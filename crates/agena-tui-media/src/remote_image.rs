@@ -138,6 +138,38 @@ static REMOTE_IMAGE_GENERATION: AtomicU64 = AtomicU64::new(1);
 static REMOTE_IMAGE_DOWNLOADS: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::new(MAX_REMOTE_IMAGE_DOWNLOADS)));
 
+struct RemoteImageLoadGuard {
+    key: String,
+    completed: bool,
+}
+
+impl RemoteImageLoadGuard {
+    fn complete(mut self, result: Result<Vec<u8>, String>) {
+        REMOTE_IMAGES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .complete(&self.key, result);
+        self.completed = true;
+        REMOTE_IMAGE_GENERATION.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+impl Drop for RemoteImageLoadGuard {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        REMOTE_IMAGES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .complete(
+                &self.key,
+                Err("remote image download was cancelled".to_string()),
+            );
+        REMOTE_IMAGE_GENERATION.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
 pub(super) fn generation() -> u64 {
     REMOTE_IMAGE_GENERATION.load(Ordering::Acquire)
 }
@@ -160,15 +192,15 @@ pub(super) fn load(url: &Url) -> Result<Arc<Vec<u8>>, String> {
     drop(cache);
 
     handle.spawn(async move {
+        let guard = RemoteImageLoadGuard {
+            key,
+            completed: false,
+        };
         let result = match Arc::clone(&REMOTE_IMAGE_DOWNLOADS).acquire_owned().await {
             Ok(_permit) => fetch(url).await,
             Err(_) => Err("remote image downloader is unavailable".to_string()),
         };
-        REMOTE_IMAGES
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .complete(&key, result);
-        REMOTE_IMAGE_GENERATION.fetch_add(1, Ordering::AcqRel);
+        guard.complete(result);
     });
 
     Err("remote image is loading".to_string())

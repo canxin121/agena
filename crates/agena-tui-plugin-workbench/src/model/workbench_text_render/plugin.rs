@@ -37,7 +37,7 @@ pub(crate) fn plugin_tools_text(
     dialog: &PluginWorkbenchOverlay,
     plugin: &PluginWorkbenchPlugin,
 ) -> Text<'static> {
-        if plugin.tools.is_empty() {
+    if plugin.tools.is_empty() {
         return Text::from("No tools.");
     }
     let mut lines = vec![Line::from(
@@ -45,17 +45,10 @@ pub(crate) fn plugin_tools_text(
     )];
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        fixed_columns(
-            &[
-                ("Tool", 24),
-                ("Description", 54),
-                ("Inputs", 8),
-            ],
-            124,
-        ),
+        fixed_columns(&[("Tool", 24), ("Description", 54), ("Inputs", 8)], 124),
         Style::default().add_modifier(Modifier::BOLD),
     )));
-        for (index, tool) in plugin.tools.iter().enumerate() {
+    for (index, tool) in plugin.tools.iter().enumerate() {
         let inputs = schema_property_count(&tool.contract.input_schema);
         let description = tool
             .docs

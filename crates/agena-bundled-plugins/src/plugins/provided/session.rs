@@ -38,19 +38,13 @@ impl SessionPlugin {
         tags(query, discovery),
         summary = "Inspect the current session metadata.",
         read_only,
-
         concurrency_safe
     )]
     async fn get(&self) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_get_session().await
     }
 
-    #[tool(
-        tags(mutate),
-        summary = "Rename the current session.",
-        mutating,
-
-    )]
+    #[tool(tags(mutate), summary = "Rename the current session.", mutating)]
     async fn rename(&self, input: &SessionRenameToolInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_rename_session(input).await
     }

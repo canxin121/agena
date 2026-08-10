@@ -158,6 +158,7 @@ struct MonitorInner {
     ended_at_ms: Option<i64>,
     completion_reason: Option<String>,
     abort: Option<tokio::sync::oneshot::Sender<()>>,
+    worker: Option<tokio::task::AbortHandle>,
 }
 
 impl MonitorState {
@@ -287,6 +288,7 @@ impl MonitorService for MonitorRegistry {
                 ended_at_ms: None,
                 completion_reason: None,
                 abort: Some(abort_tx),
+                worker: None,
             }),
             notify: Notify::new(),
             listener: self.listener.clone(),
@@ -299,7 +301,7 @@ impl MonitorService for MonitorRegistry {
         let runner_capture_stderr = params.capture_stderr;
         let runner_persistent = params.persistent;
         let runner_quiet_period_ms = params.quiet_period_ms;
-        handle.spawn(async move {
+        let worker = handle.spawn(async move {
             run_monitor(
                 runner_state,
                 runner_command,
@@ -316,6 +318,12 @@ impl MonitorService for MonitorRegistry {
             )
             .await;
         });
+        {
+            let mut inner = state.inner.lock().unwrap();
+            if inner.status == ProcessStatus::Running {
+                inner.worker = Some(worker.abort_handle());
+            }
+        }
 
         let summary = state.snapshot();
         self.monitors
@@ -400,6 +408,27 @@ impl MonitorService for MonitorRegistry {
     }
 }
 
+impl Drop for MonitorRegistry {
+    fn drop(&mut self) {
+        let monitors = self
+            .monitors
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for state in monitors.values() {
+            let mut inner = state
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(abort) = inner.abort.take() {
+                let _ = abort.send(());
+            }
+            if let Some(worker) = inner.worker.take() {
+                worker.abort();
+            }
+        }
+    }
+}
+
 fn empty_read(state: &MonitorState, since_seq: u64) -> MonitorRead {
     let summary = state.snapshot();
     MonitorRead {
@@ -473,6 +502,7 @@ async fn run_monitor(
     }
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
+    cmd.kill_on_drop(true);
     if capture_stderr {
         cmd.stderr(Stdio::piped());
     } else {
@@ -493,7 +523,7 @@ async fn run_monitor(
     } else {
         None
     };
-    let (condition_tx, mut condition_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (condition_tx, mut condition_rx) = tokio::sync::mpsc::channel(2);
 
     let stdout_state = Arc::clone(&state);
     let stdout_include = include.clone();
@@ -595,8 +625,14 @@ async fn run_monitor(
         }
         TerminationCause::Exited(code) => (ProcessStatus::Exited, code, "process_exit".to_string()),
         TerminationCause::WaitError(reason) => {
-            mark_failed(&state, format!("wait failed: {reason}"));
-            return;
+            push_event(
+                &state,
+                ProcessStream::Stderr,
+                format!("wait failed: {reason}"),
+            );
+            kill_child(&mut child).await;
+            let code = child.wait().await.ok().and_then(|status| status.code());
+            (ProcessStatus::Failed, code, "wait_error".to_string())
         }
     };
 
@@ -622,6 +658,7 @@ async fn run_monitor(
         }
         inner.ended_at_ms = Some(Utc::now().timestamp_millis());
         inner.abort = None;
+        inner.worker = None;
     }
     state.notify.notify_waiters();
     if let Some(listener) = state.listener.as_ref() {
@@ -655,6 +692,7 @@ fn mark_failed(state: &MonitorState, reason: String) {
     inner.completion_reason = Some("runtime_failure".to_string());
     inner.ended_at_ms = Some(Utc::now().timestamp_millis());
     inner.abort = None;
+    inner.worker = None;
     drop(inner);
     state.notify.notify_waiters();
     if let Some(listener) = state.listener.as_ref() {
@@ -669,7 +707,7 @@ async fn stream_lines<R>(
     include: Option<Regex>,
     success: Option<Regex>,
     failure: Option<Regex>,
-    condition_tx: tokio::sync::mpsc::UnboundedSender<PatternOutcome>,
+    condition_tx: tokio::sync::mpsc::Sender<PatternOutcome>,
 ) where
     R: tokio::io::AsyncRead + Unpin + Send,
 {
@@ -697,12 +735,12 @@ async fn stream_lines<R>(
                     .as_ref()
                     .is_some_and(|pattern| pattern.is_match(&line))
                 {
-                    let _ = condition_tx.send(PatternOutcome::Failure);
+                    let _ = condition_tx.try_send(PatternOutcome::Failure);
                 } else if success
                     .as_ref()
                     .is_some_and(|pattern| pattern.is_match(&line))
                 {
-                    let _ = condition_tx.send(PatternOutcome::Success);
+                    let _ = condition_tx.try_send(PatternOutcome::Success);
                 }
                 if let Some(re) = include.as_ref()
                     && !re.is_match(&line)
@@ -766,6 +804,12 @@ fn build_command(command: &str) -> Command {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    fn process_exists(pid: i32) -> bool {
+        // SAFETY: signal 0 only checks existence/permission.
+        (unsafe { libc::kill(pid, 0) } == 0)
+            || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
 
     fn start_params(command: &str) -> StartParams {
         StartParams {
@@ -832,5 +876,44 @@ mod tests {
         let read = wait_for_terminal(registry, id).await;
         assert_eq!(read.status, ProcessStatus::Exited);
         assert_eq!(read.completion_reason.as_deref(), Some("quiet_period"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_registry_aborts_persistent_process() {
+        let pid_path = std::env::temp_dir().join(format!(
+            "agena-monitor-drop-{}-{}.pid",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let registry = MonitorRegistry::from_handle(Handle::current());
+        let mut params = start_params(
+            format!("echo $$ > {}; exec sleep 30", pid_path.to_string_lossy()).as_str(),
+        );
+        params.persistent = true;
+        params.timeout_ms = None;
+        registry.start(params).expect("start persistent monitor");
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !pid_path.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("monitor publishes its pid");
+        let pid = std::fs::read_to_string(&pid_path)
+            .expect("read monitor pid")
+            .trim()
+            .parse::<i32>()
+            .expect("valid monitor pid");
+
+        drop(registry);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while process_exists(pid) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("registry drop kills the persistent process");
+        let _ = std::fs::remove_file(pid_path);
     }
 }

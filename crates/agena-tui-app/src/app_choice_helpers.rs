@@ -115,7 +115,7 @@ pub(crate) fn settings_value_edit_prompt(
     file_value: &JsonValue,
     effective_value: &JsonValue,
 ) -> String {
-        let mut lines = vec![
+    let mut lines = vec![
         settings_field_display_description(i18n, field),
         i18n.text_args(
             "overlay-settings-detail-path",

@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
 use agena_notification::model::{Notification, NotificationScope};
@@ -12,7 +13,7 @@ use crate::dto::{
     RuntimeDiagnosticsResource, RuntimeMetricsResource, RuntimeSnapshotSummaryResource,
     TuiPreferencesResource,
 };
-use crate::service::ApplicationService;
+use crate::service::{ApplicationService, SNAPSHOT_WORKERS};
 
 /// Shared in-process application handle.
 ///
@@ -35,11 +36,31 @@ pub struct Application {
     live_signals: Option<Arc<dyn agena_runtime::RuntimeLiveSignalService>>,
     service: ApplicationService,
     notifications: Arc<agena_runtime_notifications::store::InMemoryNotificationStore>,
+    notification_aggregator: Arc<NotificationAggregator>,
     session_queries: Option<Arc<dyn agena_runtime::SessionQueryService>>,
     execution_control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
     execution_commands: Option<Arc<dyn agena_runtime::SessionExecutionCommandService>>,
     tool_execution: Option<Arc<dyn agena_runtime::SessionToolExecutionService>>,
     plugin_commands: Option<Arc<dyn agena_runtime::SessionPluginCommandService>>,
+}
+
+#[derive(Default)]
+struct NotificationAggregator {
+    started: AtomicBool,
+    session_subscription: std::sync::Mutex<Option<agena_storage::store::GlobalSubscription>>,
+    tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+impl Drop for NotificationAggregator {
+    fn drop(&mut self) {
+        let tasks = self
+            .tasks
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for task in tasks.drain(..) {
+            task.abort();
+        }
+    }
 }
 
 /// Runtime session capabilities exposed to application command handling. The
@@ -124,6 +145,7 @@ impl Application {
             notifications: Arc::new(
                 agena_runtime_notifications::store::InMemoryNotificationStore::new(512),
             ),
+            notification_aggregator: Arc::new(NotificationAggregator::default()),
             session_queries,
             execution_control,
             execution_commands,
@@ -514,27 +536,31 @@ impl Application {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return;
         };
+        if self
+            .notification_aggregator
+            .started
+            .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
         let store = Arc::clone(&self.notifications);
         if let Ok(facade) = self.session_store_facade() {
             let store = Arc::clone(&store);
-            handle.spawn(async move {
-                // The observer runs synchronously on the facade's bus; holding
-                // the returned subscription keeps it registered for the
-                // process lifetime (14.3 observer notification, never replayed).
-                let _subscription = facade.subscribe_all(Arc::new(move |change| {
-                    if let Some(notification) = notification_from_session_change(&change) {
-                        store.ingest(notification);
-                    }
-                }));
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            let subscription = facade.subscribe_all(Arc::new(move |change| {
+                if let Some(notification) = notification_from_session_change(&change) {
+                    store.ingest(notification);
                 }
-            });
+            }));
+            *self
+                .notification_aggregator
+                .session_subscription
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(subscription);
         }
         let Some(live_signals) = self.live_signals.clone() else {
             return;
         };
-        handle.spawn(async move {
+        let task = handle.spawn(async move {
             let mut subscription = live_signals.subscribe();
             while let Some(item) = subscription.recv().await {
                 let signal = match item {
@@ -548,6 +574,11 @@ impl Application {
                 }
             }
         });
+        self.notification_aggregator
+            .tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(task);
     }
 
     pub fn runtime_draft_authentication(
@@ -651,13 +682,29 @@ impl Application {
     /// session runtime. Callers must not inspect Runtime's snapshot registry
     /// directly: registry availability and the stable presentation shape are
     /// application-service concerns.
-    pub fn snapshot_status(&self) -> crate::dto::SnapshotStatusResource {
-        let capabilities = agena_runtime::RuntimeControlService::snapshot_backend_capabilities(
-            self.runtime_control.as_ref(),
-            &self.workspace_root,
-        );
-        self.service
-            .snapshot_status(self.execution_control.as_deref(), capabilities)
+    pub async fn snapshot_status(
+        &self,
+    ) -> Result<crate::dto::SnapshotStatusResource, ApplicationError> {
+        let permit = SNAPSHOT_WORKERS
+            .acquire()
+            .await
+            .map_err(|_| ApplicationError::internal("snapshot worker pool is unavailable"))?;
+        let runtime_control = Arc::clone(&self.runtime_control);
+        let execution_control = self.execution_control.clone();
+        let workspace_root = self.workspace_root.clone();
+        let service = self.service.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let capabilities = agena_runtime::RuntimeControlService::snapshot_backend_capabilities(
+                runtime_control.as_ref(),
+                &workspace_root,
+            );
+            service.snapshot_status(execution_control.as_deref(), capabilities)
+        })
+        .await
+        .map_err(|error| {
+            ApplicationError::internal(format!("snapshot status worker failed: {error}"))
+        })
     }
 
     /// Returns the application-owned source-control projection. The concrete
@@ -666,16 +713,14 @@ impl Application {
     /// policy and snapshot accounting.
     pub async fn git_status(&self) -> Result<crate::dto::GitStatusResource, ApplicationError> {
         self.service
-            .git_status(self.execution_control.as_deref())
+            .git_status(self.execution_control.clone())
             .await
     }
 
     /// Initializes source control through the application use case while
     /// retaining snapshot accounting at the application boundary.
     pub async fn git_init(&self) -> Result<crate::dto::GitStatusResource, ApplicationError> {
-        self.service
-            .git_init(self.execution_control.as_deref())
-            .await
+        self.service.git_init(self.execution_control.clone()).await
     }
 
     /// Returns the raw version-control patch used by the application-facing
@@ -690,7 +735,7 @@ impl Application {
         request: crate::dto::GitStageRequest,
     ) -> Result<crate::dto::GitStatusResource, ApplicationError> {
         self.service
-            .git_stage(self.execution_control.as_deref(), request)
+            .git_stage(self.execution_control.clone(), request)
             .await
     }
 
@@ -700,7 +745,7 @@ impl Application {
         request: crate::dto::GitCommitRequest,
     ) -> Result<crate::dto::GitCommitResource, ApplicationError> {
         self.service
-            .git_commit(self.execution_control.as_deref(), request)
+            .git_commit(self.execution_control.clone(), request)
             .await
     }
 
@@ -710,7 +755,7 @@ impl Application {
         request: crate::dto::GitPullRequestCreateRequest,
     ) -> Result<crate::dto::GitPullRequestResource, ApplicationError> {
         self.service
-            .git_create_pull_request(self.execution_control.as_deref(), request)
+            .git_create_pull_request(self.execution_control.clone(), request)
             .await
     }
 

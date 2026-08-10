@@ -63,7 +63,9 @@ impl App {
                         .and_then(serde_json::Value::as_bool),
                 })
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::PlanViewerLoaded { request_id, result });
+            let _ = tx
+                .send(AppMessage::PlanViewerLoaded { request_id, result })
+                .await;
         });
         if let Route::PlanViewer(state) = &mut self.current_route {
             state.request_id = request_id;
@@ -189,7 +191,9 @@ impl App {
                 .await
                 .map(|_| true)
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::PlanAutorunToggled { request_id, result });
+            let _ = tx
+                .send(AppMessage::PlanAutorunToggled { request_id, result })
+                .await;
         });
         state.toggle_request_id = request_id;
     }
@@ -261,10 +265,12 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = backend.refresh_plan_display(session_id).await;
-            let _ = tx.send(AppMessage::PlanDisplayRefreshed {
-                session_id,
-                result: result.map_err(crate::UiFailure::internal),
-            });
+            let _ = tx
+                .send(AppMessage::PlanDisplayRefreshed {
+                    session_id,
+                    result: result.map_err(crate::UiFailure::internal),
+                })
+                .await;
         });
     }
 

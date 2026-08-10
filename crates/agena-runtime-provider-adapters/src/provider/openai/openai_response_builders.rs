@@ -80,6 +80,44 @@ impl OpenAiTransport {
         })
     }
 
+    /// Decide which `reasoning` items the follow-up request must replay, given
+    /// what this model response just produced.
+    ///
+    /// Reasoning gateways (e.g. DeepSeek thinking mode) reject any tool-result
+    /// follow-up whose preceding assistant function calls do not carry the
+    /// matching reasoning item. A tool-calling turn may legitimately stream no
+    /// new reasoning (an empty `fresh_items`), and if so the follow-up still
+    /// needs the reasoning that was replayed into *this* request — the gateway
+    /// requires reasoning before every assistant tool call, including turns
+    /// where the model chose not to reason out loud. Carry the previously
+    /// replayed items forward verbatim so persistence does not drop them
+    /// between turns.
+    pub(super) fn responses_reasoning_items_for_replay(
+        request: &CompletionRequest,
+        fresh_items: impl IntoIterator<Item = serde_json::Value>,
+    ) -> Vec<serde_json::Value> {
+        let fresh = fresh_items.into_iter().collect::<Vec<_>>();
+        if !fresh.is_empty() {
+            return fresh;
+        }
+        request
+            .turns
+            .iter()
+            .rev()
+            .find(|turn| matches!(turn.role, agena_domain::Role::Assistant))
+            .map(|turn| {
+                turn.provider_state
+                    .openai_reasoning_items
+                    .iter()
+                    .filter(|item| {
+                        item.get("type").and_then(serde_json::Value::as_str) == Some("reasoning")
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(super) fn responses_input_for_request(
         &self,
         request: &CompletionRequest,
@@ -455,12 +493,19 @@ impl OpenAiTransport {
                     Self::push_responses_text_message(input, "assistant", run.as_text_lossy());
                 } else {
                     let mut text_chunks = Vec::new();
+                    let mut calls: Vec<OpenAiResponsesInputItem> = Vec::new();
+                    let mut outputs: Vec<OpenAiResponsesInputItem> = Vec::new();
                     let mut pending_output: Option<(String, String, Vec<wire_message::WirePart>)> =
                         None;
                     for part in projected_parts {
                         match part {
                             wire_message::WirePart::Text { text } => {
-                                Self::flush_responses_function_output(input, &mut pending_output);
+                                if let Some(output) = pending_output.take() {
+                                    Self::flush_responses_function_output(
+                                        &mut outputs,
+                                        &mut Some(output),
+                                    );
+                                }
                                 text_chunks.push(text);
                             }
                             wire_message::WirePart::Reasoning { .. } => {
@@ -480,10 +525,14 @@ impl OpenAiTransport {
                                 function,
                                 arguments_json,
                             } => {
-                                Self::flush_assistant_responses_text(input, &mut text_chunks);
-                                Self::flush_responses_function_output(input, &mut pending_output);
+                                if let Some(output) = pending_output.take() {
+                                    Self::flush_responses_function_output(
+                                        &mut outputs,
+                                        &mut Some(output),
+                                    );
+                                }
                                 if let Some(call_id) = responses_input_call_id(id.as_str()) {
-                                    input.push(OpenAiResponsesInputItem::FunctionCall(
+                                    calls.push(OpenAiResponsesInputItem::FunctionCall(
                                         OpenAiFunctionCallItem {
                                             kind: "function_call",
                                             call_id,
@@ -500,8 +549,12 @@ impl OpenAiTransport {
                                 output_json,
                                 ..
                             } => {
-                                Self::flush_assistant_responses_text(input, &mut text_chunks);
-                                Self::flush_responses_function_output(input, &mut pending_output);
+                                if let Some(output) = pending_output.take() {
+                                    Self::flush_responses_function_output(
+                                        &mut outputs,
+                                        &mut Some(output),
+                                    );
+                                }
                                 if let Some(call_id) =
                                     responses_input_call_id(tool_call_id.as_ref())
                                 {
@@ -510,8 +563,23 @@ impl OpenAiTransport {
                             }
                         }
                     }
-                    Self::flush_responses_function_output(input, &mut pending_output);
+                    if let Some(output) = pending_output.take() {
+                        Self::flush_responses_function_output(&mut outputs, &mut Some(output));
+                    }
+                    // OpenAI-compatible gateways that translate the Responses
+                    // input into Chat Completions messages before reaching a
+                    // reasoning model (for example the Console Go / codex route)
+                    // turn every `function_call` into its own assistant message
+                    // that must carry the preceding reasoning item. Emit all
+                    // function calls before their outputs — Responses correlates
+                    // them by `call_id`, so the reordering is semantically
+                    // identical — so a parallel tool turn replays as one
+                    // assistant message with the reasoning intact instead of an
+                    // interleaved call/output stream that drops the reasoning
+                    // on the second call.
                     Self::flush_assistant_responses_text(input, &mut text_chunks);
+                    input.extend(calls);
+                    input.extend(outputs);
                 }
             }
             Role::Tool => {
@@ -875,6 +943,7 @@ mod tool_api_history_tests {
     use agena_domain::ToolInvocation;
     use agena_domain::ToolOutput;
     use agena_domain::{StructuredObject, TimeRange};
+    use agena_provider::CompletionRequest;
     use agena_runtime_contracts::part::OperationPart;
     use agena_runtime_contracts::provider_state::PartProviderState;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
@@ -1051,7 +1120,7 @@ mod tool_api_history_tests {
             ),
             openai_reasoning_items: vec![serde_json::json!({
                 "type": "reasoning",
-                "summary": [{ "type": "summary_text", "text": "think" }],
+                "summary": [],
                 "content": [{ "type": "reasoning_text", "text": "reasoned text" }]
             })],
             ..PartProviderState::default()
@@ -1084,6 +1153,155 @@ mod tool_api_history_tests {
                 .and_then(serde_json::Value::as_str),
             Some("reasoned text"),
             "the reasoning content must survive replay for reasoning_content models"
+        );
+        assert_eq!(reasoning.get("summary"), Some(&serde_json::json!([])));
+    }
+
+    #[test]
+    fn parallel_tool_replay_groups_calls_before_outputs_to_preserve_reasoning() {
+        use agena_domain::Role;
+        use agena_provider::{
+            CompletionInputPart, CompletionInputProviderState, CompletionInputRun,
+            ModelToolFunction,
+        };
+
+        // A parallel tool turn replays in storage order: reasoning field and
+        // item on the marker, then interleaved call/result pairs.
+        let run = CompletionInputRun {
+            role: Role::Assistant,
+            parts: vec![
+                CompletionInputPart::ToolCall {
+                    id: "call_1".to_owned(),
+                    function: ModelToolFunction::new("tools_search"),
+                    arguments_json: r#"{"query":"status"}"#.to_owned(),
+                },
+                CompletionInputPart::ToolResult {
+                    tool_call_id: "call_1".to_owned(),
+                    function: ModelToolFunction::new("tools_search"),
+                    arguments_json: r#"{"query":"status"}"#.to_owned(),
+                    status: Default::default(),
+                    output_json: "status result".to_owned(),
+                },
+                CompletionInputPart::ToolCall {
+                    id: "call_2".to_owned(),
+                    function: ModelToolFunction::new("tools_search"),
+                    arguments_json: r#"{"query":"rename"}"#.to_owned(),
+                },
+                CompletionInputPart::ToolResult {
+                    tool_call_id: "call_2".to_owned(),
+                    function: ModelToolFunction::new("tools_search"),
+                    arguments_json: r#"{"query":"rename"}"#.to_owned(),
+                    status: Default::default(),
+                    output_json: "rename result".to_owned(),
+                },
+            ],
+            provider_state: CompletionInputProviderState {
+                assistant_reasoning_field: Some(
+                    agena_domain::AssistantReasoningField::ReasoningContent,
+                ),
+                openai_reasoning_items: vec![serde_json::json!({
+                    "type": "reasoning",
+                    "summary": [],
+                    "content": [{ "type": "reasoning_text", "text": "reasoned text" }]
+                })],
+                ..CompletionInputProviderState::default()
+            },
+        };
+
+        let mut input = Vec::new();
+        OpenAiTransport::append_responses_items_for_message(&mut input, &run);
+        validate_responses_input(input.as_slice()).expect("provider-safe replay input");
+
+        let value = serde_json::to_value(&input).expect("serialize replay input");
+        let kinds = value
+            .as_array()
+            .expect("responses input array")
+            .iter()
+            .filter_map(|item| item.get("type").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                "reasoning",
+                "function_call",
+                "function_call",
+                "function_call_output",
+                "function_call_output",
+            ],
+            "the reasoning item must precede a single grouped function-call block so \
+             gateway chat translation keeps the reasoning on every assistant message"
+        );
+    }
+
+    #[test]
+    fn reasoning_replay_carries_prior_items_when_this_turn_streamed_none() {
+        use agena_domain::Role;
+        use agena_provider::{CompletionInputProviderState, CompletionInputRun};
+
+        // A tool-calling turn may legitimately stream no new reasoning. The
+        // follow-up request still needs reasoning before its function calls
+        // (verified against the Console Go gateway: a round-2 assistant turn
+        // without a reasoning item 400s), so an empty fresh set must fall back
+        // to the reasoning items replayed into this request.
+        let prior_item = serde_json::json!({
+            "type": "reasoning",
+            "summary": [],
+            "content": [{ "type": "reasoning_text", "text": "prior reasoning" }]
+        });
+        let request = CompletionRequest {
+            model: agena_domain::ModelId::new("deepseek-v4-flash"),
+            system: None,
+            turns: vec![CompletionInputRun {
+                role: Role::Assistant,
+                parts: Vec::new(),
+                provider_state: CompletionInputProviderState {
+                    openai_reasoning_items: vec![prior_item.clone()],
+                    ..CompletionInputProviderState::default()
+                },
+            }],
+            tool_api_functions: Vec::new(),
+            provider_native_tools: Default::default(),
+            disable_tools: false,
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            provider_compaction: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            response_format: None,
+            responses_api_metadata: None,
+            request_override: Default::default(),
+        };
+
+        let carried = OpenAiTransport::responses_reasoning_items_for_replay(
+            &request,
+            Vec::<serde_json::Value>::new(),
+        );
+        assert_eq!(
+            carried,
+            vec![prior_item.clone()],
+            "an empty fresh set must carry the previously replayed reasoning items forward"
+        );
+
+        let fresh_item = serde_json::json!({
+            "type": "reasoning",
+            "summary": [],
+            "content": [{ "type": "reasoning_text", "text": "fresh reasoning" }]
+        });
+        let fresh = OpenAiTransport::responses_reasoning_items_for_replay(
+            &request,
+            vec![fresh_item.clone()],
+        );
+        assert_eq!(
+            fresh,
+            vec![fresh_item.clone()],
+            "new reasoning produced this turn wins over the carried items"
         );
     }
 

@@ -33,6 +33,13 @@ impl<P: Plugin> PluginDispatcher<P> {
         }
     }
 
+    pub fn with_host(plugin: P, host: Arc<dyn HostClient>) -> Self {
+        Self {
+            plugin: Arc::new(plugin),
+            host: tokio::sync::RwLock::new(Some(host)),
+        }
+    }
+
     pub async fn set_host(&self, host: Arc<dyn HostClient>) {
         *self.host.write().await = Some(host);
     }

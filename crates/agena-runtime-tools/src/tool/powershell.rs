@@ -13,7 +13,7 @@ use agena_tool::{
     shell::{DEFAULT_SHELL_TIMEOUT_MS, powershell_command_for_windows, truncate_shell_output},
 };
 
-pub(super) fn execute(
+pub(super) async fn execute_async(
     executor: &ToolExecutor,
     input: &ShellCommandInput,
     context: ToolRuntimeContext,
@@ -31,22 +31,49 @@ pub(super) fn execute(
     let effects = input.filesystem_effects();
     validate_declared_filesystem_effects("powershell", input.command.as_str(), &effects)?;
     let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
-
     let mut env = inherited_environment();
-    env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);
-
+    env.extend(
+        executor
+            .shell_env_overrides_async(&cwd, context.session_id, context.call_id)
+            .await?,
+    );
     let request = ShellRequest {
         command: powershell_command_for_windows(&input.command),
         cwd,
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS)),
     };
-    let execution = executor.execute_shell_command(
-        &request,
-        input.command.as_str(),
-        context.session_id,
-        context.call_id,
-    )?;
+    let worker_executor = executor.clone();
+    let worker_request = request.clone();
+    let command = input.command.clone();
+    let session_id = context.session_id;
+    let call_id = context.call_id;
+    let worker_permit = super::shell::acquire_worker_permit()
+        .await
+        .ok_or_else(|| ToolError::plugin("shell worker pool is unavailable".to_string()))?;
+    let execution = tokio::task::spawn_blocking(move || {
+        let _worker_permit = worker_permit;
+        worker_executor.execute_shell_command(
+            &worker_request,
+            command.as_str(),
+            session_id,
+            call_id,
+        )
+    })
+    .await
+    .map_err(|error| {
+        ToolError::plugin(format!(
+            "PowerShell process worker failed before completion: {error}"
+        ))
+    })??;
+    executor.ensure_not_cancelled()?;
+    render_execution(&request, execution)
+}
+
+fn render_execution(
+    request: &ShellRequest,
+    execution: agena_tool::ShellOutput,
+) -> Result<ToolPayloadExecution, ToolError> {
     let (trimmed_output, truncated) = truncate_shell_output(&execution.aggregated_output);
 
     let status_text = if execution.timed_out {
@@ -65,7 +92,7 @@ pub(super) fn execute(
     let display_output = if trimmed_output.trim().is_empty() {
         status_text.clone()
     } else {
-        trimmed_output.clone()
+        trimmed_output
     };
 
     let output = ToolPayloadOutput::Shell {
@@ -108,6 +135,5 @@ pub(super) fn execute(
     view.metadata
         .insert("truncated".to_string(), truncated.to_string());
     view.metadata.insert("status".to_string(), status_text);
-
     Ok(ToolPayloadExecution::new(output, view))
 }

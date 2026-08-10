@@ -120,11 +120,11 @@ impl ActivityStore {
 #[derive(Debug, Clone)]
 pub(crate) struct ActivityRegistry {
     store: Arc<Mutex<ActivityStore>>,
-    tx: mpsc::UnboundedSender<BackgroundActivityChangedEvent>,
+    tx: mpsc::Sender<BackgroundActivityChangedEvent>,
 }
 
 impl ActivityRegistry {
-    pub(crate) fn new(tx: mpsc::UnboundedSender<BackgroundActivityChangedEvent>) -> Self {
+    pub(crate) fn new(tx: mpsc::Sender<BackgroundActivityChangedEvent>) -> Self {
         Self {
             store: Arc::new(Mutex::new(ActivityStore::new(
                 DEFAULT_ACTIVITY_HISTORY_LIMIT,
@@ -183,7 +183,18 @@ impl ActivityRegistry {
             activity,
             ts_ms: Utc::now().timestamp_millis(),
         };
-        let _ = self.tx.send(event);
+        if let Err(error) = self.tx.try_send(event) {
+            match error {
+                mpsc::error::TrySendError::Full(event) => tracing::debug!(
+                    activity_id = %event.activity_id,
+                    reason = ?event.reason,
+                    "background activity signal queue is full; the authoritative registry snapshot remains available"
+                ),
+                mpsc::error::TrySendError::Closed(_) => {
+                    tracing::debug!("background activity signal publisher is closed")
+                }
+            }
+        }
     }
 }
 
@@ -246,7 +257,7 @@ mod tests {
 
     #[test]
     fn registry_publishes_reason_by_transition() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(8);
         let registry = ActivityRegistry::new(tx);
         registry.upsert(activity("a", BackgroundActivityStatus::Running));
         assert_eq!(

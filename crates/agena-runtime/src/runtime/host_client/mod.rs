@@ -221,10 +221,10 @@ impl RuntimeHostClient {
     > {
         let executor = self.tool_executor()?;
         let session_context = self.callback_session_context().await?;
-        let executor = session_context
-            .as_ref()
-            .map(|context| executor.for_session_context(context))
-            .unwrap_or(executor);
+        let executor = match session_context.as_ref() {
+            Some(context) => executor.for_session_context_async(context).await,
+            None => executor,
+        };
         Ok((executor, session_context))
     }
 
@@ -659,7 +659,7 @@ impl HostClient for RuntimeHostClient {
 
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, PluginError> {
         let (executor, _) = self.callback_scoped_tool_executor().await?;
-        let tools = executor.detailed_execution_tools();
+        let tools = executor.detailed_execution_tools_async().await;
         let names = crate::tool::execution_tool_names(&tools);
         Ok(tools
             .into_iter()
@@ -685,7 +685,13 @@ impl HostClient for RuntimeHostClient {
             .get_session(session_id)
             .await
             .map_err(plugin_error)?;
-        let usage = manager.session_usage(&session).map_err(plugin_error)?;
+        let usage = manager
+            .session_usage_async(&session)
+            .await
+            .map_err(plugin_error)?;
+        let model_status = manager
+            .session_model_status(&session)
+            .map_err(plugin_error)?;
         let prompt_window = &session.runtime().prompt_window;
         let compaction = prompt_window.compaction.as_ref();
         Ok(HostContextStatusResponse {
@@ -701,12 +707,12 @@ impl HostClient for RuntimeHostClient {
             model_context_window_tokens: usage.model_context_window_tokens,
             model_max_input_tokens: usage.model_max_input_tokens,
             model_max_output_tokens: usage.model_max_output_tokens,
-            model_provider_id: session.runtime().execution.selection.provider.clone(),
-            model_adapter_id: session.runtime().execution.selection.adapter.clone(),
-            model_id: session.runtime().execution.selection.model.clone(),
-            thinking_mode: session.runtime().execution.selection.thinking_mode.clone(),
-            speed_mode: session.runtime().execution.selection.speed_mode.clone(),
-            verbosity: session.runtime().execution.selection.verbosity.clone(),
+            model_provider_id: model_status.provider,
+            model_adapter_id: model_status.adapter,
+            model_id: model_status.model,
+            thinking_mode: model_status.thinking_mode,
+            speed_mode: model_status.speed_mode,
+            verbosity: model_status.verbosity,
             prompt_window_generation: prompt_window.generation,
             compacted: compaction.is_some(),
             last_compaction_before_tokens: compaction.map(|value| value.before_tokens),

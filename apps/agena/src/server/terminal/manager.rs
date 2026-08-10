@@ -21,7 +21,7 @@ use portable_pty::ChildKiller;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{Semaphore, broadcast, watch};
 
 use crate::{ApiResult, AppError};
 
@@ -484,13 +484,17 @@ impl TerminalManager {
             return;
         };
 
+        let manager = Arc::downgrade(&self);
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(TERMINAL_CLEANUP_INTERVAL);
             loop {
                 ticker.tick().await;
+                let Some(manager) = manager.upgrade() else {
+                    break;
+                };
                 let now = Instant::now();
                 let mut to_remove = Vec::new();
-                for entry in self.sessions.iter() {
+                for entry in manager.sessions.iter() {
                     let idle = {
                         let last = entry.value().last_activity.lock().unwrap();
                         now.duration_since(*last)
@@ -501,10 +505,10 @@ impl TerminalManager {
                 }
 
                 for id in to_remove {
-                    if let Some((_, session)) = self.sessions.remove(&id) {
+                    if let Some((_, session)) = manager.sessions.remove(&id) {
                         tracing::info!("Cleaning up idle terminal session: {}", id);
                         let _ = session.kill();
-                        self.remove_persisted_session(&id);
+                        manager.remove_persisted_session(&id);
                     }
                 }
             }
@@ -661,6 +665,7 @@ pub struct TerminalSession {
     pub last_activity: Mutex<Instant>,
     master: Mutex<Box<dyn portable_pty::MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
+    blocking_io: Arc<Semaphore>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     tx: broadcast::Sender<TerminalEvent>,
     exit_state: watch::Sender<bool>,
@@ -769,6 +774,7 @@ impl TerminalSession {
             last_activity: Mutex::new(Instant::now()),
             master: Mutex::new(master),
             writer: Mutex::new(writer),
+            blocking_io: Arc::new(Semaphore::new(1)),
             killer: Mutex::new(killer),
             tx,
             exit_state,
@@ -858,7 +864,21 @@ impl TerminalSession {
         });
     }
 
-    pub fn write(&self, data: Bytes) -> Result<(), anyhow::Error> {
+    pub async fn write(self: &Arc<Self>, data: Bytes) -> Result<(), anyhow::Error> {
+        let permit = Arc::clone(&self.blocking_io)
+            .acquire_owned()
+            .await
+            .map_err(|_| anyhow::anyhow!("terminal I/O queue is closed"))?;
+        let session = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            session.write_blocking(data)
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("terminal write worker failed: {error}"))?
+    }
+
+    fn write_blocking(&self, data: Bytes) -> Result<(), anyhow::Error> {
         *self.last_activity.lock().unwrap() = Instant::now();
         let mut writer = self.writer.lock().unwrap();
         writer.write_all(&data)?;
@@ -866,7 +886,21 @@ impl TerminalSession {
         Ok(())
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), anyhow::Error> {
+    pub async fn resize(self: &Arc<Self>, cols: u16, rows: u16) -> Result<(), anyhow::Error> {
+        let permit = Arc::clone(&self.blocking_io)
+            .acquire_owned()
+            .await
+            .map_err(|_| anyhow::anyhow!("terminal I/O queue is closed"))?;
+        let session = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            session.resize_blocking(cols, rows)
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("terminal resize worker failed: {error}"))?
+    }
+
+    fn resize_blocking(&self, cols: u16, rows: u16) -> Result<(), anyhow::Error> {
         *self.last_activity.lock().unwrap() = Instant::now();
         let master = self.master.lock().unwrap();
         master.resize(PtySize {
@@ -1235,6 +1269,7 @@ pub async fn terminal_input(
 
     session
         .write(bytes)
+        .await
         .map_err(|err| AppError::internal(err.to_string()))?;
 
     Ok(Json(TerminalSuccessResponse { success: true }))
@@ -1256,6 +1291,7 @@ pub async fn terminal_resize(
 
     session
         .resize(cols, rows)
+        .await
         .map_err(|err| AppError::internal(err.to_string()))?;
     state.terminal.remember_dimensions(&session_id, cols, rows);
 

@@ -63,7 +63,9 @@ impl App {
                 .usage_stats(query)
                 .await
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::UsageStatsLoaded { request_id, result });
+            let _ = tx
+                .send(AppMessage::UsageStatsLoaded { request_id, result })
+                .await;
         });
     }
 

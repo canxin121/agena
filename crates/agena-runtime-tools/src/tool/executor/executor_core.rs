@@ -12,6 +12,7 @@ impl ToolExecutor {
             principal,
             allowed_tool_names: None,
             model_id: None,
+            definition_catalog: None,
             monitor_registry: crate::default_monitor_registry(),
             plugins,
             snapshot_registry,
@@ -39,7 +40,9 @@ impl ToolExecutor {
         &self.workspace_root
     }
 
-    pub fn for_session_context<C: crate::ToolSessionContext + ?Sized>(
+    /// Build a session-scoped executor and await definition hooks on the
+    /// owning runtime. This is the only session-context construction path.
+    pub async fn for_session_context_async<C: crate::ToolSessionContext + ?Sized>(
         &self,
         session_context: &C,
     ) -> Self {
@@ -59,10 +62,13 @@ impl ToolExecutor {
                 .clone()
                 .apply_permission_ceiling_or_self(session_context.permission_ceiling());
         }
+        let definition_catalog = scoped
+            .registered_tools_with_definition_overrides_async()
+            .await;
+        scoped.definition_catalog = Some(Arc::new(definition_catalog.clone()));
         if session_context.execution_access() == agena_domain::ExecutionAccess::ReadOnly {
-            let allowed_tools = scoped
-                .registered_tools_with_definition_overrides()
-                .into_iter()
+            let allowed_tools = definition_catalog
+                .iter()
                 .filter(|entry| {
                     let permissions = &entry.definition.permissions;
                     permissions.read_only
@@ -76,9 +82,8 @@ impl ToolExecutor {
         }
         if !session_context.capability_denied_tool_names().is_empty() {
             let denied = session_context.capability_denied_tool_names();
-            let allowed_tools = scoped
-                .registered_tools_with_definition_overrides()
-                .into_iter()
+            let allowed_tools = definition_catalog
+                .iter()
                 .filter(|entry| {
                     !denied
                         .iter()
@@ -227,6 +232,9 @@ impl ToolExecutor {
     }
 
     pub(crate) fn registered_tools_with_definition_overrides(&self) -> Vec<RegisteredTool> {
+        if let Some(catalog) = self.definition_catalog.as_ref() {
+            return catalog.as_ref().clone();
+        }
         let mut tools = self
             .plugins
             .registered_tools()
@@ -239,36 +247,45 @@ impl ToolExecutor {
                 .then_with(|| left.summary_text().cmp(&right.summary_text()))
         });
 
-        // Plugin chain: tool.definition. Every ordinary execution tool follows
-        // this same path, including provider-backed plugins such as agena.openai.
+        // Async session construction populates `definition_catalog` after
+        // running `tool.definition` hooks. A bare executor has no async
+        // context and therefore exposes the immutable manifest snapshot here;
+        // it must never enter a runtime through a synchronous hook bridge.
+        tools
+    }
+
+    /// Build the definition-patched catalog without crossing the sync/async
+    /// boundary. This is the canonical catalog path for Tokio request code.
+    pub(crate) async fn registered_tools_with_definition_overrides_async(
+        &self,
+    ) -> Vec<RegisteredTool> {
+        if let Some(catalog) = self.definition_catalog.as_ref() {
+            return catalog.as_ref().clone();
+        }
+        let mut tools = self
+            .plugins
+            .registered_tools()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        tools.sort_by(|left, right| {
+            left.canonical_name()
+                .cmp(&right.canonical_name())
+                .then_with(|| left.summary_text().cmp(&right.summary_text()))
+        });
+
         if !self.plugins.is_empty() {
-            tools = tools
-                .into_iter()
-                .map(|mut entry| {
-                                        let input = PluginToolDefinitionInput {
-                        tool: entry.tool_key().clone(),
-                        summary: tool_summary(&entry),
-                        help: entry.definition.docs.help.clone(),
-                        input_schema: entry.input_schema(),
-                    };
-                    match self.plugins.dispatch_tool_definition_blocking(input) {
-                        Ok(patched) => {
-                            entry.definition.docs.summary = Some(patched.summary);
-                            entry.definition.docs.help = patched.help;
-                            entry.definition.contract.input_schema = patched.input_schema;
-                            entry
-                        }
-                        Err(err) => {
-                            tracing::warn!(
-                                target: "agena_plugin_host::tool_definition",
-                                tool = %entry.canonical_name(),
-                                "tool.definition hook failed (keeping original): {err}"
-                            );
-                            entry
-                        }
-                    }
+            let inputs = tools
+                .iter()
+                .map(|entry| PluginToolDefinitionInput {
+                    tool: entry.tool_key().clone(),
+                    summary: tool_summary(entry),
+                    help: entry.definition.docs.help.clone(),
+                    input_schema: entry.input_schema(),
                 })
-                .collect();
+                .collect::<Vec<_>>();
+            let patched = self.plugins.dispatch_tool_definitions(inputs).await;
+            tools = apply_definition_overrides(tools, patched);
         }
 
         tools
@@ -276,10 +293,54 @@ impl ToolExecutor {
 
     pub(crate) fn available_registered_tools(&self) -> Vec<RegisteredTool> {
         let tool_set = self.builtin_tool_set();
-        self.registered_tools_with_definition_overrides()
+        let enabled = self
+            .registered_tools_with_definition_overrides()
             .into_iter()
             .filter(|entry| tool_set.is_tool_enabled(entry))
-            .filter(|entry| self.is_tool_available(entry))
+            .collect::<Vec<_>>();
+        let has_execution_tool_capability = !self.principal.blocked
+            && enabled.iter().any(|entry| {
+                !crate::tool::is_tool_api_handler(entry) && self.tool_is_within_capability(entry)
+            });
+
+        // Do not call `is_tool_available` here. For a Tool API handler that
+        // method answers by rebuilding the complete, definition-patched
+        // catalog. Calling it from this catalog pass recursively reran every
+        // `tool.definition` hook once per gateway handler, amplifying one
+        // stalled hook into minutes of work and millions of warnings.
+        enabled
+            .into_iter()
+            .filter(|entry| {
+                if crate::tool::is_tool_api_handler(entry) {
+                    has_execution_tool_capability
+                } else {
+                    self.tool_is_within_capability(entry)
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) async fn available_registered_tools_async(&self) -> Vec<RegisteredTool> {
+        let tool_set = self.builtin_tool_set();
+        let enabled = self
+            .registered_tools_with_definition_overrides_async()
+            .await
+            .into_iter()
+            .filter(|entry| tool_set.is_tool_enabled(entry))
+            .collect::<Vec<_>>();
+        let has_execution_tool_capability = !self.principal.blocked
+            && enabled.iter().any(|entry| {
+                !crate::tool::is_tool_api_handler(entry) && self.tool_is_within_capability(entry)
+            });
+        enabled
+            .into_iter()
+            .filter(|entry| {
+                if crate::tool::is_tool_api_handler(entry) {
+                    has_execution_tool_capability
+                } else {
+                    self.tool_is_within_capability(entry)
+                }
+            })
             .collect()
     }
 
@@ -289,34 +350,12 @@ impl ToolExecutor {
             .is_none_or(|allowed| allowed.contains(entry.canonical_name().as_str()))
     }
 
-    fn has_execution_tool_capability(&self) -> bool {
-        if self.principal.blocked {
-            return false;
-        }
-        let tool_set = self.builtin_tool_set();
-        self.registered_tools_with_definition_overrides()
-            .into_iter()
-            .filter(|entry| tool_set.is_tool_enabled(entry))
-            .filter(|entry| !crate::tool::is_tool_api_handler(entry))
-            .any(|entry| self.tool_is_within_capability(&entry))
-    }
-
-    pub(crate) fn is_tool_available(&self, entry: &RegisteredTool) -> bool {
-        // The five Tool API handlers form the provider protocol and carry no
-        // execution authority. Every other entry is an ordinary execution tool
-        // governed by the same execution principal and permission policy.
-        // Permission Deny is intentionally not a catalog filter: the model
-        // must be able to call a present capability and receive a structured
-        // PolicyDenied result with user-rule provenance. Only hard capability
-        // boundaries remove tools from the catalog.
-        if crate::tool::is_tool_api_handler(entry) {
-            return self.has_execution_tool_capability();
-        }
-        self.tool_is_within_capability(entry)
-    }
-
     pub fn detailed_tools(&self) -> Vec<RegisteredTool> {
         self.available_registered_tools()
+    }
+
+    pub async fn detailed_tools_async(&self) -> Vec<RegisteredTool> {
+        self.available_registered_tools_async().await
     }
 
     /// Return every ordinary execution tool visible to this session. There is
@@ -329,12 +368,32 @@ impl ToolExecutor {
             .collect()
     }
 
+    pub async fn detailed_execution_tools_async(&self) -> Vec<crate::tool::ExecutionTool> {
+        self.detailed_tools_async()
+            .await
+            .into_iter()
+            .filter_map(crate::tool::ExecutionTool::from_registered_tool)
+            .collect()
+    }
+
     pub fn available_tools(&self) -> Vec<RegisteredTool> {
         self.available_registered_tools()
     }
 
+    pub async fn available_tools_async(&self) -> Vec<RegisteredTool> {
+        self.available_registered_tools_async().await
+    }
+
     pub fn available_execution_tools(&self) -> Vec<crate::tool::ExecutionTool> {
         self.available_tools()
+            .into_iter()
+            .filter_map(crate::tool::ExecutionTool::from_registered_tool)
+            .collect()
+    }
+
+    pub async fn available_execution_tools_async(&self) -> Vec<crate::tool::ExecutionTool> {
+        self.available_tools_async()
+            .await
             .into_iter()
             .filter_map(crate::tool::ExecutionTool::from_registered_tool)
             .collect()
@@ -345,6 +404,26 @@ impl ToolExecutor {
     pub fn available_tool_api_bindings(&self) -> Vec<ToolApiBinding> {
         let mut tools = self
             .available_tools()
+            .into_iter()
+            .filter_map(ToolApiBinding::from_registered_tool)
+            .collect::<Vec<_>>();
+        if tools
+            .iter()
+            .any(|binding| binding.function() != agena_domain::ToolApiFunction::Call)
+            && !tools
+                .iter()
+                .any(|binding| binding.function() == agena_domain::ToolApiFunction::Call)
+        {
+            tools.push(ToolApiBinding::call_gateway());
+        }
+        tools.sort_by(|left, right| left.function_name().cmp(right.function_name()));
+        tools
+    }
+
+    pub async fn available_tool_api_bindings_async(&self) -> Vec<ToolApiBinding> {
+        let mut tools = self
+            .available_registered_tools_async()
+            .await
             .into_iter()
             .filter_map(ToolApiBinding::from_registered_tool)
             .collect::<Vec<_>>();
@@ -395,3 +474,44 @@ use super::{
     tool_summary, unknown_tool_hint,
 };
 use crate::tool::ToolApiBinding;
+use agena_plugin_host::PluginError;
+
+fn apply_definition_overrides(
+    tools: Vec<RegisteredTool>,
+    patched: Vec<Result<PluginToolDefinitionInput, PluginError>>,
+) -> Vec<RegisteredTool> {
+    const MAX_INDIVIDUAL_WARNINGS: usize = 3;
+    let mut failure_count = 0usize;
+    let tools = tools
+        .into_iter()
+        .zip(patched)
+        .map(|(mut entry, patched)| match patched {
+            Ok(patched) => {
+                entry.definition.docs.summary = Some(patched.summary);
+                entry.definition.docs.help = patched.help;
+                entry.definition.contract.input_schema = patched.input_schema;
+                entry
+            }
+            Err(err) => {
+                failure_count += 1;
+                if failure_count <= MAX_INDIVIDUAL_WARNINGS {
+                    tracing::warn!(
+                        target: "agena_plugin_host::tool_definition",
+                        tool = %entry.canonical_name(),
+                        "tool.definition hook failed (keeping original): {err}"
+                    );
+                }
+                entry
+            }
+        })
+        .collect();
+    if failure_count > MAX_INDIVIDUAL_WARNINGS {
+        tracing::warn!(
+            target: "agena_plugin_host::tool_definition",
+            failures = failure_count,
+            suppressed = failure_count - MAX_INDIVIDUAL_WARNINGS,
+            "additional tool.definition failures suppressed; original definitions were kept"
+        );
+    }
+    tools
+}

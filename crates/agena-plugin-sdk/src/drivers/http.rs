@@ -2,9 +2,11 @@
 //! POST endpoint receives JSON-RPC envelopes and forwards them to dispatch.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::Duration;
 
 use axum::{Json, Router, extract::State, routing::post};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{RwLock, Semaphore};
 
 use crate::drivers::dispatch::PluginDispatcher;
 use crate::error::{PluginError, PluginErrorKind};
@@ -24,26 +26,30 @@ use crate::rpc::{
 struct HttpDriverState<P: Plugin> {
     dispatcher: Arc<PluginDispatcher<P>>,
     callback_client: RwLock<Option<Arc<HttpCallbackHostClient>>>,
+    dispatch_slots: Arc<Semaphore>,
 }
 
 struct HttpCallbackHostClient {
     client: reqwest::Client,
     url: String,
     auth_header: Option<String>,
-    next_id: Mutex<i64>,
+    next_id: AtomicI64,
 }
 
 impl HttpCallbackHostClient {
     fn from_init_context(ctx: &InitContext) -> Option<Self> {
         let url = ctx.host_callback_url.clone()?;
         Some(Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(60))
+                .build()
+                .ok()?,
             url,
             auth_header: ctx
                 .host_callback_token
                 .as_ref()
                 .map(|token| format!("Bearer {token}")),
-            next_id: Mutex::new(1),
+            next_id: AtomicI64::new(1),
         })
     }
 
@@ -52,12 +58,7 @@ impl HttpCallbackHostClient {
         method_name: &str,
         params: serde_json::Value,
     ) -> crate::error::Result<T> {
-        let id = {
-            let mut g = self.next_id.lock().await;
-            let v = *g;
-            *g += 1;
-            v
-        };
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = Request {
             jsonrpc: JsonRpcVersion,
             id: RequestId::Num(id),
@@ -189,14 +190,11 @@ impl HostClient for HttpCallbackHostClient {
 }
 
 pub fn router<P: Plugin>(plugin: P, host: Arc<dyn HostClient>) -> Router {
-    let dispatcher = Arc::new(PluginDispatcher::new(plugin));
-    let dispatcher_clone = Arc::clone(&dispatcher);
-    tokio::spawn(async move {
-        dispatcher_clone.set_host(host).await;
-    });
+    let dispatcher = Arc::new(PluginDispatcher::with_host(plugin, host));
     let state = Arc::new(HttpDriverState {
         dispatcher,
         callback_client: RwLock::new(None),
+        dispatch_slots: Arc::new(Semaphore::new(64)),
     });
     Router::new()
         .route("/rpc", post(handle_rpc::<P>))
@@ -209,6 +207,13 @@ async fn handle_rpc<P: Plugin>(
 ) -> Json<Response> {
     let id = req.id.clone();
     let params = req.params.unwrap_or(serde_json::Value::Null);
+    let dispatch_slot = Arc::clone(&state.dispatch_slots).try_acquire_owned();
+    let Ok(dispatch_slot) = dispatch_slot else {
+        return Json(error_response(
+            id,
+            PluginError::internal("http plugin dispatch capacity exhausted"),
+        ));
+    };
 
     if req.method == method::META_INIT
         && let Ok(ctx) = serde_json::from_value::<InitContext>(params.clone())
@@ -246,8 +251,9 @@ async fn handle_rpc<P: Plugin>(
             ..crate::host_api::current_host_callback_context().unwrap_or_default()
         };
         tokio::spawn(async move {
+            let _dispatch_slot = dispatch_slot;
             while let Some(chunk) = handle.chunks.recv().await {
-                let _ = callback_client
+                if callback_client
                     .fire(
                         method::TOOL_STREAM_CHUNK,
                         attach_host_context(
@@ -255,7 +261,11 @@ async fn handle_rpc<P: Plugin>(
                             callback_context.clone(),
                         ),
                     )
-                    .await;
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
             }
             match handle.end.await {
                 Ok(Ok(end)) => {

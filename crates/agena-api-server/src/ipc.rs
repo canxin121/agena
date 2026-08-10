@@ -42,14 +42,16 @@ mod unix {
             std::fs::remove_file(&path)?;
         }
         let listener = UnixListener::bind(&path)?;
+        let mut connections = tokio::task::JoinSet::new();
         loop {
             let (stream, _) = listener.accept().await?;
             let state_clone = state.clone();
-            tokio::spawn(async move {
+            connections.spawn(async move {
                 if let Err(err) = handle_connection(stream, state_clone).await {
                     tracing::warn!(?err, "ipc connection failed");
                 }
             });
+            while connections.try_join_next().is_some() {}
         }
     }
 
@@ -64,7 +66,7 @@ mod unix {
             })
             .await;
 
-        let writer = tokio::spawn(async move {
+        let mut writer = tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 let payload = match serde_json::to_string(&msg) {
                     Ok(p) => p,
@@ -106,7 +108,13 @@ mod unix {
         }
         drop(guard);
         drop(tx);
-        let _ = writer.await;
+        if tokio::time::timeout(std::time::Duration::from_secs(1), &mut writer)
+            .await
+            .is_err()
+        {
+            writer.abort();
+            let _ = writer.await;
+        }
         Ok(())
     }
 

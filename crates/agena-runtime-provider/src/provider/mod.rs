@@ -31,7 +31,8 @@ pub use multi_adapter::MultiAdapterProvider;
 pub use multi_adapter::ProviderModelRoute;
 pub use registry::ProviderRegistry;
 pub use wire_message::{
-    WirePart as ProjectedSessionPart, project_completion_input, project_operation_output,
+    WirePart as ProjectedSessionPart, completion_input_part_from_wire,
+    completion_input_provider_state, project_completion_input, project_operation_output,
     project_operation_output as project_session_tool_result_output, project_persisted,
     project_persisted as project_session_parts, project_persisted_text_lossy,
     project_persisted_text_lossy as project_session_text_lossy,

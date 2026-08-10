@@ -886,9 +886,10 @@ async fn git_check_ignore(dir: &Path, names: &[String]) -> HashSet<String> {
     cmd.stdin(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
+    cmd.kill_on_drop(true);
 
-    let out = match cmd.output().await {
-        Ok(out) if out.status.success() => out,
+    let out = match tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output()).await {
+        Ok(Ok(out)) if out.status.success() => out,
         _ => return HashSet::new(),
     };
 

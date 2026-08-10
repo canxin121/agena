@@ -35,7 +35,7 @@ pub struct PluginManifest {
     pub hooks: HookSubscription,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolDefinition>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<PluginCommandDefinition>,
     /// Activity kinds contributed by this plugin. Hosts merge these into the
     /// built-in catalog so new kinds appear in transcript expansion settings
@@ -1080,7 +1080,7 @@ impl PluginManifest {
             authors: Vec::new(),
             transports: Vec::new(),
             hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
-                        tools: Vec::new(),
+            tools: Vec::new(),
             commands: Vec::new(),
             activity_kinds: Vec::new(),
             tags: Vec::new(),

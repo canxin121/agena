@@ -507,6 +507,7 @@ async fn ssh_agent_probe() -> (bool, bool, Option<String>) {
     // `ssh-add -L` prints public keys; it should not require interaction.
     let mut cmd = Command::new("ssh-add");
     cmd.args(["-L"])
+        .kill_on_drop(true)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

@@ -51,7 +51,6 @@ impl ToolApiPlugin {
         summary = "Enumerate current tools.",
         read_only,
         discovery,
-
         concurrency_safe
     )]
     async fn list(&self, input: &ToolApiListInput) -> SdkResult<ToolInvokeOutput> {
@@ -63,7 +62,6 @@ impl ToolApiPlugin {
         summary = "Search the Agena execution tools available in this session.",
         read_only,
         discovery,
-
         concurrency_safe
     )]
     async fn search(&self, input: &ToolApiSearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -75,7 +73,7 @@ impl ToolApiPlugin {
         summary = "Get reusable schema, examples, and usage notes for one Agena execution tool.",
         read_only,
         discovery,
-                concurrency_safe
+        concurrency_safe
     )]
     async fn help(&self, input: &ToolApiHelpInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_tool_api_help(input).await
@@ -86,7 +84,6 @@ impl ToolApiPlugin {
         summary = "List tool tags with pagination.",
         read_only,
         discovery,
-
         concurrency_safe
     )]
     async fn tags(&self, input: &ToolApiTagsInput) -> SdkResult<ToolInvokeOutput> {
@@ -98,7 +95,6 @@ impl ToolApiPlugin {
         summary = "Enumerate the current live plugin inventory with version, summary, tags, and tool count.",
         read_only,
         discovery,
-
         concurrency_safe
     )]
     async fn plugins_list(&self, input: &ToolApiListInput) -> SdkResult<ToolInvokeOutput> {
@@ -110,7 +106,6 @@ impl ToolApiPlugin {
         summary = "Search the loaded plugins by id, summary, or tag.",
         read_only,
         discovery,
-
         concurrency_safe
     )]
     async fn plugins_search(&self, input: &ToolApiSearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -122,7 +117,6 @@ impl ToolApiPlugin {
         summary = "List plugin tags with pagination.",
         read_only,
         discovery,
-
         concurrency_safe
     )]
     async fn plugins_tags(&self, input: &ToolApiTagsInput) -> SdkResult<ToolInvokeOutput> {

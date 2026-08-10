@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, Command};
+use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::error::{LspError, LspResult};
@@ -21,9 +21,14 @@ use super::LspTransport;
 /// Stdio transport for an LSP server.
 pub struct StdioTransport {
     server_name: String,
-    stdin: Mutex<ChildStdin>,
-    inbox: Mutex<mpsc::UnboundedReceiver<LspResult<InboundMessage>>>,
+    writer: mpsc::Sender<WriteRequest>,
+    inbox: Mutex<mpsc::Receiver<LspResult<InboundMessage>>>,
     _child: Mutex<Option<Child>>,
+}
+
+struct WriteRequest {
+    bytes: Vec<u8>,
+    completion: tokio::sync::oneshot::Sender<LspResult<()>>,
 }
 
 impl StdioTransport {
@@ -38,7 +43,8 @@ impl StdioTransport {
         cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
         }
@@ -59,13 +65,31 @@ impl StdioTransport {
             .take()
             .ok_or_else(|| LspError::Transport("child stderr closed".into()))?;
 
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(256);
         spawn_stdout_reader(name.to_string(), stdout, tx.clone());
         spawn_stderr_reader(name.to_string(), stderr);
 
+        let (writer, mut writes) = mpsc::channel::<WriteRequest>(64);
+        tokio::spawn(async move {
+            let mut stdin = stdin;
+            while let Some(request) = writes.recv().await {
+                let result = async {
+                    stdin.write_all(request.bytes.as_slice()).await?;
+                    stdin.flush().await
+                }
+                .await
+                .map_err(LspError::Io);
+                let failed = result.is_err();
+                let _ = request.completion.send(result);
+                if failed {
+                    break;
+                }
+            }
+        });
+
         Ok(Arc::new(Self {
             server_name: name.to_string(),
-            stdin: Mutex::new(stdin),
+            writer,
             inbox: Mutex::new(rx),
             _child: Mutex::new(Some(child)),
         }))
@@ -80,10 +104,12 @@ impl StdioTransport {
 impl LspTransport for StdioTransport {
     async fn send(&self, payload: Value) -> LspResult<()> {
         let bytes = encode_frame(&payload);
-        let mut stdin = self.stdin.lock().await;
-        stdin.write_all(&bytes).await?;
-        stdin.flush().await?;
-        Ok(())
+        let (completion, result) = tokio::sync::oneshot::channel();
+        self.writer
+            .send(WriteRequest { bytes, completion })
+            .await
+            .map_err(|_| LspError::TransportClosed)?;
+        result.await.map_err(|_| LspError::TransportClosed)?
     }
 
     async fn recv(&self) -> LspResult<InboundMessage> {
@@ -92,8 +118,8 @@ impl LspTransport for StdioTransport {
     }
 
     async fn close(&self) -> LspResult<()> {
-        let mut guard = self._child.lock().await;
-        if let Some(mut child) = guard.take() {
+        let child = self._child.lock().await.take();
+        if let Some(mut child) = child {
             let _ = child.kill().await;
         }
         Ok(())
@@ -103,7 +129,7 @@ impl LspTransport for StdioTransport {
 fn spawn_stdout_reader(
     name: String,
     stdout: tokio::process::ChildStdout,
-    tx: mpsc::UnboundedSender<LspResult<InboundMessage>>,
+    tx: mpsc::Sender<LspResult<InboundMessage>>,
 ) {
     tokio::spawn(async move {
         let mut reader = BufReader::new(stdout);
@@ -112,12 +138,12 @@ fn spawn_stdout_reader(
         loop {
             let n = match reader.read(&mut chunk).await {
                 Ok(0) => {
-                    let _ = tx.send(Err(LspError::TransportClosed));
+                    let _ = tx.send(Err(LspError::TransportClosed)).await;
                     return;
                 }
                 Ok(n) => n,
                 Err(err) => {
-                    let _ = tx.send(Err(LspError::Io(err)));
+                    let _ = tx.send(Err(LspError::Io(err))).await;
                     return;
                 }
             };
@@ -126,7 +152,7 @@ fn spawn_stdout_reader(
                 match parser.take() {
                     Ok(Some(value)) => match InboundMessage::from_value(value) {
                         Ok(msg) => {
-                            if tx.send(Ok(msg)).is_err() {
+                            if tx.send(Ok(msg)).await.is_err() {
                                 return;
                             }
                         }
@@ -140,7 +166,7 @@ fn spawn_stdout_reader(
                     },
                     Ok(None) => break,
                     Err(err) => {
-                        let _ = tx.send(Err(LspError::Protocol(err)));
+                        let _ = tx.send(Err(LspError::Protocol(err))).await;
                         return;
                     }
                 }

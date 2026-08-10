@@ -195,7 +195,7 @@ pub(super) fn validate_plugin_manifest_value(
             "version",
             "description",
             "summary",
-                        "help",
+            "help",
             "authors",
             "transports",
             "hooks",
@@ -323,7 +323,7 @@ pub(super) fn validate_tool_manifest_value(
             "contract",
             "model",
             "docs",
-                        "runtime",
+            "runtime",
             "permissions",
             "capabilities",
         ],
@@ -395,7 +395,7 @@ pub(super) fn validate_tool_manifest_value(
             output,
         );
     }
-        if let Some(tool) = parsed_tool.as_ref() {
+    if let Some(tool) = parsed_tool.as_ref() {
         validate_tool_segment(
             plugin_namespace,
             plugin_name,

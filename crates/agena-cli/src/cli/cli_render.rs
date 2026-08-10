@@ -2,21 +2,21 @@ use agena_application::Application;
 
 use super::{
     ActiveSnapshotOutput, AgenaCli, AppError, ApplyArgs, ApplyOutput, AuthCommand, AuthListArgs,
-    AuthListOutput, AuthSubcommand, Command, CommitArgs, CommitOutput, ContinueArgs, CostArgs,
-    CostOutput, DebugCommand, DebugRunOutput, DebugSessionArgs, DebugSessionOutput,
-    DebugSubcommand, DiagnosticsArgs, DiagnosticsConfigOutput, DiagnosticsEnvironmentOutput,
-    DiagnosticsOutput, ExecArgs, ExecOutput, ForkArgs, GitArgs, GitOutput, ManagedSnapshotOutput,
-    MemoryCommand, MemoryListArgs, MemoryListOutput, MemorySubcommand, MemorySummaryOutput,
-    OutputFormat, PathBuf, PermissionReply, PermissionsArgs, PermissionsListArgs,
-    PermissionsOutput, PermissionsReplaceArgs, PermissionsReplyArgs, PermissionsRevokeArgs,
-    PermissionsSubcommand, PermissionsWriteArgs, PrArgs, PrOutput, ResumeArgs, ReviewArgs,
-    SessionCreateRequest, SessionExecutionRequest, SessionForkOutput, SessionForkRequest,
-    SessionImportOutput, SessionListArgs, SessionListOutput, SessionListView, SessionOutput,
+    AuthListOutput, AuthSubcommand, CommitArgs, CommitOutput, ContinueArgs, CostArgs, CostOutput,
+    DebugCommand, DebugRunOutput, DebugSessionArgs, DebugSessionOutput, DebugSubcommand,
+    DiagnosticsArgs, DiagnosticsConfigOutput, DiagnosticsEnvironmentOutput, DiagnosticsOutput,
+    ExecArgs, ExecOutput, ForkArgs, GitArgs, GitOutput, ManagedSnapshotOutput, MemoryCommand,
+    MemoryListArgs, MemoryListOutput, MemorySubcommand, MemorySummaryOutput, OutputFormat, PathBuf,
+    PermissionReply, PermissionsArgs, PermissionsListArgs, PermissionsOutput,
+    PermissionsReplaceArgs, PermissionsReplyArgs, PermissionsRevokeArgs, PermissionsSubcommand,
+    PermissionsWriteArgs, PrArgs, PrOutput, ResumeArgs, ReviewArgs, SessionCreateRequest,
+    SessionExecutionRequest, SessionForkOutput, SessionForkRequest, SessionImportOutput,
+    SessionListArgs, SessionListOutput, SessionListView, SessionOutput,
     SessionPermissionReplyRequest, SessionUserRunRequest, SessionsCommand, SessionsSubcommand,
     SnapshotArgs, SnapshotBackendSupportOutput, SnapshotCapabilitiesOutput, SnapshotOutput,
-    UsageArgs, WorkflowState, application_from_runtime, auth_summary, collect_git_preflight,
+    UsageArgs, WorkflowState, application_from_runtime, auth_summary,
     filter_session_summaries_by_view, format_apply_output, format_debug_session_output, fs,
-    git_output, last_assistant_text_from_projection, latest_event_seq, list_all_session_summaries,
+    last_assistant_text_from_projection, latest_event_seq, list_all_session_summaries,
     list_permission_rules, memory_type_label, paginate_session_summaries,
     permission_reply_kind_from_arg, permission_rule_output,
     permission_rule_write_command_from_args, permission_scope_from_arg, projected_run_visible_text,
@@ -441,7 +441,10 @@ impl AgenaCli {
     ) -> Result<String, AppError> {
         let runtime = self.session_runtime().await?;
         let application = application_from_runtime(&runtime)?;
-        let snapshot = application.snapshot_status();
+        let snapshot = application
+            .snapshot_status()
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
         if !snapshot.registry_available {
             return Err(AppError::Config(
                 "snapshot registry is not enabled in this runtime".to_owned(),
@@ -522,93 +525,53 @@ impl AgenaCli {
         )
     }
 
-    pub(super) fn render_commit_command(&self, args: CommitArgs) -> Result<String, AppError> {
-        let workspace_root = self.resolve_workspace_root(None)?;
-        let preflight = collect_git_preflight(&workspace_root)?;
-        if !preflight.git_available {
-            return Err(AppError::Config("git is not available in PATH".to_owned()));
-        }
-        if !preflight.repo {
-            return Err(AppError::Config(format!(
-                "not a git repository: {}",
-                workspace_root.display()
-            )));
-        }
-        if preflight.staged_files == 0 {
-            return Err(AppError::Config("no staged changes to commit".to_owned()));
-        }
-        let output = Command::new("git")
-            .args(["commit", "-m", args.message.as_str()])
-            .current_dir(&workspace_root)
-            .output()?;
-        if !output.status.success() {
-            return Err(AppError::Config(format!(
-                "git commit failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        let commit = git_output(&workspace_root, ["rev-parse", "HEAD"])?;
-        let summary = git_output(&workspace_root, ["log", "-1", "--pretty=%s"])?;
+    pub(super) async fn render_commit_command(&self, args: CommitArgs) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
+        let application = application_from_runtime(&runtime)?;
+        let result = application
+            .git_commit(agena_application::dto::GitCommitRequest {
+                message: args.message,
+            })
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
         render_serialized(
             args.format,
             &CommitOutput {
-                workspace_root: workspace_root.display().to_string(),
-                commit,
-                summary,
+                workspace_root: result.status.workspace_root,
+                commit: result.commit,
+                summary: result.summary,
             },
         )
     }
 
-    pub(super) fn render_pr_command(&self, args: PrArgs) -> Result<String, AppError> {
-        let workspace_root = self.resolve_workspace_root(None)?;
-        let preflight = collect_git_preflight(&workspace_root)?;
-        if !preflight.git_available {
-            return Err(AppError::Config("git is not available in PATH".to_owned()));
-        }
-        if !preflight.gh_available {
-            return Err(AppError::Config("gh is not available in PATH".to_owned()));
-        }
-        if !preflight.repo {
-            return Err(AppError::Config(format!(
-                "not a git repository: {}",
-                workspace_root.display()
-            )));
-        }
+    pub(super) async fn render_pr_command(&self, args: PrArgs) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
+        let application = application_from_runtime(&runtime)?;
+        let status = application
+            .git_status()
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
         let branch = args
             .head
             .clone()
-            .or(preflight.branch.clone())
+            .or(status.branch)
             .ok_or_else(|| AppError::Config("could not determine current branch".to_owned()))?;
-
-        let mut command = Command::new("gh");
-        command
-            .arg("pr")
-            .arg("create")
-            .arg("--title")
-            .arg(args.title);
-        command.arg("--body").arg(args.body.unwrap_or_default());
-        if let Some(base) = args.base {
-            command.arg("--base").arg(base);
-        }
-        if let Some(head) = args.head {
-            command.arg("--head").arg(head);
-        }
-        command.current_dir(&workspace_root);
-
-        let output = command.output()?;
-        if !output.status.success() {
-            return Err(AppError::Config(format!(
-                "gh pr create failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let workspace_root = status.workspace_root;
+        let created = application
+            .git_create_pull_request(agena_application::dto::GitPullRequestCreateRequest {
+                title: args.title,
+                body: args.body,
+                base: args.base,
+                head: args.head,
+            })
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
         render_serialized(
             args.format,
             &PrOutput {
-                workspace_root: workspace_root.display().to_string(),
+                workspace_root,
                 branch,
-                url,
+                url: created.url,
             },
         )
     }

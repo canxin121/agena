@@ -1,5 +1,7 @@
 //! Internal process-management handler for the `shell` tool.
 
+static PROCESS_BLOCKING_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
+
 use crate::part::ShellToolInput;
 use agena_domain::{ProcessEvent, ProcessShell, ProcessStatus, ProcessStream, ProcessSummary};
 
@@ -19,21 +21,12 @@ use agena_tool::shell::powershell_command_for_windows;
 pub(crate) fn execute(
     executor: &ToolExecutor,
     input: &ShellToolInput,
-    context: ToolRuntimeContext,
+    _context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     match input {
-        ShellToolInput::Run {
-            shell,
-            command,
-            background,
-            monitor,
-        } => {
-            if *background || monitor.is_some() {
-                execute_background_run(executor, *shell, command, monitor.as_ref(), context)
-            } else {
-                execute_foreground_run(executor, *shell, command, context)
-            }
-        }
+        ShellToolInput::Run { .. } => Err(ToolError::plugin(
+            "shell.run must execute through the async process path".to_string(),
+        )),
         ShellToolInput::List {} => {
             let registry = process_registry(executor)?;
             Ok(render_list(registry.list()))
@@ -65,16 +58,70 @@ pub(crate) fn execute(
     }
 }
 
-fn execute_foreground_run(
+pub(crate) async fn execute_async(
     executor: &ToolExecutor,
-    shell: ProcessShell,
+    input: &ShellToolInput,
+    context: ToolRuntimeContext,
+) -> Result<ToolPayloadExecution, ToolError> {
+    match input {
+        ShellToolInput::Run {
+            shell: ProcessShell::Bash,
+            command,
+            background: false,
+            monitor: None,
+        } => execute_foreground_bash_async(executor, command, context).await,
+        ShellToolInput::Run {
+            shell: ProcessShell::Powershell,
+            command,
+            background: false,
+            monitor: None,
+        } => {
+            let execution = powershell::execute_async(executor, command, context).await?;
+            normalize_foreground_execution(execution, ProcessShell::Powershell, command)
+        }
+        ShellToolInput::Run {
+            shell,
+            command,
+            background,
+            monitor,
+        } if *background || monitor.is_some() => {
+            execute_background_run_async(executor, *shell, command, monitor.as_ref(), context).await
+        }
+        _ => {
+            let executor = executor.clone();
+            let input = input.clone();
+            let worker_permit = PROCESS_BLOCKING_WORKERS
+                .acquire()
+                .await
+                .map_err(|_| ToolError::plugin("process worker pool is unavailable".to_string()))?;
+            tokio::task::spawn_blocking(move || {
+                let _worker_permit = worker_permit;
+                execute(&executor, &input, context)
+            })
+            .await
+            .map_err(|error| {
+                ToolError::plugin(format!(
+                    "process tool worker failed before completion: {error}"
+                ))
+            })?
+        }
+    }
+}
+
+async fn execute_foreground_bash_async(
+    executor: &ToolExecutor,
     command: &crate::part::ShellCommandInput,
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let execution = match shell {
-        ProcessShell::Bash => bash::execute(executor, command, context)?,
-        ProcessShell::Powershell => powershell::execute(executor, command, context)?,
-    };
+    let execution = bash::execute_async(executor, command, context).await?;
+    normalize_foreground_execution(execution, ProcessShell::Bash, command)
+}
+
+fn normalize_foreground_execution(
+    execution: ToolPayloadExecution,
+    shell: ProcessShell,
+    command: &crate::part::ShellCommandInput,
+) -> Result<ToolPayloadExecution, ToolError> {
     let super::ToolPayloadExecution {
         output,
         mut view,
@@ -125,35 +172,85 @@ fn execute_foreground_run(
     Ok(ToolPayloadExecution::new(output, view))
 }
 
-fn execute_background_run(
+async fn execute_background_run_async(
     executor: &ToolExecutor,
     shell: ProcessShell,
     command: &crate::part::ShellCommandInput,
     monitor: Option<&crate::part::ShellMonitorInput>,
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let registry = process_registry(executor)?;
     let effects = command.filesystem_effects();
     validate_declared_filesystem_effects("shell.run", command.command.as_str(), &effects)?;
-
     let cwd = resolve_workdir(executor, command.workdir.as_deref())?;
-
-    let mut env = inherited_environment();
-    env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);
-
+    let ToolRuntimeContext {
+        session_id,
+        call_id,
+        prepared_shell_command,
+    } = context;
     let prepared = match shell {
-        ProcessShell::Bash => match context.prepared_shell_command {
+        ProcessShell::Bash => match prepared_shell_command {
             Some(prepared) => Some(prepared),
-            None => match (context.session_id, context.call_id) {
+            None => match (session_id, call_id) {
                 (Some(session_id), Some(call_id)) => {
-                    executor.prepare_shell_command(command, session_id, call_id)?
+                    bash::prepare_command_async(executor, command, session_id, call_id).await?
                 }
                 _ => None,
             },
         },
         ProcessShell::Powershell => None,
     };
+    let prepared_env = prepared.as_ref().map(|prepared| prepared.env.clone());
     let (final_command, final_cwd) = finalize_background_command(shell, command, cwd, prepared)?;
+    let env = match prepared_env {
+        Some(env) => env,
+        None => {
+            let mut env = inherited_environment();
+            env.extend(
+                executor
+                    .shell_env_overrides_async(&final_cwd, session_id, call_id)
+                    .await?,
+            );
+            env
+        }
+    };
+
+    let worker_executor = executor.clone();
+    let worker_command = command.clone();
+    let worker_monitor = monitor.cloned();
+    let worker_permit = PROCESS_BLOCKING_WORKERS
+        .acquire()
+        .await
+        .map_err(|_| ToolError::plugin("process worker pool is unavailable".to_string()))?;
+    tokio::task::spawn_blocking(move || {
+        let _worker_permit = worker_permit;
+        execute_background_run_prepared(
+            &worker_executor,
+            shell,
+            &worker_command,
+            worker_monitor.as_ref(),
+            final_command,
+            final_cwd,
+            env,
+        )
+    })
+    .await
+    .map_err(|error| {
+        ToolError::plugin(format!(
+            "background process worker failed before completion: {error}"
+        ))
+    })?
+}
+
+fn execute_background_run_prepared(
+    executor: &ToolExecutor,
+    shell: ProcessShell,
+    command: &crate::part::ShellCommandInput,
+    monitor: Option<&crate::part::ShellMonitorInput>,
+    final_command: String,
+    final_cwd: std::path::PathBuf,
+    env: std::collections::HashMap<String, String>,
+) -> Result<ToolPayloadExecution, ToolError> {
+    let registry = process_registry(executor)?;
     let pattern = |value: Option<&String>| {
         value.map(|value| match monitor.map(|monitor| monitor.pattern_kind) {
             Some(crate::part::ShellMonitorPatternKind::Literal) => regex::escape(value),

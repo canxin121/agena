@@ -350,7 +350,7 @@ pub fn project_completion_input(parts: &[Part]) -> CompletionInputRun {
     }
 }
 
-fn completion_input_part_from_wire(part: WirePart) -> CompletionInputPart {
+pub fn completion_input_part_from_wire(part: WirePart) -> CompletionInputPart {
     match part {
         WirePart::Text { text } => CompletionInputPart::Text { text },
         WirePart::Reasoning { text } => CompletionInputPart::Reasoning { text },
@@ -414,7 +414,7 @@ fn completion_input_attachment(item: AttachmentItem) -> CompletionInputAttachmen
     }
 }
 
-fn completion_input_provider_state(
+pub fn completion_input_provider_state(
     value: &serde_json::Value,
 ) -> Option<CompletionInputProviderState> {
     serde_json::from_value::<PartProviderState>(value.clone())

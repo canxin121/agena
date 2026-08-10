@@ -10,9 +10,9 @@ impl App {
         let tx = self.tx.clone();
         let session_id = self.transcript.session_id.map(|id| id.to_string());
         let focus = self.focus.label().to_string();
-        tokio::task::spawn_blocking(move || {
-            let output = run_status_line_command(command, session_id, focus);
-            let _ = tx.send(AppMessage::StatusLineUpdated { output });
+        tokio::spawn(async move {
+            let output = run_status_line_command(command, session_id, focus).await;
+            let _ = tx.try_send(AppMessage::StatusLineUpdated { output });
         });
     }
 
@@ -48,11 +48,13 @@ impl App {
                 .create_session(title, parent_id)
                 .await
                 .map_err(crate::UiFailure::from_backend);
-            let _ = tx.send(AppMessage::SessionCreated {
-                submit_draft,
-                pending_message_id,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::SessionCreated {
+                    submit_draft,
+                    pending_message_id,
+                    result,
+                })
+                .await;
         });
     }
 

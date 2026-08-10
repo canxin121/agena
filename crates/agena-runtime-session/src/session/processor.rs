@@ -30,6 +30,12 @@ pub(crate) struct SessionRunRequest {
     pub model: ModelRef,
     pub completion: CompletionRequest,
     pub next_message_id: i64,
+    /// The run marker's content at turn start. Multi-round turns (one user
+    /// message == one run marker) carry the accumulated round records in
+    /// `content["rounds"]`; the processor appends this round's record at the
+    /// end of a successful tool-calling turn so the next round's prompt
+    /// projection can re-split the run into per-round wire messages.
+    pub marker_content: Option<serde_json::Value>,
     pub part_ids: ProcessorPartIdAllocator,
     pub next_call_id: i64,
     /// The v2 facade-backed store. R2 makes parts the only durable write
@@ -99,6 +105,7 @@ mod tool_calls;
 
 pub(crate) use self::helpers::*;
 pub(crate) use self::media::*;
+pub(crate) use self::run::MARKER_ROUNDS_KEY;
 pub(crate) use self::tool_call_helpers::*;
 
 #[cfg(test)]

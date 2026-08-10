@@ -1,6 +1,6 @@
 use super::{
-    AppError, Command, ContinueArgs, DateTime, Duration, GitPreflight, Instant, ModelRef, Path,
-    Role, SessionDetail, SessionRunOptions, UsageArgs, UsageStatsQuery, Utc,
+    AppError, ContinueArgs, DateTime, Duration, Instant, ModelRef, Role, SessionDetail,
+    SessionRunOptions, UsageArgs, UsageStatsQuery, Utc,
 };
 use agena_provider::ProviderCatalog;
 
@@ -197,95 +197,6 @@ pub(super) fn title_from_prompt(prompt: &str) -> String {
     } else {
         truncated
     }
-}
-
-pub(super) fn command_available(command: &str) -> bool {
-    Command::new(command)
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
-pub(super) fn git_success<const N: usize>(workspace_root: &Path, args: [&str; N]) -> bool {
-    Command::new("git")
-        .args(args)
-        .current_dir(workspace_root)
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
-pub(super) fn git_output<const N: usize>(
-    workspace_root: &Path,
-    args: [&str; N],
-) -> Result<String, AppError> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(workspace_root)
-        .output()?;
-    if !output.status.success() {
-        return Err(AppError::Config(format!(
-            "git {:?} failed: {}",
-            args,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-pub(super) fn collect_git_preflight(workspace_root: &Path) -> Result<GitPreflight, AppError> {
-    let git_available = command_available("git");
-    let gh_available = command_available("gh");
-    if !git_available {
-        return Ok(GitPreflight {
-            git_available,
-            repo: false,
-            gh_available,
-            branch: None,
-            staged_files: 0,
-        });
-    }
-
-    let repo = git_success(workspace_root, ["rev-parse", "--is-inside-work-tree"]);
-    if !repo {
-        return Ok(GitPreflight {
-            git_available,
-            repo,
-            gh_available,
-            branch: None,
-            staged_files: 0,
-        });
-    }
-
-    let branch = non_empty_string(git_output(workspace_root, ["branch", "--show-current"])?);
-    let status = git_output(workspace_root, ["status", "--porcelain"])?;
-    let staged_files = count_staged_files(status.as_str());
-
-    Ok(GitPreflight {
-        git_available,
-        repo,
-        gh_available,
-        branch,
-        staged_files,
-    })
-}
-
-pub(super) fn non_empty_string(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
-}
-
-pub(super) fn count_staged_files(status: &str) -> u64 {
-    let mut staged = 0_u64;
-
-    for line in status.lines().filter(|line| !line.is_empty()) {
-        let bytes = line.as_bytes();
-        let x = bytes.first().copied().unwrap_or(b' ');
-        if x != b' ' {
-            staged += 1;
-        }
-    }
-
-    staged
 }
 
 pub(super) fn session_storage_error() -> AppError {

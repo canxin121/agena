@@ -178,7 +178,7 @@ impl From<agena_runtime::RuntimeUiConfiguration> for TuiPreferencesResource {
                 agena_runtime::RuntimeTuiColorScheme::Dark => TuiColorSchemeResource::Dark,
                 agena_runtime::RuntimeTuiColorScheme::Light => TuiColorSchemeResource::Light,
             },
-                        graphics: match value.graphics {
+            graphics: match value.graphics {
                 agena_runtime::RuntimeTuiGraphicsMode::Auto => TuiGraphicsModeResource::Auto,
                 agena_runtime::RuntimeTuiGraphicsMode::Native => TuiGraphicsModeResource::Native,
                 agena_runtime::RuntimeTuiGraphicsMode::Unicode => TuiGraphicsModeResource::Unicode,

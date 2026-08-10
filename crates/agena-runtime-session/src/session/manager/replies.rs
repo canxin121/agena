@@ -53,6 +53,29 @@ enum ReplyDispatch {
     Accepted(crate::SessionExecutionCommandOutcome),
 }
 
+enum SessionMutationResult<T> {
+    Duplicate(Box<Session>),
+    Committed(T),
+}
+
+struct PermissionReplyCommit {
+    state: Arc<SessionManagerState>,
+    session: Session,
+    pending: SessionPendingPermissionRequest,
+    permission_request: agena_domain::PermissionRequest,
+    conversation_identity: ConversationIdentity,
+    reply_model_turn_id: i64,
+    continue_model: bool,
+}
+
+struct UserInputReplyCommit {
+    state: Arc<SessionManagerState>,
+    session: Session,
+    pending: SessionPendingInteractiveRequest,
+    reply_model_turn_id: i64,
+    host_response: Option<agena_plugin_host::sdk::host_api::AskUserResponse>,
+}
+
 /// Inputs specific to continuing a session after a permission grant.
 ///
 /// These values are consumed as one transaction: separating them into a long
@@ -787,7 +810,9 @@ impl SessionManager {
             model_turn_id,
             state,
         } = continuation;
-        let options = self.apply_execution_context_to_run_options(&session, options)?;
+        let options = self
+            .apply_execution_context_to_run_options_async(&session, options)
+            .await?;
         let continuation_model_turn_id = matching_model_turn_id(&session, model_turn_id, &options);
         if self.apply_run_selection_to_session(&mut session, &options) {
             session = self
@@ -853,7 +878,8 @@ impl SessionManager {
             continue_model,
         } = continuation;
         let options = if continue_model {
-            self.apply_execution_context_to_run_options(&session, options)?
+            self.apply_execution_context_to_run_options_async(&session, options)
+                .await?
         } else {
             options
         };
@@ -872,16 +898,26 @@ impl SessionManager {
             let execution_state = state.clone();
             let execution_tool = resolved_tool.clone();
             let cancellation = control.cancel.clone();
-            let execution = tokio::task::spawn_blocking(move || {
-                execution_manager.execute_pending_tool_after_approval(
-                    execution_state.as_ref(),
+            let scoped_executor = execution_state
+                .tool_executor
+                .for_session_context_async(&execution_tool.session_runtime.execution)
+                .await
+                .with_cancellation_token(Some(cancellation))
+                .with_command_event_sink(
+                    execution_manager
+                        .command_event_sink_for_pending_if_needed(session_id, &execution_tool),
+                );
+            let host_user_input_sequence = execution_manager
+                .host_user_input_sequence_guard(session_id, execution_tool.call_id);
+            let execution = scoped_executor
+                .execute_invocation_detailed_with_prepared_shell(
+                    &execution_tool.invocation,
                     session_id,
-                    &execution_tool,
-                    Some(cancellation),
+                    execution_tool.call_id,
+                    execution_tool.prepared_shell_command.clone(),
                 )
-            })
-            .await
-            .map_err(|error| AppError::Internal(format!("approved tool task failed: {error}")))?;
+                .await;
+            drop(host_user_input_sequence);
             // A plugin may have persisted nested interaction state while the
             // blocking invocation was in flight. Apply the terminal result to
             // the latest projection, exactly as ordinary tool execution does.
@@ -955,45 +991,43 @@ impl SessionManager {
         mode: ReplyExecutionMode,
     ) -> Result<ReplyDispatch, AppError> {
         let request_id = request.request.reply.request_id.clone();
-        let reply_lock = self.reply_session_lock(request.request.session_id).await;
-        let reply_guard = reply_lock.lock().await;
-        let (state, mut session) = self.load_reply_session(request.request.session_id).await?;
-        let pending = match self.lookup_pending_reply(
-            &session,
-            request.request.session_id,
-            request_id.as_str(),
-            "permission",
-            find_pending_permission_by_request_id,
-            has_replied_permission_request,
-        )? {
-            PendingReplyLookup::Pending(pending) => pending,
-            PendingReplyLookup::Duplicate => {
-                return Ok(ReplyDispatch::Completed(Box::new(session)));
-            }
-        };
 
-        let permission_request = self.clone_pending_reply_request(
-            &session,
-            &pending,
-            request_id.as_str(),
-            "permission",
-            pending_permission_request,
-        )?;
-
-        // An `AutoApprove` reply asks the automatic-approval classifier to
-        // decide this exact request. Classify before the reply is recorded:
-        // the classifier outcome is downgraded to a one-shot Allow/Deny, and
-        // a classification failure keeps the pending permission untouched so
-        // the interactive client can retry or pick a manual decision.
+        // Auto-approval may call a model and can take seconds. Do that from a
+        // read snapshot before entering the per-session reply transaction;
+        // otherwise one classifier request serializes every permission and
+        // user-input reply for the session. The pending request is loaded and
+        // validated again under the lock below before any mutation commits.
         if request.request.reply.kind == PermissionReplyKind::AutoApprove {
+            let (classification_state, classification_session) =
+                self.load_reply_session(request.request.session_id).await?;
+            let classification_pending = match self.lookup_pending_reply(
+                &classification_session,
+                request.request.session_id,
+                request_id.as_str(),
+                "permission",
+                find_pending_permission_by_request_id,
+                has_replied_permission_request,
+            )? {
+                PendingReplyLookup::Pending(pending) => pending,
+                PendingReplyLookup::Duplicate => {
+                    return Ok(ReplyDispatch::Completed(Box::new(classification_session)));
+                }
+            };
+            let classification_request = self.clone_pending_reply_request(
+                &classification_session,
+                &classification_pending,
+                request_id.as_str(),
+                "permission",
+                pending_permission_request,
+            )?;
             let candidate = agena_permission::ClassifierCandidate {
-                action: agena_domain::ActionSpec::from_action(&permission_request.action),
-                policy_reason: permission_request.reason.clone(),
+                action: agena_domain::ActionSpec::from_action(&classification_request.action),
+                policy_reason: classification_request.reason.clone(),
             };
             let outcomes = self
                 .classify_auto_candidates(
-                    Some(&session),
-                    &state,
+                    Some(&classification_session),
+                    &classification_state,
                     Some(request.request.session_id),
                     vec![candidate],
                 )
@@ -1018,100 +1052,139 @@ impl SessionManager {
             }
         }
 
-        let replied_at_ms = Utc::now().timestamp_millis();
-        let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
-        let _operation_id = resolved_tool.operation_id.clone();
-        let _call_id = resolved_tool.call_id;
-        {
-            let tool_part = session
-                .part_mut(&pending.tool.part)
-                .ok_or_else(|| pending_tool_part_not_found_error(&pending.tool.part))?;
-            let Some(mut operation) = operation_from_part(tool_part) else {
-                return Err(pending_reply_payload_missing_error(
-                    "permission",
+        let mutation = self
+            .session_mutations
+            .run(request.request.session_id, async {
+                let (state, mut session) =
+                    self.load_reply_session(request.request.session_id).await?;
+                let pending = match self.lookup_pending_reply(
+                    &session,
+                    request.request.session_id,
                     request_id.as_str(),
-                ));
-            };
-            if !operation
-                .authorization
-                .record_reply(request.request.reply.clone(), replied_at_ms)
-            {
-                return Err(pending_reply_payload_missing_error(
                     "permission",
+                    find_pending_permission_by_request_id,
+                    has_replied_permission_request,
+                )? {
+                    PendingReplyLookup::Pending(pending) => pending,
+                    PendingReplyLookup::Duplicate => {
+                        return Ok(SessionMutationResult::Duplicate(Box::new(session)));
+                    }
+                };
+
+                let permission_request = self.clone_pending_reply_request(
+                    &session,
+                    &pending,
                     request_id.as_str(),
-                ));
+                    "permission",
+                    pending_permission_request,
+                )?;
+
+                // AutoApprove has been downgraded to a one-shot Allow/Deny before
+                // entering the mutation lane. A classifier failure therefore
+                // leaves the durable pending permission untouched.
+                let replied_at_ms = Utc::now().timestamp_millis();
+                let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
+                let _operation_id = resolved_tool.operation_id.clone();
+                let _call_id = resolved_tool.call_id;
+                {
+                    let tool_part = session
+                        .part_mut(&pending.tool.part)
+                        .ok_or_else(|| pending_tool_part_not_found_error(&pending.tool.part))?;
+                    let Some(mut operation) = operation_from_part(tool_part) else {
+                        return Err(pending_reply_payload_missing_error(
+                            "permission",
+                            request_id.as_str(),
+                        ));
+                    };
+                    if !operation
+                        .authorization
+                        .record_reply(request.request.reply.clone(), replied_at_ms)
+                    {
+                        return Err(pending_reply_payload_missing_error(
+                            "permission",
+                            request_id.as_str(),
+                        ));
+                    }
+                    let decision = match request.request.reply.kind {
+                        PermissionReplyKind::AllowOnce => "Permission allowed once",
+                        PermissionReplyKind::AllowAlways => "Permission allowed always",
+                        PermissionReplyKind::DenyOnce => "Permission denied once",
+                        PermissionReplyKind::DenyAlways => "Permission denied always",
+                        PermissionReplyKind::AutoApprove => "Permission auto-approved",
+                    };
+                    let summary = request
+                        .request
+                        .reply
+                        .reason
+                        .as_deref()
+                        .filter(|reason| !reason.trim().is_empty())
+                        .map(|reason| format!("{decision} · {reason}"))
+                        .unwrap_or_else(|| decision.to_owned());
+                    operation.set_summary(summary);
+                    let summary = operation.summary.clone();
+                    apply_operation_mutation(tool_part, |op| *op = operation);
+                    tool_part.summary = Some(summary);
+                }
+                let reply_message_id = assistant_message_id(&session, &pending.tool.part)?;
+                let conversation_identity = self
+                    .conversation_identity_for_message(request.request.session_id, reply_message_id)
+                    .await?;
+
+                // Only a genuine provider Tool API call may resume the model.
+                let continue_model =
+                    !run_marker_externally_initiated_tool(&session, &pending.tool.part)?
+                        && resolve_pending_tool(&session, &pending.tool)?
+                            .invocation
+                            .tool_api_call
+                            .is_some();
+                let persisted_actions = if permission_request.requested_actions.is_empty() {
+                    vec![permission_request.action.clone()]
+                } else {
+                    permission_request.requested_actions.clone()
+                };
+                let persisted_rules = persisted_rules_for_reply(
+                    self,
+                    request.request.session_id,
+                    persisted_actions.as_slice(),
+                    &request.request.reply,
+                    request.operator.as_deref(),
+                )
+                .await?;
+                session = self
+                    .persist_session_changes_with_rules(
+                        session,
+                        vec![pending.tool.part.part_id],
+                        persisted_rules,
+                        state.clone(),
+                    )
+                    .await?;
+                session.refresh_derived();
+
+                Ok(SessionMutationResult::Committed(PermissionReplyCommit {
+                    state,
+                    session,
+                    pending,
+                    permission_request,
+                    conversation_identity,
+                    reply_model_turn_id: reply_message_id,
+                    continue_model,
+                }))
+            })
+            .await?;
+        let PermissionReplyCommit {
+            state,
+            mut session,
+            pending,
+            permission_request,
+            conversation_identity,
+            reply_model_turn_id,
+            continue_model,
+        } = match mutation {
+            SessionMutationResult::Duplicate(session) => {
+                return Ok(ReplyDispatch::Completed(session));
             }
-            let decision = match request.request.reply.kind {
-                PermissionReplyKind::AllowOnce => "Permission allowed once",
-                PermissionReplyKind::AllowAlways => "Permission allowed always",
-                PermissionReplyKind::DenyOnce => "Permission denied once",
-                PermissionReplyKind::DenyAlways => "Permission denied always",
-                // Unreachable: an AutoApprove reply is downgraded to a one-shot
-                // Allow/Deny before this point. Keep a clean fallback instead of
-                // panicking if a future regression skips the downgrade.
-                PermissionReplyKind::AutoApprove => "Permission auto-approved",
-            };
-            let summary = request
-                .request
-                .reply
-                .reason
-                .as_deref()
-                .filter(|reason| !reason.trim().is_empty())
-                .map(|reason| format!("{decision} · {reason}"))
-                .unwrap_or_else(|| decision.to_owned());
-            operation.set_summary(summary);
-            let summary = operation.summary.clone();
-            apply_operation_mutation(tool_part, |op| *op = operation);
-            tool_part.summary = Some(summary);
-        }
-        let reply_message_id = assistant_message_id(&session, &pending.tool.part)?;
-        let conversation_identity = self
-            .conversation_identity_for_message(request.request.session_id, reply_message_id)
-            .await?;
-        let reply_model_turn_id = reply_message_id;
-
-        // Only a genuine provider Tool API call may resume the model after
-        // the approved target completes. A manually constructed or
-        // application-originated operation has no provider call to replay;
-        // treating it as one can re-enter the response loop without a model
-        // turn (and used to permit legacy external approval paths).
-        let continue_model = !run_marker_externally_initiated_tool(&session, &pending.tool.part)?
-            && resolve_pending_tool(&session, &pending.tool)?
-                .invocation
-                .tool_api_call
-                .is_some();
-        let persisted_actions = if permission_request.requested_actions.is_empty() {
-            vec![permission_request.action.clone()]
-        } else {
-            permission_request.requested_actions.clone()
+            SessionMutationResult::Committed(commit) => commit,
         };
-        let persisted_rules = persisted_rules_for_reply(
-            self,
-            request.request.session_id,
-            persisted_actions.as_slice(),
-            &request.request.reply,
-            request.operator.as_deref(),
-        )
-        .await?;
-        session = self
-            .persist_session_changes_with_rules(
-                session,
-                vec![pending.tool.part.part_id],
-                persisted_rules.clone(),
-                state.clone(),
-            )
-            .await?;
-
-        // The reply is now durable, so another reply will observe it as a
-        // duplicate. Refresh the derived pending state before deciding whether
-        // this reply is the batch barrier or merely one member of it.
-        session.refresh_derived();
-
-        // Release the per-session serialization lock only after the durable
-        // reply and its derived state agree. Concurrent approval commands can
-        // now collect decisions independently without registering competing
-        // reply executions.
-        drop(reply_guard);
 
         match request.request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
@@ -1246,52 +1319,51 @@ impl SessionManager {
         session_id: i64,
         request_id: String,
     ) -> Result<Session, AppError> {
-        let reply_lock = self.reply_session_lock(session_id).await;
-        let reply_guard = reply_lock.lock().await;
-        let (state, mut session) = self.load_reply_session(session_id).await?;
-        let request_parts = matching_request_part_refs(
-            &session,
-            request_id.as_str(),
-            agena_domain::PendingInteractiveRequestKind::UserInput,
-            false,
-        );
-        if request_parts.is_empty() {
-            return Err(pending_reply_part_missing_error(
-                "user input",
-                request_id.as_str(),
-            ));
-        }
+        self.session_mutations
+            .run(session_id, async {
+                let (state, mut session) = self.load_reply_session(session_id).await?;
+                let request_parts = matching_request_part_refs(
+                    &session,
+                    request_id.as_str(),
+                    agena_domain::PendingInteractiveRequestKind::UserInput,
+                    false,
+                );
+                if request_parts.is_empty() {
+                    return Err(pending_reply_part_missing_error(
+                        "user input",
+                        request_id.as_str(),
+                    ));
+                }
 
-        let mut changed_part_ids = Vec::new();
-        let mut presented = false;
-        for request_part in &request_parts {
-            let part = session.part_mut(request_part).ok_or_else(|| {
-                pending_reply_part_missing_error("user input", request_id.as_str())
-            })?;
-            let Some(mut request) = part.content.get("request").and_then(|value| {
-                serde_json::from_value::<agena_domain::UserInputRequest>(value.clone()).ok()
-            }) else {
-                continue;
-            };
-            if part.state == PartState::Pending && request.presented_at.is_none() {
-                request.presented_at = Some(Utc::now());
-                part.content["request"] = serde_json::to_value(&request)
-                    .expect("user input request is JSON serializable");
-                presented = true;
-                changed_part_ids.push(request_part.part_id);
-            }
-        }
+                let mut changed_part_ids = Vec::new();
+                let mut presented = false;
+                for request_part in &request_parts {
+                    let part = session.part_mut(request_part).ok_or_else(|| {
+                        pending_reply_part_missing_error("user input", request_id.as_str())
+                    })?;
+                    let Some(mut request) = part.content.get("request").and_then(|value| {
+                        serde_json::from_value::<agena_domain::UserInputRequest>(value.clone()).ok()
+                    }) else {
+                        continue;
+                    };
+                    if part.state == PartState::Pending && request.presented_at.is_none() {
+                        request.presented_at = Some(Utc::now());
+                        part.content["request"] = serde_json::to_value(&request)
+                            .expect("user input request is JSON serializable");
+                        presented = true;
+                        changed_part_ids.push(request_part.part_id);
+                    }
+                }
 
-        if !presented {
-            // Already presented (idempotent replay) or already resolved
-            // (presentation is moot): nothing to persist.
-            return Ok(session);
-        }
-        session = self
-            .persist_session_changes(session, changed_part_ids, None, state.clone())
-            .await?;
-        drop(reply_guard);
-        Ok(session)
+                if !presented {
+                    // Already presented (idempotent replay) or already resolved
+                    // (presentation is moot): nothing to persist.
+                    return Ok(session);
+                }
+                self.persist_session_changes(session, changed_part_ids, None, state)
+                    .await
+            })
+            .await
     }
 
     pub async fn reply_permission(
@@ -1324,66 +1396,132 @@ impl SessionManager {
         mode: ReplyExecutionMode,
     ) -> Result<ReplyDispatch, AppError> {
         let request_id = request.reply.request_id.clone();
-        let reply_lock = self.reply_session_lock(request.session_id).await;
-        let reply_guard = reply_lock.lock().await;
-        let (state, mut session) = self.load_reply_session(request.session_id).await?;
-        let pending = match self.lookup_pending_reply(
-            &session,
-            request.session_id,
-            request_id.as_str(),
-            "user input",
-            find_pending_user_input_by_request_id,
-            has_replied_user_input_request,
-        )? {
-            PendingReplyLookup::Pending(pending) => pending,
-            PendingReplyLookup::Duplicate => {
-                return Ok(ReplyDispatch::Completed(Box::new(session)));
-            }
-        };
-        // The run marker owning the pending tool carries the durable message id
-        // and model turn id for the continuation (v2 collapses both onto the
-        // marker's part id).
-        let reply_model_turn_id = assistant_message_id(&session, &pending.tool.part)?;
+        let mutation = self
+            .session_mutations
+            .run(request.session_id, async {
+                let (state, mut session) = self.load_reply_session(request.session_id).await?;
+                let pending = match self.lookup_pending_reply(
+                    &session,
+                    request.session_id,
+                    request_id.as_str(),
+                    "user input",
+                    find_pending_user_input_by_request_id,
+                    has_replied_user_input_request,
+                )? {
+                    PendingReplyLookup::Pending(pending) => pending,
+                    PendingReplyLookup::Duplicate => {
+                        return Ok(SessionMutationResult::Duplicate(Box::new(session)));
+                    }
+                };
+                let reply_model_turn_id = assistant_message_id(&session, &pending.tool.part)?;
+                let user_input_request = self.clone_pending_reply_request(
+                    &session,
+                    &pending,
+                    request_id.as_str(),
+                    "user input",
+                    pending_user_input_request,
+                )?;
+                let mut replied_content = interaction_content(
+                    "ask_user",
+                    request_id.as_str(),
+                    (!user_input_request.title.is_empty())
+                        .then_some(user_input_request.title.as_str()),
+                    pending.tool.part.part_id,
+                    &serde_json::to_value(&user_input_request)
+                        .expect("UserInputRequest is always JSON serializable"),
+                );
+                replied_content["response"] = serde_json::to_value(&request.reply)
+                    .expect("UserInputReply is always JSON serializable");
+                self.complete_reply_request_parts(
+                    &mut session,
+                    request_id.as_str(),
+                    agena_domain::PendingInteractiveRequestKind::UserInput,
+                    replied_content,
+                )?;
 
-        let user_input_request = self.clone_pending_reply_request(
-            &session,
-            &pending,
-            request_id.as_str(),
-            "user input",
-            pending_user_input_request,
-        )?;
-        let mut replied_content = interaction_content(
-            "ask_user",
-            request_id.as_str(),
-            (!user_input_request.title.is_empty()).then_some(user_input_request.title.as_str()),
-            pending.tool.part.part_id,
-            &serde_json::to_value(&user_input_request)
-                .expect("UserInputRequest is always JSON serializable"),
-        );
-        replied_content["response"] = serde_json::to_value(&request.reply)
-            .expect("UserInputReply is always JSON serializable");
-        self.complete_reply_request_parts(
-            &mut session,
-            request_id.as_str(),
-            agena_domain::PendingInteractiveRequestKind::UserInput,
-            replied_content,
-        )?;
+                let host_response = if request_id.starts_with("host-input:") {
+                    let response = host_user_input_response(&user_input_request, &request.reply)?;
+                    session = self
+                        .persist_session_changes(
+                            session,
+                            vec![pending.request.part_id],
+                            None,
+                            state.clone(),
+                        )
+                        .await?;
+                    Some(response)
+                } else {
+                    match request.reply.kind {
+                        UserInputReplyKind::Submit => {
+                            let execution =
+                                user_input_execution(&user_input_request, &request.reply)?;
+                            session = self
+                                .apply_tool_success(
+                                    session,
+                                    &pending.tool,
+                                    execution,
+                                    None,
+                                    state.clone(),
+                                )
+                                .await?;
+                        }
+                        UserInputReplyKind::Cancel => {
+                            let reason = request.reply.reason.clone().unwrap_or_else(|| {
+                                "user declined to answer requested questions".to_string()
+                            });
+                            session = self
+                                .apply_user_declined(session, &pending.tool, reason, state.clone())
+                                .await?;
+                        }
+                        UserInputReplyKind::Timeout => {
+                            let execution = crate::tool::ask_user::execution_from_timeout(
+                                &crate::part::AskUserToolInput {
+                                    title: user_input_request.title.clone(),
+                                    kind: user_input_request.kind.clone(),
+                                    auto_resolution_ms: user_input_request.auto_resolution_ms,
+                                    questions: user_input_request.questions.clone(),
+                                },
+                            );
+                            session = self
+                                .apply_tool_success(
+                                    session,
+                                    &pending.tool,
+                                    execution.into(),
+                                    None,
+                                    state.clone(),
+                                )
+                                .await?;
+                        }
+                    }
+                    None
+                };
 
-        let is_host_request = request_id.starts_with("host-input:");
-        if is_host_request {
-            let response = host_user_input_response(&user_input_request, &request.reply)?;
-            session = self
-                .persist_session_changes(
+                Ok(SessionMutationResult::Committed(UserInputReplyCommit {
+                    state,
                     session,
-                    vec![pending.request.part_id],
-                    None,
-                    state.clone(),
-                )
-                .await?;
-            // Wake the suspended host call only after its reply is durable,
-            // but never while holding the session reply lock. The resumed tool
-            // may immediately issue another interactive host request.
-            drop(reply_guard);
+                    pending,
+                    reply_model_turn_id,
+                    host_response,
+                }))
+            })
+            .await?;
+        let UserInputReplyCommit {
+            state,
+            mut session,
+            pending,
+            reply_model_turn_id,
+            host_response,
+        } = match mutation {
+            SessionMutationResult::Duplicate(session) => {
+                return Ok(ReplyDispatch::Completed(session));
+            }
+            SessionMutationResult::Committed(commit) => commit,
+        };
+
+        if let Some(response) = host_response {
+            // Wake the suspended host call only after its reply is durable and
+            // after the mutation lane is released. The resumed tool may issue
+            // another host request immediately.
             if let Some(waiter) = self
                 .host_user_input_waiters
                 .lock()
@@ -1402,43 +1540,6 @@ impl SessionManager {
             session = self
                 .resolve_pending_tool(session, pending.tool.clone(), state.clone())
                 .await?;
-        } else {
-            match request.reply.kind {
-                UserInputReplyKind::Submit => {
-                    let execution = user_input_execution(&user_input_request, &request.reply)?;
-                    session = self
-                        .apply_tool_success(session, &pending.tool, execution, None, state.clone())
-                        .await?;
-                }
-                UserInputReplyKind::Cancel => {
-                    let reason = request.reply.reason.clone().unwrap_or_else(|| {
-                        "user declined to answer requested questions".to_string()
-                    });
-                    session = self
-                        .apply_user_declined(session, &pending.tool, reason, state.clone())
-                        .await?;
-                }
-                UserInputReplyKind::Timeout => {
-                    let execution = crate::tool::ask_user::execution_from_timeout(
-                        &crate::part::AskUserToolInput {
-                            title: user_input_request.title.clone(),
-                            kind: user_input_request.kind.clone(),
-                            auto_resolution_ms: user_input_request.auto_resolution_ms,
-                            questions: user_input_request.questions.clone(),
-                        },
-                    );
-                    session = self
-                        .apply_tool_success(
-                            session,
-                            &pending.tool,
-                            execution.into(),
-                            None,
-                            state.clone(),
-                        )
-                        .await?;
-                }
-            }
-            drop(reply_guard);
         }
 
         // A live host request resumes the already-running tool through its

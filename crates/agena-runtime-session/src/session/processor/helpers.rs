@@ -53,7 +53,7 @@ pub(crate) fn map_finish_reason(reason: &CompletionFinishReason) -> FinishReason
 pub(crate) fn message_provider_state_from_provider_metadata(
     provider_metadata: &serde_json::Value,
 ) -> Option<PartProviderState> {
-    let assistant_reasoning_field =
+    let mut assistant_reasoning_field =
         provider_metadata_string_field(provider_metadata, "assistant_reasoning_field")
             .and_then(|value| value.as_str())
             .and_then(|value| match value {
@@ -79,7 +79,7 @@ pub(crate) fn message_provider_state_from_provider_metadata(
                     .collect()
             })
             .unwrap_or_default();
-    let openai_reasoning_items =
+    let openai_reasoning_items: Vec<serde_json::Value> =
         provider_metadata_string_field(provider_metadata, "openai_reasoning_items")
             .and_then(serde_json::Value::as_array)
             .map(|items| {
@@ -90,6 +90,28 @@ pub(crate) fn message_provider_state_from_provider_metadata(
                     .collect()
             })
             .unwrap_or_default();
+    if assistant_reasoning_field.is_none()
+        && openai_reasoning_items.iter().any(|item| {
+            let has_plaintext_content = item
+                .get("content")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|content| !content.is_empty());
+            let has_encrypted_content = item
+                .get("encrypted_content")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|content| !content.is_empty());
+            has_plaintext_content && !has_encrypted_content
+        })
+    {
+        // OpenAI-compatible Responses gateways do not all echo the model's
+        // `assistant_reasoning_field` metadata. A reasoning item that carries
+        // plaintext `content` but no OpenAI `encrypted_content` is itself the
+        // unambiguous replay carrier used by `reasoning_content` models (for
+        // example DeepSeek). Persist that observed shape so the next tool
+        // follow-up does not silently drop the reasoning item and get rejected
+        // by the provider.
+        assistant_reasoning_field = Some(AssistantReasoningField::ReasoningContent);
+    }
     let anthropic_thinking_blocks =
         provider_metadata_string_field(provider_metadata, "anthropic_thinking_blocks")
             .and_then(serde_json::Value::as_array)

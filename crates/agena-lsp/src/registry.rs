@@ -3,10 +3,10 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use thiserror::Error;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::client::LspClient;
 use crate::error::{LspError, LspResult};
@@ -27,6 +27,8 @@ pub struct LspRegistry {
     client_version: String,
     servers: RwLock<HashMap<String, LspServerSpec>>,
     spawned: RwLock<HashMap<String, Arc<LspClient>>>,
+    starting: Mutex<HashMap<String, Weak<Mutex<()>>>>,
+    lifecycle: RwLock<()>,
 }
 
 impl LspRegistry {
@@ -41,6 +43,8 @@ impl LspRegistry {
             client_version: client_version.into(),
             servers: RwLock::new(HashMap::new()),
             spawned: RwLock::new(HashMap::new()),
+            starting: Mutex::new(HashMap::new()),
+            lifecycle: RwLock::new(()),
         }
     }
 
@@ -99,6 +103,30 @@ impl LspRegistry {
         server_name: &str,
         hint_dir: &Path,
     ) -> LspResult<Arc<LspClient>> {
+        // A shutdown takes the write side of this gate. Holding a read permit
+        // makes spawn/initialize/insert one lifecycle transaction so shutdown
+        // cannot drain the map and then have an in-flight initializer insert
+        // a live child after shutdown has returned.
+        let _lifecycle_guard = self.lifecycle.read().await;
+        if let Some(client) = self.spawned.read().await.get(server_name).cloned() {
+            return Ok(client);
+        }
+        // Only one task may perform the expensive spawn/initialize sequence
+        // for a server. Without this keyed single-flight, concurrent first
+        // requests launch duplicate children and overwrite all but one in the
+        // registry, leaking their reader tasks and stdio pipes.
+        let start_lock = {
+            let mut starting = self.starting.lock().await;
+            starting.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(lock) = starting.get(server_name).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(Mutex::new(()));
+                starting.insert(server_name.to_string(), Arc::downgrade(&lock));
+                lock
+            }
+        };
+        let _start_guard = start_lock.lock().await;
         if let Some(client) = self.spawned.read().await.get(server_name).cloned() {
             return Ok(client);
         }
@@ -121,14 +149,18 @@ impl LspRegistry {
         let root_uri = url::Url::from_directory_path(&root_dir)
             .ok()
             .and_then(|u| u.as_str().parse::<lsp_types::Uri>().ok());
-        client
+        if let Err(error) = client
             .initialize(
                 root_uri,
                 &self.client_name,
                 &self.client_version,
                 spec.initialization_options.clone(),
             )
-            .await?;
+            .await
+        {
+            let _ = client.close_transport().await;
+            return Err(error);
+        }
         let mut spawned = self.spawned.write().await;
         spawned.insert(server_name.to_string(), client.clone());
         Ok(client)
@@ -145,9 +177,25 @@ impl LspRegistry {
     }
 
     pub async fn shutdown_all(&self) {
-        let mut spawned = self.spawned.write().await;
-        for (_, client) in spawned.drain() {
-            let _ = client.shutdown().await;
+        let _lifecycle_guard = self.lifecycle.write().await;
+        // Do not hold the registry write lock while asking a client to shut
+        // down. Shutdown performs transport I/O and can wait for the server
+        // reader task; keeping this lock held would block every other LSP
+        // lookup for the whole transport timeout and makes re-entrant
+        // shutdown paths prone to deadlock.
+        let clients = {
+            let mut spawned = self.spawned.write().await;
+            spawned
+                .drain()
+                .map(|(_, client)| client)
+                .collect::<Vec<_>>()
+        };
+        let mut shutdowns = tokio::task::JoinSet::new();
+        for client in clients {
+            shutdowns.spawn(async move {
+                let _ = client.shutdown().await;
+            });
         }
+        while shutdowns.join_next().await.is_some() {}
     }
 }

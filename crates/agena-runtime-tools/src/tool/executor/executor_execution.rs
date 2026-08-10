@@ -1,14 +1,9 @@
-impl ToolExecutor {
-    pub fn prepare_shell_command(
-        &self,
-        input: &crate::part::ShellCommandInput,
-        session_id: i64,
-        call_id: i64,
-    ) -> Result<Option<PreparedShellCommand>, ToolError> {
-        bash::prepare_command(self, input, session_id, call_id)
-    }
+static BUILTIN_BLOCKING_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
 
-    pub fn prepare_shell_invocation(
+impl ToolExecutor {
+    /// Native async shell preparation, including environment and command
+    /// policy hooks.
+    pub async fn prepare_shell_invocation(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
@@ -33,7 +28,7 @@ impl ToolExecutor {
             return Ok((invocation.clone(), None));
         };
         let prepared_shell =
-            self.prepare_shell_command(process_input.as_ref(), session_id, call_id)?;
+            bash::prepare_command_async(self, process_input.as_ref(), session_id, call_id).await?;
         let Some(prepared_shell) = prepared_shell.clone() else {
             return Ok((invocation.clone(), None));
         };
@@ -63,26 +58,21 @@ impl ToolExecutor {
         ))
     }
 
-    pub fn prepare_invocation(
+    /// Prepare an invocation while awaiting all plugin hooks on the owning
+    /// Tokio runtime.
+    pub async fn prepare_invocation(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
     ) -> Result<PreparedToolInvocation, ToolError> {
         self.ensure_not_cancelled()?;
-        // A `tools_call` gateway envelope that still names the gateway function
-        // itself means the model never supplied a `tool` target. Reject it as an
-        // invalid call (corrective feedback for the model) instead of dispatching
-        // a fabricated execution-tool name. See `tool_invocation_for_definition`.
         if invocation
             .tool_api_call
             .as_ref()
             .is_some_and(|call| call.function == ToolApiFunction::Call)
             && invocation.name == ToolApiFunction::Call.function_name()
         {
-            // Prefer a precise shape diagnostic stamped by the session
-            // processor (string-encoded or malformed arguments) over the
-            // generic missing-`tool` message.
             let diagnostic = invocation
                 .tool_api_call
                 .as_ref()
@@ -118,10 +108,8 @@ impl ToolExecutor {
             .or_else(|| hook_tool_name.parse().ok())
             .ok_or_else(|| self.unknown_tool_error(hook_tool_name.as_str()))?;
         let input_json = invocation_input_json(invocation)?;
-        let parsed_input_value: serde_json::Value = serde_json::from_str(&input_json)
+        let input_value: serde_json::Value = serde_json::from_str(&input_json)
             .map_err(|e| ToolError::invalid_input(e.to_string()))?;
-        let input_value = parsed_input_value;
-
         let effective_tags = definition
             .as_ref()
             .map(|definition| invocation_effective_tags(definition, invocation))
@@ -133,7 +121,7 @@ impl ToolExecutor {
 
         let hooked = self
             .plugins
-            .dispatch_tool_before_cancellable(
+            .dispatch_tool_before(
                 PluginToolBeforeInput {
                     tool: hook_tool,
                     session_id,
@@ -147,11 +135,11 @@ impl ToolExecutor {
                 },
                 self.cancellation_token.clone(),
             )
+            .await
             .map_err(|err| self.plugin_error_or_cancelled(err))?;
 
         let input_json = serde_json::to_string(&hooked.input)
             .map_err(|e| ToolError::invalid_input(e.to_string()))?;
-
         let mut prepared_invocation =
             parse_invocation_from_json(model_tool_name.as_str(), input_json.as_str())?;
         prepared_invocation.tool_api_call = invocation.tool_api_call.clone();
@@ -168,28 +156,15 @@ impl ToolExecutor {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn collect_permission_checks_for_invocation(
-        &self,
-        invocation: &ToolInvocation,
-    ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
-        self.collect_permission_checks_for_invocation_in_session(invocation, None)
-    }
-
-    pub fn collect_permission_checks_for_invocation_in_session(
+    /// Async permission preflight, including plugin-provided dynamic path and
+    /// network requests. It never blocks a Tokio worker waiting on transport
+    /// I/O.
+    pub async fn collect_permission_checks_for_invocation_in_session(
         &self,
         invocation: &ToolInvocation,
         _session_id: Option<i64>,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         self.ensure_not_cancelled()?;
-        // These five functions are the provider-facing Tool API transport. They
-        // only discover tools or route `tools_call` to an execution tool; they
-        // are not themselves authority-bearing operations. In particular,
-        // authorizing the outer `tools_call` would both ask about the
-        // wrong tool and allow a persisted rule for that gateway to obscure
-        // the permissions of the actual target. The host callback used by
-        // `tools_call` re-enters this method with the resolved execution tool,
-        // which is where tool/path/network permission checks belong.
         if self
             .invocation_definition(invocation)
             .as_ref()
@@ -234,14 +209,16 @@ impl ToolExecutor {
                 &resolution.definition.permissions.input_paths,
                 &resolution.definition.permissions.path_access,
             )?;
-            self.collect_dynamic_path_checks(&mut checks, &resolution, &input_value)?;
+            self.collect_dynamic_path_checks_async(&mut checks, &resolution, &input_value)
+                .await?;
             self.collect_declared_network_checks(
                 &mut checks,
                 &input_value,
                 &resolution.definition.permissions.input_networks,
                 &resolution.definition.permissions.network_access,
             )?;
-            self.collect_dynamic_network_checks(&mut checks, &resolution, &input_value)?;
+            self.collect_dynamic_network_checks_async(&mut checks, &resolution, &input_value)
+                .await?;
         }
         Ok(checks)
     }
@@ -313,49 +290,56 @@ impl ToolExecutor {
         let executor = self.clone();
         let cancellation = self.cancellation_token.clone();
         let invocation = invocation.clone();
-        let (end_tx, end_rx) = tokio::sync::oneshot::channel();
+        let (mut end_tx, end_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let stream_end = match cancellation.as_ref() {
+            let lifecycle = async {
+                match end.await {
+                    Ok(Ok(end)) => {
+                        let view = ToolExecutionView {
+                            title: end.title,
+                            summary: end.summary,
+                            output_text: end.output_text,
+                            sections: end.sections,
+                            metadata: end.metadata.into_iter().collect(),
+                            attachments: end.attachments,
+                        };
+                        let output = ToolOutput::from_json_payload(end.payload.as_ref())
+                            .map_err(ToolError::invalid_input)?;
+                        let execution = ToolInvocationExecution {
+                            output: output.clone(),
+                            view,
+                            apply_patch: apply_patch_execution_from_tool_output(&output),
+                        };
+                        executor
+                            .finalize_execution_async(
+                                &invocation,
+                                session_id,
+                                model_tool_name.as_str(),
+                                &result_policy,
+                                call_id,
+                                execution,
+                            )
+                            .await
+                    }
+                    Ok(Err(err)) => Err(ToolError::from_plugin_error(err)),
+                    Err(_) => Err(ToolError::plugin(
+                        "stream ended without a terminal frame".to_string(),
+                    )),
+                }
+            };
+            tokio::pin!(lifecycle);
+            let result = match cancellation.as_ref() {
                 Some(cancellation) => tokio::select! {
                     biased;
-                    _ = cancellation.cancelled() => {
-                        let _ = end_tx.send(Err(ToolError::Cancelled));
-                        return;
-                    },
-                    result = end => result,
+                    _ = end_tx.closed() => return,
+                    _ = cancellation.cancelled() => Err(ToolError::Cancelled),
+                    result = &mut lifecycle => result,
                 },
-                None => end.await,
-            };
-            let result = match stream_end {
-                Ok(Ok(end)) => (|| {
-                    let view = ToolExecutionView {
-                        title: end.title,
-                        summary: end.summary,
-                        output_text: end.output_text,
-                        sections: end.sections,
-                        metadata: end.metadata.into_iter().collect(),
-                        attachments: end.attachments,
-                    };
-                    let output = ToolOutput::from_json_payload(end.payload.as_ref())
-                        .map_err(ToolError::invalid_input)?;
-                    let execution = ToolInvocationExecution {
-                        output: output.clone(),
-                        view,
-                        apply_patch: apply_patch_execution_from_tool_output(&output),
-                    };
-                    executor.finalize_execution(
-                        &invocation,
-                        session_id,
-                        model_tool_name.as_str(),
-                        &result_policy,
-                        call_id,
-                        execution,
-                    )
-                })(),
-                Ok(Err(err)) => Err(ToolError::from_plugin_error(err)),
-                Err(_) => Err(ToolError::plugin(
-                    "stream ended without a terminal frame".to_string(),
-                )),
+                None => tokio::select! {
+                    biased;
+                    _ = end_tx.closed() => return,
+                    result = &mut lifecycle => result,
+                },
             };
             let _ = end_tx.send(result);
         });
@@ -366,7 +350,7 @@ impl ToolExecutor {
         }))
     }
 
-    pub(crate) fn execute_invocation_detailed_inner(
+    pub(crate) async fn execute_invocation_detailed_inner(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
@@ -376,9 +360,7 @@ impl ToolExecutor {
         self.ensure_not_cancelled()?;
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
         let tool_name = plugin_invocation_name(&plugin_invocation);
-        let _tool_span =
-            tracing::info_span!("tool.call", session_id, call_id, tool = tool_name.as_str(),)
-                .entered();
+        tracing::debug!(session_id, call_id, tool = tool_name.as_str(), "tool.call");
         let resolution = self
             .plugin_resolution_for_invocation(invocation)
             .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
@@ -387,35 +369,97 @@ impl ToolExecutor {
             ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)
         {
             let payload = payload.map_err(|error| ToolError::invalid_input(error.to_string()))?;
-            let payload_name = payload.tool_name();
-            let mut input = serde_json::to_value(payload)
-                .map_err(|error| ToolError::invalid_input(error.to_string()))?;
-            if let Some(input) = input.as_object_mut() {
-                input.remove("tool");
-            }
-            let execution = crate::tool::orchestrator::execute_tool(
-                self,
-                payload_name,
-                input,
-                crate::tool::ToolRuntimeContext {
-                    session_id: (session_id >= 0).then_some(session_id),
-                    call_id: (call_id >= 0).then_some(call_id),
-                    prepared_shell_command,
-                },
-            )?;
-            return self.finalize_execution(
-                invocation,
-                session_id,
-                resolution.canonical_name().as_str(),
-                &resolution.definition.runtime.result_policy,
-                call_id,
-                execution.into(),
-            );
+            let context = crate::tool::ToolRuntimeContext {
+                session_id: (session_id >= 0).then_some(session_id),
+                call_id: (call_id >= 0).then_some(call_id),
+                prepared_shell_command,
+            };
+            let execution = match payload {
+                ToolPayloadInput::Shell(input) => {
+                    crate::tool::process_tool::execute_async(self, &input, context).await?
+                }
+                ToolPayloadInput::CronCreate(input) => {
+                    crate::tool::cron::execute_create_async(self, &input, context.session_id)
+                        .await?
+                }
+                ToolPayloadInput::CronList(input) => {
+                    crate::tool::cron::execute_list_async(self, &input).await?
+                }
+                ToolPayloadInput::CronDelete(input) => {
+                    crate::tool::cron::execute_delete_async(self, &input).await?
+                }
+                ToolPayloadInput::CronUpdate(input) => {
+                    crate::tool::cron::execute_update_async(self, &input).await?
+                }
+                ToolPayloadInput::CronPause(input) => {
+                    crate::tool::cron::execute_pause_async(self, &input).await?
+                }
+                ToolPayloadInput::CronResume(input) => {
+                    crate::tool::cron::execute_resume_async(self, &input).await?
+                }
+                ToolPayloadInput::CronHistory(input) => {
+                    crate::tool::cron::execute_history_async(self, &input).await?
+                }
+                ToolPayloadInput::ScheduleWakeup(input) => {
+                    crate::tool::cron::execute_wakeup_async(self, &input, context.session_id)
+                        .await?
+                }
+                ToolPayloadInput::LspDefinition(input) => {
+                    crate::tool::lsp::execute_definition_async(self, &input).await?
+                }
+                ToolPayloadInput::LspReferences(input) => {
+                    crate::tool::lsp::execute_references_async(self, &input).await?
+                }
+                ToolPayloadInput::LspHover(input) => {
+                    crate::tool::lsp::execute_hover_async(self, &input).await?
+                }
+                ToolPayloadInput::LspDiagnostics(input) => {
+                    crate::tool::lsp::execute_diagnostics_async(self, &input).await?
+                }
+                payload => {
+                    let payload_name = payload.tool_name();
+                    let mut input = serde_json::to_value(payload)
+                        .map_err(|error| ToolError::invalid_input(error.to_string()))?;
+                    if let Some(input) = input.as_object_mut() {
+                        input.remove("tool");
+                    }
+                    let executor = self.clone();
+                    let worker_permit = BUILTIN_BLOCKING_WORKERS.acquire().await.map_err(|_| {
+                        ToolError::plugin("builtin worker pool is unavailable".to_string())
+                    })?;
+                    tokio::task::spawn_blocking(move || {
+                        let _worker_permit = worker_permit;
+                        crate::tool::orchestrator::execute_tool(
+                            &executor,
+                            payload_name,
+                            input,
+                            context,
+                        )
+                    })
+                    .await
+                    .map_err(|error| {
+                        ToolError::plugin(format!(
+                            "builtin tool worker failed before completion: {error}"
+                        ))
+                    })??
+                }
+            };
+            self.ensure_not_cancelled()?;
+            return self
+                .finalize_execution_async(
+                    invocation,
+                    session_id,
+                    resolution.canonical_name().as_str(),
+                    &resolution.definition.runtime.result_policy,
+                    call_id,
+                    execution.into(),
+                )
+                .await;
         }
 
         let response = self
             .plugins
-            .invoke_tool_cancellable(
+            .invoke_tool(
                 &resolution,
                 PluginToolInvokeInput {
                     tool_name: resolution.tool_name().to_string(),
@@ -426,16 +470,8 @@ impl ToolExecutor {
                 },
                 self.cancellation_token.clone(),
             )
-            .map_err(|err| {
-                if self
-                    .cancellation_token()
-                    .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
-                {
-                    ToolError::Cancelled
-                } else {
-                    ToolError::from_plugin_error(err)
-                }
-            })?;
+            .await
+            .map_err(|err| self.plugin_error_or_cancelled(err))?;
         self.ensure_not_cancelled()?;
 
         let view = ToolExecutionView {
@@ -453,7 +489,7 @@ impl ToolExecutor {
             view,
             apply_patch: apply_patch_execution_from_tool_output(&output),
         };
-        self.finalize_execution(
+        self.finalize_execution_async(
             invocation,
             session_id,
             resolution.canonical_name().as_str(),
@@ -461,18 +497,20 @@ impl ToolExecutor {
             call_id,
             execution,
         )
+        .await
     }
 
-    pub fn execute_invocation_detailed(
+    pub async fn execute_invocation_detailed(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
     ) -> Result<ToolInvocationExecution, ToolError> {
         self.execute_invocation_detailed_with_prepared_shell(invocation, session_id, call_id, None)
+            .await
     }
 
-    pub fn execute_invocation_detailed_with_prepared_shell(
+    pub async fn execute_invocation_detailed_with_prepared_shell(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
@@ -485,6 +523,7 @@ impl ToolExecutor {
             call_id,
             prepared_shell_command,
         )
+        .await
     }
 }
 use agena_domain::{

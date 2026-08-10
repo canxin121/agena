@@ -2,8 +2,8 @@
 //! a background reader_loop demultiplexes inbound frames, request/response
 //! correlation lives in a DashMap keyed by request id.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use dashmap::DashMap;
@@ -17,7 +17,7 @@ use lsp_types::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 
 use crate::error::{LspError, LspResult};
 use crate::protocol::{
@@ -27,6 +27,7 @@ use crate::protocol::{
 use crate::transport::LspTransport;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const SHUTDOWN_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 // LSP's `ContentModified` error code. A server may report this while it is
 // catching up with a `didOpen`/`didChange` notification.
 const CONTENT_MODIFIED_ERROR_CODE: i64 = -32_801;
@@ -82,9 +83,10 @@ struct Inner {
     transport: Arc<dyn LspTransport>,
     next_id: AtomicI64,
     pending: DashMap<i64, oneshot::Sender<JsonRpcResponse>>,
-    notifications: Mutex<Option<mpsc::UnboundedSender<ServerNotification>>>,
+    notifications: Mutex<Option<mpsc::Sender<ServerNotification>>>,
     diagnostics: DashMap<Uri, Vec<Diagnostic>>,
     initialized: arc_swap::ArcSwapOption<InitializeResult>,
+    shutdown: watch::Sender<bool>,
     /// Track which URIs we've sent didOpen for (and their content hash +
     /// version), so we can decide between didOpen / didChange.
     open_docs: DashMap<Uri, OpenDocState>,
@@ -99,25 +101,27 @@ struct OpenDocState {
 
 impl LspClient {
     pub fn new(transport: Arc<dyn LspTransport>) -> Arc<Self> {
+        let (shutdown, shutdown_rx) = watch::channel(false);
         let inner = Arc::new(Inner {
-            transport,
+            transport: Arc::clone(&transport),
             next_id: AtomicI64::new(1),
             pending: DashMap::new(),
             notifications: Mutex::new(None),
             diagnostics: DashMap::new(),
             initialized: arc_swap::ArcSwapOption::from(None),
+            shutdown,
             open_docs: DashMap::new(),
         });
-        let inner_for_reader = inner.clone();
-        tokio::spawn(async move { reader_loop(inner_for_reader).await });
+        let weak_inner = Arc::downgrade(&inner);
+        tokio::spawn(async move { reader_loop(weak_inner, transport, shutdown_rx).await });
         Arc::new(Self { inner })
     }
 
     /// Subscribe to every notification frame the server sends. Replaces
     /// any previous subscription. Diagnostics still land in the typed
     /// per-uri cache regardless.
-    pub async fn subscribe_notifications(&self) -> mpsc::UnboundedReceiver<ServerNotification> {
-        let (tx, rx) = mpsc::unbounded_channel();
+    pub async fn subscribe_notifications(&self) -> mpsc::Receiver<ServerNotification> {
+        let (tx, rx) = mpsc::channel(256);
         let mut guard = self.inner.notifications.lock().await;
         *guard = Some(tx);
         rx
@@ -180,10 +184,30 @@ impl LspClient {
     }
 
     pub async fn shutdown(&self) -> LspResult<()> {
-        let _: Option<Value> = self.request_opt("shutdown", Value::Null).await?;
-        let _ = self.notify("exit", Value::Null).await;
-        let _ = self.inner.transport.close().await;
-        Ok(())
+        let handshake = tokio::time::timeout(
+            SHUTDOWN_REQUEST_TIMEOUT,
+            self.request_opt::<Value, Value>("shutdown", Value::Null),
+        )
+        .await;
+        if matches!(handshake, Ok(Ok(_))) {
+            let _ = self.notify("exit", Value::Null).await;
+        }
+        let close_result = self.inner.transport.close().await;
+        let _ = self.inner.shutdown.send(true);
+        match handshake {
+            Ok(Ok(_)) => close_result,
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(LspError::Timeout(
+                SHUTDOWN_REQUEST_TIMEOUT.as_millis() as u64
+            )),
+        }
+    }
+
+    /// Close the transport without waiting for the LSP shutdown handshake.
+    /// Used when initialization itself failed: no initialized peer exists to
+    /// answer `shutdown`, but the child process must not be leaked.
+    pub(crate) async fn close_transport(&self) -> LspResult<()> {
+        self.inner.transport.close().await
     }
 
     /// Make sure the server has the current contents of `uri`. Sends
@@ -487,18 +511,34 @@ fn should_retry_navigation<T: NavigationResult>(result: &LspResult<Option<T>>) -
     }
 }
 
-async fn reader_loop(inner: Arc<Inner>) {
+async fn reader_loop(
+    weak_inner: Weak<Inner>,
+    transport: Arc<dyn LspTransport>,
+    mut shutdown: watch::Receiver<bool>,
+) {
     loop {
-        let frame = match inner.transport.recv().await {
+        let frame = tokio::select! {
+            biased;
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+                continue;
+            }
+            frame = transport.recv() => frame,
+        };
+        let frame = match frame {
             Ok(f) => f,
             Err(err) => {
                 tracing::debug!(target: "agena_lsp::reader", "transport ended: {err}");
-                let mut keys: Vec<i64> = inner.pending.iter().map(|kv| *kv.key()).collect();
-                for k in keys.drain(..) {
-                    inner.pending.remove(&k);
+                if let Some(inner) = weak_inner.upgrade() {
+                    inner.pending.clear();
                 }
                 return;
             }
+        };
+        let Some(inner) = weak_inner.upgrade() else {
+            return;
         };
         match frame {
             InboundMessage::Response(resp) => {
@@ -533,12 +573,18 @@ async fn reader_loop(inner: Arc<Inner>) {
                         data: None,
                     }),
                 };
-                let _ = inner
-                    .transport
+                drop(inner);
+                let _ = transport
                     .send(serde_json::to_value(&resp).unwrap_or(Value::Null))
                     .await;
             }
         }
+    }
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        let _ = self.shutdown.send(true);
     }
 }
 
@@ -549,9 +595,12 @@ async fn handle_notification(inner: &Inner, n: JsonRpcNotification) {
     {
         inner.diagnostics.insert(p.uri.clone(), p.diagnostics);
     }
-    let guard = inner.notifications.lock().await;
-    if let Some(tx) = guard.as_ref() {
-        let _ = tx.send(ServerNotification {
+    let subscriber = inner.notifications.lock().await.clone();
+    if let Some(tx) = subscriber {
+        // Diagnostics have their own latest-value cache above. The generic
+        // notification feed is observational, so a slow subscriber must not
+        // create an unbounded queue or stop the LSP response reader.
+        let _ = tx.try_send(ServerNotification {
             method: n.method,
             params,
         });
@@ -570,6 +619,7 @@ fn hash_str(text: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use serde_json::json;
@@ -632,6 +682,7 @@ mod tests {
         );
         inbound
             .send(response(request_id(&first), json!([])))
+            .await
             .unwrap();
 
         let retry = timeout(Duration::from_secs(1), outbound.recv())
@@ -653,9 +704,26 @@ mod tests {
                     }
                 }),
             ))
+            .await
             .unwrap();
 
         let response = task.await.unwrap().expect("definition response");
         assert!(matches!(response, GotoDefinitionResponse::Scalar(_)));
+    }
+
+    #[tokio::test]
+    async fn dropping_client_releases_reader_transport_without_peer_eof() {
+        let (transport, _outbound, _inbound) = InMemoryTransport::pair();
+        let client = LspClient::new(transport.clone());
+        assert!(Arc::strong_count(&transport) > 1);
+
+        drop(client);
+        timeout(Duration::from_secs(1), async {
+            while Arc::strong_count(&transport) > 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("reader task releases the transport when its owner is dropped");
     }
 }

@@ -1,37 +1,113 @@
-//! Cdylib transport — loads an abi_stable shared library that exports
-//! `agena_plugin_root_module`.
+//! Cdylib transport — loads an `abi_stable` shared library and isolates all
+//! calls to it on one dedicated, bounded actor thread.
+//!
+//! Native code cannot be force-cancelled safely. Running it on Tokio's global
+//! blocking pool would let a wedged plugin permanently consume shared pool
+//! capacity after the async caller times out. A per-plugin actor contains that
+//! failure to one OS thread and bounds queued work.
 
 use std::path::Path;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use abi_stable::library::RootModule;
 use async_trait::async_trait;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::error::TransportError;
 use crate::sdk::PluginError;
 use crate::sdk::cdylib_abi::AgenaPluginCdylib_Ref;
 use crate::transport::PluginTransport;
 
+const ACTOR_QUEUE_CAPACITY: usize = 64;
+const ACTOR_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Plugin transport over a cdylib ABI.
 pub struct CdylibTransport {
-    module: AgenaPluginCdylib_Ref,
+    commands: mpsc::Sender<ActorCommand>,
+    actor: Mutex<Option<std::thread::JoinHandle<()>>>,
+    closed: AtomicBool,
 }
 
-// SAFETY: `AgenaPluginCdylib_Ref` is a `RootModule` reference returned by
-// abi_stable's `load_from_file`. Once loaded the underlying dylib is leaked
-// for the process lifetime (abi_stable does not unload), so the inner
-// pointer remains valid across threads. The plugin contract requires every
-// exported function to be Send + Sync, so it is safe to share `Self`
-// across threads.
-unsafe impl Send for CdylibTransport {}
-// SAFETY: see above — the plugin contract guarantees thread-safe entry
-// points and the loaded module is never unloaded.
-unsafe impl Sync for CdylibTransport {}
+enum ActorCommand {
+    Dispatch {
+        method: String,
+        params: String,
+        response: oneshot::Sender<Result<serde_json::Value, TransportError>>,
+    },
+    Shutdown {
+        complete: oneshot::Sender<()>,
+    },
+}
 
 impl CdylibTransport {
     pub fn load(path: &Path) -> Result<Self, TransportError> {
-        let module = AgenaPluginCdylib_Ref::load_from_file(path)
-            .map_err(|e| TransportError::Io(format!("load cdylib `{}`: {e}", path.display())))?;
-        Ok(Self { module })
+        let module = AgenaPluginCdylib_Ref::load_from_file(path).map_err(|error| {
+            TransportError::Io(format!("load cdylib `{}`: {error}", path.display()))
+        })?;
+        let (commands, receiver) = mpsc::channel(ACTOR_QUEUE_CAPACITY);
+        let actor = std::thread::Builder::new()
+            .name("agena-cdylib-plugin".to_string())
+            .spawn(move || run_actor(module, receiver))
+            .map_err(TransportError::from)?;
+        Ok(Self {
+            commands,
+            actor: Mutex::new(Some(actor)),
+            closed: AtomicBool::new(false),
+        })
+    }
+}
+
+fn run_actor(module: AgenaPluginCdylib_Ref, mut receiver: mpsc::Receiver<ActorCommand>) {
+    while let Some(command) = receiver.blocking_recv() {
+        match command {
+            ActorCommand::Dispatch {
+                method,
+                params,
+                response,
+            } => {
+                // A timed-out/cancelled caller may leave a command in the
+                // bounded mailbox. Skip it before entering native code.
+                if response.is_closed() {
+                    continue;
+                }
+                let _ = response.send(dispatch_native(module, method, params));
+            }
+            ActorCommand::Shutdown { complete } => {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    (module.shutdown())()
+                }));
+                let _ = complete.send(());
+                return;
+            }
+        }
+    }
+}
+
+fn dispatch_native(
+    module: AgenaPluginCdylib_Ref,
+    method: String,
+    params: String,
+) -> Result<serde_json::Value, TransportError> {
+    let dispatch = module.dispatch();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        dispatch(method.into(), params.into())
+    }));
+    match result {
+        Ok(result) => match result.into_result() {
+            Ok(value) => {
+                let value: String = value.into();
+                serde_json::from_str(&value).map_err(TransportError::from)
+            }
+            Err(error) => {
+                let error: String = error.into();
+                let plugin_error = serde_json::from_str::<PluginError>(&error)
+                    .unwrap_or_else(|_| PluginError::internal(error));
+                Err(TransportError::Plugin(plugin_error))
+            }
+        },
+        Err(_) => Err(TransportError::Panicked),
     }
 }
 
@@ -42,37 +118,65 @@ impl PluginTransport for CdylibTransport {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, TransportError> {
-        let module = self.module;
-        let method = method.to_string();
-        let params_str = serde_json::to_string(&params)?;
-        let join = tokio::task::spawn_blocking(move || {
-            let dispatch_fn = module.dispatch();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                dispatch_fn(method.into(), params_str.into())
-            }));
-            match result {
-                Ok(r) => match r.into_result() {
-                    Ok(s) => {
-                        let s: String = s.into();
-                        let v: serde_json::Value = serde_json::from_str(&s)?;
-                        Ok::<_, TransportError>(v)
-                    }
-                    Err(err_str) => {
-                        let s: String = err_str.into();
-                        let pe: PluginError =
-                            serde_json::from_str(&s).unwrap_or_else(|_| PluginError::internal(s));
-                        Err(TransportError::Plugin(pe))
-                    }
-                },
-                Err(_) => Err(TransportError::Panicked),
-            }
-        });
-        join.await.map_err(|_| TransportError::Panicked)?
+        if self.closed.load(Ordering::Acquire) {
+            return Err(TransportError::Disconnected);
+        }
+        let params = serde_json::to_string(&params)?;
+        let (response, result) = oneshot::channel();
+        self.commands
+            .send(ActorCommand::Dispatch {
+                method: method.to_string(),
+                params,
+                response,
+            })
+            .await
+            .map_err(|_| TransportError::Disconnected)?;
+        result.await.map_err(|_| TransportError::Disconnected)?
     }
 
     async fn close(&self) -> Result<(), TransportError> {
-        let module = self.module;
-        let _ = tokio::task::spawn_blocking(move || (module.shutdown())()).await;
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let (complete, completed) = oneshot::channel();
+        tokio::time::timeout(
+            ACTOR_SHUTDOWN_TIMEOUT,
+            self.commands.send(ActorCommand::Shutdown { complete }),
+        )
+        .await
+        .map_err(|_| TransportError::Timeout)?
+        .map_err(|_| TransportError::Disconnected)?;
+        tokio::time::timeout(ACTOR_SHUTDOWN_TIMEOUT, completed)
+            .await
+            .map_err(|_| TransportError::Timeout)?
+            .map_err(|_| TransportError::Disconnected)?;
+
+        let actor = self
+            .actor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(actor) = actor {
+            tokio::task::spawn_blocking(move || actor.join())
+                .await
+                .map_err(|_| TransportError::Panicked)?
+                .map_err(|_| TransportError::Panicked)?;
+        }
         Ok(())
+    }
+}
+
+impl Drop for CdylibTransport {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::Release);
+        let (complete, _completed) = oneshot::channel();
+        let _ = self.commands.try_send(ActorCommand::Shutdown { complete });
+        // Never join here: native code may be permanently wedged. The actor
+        // is isolated and may outlive this value without blocking teardown.
+        let _ = self
+            .actor
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
     }
 }

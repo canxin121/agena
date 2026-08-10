@@ -81,9 +81,9 @@ pub use manifest::{
     PluginStudioCommand, PluginStudioControl, PluginStudioControlOption,
     PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiThemeColors,
     PluginTuiUiContributions, PluginUiAction, PluginUiContributions, PluginUiThemePalette,
-    ToolDefinition, ToolInput, ToolPermissionContract,
-    ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode, ToolTag, TransportKind,
-    normalize_tool_tag_name, plugin_workbench_tab_id_is_supported,
+    ToolDefinition, ToolInput, ToolPermissionContract, ToolResultPolicy, ToolResultRenderKind,
+    ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
+    plugin_workbench_tab_id_is_supported,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use schemars::JsonSchema;

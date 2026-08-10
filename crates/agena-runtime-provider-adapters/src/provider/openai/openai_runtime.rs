@@ -495,7 +495,10 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         let usage = OpenAiTransport::map_usage(response.usage);
         let provider_metadata = openai_responses_metadata(
             response.id,
-            openai_reasoning_items_from_output(response.output.as_deref()),
+            OpenAiTransport::responses_reasoning_items_for_replay(
+                &request,
+                openai_reasoning_items_from_output(response.output.as_deref()),
+            ),
         );
 
         Ok(CompletionResponse {
@@ -821,7 +824,12 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                         usage: stream_usage.clone(),
                         provider_metadata: openai_responses_metadata(
                             response_id.clone(),
-                            reasoning_items.iter().map(|(_, item)| item.clone()),
+                            OpenAiTransport::responses_reasoning_items_for_replay(
+                                &request,
+                                reasoning_items
+                                    .iter()
+                                    .map(|(_, item)| item.clone()),
+                            ),
                         ),
                         end_turn: utils::responses_end_turn(&event),
                     };

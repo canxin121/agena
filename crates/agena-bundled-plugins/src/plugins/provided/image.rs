@@ -340,8 +340,6 @@ impl OpenAiToolsPlugin {
         summary = "Search the public web through OpenAI's official Responses web-search service.",
         help = "This is an ordinary Agena execution tool. Discovery, help, permission checks, and invocation all go through tools_list/tools_search/tools_help/tools_call; only the implementation uses an OpenAI endpoint.",
         read_only,
-
-
         discovery,
         examples(r#"{"query":"Latest Rust language release notes","model":"gpt-4.1"}"#)
     )]

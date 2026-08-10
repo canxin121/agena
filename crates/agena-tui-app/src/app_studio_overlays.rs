@@ -31,16 +31,55 @@ impl App {
     }
 
     pub(crate) fn open_session_permission_studio(&mut self, session_id: i64) {
-        match self.build_permission_studio_overlay(
-            PermissionStudioSource::Session { session_id },
-            PermissionStudioPage::PathDefaults,
-            Some(PermissionStudioSectionId::PathDefaults),
-            None,
-            PermissionStudioFocus::Items,
-        ) {
-            Ok(dialog) => self.current_route = Route::PermissionStudio(dialog),
-            Err(error) => self.flash_error(error),
-        }
+        self.open_loaded_session_permission_studio(PermissionStudioSource::Session { session_id });
+    }
+
+    pub(crate) fn open_effective_session_permission_studio(&mut self, session_id: i64) {
+        self.open_loaded_session_permission_studio(PermissionStudioSource::EffectiveSession {
+            session_id,
+        });
+    }
+
+    fn open_loaded_session_permission_studio(&mut self, source: PermissionStudioSource) {
+        let session_id = match &source {
+            PermissionStudioSource::Session { session_id }
+            | PermissionStudioSource::EffectiveSession { session_id } => *session_id,
+            _ => return,
+        };
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .get_session_permission_studio_state(session_id)
+                    .await
+            },
+            move |app, result| match result {
+                Ok(state) => {
+                    app.settings_session_permission = Some((session_id, state));
+                    match app.build_permission_studio_overlay(
+                        source,
+                        PermissionStudioPage::PathDefaults,
+                        Some(PermissionStudioSectionId::PathDefaults),
+                        None,
+                        PermissionStudioFocus::Items,
+                    ) {
+                        Ok(dialog) => app.current_route = Route::PermissionStudio(dialog),
+                        Err(error) => app.flash_error(error),
+                    }
+                }
+                Err(error) => app.flash_error(error),
+            },
+        );
+    }
+
+    fn cached_session_permission_studio_state(
+        &self,
+        session_id: i64,
+    ) -> UiResult<&agena_tui_backend::SessionPermissionStudioState> {
+        self.settings_session_permission
+            .as_ref()
+            .filter(|(cached_session_id, _)| *cached_session_id == session_id)
+            .map(|(_, state)| state)
+            .ok_or_else(|| crate::UiFailure::internal("session permission state is still loading"))
     }
 
     pub(crate) fn build_permission_studio_overlay(
@@ -86,33 +125,23 @@ impl App {
                 )
             }
             PermissionStudioSource::Session { session_id } => {
-                let state = self
-                    .block_on_async(
-                        self.backend
-                            .get_session_permission_studio_state(*session_id),
-                    )
-                    .map_err(crate::UiFailure::internal)?;
+                let state = self.cached_session_permission_studio_state(*session_id)?;
                 (
-                    state.session_title,
+                    state.session_title.clone(),
                     session_id.to_string(),
                     ui_text::t(&self.i18n, "permission-studio-source-session"),
                     true,
-                    state.permission,
+                    state.permission.clone(),
                 )
             }
             PermissionStudioSource::EffectiveSession { session_id } => {
-                let state = self
-                    .block_on_async(
-                        self.backend
-                            .get_session_permission_studio_state(*session_id),
-                    )
-                    .map_err(crate::UiFailure::internal)?;
+                let state = self.cached_session_permission_studio_state(*session_id)?;
                 (
                     ui_text::t(&self.i18n, "settings-permission-effective-label"),
-                    state.session_title,
+                    state.session_title.clone(),
                     ui_text::t(&self.i18n, "permission-studio-source-effective"),
                     false,
-                    state.effective_permission,
+                    state.effective_permission.clone(),
                 )
             }
         };
@@ -179,54 +208,111 @@ impl App {
         dialog: &mut PermissionStudioOverlay,
         permission: PermissionConfig,
     ) -> UiResult<()> {
-        match &dialog.source {
-            PermissionStudioSource::GlobalConfig => {
-                if permission.is_empty() {
-                    self.block_on_async(self.backend.delete_config_setting("permission"))
-                        .map_err(crate::UiFailure::internal)?;
-                    self.flash_success(settings_path_cleared_message(&self.i18n, "permission"));
-                } else {
-                    self.block_on_async(self.backend.set_config_setting(
-                        "permission",
-                        serde_json::to_value(&permission).map_err(crate::UiFailure::internal)?,
-                    ))
-                    .map_err(crate::UiFailure::internal)?;
-                    self.flash_success(settings_path_updated_message(&self.i18n, "permission"));
-                }
-                self.refresh_current_transcript_execution_state();
-            }
-            PermissionStudioSource::WorkspaceConfig => {
-                if permission.is_empty() {
-                    self.block_on_async(self.backend.delete_workspace_config_setting("permission"))
-                        .map_err(crate::UiFailure::internal)?;
-                    self.flash_success(settings_path_cleared_message(&self.i18n, "permission"));
-                } else {
-                    self.block_on_async(self.backend.set_workspace_config_setting(
-                        "permission",
-                        serde_json::to_value(&permission).map_err(crate::UiFailure::internal)?,
-                    ))
-                    .map_err(crate::UiFailure::internal)?;
-                    self.flash_success(settings_path_updated_message(&self.i18n, "permission"));
-                }
-                self.refresh_current_transcript_execution_state();
-            }
-            PermissionStudioSource::Session { session_id } => {
-                let execution = self
-                    .block_on_async(self.backend.set_session_permission(*session_id, permission))
-                    .map_err(crate::UiFailure::internal)?;
-                if self.transcript.session_id == Some(*session_id) {
-                    let _ = self.apply_transcript_execution(execution);
-                }
-                self.flash_success(ui_text::t(&self.i18n, "flash-session-permission-updated"));
-            }
-            PermissionStudioSource::EffectiveSession { .. } => {
-                return Err(crate::UiFailure::message(
-                    permission_studio_read_only_message(&self.i18n, &dialog.source),
-                ));
-            }
+        if matches!(
+            dialog.source,
+            PermissionStudioSource::EffectiveSession { .. }
+        ) {
+            return Err(crate::UiFailure::message(
+                permission_studio_read_only_message(&self.i18n, &dialog.source),
+            ));
         }
-        self.refresh_permission_studio_overlay(dialog);
+        let source = dialog.source.clone();
+        let completion_source = source.clone();
+        let permission_value = (!permission.is_empty())
+            .then(|| serde_json::to_value(&permission).map_err(crate::UiFailure::internal))
+            .transpose()?;
+        let cleared = permission_value.is_none();
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                match source {
+                    PermissionStudioSource::GlobalConfig => match permission_value {
+                        Some(value) => {
+                            backend.set_config_setting("permission", value).await?;
+                        }
+                        None => {
+                            backend.delete_config_setting("permission").await?;
+                        }
+                    },
+                    PermissionStudioSource::WorkspaceConfig => match permission_value {
+                        Some(value) => {
+                            backend
+                                .set_workspace_config_setting("permission", value)
+                                .await?;
+                        }
+                        None => {
+                            backend
+                                .delete_workspace_config_setting("permission")
+                                .await?;
+                        }
+                    },
+                    PermissionStudioSource::Session { session_id } => {
+                        let execution = backend
+                            .set_session_permission(session_id, permission)
+                            .await?;
+                        return Ok::<_, anyhow::Error>(Some(execution));
+                    }
+                    PermissionStudioSource::EffectiveSession { .. } => unreachable!(),
+                }
+                Ok::<_, anyhow::Error>(None)
+            },
+            move |app, result| match result {
+                Ok(execution) => match completion_source {
+                    PermissionStudioSource::GlobalConfig
+                    | PermissionStudioSource::WorkspaceConfig => {
+                        app.flash_success(if cleared {
+                            settings_path_cleared_message(&app.i18n, "permission")
+                        } else {
+                            settings_path_updated_message(&app.i18n, "permission")
+                        });
+                        app.refresh_current_transcript_execution_state();
+                        app.rebuild_current_permission_studio_route();
+                    }
+                    PermissionStudioSource::Session { session_id } => {
+                        if let Some(execution) = execution
+                            && app.transcript.session_id == Some(session_id)
+                        {
+                            let _ = app.apply_transcript_execution(execution);
+                        }
+                        app.flash_success(ui_text::t(
+                            &app.i18n,
+                            "flash-session-permission-updated",
+                        ));
+                        app.refresh_session_permission_studio_state(session_id);
+                    }
+                    PermissionStudioSource::EffectiveSession { .. } => {}
+                },
+                Err(error) => app.flash_error(error),
+            },
+        );
         Ok(())
+    }
+
+    fn refresh_session_permission_studio_state(&mut self, session_id: i64) {
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .get_session_permission_studio_state(session_id)
+                    .await
+            },
+            move |app, result| match result {
+                Ok(state) => {
+                    app.settings_session_permission = Some((session_id, state));
+                    app.rebuild_current_permission_studio_route();
+                }
+                Err(error) => app.flash_error(error),
+            },
+        );
+    }
+
+    fn rebuild_current_permission_studio_route(&mut self) {
+        let route = std::mem::replace(&mut self.current_route, Route::Main);
+        self.current_route = match route {
+            Route::PermissionStudio(mut dialog) => {
+                self.refresh_permission_studio_overlay(&mut dialog);
+                Route::PermissionStudio(dialog)
+            }
+            route => route,
+        };
     }
 }
 use crate::{

@@ -89,8 +89,6 @@ impl EnvironmentPlugin {
         tags(query, filesystem, network),
         summary = "Wait until a path, TCP endpoint, or HTTP health check is ready.",
         read_only,
-
-
         concurrency_safe
     )]
     async fn wait(&self, input: &EnvironmentWaitInput) -> SdkResult<ToolInvokeOutput> {

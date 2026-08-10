@@ -80,17 +80,8 @@ impl App {
                 let Some(name) = dialog.actions.get(key.as_str()).cloned() else {
                     return false;
                 };
-                match self.load_skill_snapshot(dialog.session_id, name.as_str()) {
-                    Ok(skill) => {
-                        self.stage_skill_reference(skill);
-                        self.focus = agena_tui::main_focus::Focus::Composer;
-                        true
-                    }
-                    Err(error) => {
-                        dialog.presentation.error_message = Some(error.to_string());
-                        false
-                    }
-                }
+                self.request_skill_snapshot(dialog.session_id, name);
+                false
             }
         }
     }
@@ -99,20 +90,52 @@ impl App {
         dialog.presentation.set_loading(true);
         dialog.presentation.error_message = None;
         dialog.actions.clear();
+        dialog.offset = offset;
 
-        let result = self.block_on_async(self.backend.invoke_plugin_ui_tool(
-            "agena.skills",
-            "list",
-            serde_json::json!({
-                "kind": "skill",
-                "offset": offset,
-                "limit": dialog.limit,
-                "verbose": false,
-            }),
-            Some(dialog.session_id),
-        ));
+        let limit = dialog.limit;
+        let session_id = dialog.session_id;
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .invoke_plugin_ui_tool(
+                        "agena.skills",
+                        "list",
+                        serde_json::json!({
+                            "kind": "skill",
+                            "offset": offset,
+                            "limit": limit,
+                            "verbose": false,
+                        }),
+                        Some(session_id),
+                    )
+                    .await
+            },
+            move |app, result| {
+                let route = std::mem::replace(&mut app.current_route, Route::Main);
+                app.current_route = match route {
+                    Route::SkillPicker(mut dialog)
+                        if dialog.session_id == session_id && dialog.offset == offset =>
+                    {
+                        app.apply_skill_picker_page(&mut dialog, offset, result);
+                        Route::SkillPicker(dialog)
+                    }
+                    route => route,
+                };
+            },
+        );
+    }
+
+    fn apply_skill_picker_page(
+        &mut self,
+        dialog: &mut SkillPickerOverlay,
+        requested_offset: usize,
+        result: UiResult<agena_plugin_host::PluginUiToolInvokeResponse>,
+    ) {
         match result.and_then(|response| skill_catalog_page(response.payload)) {
             Ok(page) => {
+                if page.offset != requested_offset {
+                    return;
+                }
                 dialog.offset = page.offset;
                 dialog.total = page.total;
                 let mut items = Vec::with_capacity(page.items.len());
@@ -146,16 +169,36 @@ impl App {
         }
     }
 
-    fn load_skill_snapshot(&mut self, session_id: i64, name: &str) -> UiResult<ComposerItem> {
-        let response = self
-            .block_on_async(self.backend.invoke_plugin_ui_tool(
-                "agena.skills",
-                "get",
-                serde_json::json!({ "name": name }),
-                Some(session_id),
-            ))
-            .map_err(crate::UiFailure::internal)?;
-        skill_snapshot(response.payload)
+    fn request_skill_snapshot(&mut self, session_id: i64, name: String) {
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .invoke_plugin_ui_tool(
+                        "agena.skills",
+                        "get",
+                        serde_json::json!({ "name": name }),
+                        Some(session_id),
+                    )
+                    .await
+            },
+            move |app, result| match result.and_then(|response| skill_snapshot(response.payload)) {
+                Ok(skill) => {
+                    app.stage_skill_reference(skill);
+                    app.focus = agena_tui::main_focus::Focus::Composer;
+                    app.current_route = app.route_stack.pop().unwrap_or(Route::Main);
+                }
+                Err(error) => {
+                    let route = std::mem::replace(&mut app.current_route, Route::Main);
+                    app.current_route = match route {
+                        Route::SkillPicker(mut dialog) if dialog.session_id == session_id => {
+                            dialog.presentation.error_message = Some(error.to_string());
+                            Route::SkillPicker(dialog)
+                        }
+                        route => route,
+                    };
+                }
+            },
+        );
     }
 
     fn skill_picker_footer(&self, dialog: &SkillPickerOverlay) -> String {

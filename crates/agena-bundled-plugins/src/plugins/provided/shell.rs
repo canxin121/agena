@@ -129,7 +129,7 @@ impl ShellPlugin {
         tags(mutate, execute),
         summary = "Stop one background process.",
         mutating,
-        shell,
+        shell
     )]
     async fn invoke_stop(
         &self,

@@ -59,11 +59,13 @@ impl App {
                     (result, subtree_root_id)
                 }
             };
-            let _ = tx.send(AppMessage::SessionsLoaded {
-                scope,
-                subtree_root_id,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::SessionsLoaded {
+                    scope,
+                    subtree_root_id,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -72,7 +74,9 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = Ok(backend.list_configured_providers());
-            let _ = tx.send(AppMessage::ProvidersLoaded { purpose, result });
+            let _ = tx
+                .send(AppMessage::ProvidersLoaded { purpose, result })
+                .await;
         });
     }
 
@@ -95,12 +99,14 @@ impl App {
                 )
                 .await
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::SessionSearchPageLoaded {
-                mode,
-                query,
-                page_index,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::SessionSearchPageLoaded {
+                    mode,
+                    query,
+                    page_index,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -112,11 +118,13 @@ impl App {
                 .list_session_subtree(session_id)
                 .await
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::SessionSearchSubtreeLoaded {
-                session_id,
-                query,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::SessionSearchSubtreeLoaded {
+                    session_id,
+                    query,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -128,7 +136,9 @@ impl App {
                 .list_session_subtree(session_id)
                 .await
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::LineageLoaded { session_id, result });
+            let _ = tx
+                .send(AppMessage::LineageLoaded { session_id, result })
+                .await;
         });
     }
 
@@ -141,7 +151,9 @@ impl App {
                 .await
                 .map(|state| rewind_targets_from_parts(&state.parts))
                 .map_err(crate::UiFailure::from_backend);
-            let _ = tx.send(AppMessage::RewindMessagesLoaded { session_id, result });
+            let _ = tx
+                .send(AppMessage::RewindMessagesLoaded { session_id, result })
+                .await;
         });
     }
 
@@ -153,10 +165,12 @@ impl App {
                 .list_child_sessions(parent_session_id)
                 .await
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::ChildSessionsLoaded {
-                parent_session_id,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::ChildSessionsLoaded {
+                    parent_session_id,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -168,7 +182,9 @@ impl App {
                 .rename_session(session_id, title)
                 .await
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::SessionRenamed { session_id, result });
+            let _ = tx
+                .send(AppMessage::SessionRenamed { session_id, result })
+                .await;
         });
     }
 
@@ -180,7 +196,9 @@ impl App {
                 .list_session_timeline(session_id, limit)
                 .await
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::TimelineLoaded { session_id, result });
+            let _ = tx
+                .send(AppMessage::TimelineLoaded { session_id, result })
+                .await;
         });
     }
 
@@ -202,12 +220,14 @@ impl App {
                 .rewind_session_to_turn(session_id, turn_id)
                 .await
                 .map_err(crate::UiFailure::from_backend);
-            let _ = tx.send(AppMessage::SessionRewound {
-                session_id,
-                message_text,
-                target,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::SessionRewound {
+                    session_id,
+                    message_text,
+                    target,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -225,7 +245,9 @@ impl App {
                 .get_session_state(session_id)
                 .await
                 .map_err(crate::UiFailure::from_backend);
-            let _ = tx.send(AppMessage::SessionStateLoaded { session_id, result });
+            let _ = tx
+                .send(AppMessage::SessionStateLoaded { session_id, result })
+                .await;
         });
     }
 
@@ -271,7 +293,9 @@ impl App {
                 .refresh_session(session_id, after_seq, force)
                 .await
                 .map_err(crate::UiFailure::from_backend);
-            let _ = tx.send(AppMessage::SessionRefreshed { session_id, result });
+            let _ = tx
+                .send(AppMessage::SessionRefreshed { session_id, result })
+                .await;
         });
     }
 
@@ -343,12 +367,14 @@ impl App {
                 .submit_document_with_options(session_id, document, options)
                 .await
                 .map_err(crate::UiFailure::from_backend);
-            let _ = tx.send(AppMessage::SessionMessageSubmitted {
-                session_id,
-                pending_message_id,
-                draft,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::SessionMessageSubmitted {
+                    session_id,
+                    pending_message_id,
+                    draft,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -365,7 +391,9 @@ impl App {
                 .continue_session_with_options(session_id, options)
                 .await
                 .map_err(crate::UiFailure::from_backend);
-            let _ = tx.send(AppMessage::SessionContinued { session_id, result });
+            let _ = tx
+                .send(AppMessage::SessionContinued { session_id, result })
+                .await;
         });
     }
 
@@ -382,7 +410,9 @@ impl App {
                 .compact_session_with_options(session_id, options)
                 .await
                 .map_err(crate::UiFailure::from_backend);
-            let _ = tx.send(AppMessage::SessionCompacted { session_id, result });
+            let _ = tx
+                .send(AppMessage::SessionCompacted { session_id, result })
+                .await;
         });
     }
 
@@ -424,7 +454,9 @@ impl App {
                     )),
                 })
                 .map_err(crate::UiFailure::from_backend);
-            let _ = tx.send(AppMessage::RunCancelled { session_id, result });
+            let _ = tx
+                .send(AppMessage::RunCancelled { session_id, result })
+                .await;
         });
     }
 
@@ -450,13 +482,15 @@ impl App {
                 .reply_permission_with_options(session_id, request_id, kind, scope, options)
                 .await
                 .map_err(crate::UiFailure::from_backend);
-            let _ = tx.send(AppMessage::PermissionReplied {
-                session_id,
-                request_id: replied_request_id,
-                kind: replied_kind,
-                label,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::PermissionReplied {
+                    session_id,
+                    request_id: replied_request_id,
+                    kind: replied_kind,
+                    label,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -474,11 +508,13 @@ impl App {
                 .reply_user_input_with_options(session_id, reply, options)
                 .await
                 .map_err(crate::UiFailure::from_backend);
-            let _ = tx.send(AppMessage::UserInputReplied {
-                session_id,
-                request_id,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::UserInputReplied {
+                    session_id,
+                    request_id,
+                    result,
+                })
+                .await;
         });
     }
 }

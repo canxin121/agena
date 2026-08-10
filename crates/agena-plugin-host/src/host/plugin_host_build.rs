@@ -123,10 +123,7 @@ impl PluginHost {
                 tool_registry_shared
                     .write()
                     .map_err(|_| HostError::Config("plugin tool registry lock poisoned".into()))?
-                    .extend_from_plugin(
-                        &reused.key(),
-                        &reused.manifest.tools,
-                    )
+                    .extend_from_plugin(&reused.key(), &reused.manifest.tools)
                     .map_err(|message| HostError::Load {
                         plugin: reused.key().to_string(),
                         message,
@@ -168,10 +165,7 @@ impl PluginHost {
                         .map_err(|_| {
                             HostError::Config("plugin tool registry lock poisoned".into())
                         })?
-                        .extend_from_plugin(
-                            &plugin.key(),
-                            &plugin.manifest.tools,
-                        )
+                        .extend_from_plugin(&plugin.key(), &plugin.manifest.tools)
                         .map_err(|message| HostError::Load {
                             plugin: plugin.key().to_string(),
                             message,
@@ -219,8 +213,6 @@ impl PluginHost {
             statuses: statuses_shared,
             logs: logs_shared,
             timeouts: config.host.timeouts,
-            runtime: None,
-            runtime_handle: tokio::runtime::Handle::try_current().ok(),
             _host_handle: host_handle,
             transferred_to_successor: tokio::sync::Mutex::new(Default::default()),
             hook_runs: Arc::new(std::sync::Mutex::new(Vec::new())),

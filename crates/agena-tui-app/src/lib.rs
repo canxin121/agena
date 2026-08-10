@@ -23,7 +23,7 @@ use std::{
     env, fs,
     ops::Range,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     time::{Duration, Instant},
 };
 
@@ -77,7 +77,7 @@ use ratatui::{
     style::{Color, Style},
 };
 use serde_json::{Map as JsonMap, Value as JsonValue};
-use tokio::{sync::mpsc::unbounded_channel, time::interval};
+use tokio::{process::Command, time::interval};
 use unicode_width::UnicodeWidthChar;
 
 #[cfg(test)]
@@ -346,7 +346,7 @@ mod tui_config_tests {
 
     #[test]
     fn persistent_tui_preferences_are_projected_into_the_tui_model() {
-                let persistent = TuiPreferencesResource {
+        let persistent = TuiPreferencesResource {
             locale: Some("en-US".to_owned()),
             color_scheme: TuiColorSchemeResource::Light,
             graphics: TuiGraphicsModeResource::Native,
@@ -358,7 +358,7 @@ mod tui_config_tests {
             )]),
         };
 
-                let config = tui_config_from_preferences(&persistent);
+        let config = tui_config_from_preferences(&persistent);
         assert_eq!(config.color_scheme, ColorSchemePreference::Light);
         assert_eq!(config.graphics, GraphicsMode::Native);
         assert_eq!(config.theme.as_deref(), Some("ocean"));

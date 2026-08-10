@@ -89,117 +89,134 @@ impl NotebookPlugin {
         context: &ToolInvokeContext<'_>,
         input: &NotebookEditInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let path = resolve_path(context.workspace_root, input.path.as_str());
-        if path.extension().and_then(|value| value.to_str()) != Some("ipynb") {
-            return Err(PluginError::invalid_params(
-                "notebook.edit_cell requires an .ipynb file",
-            ));
-        }
-        let original = std::fs::read(&path).map_err(io_error)?;
-        let before_sha256 = sha256(original.as_slice());
-        if !before_sha256.eq_ignore_ascii_case(input.expected_sha256.trim()) {
-            return Err(PluginError::invalid_params(format!(
-                "stale notebook revision: expected {}, actual {before_sha256}",
-                input.expected_sha256.trim()
-            )));
-        }
-        let mut notebook: serde_json::Value =
-            serde_json::from_slice(original.as_slice()).map_err(|error| {
-                PluginError::invalid_params(format!("invalid notebook JSON: {error}"))
+        let workspace_root = context.workspace_root.to_string();
+        let input = input.clone();
+        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
+            .acquire()
+            .await
+            .map_err(|_| PluginError::internal("notebook worker pool is unavailable"))?;
+        tokio::task::spawn_blocking(move || {
+            let _worker_permit = worker_permit;
+            let path = resolve_path(workspace_root.as_str(), input.path.as_str());
+            if path.extension().and_then(|value| value.to_str()) != Some("ipynb") {
+                return Err(PluginError::invalid_params(
+                    "notebook.edit_cell requires an .ipynb file",
+                ));
+            }
+            let original = std::fs::read(&path).map_err(io_error)?;
+            let before_sha256 = sha256(original.as_slice());
+            if !before_sha256.eq_ignore_ascii_case(input.expected_sha256.trim()) {
+                return Err(PluginError::invalid_params(format!(
+                    "stale notebook revision: expected {}, actual {before_sha256}",
+                    input.expected_sha256.trim()
+                )));
+            }
+            let mut notebook: serde_json::Value = serde_json::from_slice(original.as_slice())
+                .map_err(|error| {
+                    PluginError::invalid_params(format!("invalid notebook JSON: {error}"))
+                })?;
+            let cells = notebook
+                .get_mut("cells")
+                .and_then(serde_json::Value::as_array_mut)
+                .ok_or_else(|| PluginError::invalid_params("notebook has no cells array"))?;
+
+            match input.action {
+                NotebookEditAction::Replace => {
+                    let cell_count = cells.len();
+                    let cell = cells.get_mut(input.cell_index).ok_or_else(|| {
+                        PluginError::invalid_params(format!(
+                            "cell_index {} is out of range for {} cells",
+                            input.cell_index, cell_count
+                        ))
+                    })?;
+                    let object = cell.as_object_mut().ok_or_else(|| {
+                        PluginError::invalid_params("target notebook cell is not an object")
+                    })?;
+                    if let Some(cell_type) = input.cell_type {
+                        object.insert(
+                            "cell_type".to_string(),
+                            serde_json::Value::String(cell_type.as_str().to_string()),
+                        );
+                    }
+                    object.insert("source".to_string(), notebook_source(input.source.as_str()));
+                    if !input.preserve_outputs
+                        && object.get("cell_type").and_then(serde_json::Value::as_str)
+                            == Some("code")
+                    {
+                        object.insert("outputs".to_string(), serde_json::json!([]));
+                        object.insert("execution_count".to_string(), serde_json::Value::Null);
+                    }
+                }
+                NotebookEditAction::InsertBefore | NotebookEditAction::InsertAfter => {
+                    if input.cell_index > cells.len()
+                        || (matches!(input.action, NotebookEditAction::InsertAfter)
+                            && input.cell_index >= cells.len())
+                    {
+                        return Err(PluginError::invalid_params(format!(
+                            "cell_index {} is out of range for {} cells",
+                            input.cell_index,
+                            cells.len()
+                        )));
+                    }
+                    let cell_type = input.cell_type.unwrap_or(NotebookCellType::Code);
+                    let insert_at = if matches!(input.action, NotebookEditAction::InsertAfter) {
+                        input.cell_index + 1
+                    } else {
+                        input.cell_index
+                    };
+                    cells.insert(insert_at, new_cell(cell_type, input.source.as_str()));
+                }
+                NotebookEditAction::Delete => {
+                    if input.cell_index >= cells.len() {
+                        return Err(PluginError::invalid_params(format!(
+                            "cell_index {} is out of range for {} cells",
+                            input.cell_index,
+                            cells.len()
+                        )));
+                    }
+                    cells.remove(input.cell_index);
+                }
+            }
+
+            let cell_count = cells.len();
+            let updated = serde_json::to_vec_pretty(&notebook).map_err(|error| {
+                PluginError::internal(format!("cannot serialize notebook: {error}"))
             })?;
-        let cells = notebook
-            .get_mut("cells")
-            .and_then(serde_json::Value::as_array_mut)
-            .ok_or_else(|| PluginError::invalid_params("notebook has no cells array"))?;
-
-        match input.action {
-            NotebookEditAction::Replace => {
-                let cell_count = cells.len();
-                let cell = cells.get_mut(input.cell_index).ok_or_else(|| {
-                    PluginError::invalid_params(format!(
-                        "cell_index {} is out of range for {} cells",
-                        input.cell_index, cell_count
-                    ))
-                })?;
-                let object = cell.as_object_mut().ok_or_else(|| {
-                    PluginError::invalid_params("target notebook cell is not an object")
-                })?;
-                if let Some(cell_type) = input.cell_type {
-                    object.insert(
-                        "cell_type".to_string(),
-                        serde_json::Value::String(cell_type.as_str().to_string()),
-                    );
-                }
-                object.insert("source".to_string(), notebook_source(input.source.as_str()));
-                if !input.preserve_outputs
-                    && object.get("cell_type").and_then(serde_json::Value::as_str) == Some("code")
-                {
-                    object.insert("outputs".to_string(), serde_json::json!([]));
-                    object.insert("execution_count".to_string(), serde_json::Value::Null);
-                }
-            }
-            NotebookEditAction::InsertBefore | NotebookEditAction::InsertAfter => {
-                if input.cell_index > cells.len()
-                    || (matches!(input.action, NotebookEditAction::InsertAfter)
-                        && input.cell_index >= cells.len())
-                {
-                    return Err(PluginError::invalid_params(format!(
-                        "cell_index {} is out of range for {} cells",
-                        input.cell_index,
-                        cells.len()
-                    )));
-                }
-                let cell_type = input.cell_type.unwrap_or(NotebookCellType::Code);
-                let insert_at = if matches!(input.action, NotebookEditAction::InsertAfter) {
-                    input.cell_index + 1
-                } else {
-                    input.cell_index
-                };
-                cells.insert(insert_at, new_cell(cell_type, input.source.as_str()));
-            }
-            NotebookEditAction::Delete => {
-                if input.cell_index >= cells.len() {
-                    return Err(PluginError::invalid_params(format!(
-                        "cell_index {} is out of range for {} cells",
-                        input.cell_index,
-                        cells.len()
-                    )));
-                }
-                cells.remove(input.cell_index);
-            }
-        }
-
-        let cell_count = cells.len();
-        let updated = serde_json::to_vec_pretty(&notebook).map_err(|error| {
-            PluginError::internal(format!("cannot serialize notebook: {error}"))
-        })?;
-        atomic_write(&path, updated.as_slice())?;
-        let after_sha256 = sha256(updated.as_slice());
-        Ok(ToolInvokeOutput::from_parts(
-            format!("edited notebook {}", input.path),
-            format!(
-                "{:?} cell {} · {cell_count} cells",
-                input.action, input.cell_index
-            ),
-            format!(
-                "Applied {:?} at cell {} in '{}' ({} cells, sha256 {} -> {}).",
-                input.action, input.cell_index, input.path, cell_count, before_sha256, after_sha256
-            ),
-            Some(serde_json::json!({
-                "path": input.path,
-                "action": input.action,
-                "cell_index": input.cell_index,
-                "cell_count": cell_count,
-                "before_sha256": before_sha256,
-                "after_sha256": after_sha256,
-            })),
-            std::collections::BTreeMap::from([
-                ("agena.effect".to_string(), "file_changes".to_string()),
-                ("path".to_string(), input.path.clone()),
-                ("after_sha256".to_string(), after_sha256),
-            ]),
-            Vec::new(),
-        ))
+            atomic_write(&path, updated.as_slice())?;
+            let after_sha256 = sha256(updated.as_slice());
+            Ok(ToolInvokeOutput::from_parts(
+                format!("edited notebook {}", input.path),
+                format!(
+                    "{:?} cell {} · {cell_count} cells",
+                    input.action, input.cell_index
+                ),
+                format!(
+                    "Applied {:?} at cell {} in '{}' ({} cells, sha256 {} -> {}).",
+                    input.action,
+                    input.cell_index,
+                    input.path,
+                    cell_count,
+                    before_sha256,
+                    after_sha256
+                ),
+                Some(serde_json::json!({
+                    "path": input.path,
+                    "action": input.action,
+                    "cell_index": input.cell_index,
+                    "cell_count": cell_count,
+                    "before_sha256": before_sha256,
+                    "after_sha256": after_sha256,
+                })),
+                std::collections::BTreeMap::from([
+                    ("agena.effect".to_string(), "file_changes".to_string()),
+                    ("path".to_string(), input.path.clone()),
+                    ("after_sha256".to_string(), after_sha256),
+                ]),
+                Vec::new(),
+            ))
+        })
+        .await
+        .map_err(|error| PluginError::internal(format!("notebook worker failed: {error}")))?
     }
 }
 

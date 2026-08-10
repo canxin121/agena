@@ -108,7 +108,7 @@ pub fn expand_plugin_layer_manifest(
     } else {
         quote! {}
     };
-        let skills_assignment = config
+    let skills_assignment = config
         .skills
         .as_ref()
         .map(|skills| quote! { manifest.skills.extend(#skills); })

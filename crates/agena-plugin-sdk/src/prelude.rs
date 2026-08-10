@@ -42,9 +42,8 @@ pub use crate::manifest::{
     PluginStudioCommand, PluginStudioControl, PluginStudioControlOption,
     PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiThemeColors,
     PluginTuiUiContributions, PluginUiAction, PluginUiContributions, PluginUiThemePalette,
-    ToolDefinition, ToolInput, ToolResultPolicy,
-    ToolResultRenderKind, ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
-    plugin_workbench_tab_id_is_supported,
+    ToolDefinition, ToolInput, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode, ToolTag,
+    TransportKind, normalize_tool_tag_name, plugin_workbench_tab_id_is_supported,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};

@@ -141,7 +141,7 @@ pub struct PluginWorkbenchPlugin {
     pub plugin_id: String,
     pub visible_tool: String,
     pub version: String,
-        pub transport: String,
+    pub transport: String,
     pub tools: Vec<agena_plugin_host::ToolDefinition>,
     pub commands: Vec<agena_plugin_host::PluginCommandDefinition>,
     pub config_status: PluginConfigStatus,

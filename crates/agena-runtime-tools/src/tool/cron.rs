@@ -14,7 +14,7 @@ use crate::part::{
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 use agena_tool::CronJobSummary;
 
-pub(super) fn execute_create(
+pub(super) async fn execute_create_async(
     executor: &ToolExecutor,
     input: &CronCreateToolInput,
     session_id: Option<i64>,
@@ -35,7 +35,7 @@ pub(super) fn execute_create(
     }
     let id = job.id;
     let next = job.next_fire_at.map(|t| t.to_rfc3339());
-    super::mcp::block_on(async move { scheduler.add(job).await });
+    scheduler.add(job).await;
 
     let view = ToolExecutionView::simple(
         "Create schedule",
@@ -57,13 +57,12 @@ pub(super) fn execute_create(
     ))
 }
 
-pub(super) fn execute_list(
+pub(super) async fn execute_list_async(
     executor: &ToolExecutor,
     _input: &CronListToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
-    let scheduler_for_list = scheduler.clone();
-    let jobs = super::mcp::block_on(async move { scheduler_for_list.list().await });
+    let jobs = scheduler.list().await;
     let summaries: Vec<CronJobSummary> = jobs.into_iter().map(summarize).collect();
     let summary_text = if summaries.is_empty() {
         "no scheduled jobs".to_string()
@@ -90,15 +89,14 @@ pub(super) fn execute_list(
     ))
 }
 
-pub(super) fn execute_delete(
+pub(super) async fn execute_delete_async(
     executor: &ToolExecutor,
     input: &CronDeleteToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
     let id = uuid::Uuid::parse_str(input.id.trim())
         .map_err(|e| ToolError::plugin(format!("cron_delete: invalid id: {e}")))?;
-    let scheduler_for_remove = scheduler.clone();
-    let removed = super::mcp::block_on(async move { scheduler_for_remove.remove(id).await });
+    let removed = scheduler.remove(id).await;
     let view = ToolExecutionView::simple(
         "Delete schedule",
         if removed { "Removed" } else { "Not found" },
@@ -113,7 +111,7 @@ pub(super) fn execute_delete(
     ))
 }
 
-pub(super) fn execute_update(
+pub(super) async fn execute_update_async(
     executor: &ToolExecutor,
     input: &CronUpdateToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
@@ -135,20 +133,18 @@ pub(super) fn execute_update(
     let max_age_days = input.max_age_days;
     let misfire_policy = input.misfire_policy.map(scheduler_misfire_policy);
     let retry_policy = input.retry_policy.as_ref().map(scheduler_retry_policy);
-    let updated = super::mcp::block_on(async move {
-        scheduler
-            .update(
-                id,
-                prompt,
-                expression,
-                max_age_days,
-                misfire_policy,
-                retry_policy,
-            )
-            .await
-    })
-    .map_err(|error| ToolError::plugin(format!("cron_update: {error}")))?
-    .ok_or_else(|| ToolError::plugin(format!("cron_update: job {id} was not found")))?;
+    let updated = scheduler
+        .update(
+            id,
+            prompt,
+            expression,
+            max_age_days,
+            misfire_policy,
+            retry_policy,
+        )
+        .await
+        .map_err(|error| ToolError::plugin(format!("cron_update: {error}")))?
+        .ok_or_else(|| ToolError::plugin(format!("cron_update: job {id} was not found")))?;
     let summary = summarize(updated);
     let view = ToolExecutionView::simple(
         "Update schedule",
@@ -165,13 +161,15 @@ pub(super) fn execute_update(
     ))
 }
 
-pub(super) fn execute_pause(
+pub(super) async fn execute_pause_async(
     executor: &ToolExecutor,
     input: &CronJobControlToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
     let id = parse_job_id("cron_pause", input.id.as_str())?;
-    let job = super::mcp::block_on(async move { scheduler.pause(id).await })
+    let job = scheduler
+        .pause(id)
+        .await
         .map_err(|error| ToolError::plugin(format!("cron_pause: {error}")))?
         .ok_or_else(|| ToolError::plugin(format!("cron_pause: job {id} was not found")))?;
     let summary = summarize(job);
@@ -190,13 +188,15 @@ pub(super) fn execute_pause(
     ))
 }
 
-pub(super) fn execute_resume(
+pub(super) async fn execute_resume_async(
     executor: &ToolExecutor,
     input: &CronJobControlToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
     let id = parse_job_id("cron_resume", input.id.as_str())?;
-    let job = super::mcp::block_on(async move { scheduler.resume(id).await })
+    let job = scheduler
+        .resume(id)
+        .await
         .map_err(|error| ToolError::plugin(format!("cron_resume: {error}")))?
         .ok_or_else(|| ToolError::plugin(format!("cron_resume: job {id} was not found")))?;
     let summary = summarize(job);
@@ -223,7 +223,7 @@ pub(super) fn execute_resume(
     ))
 }
 
-pub(super) fn execute_history(
+pub(super) async fn execute_history_async(
     executor: &ToolExecutor,
     input: &CronHistoryToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
@@ -233,25 +233,22 @@ pub(super) fn execute_history(
         .as_deref()
         .map(|id| parse_job_id("cron_history", id))
         .transpose()?;
-    let scheduler_for_history = scheduler.clone();
-    let mut entries = super::mcp::block_on(async move {
-        scheduler_for_history
-            .history(filter_id, input.limit as usize)
-            .await
-    })
-    .into_iter()
-    .map(|entry| CronRunSummary {
-        job_id: entry.job_id.to_string(),
-        triggered_at: entry.record.triggered_at.to_rfc3339(),
-        finished_at: entry.record.finished_at.to_rfc3339(),
-        status: format!("{:?}", entry.record.status).to_ascii_lowercase(),
-        scheduled_for: entry.record.scheduled_for.map(|time| time.to_rfc3339()),
-        delivery_key: entry.record.delivery_key,
-        attempt: entry.record.attempt,
-        session_id: entry.record.session_id,
-        failure: entry.record.failure.map(Into::into),
-    })
-    .collect::<Vec<_>>();
+    let mut entries = scheduler
+        .history(filter_id, input.limit as usize)
+        .await
+        .into_iter()
+        .map(|entry| CronRunSummary {
+            job_id: entry.job_id.to_string(),
+            triggered_at: entry.record.triggered_at.to_rfc3339(),
+            finished_at: entry.record.finished_at.to_rfc3339(),
+            status: format!("{:?}", entry.record.status).to_ascii_lowercase(),
+            scheduled_for: entry.record.scheduled_for.map(|time| time.to_rfc3339()),
+            delivery_key: entry.record.delivery_key,
+            attempt: entry.record.attempt,
+            session_id: entry.record.session_id,
+            failure: entry.record.failure.map(Into::into),
+        })
+        .collect::<Vec<_>>();
     // A database-backed ledger has a stable newest-first order.  Keep this
     // deterministic for in-memory/embedded stores as well before returning
     // the JSON payload that callers can export without choosing a host path.
@@ -271,7 +268,7 @@ pub(super) fn execute_history(
     ))
 }
 
-pub(super) fn execute_wakeup(
+pub(super) async fn execute_wakeup_async(
     executor: &ToolExecutor,
     input: &ScheduleWakeupToolInput,
     session_id: Option<i64>,
@@ -284,7 +281,7 @@ pub(super) fn execute_wakeup(
     }
     let id = job.id;
     let next = job.next_fire_at.map(|t| t.to_rfc3339()).unwrap_or_default();
-    super::mcp::block_on(async move { scheduler.add(job).await });
+    scheduler.add(job).await;
 
     let view = ToolExecutionView::simple(
         "Schedule wake-up",

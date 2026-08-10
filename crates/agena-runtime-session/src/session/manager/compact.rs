@@ -85,7 +85,9 @@ impl SessionManager {
         let state = self.execution_state();
         let mut session = self.store.load_session(session_id).await?;
         self.refresh_execution_policy(&mut session, &state);
-        let options = self.apply_execution_context_to_run_options(&session, request.options)?;
+        let options = self
+            .apply_execution_context_to_run_options_async(&session, request.options)
+            .await?;
         match self
             .compact_candidate(
                 session,
@@ -199,7 +201,10 @@ impl SessionManager {
             .last_run_marker()
             .map(|marker| marker.part_id)
             .unwrap_or_default();
-        let prompt_inputs = match self.compaction_prompt_inputs(&session, options, state.as_ref()) {
+        let prompt_inputs = match self
+            .compaction_prompt_inputs(&session, options, state.as_ref())
+            .await
+        {
             Ok(inputs) => inputs,
             Err(error) => return Err((session, error)),
         };
@@ -305,7 +310,7 @@ impl SessionManager {
         }
     }
 
-    fn compaction_prompt_inputs(
+    async fn compaction_prompt_inputs(
         &self,
         session: &Session,
         options: &SessionRunOptions,
@@ -314,14 +319,15 @@ impl SessionManager {
         let provider_registry = state.processor.provider_registry();
         let scoped_executor = state
             .tool_executor
-            .for_session_context(&session.runtime.execution);
+            .for_session_context_async(&session.runtime.execution)
+            .await;
         let agena_tool_mode = provider_registry.agena_tool_mode(&options.model)?;
         let native_compaction_enabled =
             provider_registry.native_compaction_enabled(&options.model)?;
         let tools = if agena_tool_mode.is_disabled() {
             Vec::new()
         } else {
-            scoped_executor.available_tool_api_bindings()
+            scoped_executor.available_tool_api_bindings_async().await
         };
         let turns = prompt_window::compactable_prompt_runs(
             session,

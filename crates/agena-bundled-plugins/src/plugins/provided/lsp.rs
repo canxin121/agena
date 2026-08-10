@@ -180,7 +180,6 @@ impl LspPlugin {
         summary = "List configured language servers.",
         read_only,
         lsp,
-
         concurrency_safe
     )]
     async fn dispatch_servers(&self) -> SdkResult<ToolInvokeOutput> {
@@ -213,9 +212,7 @@ impl LspPlugin {
         tags(query, lsp, filesystem),
         summary = "Resolve symbol definitions.",
         read_only,
-
         lsp,
-
         concurrency_safe
     )]
     async fn dispatch_definition(
@@ -230,9 +227,7 @@ impl LspPlugin {
         tags(query, lsp, filesystem),
         summary = "Find symbol references.",
         read_only,
-
         lsp,
-
         concurrency_safe
     )]
     async fn dispatch_references(
@@ -247,9 +242,7 @@ impl LspPlugin {
         tags(query, lsp, filesystem),
         summary = "Fetch hover text.",
         read_only,
-
         lsp,
-
         concurrency_safe
     )]
     async fn dispatch_hover(
@@ -264,9 +257,7 @@ impl LspPlugin {
         tags(query, lsp, filesystem),
         summary = "Fetch file diagnostics.",
         read_only,
-
         lsp,
-
         concurrency_safe
     )]
     async fn dispatch_diagnostics(

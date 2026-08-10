@@ -22,7 +22,7 @@ use crate::{
     HttpProviderAdapterConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ProviderDefaultsConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
     ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,
-        SessionConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig, TuiUiTranscriptConfig,
+    SessionConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig, TuiUiTranscriptConfig,
     UiConfig,
 };
 use agena_domain::ModelSelectionConfig;
@@ -389,7 +389,7 @@ impl RawConfig {
         .then_some(RawUiConfig {
             locale,
             tui: (tui_color_scheme.is_some() || tui_graphics.is_some() || tui_theme.is_some())
-                                .then_some(RawTuiUiConfig {
+                .then_some(RawTuiUiConfig {
                     color_scheme: tui_color_scheme,
                     graphics: tui_graphics,
                     theme: tui_theme,
@@ -475,7 +475,7 @@ impl RawConfig {
                 .locale
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
-                        tui: TuiUiConfig {
+            tui: TuiUiConfig {
                 color_scheme: raw_tui.color_scheme.unwrap_or_default(),
                 graphics: raw_tui.graphics.unwrap_or_default(),
                 theme: raw_tui
@@ -757,7 +757,7 @@ pub struct RawTuiUiConfig {
     pub color_scheme: Option<TuiColorSchemeConfig>,
     #[merge(strategy = option_override)]
     pub graphics: Option<TuiGraphicsModeConfig>,
-        #[merge(strategy = option_override)]
+    #[merge(strategy = option_override)]
     pub theme: Option<String>,
     #[merge(strategy = option_struct_merge)]
     pub transcript: Option<RawTuiUiTranscriptConfig>,

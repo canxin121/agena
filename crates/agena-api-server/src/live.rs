@@ -6,6 +6,7 @@
 //! replay, or a global sequence.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use agena_api::{
     Scope,
@@ -25,14 +26,28 @@ pub(crate) enum LiveItem {
 }
 
 pub(crate) struct LiveSubscription {
-    rx: mpsc::UnboundedReceiver<LiveItem>,
+    rx: mpsc::Receiver<LiveItem>,
+    dropped: Arc<AtomicU64>,
+    pending_lag: u64,
     _store_subscription: GlobalSubscription,
     signal_task: tokio::task::JoinHandle<()>,
 }
 
 impl LiveSubscription {
     pub(crate) async fn recv(&mut self) -> Option<LiveItem> {
-        self.rx.recv().await
+        if self.pending_lag > 0 {
+            return Some(LiveItem::Lagged(std::mem::take(&mut self.pending_lag)));
+        }
+        match self.rx.recv().await {
+            Some(item) => {
+                self.pending_lag = self.dropped.swap(0, Ordering::AcqRel);
+                Some(item)
+            }
+            None => {
+                let skipped = self.dropped.swap(0, Ordering::AcqRel);
+                (skipped > 0).then_some(LiveItem::Lagged(skipped))
+            }
+        }
     }
 }
 
@@ -43,12 +58,22 @@ impl Drop for LiveSubscription {
 }
 
 pub(crate) fn subscribe(state: &AppState) -> Result<LiveSubscription, ServerError> {
+    const LIVE_QUEUE_CAPACITY: usize = 256;
+
     let store = state.session_store()?;
     let signals = state.live_signals()?;
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(LIVE_QUEUE_CAPACITY);
+    let dropped = Arc::new(AtomicU64::new(0));
     let change_tx = tx.clone();
+    let change_dropped = Arc::clone(&dropped);
     let store_subscription = store.subscribe_all(Arc::new(move |change| {
-        let _ = change_tx.send(LiveItem::SessionChanged(project_change(change)));
+        match change_tx.try_send(LiveItem::SessionChanged(project_change(change))) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                change_dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {}
+        }
     }));
     let mut signal_subscription = signals.subscribe();
     let signal_task = tokio::spawn(async move {
@@ -59,13 +84,15 @@ pub(crate) fn subscribe(state: &AppState) -> Result<LiveSubscription, ServerErro
                 }
                 RuntimeLiveSignalItem::Lagged(skipped) => LiveItem::Lagged(skipped),
             };
-            if tx.send(item).is_err() {
+            if tx.send(item).await.is_err() {
                 break;
             }
         }
     });
     Ok(LiveSubscription {
         rx,
+        dropped,
+        pending_lag: 0,
         _store_subscription: store_subscription,
         signal_task,
     })

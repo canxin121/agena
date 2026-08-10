@@ -13,7 +13,7 @@ pub struct PluginImplConfig {
     pub version: Option<Expr>,
     pub summary: Option<Expr>,
     pub help: Option<Expr>,
-        pub skills: Option<Expr>,
+    pub skills: Option<Expr>,
     pub activity_kinds: Option<Expr>,
     pub config_schema: Option<Expr>,
     pub config_schema_type: Option<Type>,
@@ -33,7 +33,7 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
     let mut version = None;
     let mut summary = None;
     let mut help = None;
-        let mut skills = None;
+    let mut skills = None;
     let mut activity_kinds = None;
     let mut config_schema = None;
     let mut config_schema_type = None;
@@ -56,8 +56,8 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                     "version" => version = Some(value.value),
                     "summary" => summary = Some(value.value),
                     "help" => help = Some(value.value),
-                                    "skills" => skills = Some(value.value),
-                "activity_kinds" => activity_kinds = Some(value.value),
+                    "skills" => skills = Some(value.value),
+                    "activity_kinds" => activity_kinds = Some(value.value),
                     "config" => {
                         config_schema_type = Some(expr_as_type(value.value)?);
                         config_store = true;
@@ -165,7 +165,7 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
         version,
         summary,
         help,
-                skills,
+        skills,
         activity_kinds,
         config_schema,
         config_schema_type,

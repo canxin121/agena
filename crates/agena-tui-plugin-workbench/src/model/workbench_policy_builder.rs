@@ -17,7 +17,7 @@ pub fn build_plugin_workbench_plugin(
     let version = manifest
         .map(|manifest| manifest.version.clone())
         .unwrap_or_else(|| "n/a".to_owned());
-        let visible_tool = tools
+    let visible_tool = tools
         .first()
         .map(|tool| tool.name.clone())
         .unwrap_or_else(|| status.plugin_id.name().to_owned());
@@ -55,7 +55,7 @@ pub fn build_plugin_workbench_plugin(
         plugin_id,
         visible_tool,
         version,
-                transport: status.kind.to_owned(),
+        transport: status.kind.to_owned(),
         tools,
         commands,
         config_status: PluginConfigStatus {
@@ -85,6 +85,6 @@ pub fn build_plugin_workbench_plugin(
 }
 use super::{
     BTreeMap, JsonValue, PluginConfigStatus, PluginConfigStatusKind, PluginWorkbenchPlugin,
-    derive_override_value, localized_config_schema, materialized_config_value, plugin_get_json_path,
-    quote_settings_segment, recompute_plugin_config_state,
+    derive_override_value, localized_config_schema, materialized_config_value,
+    plugin_get_json_path, quote_settings_segment, recompute_plugin_config_state,
 };

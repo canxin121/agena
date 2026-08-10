@@ -73,16 +73,25 @@ impl App {
             .transcript
             .session_id
             .or_else(|| self.sessions.current_selected_id());
-        let effect = match self.block_on_async(
-            self.backend
-                .invoke_plugin_slash_command(&entry, session_id, args),
-        ) {
-            Ok(effect) => effect,
-            Err(error) => {
-                self.flash_error(error);
-                return;
-            }
-        };
+        let args = args.to_string();
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .invoke_plugin_slash_command(&entry, session_id, &args)
+                    .await
+            },
+            move |app, result| match result {
+                Ok(effect) => app.apply_plugin_command_effect(effect, session_id),
+                Err(error) => app.flash_error(error),
+            },
+        );
+    }
+
+    fn apply_plugin_command_effect(
+        &mut self,
+        effect: PluginCommandEffect,
+        session_id: Option<i64>,
+    ) {
         match effect {
             PluginCommandEffect::None => {}
             PluginCommandEffect::Message(message) => {
@@ -168,23 +177,29 @@ impl App {
                     // routes the UI into the fork, so the open_session switch
                     // keeps the side marker (same-channel ordering).
                     if track_as_side {
-                        let _ = tx.send(AppMessage::SideSessionOpened {
-                            session_id,
-                            parent_id,
-                        });
+                        let _ = tx
+                            .send(AppMessage::SideSessionOpened {
+                                session_id,
+                                parent_id,
+                            })
+                            .await;
                     }
-                    let _ = tx.send(AppMessage::SessionCreated {
-                        submit_draft: None,
-                        pending_message_id: None,
-                        result: Ok(state.session),
-                    });
+                    let _ = tx
+                        .send(AppMessage::SessionCreated {
+                            submit_draft: None,
+                            pending_message_id: None,
+                            result: Ok(state.session),
+                        })
+                        .await;
                 }
                 Err(err) => {
-                    let _ = tx.send(AppMessage::SessionCreated {
-                        submit_draft: None,
-                        pending_message_id: None,
-                        result: Err(crate::UiFailure::internal(err)),
-                    });
+                    let _ = tx
+                        .send(AppMessage::SessionCreated {
+                            submit_draft: None,
+                            pending_message_id: None,
+                            result: Err(crate::UiFailure::internal(err)),
+                        })
+                        .await;
                 }
             }
         });
@@ -199,44 +214,50 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        let prompt = match self.block_on_async(self.backend.invoke_plugin_ui_tool(
-            "agena.skills",
-            "get",
-            serde_json::json!({ "name": "review" }),
-            Some(session_id),
-        )) {
-            Ok(response) => response
-                .payload
-                .as_ref()
-                .and_then(|payload| payload.get("body"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|body| !body.is_empty())
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| "review Skill did not return instructions".to_owned()),
-            Err(error) => {
-                self.notify_ui_failure(error, NoticeScope::Session(session_id));
-                return;
-            }
-        };
-        let prompt = match prompt {
-            Ok(prompt) if args.trim().is_empty() => prompt,
-            Ok(prompt) => format!("{prompt}\n\nReview focus:\n{}", args.trim()),
-            Err(error) => {
-                self.flash_error(error);
-                return;
-            }
-        };
-        if prompt.trim().is_empty() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-user-command-empty"));
-            return;
-        }
-        let draft = ComposerDraft {
-            document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
-                text: prompt,
-            }]),
-        };
-        self.request_submit_message(session_id, draft);
+        let review_focus = args.trim().to_string();
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .invoke_plugin_ui_tool(
+                        "agena.skills",
+                        "get",
+                        serde_json::json!({ "name": "review" }),
+                        Some(session_id),
+                    )
+                    .await
+            },
+            move |app, result| {
+                let response = match result {
+                    Ok(response) => response,
+                    Err(error) => {
+                        app.notify_ui_failure(error, NoticeScope::Session(session_id));
+                        return;
+                    }
+                };
+                let Some(prompt) = response
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.get("body"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|body| !body.is_empty())
+                else {
+                    app.flash_error("review Skill did not return instructions");
+                    return;
+                };
+                let prompt = if review_focus.is_empty() {
+                    prompt.to_string()
+                } else {
+                    format!("{prompt}\n\nReview focus:\n{review_focus}")
+                };
+                let draft = ComposerDraft {
+                    document: agena_domain::ComposerDocument(vec![
+                        agena_domain::ComposerNode::Text { text: prompt },
+                    ]),
+                };
+                app.request_submit_message(session_id, draft);
+            },
+        );
     }
 
     pub(crate) fn handle_commit_command(&mut self, args: &str) {
@@ -249,16 +270,18 @@ impl App {
             return;
         }
 
-        match self.block_on_async(self.backend.create_commit(message.to_string())) {
-            Ok((commit, summary)) => {
-                self.flash_success(ui_text::commit_created_message(
-                    &self.i18n,
+        let message = message.to_string();
+        self.dispatch_backend_operation(
+            move |backend| async move { backend.create_commit(message).await },
+            |app, result| match result {
+                Ok((commit, summary)) => app.flash_success(ui_text::commit_created_message(
+                    &app.i18n,
                     &commit[..commit.len().min(12)],
                     summary.as_str(),
-                ));
-            }
-            Err(error) => self.flash_error(error),
-        }
+                )),
+                Err(error) => app.flash_error(error),
+            },
+        );
     }
 
     pub(crate) fn handle_pr_command(&mut self, args: &str) {
@@ -282,13 +305,16 @@ impl App {
             }
         };
 
-        match self.block_on_async(self.backend.create_pr(title, body, base, head)) {
-            Ok(url) => self.flash_success(ui_text::pull_request_created_message(
-                &self.i18n,
-                url.as_str(),
-            )),
-            Err(error) => self.flash_error(error),
-        }
+        self.dispatch_backend_operation(
+            move |backend| async move { backend.create_pr(title, body, base, head).await },
+            |app, result| match result {
+                Ok(url) => app.flash_success(ui_text::pull_request_created_message(
+                    &app.i18n,
+                    url.as_str(),
+                )),
+                Err(error) => app.flash_error(error),
+            },
+        );
     }
 
     pub(crate) fn handle_export_command(&mut self, args: &str) {

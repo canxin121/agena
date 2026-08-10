@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use std::{collections::BTreeMap, fmt};
 
 use agena_macros::ToolInput;
@@ -619,6 +620,19 @@ struct CatalogState {
     generation: u64,
 }
 
+#[derive(Debug, Clone)]
+struct DefinitionCatalogSnapshot {
+    catalog: DiscoveredCatalog,
+    watcher_generation: u64,
+    captured_at: Instant,
+}
+
+/// One catalog build feeds every `tool.definition` hook in the same request.
+/// The watcher invalidates ordinary filesystem changes; the short TTL keeps
+/// request-driven discovery correct when the watcher is disabled or an event
+/// is coalesced by the operating system.
+const DEFINITION_CATALOG_CACHE_TTL: Duration = Duration::from_millis(250);
+
 const MAX_SKILL_DOCUMENT_BYTES: usize = 1_048_576;
 
 #[derive(Debug)]
@@ -847,11 +861,13 @@ struct SkillsRefreshInput {
     verbose: bool,
 }
 
+#[derive(Clone)]
 pub(crate) struct SkillsPlugin {
-    workspace_root: OnceLock<PathBuf>,
-    config: OnceLock<SkillsPluginConfig>,
-    catalog_state: Mutex<CatalogState>,
-    watcher: Mutex<Option<SkillCatalogWatcher>>,
+    workspace_root: Arc<OnceLock<PathBuf>>,
+    config: Arc<OnceLock<SkillsPluginConfig>>,
+    catalog_state: Arc<Mutex<CatalogState>>,
+    definition_catalog: Arc<Mutex<Option<DefinitionCatalogSnapshot>>>,
+    watcher: Arc<Mutex<Option<SkillCatalogWatcher>>>,
     watcher_generation: Arc<AtomicU64>,
 }
 
@@ -911,12 +927,34 @@ fn skills_config_schema() -> serde_json::Value {
 impl SkillsPlugin {
     pub(crate) fn new() -> Self {
         Self {
-            workspace_root: OnceLock::new(),
-            config: OnceLock::new(),
-            catalog_state: Mutex::new(CatalogState::default()),
-            watcher: Mutex::new(None),
+            workspace_root: Arc::new(OnceLock::new()),
+            config: Arc::new(OnceLock::new()),
+            catalog_state: Arc::new(Mutex::new(CatalogState::default())),
+            definition_catalog: Arc::new(Mutex::new(None)),
+            watcher: Arc::new(Mutex::new(None)),
             watcher_generation: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Filesystem discovery and document I/O are synchronous APIs. Keep them
+    /// off Tokio workers and make the blocking boundary explicit at the
+    /// plugin edge.
+    async fn run_blocking<T, F>(&self, operation: F) -> SdkResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(Self) -> SdkResult<T> + Send + 'static,
+    {
+        let plugin = self.clone();
+        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
+            .acquire()
+            .await
+            .map_err(|_| PluginError::internal("skills worker pool is unavailable"))?;
+        tokio::task::spawn_blocking(move || {
+            let _worker_permit = worker_permit;
+            operation(plugin)
+        })
+        .await
+        .map_err(|error| PluginError::internal(format!("skills blocking task failed: {error}")))?
     }
 
     #[hook(init)]
@@ -1090,6 +1128,49 @@ impl SkillsPlugin {
 
     fn discovered_catalog(&self) -> SdkResult<DiscoveredCatalog> {
         Ok(self.refresh_catalog()?.catalog)
+    }
+
+    async fn discovered_catalog_async(&self) -> SdkResult<DiscoveredCatalog> {
+        self.run_blocking(|plugin| plugin.discovered_catalog())
+            .await
+    }
+
+    fn definition_catalog(&self) -> SdkResult<DiscoveredCatalog> {
+        let watcher_generation = self.watcher_generation.load(Ordering::Acquire);
+        let mut snapshot = self
+            .definition_catalog
+            .lock()
+            .map_err(|_| PluginError::internal("skills definition-catalog lock poisoned"))?;
+        if let Some(cached) = snapshot.as_ref()
+            && cached.watcher_generation == watcher_generation
+            && cached.captured_at.elapsed() <= DEFINITION_CATALOG_CACHE_TTL
+        {
+            return Ok(cached.catalog.clone());
+        }
+
+        // Keep this non-async mutex while scanning so concurrent definition
+        // requests coalesce into one blocking job. This method only runs on
+        // Tokio's blocking pool and never waits on async work while locked.
+        let catalog = self.discovered_catalog()?;
+        *snapshot = Some(DefinitionCatalogSnapshot {
+            catalog: catalog.clone(),
+            watcher_generation,
+            captured_at: Instant::now(),
+        });
+        Ok(catalog)
+    }
+
+    async fn definition_catalog_async(&self) -> SdkResult<DiscoveredCatalog> {
+        self.run_blocking(|plugin| plugin.definition_catalog())
+            .await
+    }
+
+    fn invalidate_definition_catalog(&self) -> SdkResult<()> {
+        *self
+            .definition_catalog
+            .lock()
+            .map_err(|_| PluginError::internal("skills definition-catalog lock poisoned"))? = None;
+        Ok(())
     }
 
     fn discovered_tools(&self) -> SdkResult<BTreeMap<String, DiscoveredTool>> {
@@ -1433,14 +1514,14 @@ impl SkillsPlugin {
     }
 
     #[hook(tool.definition)]
-    fn tool_definition_patch(
+    async fn tool_definition_patch(
         &self,
         input: ToolDefinitionInput,
     ) -> SdkResult<Option<ToolDefinitionPatch>> {
         if input.plugin_key().to_string() != SKILLS_PLUGIN_ID {
             return Ok(None);
         }
-        let catalog = self.discovered_catalog()?;
+        let catalog = self.definition_catalog_async().await?;
         let tools = catalog.tools;
         let skill_count = tools
             .values()
@@ -1522,8 +1603,8 @@ impl SkillsPlugin {
         concurrency_safe
     )]
     async fn invoke_list(&self, input: &SkillsListInput) -> SdkResult<ToolInvokeOutput> {
-        let catalog = self.discovered_catalog()?;
-        let workspace_root = self.workspace_root()?;
+        let catalog = self.discovered_catalog_async().await?;
+        let workspace_root = self.workspace_root()?.to_path_buf();
         let kind_filter = Self::normalize_kind_filter(input.kind.as_deref())?;
         let entries = catalog
             .tools
@@ -1568,7 +1649,7 @@ impl SkillsPlugin {
                 "source_path": tool.skill.source_path,
                 "source": tool.origin.source_label(),
                 "content_hash": tool.skill.content_hash(),
-                "editable": is_workspace_managed_skill(workspace_root, name, tool),
+                "editable": is_workspace_managed_skill(workspace_root.as_path(), name, tool),
             })).collect::<Vec<_>>(),
             "diagnostics": catalog.diagnostics.iter().map(|diagnostic| serde_json::json!({
                 "problem": diagnostic.failure,
@@ -1604,139 +1685,161 @@ impl SkillsPlugin {
         concurrency_safe
     )]
     async fn invoke_get(&self, input: &SkillsGetInput) -> SdkResult<ToolInvokeOutput> {
-        let tools = self.discovered_tools()?;
-        let workspace_root = self.workspace_root()?;
-        let (name, discovered_tool) = Self::resolve_tool(&tools, input.name.as_str())?;
-        let summary = Self::tool_description(discovered_tool);
-        let body = discovered_tool.skill.body.trim();
-        let document = match discovered_tool.skill.source_path.as_ref() {
-            Some(path) => std::fs::read_to_string(path).map_err(skill_write_error)?,
-            None => format_skill_document(&discovered_tool.skill),
-        };
-        enforce_skill_document_size(document.as_str())?;
-        let text = format!(
-            "Name: {name}\nKind: {}\nSummary: {}\n\nBody:\n{}",
-            discovered_tool.kind, summary, body
-        );
-        let payload = serde_json::json!({
-            "name": name,
-            "kind": discovered_tool.kind.to_string(),
-            "summary": summary,
-            "body": body,
-            "aliases": discovered_tool.skill.frontmatter.aliases,
-            "source_path": discovered_tool.skill.source_path,
-            "source": discovered_tool.origin.source_label(),
-            "content_hash": discovered_tool.skill.content_hash(),
-            "document": document,
-            "editable": is_workspace_managed_skill(workspace_root, name, discovered_tool),
-        });
-        Ok(ToolInvokeOutput::from_parts(
-            format!("skills get {name}"),
-            format!("{} · {summary}", discovered_tool.kind),
-            text,
-            Some(payload),
-            std::collections::BTreeMap::from([
-                ("name".to_string(), name.to_string()),
-                ("kind".to_string(), discovered_tool.kind.to_string()),
-            ]),
-            Vec::new(),
-        ))
+        let requested_name = input.name.clone();
+        self.run_blocking(move |plugin| {
+            let tools = plugin.discovered_tools()?;
+            let workspace_root = plugin.workspace_root()?;
+            let (name, discovered_tool) = Self::resolve_tool(&tools, requested_name.as_str())?;
+            let summary = Self::tool_description(discovered_tool);
+            let body = discovered_tool.skill.body.trim();
+            let document = match discovered_tool.skill.source_path.as_ref() {
+                Some(path) => std::fs::read_to_string(path).map_err(skill_write_error)?,
+                None => format_skill_document(&discovered_tool.skill),
+            };
+            enforce_skill_document_size(document.as_str())?;
+            let text = format!(
+                "Name: {name}\nKind: {}\nSummary: {}\n\nBody:\n{}",
+                discovered_tool.kind, summary, body
+            );
+            let payload = serde_json::json!({
+                "name": name,
+                "kind": discovered_tool.kind.to_string(),
+                "summary": summary,
+                "body": body,
+                "aliases": discovered_tool.skill.frontmatter.aliases,
+                "source_path": discovered_tool.skill.source_path,
+                "source": discovered_tool.origin.source_label(),
+                "content_hash": discovered_tool.skill.content_hash(),
+                "document": document,
+                "editable": is_workspace_managed_skill(workspace_root, name, discovered_tool),
+            });
+            Ok(ToolInvokeOutput::from_parts(
+                format!("skills get {name}"),
+                format!("{} · {summary}", discovered_tool.kind),
+                text,
+                Some(payload),
+                std::collections::BTreeMap::from([
+                    ("name".to_string(), name.to_string()),
+                    ("kind".to_string(), discovered_tool.kind.to_string()),
+                ]),
+                Vec::new(),
+            ))
+        })
+        .await
     }
 
     #[tool(
         tags(mutate, filesystem),
         summary = "Create a workspace-managed Skill document.",
         help = "Creates `.agena/skills/<name>/SKILL.md` from a complete SKILL.md document. Only workspace-local Skills are mutable; built-in, plugin, user-global, and compatibility Skills remain read-only.",
-        mutating,
-
+        mutating
     )]
     async fn invoke_create(&self, input: &SkillsCreateInput) -> SdkResult<ToolInvokeOutput> {
-        let result = self.create_managed_skill(input.document.as_str())?;
-        let refresh = self.refresh_catalog()?;
-        Ok(skill_write_output(
-            result,
-            refresh.generation,
-            refresh.changed,
-        ))
+        let document = input.document.clone();
+        self.run_blocking(move |plugin| {
+            let result = plugin.create_managed_skill(document.as_str())?;
+            plugin.invalidate_definition_catalog()?;
+            let refresh = plugin.refresh_catalog()?;
+            Ok(skill_write_output(
+                result,
+                refresh.generation,
+                refresh.changed,
+            ))
+        })
+        .await
     }
 
     #[tool(
         tags(mutate, filesystem),
         summary = "Update a workspace-managed Skill document.",
         help = "Replaces an existing `.agena/skills/<name>/SKILL.md` document. The replacement frontmatter must keep the same canonical name.",
-        mutating,
-
+        mutating
     )]
     async fn invoke_update(&self, input: &SkillsUpdateInput) -> SdkResult<ToolInvokeOutput> {
-        let result = self.update_managed_skill(input.name.as_str(), input.document.as_str())?;
-        let refresh = self.refresh_catalog()?;
-        Ok(skill_write_output(
-            result,
-            refresh.generation,
-            refresh.changed,
-        ))
+        let name = input.name.clone();
+        let document = input.document.clone();
+        self.run_blocking(move |plugin| {
+            let result = plugin.update_managed_skill(name.as_str(), document.as_str())?;
+            plugin.invalidate_definition_catalog()?;
+            let refresh = plugin.refresh_catalog()?;
+            Ok(skill_write_output(
+                result,
+                refresh.generation,
+                refresh.changed,
+            ))
+        })
+        .await
     }
 
     #[tool(
         tags(mutate, filesystem),
         summary = "Delete a workspace-managed Skill document.",
         help = "Deletes only `.agena/skills/<name>/SKILL.md`; bundled, plugin, user-global, and compatibility Skills cannot be deleted through this tool.",
-        mutating,
-
+        mutating
     )]
     async fn invoke_delete(&self, input: &SkillsDeleteInput) -> SdkResult<ToolInvokeOutput> {
-        let result = self.delete_managed_skill(input.name.as_str())?;
-        let refresh = self.refresh_catalog()?;
-        Ok(skill_write_output(
-            result,
-            refresh.generation,
-            refresh.changed,
-        ))
+        let name = input.name.clone();
+        self.run_blocking(move |plugin| {
+            let result = plugin.delete_managed_skill(name.as_str())?;
+            plugin.invalidate_definition_catalog()?;
+            let refresh = plugin.refresh_catalog()?;
+            Ok(skill_write_output(
+                result,
+                refresh.generation,
+                refresh.changed,
+            ))
+        })
+        .await
     }
 
     #[tool(
         tags(query, filesystem),
         summary = "Read a bounded UTF-8 resource contained by one skill package.",
         read_only,
-
         concurrency_safe
     )]
     async fn invoke_read_resource(
         &self,
         input: &SkillsReadResourceInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let tools = self.discovered_tools()?;
-        let (name, discovered_tool) = Self::resolve_tool(&tools, input.name.as_str())?;
-        if !discovered_tool.origin.supports_resources() {
-            return Err(PluginError::invalid_params(format!(
-                "{} '{}' does not expose filesystem-backed resources",
-                discovered_tool.origin.source_label(),
-                name
-            )));
-        }
-        let content = discovered_tool
-            .skill
-            .read_text_resource(Path::new(input.path.as_str()), input.max_bytes as usize)
-            .map_err(|error| PluginError::invalid_params(error.to_string()))?;
-        Ok(ToolInvokeOutput::from_parts(
-            format!("skill resource {name}/{}", input.path),
-            format!("{} bytes", content.len()),
-            content.clone(),
-            Some(serde_json::json!({
-                "name": name,
-                "path": input.path,
-                "content": content,
-                "bytes": content.len(),
-                "content_hash": discovered_tool.skill.content_hash(),
-                "source_path": discovered_tool.skill.source_path,
-                "source": discovered_tool.origin.source_label(),
-            })),
-            BTreeMap::from([
-                ("skill".to_string(), name.to_string()),
-                ("resource_path".to_string(), input.path.clone()),
-            ]),
-            Vec::new(),
-        ))
+        let requested_name = input.name.clone();
+        let resource_path = input.path.clone();
+        let max_bytes = input.max_bytes;
+        self.run_blocking(move |plugin| {
+            let tools = plugin.discovered_tools()?;
+            let (name, discovered_tool) = Self::resolve_tool(&tools, requested_name.as_str())?;
+            if !discovered_tool.origin.supports_resources() {
+                return Err(PluginError::invalid_params(format!(
+                    "{} '{}' does not expose filesystem-backed resources",
+                    discovered_tool.origin.source_label(),
+                    name
+                )));
+            }
+            let content = discovered_tool
+                .skill
+                .read_text_resource(Path::new(resource_path.as_str()), max_bytes as usize)
+                .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+            Ok(ToolInvokeOutput::from_parts(
+                format!("skill resource {name}/{resource_path}"),
+                format!("{} bytes", content.len()),
+                content.clone(),
+                Some(serde_json::json!({
+                    "name": name,
+                    "path": resource_path,
+                    "content": content,
+                    "bytes": content.len(),
+                    "content_hash": discovered_tool.skill.content_hash(),
+                    "source_path": discovered_tool.skill.source_path,
+                    "source": discovered_tool.origin.source_label(),
+                })),
+                BTreeMap::from([
+                    ("skill".to_string(), name.to_string()),
+                    ("resource_path".to_string(), resource_path),
+                ]),
+                Vec::new(),
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -1747,8 +1850,14 @@ impl SkillsPlugin {
         concurrency_safe
     )]
     async fn invoke_refresh(&self, input: &SkillsRefreshInput) -> SdkResult<ToolInvokeOutput> {
-        let refresh = self.refresh_catalog()?;
-        let (watcher_enabled, watched_path_count, watcher_generation) = self.watcher_status()?;
+        let (refresh, watcher_status) = self
+            .run_blocking(|plugin| {
+                let refresh = plugin.refresh_catalog()?;
+                let watcher_status = plugin.watcher_status()?;
+                Ok((refresh, watcher_status))
+            })
+            .await?;
+        let (watcher_enabled, watched_path_count, watcher_generation) = watcher_status;
         let skill_count = refresh
             .catalog
             .tools

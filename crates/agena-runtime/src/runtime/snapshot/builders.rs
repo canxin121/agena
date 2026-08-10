@@ -295,7 +295,7 @@ pub(super) fn build_scheduler(
     }
 
     impl SessionSink {
-        fn notify_job_result(
+        async fn notify_job_result(
             &self,
             session_manager: &SessionManager,
             job: &agena_scheduler::ScheduledJob,
@@ -325,13 +325,16 @@ pub(super) fn build_scheduler(
                 "next_fire_at": job.next_fire_at,
                 "last_fired_at": job.last_fired_at,
             });
-            session_manager.tool_executor().broadcast_notification(
-                "scheduled_job",
-                result.session_id.or(job.owner_session_id),
-                title,
-                message,
-                payload,
-            );
+            session_manager
+                .tool_executor()
+                .broadcast_notification(
+                    "scheduled_job",
+                    result.session_id.or(job.owner_session_id),
+                    title,
+                    message,
+                    payload,
+                )
+                .await;
         }
     }
 
@@ -377,7 +380,8 @@ pub(super) fn build_scheduler(
                                     Some(session_id),
                                     scheduler_failure(err),
                                 );
-                                self.notify_job_result(&session_manager, job, delivery, &result);
+                                self.notify_job_result(&session_manager, job, delivery, &result)
+                                    .await;
                                 return result;
                             }
                         };
@@ -405,7 +409,8 @@ pub(super) fn build_scheduler(
                                         job,
                                         delivery,
                                         &result,
-                                    );
+                                    )
+                                    .await;
                                     return result;
                                 }
                             };
@@ -442,7 +447,8 @@ pub(super) fn build_scheduler(
                     scheduler_failure("scheduled job has no owner_session_id"),
                 )
             };
-            self.notify_job_result(&session_manager, job, delivery, &result);
+            self.notify_job_result(&session_manager, job, delivery, &result)
+                .await;
             result
         }
     }

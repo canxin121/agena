@@ -128,7 +128,7 @@ impl AgenaRuntime {
         // task drains events onto the runtime bus, and the same registry backs
         // the application-facing activity service.
         let (activity_tx, activity_rx) =
-            tokio::sync::mpsc::unbounded_channel::<agena_domain::BackgroundActivityChangedEvent>();
+            tokio::sync::mpsc::channel::<agena_domain::BackgroundActivityChangedEvent>(256);
         let activity_registry = crate::activity::ActivityRegistry::new(activity_tx);
         let monitor_registry = tokio::runtime::Handle::try_current().ok().map(|handle| {
             let registry = crate::MonitorRegistry::from_handle(handle);
@@ -566,9 +566,9 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
         plugin_id: &str,
         input: agena_plugin_host::sdk::PluginCommandInvokeInput,
     ) -> Result<agena_plugin_host::sdk::PluginCommandOutput, String> {
-        self.current_snapshot()
-            .plugin_manager()
-            .invoke_plugin_command(plugin_id, input)
+        let host = self.current_snapshot().plugin_manager();
+        host.invoke_plugin_command_async(plugin_id, input)
+            .await
             .map_err(|error| error.to_string())
     }
 
@@ -590,8 +590,11 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
 
 #[async_trait::async_trait]
 impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
-    fn available_runtime_tools(&self) -> Vec<agena_runtime::RuntimeToolDescriptor> {
-        let tools = self.runtime_tool_executor().available_execution_tools();
+    async fn available_runtime_tools(&self) -> Vec<agena_runtime::RuntimeToolDescriptor> {
+        let tools = self
+            .runtime_tool_executor()
+            .available_execution_tools_async()
+            .await;
         let names = crate::tool::execution_tool_names(&tools);
         tools
             .into_iter()
@@ -606,9 +609,10 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
             .collect()
     }
 
-    fn available_tool_api_definitions(&self) -> Vec<agena_provider::ToolApiDefinition> {
+    async fn available_tool_api_definitions(&self) -> Vec<agena_provider::ToolApiDefinition> {
         self.runtime_tool_executor()
-            .available_tool_api_bindings()
+            .available_tool_api_bindings_async()
+            .await
             .into_iter()
             .map(|binding| binding.definition())
             .collect()
@@ -1021,7 +1025,7 @@ impl agena_runtime::RuntimeConfigurationService for AgenaRuntime {
                     TuiColorSchemeConfig::Dark => agena_runtime::RuntimeTuiColorScheme::Dark,
                     TuiColorSchemeConfig::Light => agena_runtime::RuntimeTuiColorScheme::Light,
                 },
-                                graphics: match snapshot.ui_config().tui.graphics {
+                graphics: match snapshot.ui_config().tui.graphics {
                     TuiGraphicsModeConfig::Auto => agena_runtime::RuntimeTuiGraphicsMode::Auto,
                     TuiGraphicsModeConfig::Native => agena_runtime::RuntimeTuiGraphicsMode::Native,
                     TuiGraphicsModeConfig::Unicode => {
@@ -1033,7 +1037,12 @@ impl agena_runtime::RuntimeConfigurationService for AgenaRuntime {
                     .tui
                     .transcript
                     .activity_default_expanded,
-                transcript_activity_kinds: snapshot.ui_config().tui.transcript.activity_kinds.clone(),
+                transcript_activity_kinds: snapshot
+                    .ui_config()
+                    .tui
+                    .transcript
+                    .activity_kinds
+                    .clone(),
             },
             effective_config,
             configuration_document,

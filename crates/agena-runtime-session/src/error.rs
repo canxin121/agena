@@ -71,6 +71,15 @@ pub enum AppError {
     SubtaskBudgetExceeded(String),
     #[error("session {0} already has an active execution")]
     ExecutionAlreadyActive(i64),
+    #[error("session {0} mutation queue is full or did not become available before its deadline")]
+    SessionMutationBusy(i64),
+    #[error(
+        "nested session mutation is forbidden: task holds session {held_session_id} and requested session {requested_session_id}"
+    )]
+    NestedSessionMutation {
+        held_session_id: i64,
+        requested_session_id: i64,
+    },
     #[error("model returned an empty response")]
     EmptyResponse,
     #[error("model-turn budget exhausted (max_turns={max_turns}); the run stopped")]
@@ -151,6 +160,9 @@ impl AppError {
                 "The subtask reached its usage limit before it could finish."
             }
             Self::ExecutionAlreadyActive(_) => "This session is already running a response.",
+            Self::SessionMutationBusy(_) => {
+                "This session is busy applying another change. Try again shortly."
+            }
             Self::EmptyResponse => {
                 "The model returned an empty response. It may be temporarily unavailable or misconfigured; try again or choose another model."
             }
@@ -170,6 +182,7 @@ impl AppError {
             | Self::SerdeJson(_)
             | Self::Io(_)
             | Self::StorageConfig(_)
+            | Self::NestedSessionMutation { .. }
             | Self::Internal(_) => "The operation failed. Review the logs for details.",
         }
     }
@@ -297,7 +310,9 @@ impl AppError {
                 Retry::Backoff,
                 Recovery::ChooseAlternative,
             ),
-            Self::Conflict { .. } | Self::ExecutionAlreadyActive(_) => (
+            Self::Conflict { .. }
+            | Self::ExecutionAlreadyActive(_)
+            | Self::SessionMutationBusy(_) => (
                 "session.conflict",
                 Category::Conflict,
                 Responsibility::Caller,
@@ -368,6 +383,7 @@ impl AppError {
             | Self::SerdeJson(_)
             | Self::Io(_)
             | Self::StorageConfig(_)
+            | Self::NestedSessionMutation { .. }
             | Self::Internal(_) => (
                 "internal.unexpected",
                 Category::Internal,

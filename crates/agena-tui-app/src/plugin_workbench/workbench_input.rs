@@ -404,37 +404,55 @@ impl App {
             .ok_or_else(|| {
                 crate::UiFailure::message("The plugin tool requires an active session.")
             })?;
-        let result = self.block_on_async(self.backend.invoke_plugin_workbench_tool(
-            action.plugin_id.as_str(),
-            action.tool_name.as_str(),
-            value,
-            Some(session_id),
-        ));
-        match result {
-            Ok(output) => {
-                dialog.tool_result = Some(PluginToolInvocationResult {
-                    plugin_id: action.plugin_id,
-                    tool_name: action.tool_name,
-                    output: if output.trim().is_empty() {
-                        "Tool completed successfully with no output.".to_owned()
-                    } else {
-                        output
-                    },
-                    succeeded: true,
-                });
-                self.flash_success("plugin tool completed".to_owned());
-            }
-            Err(error) => {
-                let error = error.to_string();
-                dialog.tool_result = Some(PluginToolInvocationResult {
-                    plugin_id: action.plugin_id,
-                    tool_name: action.tool_name,
-                    output: error.clone(),
-                    succeeded: false,
-                });
-                self.flash_error(error);
-            }
-        }
+        let plugin_id = action.plugin_id;
+        let tool_name = action.tool_name;
+        let request_plugin_id = plugin_id.clone();
+        let request_tool_name = tool_name.clone();
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .invoke_plugin_workbench_tool(
+                        request_plugin_id.as_str(),
+                        request_tool_name.as_str(),
+                        value,
+                        Some(session_id),
+                    )
+                    .await
+            },
+            move |app, result| {
+                let (output, succeeded) = match result {
+                    Ok(output) => {
+                        app.flash_success("plugin tool completed".to_owned());
+                        (
+                            if output.trim().is_empty() {
+                                "Tool completed successfully with no output.".to_owned()
+                            } else {
+                                output
+                            },
+                            true,
+                        )
+                    }
+                    Err(error) => {
+                        let error = error.to_string();
+                        app.flash_error(error.clone());
+                        (error, false)
+                    }
+                };
+                let route = std::mem::replace(&mut app.current_route, Route::Main);
+                app.current_route = match route {
+                    Route::PluginWorkbench(mut dialog) => {
+                        dialog.tool_result = Some(PluginToolInvocationResult {
+                            plugin_id,
+                            tool_name,
+                            output,
+                            succeeded,
+                        });
+                        Route::PluginWorkbench(dialog)
+                    }
+                    route => route,
+                };
+            },
+        );
         Ok(())
     }
 

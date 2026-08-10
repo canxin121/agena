@@ -608,6 +608,13 @@ pub struct ToolExecutor {
     pub(super) principal: ExecutionPrincipal,
     pub(super) allowed_tool_names: Option<std::collections::HashSet<String>>,
     pub(super) model_id: Option<String>,
+    /// Definition-hook output captured for one scoped request/turn.
+    ///
+    /// Tool identity, permission, availability, and execution must all see
+    /// the same registry snapshot. Without this cache each lookup rebuilt the
+    /// catalog and synchronously re-entered async `tool.definition` hooks,
+    /// multiplying one slow plugin into many blocking waits per tool call.
+    pub(super) definition_catalog: Option<Arc<Vec<RegisteredTool>>>,
     pub(super) monitor_registry: Option<Arc<dyn MonitorService>>,
     pub(super) plugins: Arc<PluginHost>,
     pub(super) snapshot_registry: Option<crate::SnapshotRegistry>,

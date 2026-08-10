@@ -166,13 +166,20 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
         };
 
         if started {
-            let registry = self.clone();
+            let registry = Arc::downgrade(&self.inner);
+            let history_limit = self.history_limit;
             let task_id = task.id.clone();
             let listener = self.inner.lock().listener.clone();
             if let Some(listener) = listener {
                 listener.on_started(&task);
             }
-            tokio::spawn(async move {
+            let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+            let worker_task_id = task_id.clone();
+            let log_task_id = task_id.clone();
+            let worker = tokio::spawn(async move {
+                if start_rx.await.is_err() {
+                    return;
+                }
                 let completion = tokio::select! {
                     _ = token.cancelled() => RuntimeBackgroundTaskCompletion::Cancelled {
                         message: Some("Cancelled by operator.".to_owned()),
@@ -202,7 +209,7 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
                                 ),
                             );
                             tracing::error!(
-                                task_id = %task_id,
+                                task_id = %log_task_id,
                                 failure_id = %failure.id,
                                 diagnostic = %diagnostic,
                                 "background task failed"
@@ -211,16 +218,33 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
                         }
                     },
                 };
-                registry.finish(task_id.as_str(), completion);
+                if let Some(registry) = registry.upgrade() {
+                    Self::finish_inner(
+                        &registry,
+                        history_limit,
+                        worker_task_id.as_str(),
+                        completion,
+                    );
+                }
             });
+            self.inner
+                .lock()
+                .workers
+                .insert(task_id, worker.abort_handle());
+            let _ = start_tx.send(());
         }
 
         RuntimeBackgroundTaskStart { started, task }
     }
 
-    fn finish(&self, task_id: &str, completion: RuntimeBackgroundTaskCompletion) {
+    fn finish_inner(
+        inner: &Arc<Mutex<RuntimeBackgroundTaskState>>,
+        history_limit: usize,
+        task_id: &str,
+        completion: RuntimeBackgroundTaskCompletion,
+    ) {
         let finished = {
-            let mut state = self.inner.lock();
+            let mut state = inner.lock();
             if let Some(task) = state.tasks.get_mut(task_id) {
                 task.finished_at = Some(Utc::now());
                 match completion {
@@ -247,8 +271,9 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
         };
 
         {
-            let mut state = self.inner.lock();
+            let mut state = inner.lock();
             state.controls.remove(task_id);
+            state.workers.remove(task_id);
             if let Some(dedupe_key) = state.dedupe_keys.remove(task_id)
                 && state
                     .active_by_key
@@ -257,9 +282,9 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
             {
                 state.active_by_key.remove(&dedupe_key);
             }
-            state.trim_history(self.history_limit);
+            state.trim_history(history_limit);
         }
-        if let (Some(listener), Some(task)) = (self.inner.lock().listener.clone(), finished) {
+        if let (Some(listener), Some(task)) = (inner.lock().listener.clone(), finished) {
             listener.on_finished(&task);
         }
     }

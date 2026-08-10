@@ -228,7 +228,7 @@ pub(crate) fn settings_studio_field_items(
     sources: &ConfigJsonSources,
     section: SettingsStudioSectionId,
 ) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
-        settings_fields()
+    settings_fields()
         .into_iter()
         .filter(|field| field.section == section)
         .map(|field| {
@@ -292,14 +292,14 @@ pub(crate) fn settings_studio_provider_default_item(
     sources: &ConfigJsonSources,
     providers: &[ProviderSummaryResource],
 ) -> SettingsStudioItem<SettingsPickerAction> {
-        let field = settings_fields()
+    let field = settings_fields()
         .into_iter()
         .find(|field| field.path == "providers.default")
         .expect("providers.default settings field must exist");
     let file_provider_value =
         get_json_path(&sources.file, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
-    let effective_provider_value = get_json_path(&sources.effective, Some(field.path.as_str()))
-        .unwrap_or(JsonValue::Null);
+    let effective_provider_value =
+        get_json_path(&sources.effective, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
     let file_value = get_json_path(&sources.file, Some("providers.default_selection"))
         .ok()
         .filter(|value| !value.is_null())
@@ -538,7 +538,7 @@ pub(crate) fn settings_config_path_display_label(i18n: &I18n, path: &str) -> Str
 
 use super::{
     ConfigJsonSources, I18n, JsonValue, ProviderSummaryResource, SessionModelModeStep,
-    SettingsFieldSpec, SettingsFieldKind, SettingsPickerAction, SettingsStudioItem,
+    SettingsFieldKind, SettingsFieldSpec, SettingsPickerAction, SettingsStudioItem,
     SettingsStudioSectionId, SettingsStudioSourceRow, get_json_path, join_inline_segments,
     settings_fields,
 };

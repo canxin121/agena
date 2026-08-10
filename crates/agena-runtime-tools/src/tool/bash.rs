@@ -3,9 +3,9 @@ use super::shell_tools::{
     validate_declared_filesystem_effects,
 };
 use agena_tool::{
-    ShellRequest,
+    ShellOutput, ShellRequest,
     shell::{DEFAULT_SHELL_TIMEOUT_MS, shell_command_for_platform, truncate_shell_output},
-    shell_analysis::interpret_exit_code,
+    shell_analysis::{CommandAnalysis, interpret_exit_code},
 };
 
 use crate::part::ShellCommandInput;
@@ -17,21 +17,20 @@ use super::{
     ToolPayloadOutput, ToolRuntimeContext,
 };
 
-pub(super) fn prepare_command(
+pub(super) async fn prepare_command_async(
     executor: &ToolExecutor,
     input: &ShellCommandInput,
     session_id: i64,
     call_id: i64,
 ) -> Result<Option<PreparedShellCommand>, ToolError> {
     let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
-
     let mut env = inherited_environment();
-    env.extend(executor.shell_env_overrides(&cwd, Some(session_id), Some(call_id))?);
-
-    let env_btree = env
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect::<std::collections::BTreeMap<String, String>>();
+    env.extend(
+        executor
+            .shell_env_overrides_async(&cwd, Some(session_id), Some(call_id))
+            .await?,
+    );
+    let fallback_env = env.clone();
     let hook_input = CommandBeforeInput {
         session_id: Some(session_id),
         call_id: Some(call_id),
@@ -39,11 +38,12 @@ pub(super) fn prepare_command(
         command: "sh".to_string(),
         args: vec!["-c".to_string(), input.command.clone()],
         cwd: cwd.clone(),
-        env: env_btree,
+        env: env.into_iter().collect(),
     };
     match executor
         .plugin_manager()
-        .dispatch_command_before_blocking(hook_input)
+        .dispatch_command_before(hook_input)
+        .await
     {
         Ok(CommandBeforeOutcome::Continue(updated)) => {
             let command =
@@ -55,6 +55,7 @@ pub(super) fn prepare_command(
             Ok(Some(PreparedShellCommand {
                 command,
                 cwd: updated.cwd,
+                env: updated.env.into_iter().collect(),
             }))
         }
         Ok(CommandBeforeOutcome::Abort(reason)) => {
@@ -91,12 +92,16 @@ pub(super) fn prepare_command(
                 target: "agena_plugin_host::command_before",
                 "command.execute.before hook failed (continuing): {err}"
             );
-            Ok(None)
+            Ok(Some(PreparedShellCommand {
+                command: input.command.clone(),
+                cwd,
+                env: fallback_env,
+            }))
         }
     }
 }
 
-pub(super) fn execute(
+pub(super) async fn execute_async(
     executor: &ToolExecutor,
     input: &ShellCommandInput,
     context: ToolRuntimeContext,
@@ -106,84 +111,112 @@ pub(super) fn execute(
             "bash command must not be empty".to_string(),
         ));
     }
-
     let analysis = analyze_command(input.command.as_str());
     let effects = input.filesystem_effects();
     validate_declared_filesystem_effects("bash", input.command.as_str(), &effects)?;
-
     let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
-
-    let mut env = inherited_environment();
-    env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);
-
     let prepared = match context.prepared_shell_command {
         Some(prepared) => Some(prepared),
         None => match (context.session_id, context.call_id) {
             (Some(session_id), Some(call_id)) => {
-                executor.prepare_shell_command(input, session_id, call_id)?
+                prepare_command_async(executor, input, session_id, call_id).await?
             }
             _ => None,
         },
     };
-    let (final_command, final_cwd) = prepared
-        .map(|prepared| (prepared.command, prepared.cwd))
-        .unwrap_or_else(|| (input.command.clone(), cwd));
+    let (final_command, final_cwd, env) = match prepared {
+        Some(prepared) => (prepared.command, prepared.cwd, prepared.env),
+        None => {
+            let mut env = inherited_environment();
+            env.extend(
+                executor
+                    .shell_env_overrides_async(&cwd, context.session_id, context.call_id)
+                    .await?,
+            );
+            (input.command.clone(), cwd, env)
+        }
+    };
     let final_analysis = analyze_command(final_command.as_str());
     let command_rewritten = final_command != input.command;
-
     let request = ShellRequest {
         command: shell_command_for_platform(&final_command),
         cwd: final_cwd,
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS)),
     };
+    let worker_executor = executor.clone();
+    let worker_request = request.clone();
+    let worker_command = final_command.clone();
+    let session_id = context.session_id;
+    let call_id = context.call_id;
+    let worker_permit = super::shell::acquire_worker_permit()
+        .await
+        .ok_or_else(|| ToolError::plugin("shell worker pool is unavailable".to_string()))?;
+    let execution = tokio::task::spawn_blocking(move || {
+        let _worker_permit = worker_permit;
+        worker_executor.execute_shell_command(
+            &worker_request,
+            worker_command.as_str(),
+            session_id,
+            call_id,
+        )
+    })
+    .await
+    .map_err(|error| {
+        ToolError::plugin(format!(
+            "shell process worker failed before completion: {error}"
+        ))
+    })??;
+    executor.ensure_not_cancelled()?;
 
-    let execution = executor.execute_shell_command(
-        &request,
-        final_command.as_str(),
-        context.session_id,
-        context.call_id,
-    )?;
-
-    // Plugin chain: command.execute.after. Plugins can observe or rewrite
-    // stdout/stderr; we use the (potentially patched) combined output.
-    let patched_after = {
-        let hook_input = CommandAfterInput {
-            session_id: context.session_id,
-            command: "sh".to_string(),
-            args: vec!["-c".to_string(), final_command.clone()],
-            cwd: request.cwd.clone(),
-            exit_code: Some(execution.exit_code),
-            stdout: execution.stdout.clone(),
-            stderr: execution.stderr.clone(),
-            timed_out: execution.timed_out,
-        };
-        match executor
-            .plugin_manager()
-            .dispatch_command_after_blocking(hook_input)
-        {
-            Ok(after) => Some(after),
-            Err(err) => {
-                tracing::warn!(
-                    target: "agena_plugin_host::command_after",
-                    "command.execute.after hook failed (continuing): {err}"
-                );
-                None
-            }
+    let hook_input = CommandAfterInput {
+        session_id: context.session_id,
+        command: "sh".to_string(),
+        args: vec!["-c".to_string(), final_command.clone()],
+        cwd: request.cwd.clone(),
+        exit_code: Some(execution.exit_code),
+        stdout: execution.stdout.clone(),
+        stderr: execution.stderr.clone(),
+        timed_out: execution.timed_out,
+    };
+    let aggregated_for_display = match executor
+        .plugin_manager()
+        .dispatch_command_after(hook_input)
+        .await
+    {
+        Ok(after) if after.stdout.is_empty() => after.stderr,
+        Ok(after) if after.stderr.is_empty() => after.stdout,
+        Ok(after) => format!("{}\n{}", after.stdout, after.stderr),
+        Err(err) => {
+            tracing::warn!(
+                target: "agena_plugin_host::command_after",
+                "command.execute.after hook failed (continuing): {err}"
+            );
+            execution.aggregated_output.clone()
         }
     };
-    let aggregated_for_display = patched_after
-        .map(|a| {
-            if a.stdout.is_empty() {
-                a.stderr
-            } else if a.stderr.is_empty() {
-                a.stdout
-            } else {
-                format!("{}\n{}", a.stdout, a.stderr)
-            }
-        })
-        .unwrap_or(execution.aggregated_output.clone());
+    render_execution(
+        input,
+        analysis,
+        final_analysis,
+        command_rewritten,
+        final_command,
+        &request,
+        execution,
+        aggregated_for_display,
+    )
+}
 
+fn render_execution(
+    input: &ShellCommandInput,
+    analysis: CommandAnalysis,
+    final_analysis: CommandAnalysis,
+    command_rewritten: bool,
+    final_command: String,
+    request: &ShellRequest,
+    execution: ShellOutput,
+    aggregated_for_display: String,
+) -> Result<ToolPayloadExecution, ToolError> {
     let (trimmed_output, truncated) = truncate_shell_output(&aggregated_for_display);
     let exit_interpretation =
         interpret_exit_code(&analysis, execution.exit_code, execution.timed_out);

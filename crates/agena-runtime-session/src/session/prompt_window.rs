@@ -243,12 +243,87 @@ fn run_is_failed_or_cancelled_assistant(run: &[Part]) -> bool {
 fn window_items_from_parts(parts: &[Part]) -> Vec<WindowItem> {
     parts_into_runs(parts)
         .into_iter()
-        .map(|run| WindowItem {
-            id: run
+        .flat_map(|run| {
+            let marker = run.first().expect("run group has a marker");
+            let marker_id = marker.part_id;
+            // Multi-round turns (one user message == one run marker) carry the
+            // per-round records on the marker's `content["rounds"]` (written by
+            // the processor at each round's end). Re-split the merged run into
+            // one wire message per round so each provider round-trip keeps its
+            // own reasoning passback (required by reasoning gateways) while all
+            // parts still persist under a single run marker.
+            let Some(rounds) = marker
+                .content
+                .get(crate::session::processor::MARKER_ROUNDS_KEY)
+                .and_then(serde_json::Value::as_array)
+                .filter(|rounds| !rounds.is_empty())
+            else {
+                return vec![WindowItem {
+                    id: Some(marker_id),
+                    run: project_completion_input(&run),
+                }];
+            };
+            let content_parts = &run[1..];
+            let mut items = Vec::with_capacity(rounds.len());
+            let mut claimed: Vec<i64> = Vec::new();
+            for round in rounds {
+                let part_ids = round
+                    .get("part_ids")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(serde_json::Value::as_i64)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let round_parts = content_parts
+                    .iter()
+                    .filter(|part| part_ids.contains(&part.part_id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                claimed.extend(part_ids.iter().copied());
+                // Project the round's parts (think/tool_call etc.), then
+                // override the replay state with the round's own record so each
+                // wire message carries the reasoning passback that belongs to
+                // exactly its provider round-trip.
+                let provider_state = round
+                    .get("provider_state")
+                    .cloned()
+                    .filter(|value| !value.is_null())
+                    .and_then(|value| crate::provider::completion_input_provider_state(&value));
+                let mut projected = project_completion_input(&round_parts);
+                if let Some(provider_state) = provider_state {
+                    projected.provider_state = provider_state;
+                }
+                items.push(WindowItem {
+                    id: Some(marker_id),
+                    run: projected,
+                });
+            }
+            // Any content parts not claimed by a round record (interaction
+            // parts appended between rounds, legacy parts) attach to the last
+            // wire message so nothing is silently dropped from the prompt.
+            let unclaimed = content_parts
                 .iter()
-                .find(|part| part.is_run_marker())
-                .map(|marker| marker.part_id),
-            run: project_completion_input(&run),
+                .filter(|part| !claimed.contains(&part.part_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !unclaimed.is_empty() {
+                if let Some(last) = items.last_mut() {
+                    let tail = crate::provider::project_session_parts(&unclaimed);
+                    let mut appended = tail
+                        .into_iter()
+                        .map(crate::provider::completion_input_part_from_wire)
+                        .collect::<Vec<_>>();
+                    last.run.parts.append(&mut appended);
+                } else {
+                    items.push(WindowItem {
+                        id: Some(marker_id),
+                        run: project_completion_input(&run),
+                    });
+                }
+            }
+            items
         })
         .collect()
 }
@@ -845,9 +920,14 @@ fn evaluate_prompt_continuation(
         };
     }
 
+    // With multi-round turns (one user message == one run marker) the anchor's
+    // `assistant_message_id` (the run marker part id) is shared by every round
+    // item of the turn. `.rposition` lands on the turn's *last* round so
+    // `delta_runs` starts after the whole turn instead of re-sending rounds
+    // 2..n as if they were new input.
     let Some(anchor_index) = prompt_runs
         .iter()
-        .position(|item| item.id == Some(anchor.assistant_message_id))
+        .rposition(|item| item.id == Some(anchor.assistant_message_id))
     else {
         return PromptContinuationOutcome::Restart {
             reason: PromptContinuationReason::AnchorAssistantMissing,
@@ -1427,6 +1507,135 @@ mod compaction_tests {
                     .collect::<Vec<_>>()
             ),
             vec!["future user".to_owned()]
+        );
+    }
+
+    /// One multi-round assistant turn (one user message == one run marker):
+    /// the marker carries `content["rounds"]` (part ids + per-round provider
+    /// replay state). `window_items_from_parts` must re-split it into one wire
+    /// message per round, each with its own parts and reasoning passback, while
+    /// every item shares the single run marker's id.
+    #[test]
+    fn multi_round_turn_projects_one_wire_message_per_round_under_one_run_id() {
+        let now = Utc::now();
+        let mut marker = run_marker_content("continue", None, None, None, None);
+        marker["rounds"] = serde_json::json!([
+            {
+                "part_ids": [1001, 1002],
+                "provider_state": { "openai_reasoning_items": [{"type": "reasoning", "id": "r1"}] }
+            },
+            {
+                "part_ids": [2001, 2002, 2003],
+                "provider_state": { "openai_reasoning_items": [{"type": "reasoning", "id": "r2"}] }
+            }
+        ]);
+        let run_marker = Part {
+            part_id: 999,
+            kind: "run".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: marker,
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: None,
+            origin_session_id: 7,
+            revision: 0,
+            started_at_ms: now.timestamp_millis(),
+            finished_at_ms: None,
+            created_at_ms: now.timestamp_millis(),
+            updated_at_ms: now.timestamp_millis(),
+            provider_state: None,
+        };
+        let content_part = |id: i64, text: &str| Part {
+            part_id: id,
+            kind: "text".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: typed_content_to_value(&TypedContent::Text(text_content(text.to_owned())))
+                .expect("text content is always serializable"),
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(999),
+            origin_session_id: 7,
+            revision: 0,
+            started_at_ms: now.timestamp_millis(),
+            finished_at_ms: None,
+            created_at_ms: now.timestamp_millis(),
+            updated_at_ms: now.timestamp_millis(),
+            provider_state: None,
+        };
+
+        let parts = vec![
+            run_marker,
+            content_part(1001, "round one thinking"),
+            content_part(1002, "round one call"),
+            content_part(2001, "round two thinking"),
+            content_part(2002, "round two call"),
+            content_part(2003, "round two final"),
+        ];
+        let items = window_items_from_parts(&parts);
+        assert_eq!(
+            items.len(),
+            2,
+            "one wire message per round, got {}",
+            items.len()
+        );
+        // Every round item maps back to the single run marker id.
+        assert!(items.iter().all(|item| item.id == Some(999)));
+        // Round one carries exactly its own parts and its own reasoning replay.
+        assert_eq!(
+            items[0]
+                .run
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    CompletionInputPart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec!["round one thinking", "round one call"]
+        );
+        assert_eq!(
+            items[0].run.provider_state.openai_reasoning_items.len(),
+            1,
+            "round one replays its own reasoning"
+        );
+        // Round two carries its own parts and its own (different) reasoning.
+        assert_eq!(
+            items[1]
+                .run
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    CompletionInputPart::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec!["round two thinking", "round two call", "round two final"]
+        );
+        assert_eq!(
+            items[1].run.provider_state.openai_reasoning_items[0]["id"],
+            serde_json::json!("r2"),
+            "round two replays its own reasoning"
+        );
+    }
+
+    /// A run marker without `rounds` (single-round turns, legacy rows, user /
+    /// hook / execution runs) projects as one item exactly as before.
+    #[test]
+    fn single_round_or_legacy_run_projects_one_item_without_round_splitting() {
+        let now = Utc::now();
+        let parts = run_parts(7, PartRole::Assistant, "tool", "plain assistant", now);
+        let items = window_items_from_parts(&parts);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, Some(7));
+        assert_eq!(
+            text_lossy_list(&[items[0].run.clone()]),
+            vec!["plain assistant".to_owned()]
         );
     }
 }

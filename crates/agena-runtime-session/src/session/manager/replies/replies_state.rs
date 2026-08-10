@@ -1,8 +1,8 @@
 use super::{
-    AppError, Arc, ModelRef, PathBuf, PersistedPermissionRule, ResolvedPendingTool, SessionManager,
-    SessionManagerState, SessionRunOptions, ToolError, ToolInvocationExecution,
-    custom_payload_value, managed_project_state_permission, mode_request_override_for_adapter,
-    mpsc, payload_tool_name_for_invocation,
+    AppError, Arc, ModelRef, PathBuf, PersistedPermissionRule, SessionManager, SessionManagerState,
+    SessionRunOptions, ToolInvocationExecution, custom_payload_value,
+    managed_project_state_permission, mode_request_override_for_adapter, mpsc,
+    payload_tool_name_for_invocation,
 };
 use crate::session::Session;
 use crate::session::store::new_part_from_content;
@@ -133,14 +133,16 @@ impl SessionManager {
         changed
     }
 
-    pub(in crate::session::manager) fn apply_execution_context_to_run_options(
+    pub(in crate::session::manager) async fn apply_execution_context_to_run_options_async(
         &self,
         session: &Session,
         mut options: SessionRunOptions,
     ) -> Result<SessionRunOptions, AppError> {
         self.apply_selection_modes_to_run_options(session, &mut options)?;
-        options.system =
-            Some(self.assemble_session_system_prompt(session, options.system.as_deref()));
+        options.system = Some(
+            self.assemble_session_system_prompt_async(session, options.system.as_deref())
+                .await,
+        );
         if options.temperature.is_none() {
             let execution = self.execution_state();
             let provider_registry = execution.processor.provider_registry();
@@ -349,14 +351,14 @@ impl SessionManager {
             })
     }
 
-    pub(in crate::session::manager) fn run_options_from_session(
+    pub(in crate::session::manager) async fn run_options_from_session_async(
         &self,
         session: &Session,
         state: Arc<SessionManagerState>,
     ) -> Result<SessionRunOptions, AppError> {
         let model = self.model_from_session_or_default(session, &state)?;
 
-        self.apply_execution_context_to_run_options(
+        self.apply_execution_context_to_run_options_async(
             session,
             SessionRunOptions {
                 model,
@@ -370,6 +372,7 @@ impl SessionManager {
                 max_output_tokens: None,
             },
         )
+        .await
     }
 
     pub(in crate::session::manager) fn resolve_model_selection_override(
@@ -524,7 +527,7 @@ impl SessionManager {
     pub(in crate::session::manager) async fn drain_steer_input(
         &self,
         mut session: Session,
-        steer_rx: &mut mpsc::UnboundedReceiver<Vec<TypedContent>>,
+        steer_rx: &mut mpsc::Receiver<Vec<TypedContent>>,
         _options: &SessionRunOptions,
         _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
@@ -552,53 +555,5 @@ impl SessionManager {
             projected.extend(outcome.parts);
             session.install_projected_parts(projected);
         }
-    }
-
-    pub(in crate::session::manager) fn execute_pending_tool(
-        &self,
-        state: &SessionManagerState,
-        session_id: i64,
-        pending_tool: &ResolvedPendingTool,
-        cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<ToolInvocationExecution, ToolError> {
-        let _host_user_input_sequence =
-            self.host_user_input_sequence_guard(session_id, pending_tool.call_id);
-        let scoped_executor = state
-            .tool_executor
-            .for_session_context(&pending_tool.session_runtime.execution)
-            .with_cancellation_token(cancellation)
-            .with_command_event_sink(
-                self.command_event_sink_for_pending_if_needed(session_id, pending_tool),
-            );
-        scoped_executor.execute_invocation_detailed_with_prepared_shell(
-            &pending_tool.invocation,
-            session_id,
-            pending_tool.call_id,
-            pending_tool.prepared_shell_command.clone(),
-        )
-    }
-
-    pub(in crate::session::manager) fn execute_pending_tool_after_approval(
-        &self,
-        state: &SessionManagerState,
-        session_id: i64,
-        pending_tool: &ResolvedPendingTool,
-        cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<ToolInvocationExecution, ToolError> {
-        let _host_user_input_sequence =
-            self.host_user_input_sequence_guard(session_id, pending_tool.call_id);
-        let scoped_executor = state
-            .tool_executor
-            .for_session_context(&pending_tool.session_runtime.execution)
-            .with_cancellation_token(cancellation)
-            .with_command_event_sink(
-                self.command_event_sink_for_pending_if_needed(session_id, pending_tool),
-            );
-        scoped_executor.execute_invocation_detailed_with_prepared_shell(
-            &pending_tool.invocation,
-            session_id,
-            pending_tool.call_id,
-            pending_tool.prepared_shell_command.clone(),
-        )
     }
 }

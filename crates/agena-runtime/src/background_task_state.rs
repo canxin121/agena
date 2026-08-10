@@ -11,6 +11,7 @@ pub(crate) struct RuntimeBackgroundTaskState {
     pub(crate) order: VecDeque<String>,
     pub(crate) tasks: HashMap<String, RuntimeBackgroundTask>,
     pub(crate) controls: HashMap<String, CancellationToken>,
+    pub(crate) workers: HashMap<String, tokio::task::AbortHandle>,
     pub(crate) active_by_key: HashMap<String, String>,
     pub(crate) dedupe_keys: HashMap<String, String>,
     /// Observer notified on start/finish transitions.
@@ -41,6 +42,7 @@ impl RuntimeBackgroundTaskState {
             let _ = self.order.remove(index);
             self.tasks.remove(task_id.as_str());
             self.controls.remove(task_id.as_str());
+            self.workers.remove(task_id.as_str());
             if let Some(dedupe_key) = self.dedupe_keys.remove(task_id.as_str())
                 && self
                     .active_by_key
@@ -49,6 +51,17 @@ impl RuntimeBackgroundTaskState {
             {
                 self.active_by_key.remove(dedupe_key.as_str());
             }
+        }
+    }
+}
+
+impl Drop for RuntimeBackgroundTaskState {
+    fn drop(&mut self) {
+        for token in self.controls.values() {
+            token.cancel();
+        }
+        for worker in self.workers.values() {
+            worker.abort();
         }
     }
 }

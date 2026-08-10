@@ -6,11 +6,15 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use agena_domain::{AssistantReplyId, ModelId, ModelRef, ProviderId, Role, TurnId};
-use agena_plugin_host::{PluginHost, PluginHostBuildConfig, PluginsConfig};
+use agena_domain::{
+    AssistantReasoningField, AssistantReplyId, ModelId, ModelRef, ProviderId, Role, TurnId,
+};
+use agena_plugin_host::{
+    ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
+};
 use agena_provider::{
-    CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    CompletionUsage,
+    CompletionFinishReason, CompletionInputPart, CompletionRequest, CompletionResponse,
+    CompletionStreamEvent, CompletionUsage,
 };
 use agena_storage::store::{
     NewPart, PartDelta, PartRole, PartState, PartVisibility, PersistenceEngine, SessionState,
@@ -18,7 +22,10 @@ use agena_storage::store::{
 };
 use sea_orm::{Database, DatabaseConnection};
 
-use super::{SessionManager, SessionRunRequest, SessionRunTermination, merge_system_prompts};
+use super::{
+    ExecutionConversationTarget, SessionManager, SessionRunRequest, SessionRunTermination,
+    SessionUserRunRequest, merge_system_prompts,
+};
 use crate::provider::{ModelRuntime, ProviderError};
 use crate::session::manager::runs::run_visible_text_lossy;
 use crate::session::store::{
@@ -98,6 +105,47 @@ async fn create(manager: &SessionManager, title: &str) -> Session {
         })
         .await
         .expect("create session")
+}
+
+#[tokio::test]
+async fn cancellation_force_aborts_unresponsive_operation_and_releases_registry() {
+    let manager = test_manager().await;
+    let session = create(&manager, "unresponsive cancellation").await;
+    let session_id = session.id;
+    let owner = manager.background_handle();
+    let execution = tokio::spawn(async move {
+        owner
+            .execute_registered(
+                session_id,
+                agena_domain::ExecutionSource::User,
+                ExecutionConversationTarget::NewTurn,
+                "unresponsive cancellation fixture",
+                |_manager, _control, _steer_rx| async move {
+                    std::future::pending::<Result<(), crate::AppError>>().await
+                },
+            )
+            .await
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !manager.execution_registry.is_active(session_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("execution registers");
+    manager
+        .cancel_active_execution(session_id)
+        .await
+        .expect("request cancellation");
+
+    let error = tokio::time::timeout(std::time::Duration::from_secs(2), execution)
+        .await
+        .expect("lifecycle owner finishes within cancellation budget")
+        .expect("request task joins")
+        .expect_err("unresponsive operation is cancelled");
+    assert!(matches!(error, crate::AppError::Cancelled));
+    assert!(!manager.execution_registry.is_active(session_id).await);
 }
 
 async fn append_message(
@@ -735,6 +783,51 @@ struct FakeProvider {
     finish_reason: Option<CompletionFinishReason>,
 }
 
+struct StartupFailureProvider {
+    model: ModelId,
+}
+
+#[async_trait::async_trait]
+impl ModelRuntime for StartupFailureProvider {
+    fn id(&self) -> &str {
+        "startup-failure"
+    }
+
+    fn default_model(&self) -> &ModelId {
+        &self.model
+    }
+
+    async fn list_models(&self) -> Result<Vec<agena_domain::Model>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse, ProviderError> {
+        Err(ProviderError::Provider(
+            "fixture upstream rejected request".to_owned(),
+        ))
+    }
+
+    async fn complete_stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures_util::Stream<Item = Result<CompletionStreamEvent, ProviderError>>
+                    + Send,
+            >,
+        >,
+        ProviderError,
+    > {
+        Err(ProviderError::Provider(
+            "fixture upstream rejected request".to_owned(),
+        ))
+    }
+}
+
 #[async_trait::async_trait]
 impl ModelRuntime for FakeProvider {
     fn id(&self) -> &str {
@@ -850,6 +943,242 @@ async fn manager_with_provider(provider: Arc<dyn ModelRuntime>) -> SessionManage
     )
 }
 
+#[derive(Default)]
+struct ToolSearchFixture;
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "agena",
+    name = "tools",
+    version = "test",
+    summary = "Tool API stable-loop regression fixture."
+)]
+impl ToolSearchFixture {
+    #[tool(
+        name = "search",
+        summary = "Search live tools.",
+        read_only,
+        discovery,
+        concurrency_safe
+    )]
+    async fn search(
+        &self,
+        input: &agena_runtime_contracts::part::ToolSearchToolInput,
+    ) -> agena_plugin_host::sdk::ToolInvokeOutput {
+        agena_plugin_host::sdk::ToolInvokeOutput::text(format!(
+            "Matching tools for {:?}:\n- fs.read [filesystem, query]: Read workspace files.",
+            input.query
+        ))
+    }
+}
+
+#[derive(Default)]
+struct FilesystemFixture;
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "agena",
+    name = "fs",
+    version = "test",
+    summary = "Filesystem catalog regression fixture."
+)]
+impl FilesystemFixture {
+    #[tool(name = "read", summary = "Read workspace files.", read_only)]
+    async fn read(&self) -> String {
+        "fixture".to_owned()
+    }
+}
+
+/// Stateful fake provider for the complete model -> tools_search -> model
+/// loop. The first request emits reasoning plus one gateway call; the second
+/// captures the replayed transcript and emits the final answer.
+struct ToolSearchLoopProvider {
+    model: ModelId,
+    requests: std::sync::Mutex<Vec<CompletionRequest>>,
+}
+
+impl ToolSearchLoopProvider {
+    fn new() -> Self {
+        Self {
+            model: ModelId::new("tool-loop-model"),
+            requests: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn requests(&self) -> Vec<CompletionRequest> {
+        self.requests.lock().expect("request lock").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ModelRuntime for ToolSearchLoopProvider {
+    fn id(&self) -> &str {
+        "tool-loop"
+    }
+
+    fn default_model(&self) -> &ModelId {
+        &self.model
+    }
+
+    fn agena_tool_mode(&self, _model: &ModelId) -> agena_provider::AgenaToolMode {
+        agena_provider::AgenaToolMode::ProviderProtocol
+    }
+
+    async fn list_models(&self) -> Result<Vec<agena_domain::Model>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse, ProviderError> {
+        Ok(CompletionResponse {
+            provider_id: ProviderId::new(self.id()),
+            model: self.model.clone(),
+            text: "TOOL_SEARCH_OK fs.read".to_owned(),
+            reasoning_text: None,
+            finish_reason: Some(CompletionFinishReason::Stop),
+            tool_calls: Vec::new(),
+            usage: Some(CompletionUsage::default()),
+            provider_metadata: None,
+        })
+    }
+
+    async fn complete_stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures_util::Stream<Item = Result<CompletionStreamEvent, ProviderError>>
+                    + Send,
+            >,
+        >,
+        ProviderError,
+    > {
+        let request_index = {
+            let mut requests = self.requests.lock().expect("request lock");
+            let request_index = requests.len();
+            requests.push(request);
+            request_index
+        };
+        let provider_id = ProviderId::new(self.id());
+        let model = self.model.clone();
+        let events = match request_index {
+            0 => vec![
+                Ok(CompletionStreamEvent::ThinkingDelta {
+                    provider_id: provider_id.clone(),
+                    model: model.clone(),
+                    delta: "I must discover the filesystem tool.".to_owned(),
+                }),
+                Ok(CompletionStreamEvent::ToolCallSnapshot {
+                    provider_id: provider_id.clone(),
+                    model: model.clone(),
+                    stream_key: "call:0".to_owned(),
+                    id: Some("call_tools_search_1".to_owned()),
+                    name: Some("tools_search".to_owned()),
+                    arguments_json: r#"{"query":"filesystem"}"#.to_owned(),
+                }),
+                Ok(CompletionStreamEvent::Completed {
+                    provider_id,
+                    model,
+                    finish_reason: Some(CompletionFinishReason::ToolCalls),
+                    usage: Some(CompletionUsage::default()),
+                    // Match OpenAI-compatible gateways that return plaintext
+                    // Responses reasoning items but omit the explicit
+                    // `assistant_reasoning_field` hint.
+                    provider_metadata: Some(serde_json::json!({
+                        "openai_reasoning_items": [{
+                            "type": "reasoning",
+                            "summary": [],
+                            "content": [{
+                                "type": "reasoning_text",
+                                "text": "I must discover the filesystem tool."
+                            }]
+                        }]
+                    })),
+                    end_turn: None,
+                }),
+            ],
+            1 => vec![
+                Ok(CompletionStreamEvent::TextDelta {
+                    provider_id: provider_id.clone(),
+                    model: model.clone(),
+                    delta: "TOOL_SEARCH_OK fs.read".to_owned(),
+                }),
+                Ok(CompletionStreamEvent::Completed {
+                    provider_id,
+                    model,
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: Some(CompletionUsage::default()),
+                    provider_metadata: None,
+                    end_turn: None,
+                }),
+            ],
+            other => panic!("stable run made an unexpected provider request #{other}"),
+        };
+        Ok(Box::pin(futures_util::stream::iter(events)))
+    }
+}
+
+async fn manager_with_tool_search_fixture(provider: Arc<dyn ModelRuntime>) -> SessionManager {
+    let workspace_root = std::env::current_dir().expect("resolve test workspace");
+    let mut plugins_config = PluginsConfig::default();
+    for plugin_id in ["agena.tools", "agena.fs"] {
+        plugins_config
+            .list
+            .insert(plugin_id.to_owned(), ConfiguredPlugin::static_default());
+    }
+    let plugins = PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![
+            StaticPluginRegistration::new(
+                "agena.tools".parse().expect("valid Tool API plugin key"),
+                ToolSearchFixture,
+            ),
+            StaticPluginRegistration::new(
+                "agena.fs".parse().expect("valid filesystem plugin key"),
+                FilesystemFixture,
+            ),
+        ],
+        config: plugins_config,
+        workspace_root: workspace_root.clone(),
+        agena_version: "test".to_owned(),
+        callback_base_url: None,
+        host_client: None,
+        previous: None,
+        previous_plugins: HashMap::new(),
+    })
+    .await
+    .expect("build Tool API plugin host");
+    let executor = ToolExecutor::new(
+        workspace_root.clone(),
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        ),
+        Arc::clone(&plugins),
+        None,
+        None,
+        None,
+    );
+    let mut registry = ProviderRegistry::new();
+    registry.register_arc(provider);
+    let processor = SessionProcessor::new(
+        Arc::new(registry),
+        ContextGovernor::new(agena_domain::ContextPolicy::default()),
+        plugins,
+        workspace_root,
+    );
+    let database = Database::connect("sqlite::memory:")
+        .await
+        .expect("open v2 test database");
+    initialize(&database).await;
+    SessionManager::new(
+        database,
+        processor,
+        executor,
+        RuntimeSessionManagerConfig::default(),
+    )
+}
+
 #[tokio::test]
 async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_write() {
     // 25 deltas > STREAMING_FLUSH_DELTA_COUNT (8): the facade must amortize
@@ -912,6 +1241,7 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
             request_override: Default::default(),
         },
         next_message_id: run_id,
+        marker_content: Some(run_marker_content("continue", None, None, None, None)),
         part_ids: ProcessorPartIdAllocator,
         next_call_id: 0,
         store: manager.store.clone(),
@@ -1034,4 +1364,209 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
         .expect("mid-stream part");
     assert_eq!(mid_part.state, PartState::InProgress);
     assert_eq!(mid_part.content["text"], "live deltas");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
+    let provider = Arc::new(ToolSearchLoopProvider::new());
+    let manager = manager_with_tool_search_fixture(provider.clone()).await;
+    let session = create(&manager, "tools_search stable loop").await;
+    let request = SessionUserRunRequest::new(
+        session.id,
+        agena_runtime::SessionRunOptions {
+            model: ModelRef::new("tool-loop", "tool-loop-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: Some("Call the requested Tool API function.".to_owned()),
+            temperature: Some(0.0),
+            max_output_tokens: Some(256),
+        },
+        vec![TypedContent::Text(text_content(
+            "Call tools_search for filesystem tools.",
+        ))],
+    );
+
+    let completed = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        manager.submit_subtask_user_message(request, None),
+    )
+    .await
+    .expect("model -> tool -> model loop must not hang")
+    .expect("stable run must complete");
+
+    let tool_part = completed
+        .parts()
+        .iter()
+        .find(|part| part.kind == "tool_call")
+        .expect("tools_search part");
+    assert_eq!(
+        tool_part.state,
+        PartState::Completed,
+        "the processor creates streamed calls as InProgress; the singleton sequential path must execute them"
+    );
+    let TypedContent::ToolCall(tool_call) =
+        crate::session::store::typed_content_from_value(&tool_part.kind, &tool_part.content)
+            .expect("decode tools_search part")
+    else {
+        panic!("expected tool_call content");
+    };
+    let operation = agena_runtime_contracts::part_content::operation_from_tool_call(&tool_call);
+    assert!(
+        operation.output_text().is_some_and(|output| {
+            output.contains("Matching tools for \"filesystem\"") && output.contains("fs.read")
+        }),
+        "tools_search must execute through the Tool API handler: {operation:?}"
+    );
+    assert!(completed.parts().iter().any(|part| {
+        part.kind == "text"
+            && part.content.get("text").and_then(serde_json::Value::as_str)
+                == Some("TOOL_SEARCH_OK fs.read")
+    }));
+
+    let requests = provider.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "the persisted pending call must keep the stable loop alive for one follow-up turn"
+    );
+    assert!(
+        requests[0]
+            .tool_api_functions
+            .iter()
+            .any(|tool| tool.name == "tools_search"),
+        "tools_search must be advertised to the model"
+    );
+    let replayed_tool_turn = requests[1]
+        .turns
+        .iter()
+        .find(|run| {
+            run.role == Role::Assistant
+                && run.parts.iter().any(|part| {
+                    matches!(
+                        part,
+                        CompletionInputPart::ToolCall { function, .. }
+                            if function.function_name() == "tools_search"
+                    )
+                })
+        })
+        .expect("second request must replay the assistant tool-calling turn");
+    assert_eq!(
+        replayed_tool_turn.provider_state.assistant_reasoning_field,
+        Some(AssistantReasoningField::ReasoningContent),
+        "provider replay state must be persisted before the tool resolves"
+    );
+    assert_eq!(
+        replayed_tool_turn
+            .provider_state
+            .openai_reasoning_items
+            .len(),
+        1
+    );
+    assert!(replayed_tool_turn.parts.iter().any(|part| {
+        matches!(part, CompletionInputPart::Reasoning { text } if text == "I must discover the filesystem tool.")
+    }));
+    let replayed_call_id = replayed_tool_turn
+        .parts
+        .iter()
+        .find_map(|part| match part {
+            CompletionInputPart::ToolCall { id, function, .. }
+                if function.function_name() == "tools_search" =>
+            {
+                Some(id.as_str())
+            }
+            _ => None,
+        })
+        .expect("replayed tools_search call id");
+    assert!(
+        replayed_tool_turn.parts.iter().any(|part| {
+            matches!(
+                part,
+                CompletionInputPart::ToolResult {
+                    tool_call_id,
+                    output_json,
+                    ..
+                } if tool_call_id == replayed_call_id
+                    && output_json.contains("fs.read")
+            )
+        }),
+        "replayed parts: {:#?}",
+        replayed_tool_turn.parts
+    );
+}
+
+#[tokio::test]
+async fn provider_startup_failure_persists_expandable_error_part() {
+    let provider = Arc::new(StartupFailureProvider {
+        model: ModelId::new("failure-model"),
+    });
+    let manager = manager_with_provider(provider).await;
+    let session = create(&manager, "provider failure detail").await;
+    let request = SessionUserRunRequest::new(
+        session.id,
+        agena_runtime::SessionRunOptions {
+            model: ModelRef::new("startup-failure", "failure-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: Some(0.0),
+            max_output_tokens: Some(64),
+        },
+        vec![TypedContent::Text(text_content("fail once"))],
+    );
+
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        manager.submit_subtask_user_message(request, None),
+    )
+    .await
+    .expect("startup failure must terminate instead of hanging")
+    .expect_err("fixture provider must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("fixture upstream rejected request")
+    );
+
+    let reloaded = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("reload failed run");
+    let failed_run = reloaded
+        .parts()
+        .iter()
+        .rev()
+        .find(|part| {
+            part.kind == "run"
+                && part.role == PartRole::Assistant
+                && part.state == PartState::Failed
+        })
+        .expect("failed assistant marker");
+    let error_part = reloaded
+        .parts()
+        .iter()
+        .find(|part| part.kind == "error" && part.run_id == Some(failed_run.part_id))
+        .expect("failed run must carry a durable error detail part");
+    assert_eq!(error_part.state, PartState::Failed);
+    let problem: agena_failure::UserProblem = serde_json::from_value(
+        error_part
+            .content
+            .get("problem")
+            .cloned()
+            .expect("safe user problem payload"),
+    )
+    .expect("decode safe user problem");
+    assert!(
+        problem
+            .user
+            .fallback
+            .contains("fixture upstream rejected request"),
+        "persisted detail should carry the scrubbed provider cause: {problem:?}"
+    );
 }

@@ -1,6 +1,7 @@
 impl App {
     pub(crate) fn handle_message(&mut self, message: AppMessage) {
         match message {
+            AppMessage::AsyncOperationCompleted(completion) => completion(self),
             AppMessage::BackgroundActivitySummaryLoaded { count } => {
                 self.background_activity_summary = Some((count, crate::Instant::now()));
             }

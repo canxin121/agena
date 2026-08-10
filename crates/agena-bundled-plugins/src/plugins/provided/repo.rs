@@ -65,8 +65,7 @@ impl SnapshotPlugin {
         tags(query, snapshot),
         summary = "List active managed repository snapshots.",
         read_only,
-        snapshot,
-
+        snapshot
     )]
     async fn status(&self) -> SdkResult<ToolInvokeOutput> {
         let response = self.inner.host()?.snapshot_list().await?;

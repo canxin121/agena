@@ -272,7 +272,12 @@ impl ClaudeToolsPlugin {
         )))
     }
 
-    #[tool(tags(network, interactive), summary="Use Claude's current Bash client tool.", help="The declaration uses bash_20250124. Execute returned bash tool_use blocks through Agena shell permissions, append assistant content and user tool_result content to messages, then call this tool again.", mutating)]
+    #[tool(
+        tags(network, interactive),
+        summary = "Use Claude's current Bash client tool.",
+        help = "The declaration uses bash_20250124. Execute returned bash tool_use blocks through Agena shell permissions, append assistant content and user tool_result content to messages, then call this tool again.",
+        mutating
+    )]
     async fn bash(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
             "bash",
@@ -284,7 +289,12 @@ impl ClaudeToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Run Claude's latest hosted code execution tool.", help="Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.", read_only)]
+    #[tool(
+        tags(network, interactive),
+        summary = "Run Claude's latest hosted code execution tool.",
+        help = "Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.",
+        read_only
+    )]
     async fn code_execution(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
             "code_execution",
@@ -296,7 +306,12 @@ impl ClaudeToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Run Claude Computer Use and return pending computer actions.", help="Uses computer_20251124. Set display_width_px and display_height_px in tool_options. Agena executors should normalize left_mouse_down/left_mouse_up, drag paths, key combinations, screenshots, zoom, and cursor actions before returning tool_result blocks.", mutating)]
+    #[tool(
+        tags(network, interactive),
+        summary = "Run Claude Computer Use and return pending computer actions.",
+        help = "Uses computer_20251124. Set display_width_px and display_height_px in tool_options. Agena executors should normalize left_mouse_down/left_mouse_up, drag paths, key combinations, screenshots, zoom, and cursor actions before returning tool_result blocks.",
+        mutating
+    )]
     async fn computer(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
             "computer",
@@ -308,7 +323,12 @@ impl ClaudeToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Use Claude's memory client tool.", help="Uses memory_20250818. Execute returned memory commands against Agena's permission-checked memory store and continue with tool_result blocks.", mutating)]
+    #[tool(
+        tags(network, interactive),
+        summary = "Use Claude's memory client tool.",
+        help = "Uses memory_20250818. Execute returned memory commands against Agena's permission-checked memory store and continue with tool_result blocks.",
+        mutating
+    )]
     async fn memory(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
             "memory",
@@ -320,7 +340,12 @@ impl ClaudeToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Use Claude's current text editor client tool.", help="Uses text_editor_20250728 with name str_replace_based_edit_tool. Execute view/create/str_replace/insert operations through Agena filesystem permissions and continue with tool_result blocks.", mutating)]
+    #[tool(
+        tags(network, interactive),
+        summary = "Use Claude's current text editor client tool.",
+        help = "Uses text_editor_20250728 with name str_replace_based_edit_tool. Execute view/create/str_replace/insert operations through Agena filesystem permissions and continue with tool_result blocks.",
+        mutating
+    )]
     async fn text_editor(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
             "text_editor",
@@ -332,7 +357,13 @@ impl ClaudeToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Search the web with Claude's latest server web search.", help="Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.", read_only, discovery)]
+    #[tool(
+        tags(network, interactive),
+        summary = "Search the web with Claude's latest server web search.",
+        help = "Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.",
+        read_only,
+        discovery
+    )]
     async fn web_search(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
             "web_search",
@@ -344,7 +375,13 @@ impl ClaudeToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Fetch web documents with Claude's latest server web fetch.", help="Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.", read_only, discovery)]
+    #[tool(
+        tags(network, interactive),
+        summary = "Fetch web documents with Claude's latest server web fetch.",
+        help = "Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.",
+        read_only,
+        discovery
+    )]
     async fn web_fetch(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
             "web_fetch",
@@ -356,7 +393,12 @@ impl ClaudeToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Ask an Anthropic advisor model with Claude's advisor server tool.", help="Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.", read_only)]
+    #[tool(
+        tags(network, interactive),
+        summary = "Ask an Anthropic advisor model with Claude's advisor server tool.",
+        help = "Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.",
+        read_only
+    )]
     async fn advisor(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
             "advisor",
@@ -368,17 +410,34 @@ impl ClaudeToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Use Claude's BM25 deferred tool search.", help="Uses tool_search_tool_bm25_20251119. The returned tool_reference/server_tool_use content remains in the provider response and can be continued through messages.", read_only, discovery)]
+    #[tool(
+        tags(network, interactive),
+        summary = "Use Claude's BM25 deferred tool search.",
+        help = "Uses tool_search_tool_bm25_20251119. The returned tool_reference/server_tool_use content remains in the provider response and can be continued through messages.",
+        read_only,
+        discovery
+    )]
     async fn tool_search_bm25(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool("tool_search_bm25", "Claude BM25 tool search", serde_json::json!({"type":"tool_search_tool_bm25_20251119","name":"tool_search_tool_bm25"}), &["advanced-tool-use-2025-11-20"], input).await
     }
 
-    #[tool(tags(network, interactive), summary="Use Claude's regex deferred tool search.", help="Uses tool_search_tool_regex_20251119 and supports official allowed_callers, cache_control, defer_loading, and strict options.", read_only, discovery)]
+    #[tool(
+        tags(network, interactive),
+        summary = "Use Claude's regex deferred tool search.",
+        help = "Uses tool_search_tool_regex_20251119 and supports official allowed_callers, cache_control, defer_loading, and strict options.",
+        read_only,
+        discovery
+    )]
     async fn tool_search_regex(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool("tool_search_regex", "Claude regex tool search", serde_json::json!({"type":"tool_search_tool_regex_20251119","name":"tool_search_tool_regex"}), &["advanced-tool-use-2025-11-20"], input).await
     }
 
-    #[tool(tags(network, interactive), summary="Configure a Claude MCP toolset.", help="Set tool_options.mcp_server_name plus optional configs and default_config. The wrapper sends the official mcp_toolset declaration and returns approval/tool-use content for continuation.", mutating)]
+    #[tool(
+        tags(network, interactive),
+        summary = "Configure a Claude MCP toolset.",
+        help = "Set tool_options.mcp_server_name plus optional configs and default_config. The wrapper sends the official mcp_toolset declaration and returns approval/tool-use content for continuation.",
+        mutating
+    )]
     async fn mcp_toolset(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput> {
         self.messages_tool(
             "mcp_toolset",

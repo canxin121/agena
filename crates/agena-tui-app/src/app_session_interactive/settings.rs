@@ -1,8 +1,8 @@
 use super::super::{
-    permission_config_from_json_value, permission_override_summary, settings_studio_activity_kind_items,
-    settings_studio_field_items, settings_studio_harness_items, settings_studio_permission_items,
-    settings_studio_plugin_items, settings_studio_provider_approval_model_item,
-    settings_studio_provider_items,
+    permission_config_from_json_value, permission_override_summary,
+    settings_studio_activity_kind_items, settings_studio_field_items,
+    settings_studio_harness_items, settings_studio_permission_items, settings_studio_plugin_items,
+    settings_studio_provider_approval_model_item, settings_studio_provider_items,
 };
 
 impl App {
@@ -116,6 +116,7 @@ impl App {
     }
 
     pub(crate) fn open_settings_studio(&mut self) {
+        self.request_settings_async_context();
         match self.build_settings_studio_overlay(None, None, SettingsStudioFocus::Navigation) {
             Ok(dialog) => {
                 self.route_stack.clear();
@@ -123,6 +124,32 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
+    }
+
+    fn request_settings_async_context(&mut self) {
+        let session_id = self.current_or_selected_session_id();
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                let permission = match session_id {
+                    Some(session_id) => Some(
+                        backend
+                            .get_session_permission_studio_state(session_id)
+                            .await?,
+                    ),
+                    None => None,
+                };
+                let runtime_summary = backend.runtime_snapshot_summary().await?;
+                Ok::<_, anyhow::Error>((session_id, permission, runtime_summary))
+            },
+            |app, result| match result {
+                Ok((session_id, permission, runtime_summary)) => {
+                    app.settings_runtime_snapshot_summary = Some(runtime_summary);
+                    app.settings_session_permission = session_id.zip(permission);
+                    app.refresh_current_route_after_local_edit();
+                }
+                Err(error) => app.flash_error(error),
+            },
+        );
     }
 
     pub(crate) fn build_settings_studio_overlay(
@@ -148,10 +175,10 @@ impl App {
         let current_session_permission =
             self.current_or_selected_session_id()
                 .and_then(|session_id| {
-                    self.block_on_async(
-                        self.backend.get_session_permission_studio_state(session_id),
-                    )
-                    .ok()
+                    self.settings_session_permission
+                        .as_ref()
+                        .filter(|(cached_session_id, _)| *cached_session_id == session_id)
+                        .map(|(_, permission)| permission)
                 });
         let model_catalog = self
             .backend
@@ -177,12 +204,13 @@ impl App {
         diagnostic_items.extend(settings_studio_file_items(&self.i18n, &sources));
         diagnostic_items.push(SettingsStudioItem::new(
             ui_text::t(&self.i18n, "terminal-diagnostics-title"),
-            self.block_on_async(self.backend.runtime_snapshot_summary())
-                .map_err(crate::UiFailure::internal)?,
+            self.settings_runtime_snapshot_summary
+                .clone()
+                .unwrap_or_else(|| "Loading runtime snapshot…".to_string()),
             ui_text::t(&self.i18n, "command-diagnostics-summary"),
             SettingsPickerAction::OpenTerminalDiagnostics,
         ));
-                let mut ui_items =
+        let mut ui_items =
             settings_studio_field_items(&self.i18n, &sources, SettingsStudioSectionId::Interface);
         ui_items.extend(settings_studio_activity_kind_items(
             &self.i18n,
@@ -206,7 +234,7 @@ impl App {
             &global_permission,
             &workspace_permission,
             &effective_permission,
-            current_session_permission.as_ref(),
+            current_session_permission,
         );
         let mut sections = vec![
             SettingsStudioSection {

@@ -312,6 +312,7 @@ pub(crate) async fn run_git_env(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
 
     #[cfg(unix)]
     {
@@ -408,6 +409,7 @@ pub(crate) async fn run_git_input(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
 
     #[cfg(unix)]
     {

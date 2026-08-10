@@ -100,7 +100,7 @@ pub(crate) fn compact_config_sections_text(
             lines.push(Line::from(Span::styled(padded, style)));
         }
     }
-        Text::from(lines)
+    Text::from(lines)
 }
 
 use super::{

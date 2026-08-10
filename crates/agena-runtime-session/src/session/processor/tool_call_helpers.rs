@@ -285,7 +285,7 @@ mod tests {
                     model: Default::default(),
                     docs: Default::default(),
                     runtime: Default::default(),
-                                        permissions: Default::default(),
+                    permissions: Default::default(),
                     tags: Vec::new(),
                 },
             )

@@ -1,6 +1,6 @@
 use super::{
-    AppError, SessionCreateRequest, SessionListRequest, SessionManager, SessionRunOptions,
-    SessionSummary,
+    AppError, SessionCreateRequest, SessionListRequest, SessionManager, SessionManagerState,
+    SessionRunOptions, SessionSummary,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -308,9 +308,15 @@ impl SessionManager {
             .await
     }
 
-    pub fn session_usage(&self, session: &Session) -> Result<SessionUsage, AppError> {
+    pub async fn session_usage_async(&self, session: &Session) -> Result<SessionUsage, AppError> {
         let state = self.execution_state();
-        let options = self.run_options_from_session(session, state.clone()).ok();
+        let scoped_executor = state
+            .tool_executor
+            .for_session_context_async(&session.runtime.execution)
+            .await;
+        let options = self
+            .session_usage_run_options(session, state.as_ref(), &scoped_executor)
+            .ok();
         let native_compaction_enabled = options
             .as_ref()
             .map(|options| {
@@ -321,9 +327,6 @@ impl SessionManager {
             })
             .transpose()?
             .unwrap_or(false);
-        let scoped_executor = state
-            .tool_executor
-            .for_session_context(&session.runtime.execution);
         let agena_tool_mode = options
             .as_ref()
             .and_then(|options| {
@@ -337,8 +340,52 @@ impl SessionManager {
         let tool_api_functions = if agena_tool_mode.is_disabled() {
             Vec::new()
         } else {
-            scoped_executor.available_tool_api_bindings()
+            scoped_executor.available_tool_api_bindings_async().await
         };
+        self.session_usage_with_catalog(
+            session,
+            state.as_ref(),
+            &options,
+            native_compaction_enabled,
+            tool_api_functions,
+        )
+    }
+
+    fn session_usage_run_options(
+        &self,
+        session: &Session,
+        state: &SessionManagerState,
+        scoped_executor: &crate::tool::ToolExecutor,
+    ) -> Result<SessionRunOptions, AppError> {
+        let model = self.model_from_session_or_default(session, state)?;
+        let mut options = SessionRunOptions {
+            model,
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        self.apply_selection_modes_to_run_options(session, &mut options)?;
+        options.system =
+            Some(self.assemble_session_system_prompt_with_executor(scoped_executor, None));
+        if let Ok(metadata) = state.processor.model_metadata(&options.model) {
+            options.temperature = metadata.parsed_default_temperature();
+        }
+        Ok(options)
+    }
+
+    fn session_usage_with_catalog(
+        &self,
+        session: &Session,
+        state: &SessionManagerState,
+        options: &Option<SessionRunOptions>,
+        native_compaction_enabled: bool,
+        tool_api_functions: Vec<crate::tool::ToolApiBinding>,
+    ) -> Result<SessionUsage, AppError> {
         let request_system = options
             .as_ref()
             .and_then(|options| options.system.clone())
@@ -446,6 +493,42 @@ impl SessionManager {
         })
     }
 
+    /// The session's **effective** model selection after resolving the default
+    /// model and applying every mode cascade/registry default.
+    ///
+    /// Unlike `execution.selection` (which holds only the persisted per-session
+    /// override and is empty for default-model sessions), this resolves the
+    /// concrete provider/adapter/model that would actually run plus the
+    /// effective thinking/speed/verbosity modes.
+    pub fn session_model_status(
+        &self,
+        session: &Session,
+    ) -> Result<agena_domain::ModelSelectionConfig, AppError> {
+        let state = self.execution_state();
+        let model = self.model_from_session_or_default(session, &state)?;
+        let mut options = SessionRunOptions {
+            model,
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        self.apply_selection_modes_to_run_options(session, &mut options)?;
+        Ok(agena_domain::ModelSelectionConfig {
+            provider: Some(options.model.provider_id.to_string()),
+            adapter: options.model.adapter_id.as_ref().map(ToString::to_string),
+            model: Some(options.model.model_id.to_string()),
+            thinking_mode: options.thinking_mode,
+            speed_mode: options.speed_mode,
+            verbosity: options.verbosity,
+            parallel_tool_calls: options.request_override.parallel_tool_calls(),
+        })
+    }
+
     pub async fn set_session_permission(
         &self,
         session_id: i64,
@@ -503,7 +586,7 @@ impl SessionManager {
         let session = self.get_session(session_id).await?;
         let state = self.execution_state();
         let model = self.model_from_session_or_default(&session, &state)?;
-        self.apply_execution_context_to_run_options(
+        self.apply_execution_context_to_run_options_async(
             &session,
             SessionRunOptions {
                 model,
@@ -517,6 +600,7 @@ impl SessionManager {
                 max_output_tokens: None,
             },
         )
+        .await
     }
 
     pub async fn workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {

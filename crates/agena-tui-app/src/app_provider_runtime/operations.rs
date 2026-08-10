@@ -48,10 +48,12 @@ impl App {
                     &dialog.selected_model_keys,
                 )
                 .await;
-            let _ = tx.send(AppMessage::ProviderStudioSaved {
-                provider_id: dialog.draft.provider_id.clone(),
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::ProviderStudioSaved {
+                    provider_id: dialog.draft.provider_id.clone(),
+                    result,
+                })
+                .await;
         });
     }
 
@@ -72,10 +74,12 @@ impl App {
             let result = backend
                 .save_provider_adapter_matches(dialog.draft.clone(), adapter_models)
                 .await;
-            let _ = tx.send(AppMessage::ProviderStudioSaved {
-                provider_id: dialog.draft.provider_id.clone(),
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::ProviderStudioSaved {
+                    provider_id: dialog.draft.provider_id.clone(),
+                    result,
+                })
+                .await;
         });
     }
 
@@ -97,10 +101,12 @@ impl App {
                     model_value,
                 )
                 .await;
-            let _ = tx.send(AppMessage::ProviderStudioSaved {
-                provider_id: draft.provider_id.clone(),
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::ProviderStudioSaved {
+                    provider_id: draft.provider_id.clone(),
+                    result,
+                })
+                .await;
         });
     }
 
@@ -116,10 +122,12 @@ impl App {
             let result = backend
                 .delete_provider_model(draft.clone(), adapter_id.as_str(), model_id.as_str())
                 .await;
-            let _ = tx.send(AppMessage::ProviderStudioSaved {
-                provider_id: draft.provider_id.clone(),
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::ProviderStudioSaved {
+                    provider_id: draft.provider_id.clone(),
+                    result,
+                })
+                .await;
         });
     }
 
@@ -128,10 +136,12 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = backend.delete_provider(provider_id.as_str()).await;
-            let _ = tx.send(AppMessage::ProviderStudioSaved {
-                provider_id,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::ProviderStudioSaved {
+                    provider_id,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -146,10 +156,12 @@ impl App {
             let result = backend
                 .delete_provider_adapter(draft.clone(), adapter_id.as_str())
                 .await;
-            let _ = tx.send(AppMessage::ProviderStudioSaved {
-                provider_id: draft.provider_id.clone(),
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::ProviderStudioSaved {
+                    provider_id: draft.provider_id.clone(),
+                    result,
+                })
+                .await;
         });
     }
 

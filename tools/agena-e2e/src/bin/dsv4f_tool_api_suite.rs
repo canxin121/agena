@@ -128,7 +128,7 @@ async fn async_main() -> anyhow::Result<()> {
     .await
     .context("start isolated dsv4f suite runtime")?;
     let services = runtime.application_services();
-    assert_tool_api_surface(services.tools.as_ref())?;
+    assert_tool_api_surface(services.tools.as_ref()).await?;
     let session_store = services
         .session_store
         .context("runtime does not provide the session store facade")?;
@@ -198,8 +198,8 @@ fn run_options(model: ModelRef) -> SessionRunOptions {
     }
 }
 
-fn assert_tool_api_surface(tools: &dyn RuntimeToolExecutionService) -> anyhow::Result<()> {
-    let specs = tools.available_tool_api_definitions();
+async fn assert_tool_api_surface(tools: &dyn RuntimeToolExecutionService) -> anyhow::Result<()> {
+    let specs = tools.available_tool_api_definitions().await;
     let mut names = specs.into_iter().map(|spec| spec.name).collect::<Vec<_>>();
     names.sort();
     let expected = [

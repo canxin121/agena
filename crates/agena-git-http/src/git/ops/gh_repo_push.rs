@@ -63,6 +63,7 @@ enum GhRunError {
 async fn run_gh(directory: &Path, args: &[&str]) -> Result<(i32, String, String), GhRunError> {
     let mut cmd = Command::new("gh");
     cmd.args(args)
+        .kill_on_drop(true)
         .current_dir(directory)
         .env("GH_PROMPT_DISABLED", "1")
         .env("GIT_TERMINAL_PROMPT", "0");

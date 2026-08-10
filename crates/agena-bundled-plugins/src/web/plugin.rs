@@ -503,7 +503,8 @@ fn default_web_config() -> WebConfig {
 pub(crate) struct WebPlugin {
     state: OnceLock<WebPluginState>,
     workspace_root: OnceLock<PathBuf>,
-    sync_lock: Mutex<()>,
+    crawl_lock: Mutex<()>,
+    browser_download_lock: Mutex<()>,
     /// Shared interactive-browser session state. Owned by the plugin and by
     /// the registered [`BrowserActivitySource`] so log reads and stop requests
     /// can reach live sessions without going through a tool invocation.
@@ -610,6 +611,7 @@ impl BrowserSessionLog {
 #[derive(Clone)]
 struct BrowserActivityState {
     clients: Arc<tokio::sync::Mutex<BTreeMap<String, CdpClient>>>,
+    connecting: Arc<tokio::sync::Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     meta: Arc<tokio::sync::Mutex<BTreeMap<String, BrowserSessionMeta>>>,
     logs: Arc<tokio::sync::Mutex<BTreeMap<String, BrowserSessionLog>>>,
     root: Arc<tokio::sync::Mutex<Option<CdpClient>>>,
@@ -619,6 +621,7 @@ impl BrowserActivityState {
     fn new() -> Self {
         Self {
             clients: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            connecting: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             meta: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             logs: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             root: Arc::new(tokio::sync::Mutex::new(None)),
@@ -643,7 +646,20 @@ impl BrowserActivityState {
         message: &str,
         host: &dyn HostClient,
     ) -> SdkResult<bool> {
-        let closed = match self.root.lock().await.as_ref() {
+        let connect_lock = {
+            let mut connecting = self.connecting.lock().await;
+            Arc::clone(
+                connecting
+                    .entry(target_id.to_string())
+                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+            )
+        };
+        let _connect_guard = connect_lock.lock().await;
+        // Clone the client under the state lock, then perform CDP I/O after
+        // releasing it. The command can wait on the browser's reader task,
+        // which must remain free to update browser state.
+        let root = self.root.lock().await.clone();
+        let closed = match root {
             Some(root) => root
                 .command(
                     "Target.closeTarget",
@@ -1018,7 +1034,8 @@ impl WebPlugin {
         Self {
             state: OnceLock::new(),
             workspace_root: OnceLock::new(),
-            sync_lock: Mutex::new(()),
+            crawl_lock: Mutex::new(()),
+            browser_download_lock: Mutex::new(()),
             browser_state: Arc::new(BrowserActivityState::new()),
             user_agent: "agena-web".to_owned(),
         }
@@ -1082,12 +1099,17 @@ impl WebPlugin {
             .await;
         }
         self.browser_state.logs.lock().await.clear();
-        tokio::task::spawn_blocking(shutdown_local_browser)
+        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
+            .acquire()
             .await
-            .map_err(|error| {
-                PluginError::internal(format!("browser shutdown task failed: {error}"))
-            })?
-            .map_err(crawl_error_to_plugin)?;
+            .map_err(|_| PluginError::internal("browser worker pool is unavailable"))?;
+        tokio::task::spawn_blocking(move || {
+            let _worker_permit = worker_permit;
+            shutdown_local_browser()
+        })
+        .await
+        .map_err(|error| PluginError::internal(format!("browser shutdown task failed: {error}")))?
+        .map_err(crawl_error_to_plugin)?;
         Ok(())
     }
 
@@ -1263,10 +1285,17 @@ impl WebPlugin {
 
     async fn browser_endpoint(&self) -> SdkResult<String> {
         let options = self.local_browser_options()?;
-        tokio::task::spawn_blocking(move || local_browser_endpoint(&options))
+        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
+            .acquire()
             .await
-            .map_err(|error| PluginError::internal(format!("browser launcher failed: {error}")))?
-            .map_err(crawl_error_to_plugin)
+            .map_err(|_| PluginError::internal("browser worker pool is unavailable"))?;
+        tokio::task::spawn_blocking(move || {
+            let _worker_permit = worker_permit;
+            local_browser_endpoint(&options)
+        })
+        .await
+        .map_err(|error| PluginError::internal(format!("browser launcher failed: {error}")))?
+        .map_err(crawl_error_to_plugin)
     }
 
     async fn browser_client(&self, target_id: Option<&str>) -> SdkResult<CdpClient> {
@@ -1278,25 +1307,63 @@ impl WebPlugin {
     async fn browser_client_with_events(
         &self,
         target_id: Option<&str>,
-        events: Option<mpsc::UnboundedSender<CdpEvent>>,
+        events: Option<mpsc::Sender<CdpEvent>>,
     ) -> SdkResult<CdpClient> {
         let Some(target_id) = target_id else {
             let endpoint = self.browser_endpoint().await?;
             return CdpClient::connect(endpoint.as_str(), None, events).await;
         };
 
-        let mut clients = self.browser_state.clients.lock().await;
-        if let Some(client) = clients.get(target_id)
-            && !client.is_closed()
-        {
-            return Ok(client.clone());
+        let existing = {
+            let mut clients = self.browser_state.clients.lock().await;
+            if let Some(client) = clients.get(target_id)
+                && !client.is_closed()
+            {
+                Some(client.clone())
+            } else {
+                clients.remove(target_id);
+                None
+            }
+        };
+        if let Some(client) = existing {
+            return Ok(client);
         }
-        clients.remove(target_id);
+
+        // Coalesce concurrent first use of one target. Without the second
+        // check below, two commands can establish separate CDP sockets and
+        // whichever inserts last silently orphans the other's reader task.
+        let connect_lock = {
+            let mut connecting = self.browser_state.connecting.lock().await;
+            Arc::clone(
+                connecting
+                    .entry(target_id.to_string())
+                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+            )
+        };
+        let _connect_guard = connect_lock.lock().await;
+        let existing = {
+            let mut clients = self.browser_state.clients.lock().await;
+            if let Some(client) = clients.get(target_id)
+                && !client.is_closed()
+            {
+                Some(client.clone())
+            } else {
+                clients.remove(target_id);
+                None
+            }
+        };
+        if let Some(client) = existing {
+            return Ok(client);
+        }
 
         let endpoint = self.browser_endpoint().await?;
         let client = CdpClient::connect(endpoint.as_str(), Some(target_id), events).await?;
         client.enable_navigation_interception().await?;
-        clients.insert(target_id.to_string(), client.clone());
+        self.browser_state
+            .clients
+            .lock()
+            .await
+            .insert(target_id.to_string(), client.clone());
         Ok(client)
     }
 
@@ -1312,7 +1379,7 @@ impl WebPlugin {
     fn spawn_browser_event_task(
         &self,
         session_id: &str,
-        mut rx: mpsc::UnboundedReceiver<CdpEvent>,
+        mut rx: mpsc::Receiver<CdpEvent>,
     ) -> SdkResult<()> {
         let state = Arc::clone(&self.browser_state);
         let host = self.state()?.host.clone();
@@ -1541,7 +1608,7 @@ impl WebPlugin {
         let start_url =
             prepare_fetch_url(input.start_url.as_str()).map_err(crawl_error_to_plugin)?;
         let store = self.store()?;
-        let _guard = self.sync_lock.lock().await;
+        let _guard = self.crawl_lock.lock().await;
         let config = self.config()?;
         let options = CrawlRunOptions {
             max_pages: clamp_limit(
@@ -1665,9 +1732,7 @@ impl WebPlugin {
         tags(network, interactive, mutate),
         name = "browser_open",
         summary = "Open a page in a managed interactive browser session.",
-        read_only,
-
-
+        read_only
     )]
     async fn browser_open(&self, input: &BrowserOpenInput) -> SdkResult<ToolInvokeOutput> {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
@@ -1686,7 +1751,7 @@ impl WebPlugin {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| PluginError::internal("browser did not return a target id"))?
             .to_string();
-        let (event_tx, event_rx) = mpsc::unbounded_channel::<CdpEvent>();
+        let (event_tx, event_rx) = mpsc::channel::<CdpEvent>(512);
         let page = match self
             .browser_client_with_events(Some(target_id.as_str()), Some(event_tx))
             .await
@@ -1776,17 +1841,21 @@ impl WebPlugin {
         name = "browser_list",
         summary = "List open page targets in the managed interactive browser.",
         read_only,
-
         concurrency_safe
     )]
     async fn browser_list(&self, _input: &BrowserListInput) -> SdkResult<ToolInvokeOutput> {
         // Listing must never start the managed browser. Report the current
         // process state first and only connect when it is already running.
-        let running = tokio::task::spawn_blocking(local_browser_running)
+        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
+            .acquire()
             .await
-            .map_err(|error| {
-                PluginError::internal(format!("browser status task failed: {error}"))
-            })?;
+            .map_err(|_| PluginError::internal("browser worker pool is unavailable"))?;
+        let running = tokio::task::spawn_blocking(move || {
+            let _worker_permit = worker_permit;
+            local_browser_running()
+        })
+        .await
+        .map_err(|error| PluginError::internal(format!("browser status task failed: {error}")))?;
         if !running {
             return Ok(ToolInvokeOutput::from_parts(
                 "browser list",
@@ -1841,8 +1910,7 @@ impl WebPlugin {
         tags(network, mutate),
         name = "browser_close",
         summary = "Close one page target in the managed interactive browser.",
-        mutating,
-
+        mutating
     )]
     async fn browser_close(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput> {
         let host = self.state()?.host.clone();
@@ -1874,7 +1942,7 @@ impl WebPlugin {
         name = "browser_shutdown",
         summary = "Shut down the managed browser process and all its sessions.",
         help = "Closes the underlying Chrome/Chromium process used for rendered fetches and interactive browsing, and removes its temporary profile. All browser sessions are discarded; the next browser_open starts a fresh browser. Use this to release memory without exiting Agena.",
-        mutating,
+        mutating
     )]
     async fn browser_shutdown(&self, _input: &BrowserListInput) -> SdkResult<ToolInvokeOutput> {
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
@@ -1896,12 +1964,17 @@ impl WebPlugin {
         self.browser_state.clients.lock().await.clear();
         *self.browser_state.root.lock().await = None;
         self.browser_state.logs.lock().await.clear();
-        let closed = tokio::task::spawn_blocking(shutdown_local_browser)
+        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
+            .acquire()
             .await
-            .map_err(|error| {
-                PluginError::internal(format!("browser shutdown task failed: {error}"))
-            })?
-            .map_err(crawl_error_to_plugin)?;
+            .map_err(|_| PluginError::internal("browser worker pool is unavailable"))?;
+        let closed = tokio::task::spawn_blocking(move || {
+            let _worker_permit = worker_permit;
+            shutdown_local_browser()
+        })
+        .await
+        .map_err(|error| PluginError::internal(format!("browser shutdown task failed: {error}")))?
+        .map_err(crawl_error_to_plugin)?;
         Ok(ToolInvokeOutput::from_parts(
             "browser shutdown",
             if closed { "Closed" } else { "Not running" },
@@ -1921,7 +1994,6 @@ impl WebPlugin {
         name = "browser_snapshot",
         summary = "Inspect visible text and interactive elements in a browser session.",
         read_only,
-
         concurrency_safe
     )]
     async fn browser_snapshot(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput> {
@@ -1946,8 +2018,7 @@ impl WebPlugin {
         tags(network, interactive, mutate),
         name = "browser_click",
         summary = "Click a browser element selected by CSS or the latest snapshot ref.",
-        mutating,
-
+        mutating
     )]
     async fn browser_click(&self, input: &BrowserClickInput) -> SdkResult<ToolInvokeOutput> {
         let target = browser_element_expression(input.selector.as_deref(), input.element_ref)?;
@@ -1971,8 +2042,7 @@ impl WebPlugin {
         tags(network, interactive, mutate),
         name = "browser_type",
         summary = "Fill a browser input selected by CSS or the latest snapshot ref, optionally pressing Enter.",
-        mutating,
-
+        mutating
     )]
     async fn browser_type(&self, input: &BrowserTypeInput) -> SdkResult<ToolInvokeOutput> {
         let expression = browser_type_expression(
@@ -1999,7 +2069,6 @@ impl WebPlugin {
         name = "browser_wait",
         summary = "Wait for page readiness, a CSS selector, or visible text.",
         read_only,
-
         concurrency_safe
     )]
     async fn browser_wait(&self, input: &BrowserWaitInput) -> SdkResult<ToolInvokeOutput> {
@@ -2029,9 +2098,7 @@ impl WebPlugin {
         tags(network, mutate, filesystem),
         name = "browser_screenshot",
         summary = "Capture a browser screenshot and return it as an image attachment.",
-        mutating,
-
-
+        mutating
     )]
     async fn browser_screenshot(
         &self,
@@ -2111,9 +2178,7 @@ impl WebPlugin {
         tags(network, mutate, filesystem),
         name = "browser_download",
         summary = "Download one HTTP(S) URL through a managed browser session and return a local artifact.",
-        mutating,
-
-
+        mutating
     )]
     async fn browser_download(&self, input: &BrowserDownloadInput) -> SdkResult<ToolInvokeOutput> {
         const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
@@ -2133,7 +2198,7 @@ impl WebPlugin {
         // Chromium's download behavior is browser-global. Serialize this
         // short setup/navigation/polling sequence so two model calls cannot
         // redirect each other's artifacts into the wrong managed directory.
-        let _guard = self.sync_lock.lock().await;
+        let _guard = self.browser_download_lock.lock().await;
         let root = self.browser_client(None).await?;
         root.command(
             "Browser.setDownloadBehavior",
@@ -2372,6 +2437,9 @@ struct NavigationDecision {
     result: Result<(), String>,
 }
 
+const CDP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const CDP_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Clone)]
 struct CdpClient {
     commands: mpsc::Sender<CdpCommandRequest>,
@@ -2383,17 +2451,25 @@ impl CdpClient {
     async fn connect(
         endpoint: &str,
         target_id: Option<&str>,
-        events: Option<mpsc::UnboundedSender<CdpEvent>>,
+        events: Option<mpsc::Sender<CdpEvent>>,
     ) -> SdkResult<Self> {
-        let (mut socket, _) =
-            tokio_tungstenite::connect_async(endpoint)
-                .await
-                .map_err(|error| {
-                    PluginError::internal(format!("cannot connect to browser CDP: {error}"))
-                })?;
+        let (mut socket, _) = tokio::time::timeout(
+            CDP_CONNECT_TIMEOUT,
+            tokio_tungstenite::connect_async(endpoint),
+        )
+        .await
+        .map_err(|_| PluginError::internal("timed out connecting to browser CDP"))?
+        .map_err(|error| {
+            PluginError::internal(format!("cannot connect to browser CDP: {error}"))
+        })?;
 
         let (session_id, next_id) = if let Some(target_id) = target_id {
-            let result = cdp_attach_target(&mut socket, target_id).await?;
+            let result = tokio::time::timeout(
+                CDP_CONNECT_TIMEOUT,
+                cdp_attach_target(&mut socket, target_id),
+            )
+            .await
+            .map_err(|_| PluginError::internal("timed out attaching browser CDP target"))??;
             let session_id = result
                 .get("sessionId")
                 .and_then(serde_json::Value::as_str)
@@ -2426,7 +2502,7 @@ impl CdpClient {
     }
 
     async fn enable_navigation_interception(&self) -> SdkResult<()> {
-        if self.navigation_interception_enabled.set(()).is_err() {
+        if self.navigation_interception_enabled.get().is_some() {
             return Ok(());
         }
         self.command(
@@ -2440,6 +2516,7 @@ impl CdpClient {
             }),
         )
         .await?;
+        let _ = self.navigation_interception_enabled.set(());
         Ok(())
     }
 
@@ -2447,6 +2524,16 @@ impl CdpClient {
         &self,
         method: &str,
         params: serde_json::Value,
+    ) -> SdkResult<serde_json::Value> {
+        self.command_with_timeout(method, params, CDP_COMMAND_TIMEOUT)
+            .await
+    }
+
+    async fn command_with_timeout(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        command_timeout: Duration,
     ) -> SdkResult<serde_json::Value> {
         // Every CDP exchange is browser activity: restart the idle auto-close
         // timer so a session mid-flight is never torn down underneath us.
@@ -2456,17 +2543,26 @@ impl CdpClient {
         }
 
         let (response, receiver) = oneshot::channel();
-        self.commands
-            .send(CdpCommandRequest {
-                method: method.to_string(),
-                params,
-                response,
-            })
-            .await
-            .map_err(|_| PluginError::internal("browser CDP connection ended"))?;
-        let result = receiver
-            .await
-            .map_err(|_| PluginError::internal("browser CDP connection ended"))?;
+        let result = tokio::time::timeout(command_timeout, async {
+            self.commands
+                .send(CdpCommandRequest {
+                    method: method.to_string(),
+                    params,
+                    response,
+                })
+                .await
+                .map_err(|_| PluginError::internal("browser CDP connection ended"))?;
+            receiver
+                .await
+                .map_err(|_| PluginError::internal("browser CDP connection ended"))
+        })
+        .await
+        .map_err(|_| {
+            PluginError::internal(format!(
+                "browser CDP command `{method}` timed out after {}s",
+                command_timeout.as_secs_f64()
+            ))
+        })??;
 
         if let Some(error) = self.take_navigation_error() {
             return Err(PluginError::internal(error));
@@ -2585,10 +2681,12 @@ async fn run_cdp_connection(
     mut next_id: u64,
     mut commands: mpsc::Receiver<CdpCommandRequest>,
     navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
-    events: Option<mpsc::UnboundedSender<CdpEvent>>,
+    events: Option<mpsc::Sender<CdpEvent>>,
 ) {
     let (mut sink, mut source) = socket.split();
-    let (decisions, mut decision_receiver) = mpsc::unbounded_channel::<NavigationDecision>();
+    // At most sixteen authorization checks can be active, so one result slot
+    // per check is sufficient and gives the CDP loop deterministic memory use.
+    let (decisions, mut decision_receiver) = mpsc::channel::<NavigationDecision>(16);
     let authorization_slots = Arc::new(Semaphore::new(16));
     let mut pending = BTreeMap::<u64, PendingCdpCommand>::new();
 
@@ -2725,7 +2823,7 @@ async fn run_cdp_connection(
                     && let Some(method) =
                         value.get("method").and_then(serde_json::Value::as_str)
                 {
-                    let _ = events.send(CdpEvent {
+                    let _ = events.try_send(CdpEvent {
                         method: method.to_string(),
                         params: value
                             .get("params")
@@ -2762,14 +2860,38 @@ async fn run_cdp_connection(
                 let decisions = decisions.clone();
                 let authorization_slot = Arc::clone(&authorization_slots).try_acquire_owned();
                 let Ok(authorization_slot) = authorization_slot else {
-                    let _ = decisions.send(NavigationDecision {
-                        request_id,
-                        url,
-                        result: Err(
-                            "browser document interception exceeded 16 concurrent network safety checks"
-                                .to_string(),
+                    let error =
+                        "browser document interception exceeded 16 concurrent network safety checks";
+                    push_navigation_error(
+                        &navigation_errors,
+                        format!(
+                            "browser document request to '{url}' was blocked before dispatch: {error}"
                         ),
-                    });
+                    );
+                    let id = next_id;
+                    next_id = next_id.saturating_add(1);
+                    match send_cdp_request(
+                        &mut sink,
+                        id,
+                        "Fetch.failRequest",
+                        serde_json::json!({
+                            "requestId": request_id,
+                            "errorReason": "BlockedByClient",
+                        }),
+                        session_id.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            pending.insert(
+                                id,
+                                PendingCdpCommand::Interception {
+                                    method: "Fetch.failRequest",
+                                },
+                            );
+                        }
+                        Err(error) => push_navigation_error(&navigation_errors, error),
+                    }
                     continue;
                 };
                 tokio::spawn(async move {
@@ -2779,11 +2901,13 @@ async fn run_cdp_connection(
                     } else {
                         authorize_browser_document_request(url.as_str()).await
                     };
-                    let _ = decisions.send(NavigationDecision {
-                        request_id,
-                        url,
-                        result,
-                    });
+                    let _ = decisions
+                        .send(NavigationDecision {
+                            request_id,
+                            url,
+                            result,
+                        })
+                        .await;
                 });
             }
         }
@@ -3429,7 +3553,11 @@ fn host_matches(host: &str, pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::{
+        collections::VecDeque,
+        net::{Ipv4Addr, Ipv6Addr},
+        sync::{Arc, OnceLock},
+    };
 
     use agena_domain::{BackgroundActivityKind, BackgroundActivityStatus};
     use agena_plugin_host::sdk::Plugin;
@@ -3438,6 +3566,26 @@ mod tests {
         BrowserSessionLog, CdpClient, WebPlugin, browser_activity, browser_element_expression,
         browser_type_expression, is_public_address, resolve_browser_redirect,
     };
+
+    #[tokio::test]
+    async fn cdp_commands_fail_instead_of_waiting_forever_for_a_response() {
+        let (commands, _requests) = tokio::sync::mpsc::channel(1);
+        let client = CdpClient {
+            commands,
+            navigation_interception_enabled: Arc::new(OnceLock::new()),
+            navigation_errors: Arc::new(std::sync::Mutex::new(VecDeque::new())),
+        };
+
+        let error = client
+            .command_with_timeout(
+                "Runtime.evaluate",
+                serde_json::json!({}),
+                std::time::Duration::from_millis(20),
+            )
+            .await
+            .expect_err("a silent CDP peer must time out");
+        assert!(error.to_string().contains("timed out"));
+    }
 
     #[test]
     fn browser_session_log_implements_the_since_seq_cursor_protocol() {

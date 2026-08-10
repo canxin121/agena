@@ -184,7 +184,10 @@ impl App {
         self.sync_composer_suggestions();
     }
 
-    pub(crate) fn persist_current_session_model_stack(&mut self) -> bool {
+    pub(crate) fn persist_current_session_model_stack(
+        &mut self,
+        rollback: RunOptionsState,
+    ) -> bool {
         let Some(session_id) = self.transcript.session_id else {
             // No session is open: the run-options model stack is already
             // updated in memory and will be applied to the next session
@@ -193,24 +196,37 @@ impl App {
             return true;
         };
         let options = self.run_options.model_stack_request();
-        match self.block_on_async(self.backend.update_session_selection(session_id, options)) {
-            Ok(execution) => {
-                let _ = self.apply_transcript_execution(execution);
-                self.request_sessions(false);
-                true
-            }
-            Err(error) => {
-                self.flash_error(error);
-                false
-            }
-        }
+        self.session_selection_revision = self.session_selection_revision.wrapping_add(1);
+        let revision = self.session_selection_revision;
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend.update_session_selection(session_id, options).await
+            },
+            move |app, result| match result {
+                Ok(execution) => {
+                    if app.transcript.session_id == Some(session_id) {
+                        let _ = app.apply_transcript_execution(execution);
+                    }
+                    app.request_sessions(false);
+                }
+                Err(error) => {
+                    if app.transcript.session_id == Some(session_id)
+                        && app.session_selection_revision == revision
+                    {
+                        app.run_options = rollback;
+                    }
+                    app.flash_error(error);
+                }
+            },
+        );
+        true
     }
 
     pub(crate) fn apply_model_override(&mut self, model: ModelRef) -> bool {
         let previous = self.run_options.clone();
         self.run_options
             .replace_model_stack(Some(model.clone()), None, None, None, None);
-        if !self.persist_current_session_model_stack() {
+        if !self.persist_current_session_model_stack(previous.clone()) {
             self.run_options = previous;
             return false;
         }
@@ -482,8 +498,8 @@ impl App {
 }
 use crate::{
     App, ConfirmAction, ModelRef, Overlay, PendingInteractiveKind, Route, RunActivityTarget,
-    RunOperation, SessionActivity, SessionNavigationCommand, SessionNavigationQuery,
-    SessionResource, SessionSearchItem, TimelineOverlay, format_timestamp,
+    RunOperation, RunOptionsState, SessionActivity, SessionNavigationCommand,
+    SessionNavigationQuery, SessionResource, SessionSearchItem, TimelineOverlay, format_timestamp,
     pending_interactive_kind_for_execution, preferred_visible_session_selection, ui_text,
 };
 use agena_tui::main_focus::Focus;

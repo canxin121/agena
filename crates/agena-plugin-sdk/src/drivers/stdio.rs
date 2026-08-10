@@ -9,10 +9,15 @@
 //!   - dispatcher runs on the tokio runtime; responses go back via the channel
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{
+    Arc, Mutex as StdMutex,
+    atomic::{AtomicI64, Ordering},
+};
+use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::task::JoinSet;
 
 use crate::drivers::dispatch::PluginDispatcher;
 use crate::error::{PluginError, PluginErrorKind};
@@ -47,15 +52,20 @@ use crate::rpc::{
     ResponsePayload, codes, method,
 };
 
+const STDIO_WRITER_QUEUE_CAPACITY: usize = 256;
+const STDIO_DISPATCH_CONCURRENCY: usize = 64;
+const STDIO_WRITER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+const STDIO_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
 /// Run a plugin to completion as a stdio JSON-RPC server. Returns when stdin
 /// closes.
 pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
     let dispatcher = Arc::new(PluginDispatcher::new(plugin));
 
-    let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    let pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<Response>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-    let next_id = Arc::new(Mutex::new(1i64));
+    let (tx, rx) = mpsc::channel::<Vec<u8>>(STDIO_WRITER_QUEUE_CAPACITY);
+    let pending: Arc<StdMutex<HashMap<RequestId, oneshot::Sender<Response>>>> =
+        Arc::new(StdMutex::new(HashMap::new()));
+    let next_id = Arc::new(AtomicI64::new(1));
 
     let host: Arc<dyn HostClient> = Arc::new(StdioHostClient {
         tx: tx.clone(),
@@ -65,7 +75,7 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
     dispatcher.set_host(host).await;
 
     // Writer task: owns stdout, drains channel.
-    let writer = tokio::spawn(async move {
+    let mut writer = tokio::spawn(async move {
         let mut stdout = tokio::io::stdout();
         let mut rx = rx;
         while let Some(payload) = rx.recv().await {
@@ -80,163 +90,247 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
         }
     });
 
-    // Reader task: owns stdin, demuxes frames.
+    // The reader must never wait for a dispatch slot: responses to plugin ->
+    // host callbacks share this pipe and must always be demultiplexed. Excess
+    // host requests receive an explicit overload response instead of spawning
+    // an unbounded number of tasks.
+    let dispatch_slots = Arc::new(Semaphore::new(STDIO_DISPATCH_CONCURRENCY));
+    let mut dispatch_tasks = JoinSet::new();
+
+    // Reader loop: owns stdin, demuxes frames.
     let mut reader = BufReader::new(tokio::io::stdin());
-    loop {
-        // Read header lines until blank line; capture Content-Length.
-        let mut content_length: Option<usize> = None;
+    let read_result = async {
         loop {
-            let mut line = String::new();
-            let n = reader.read_line(&mut line).await?;
-            if n == 0 {
-                drop(tx);
-                let _ = writer.await;
-                return Ok(());
-            }
-            let trimmed = line.trim_end_matches(['\r', '\n']);
-            if trimmed.is_empty() {
-                break;
-            }
-            if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
-                content_length = rest.trim().parse().ok();
-            }
-        }
-        let len = match content_length {
-            Some(v) => v,
-            None => continue,
-        };
-        let mut body = vec![0u8; len];
-        reader.read_exact(&mut body).await?;
+            while dispatch_tasks.try_join_next().is_some() {}
 
-        let frame: Frame = match serde_json::from_slice(&body) {
-            Ok(f) => f,
-            Err(_) => continue,
-        };
+            // Read header lines until blank line; capture Content-Length.
+            let mut content_length: Option<usize> = None;
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).await?;
+                if n == 0 {
+                    return Ok(());
+                }
+                let trimmed = line.trim_end_matches(['\r', '\n']);
+                if trimmed.is_empty() {
+                    break;
+                }
+                if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
+                    content_length = rest.trim().parse().ok();
+                }
+            }
+            let len = match content_length {
+                Some(v) => v,
+                None => continue,
+            };
+            if len > STDIO_MAX_FRAME_BYTES {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("stdio frame exceeds the {STDIO_MAX_FRAME_BYTES}-byte limit"),
+                ));
+            }
+            let mut body = vec![0u8; len];
+            reader.read_exact(&mut body).await?;
 
-        match frame {
-            Frame::Request(req) => {
-                let dispatcher = Arc::clone(&dispatcher);
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    let id = req.id.clone();
-                    let params = req.params.unwrap_or(serde_json::Value::Null);
-                    if req.method == method::HOOK_TOOL_INVOKE_STREAM {
-                        match serde_json::from_value(params) {
-                            Ok(input) => {
-                                let mut handle = dispatcher.dispatch_stream(input);
-                                let stream_id = handle.stream_id.clone();
-                                send_response(
-                                    &tx,
-                                    Response {
-                                        jsonrpc: JsonRpcVersion,
-                                        id,
-                                        payload: ResponsePayload::Ok {
-                                            result: serde_json::to_value(ToolInvokeStreamHandle {
-                                                stream_id: stream_id.clone(),
-                                                title: None,
-                                            })
-                                            .expect("stream handle serialize"),
-                                        },
+            let frame: Frame = match serde_json::from_slice(&body) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+
+            match frame {
+                Frame::Request(req) => {
+                    let dispatch_slot = Arc::clone(&dispatch_slots).try_acquire_owned();
+                    let Ok(dispatch_slot) = dispatch_slot else {
+                        if !send_response(
+                            &tx,
+                            Response {
+                                jsonrpc: JsonRpcVersion,
+                                id: req.id,
+                                payload: ResponsePayload::Err {
+                                    error: ErrorObject {
+                                        code: codes::INTERNAL_ERROR,
+                                        message: "plugin dispatch capacity exhausted".to_string(),
+                                        data: None,
                                     },
-                                );
-                                let tx = tx.clone();
-                                tokio::spawn(async move {
+                                },
+                            },
+                        )
+                        .await
+                        {
+                            return Ok(());
+                        }
+                        continue;
+                    };
+                    let dispatcher = Arc::clone(&dispatcher);
+                    let tx = tx.clone();
+                    dispatch_tasks.spawn(async move {
+                        let _dispatch_slot = dispatch_slot;
+                        let id = req.id.clone();
+                        let params = req.params.unwrap_or(serde_json::Value::Null);
+                        if req.method == method::HOOK_TOOL_INVOKE_STREAM {
+                            match serde_json::from_value(params) {
+                                Ok(input) => {
+                                    let mut handle = dispatcher.dispatch_stream(input);
+                                    let stream_id = handle.stream_id.clone();
+                                    if !send_response(
+                                        &tx,
+                                        Response {
+                                            jsonrpc: JsonRpcVersion,
+                                            id,
+                                            payload: ResponsePayload::Ok {
+                                                result: serde_json::to_value(
+                                                    ToolInvokeStreamHandle {
+                                                        stream_id: stream_id.clone(),
+                                                        title: None,
+                                                    },
+                                                )
+                                                .expect("stream handle serialize"),
+                                            },
+                                        },
+                                    )
+                                    .await
+                                    {
+                                        return;
+                                    }
                                     while let Some(chunk) = handle.chunks.recv().await {
-                                        send_notification(&tx, method::TOOL_STREAM_CHUNK, &chunk);
+                                        if !send_notification(
+                                            &tx,
+                                            method::TOOL_STREAM_CHUNK,
+                                            &chunk,
+                                        )
+                                        .await
+                                        {
+                                            return;
+                                        }
                                     }
                                     match handle.end.await {
                                         Ok(Ok(end)) => {
-                                            send_notification(&tx, method::TOOL_STREAM_END, &end);
+                                            let _ = send_notification(
+                                                &tx,
+                                                method::TOOL_STREAM_END,
+                                                &end,
+                                            )
+                                            .await;
                                         }
                                         Ok(Err(error)) => {
-                                            send_notification(
+                                            let _ = send_notification(
                                                 &tx,
                                                 method::TOOL_STREAM_ERROR,
                                                 &ToolStreamError { stream_id, error },
-                                            );
+                                            )
+                                            .await;
                                         }
                                         Err(_) => {
-                                            send_notification(
-                                                &tx,
-                                                method::TOOL_STREAM_ERROR,
-                                                &ToolStreamError {
-                                                    stream_id,
-                                                    error: PluginError::internal(
-                                                        "stream terminated before sending final frame",
-                                                    ),
-                                                },
-                                            );
+                                            let _ = send_notification(
+                                            &tx,
+                                            method::TOOL_STREAM_ERROR,
+                                            &ToolStreamError {
+                                                stream_id,
+                                                error: PluginError::internal(
+                                                    "stream terminated before sending final frame",
+                                                ),
+                                            },
+                                        )
+                                        .await;
                                         }
                                     }
-                                });
+                                }
+                                Err(err) => {
+                                    let _ = send_response(
+                                        &tx,
+                                        Response {
+                                            jsonrpc: JsonRpcVersion,
+                                            id,
+                                            payload: ResponsePayload::Err {
+                                                error: error_object_from(
+                                                    PluginError::invalid_params(err.to_string()),
+                                                ),
+                                            },
+                                        },
+                                    )
+                                    .await;
+                                }
                             }
-                            Err(err) => send_response(
-                                &tx,
-                                Response {
-                                    jsonrpc: JsonRpcVersion,
-                                    id,
-                                    payload: ResponsePayload::Err {
-                                        error: error_object_from(PluginError::invalid_params(
-                                            err.to_string(),
-                                        )),
-                                    },
-                                },
-                            ),
+                            return;
                         }
-                        return;
-                    }
-                    let resp = match dispatcher.dispatch(&req.method, params).await {
-                        Ok(v) => Response {
-                            jsonrpc: JsonRpcVersion,
-                            id,
-                            payload: ResponsePayload::Ok { result: v },
-                        },
-                        Err(e) => Response {
-                            jsonrpc: JsonRpcVersion,
-                            id,
-                            payload: ResponsePayload::Err {
-                                error: error_object_from(e),
+                        let resp = match dispatcher.dispatch(&req.method, params).await {
+                            Ok(v) => Response {
+                                jsonrpc: JsonRpcVersion,
+                                id,
+                                payload: ResponsePayload::Ok { result: v },
                             },
-                        },
+                            Err(e) => Response {
+                                jsonrpc: JsonRpcVersion,
+                                id,
+                                payload: ResponsePayload::Err {
+                                    error: error_object_from(e),
+                                },
+                            },
+                        };
+                        let _ = send_response(&tx, resp).await;
+                    });
+                }
+                Frame::Notification(notif) => {
+                    // Plugins can receive notifications (like `hooks/event`).
+                    let Ok(dispatch_slot) = Arc::clone(&dispatch_slots).try_acquire_owned() else {
+                        continue;
                     };
-                    send_response(&tx, resp);
-                });
-            }
-            Frame::Notification(notif) => {
-                // Plugins can receive notifications (like `hooks/event`).
-                let dispatcher = Arc::clone(&dispatcher);
-                tokio::spawn(async move {
-                    let _ = dispatcher
-                        .dispatch(
-                            &notif.method,
-                            notif.params.unwrap_or(serde_json::Value::Null),
-                        )
-                        .await;
-                });
-            }
-            Frame::Response(resp) => {
-                if let Some(slot) = pending.lock().await.remove(&resp.id) {
-                    let _ = slot.send(resp);
+                    let dispatcher = Arc::clone(&dispatcher);
+                    dispatch_tasks.spawn(async move {
+                        let _dispatch_slot = dispatch_slot;
+                        let _ = dispatcher
+                            .dispatch(
+                                &notif.method,
+                                notif.params.unwrap_or(serde_json::Value::Null),
+                            )
+                            .await;
+                    });
+                }
+                Frame::Response(resp) => {
+                    if let Some(slot) = pending
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .remove(&resp.id)
+                    {
+                        let _ = slot.send(resp);
+                    }
                 }
             }
         }
     }
-}
+    .await;
 
-fn send_response(tx: &mpsc::UnboundedSender<Vec<u8>>, response: Response) {
-    if let Ok(body) = serde_json::to_vec(&response) {
-        let _ = tx.send(body);
+    dispatch_tasks.abort_all();
+    while dispatch_tasks.join_next().await.is_some() {}
+    drop(dispatcher);
+    drop(tx);
+
+    if tokio::time::timeout(STDIO_WRITER_SHUTDOWN_TIMEOUT, &mut writer)
+        .await
+        .is_err()
+    {
+        writer.abort();
+        let _ = writer.await;
     }
+
+    read_result
 }
 
-fn send_notification<T: serde::Serialize>(
-    tx: &mpsc::UnboundedSender<Vec<u8>>,
+async fn send_response(tx: &mpsc::Sender<Vec<u8>>, response: Response) -> bool {
+    if let Ok(body) = serde_json::to_vec(&response) {
+        return tx.send(body).await.is_ok();
+    }
+    false
+}
+
+async fn send_notification<T: serde::Serialize>(
+    tx: &mpsc::Sender<Vec<u8>>,
     method_name: &str,
     params: &T,
-) {
+) -> bool {
     let params = match serde_json::to_value(params) {
         Ok(params) => params,
-        Err(_) => return,
+        Err(_) => return false,
     };
     let notification = Notification {
         jsonrpc: JsonRpcVersion,
@@ -244,8 +338,9 @@ fn send_notification<T: serde::Serialize>(
         params: Some(params),
     };
     if let Ok(body) = serde_json::to_vec(&notification) {
-        let _ = tx.send(body);
+        return tx.send(body).await.is_ok();
     }
+    false
 }
 
 #[macro_export]
@@ -263,9 +358,9 @@ macro_rules! export_stdio {
 // ---------- StdioHostClient: plugin -> host callbacks over the same pipe ----------
 
 struct StdioHostClient {
-    tx: mpsc::UnboundedSender<Vec<u8>>,
-    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<Response>>>>,
-    next_id: Arc<Mutex<i64>>,
+    tx: mpsc::Sender<Vec<u8>>,
+    pending: Arc<StdMutex<HashMap<RequestId, oneshot::Sender<Response>>>>,
+    next_id: Arc<AtomicI64>,
 }
 
 impl StdioHostClient {
@@ -274,12 +369,7 @@ impl StdioHostClient {
         method: &str,
         params: serde_json::Value,
     ) -> crate::error::Result<T> {
-        let id = {
-            let mut g = self.next_id.lock().await;
-            let v = *g;
-            *g += 1;
-            v
-        };
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req_id = RequestId::Num(id);
         let req = Request {
             jsonrpc: JsonRpcVersion,
@@ -290,8 +380,15 @@ impl StdioHostClient {
         let body =
             serde_json::to_vec(&req).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let (slot_tx, slot_rx) = oneshot::channel();
-        self.pending.lock().await.insert(req_id, slot_tx);
-        self.tx.send(body).map_err(|_| {
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(req_id.clone(), slot_tx);
+        let _pending_guard = PendingCallGuard {
+            pending: Arc::clone(&self.pending),
+            request_id: req_id,
+        };
+        self.tx.send(body).await.map_err(|_| {
             PluginError::from_kind(PluginErrorKind::Disconnected, "host writer closed")
         })?;
         let resp = slot_rx.await.map_err(|_| {
@@ -309,33 +406,52 @@ impl StdioHostClient {
         }
     }
 
-    fn notify(&self, method: &str, params: serde_json::Value) {
+    async fn notify(&self, method: &str, params: serde_json::Value) -> crate::error::Result<()> {
         let n = Notification {
             jsonrpc: JsonRpcVersion,
             method: method.to_string(),
             params: Some(params),
         };
         if let Ok(body) = serde_json::to_vec(&n) {
-            let _ = self.tx.send(body);
+            self.tx.send(body).await.map_err(|_| {
+                PluginError::from_kind(PluginErrorKind::Disconnected, "host writer closed")
+            })?;
         }
+        Ok(())
+    }
+}
+
+struct PendingCallGuard {
+    pending: Arc<StdMutex<HashMap<RequestId, oneshot::Sender<Response>>>>,
+    request_id: RequestId,
+}
+
+impl Drop for PendingCallGuard {
+    fn drop(&mut self) {
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.request_id);
     }
 }
 
 #[async_trait::async_trait]
 impl HostClient for StdioHostClient {
     async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value) {
-        self.notify(
-            method::HOST_LOG,
-            serde_json::json!({ "level": level, "message": message, "fields": fields }),
-        );
+        let _ = self
+            .notify(
+                method::HOST_LOG,
+                serde_json::json!({ "level": level, "message": message, "fields": fields }),
+            )
+            .await;
     }
 
     async fn publish_event(&self, env: EventEnvelope) -> crate::error::Result<()> {
         self.notify(
             method::HOST_EVENT_PUBLISH,
             serde_json::to_value(env).map_err(|e| PluginError::invalid_params(e.to_string()))?,
-        );
-        Ok(())
+        )
+        .await
     }
 
     async fn subscribe_events(

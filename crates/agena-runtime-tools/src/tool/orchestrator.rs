@@ -6,7 +6,7 @@ use agena_plugin_host::sdk::ToolInput;
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
-    ToolRuntimeContext, apply_patch, ask_user, cron, glob, grep, lsp, process_tool, read, snapshot,
+    ToolRuntimeContext, apply_patch, ask_user, glob, grep, process_tool, read, snapshot,
     suggest_tool_names, task, tool_search, unknown_tool_hint,
 };
 
@@ -140,22 +140,6 @@ pub(crate) fn execute_tool(
         "exit_snapshot" => {
             snapshot::execute_exit(executor, &parse_shape_input(input)?, context.session_id)
         }
-        "cron_create" => {
-            cron::execute_create(executor, &parse_shape_input(input)?, context.session_id)
-        }
-        "cron_list" => cron::execute_list(executor, &parse_shape_input(input)?),
-        "cron_delete" => cron::execute_delete(executor, &parse_shape_input(input)?),
-        "cron_update" => cron::execute_update(executor, &parse_shape_input(input)?),
-        "cron_pause" => cron::execute_pause(executor, &parse_shape_input(input)?),
-        "cron_resume" => cron::execute_resume(executor, &parse_shape_input(input)?),
-        "cron_history" => cron::execute_history(executor, &parse_shape_input(input)?),
-        "schedule_wakeup" => {
-            cron::execute_wakeup(executor, &parse_shape_input(input)?, context.session_id)
-        }
-        "lsp_definition" => lsp::execute_definition(executor, &parse_shape_input(input)?),
-        "lsp_references" => lsp::execute_references(executor, &parse_shape_input(input)?),
-        "lsp_hover" => lsp::execute_hover(executor, &parse_shape_input(input)?),
-        "lsp_diagnostics" => lsp::execute_diagnostics(executor, &parse_shape_input(input)?),
         other => {
             let suggestions = suggest_tool_names(other, BUILTIN_TOOL_NAMES, 1);
             Err(unknown_tool_hint(other, suggestions))

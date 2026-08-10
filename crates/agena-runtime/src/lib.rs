@@ -712,6 +712,42 @@ mod tests {
         assert!(state.order.is_empty());
         assert!(state.tasks.is_empty());
         assert!(state.controls.is_empty());
+        assert!(state.workers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dropping_background_registry_aborts_owned_worker() {
+        struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                if let Some(signal) = self.0.take() {
+                    let _ = signal.send(());
+                }
+            }
+        }
+
+        let registry = RuntimeBackgroundTaskRegistry::<String>::default();
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped, dropped_rx) = tokio::sync::oneshot::channel();
+        let spec = RuntimeBackgroundTaskSpec::new(
+            RuntimeBackgroundTaskKind::RuntimeReload,
+            RuntimeBackgroundTaskOrigin::System,
+            "Never-ending task",
+            None,
+            true,
+        );
+        registry.spawn(spec, move |_cancel| async move {
+            let _drop_signal = DropSignal(Some(dropped));
+            let _ = started.send(());
+            std::future::pending::<Result<RuntimeBackgroundTaskOutcome, String>>().await
+        });
+        started_rx.await.expect("worker starts");
+
+        drop(registry);
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped_rx)
+            .await
+            .expect("registry drop aborts its worker")
+            .expect("worker future is dropped");
     }
 
     #[test]

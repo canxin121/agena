@@ -424,10 +424,13 @@ fn clear_failed_login_attempts(inner: &UiAuthInner, attempt_key: &str) {
     inner.login_attempts.remove(attempt_key);
 }
 
-async fn cleanup_sessions_task(inner: Arc<UiAuthInner>) {
+async fn cleanup_sessions_task(inner: std::sync::Weak<UiAuthInner>) {
     let mut ticker = tokio::time::interval(UI_SESSION_CLEANUP_INTERVAL);
     loop {
         ticker.tick().await;
+        let Some(inner) = inner.upgrade() else {
+            break;
+        };
         let now = OffsetDateTime::now_utc();
         let ttl = time::Duration::seconds(UI_SESSION_TTL.as_secs() as i64);
         let login_window = login_failure_window_duration();
@@ -450,7 +453,7 @@ pub(crate) fn spawn_cleanup_sessions_task_if_enabled(ui_auth: &UiAuth) -> bool {
     match ui_auth {
         UiAuth::Disabled => false,
         UiAuth::Enabled(inner) => {
-            tokio::spawn(cleanup_sessions_task(inner.clone()));
+            tokio::spawn(cleanup_sessions_task(Arc::downgrade(inner)));
             true
         }
     }

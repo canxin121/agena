@@ -1,5 +1,5 @@
 impl ToolExecutor {
-    pub fn shell_env_overrides(
+    pub async fn shell_env_overrides_async(
         &self,
         cwd: &Path,
         session_id: Option<i64>,
@@ -8,7 +8,7 @@ impl ToolExecutor {
         self.ensure_not_cancelled()?;
         let patch = self
             .plugins
-            .dispatch_shell_env_cancellable(
+            .dispatch_shell_env(
                 PluginShellEnvInput {
                     cwd: cwd.to_path_buf(),
                     session_id,
@@ -16,11 +16,12 @@ impl ToolExecutor {
                 },
                 self.cancellation_token.clone(),
             )
+            .await
             .map_err(|err| self.plugin_error_or_cancelled(err))?;
         Ok(patch.set.into_iter().collect())
     }
 
-    pub(crate) fn finalize_execution(
+    pub(crate) async fn finalize_execution_async(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
@@ -30,7 +31,8 @@ impl ToolExecutor {
         mut execution: ToolInvocationExecution,
     ) -> Result<ToolInvocationExecution, ToolError> {
         execution.view.normalize_presentation();
-        self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
+        self.apply_after_hooks_async(invocation, session_id, call_id, &mut execution)
+            .await?;
         execution.view.normalize_presentation();
         if execution.view.summary.is_empty() {
             return Err(ToolError::plugin(format!(
@@ -42,7 +44,7 @@ impl ToolExecutor {
         Ok(execution)
     }
 
-    pub(crate) fn apply_after_hooks(
+    pub(crate) async fn apply_after_hooks_async(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
@@ -74,7 +76,8 @@ impl ToolExecutor {
 
         let hooked = self
             .plugins
-            .dispatch_tool_after_cancellable(after_in, self.cancellation_token.clone())
+            .dispatch_tool_after(after_in, self.cancellation_token.clone())
+            .await
             .map_err(|err| self.plugin_error_or_cancelled(err))?;
 
         execution.view.apply_neutral_fields(
@@ -83,12 +86,10 @@ impl ToolExecutor {
             hooked.output_text,
             hooked.metadata,
         );
-
         if let Some(payload_value) = hooked.payload {
             execution.output = ToolOutput::from_json_payload(Some(&payload_value))
                 .map_err(ToolError::invalid_input)?;
         }
-
         Ok(())
     }
 
@@ -255,7 +256,7 @@ impl ToolExecutor {
     }
 
     /// Fire-and-forget notification to plugins about a tool execution failure.
-    pub fn broadcast_tool_failure(
+    pub async fn broadcast_tool_failure(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
@@ -289,13 +290,10 @@ impl ToolExecutor {
             input: input_value,
             failure: failure.into(),
         };
-        let plugins = Arc::clone(&self.plugins);
-        tokio::spawn(async move {
-            plugins.broadcast_tool_failure(failure_input).await;
-        });
+        self.plugins.broadcast_tool_failure(failure_input).await;
     }
 
-    pub fn broadcast_notification(
+    pub async fn broadcast_notification(
         &self,
         kind: impl Into<String>,
         session_id: Option<i64>,
@@ -306,7 +304,6 @@ impl ToolExecutor {
         if self.plugins.is_empty() {
             return;
         }
-        let plugins = Arc::clone(&self.plugins);
         let input = agena_plugin_host::NotificationInput {
             kind: kind.into(),
             session_id,
@@ -314,16 +311,14 @@ impl ToolExecutor {
             message: message.into(),
             payload,
         };
-        tokio::spawn(async move {
-            plugins.broadcast_notification(input).await;
-        });
+        self.plugins.broadcast_notification(input).await;
     }
 }
 use super::{
-    Arc, Path, PluginShellEnvInput, PluginToolAfterInput, PluginToolFailureInput,
-    SdkToolResultPolicy, TOOL_MODEL_OUTPUT_MAX_BYTES, TOOL_MODEL_OUTPUT_MAX_LINES, ToolError,
-    ToolExecutor, ToolInvocation, ToolInvocationExecution, ToolOutput,
-    bounded_model_output_preview, compact_tool_output_payload_for_model, invocation_input_json,
-    invocation_name, line_count, model_output_boundary_context, model_output_exceeds_boundary,
-    persist_tool_result_output, truncate_to_char_count,
+    Path, PluginShellEnvInput, PluginToolAfterInput, PluginToolFailureInput, SdkToolResultPolicy,
+    TOOL_MODEL_OUTPUT_MAX_BYTES, TOOL_MODEL_OUTPUT_MAX_LINES, ToolError, ToolExecutor,
+    ToolInvocation, ToolInvocationExecution, ToolOutput, bounded_model_output_preview,
+    compact_tool_output_payload_for_model, invocation_input_json, invocation_name, line_count,
+    model_output_boundary_context, model_output_exceeds_boundary, persist_tool_result_output,
+    truncate_to_char_count,
 };

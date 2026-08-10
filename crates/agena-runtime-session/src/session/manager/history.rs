@@ -1001,7 +1001,8 @@ impl agena_runtime::SessionQueryService for SessionManager {
         let session = SessionManager::get_session(self, session_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
-        SessionManager::session_usage(self, &session)
+        SessionManager::session_usage_async(self, &session)
+            .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
 

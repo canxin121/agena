@@ -269,11 +269,13 @@ impl App {
             let result = backend
                 .list_model_catalog_models(query.as_str(), offset, 50)
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::ModelCatalogLoaded {
-                query,
-                offset,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::ModelCatalogLoaded {
+                    query,
+                    offset,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -285,7 +287,7 @@ impl App {
                 .refresh_model_catalog()
                 .await
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::ModelCatalogRefreshed { result });
+            let _ = tx.send(AppMessage::ModelCatalogRefreshed { result }).await;
         });
     }
 
@@ -351,10 +353,12 @@ impl App {
                     provider_studio_listing_auth_required_message(&i18n, &draft.auth_kind),
                 ))
             };
-            let _ = tx.send(AppMessage::ProviderStudioAdapterModelsLoaded {
-                request_key,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::ProviderStudioAdapterModelsLoaded {
+                    request_key,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -372,10 +376,12 @@ impl App {
         let draft = dialog.draft.clone();
         tokio::spawn(async move {
             let result = backend.start_provider_draft_auth(draft).await;
-            let _ = tx.send(AppMessage::ProviderStudioAuthCompleted {
-                request_key,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::ProviderStudioAuthCompleted {
+                    request_key,
+                    result,
+                })
+                .await;
         });
     }
 
@@ -393,10 +399,12 @@ impl App {
         let draft = dialog.draft.clone();
         tokio::spawn(async move {
             let result = backend.continue_provider_draft_auth(draft).await;
-            let _ = tx.send(AppMessage::ProviderStudioAuthCompleted {
-                request_key,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::ProviderStudioAuthCompleted {
+                    request_key,
+                    result,
+                })
+                .await;
         });
     }
 }

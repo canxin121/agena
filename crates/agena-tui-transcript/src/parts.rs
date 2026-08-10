@@ -32,18 +32,39 @@ use crate::{
     TranscriptEntry, TranscriptEntryId, TranscriptEntryPart, TranscriptPartContent,
 };
 
-/// Project an ordered v2 part list into transcript entries, one per `run`
-/// marker. Content parts without an enclosing marker become their own entry.
+/// Project an ordered v2 part list into transcript entries. Each `run` marker
+/// starts an entry, except that consecutive assistant runs fold into a single
+/// entry: a multi-round tool loop emits one run marker per model turn (tool
+/// calls, then the final answer) and the user expects those to render as one
+/// assistant block. This mirrors `canonical_turn_span` (history.rs), which
+/// groups every non-user run after a user run into one canonical turn.
+/// Content parts without an enclosing marker become their own entry.
 pub fn parts_entries(parts: &[SessionTranscriptPart]) -> Vec<TranscriptEntry<'static>> {
     let mut entries = Vec::new();
     let mut current: Option<TranscriptEntry<'static>> = None;
 
     for part in parts {
         if part.kind == "run" {
+            let marker = run_marker_entry(part);
+            if current
+                .as_ref()
+                .is_some_and(|entry| entry.role == Some(RunRole::Assistant))
+                && marker.role == Some(RunRole::Assistant)
+            {
+                // Fold this run marker into the open assistant entry: keep the
+                // first marker's created_at for stable ordering, but fold the
+                // state to the most-terminal one (mirroring history's
+                // `more_terminal_status`), so a live block stays InProgress
+                // until the whole turn terminalizes and a mid-loop failure is
+                // not hidden by a later successful turn.
+                let entry = current.as_mut().expect("foldable assistant entry exists");
+                entry.state = fold_run_status(entry.state, marker.state);
+                continue;
+            }
             if let Some(entry) = current.take() {
                 entries.push(finalize_run_entry(entry));
             }
-            current = Some(run_marker_entry(part));
+            current = Some(marker);
         } else if let Some(entry) = current.as_mut() {
             entry.parts.push(entry_part(part));
         } else {
@@ -208,6 +229,11 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
             },
         )),
         "tool_call" => {
+            if let Some(operation) = operation_resource_from_content(content) {
+                return TranscriptPartContent::Activity(TranscriptActivityContent::Operation(
+                    Box::new(operation),
+                ));
+            }
             let input = match content.get("input") {
                 Some(Value::Object(map)) => StructuredObjectResource {
                     fields: map
@@ -318,6 +344,71 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
             text: fallback_json_text(content),
             synthetic: false,
         }),
+    }
+}
+
+/// Recover the lossless operation envelope stored below canonical
+/// `tool_call.operation`. The v2 top-level keys intentionally carry only the
+/// invocation identity; execution output, display text and lifecycle live in
+/// this nested envelope. Projecting only the shallow keys makes a completed
+/// tool look expandable in the TUI while giving it an empty body.
+fn operation_resource_from_content(content: &Value) -> Option<OperationPartResource> {
+    let mut operation = content
+        .get("operation")
+        .and_then(|value| serde_json::from_value::<OperationPartResource>(value.clone()).ok())?;
+
+    if operation.invocation.gateway_function.is_none() {
+        let gateway_name = content
+            .get("tool_api_call")
+            .and_then(|call| call.get("function"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                content
+                    .get("operation")
+                    .and_then(|value| value.get("invocation"))
+                    .and_then(|value| value.get("tool_api_call"))
+                    .and_then(|value| value.get("function"))
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or(operation.invocation.name.as_str());
+        operation.invocation.gateway_function = gateway_function(gateway_name);
+    }
+
+    // Runtime operations keep their authoritative output in `result`; the
+    // public presentation resource also exposes convenient flattened mirrors
+    // consumed by the transcript renderer. Fill those mirrors without
+    // discarding the original envelope.
+    if operation.title.is_empty() {
+        operation.title = operation.result.display.title.clone();
+    }
+    if operation.summary.is_empty() {
+        operation.summary = operation.result.display.summary.clone();
+    }
+    if operation.model_output.is_empty() {
+        operation.model_output = operation.result.model_preview.clone();
+    }
+    if operation.blocks.is_empty() {
+        operation.blocks = operation.result.content.clone();
+    }
+    if operation.attachments.is_empty() {
+        operation.attachments = operation.result.attachments.clone();
+    }
+    if operation.structured.is_none() {
+        operation.structured = operation.result.structured.clone();
+    }
+    Some(operation)
+}
+
+fn gateway_function(name: &str) -> Option<agena_api::part::ToolGatewayFunctionResource> {
+    use agena_api::part::ToolGatewayFunctionResource as Gateway;
+
+    match name {
+        "tools_list" => Some(Gateway::List),
+        "tools_search" => Some(Gateway::Search),
+        "tools_help" => Some(Gateway::Help),
+        "tools_tags" => Some(Gateway::Tags),
+        "tools_call" => Some(Gateway::Call),
+        _ => None,
     }
 }
 
@@ -467,6 +558,27 @@ const fn message_status_is_terminal(state: RunStatus) -> bool {
     )
 }
 
+/// Combine two run states for a folded assistant entry: the more terminal /
+/// more severe state wins. Mirrors history's `more_terminal_status` ordering
+/// (Failed > Cancelled > Completed > InProgress > Pending), with the
+/// denied/unavailable set at failed severity so a mid-loop rejection is
+/// surfaced rather than hidden by a later successful turn.
+fn fold_run_status(current: RunStatus, next: RunStatus) -> RunStatus {
+    use RunStatus::*;
+    let severity = |status: RunStatus| match status {
+        Failed | PolicyDenied | UserDeclined | CapabilityUnavailable | ToolUnavailable => 4,
+        Cancelled => 3,
+        Completed => 2,
+        InProgress => 1,
+        Pending => 0,
+    };
+    if severity(next) > severity(current) {
+        next
+    } else {
+        current
+    }
+}
+
 const fn assistant_reply_state_requires_outcome(state: RunStatus) -> bool {
     matches!(
         state,
@@ -570,6 +682,148 @@ mod tests {
     }
 
     #[test]
+    fn consecutive_assistant_runs_fold_into_one_entry() {
+        // A multi-round tool loop: one user message, then several assistant
+        // runs (tool call turn, tool call turn, final answer). These must
+        // render as ONE assistant block, not one per run marker.
+        let parts = vec![
+            run(1, "user", "completed"),
+            content_part(2, "text", "user", serde_json::json!({ "text": "hi" })),
+            run(3, "assistant", "in_progress"),
+            content_part(
+                4,
+                "tool_call",
+                "assistant",
+                serde_json::json!({ "name": "tools_search", "operation": {} }),
+            ),
+            content_part(
+                5,
+                "tool_result",
+                "tool",
+                serde_json::json!({ "output": "ok" }),
+            ),
+            run(7, "assistant", "in_progress"),
+            content_part(
+                8,
+                "tool_call",
+                "assistant",
+                serde_json::json!({ "name": "tools_help", "operation": {} }),
+            ),
+            content_part(
+                9,
+                "tool_result",
+                "tool",
+                serde_json::json!({ "output": "ok" }),
+            ),
+            run(11, "assistant", "completed"),
+            content_part(
+                12,
+                "text",
+                "assistant",
+                serde_json::json!({ "text": "done" }),
+            ),
+        ];
+        let entries = parts_entries(&parts);
+        assert_eq!(
+            entries.len(),
+            2,
+            "one user entry + one folded assistant entry"
+        );
+        assert_eq!(entries[0].role, Some(RunRole::User));
+        assert_eq!(entries[1].role, Some(RunRole::Assistant));
+        // created_at comes from the FIRST assistant marker (stable ordering),
+        // state from the LAST marker (live turn shows InProgress while running).
+        assert_eq!(entries[1].id, TranscriptEntryId::StoredMessage(3));
+        assert_eq!(entries[1].state, RunStatus::Completed);
+        // All tool calls, results and the final text live in the one block.
+        let kinds = entries[1]
+            .parts
+            .iter()
+            .map(|part| match &part.content {
+                TranscriptPartContent::Activity(TranscriptActivityContent::Operation(_)) => "op",
+                TranscriptPartContent::Text(_) => "text",
+                _ => "other",
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, vec!["op", "text", "op", "text", "text"]);
+    }
+
+    #[test]
+    fn folded_entry_surfaces_a_mid_loop_failure() {
+        // A tool turn fails but a later retry completes. The folded block must
+        // still show the failure rather than hiding it behind the last state.
+        let parts = vec![
+            run(1, "user", "completed"),
+            content_part(2, "text", "user", serde_json::json!({ "text": "hi" })),
+            run(3, "assistant", "completed"),
+            content_part(
+                4,
+                "tool_call",
+                "assistant",
+                serde_json::json!({ "name": "tools_search", "operation": {} }),
+            ),
+            run(5, "assistant", "failed"),
+            run(7, "assistant", "completed"),
+            content_part(
+                8,
+                "text",
+                "assistant",
+                serde_json::json!({ "text": "recovered" }),
+            ),
+        ];
+        let entries = parts_entries(&parts);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].role, Some(RunRole::Assistant));
+        assert_eq!(entries[1].state, RunStatus::Failed);
+    }
+
+    #[test]
+    fn folded_entry_stays_in_progress_until_the_whole_turn_terminalizes() {
+        // Intermediate tool-call turns are in_progress; only the final turn is
+        // completed. The live block must read InProgress throughout.
+        let parts = vec![
+            run(1, "user", "completed"),
+            run(3, "assistant", "in_progress"),
+            content_part(
+                4,
+                "tool_call",
+                "assistant",
+                serde_json::json!({ "name": "tools_search", "operation": {} }),
+            ),
+            run(5, "assistant", "in_progress"),
+            run(7, "assistant", "completed"),
+            content_part(
+                8,
+                "text",
+                "assistant",
+                serde_json::json!({ "text": "done" }),
+            ),
+        ];
+        let entries = parts_entries(&parts);
+        assert_eq!(entries[1].role, Some(RunRole::Assistant));
+        assert_eq!(entries[1].state, RunStatus::Completed);
+    }
+
+    #[test]
+    fn user_run_breaks_assistant_folding() {
+        // A fresh user message must start a new entry even after assistant runs.
+        let parts = vec![
+            run(1, "user", "completed"),
+            content_part(2, "text", "user", serde_json::json!({ "text": "a" })),
+            run(3, "assistant", "completed"),
+            content_part(4, "text", "assistant", serde_json::json!({ "text": "r1" })),
+            run(5, "user", "completed"),
+            content_part(6, "text", "user", serde_json::json!({ "text": "b" })),
+            run(7, "assistant", "completed"),
+            content_part(8, "text", "assistant", serde_json::json!({ "text": "r2" })),
+        ];
+        let entries = parts_entries(&parts);
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[2].id, TranscriptEntryId::StoredMessage(5));
+        assert_eq!(entries[3].id, TranscriptEntryId::StoredMessage(7));
+    }
+
+    #[test]
     fn failed_assistant_run_renders_a_lifecycle_outcome_without_an_error_part() {
         let parts = vec![run(1, "assistant", "failed")];
         let entries = parts_entries(&parts);
@@ -600,6 +854,86 @@ mod tests {
             entries[0].parts.len(),
             1,
             "body text only, no lifecycle row"
+        );
+    }
+
+    #[test]
+    fn completed_tool_call_recovers_nested_operation_output_for_expansion() {
+        let parts = vec![
+            run(1, "assistant", "completed"),
+            content_part(
+                2,
+                "tool_call",
+                "assistant",
+                serde_json::json!({
+                    "name": "tools_search",
+                    "input": { "query": "status" },
+                    "tool_api_call": {
+                        "function": "tools_search",
+                        "arguments": {
+                            "fields": [{
+                                "name": "query",
+                                "value": { "kind": "text", "value": "status" }
+                            }]
+                        }
+                    },
+                    "operation": {
+                        "call_id": 73,
+                        "invocation": {
+                            "name": "tools_search",
+                            "input": {
+                                "fields": [{
+                                    "name": "query",
+                                    "value": { "kind": "text", "value": "status" }
+                                }]
+                            },
+                            "tool_api_call": {
+                                "function": "tools_search",
+                                "arguments": { "fields": [] }
+                            }
+                        },
+                        "title": "tools_search · Search tools · status · 3/3",
+                        "summary": "Returned 3 of 3 matching tools; no more results.",
+                        "result": {
+                            "state": "completed",
+                            "content": [{
+                                "id": "text",
+                                "type": "log",
+                                "stream": "stdout",
+                                "text": "Matching tools for status:\n- context.status"
+                            }],
+                            "model_preview": {
+                                "text": "Matching tools for status:\n- context.status"
+                            },
+                            "display": {
+                                "title": "tools_search · Search tools · status · 3/3",
+                                "summary": "Returned 3 of 3 matching tools; no more results."
+                            }
+                        },
+                        "lifecycle": { "start_ms": 100, "end_ms": 200 }
+                    }
+                }),
+            ),
+        ];
+
+        let entries = parts_entries(&parts);
+        let TranscriptPartContent::Activity(TranscriptActivityContent::Operation(operation)) =
+            &entries[0].parts[0].content
+        else {
+            panic!("expected operation activity");
+        };
+        assert_eq!(
+            operation.invocation.gateway_function,
+            Some(agena_api::part::ToolGatewayFunctionResource::Search)
+        );
+        assert_eq!(
+            operation.model_output.text,
+            "Matching tools for status:\n- context.status"
+        );
+        assert_eq!(operation.blocks.len(), 1);
+        assert_eq!(
+            operation.summary,
+            "Returned 3 of 3 matching tools; no more results."
         );
     }
 

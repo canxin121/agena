@@ -250,6 +250,46 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
+    /// Append the safe, durable user projection of an execution failure below
+    /// an in-flight run marker. The diagnostic source stays in tracing; this
+    /// part carries only [`agena_failure::UserProblem`], which is suitable for
+    /// transcript rendering and expansion.
+    pub(crate) async fn append_failure_part(
+        &self,
+        session_id: i64,
+        run_id: i64,
+        failure: &agena_failure::Failure,
+    ) -> Result<Part, AppError> {
+        let problem = agena_failure::UserProblem::from(failure);
+        let category = serde_json::to_value(problem.category)
+            .expect("failure category is always JSON serializable")
+            .as_str()
+            .map(ToOwned::to_owned);
+        let message = problem.user.fallback.clone();
+        let mut extra = BTreeMap::new();
+        extra.insert(
+            "problem".to_owned(),
+            serde_json::to_value(&problem).expect("user problem is always JSON serializable"),
+        );
+        let content = TypedContent::Error(part_content::ErrorContent {
+            category,
+            message,
+            detail: None,
+            extra,
+        });
+        let new_part =
+            new_part_from_content("error", PartRole::Assistant, &content, PartState::Failed)?;
+        self.append_parts(session_id, run_id, vec![new_part])
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "append_parts returned no failure part for run {run_id}"
+                ))
+            })
+    }
+
     /// Apply a streaming delta to one part and return the updated part.
     pub(crate) async fn update_part(
         &self,
@@ -288,6 +328,19 @@ impl StoreAdapter {
     /// markers failed and their non-terminal children cancelled (17.4).
     pub(crate) async fn reconcile(&self, session_id: i64) -> Result<(), AppError> {
         self.facade.reconcile(session_id).await.map_err(store_error)
+    }
+
+    /// Extend the session lease without touching any part. Long stable runs
+    /// (a slow reasoning stream, a multi-second tool execution) can exceed the
+    /// lease staleness window between commits; the stable-run loop's heartbeat
+    /// task calls this so the run's ownership stays fresh. A `false` return
+    /// means the lease is gone (stolen/released) — the next commit surfaces it
+    /// authoritatively, so this is best-effort.
+    pub(crate) async fn heartbeat_lease(&self, session_id: i64) -> bool {
+        self.facade
+            .heartbeat_lease(session_id, &self.owner_id)
+            .await
+            .unwrap_or(false)
     }
 
     pub(crate) async fn fork(

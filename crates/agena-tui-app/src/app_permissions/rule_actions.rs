@@ -171,26 +171,50 @@ impl App {
             })?;
         }
         let params = permission_rule_params_from_draft(&draft);
-        let saved = match dialog.rule_id {
-            Some(rule_id) => self
-                .block_on_async(self.backend.replace_permission_rule(rule_id, params))
-                .map_err(crate::UiFailure::internal)?,
-            None => self
-                .block_on_async(self.backend.create_permission_rule(params))
-                .map_err(crate::UiFailure::internal)?,
-        };
-        dialog.rule_id = Some(saved.id);
-        dialog.presentation.title = format!(
-            "{} · {}",
-            ui_text::t(&self.i18n, "overlay-permission-rule-workbench-title"),
-            permission_rule_label(&self.i18n, &saved)
+        let rule_id = dialog.rule_id;
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                match rule_id {
+                    Some(rule_id) => backend.replace_permission_rule(rule_id, params).await,
+                    None => backend.create_permission_rule(params).await,
+                }
+            },
+            |app, result| match result {
+                Ok(saved) => {
+                    app.flash_success(app.i18n.text_args(
+                        "flash-permission-rule-saved",
+                        &agena_tui::fl_args!(
+                            "name" => permission_rule_label(&app.i18n, &saved)
+                        ),
+                    ));
+                    let route = std::mem::replace(&mut app.current_route, Route::Main);
+                    match route {
+                        Route::PermissionRuleStudio(mut dialog) => {
+                            dialog.rule_id = Some(saved.id);
+                            dialog.presentation.title = format!(
+                                "{} · {}",
+                                ui_text::t(&app.i18n, "overlay-permission-rule-workbench-title",),
+                                permission_rule_label(&app.i18n, &saved)
+                            );
+                            dialog.draft = permission_rule_draft_from_resource(&saved);
+                            app.refresh_permission_rule_studio(&mut dialog);
+                            if let Some(permission) = dialog.return_permission.clone() {
+                                app.current_route = app
+                                    .route_stack
+                                    .pop()
+                                    .map(|route| app.refresh_restored_route(route))
+                                    .unwrap_or(Route::Main);
+                                app.overlay = Some(crate::Overlay::Permission(permission));
+                            } else {
+                                app.current_route = Route::PermissionRuleStudio(dialog);
+                            }
+                        }
+                        route => app.current_route = route,
+                    }
+                }
+                Err(error) => app.flash_error(error),
+            },
         );
-        dialog.draft = permission_rule_draft_from_resource(&saved);
-        self.flash_success(self.i18n.text_args(
-            "flash-permission-rule-saved",
-            &agena_tui::fl_args!("name" => permission_rule_label(&self.i18n, &saved)),
-        ));
-        self.refresh_permission_rule_studio(dialog);
         Ok(())
     }
 
@@ -201,27 +225,31 @@ impl App {
         let Some(rule_id) = dialog.rule_id else {
             return false;
         };
-        match self.block_on_async(self.backend.revoke_permission_rule(rule_id)) {
-            Ok(_) => {
-                self.flash_success(self.i18n.text_args(
-                    "flash-permission-rule-revoked",
-                    &agena_tui::fl_args!(
-                        "name" => permission_rule_draft_label(&self.i18n, &dialog.draft)
-                    ),
-                ));
-                true
-            }
-            Err(error) => {
-                self.flash_error(error);
-                false
-            }
-        }
+        let name = permission_rule_draft_label(&self.i18n, &dialog.draft);
+        self.dispatch_backend_operation(
+            move |backend| async move { backend.revoke_permission_rule(rule_id).await },
+            move |app, result| match result {
+                Ok(_) => {
+                    app.flash_success(app.i18n.text_args(
+                        "flash-permission-rule-revoked",
+                        &agena_tui::fl_args!("name" => name),
+                    ));
+                    app.current_route = app
+                        .route_stack
+                        .pop()
+                        .map(|route| app.refresh_restored_route(route))
+                        .unwrap_or(Route::Main);
+                }
+                Err(error) => app.flash_error(error),
+            },
+        );
+        false
     }
 }
 use crate::{
     App, ChoiceOverlayAction, Editor, PermissionRuleStudioAction, PermissionRuleStudioChoiceField,
     PermissionRuleStudioEditField, PermissionRuleStudioEditor, PermissionRuleStudioOverlay,
-    PermissionRuleSubjectKind, UiResult, permission_rule_choice_overlay_spec,
+    PermissionRuleSubjectKind, Route, UiResult, permission_rule_choice_overlay_spec,
     permission_rule_draft_from_resource, permission_rule_draft_label, permission_rule_editor_spec,
     permission_rule_label, permission_rule_params_from_draft, ui_text,
 };

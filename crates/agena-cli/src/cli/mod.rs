@@ -9,7 +9,6 @@ use std::{
     fs,
     io::{self},
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         Arc,
         atomic::{AtomicI64, Ordering},
@@ -1451,15 +1450,6 @@ struct SnapshotOutput {
     managed: Vec<ManagedSnapshotOutput>,
 }
 
-#[derive(Debug, Clone)]
-struct GitPreflight {
-    git_available: bool,
-    repo: bool,
-    gh_available: bool,
-    branch: Option<String>,
-    staged_files: u64,
-}
-
 #[derive(Debug, Serialize)]
 struct GitOutput {
     workspace_root: String,
@@ -1614,6 +1604,7 @@ impl McpServerBackend for AgenaMcpBackend {
         Ok(self
             .tools
             .available_runtime_tools()
+            .await
             .into_iter()
             .map(|tool| ToolDescriptor {
                 name: tool.name,

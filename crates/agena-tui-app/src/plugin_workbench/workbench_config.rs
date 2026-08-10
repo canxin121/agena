@@ -27,16 +27,28 @@ impl App {
             "plugins.list.{}",
             quote_settings_segment(plugin.plugin_id.as_str())
         );
-        match self.block_on_async(
-            self.backend
-                .set_config_setting(path.as_str(), configured_plugin_value),
-        ) {
-            Ok(_) => {
-                self.flash_success(format!("saved plugin config for {}", plugin.plugin_id));
-                self.refresh_plugin_workbench(dialog);
-            }
-            Err(error) => self.flash_error(error),
-        }
+        let plugin_id = plugin.plugin_id.clone();
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .set_config_setting(path.as_str(), configured_plugin_value)
+                    .await
+            },
+            move |app, result| match result {
+                Ok(_) => {
+                    app.flash_success(format!("saved plugin config for {plugin_id}"));
+                    let route = std::mem::replace(&mut app.current_route, Route::Main);
+                    app.current_route = match route {
+                        Route::PluginWorkbench(mut dialog) => {
+                            app.refresh_plugin_workbench(&mut dialog);
+                            Route::PluginWorkbench(dialog)
+                        }
+                        route => route,
+                    };
+                }
+                Err(error) => app.flash_error(error),
+            },
+        );
     }
 
     pub(crate) fn validate_selected_plugin_config(&mut self, dialog: &mut PluginWorkbenchOverlay) {
@@ -711,3 +723,4 @@ use super::{
     row_paths, row_rename_action_allowed, select_config_path, selected_config_row_context,
     title_from_key,
 };
+use crate::Route;

@@ -205,7 +205,7 @@ impl Backend {
         self.application.plugin_runtime().plugin_statuses()
     }
 
-        pub fn plugin_inspect(&self, plugin_id: &str) -> Option<agena_plugin_host::PluginInspect> {
+    pub fn plugin_inspect(&self, plugin_id: &str) -> Option<agena_plugin_host::PluginInspect> {
         self.application.plugin_runtime().plugin_inspect(plugin_id)
     }
 
@@ -215,7 +215,7 @@ impl Backend {
     pub fn activity_kind_catalog(&self) -> Vec<agena_domain::ActivityKind> {
         let mut kinds = agena_domain::builtin_activity_kinds();
         for status in self.plugin_statuses() {
-                        let Some(inspect) = self.plugin_inspect(&status.plugin_id.to_string()) else {
+            let Some(inspect) = self.plugin_inspect(&status.plugin_id.to_string()) else {
                 continue;
             };
             let Some(manifest) = inspect.manifest.as_ref() else {

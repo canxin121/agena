@@ -13,7 +13,8 @@ impl App {
             launch.math_graphics.as_ref(),
             backend.workspace_root(),
         );
-        let (tx, rx) = unbounded_channel();
+        let (tx, rx) = tokio::sync::mpsc::channel(APP_MESSAGE_QUEUE_CAPACITY);
+        let (command_tx, command_rx) = tokio::sync::mpsc::channel(UI_COMMAND_QUEUE_CAPACITY);
         let draft_store_path = default_draft_store_path();
         let (draft_store, pending_draft_store_error) = match DraftStore::load(&draft_store_path) {
             Ok(store) => (store, None),
@@ -39,7 +40,7 @@ impl App {
         agena_tui_components::theme::set_active_palette(tui_palette);
         let mut transcript = TranscriptState::new(
             i18n.clone(),
-                        TranscriptDetailDefaults {
+            TranscriptDetailDefaults {
                 activity_default_expanded: launch.tui_config.transcript.activity_default_expanded,
                 kind_defaults: launch.tui_config.transcript.activity_kinds.clone(),
             },
@@ -50,6 +51,12 @@ impl App {
             i18n: i18n.clone(),
             tx,
             rx,
+            command_tx,
+            command_rx: Some(command_rx),
+            command_actor: None,
+            settings_runtime_snapshot_summary: None,
+            settings_session_permission: None,
+            session_selection_revision: 0,
             launch: launch.clone(),
             math_renderer: launch
                 .math_graphics
@@ -210,6 +217,7 @@ impl App {
     }
 
     pub async fn run(&mut self, terminal: &mut TerminalRuntime) -> Result<()> {
+        self.start_command_actor();
         self.bootstrap();
 
         let mut ticker = interval(Duration::from_millis(UI_TICK_MS));
@@ -274,6 +282,14 @@ impl App {
             if self.should_quit {
                 break;
             }
+        }
+
+        self.rx.close();
+        if let Some(subscription) = self.active_subscription.take() {
+            subscription.abort();
+        }
+        if let Some(actor) = self.command_actor.take() {
+            actor.abort();
         }
 
         Ok(())
@@ -496,13 +512,13 @@ fn tui_plugin_color(color: Option<&agena_plugin_sdk::PluginTuiColor>) -> Option<
 
 use crate::Result;
 use crate::{
-    App, BTreeMap, BTreeSet, Backend, Color, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
-    DraftStore, Duration, Editor, Event, HashMap, HashSet, I18n, Instant, LaunchOptions,
-    LayoutCache, PromptHistory, REFRESH_INTERVAL_MS, REFRESH_STALL_TIMEOUT_MS, Route,
-    RunActivityTracker, RunOptionsState, SessionComposerState, SessionListLoadState,
-    TerminalIntegrationState, TerminalRuntime, TranscriptDetailDefaults, TranscriptState,
-    UI_TICK_MS, default_draft_store_path, default_prompt_history_path, interval,
-    provider_studio_auth_poll_interval, ui_text, unbounded_channel,
+    APP_MESSAGE_QUEUE_CAPACITY, App, BTreeMap, BTreeSet, Backend, Color, ComposerQueue,
+    DRAFT_PERSIST_INTERVAL_MS, DraftSlot, DraftStore, Duration, Editor, Event, HashMap, HashSet,
+    I18n, Instant, LaunchOptions, LayoutCache, PromptHistory, REFRESH_INTERVAL_MS,
+    REFRESH_STALL_TIMEOUT_MS, Route, RunActivityTracker, RunOptionsState, SessionComposerState,
+    SessionListLoadState, TerminalIntegrationState, TerminalRuntime, TranscriptDetailDefaults,
+    TranscriptState, UI_COMMAND_QUEUE_CAPACITY, UI_TICK_MS, default_draft_store_path,
+    default_prompt_history_path, interval, provider_studio_auth_poll_interval, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::status_line::StatusLinePresentation;

@@ -106,13 +106,13 @@ pub use activity::{
     SkillReferenceActivity, TextArtifactActivity, TextSegment, TextSegmentActivity,
     TranscriptPatch, TranscriptSnapshot, TurnSnapshot,
 };
-pub use activity_v2::{ActivityView, DeltaMode, RawOutput, RenderDelta, ViewBlock};
 pub use activity_kind::{
     ACTIVITY_KIND_ERROR, ACTIVITY_KIND_HOOK, ACTIVITY_KIND_INTERACTION, ACTIVITY_KIND_NOTICE,
     ACTIVITY_KIND_OPERATION, ACTIVITY_KIND_REASONING, ACTIVITY_KIND_RESOURCE,
     ACTIVITY_KIND_SKILL_REFERENCE, ACTIVITY_KIND_TEXT, ActivityKind, ActivityKindCategory,
     ActivityKindId, builtin_activity_kind_defaults, builtin_activity_kinds,
 };
+pub use activity_v2::{ActivityView, DeltaMode, RawOutput, RenderDelta, ViewBlock};
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use background_activity::{
     BackgroundActivity, BackgroundActivityChangedEvent, BackgroundActivityEventReason,

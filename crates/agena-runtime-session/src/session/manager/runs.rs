@@ -232,7 +232,7 @@ impl SessionManager {
         &self,
         mut request: SessionUserRunRequest,
         control: Arc<ExecutionControl>,
-        steer_rx: mpsc::UnboundedReceiver<Vec<TypedContent>>,
+        steer_rx: mpsc::Receiver<Vec<TypedContent>>,
         usage_budget: Option<super::SubtaskUsageBudget>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
@@ -286,7 +286,9 @@ impl SessionManager {
 
         let mut session = self.store.load_session(request.run.session_id).await?;
         self.refresh_execution_policy(&mut session, &state);
-        let options = self.apply_execution_context_to_run_options(&session, request.run.options)?;
+        let options = self
+            .apply_execution_context_to_run_options_async(&session, request.run.options)
+            .await?;
         self.apply_run_selection_to_session(&mut session, &options);
         let input_parts = request.parts;
         // The user's message is persisted as a `user_send` run: one run
@@ -456,12 +458,14 @@ impl SessionManager {
         &self,
         request: SessionExecutionRequest,
         control: Arc<ExecutionControl>,
-        steer_rx: mpsc::UnboundedReceiver<Vec<TypedContent>>,
+        steer_rx: mpsc::Receiver<Vec<TypedContent>>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
         let mut session = self.store.load_session(request.session_id).await?;
         self.refresh_execution_policy(&mut session, &state);
-        let options = self.apply_execution_context_to_run_options(&session, request.options)?;
+        let options = self
+            .apply_execution_context_to_run_options_async(&session, request.options)
+            .await?;
         if self.apply_run_selection_to_session(&mut session, &options) {
             session = self
                 .persist_session_changes(session, Vec::new(), None, state.clone())
@@ -550,93 +554,106 @@ impl SessionManager {
             None => format!("task_{}", uuid::Uuid::new_v4().simple()),
         };
 
-        // Serialize preparation for a direct parent so `(parent_id, task_id)`
-        // remains deterministic before the database uniqueness constraint is
-        // reached. The lock is released before model work starts.
-        let preparation_lock = self.reply_session_lock(parent.id).await;
-        let preparation_guard = preparation_lock.lock().await;
-        let existing = self
-            .store
-            .find_subagent_by_task_id(parent.id, task_id.as_str())
-            .await?;
-        let resumed = existing.is_some();
-        let mut child = match existing {
-            Some(existing_id) => {
-                if self.execution_registry.is_active(existing_id).await {
-                    return Err(AppError::ExecutionAlreadyActive(existing_id));
-                }
-                self.store.load_session(existing_id).await?
-            }
-            None => {
-                let child_id = self
+        // Serialize only durable subtask preparation for a direct parent. The
+        // bounded coordinator rejects nested acquisition and times out queued
+        // writers, so this path cannot wait forever or form a lock cycle.
+        let (resumed, child_id, baseline_message_id, baseline_usage, usage_budget) = self
+            .session_mutations
+            .run(parent.id, async {
+                let existing = self
                     .store
-                    .create_subagent_session(parent.id, task_id.clone(), description.to_string())
+                    .find_subagent_by_task_id(parent.id, task_id.as_str())
                     .await?;
-                self.store.load_session(child_id).await?
-            }
-        };
+                let resumed = existing.is_some();
+                let mut child = match existing {
+                    Some(existing_id) => {
+                        if self.execution_registry.is_active(existing_id).await {
+                            return Err(AppError::ExecutionAlreadyActive(existing_id));
+                        }
+                        self.store.load_session(existing_id).await?
+                    }
+                    None => {
+                        let child_id = self
+                            .store
+                            .create_subagent_session(
+                                parent.id,
+                                task_id.clone(),
+                                description.to_string(),
+                            )
+                            .await?;
+                        self.store.load_session(child_id).await?
+                    }
+                };
 
-        child.runtime.execution.access =
-            if parent.runtime.execution.access == agena_domain::ExecutionAccess::ReadOnly {
-                agena_domain::ExecutionAccess::ReadOnly
-            } else {
-                request.access
-            };
-        let child_permission = self.resolve_effective_session_permission(&child, &state);
-        let parent_permission = if parent.runtime.execution.effective_permission.is_empty() {
-            self.resolve_effective_session_permission(&parent, &state)
-        } else {
-            parent.runtime.execution.effective_permission.clone()
-        };
-        child.runtime.execution.effective_permission = child_permission;
-        child.runtime.execution.permission_ceiling = parent_permission;
-        child.runtime.execution.capability_denied_tool_names =
-            non_recursive_subtask_capability_denials();
-        child.runtime.execution.effective_workspace_root = Some(
-            parent
-                .runtime
-                .execution
-                .effective_workspace_root
-                .clone()
-                .unwrap_or_else(|| state.tool_executor.workspace_root().to_path_buf()),
-        );
-        let started_at_ms = chrono::Utc::now().timestamp_millis();
-        let baseline_message_id = child
-            .parts()
-            .iter()
-            .filter(|part| part.is_run_marker())
-            .map(|part| part.part_id)
-            .max();
-        let baseline_usage = child.aggregate_usage();
-        let usage_budget = super::SubtaskUsageBudget::new(
-            baseline_usage.clone(),
-            request.max_tokens,
-            request.max_cost_microusd,
-        );
-        child.runtime.subtask.status = agena_domain::SubtaskStatus::Running;
-        child.runtime.subtask.started_at_ms = Some(started_at_ms);
-        child.runtime.subtask.finished_at_ms = None;
-        child.runtime.subtask.failure = None;
-        self.apply_run_selection_to_session(&mut child, &options);
-        child = self
-            .store
-            .update_subtask_state(
-                child,
-                Some(agena_domain::SubtaskStatus::Running.as_ref().to_string()),
-                Some(started_at_ms),
-                None,
-                None,
-            )
+                child.runtime.execution.access =
+                    if parent.runtime.execution.access == agena_domain::ExecutionAccess::ReadOnly {
+                        agena_domain::ExecutionAccess::ReadOnly
+                    } else {
+                        request.access
+                    };
+                let child_permission = self.resolve_effective_session_permission(&child, &state);
+                let parent_permission = if parent.runtime.execution.effective_permission.is_empty()
+                {
+                    self.resolve_effective_session_permission(&parent, &state)
+                } else {
+                    parent.runtime.execution.effective_permission.clone()
+                };
+                child.runtime.execution.effective_permission = child_permission;
+                child.runtime.execution.permission_ceiling = parent_permission;
+                child.runtime.execution.capability_denied_tool_names =
+                    non_recursive_subtask_capability_denials();
+                child.runtime.execution.effective_workspace_root = Some(
+                    parent
+                        .runtime
+                        .execution
+                        .effective_workspace_root
+                        .clone()
+                        .unwrap_or_else(|| state.tool_executor.workspace_root().to_path_buf()),
+                );
+                let started_at_ms = chrono::Utc::now().timestamp_millis();
+                let baseline_message_id = child
+                    .parts()
+                    .iter()
+                    .filter(|part| part.is_run_marker())
+                    .map(|part| part.part_id)
+                    .max();
+                let baseline_usage = child.aggregate_usage();
+                let usage_budget = super::SubtaskUsageBudget::new(
+                    baseline_usage.clone(),
+                    request.max_tokens,
+                    request.max_cost_microusd,
+                );
+                child.runtime.subtask.status = agena_domain::SubtaskStatus::Running;
+                child.runtime.subtask.started_at_ms = Some(started_at_ms);
+                child.runtime.subtask.finished_at_ms = None;
+                child.runtime.subtask.failure = None;
+                self.apply_run_selection_to_session(&mut child, &options);
+                child = self
+                    .store
+                    .update_subtask_state(
+                        child,
+                        Some(agena_domain::SubtaskStatus::Running.as_ref().to_string()),
+                        Some(started_at_ms),
+                        None,
+                        None,
+                    )
+                    .await?;
+                child = self.store.persist_execution_config(child).await?;
+                Ok((
+                    resumed,
+                    child.id,
+                    baseline_message_id,
+                    baseline_usage,
+                    usage_budget,
+                ))
+            })
             .await?;
-        child = self.store.persist_execution_config(child).await?;
-        let child_id = child.id;
-        drop(preparation_guard);
 
         let manager = self.background_handle();
         let run_options = options.clone();
         let prompt = delegated_prompt.to_string();
         let skill_references = subtask_skill_references;
-        let mut run = tokio::task::spawn(async move {
+        let mut run = Box::pin(async move {
             let mut parts = vec![TypedContent::Text(text_content(prompt))];
             if let Some(skill_references) = skill_references {
                 parts.push(TypedContent::SkillRef(skill_ref_from_reference(
@@ -653,46 +670,37 @@ impl SessionManager {
                 .await
         });
 
-        // Ensure the spawned owner has either registered its execution or
-        // already finished before a very short deadline can fire. Otherwise a
-        // timeout could attempt cancellation just before registration, miss
-        // the execution, and leave an unbounded detached child running.
-        while !run.is_finished() && !self.execution_registry.is_active(child_id).await {
-            tokio::task::yield_now().await;
-        }
-
         let mut timed_out = false;
         let run_result = if let Some(timeout) = task_timeout {
             let remaining = timeout.saturating_sub(task_started.elapsed());
             match tokio::time::timeout(remaining, &mut run).await {
-                Ok(joined) => joined
-                    .map_err(|error| {
-                        AppError::Internal(format!("subtask run task failed: {error}"))
-                    })
-                    .and_then(std::convert::identity),
+                Ok(result) => result,
                 Err(_) => {
                     timed_out = true;
-                    let _ = self.cancel_active_execution(child_id).await;
-                    match tokio::time::timeout(std::time::Duration::from_secs(5), &mut run).await {
-                        Ok(joined) => joined
-                            .map_err(|error| {
-                                AppError::Internal(format!(
-                                    "timed-out subtask failed while cancelling: {error}"
-                                ))
-                            })
-                            .and_then(std::convert::identity),
-                        // Dropping a JoinHandle detaches the task. The
-                        // execution owns its registry cleanup and will finish
-                        // once the provider observes cancellation, while the
-                        // caller still receives a bounded timeout response.
-                        Err(_) => Err(AppError::Cancelled),
+                    // `execute_registered` has no suspension point between
+                    // registry insertion and lifecycle-owner spawn. If there
+                    // is no active execution now, this future timed out before
+                    // registration and is safe to drop. Otherwise signal the
+                    // supervised owner and give it a bounded cleanup window.
+                    if self.execution_registry.is_active(child_id).await {
+                        let _ = tokio::time::timeout(
+                            std::time::Duration::from_secs(2),
+                            self.cancel_active_execution(child_id),
+                        )
+                        .await;
+                        match tokio::time::timeout(std::time::Duration::from_secs(5), &mut run)
+                            .await
+                        {
+                            Ok(result) => result,
+                            Err(_) => Err(AppError::Cancelled),
+                        }
+                    } else {
+                        Err(AppError::Cancelled)
                     }
                 }
             }
         } else {
             run.await
-                .map_err(|error| AppError::Internal(format!("subtask run task failed: {error}")))
-                .and_then(std::convert::identity)
         };
 
         let (status, failure, budget_exceeded, mut session) = match run_result {

@@ -143,10 +143,10 @@ pub fn render_entry_detailed(
                             entry_id: message.id,
                             content_id: part.id,
                         };
-                                                let activity_expanded = expansions
-                            .get(&activity_key)
-                            .copied()
-                            .unwrap_or_else(|| defaults.default_expanded(activity_kind_id_for_part(part)));
+                        let activity_expanded =
+                            expansions.get(&activity_key).copied().unwrap_or_else(|| {
+                                defaults.default_expanded(activity_kind_id_for_part(part))
+                            });
                         foldable_index < collapsed_prefix_len && !activity_expanded
                     })
                     .collect::<Vec<_>>();

@@ -6,11 +6,55 @@ use super::{
     map_finish_reason, message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
 };
 use agena_provider::{ProviderNativeToolArtifact, ProviderNativeToolOutputBlock};
-use agena_storage::store::{Part, PartState, RunOutcome};
+use agena_storage::store::{Part, PartDelta, PartState, RunOutcome};
 use futures_util::StreamExt;
 use tracing::Instrument;
 
 use agena_domain::{ArtifactRef, ViewBlock, WebSearchResult};
+
+/// The JSON key under which a run marker's per-round records live. Multi-round
+/// turns (one user message == one run marker) carry an array of round records,
+/// each listing that provider round-trip's part ids and its provider replay
+/// state, so the prompt-window projection can re-split the merged run into
+/// per-round wire messages (each cpa round needs its own reasoning passback).
+pub(crate) const MARKER_ROUNDS_KEY: &str = "rounds";
+
+/// Build this turn's round record: the durable ids of every content part this
+/// provider round-trip appended under the shared run marker, plus the round's
+/// provider replay state. The record is appended to the marker's
+/// `content["rounds"]` array (see [`MARKER_ROUNDS_KEY`]).
+fn round_record_from_parts(
+    parts: &[Part],
+    provider_state: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "part_ids": parts.iter().map(|part| part.part_id).collect::<Vec<_>>(),
+        "provider_state": provider_state,
+    })
+}
+
+/// Append a round record to the marker's accumulated content, preserving every
+/// other key (`run_kind`, `provider_id`, `model_id`, `turn_id`, `reply_id`,
+/// `usage`, …). Returns `None` when no prior marker content is available (the
+/// caller did not carry the marker into the turn — legacy single-round runs),
+/// in which case the projection falls back to whole-run wire projection.
+fn merge_round_record(
+    marker_content: Option<&serde_json::Value>,
+    round_record: serde_json::Value,
+) -> Option<serde_json::Value> {
+    let mut content = marker_content?.as_object()?.clone();
+    let mut rounds = content
+        .get(MARKER_ROUNDS_KEY)
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    rounds.push(round_record);
+    content.insert(
+        MARKER_ROUNDS_KEY.to_owned(),
+        serde_json::Value::Array(rounds),
+    );
+    Some(serde_json::Value::Object(content))
+}
 
 impl SessionProcessor {
     pub fn new(
@@ -504,6 +548,14 @@ impl SessionProcessor {
             for part_id in durable_part_ids {
                 self.persist_part_state(&run, &mut parts, part_id).await?;
             }
+            let failure = (!cancelled).then(|| err.failure());
+            if let Some(failure) = failure.as_ref() {
+                parts.push(
+                    run.store
+                        .append_failure_part(run.session_id, assistant_message_id, failure)
+                        .await?,
+                );
+            }
             let marker = if cancelled {
                 // `cancel_run` cancels the marker and its in-flight children.
                 run.store
@@ -528,8 +580,7 @@ impl SessionProcessor {
                     .await?
             };
 
-            if !cancelled {
-                let failure = err.failure();
+            if let Some(failure) = failure.as_ref() {
                 tracing::warn!(
                     failure_id = %failure.id,
                     session_id = run.session_id,
@@ -559,22 +610,22 @@ impl SessionProcessor {
         // calls keeps the marker in-flight so the session stays Running while
         // the tools execute; the deferred tool parts were appended above, and
         // the tool-execution persist terminalizes the marker once they resolve.
+        let provider_state = provider_metadata
+            .as_ref()
+            .and_then(message_provider_state_from_provider_metadata)
+            .and_then(|state| {
+                serde_json::to_value(&state)
+                    .map_err(|error| {
+                        tracing::warn!(
+                            target: "agena::session::processor",
+                            run_id = assistant_message_id,
+                            "failed to serialize run provider state: {error}"
+                        );
+                    })
+                    .ok()
+            });
         let all_parts_terminal = parts.iter().all(|part| part.state.is_terminal());
         let run_marker = if all_parts_terminal {
-            let provider_state = provider_metadata
-                .as_ref()
-                .and_then(message_provider_state_from_provider_metadata)
-                .and_then(|state| {
-                    serde_json::to_value(&state)
-                        .map_err(|error| {
-                            tracing::warn!(
-                                target: "agena::session::processor",
-                                run_id = assistant_message_id,
-                                "failed to serialize run provider state: {error}"
-                            );
-                        })
-                        .ok()
-                });
             run.store
                 .complete_run(
                     run.session_id,
@@ -588,6 +639,34 @@ impl SessionProcessor {
                 )
                 .await?;
             self.collect_run_parts(&run.store, run.session_id, assistant_message_id)
+                .await?
+        } else if provider_state.is_some() {
+            // A tool-calling turn deliberately leaves its run marker in
+            // progress until the tool executor resolves every child. Provider
+            // replay state belongs to that assistant turn and must already be
+            // durable before the follow-up model request: reasoning-capable
+            // providers reject a tool result when the preceding assistant
+            // reasoning payload is not passed back. `complete_run` later
+            // preserves this value when its outcome has no replacement.
+            //
+            // Multi-round turns accumulate a per-round record on the marker's
+            // `content["rounds"]` so the prompt-window projection can re-split
+            // the merged run into per-round wire messages (each carrying its
+            // own reasoning passback). The marker stays in-flight across every
+            // round of one turn; it is terminalized only when the whole turn
+            // finishes.
+            let round_record = round_record_from_parts(&parts, provider_state.as_ref());
+            let merged_content = merge_round_record(run.marker_content.as_ref(), round_record);
+            run.store
+                .update_part(
+                    run.session_id,
+                    assistant_message_id,
+                    PartDelta {
+                        provider_state,
+                        content: merged_content,
+                        ..PartDelta::default()
+                    },
+                )
                 .await?
         } else {
             self.collect_run_parts(&run.store, run.session_id, assistant_message_id)

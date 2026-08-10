@@ -12,6 +12,9 @@ pub mod plugins;
 pub mod tool;
 pub mod web;
 
+pub(crate) static BLOCKING_PLUGIN_WORKERS: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(32);
+
 /// Generated Markdown reference for every bundled tool: definitions, detailed
 /// help text, examples, tags, runtime flags, and JSON Schema contracts.
 ///

@@ -33,7 +33,9 @@ impl App {
                 .await
                 .map(|items| items.len())
                 .unwrap_or(0);
-            let _ = tx.send(AppMessage::BackgroundActivitySummaryLoaded { count });
+            let _ = tx
+                .send(AppMessage::BackgroundActivitySummaryLoaded { count })
+                .await;
         });
     }
 
@@ -65,7 +67,9 @@ impl App {
                         .collect::<Vec<_>>()
                 })
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::ActivitiesLoaded { request_id, result });
+            let _ = tx
+                .send(AppMessage::ActivitiesLoaded { request_id, result })
+                .await;
         });
         if let Route::Activities(state) = &mut self.current_route {
             state.request_id = request_id;
@@ -102,11 +106,13 @@ impl App {
                     dropped_lines: read.dropped_lines,
                 })
                 .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::ActivitiesLogLoaded {
-                activity_id,
-                request_id,
-                result,
-            });
+            let _ = tx
+                .send(AppMessage::ActivitiesLogLoaded {
+                    activity_id,
+                    request_id,
+                    result,
+                })
+                .await;
         });
         if let Route::Activities(state) = &mut self.current_route {
             state.log_request_id = request_id;
@@ -345,10 +351,12 @@ impl App {
                         .await
                         .map(|_| true)
                         .map_err(crate::UiFailure::internal);
-                    let _ = tx.send(AppMessage::ActivitiesStopped {
-                        activity_id,
-                        result,
-                    });
+                    let _ = tx
+                        .send(AppMessage::ActivitiesStopped {
+                            activity_id,
+                            result,
+                        })
+                        .await;
                 });
             }
             ActivitiesEffect::Dismiss(activity_id) => {
@@ -361,10 +369,12 @@ impl App {
                         .await
                         .map(|_| true)
                         .map_err(crate::UiFailure::internal);
-                    let _ = tx.send(AppMessage::ActivitiesDismissed {
-                        activity_id,
-                        result,
-                    });
+                    let _ = tx
+                        .send(AppMessage::ActivitiesDismissed {
+                            activity_id,
+                            result,
+                        })
+                        .await;
                 });
             }
             ActivitiesEffect::ClearFinished => {
@@ -377,7 +387,7 @@ impl App {
                         .await
                         .map(|_| true)
                         .map_err(crate::UiFailure::internal);
-                    let _ = tx.send(AppMessage::ActivitiesCleared { result });
+                    let _ = tx.send(AppMessage::ActivitiesCleared { result }).await;
                 });
             }
             ActivitiesEffect::None => {}

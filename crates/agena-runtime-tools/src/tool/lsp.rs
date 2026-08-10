@@ -2,11 +2,10 @@
 //! plugin tools.
 //!
 //! Each tool resolves the right server via the [`agena_lsp::LspRegistry`]
-//! threaded through `ToolExecutor::with_lsp_registry`, runs the LSP
-//! request in the host's tokio runtime via the same `mcp::block_on`
-//! helper the other async-from-sync tools use, and returns a flattened
-//! `path:line:col` representation that the LLM can paste back to the
-//! user verbatim.
+//! threaded through `ToolExecutor::with_lsp_registry`, awaits the LSP request
+//! directly on the caller's Tokio runtime, and returns a flattened
+//! `path:line:col` representation that the LLM can paste back to the user
+//! verbatim.
 
 use std::path::Path;
 
@@ -21,7 +20,7 @@ use crate::part::{
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
-pub(super) fn execute_definition(
+pub(super) async fn execute_definition_async(
     executor: &ToolExecutor,
     input: &LspDefinitionToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
@@ -30,12 +29,14 @@ pub(super) fn execute_definition(
     let uri = path_to_uri(&path)?;
     let pos = Position::new(input.position.line, input.position.character);
 
-    let response = super::mcp::block_on(async {
-        let client = registry.client_for_path(&path).await?;
-        let sync_status = sync_document(&client, &path, &uri).await?;
-        client.definition_after_sync(uri, pos, sync_status).await
-    })
-    .map_err(map_lsp_err)?;
+    let client = registry.client_for_path(&path).await.map_err(map_lsp_err)?;
+    let sync_status = sync_document(&client, &path, &uri)
+        .await
+        .map_err(map_lsp_err)?;
+    let response = client
+        .definition_after_sync(uri, pos, sync_status)
+        .await
+        .map_err(map_lsp_err)?;
 
     let locations = response.map(format_definition_response).unwrap_or_default();
 
@@ -59,7 +60,7 @@ pub(super) fn execute_definition(
     ))
 }
 
-pub(super) fn execute_references(
+pub(super) async fn execute_references_async(
     executor: &ToolExecutor,
     input: &LspReferencesToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
@@ -69,14 +70,14 @@ pub(super) fn execute_references(
     let pos = Position::new(input.position.line, input.position.character);
     let include_definition = input.include_declaration;
 
-    let response = super::mcp::block_on(async {
-        let client = registry.client_for_path(&path).await?;
-        let sync_status = sync_document(&client, &path, &uri).await?;
-        client
-            .references_after_sync(uri, pos, include_definition, sync_status)
-            .await
-    })
-    .map_err(map_lsp_err)?;
+    let client = registry.client_for_path(&path).await.map_err(map_lsp_err)?;
+    let sync_status = sync_document(&client, &path, &uri)
+        .await
+        .map_err(map_lsp_err)?;
+    let response = client
+        .references_after_sync(uri, pos, include_definition, sync_status)
+        .await
+        .map_err(map_lsp_err)?;
 
     let locations = response
         .map(|locs| locs.iter().map(format_location).collect::<Vec<_>>())
@@ -102,7 +103,7 @@ pub(super) fn execute_references(
     ))
 }
 
-pub(super) fn execute_hover(
+pub(super) async fn execute_hover_async(
     executor: &ToolExecutor,
     input: &LspHoverToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
@@ -111,12 +112,14 @@ pub(super) fn execute_hover(
     let uri = path_to_uri(&path)?;
     let pos = Position::new(input.position.line, input.position.character);
 
-    let response = super::mcp::block_on(async {
-        let client = registry.client_for_path(&path).await?;
-        let sync_status = sync_document(&client, &path, &uri).await?;
-        client.hover_after_sync(uri, pos, sync_status).await
-    })
-    .map_err(map_lsp_err)?;
+    let client = registry.client_for_path(&path).await.map_err(map_lsp_err)?;
+    let sync_status = sync_document(&client, &path, &uri)
+        .await
+        .map_err(map_lsp_err)?;
+    let response = client
+        .hover_after_sync(uri, pos, sync_status)
+        .await
+        .map_err(map_lsp_err)?;
 
     let contents = response.as_ref().map(format_hover);
 
@@ -142,7 +145,7 @@ pub(super) fn execute_hover(
     ))
 }
 
-pub(super) fn execute_diagnostics(
+pub(super) async fn execute_diagnostics_async(
     executor: &ToolExecutor,
     input: &LspDiagnosticsToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
@@ -152,15 +155,14 @@ pub(super) fn execute_diagnostics(
 
     // Make sure the language server has been spawned (it might not have
     // pushed diagnostics yet if no other tool touched this file).
-    let entries = super::mcp::block_on(async {
-        let client = registry.client_for_path(&path).await?;
-        sync_document(&client, &path, &uri).await?;
-        // Give the server a brief window to publish diagnostics for the
-        // doc we just synced; servers typically push within ~100ms.
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        Ok::<_, agena_lsp::LspError>(client.diagnostics_for(&uri))
-    })
-    .map_err(map_lsp_err)?;
+    let client = registry.client_for_path(&path).await.map_err(map_lsp_err)?;
+    sync_document(&client, &path, &uri)
+        .await
+        .map_err(map_lsp_err)?;
+    // Give the server a brief window to publish diagnostics for the document
+    // we just synced; servers typically push within ~100ms.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    let entries = client.diagnostics_for(&uri);
 
     let formatted: Vec<String> = entries
         .iter()

@@ -6,6 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
+use tokio::sync::Semaphore;
 
 mod auth;
 mod blame;
@@ -27,6 +28,30 @@ mod utils;
 mod worktrees;
 
 pub(crate) const MAX_BLOB_BYTES: usize = 50 * 1024 * 1024;
+const LIBGIT2_WORKER_LIMIT: usize = 16;
+static LIBGIT2_WORKERS: Semaphore = Semaphore::const_new(LIBGIT2_WORKER_LIMIT);
+
+/// Runs synchronous libgit2 work without occupying a Tokio runtime worker.
+///
+/// `spawn_blocking` has a deliberately large pool and an unbounded submission
+/// queue. HTTP clients can otherwise enqueue arbitrary numbers of expensive
+/// repository scans, so acquire a process-wide budget before submitting the
+/// blocking job and retain the permit until the job actually returns.
+pub(crate) async fn spawn_libgit2<F, T>(job: F) -> Result<T, tokio::task::JoinError>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let permit = LIBGIT2_WORKERS
+        .acquire()
+        .await
+        .expect("the static libgit2 worker semaphore is never closed");
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        job()
+    })
+    .await
+}
 
 #[derive(Debug, Deserialize)]
 /// Query carrying an optional git directory.

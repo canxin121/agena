@@ -257,7 +257,7 @@ struct StableRunContext {
     active_model_turn_id: Option<i64>,
     state: Arc<SessionManagerState>,
     control: Arc<ExecutionControl>,
-    steer_rx: mpsc::UnboundedReceiver<Vec<TypedContent>>,
+    steer_rx: mpsc::Receiver<Vec<TypedContent>>,
     usage_budget: Option<SubtaskUsageBudget>,
 }
 
@@ -368,6 +368,7 @@ mod history;
 mod permission_service;
 mod replies;
 mod runs;
+mod session_mutation;
 mod session_prompt;
 mod sessions;
 mod stats;
@@ -438,7 +439,7 @@ pub struct SessionManager {
     workspace_id: tokio::sync::OnceCell<i64>,
     execution: ArcSwap<SessionManagerState>,
     execution_registry: Arc<ExecutionRegistry>,
-    reply_session_locks: Arc<Mutex<HashMap<i64, Arc<Mutex<()>>>>>,
+    session_mutations: session_mutation::SessionMutationCoordinator,
     /// Sessions whose interrupted-run reconciliation has already run in this
     /// process. `get_session` reconciles a session once (plus its subagent
     /// children) so the per-session event scan is not repeated on every
@@ -464,21 +465,30 @@ impl agena_runtime::SessionToolExecutionService for SessionManager {
             agena_runtime::SessionToolExecutionError::Execution(error.to_string())
         })?;
         let state = self.execution_state();
+        let cancellation = self.execution_registry.cancellation_token(session_id).await;
+        let execution_context = session.runtime.execution.clone();
         let executor = state
             .tool_executor
-            .for_session_context(&session.runtime.execution)
-            .with_cancellation_token(self.execution_registry.cancellation_token(session_id).await);
-        let prepared = (|| {
-            let prepared = executor.prepare_invocation(&invocation, session_id, -1)?;
-            let (invocation, prepared_shell_command) =
-                executor.prepare_shell_invocation(&prepared.invocation, session_id, -1)?;
-            executor.execute_invocation_detailed_with_prepared_shell(
-                &invocation,
-                session_id,
-                -1,
-                prepared_shell_command,
-            )
-        })();
+            .for_session_context_async(&execution_context)
+            .await
+            .with_cancellation_token(cancellation);
+        let prepared = async {
+            let prepared = executor
+                .prepare_invocation(&invocation, session_id, -1)
+                .await?;
+            let (invocation, prepared_shell_command) = executor
+                .prepare_shell_invocation(&prepared.invocation, session_id, -1)
+                .await?;
+            executor
+                .execute_invocation_detailed_with_prepared_shell(
+                    &invocation,
+                    session_id,
+                    -1,
+                    prepared_shell_command,
+                )
+                .await
+        }
+        .await;
         match prepared {
             Ok(execution) => Ok(agena_runtime::SessionToolExecutionOutcome::Completed(
                 execution.summary(),
@@ -509,20 +519,19 @@ impl agena_runtime::SessionPluginCommandService for SessionManager {
             .map_err(|error| {
                 agena_runtime::SessionPluginCommandError::Execution(error.to_string())
             })?;
-        self.tool_executor()
-            .plugin_manager()
-            .invoke_plugin_command(
-                request.plugin_id.as_str(),
-                agena_plugin_host::sdk::PluginCommandInvokeInput {
-                    session_id: Some(session.id),
-                    call_id: None,
-                    workspace_root: request.workspace_root,
-                    command_id: request.command_id,
-                    slash: request.slash,
-                    raw: request.raw,
-                    input: request.input,
-                },
-            )
+        let host = self.tool_executor().plugin_manager().clone();
+        let plugin_id = request.plugin_id;
+        let input = agena_plugin_host::sdk::PluginCommandInvokeInput {
+            session_id: Some(session.id),
+            call_id: None,
+            workspace_root: request.workspace_root,
+            command_id: request.command_id,
+            slash: request.slash,
+            raw: request.raw,
+            input: request.input,
+        };
+        host.invoke_plugin_command_async(plugin_id.as_str(), input)
+            .await
             .map_err(|error| agena_runtime::SessionPluginCommandError::Execution(error.to_string()))
     }
 }
@@ -842,6 +851,10 @@ fn part_contents_from_composer_document(
 }
 
 impl SessionManager {
+    /// Cooperative cancellation window before the lifecycle owner aborts an
+    /// unresponsive operation task and performs registry cleanup itself.
+    const OPERATION_CANCELLATION_GRACE: Duration = Duration::from_millis(500);
+
     /// How long a user-submit waits for a just-cancelled run to unregister
     /// before reporting `ExecutionAlreadyActive` (the interrupt-and-send
     /// race: the client submits the next turn as soon as cancellation is
@@ -965,19 +978,6 @@ impl SessionManager {
         Ok(ConversationIdentity { turn_id, reply_id })
     }
 
-    async fn begin_execution(
-        &self,
-        _session_id: i64,
-        _control: &ExecutionControl,
-        _source: ExecutionSource,
-    ) -> Result<(), AppError> {
-        // The v2 run marker IS the started state: there is no lifecycle event
-        // log to append to. The marker is created on the first persist of the
-        // run; this boundary exists only to keep the registration lifecycle
-        // symmetric with `finish_execution`.
-        Ok(())
-    }
-
     async fn finish_execution(
         &self,
         _session_id: i64,
@@ -1035,11 +1035,7 @@ impl SessionManager {
     ) -> Result<T, AppError>
     where
         T: Send + 'static,
-        F: FnOnce(
-                SessionManager,
-                Arc<ExecutionControl>,
-                mpsc::UnboundedReceiver<Vec<TypedContent>>,
-            ) -> Fut
+        F: FnOnce(SessionManager, Arc<ExecutionControl>, mpsc::Receiver<Vec<TypedContent>>) -> Fut
             + Send
             + 'static,
         Fut: Future<Output = Result<T, AppError>> + Send + 'static,
@@ -1052,18 +1048,20 @@ impl SessionManager {
             .register(session_id, identity.turn_id, identity.reply_id)
             .await
             .map_err(execution_control_to_app_error)?;
-        if let Err(error) = self
-            .begin_execution(session_id, control.as_ref(), source)
-            .await
-        {
-            self.execution_registry
-                .unregister_if_matches(session_id, &control)
-                .await;
-            return Err(error);
-        }
 
-        self.drive_registered(session_id, task_name, control, steer_rx, operation)
-            .await
+        // There is intentionally no `.await` between successful registration
+        // and spawning the lifecycle owner. Once a registry slot exists, its
+        // owner therefore always exists as well, even if the calling request
+        // is cancelled while awaiting the result.
+        let manager = self.background_handle();
+        let owner = tokio::spawn(async move {
+            manager
+                .drive_registered(session_id, task_name, control, steer_rx, operation)
+                .await
+        });
+        owner.await.map_err(|error| {
+            AppError::Internal(format!("{task_name} lifecycle owner task failed: {error}"))
+        })?
     }
 
     /// Accept an execution and return its stable identity after
@@ -1080,11 +1078,7 @@ impl SessionManager {
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError>
     where
         T: Send + 'static,
-        F: FnOnce(
-                SessionManager,
-                Arc<ExecutionControl>,
-                mpsc::UnboundedReceiver<Vec<TypedContent>>,
-            ) -> Fut
+        F: FnOnce(SessionManager, Arc<ExecutionControl>, mpsc::Receiver<Vec<TypedContent>>) -> Fut
             + Send
             + 'static,
         Fut: Future<Output = Result<T, AppError>> + Send + 'static,
@@ -1109,15 +1103,6 @@ impl SessionManager {
             .register(session_id, identity.turn_id, identity.reply_id)
             .await
             .map_err(execution_control_to_app_error)?;
-        if let Err(error) = self
-            .begin_execution(session_id, control.as_ref(), source)
-            .await
-        {
-            self.execution_registry
-                .unregister_if_matches(session_id, &control)
-                .await;
-            return Err(error);
-        }
         let outcome = crate::SessionExecutionCommandOutcome::accepted(
             session_id,
             control.execution_id(),
@@ -1147,16 +1132,12 @@ impl SessionManager {
         session_id: i64,
         task_name: &'static str,
         control: Arc<ExecutionControl>,
-        steer_rx: mpsc::UnboundedReceiver<Vec<TypedContent>>,
+        steer_rx: mpsc::Receiver<Vec<TypedContent>>,
         operation: F,
     ) -> Result<T, AppError>
     where
         T: Send + 'static,
-        F: FnOnce(
-                SessionManager,
-                Arc<ExecutionControl>,
-                mpsc::UnboundedReceiver<Vec<TypedContent>>,
-            ) -> Fut
+        F: FnOnce(SessionManager, Arc<ExecutionControl>, mpsc::Receiver<Vec<TypedContent>>) -> Fut
             + Send
             + 'static,
         Fut: Future<Output = Result<T, AppError>> + Send + 'static,
@@ -1164,9 +1145,21 @@ impl SessionManager {
         agena_runtime::session_started();
         let manager = self.background_handle();
         let task_control = Arc::clone(&control);
-        let task = tokio::task::spawn(operation(manager, task_control, steer_rx));
-        control.attach_operation_abort(task.abort_handle()).await;
-        let result = match task.await {
+        let mut task = tokio::task::spawn(operation(manager, task_control, steer_rx));
+        let joined = tokio::select! {
+            biased;
+            _ = control.cancel.cancelled() => {
+                match tokio::time::timeout(Self::OPERATION_CANCELLATION_GRACE, &mut task).await {
+                    Ok(joined) => joined,
+                    Err(_) => {
+                        task.abort();
+                        task.await
+                    }
+                }
+            }
+            joined = &mut task => joined,
+        };
+        let result = match joined {
             Ok(result) => result,
             Err(error) if error.is_cancelled() && control.cancel.is_cancelled() => {
                 Err(AppError::Cancelled)
@@ -1175,7 +1168,6 @@ impl SessionManager {
                 "{task_name} task failed: {error}"
             ))),
         };
-        control.clear_operation_abort().await;
         agena_runtime::session_finished();
 
         // Terminalize the execution first: the run's own persist wrote the
@@ -1205,7 +1197,7 @@ impl SessionManager {
             workspace_id: tokio::sync::OnceCell::new(),
             execution: ArcSwap::from(self.execution.load_full()),
             execution_registry: Arc::clone(&self.execution_registry),
-            reply_session_locks: Arc::clone(&self.reply_session_locks),
+            session_mutations: self.session_mutations.clone(),
             reconciled_sessions: Arc::clone(&self.reconciled_sessions),
             host_user_input_waiters: Arc::clone(&self.host_user_input_waiters),
             host_user_input_sequences: Arc::clone(&self.host_user_input_sequences),
@@ -1261,7 +1253,7 @@ impl SessionManager {
             workspace_id: tokio::sync::OnceCell::new(),
             execution: ArcSwap::from_pointee(state),
             execution_registry: Arc::new(ExecutionRegistry::new()),
-            reply_session_locks: Arc::new(Mutex::new(HashMap::new())),
+            session_mutations: session_mutation::SessionMutationCoordinator::new(),
             reconciled_sessions: Arc::new(Mutex::new(HashSet::new())),
             host_user_input_waiters: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_sequences: Arc::new(StdMutex::new(HashMap::new())),
@@ -1291,15 +1283,6 @@ impl SessionManager {
         Ok(workspace_id)
     }
 
-    async fn reply_session_lock(&self, session_id: i64) -> Arc<Mutex<()>> {
-        let mut guard = self.reply_session_locks.lock().await;
-        Arc::clone(
-            guard
-                .entry(session_id)
-                .or_insert_with(|| Arc::new(Mutex::new(()))),
-        )
-    }
-
     pub fn tool_executor(&self) -> ToolExecutor {
         self.execution_state().tool_executor.clone()
     }
@@ -1322,6 +1305,7 @@ impl SessionManager {
         let executor = self.tool_executor();
         let execution = executor
             .execute_invocation_detailed(&invocation, -1, call_id)
+            .await
             .map_err(tool_error_to_app_error)?;
         Ok(agena_runtime::SessionToolExecutionOutcome::Completed(
             execution.summary(),
@@ -1425,16 +1409,20 @@ impl SessionManager {
             .as_ref()
             .and_then(|pending| resolve_pending_tool(&session, pending).ok())
             .map(|pending| self.command_event_sink_for_pending(session_id, &pending));
+        let execution_context = session.runtime.execution.clone();
         let scoped_executor = state
             .tool_executor
-            .for_session_context(&session.runtime.execution)
+            .for_session_context_async(&execution_context)
+            .await
             .with_cancellation_token(cancellation.clone())
             .with_command_event_sink(command_event_sink);
         let prepared = scoped_executor
-            .prepare_invocation(&invocation, session.id, call_id)
+            .prepare_invocation(&invocation, session_id, call_id)
+            .await
             .map_err(tool_error_to_app_error)?;
         let (invocation, prepared_shell_command) = scoped_executor
-            .prepare_shell_invocation(&prepared.invocation, session.id, call_id)
+            .prepare_shell_invocation(&prepared.invocation, session_id, call_id)
+            .await
             .map_err(tool_error_to_app_error)?;
         // Host/application callbacks are not model tool invocations and do
         // not participate in the model permission state machine.
@@ -1497,17 +1485,15 @@ impl SessionManager {
                 .map_err(tool_error_to_app_error);
         }
 
-        tokio::task::spawn_blocking(move || {
-            scoped_executor.execute_invocation_detailed_with_prepared_shell(
+        scoped_executor
+            .execute_invocation_detailed_with_prepared_shell(
                 &invocation,
                 session_id,
                 call_id,
                 prepared_shell_command,
             )
-        })
-        .await
-        .map_err(|err| AppError::Internal(format!("host-invoked tool task failed: {err}")))?
-        .map_err(tool_error_to_app_error)
+            .await
+            .map_err(tool_error_to_app_error)
     }
 
     fn next_host_user_input_sequence(&self, session_id: i64, call_id: i64) -> usize {
@@ -1609,7 +1595,7 @@ impl SessionManager {
             _ = tokio::time::sleep(remaining) => {
                 let state = self.execution_state();
                 let session = self.store.load_session(session_id).await?;
-                let options = self.run_options_from_session(&session, state)?;
+                let options = self.run_options_from_session_async(&session, state).await?;
                 self.reply_user_input(SessionExecutionReplyRequest::new(
                     session_id,
                     options,

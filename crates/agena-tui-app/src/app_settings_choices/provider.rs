@@ -49,19 +49,74 @@ impl App {
         speed_mode: Option<String>,
         verbosity: Option<String>,
     ) -> bool {
-        let result = match purpose {
-            agena_tui::model_chooser::SessionModelChooserPurpose::ProviderDefault => self
-                .persist_provider_default_model_selection(
-                    &model,
-                    thinking_mode,
-                    speed_mode,
-                    verbosity,
-                ),
-            agena_tui::model_chooser::SessionModelChooserPurpose::PermissionApproval => {
-                self.persist_permission_approval_model(&model, thinking_mode, speed_mode, verbosity)
+        let selection = model_selection_value(
+            &model,
+            thinking_mode.clone(),
+            speed_mode.clone(),
+            verbosity.clone(),
+        );
+        match purpose {
+            agena_tui::model_chooser::SessionModelChooserPurpose::ProviderDefault => {
+                let provider_id = model.provider_id.to_string();
+                self.dispatch_backend_operation(
+                    move |backend| async move {
+                        backend
+                            .set_provider_default_selection(provider_id.as_str(), selection)
+                            .await
+                    },
+                    move |app, result| {
+                        app.finish_model_selection_persisted(purpose, model, result.map(|_| ()))
+                    },
+                );
+                false
             }
-            agena_tui::model_chooser::SessionModelChooserPurpose::RuntimeOverride => Ok(()),
-        };
+            agena_tui::model_chooser::SessionModelChooserPurpose::PermissionApproval => {
+                let mut approval = serde_json::Map::new();
+                approval.insert(
+                    "provider_id".to_owned(),
+                    JsonValue::String(model.provider_id.to_string()),
+                );
+                if let Some(adapter_id) = model.adapter_id.as_ref() {
+                    approval.insert(
+                        "adapter_id".to_owned(),
+                        JsonValue::String(adapter_id.to_string()),
+                    );
+                }
+                approval.insert(
+                    "model_id".to_owned(),
+                    JsonValue::String(model.model_id.to_string()),
+                );
+                insert_optional_selection_value(&mut approval, "thinking_mode", thinking_mode);
+                insert_optional_selection_value(&mut approval, "speed_mode", speed_mode);
+                insert_optional_selection_value(&mut approval, "verbosity", verbosity);
+                self.dispatch_backend_operation(
+                    move |backend| async move {
+                        backend
+                            .set_config_setting(
+                                "permission.approval_model",
+                                JsonValue::Object(approval),
+                            )
+                            .await
+                    },
+                    move |app, result| {
+                        app.finish_model_selection_persisted(purpose, model, result.map(|_| ()))
+                    },
+                );
+                false
+            }
+            agena_tui::model_chooser::SessionModelChooserPurpose::RuntimeOverride => {
+                self.finish_model_selection_persisted(purpose, model, Ok(()));
+                true
+            }
+        }
+    }
+
+    fn finish_model_selection_persisted(
+        &mut self,
+        purpose: agena_tui::model_chooser::SessionModelChooserPurpose,
+        model: ModelRef,
+        result: UiResult<()>,
+    ) {
         match result {
             Ok(()) => {
                 self.flash_success(self.i18n.text_args(
@@ -83,11 +138,9 @@ impl App {
                     .pop()
                     .map(|route| self.refresh_restored_route(route))
                     .unwrap_or(crate::Route::Main);
-                true
             }
             Err(error) => {
                 self.flash_error(error);
-                false
             }
         }
     }
@@ -97,53 +150,6 @@ impl App {
         let permission = get_json_path(&sources.effective, Some("permission")).ok()?;
         let permission = serde_json::from_value::<PermissionConfig>(permission).ok()?;
         permission.approval_model?.model_ref().ok()
-    }
-
-    fn persist_provider_default_model_selection(
-        &self,
-        model: &ModelRef,
-        thinking_mode: Option<String>,
-        speed_mode: Option<String>,
-        verbosity: Option<String>,
-    ) -> UiResult<()> {
-        let provider_id = model.provider_id.to_string();
-        self.block_on_async(self.backend.set_provider_default_selection(
-            provider_id.as_str(),
-            model_selection_value(model, thinking_mode, speed_mode, verbosity),
-        ))?;
-        Ok(())
-    }
-
-    fn persist_permission_approval_model(
-        &self,
-        model: &ModelRef,
-        thinking_mode: Option<String>,
-        speed_mode: Option<String>,
-        verbosity: Option<String>,
-    ) -> UiResult<()> {
-        let mut selection = serde_json::Map::new();
-        selection.insert(
-            "provider_id".to_owned(),
-            JsonValue::String(model.provider_id.to_string()),
-        );
-        if let Some(adapter_id) = model.adapter_id.as_ref() {
-            selection.insert(
-                "adapter_id".to_owned(),
-                JsonValue::String(adapter_id.to_string()),
-            );
-        }
-        selection.insert(
-            "model_id".to_owned(),
-            JsonValue::String(model.model_id.to_string()),
-        );
-        insert_optional_selection_value(&mut selection, "thinking_mode", thinking_mode);
-        insert_optional_selection_value(&mut selection, "speed_mode", speed_mode);
-        insert_optional_selection_value(&mut selection, "verbosity", verbosity);
-        self.block_on_async(
-            self.backend
-                .set_config_setting("permission.approval_model", JsonValue::Object(selection)),
-        )?;
-        Ok(())
     }
 }
 

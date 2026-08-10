@@ -386,13 +386,12 @@ impl SessionManager {
         let authorization = operation_authorization(&session, &resolved);
         let failure_title = terminal_operation_title(&resolved.invocation);
 
-        // Notify plugins about the tool failure (fire-and-forget).
-        state.tool_executor.broadcast_tool_failure(
-            &resolved.invocation,
-            session.id,
-            resolved.call_id,
-            &failure,
-        );
+        // Notification delivery is bounded by the plugin host and remains
+        // part of this lifecycle, so no detached hook task can outlive it.
+        state
+            .tool_executor
+            .broadcast_tool_failure(&resolved.invocation, session.id, resolved.call_id, &failure)
+            .await;
 
         let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {

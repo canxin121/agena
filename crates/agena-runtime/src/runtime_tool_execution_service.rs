@@ -36,13 +36,13 @@ impl RuntimeToolExecutionError {
 #[async_trait]
 /// Service executing tools in the runtime.
 pub trait RuntimeToolExecutionService: Send + Sync {
-    fn available_runtime_tools(&self) -> Vec<RuntimeToolDescriptor>;
+    async fn available_runtime_tools(&self) -> Vec<RuntimeToolDescriptor>;
 
     /// Provider-facing Tool API function declarations available to model
     /// executions. These are provider-contract values, not concrete registry
     /// bindings, so diagnostics and integration fixtures can validate the
     /// advertised model surface without traversing a concrete tool executor.
-    fn available_tool_api_definitions(&self) -> Vec<agena_provider::ToolApiDefinition>;
+    async fn available_tool_api_definitions(&self) -> Vec<agena_provider::ToolApiDefinition>;
 
     async fn execute_runtime_tool(
         &self,

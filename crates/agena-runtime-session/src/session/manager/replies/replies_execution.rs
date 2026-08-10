@@ -19,6 +19,7 @@ use crate::session::store::{
     interaction_from_request, new_part_from_content, run_marker_content, text_content,
     tool_call_from_operation, typed_content_from_value, typed_content_to_value,
 };
+use crate::tool::ToolExecutor;
 use agena_domain::UserInputRequest;
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
@@ -174,6 +175,7 @@ enum PendingToolBatchMember {
 /// one multi-megabyte poll frame.
 struct PreparedPendingToolExecution {
     resolved: ResolvedPendingTool,
+    scoped_executor: ToolExecutor,
     permission_checks: Vec<ToolPermissionCheck>,
     session_changed: bool,
 }
@@ -268,9 +270,63 @@ impl SessionManager {
         // pending tool batch reaches a barrier, or after new steer input.
         let mut model_requested = true;
         let mut observed_user_message_id = last_user_message_id(session.parts());
+        // The assistant run marker for the current turn (one user message ==
+        // one run marker). Created on the turn's first model turn and reused by
+        // every subsequent model turn (tool results, follow-ups, truncations)
+        // so all of one reply's parts persist under a single run marker.
+        let mut turn_run_id: Option<i64> = None;
+
+        // Turn-scoped lease heartbeat. A stable run can spend many seconds
+        // between database commits — a slow reasoning stream, a multi-second
+        // tool execution, a long permission wait — far past
+        // `LEASE_STALENESS_MS`. Without a heartbeat the next commit treats the
+        // run as stale, steals the lease, and aborts the in-flight run
+        // mid-stream (`lease_stolen`). The heartbeat extends the run's
+        // ownership every half-window and is aborted on every exit path via
+        // its Drop guard. If the lease was already stolen by another owner the
+        // heartbeat stops and the next commit surfaces the conflict
+        // authoritatively.
+        struct LeaseHeartbeatGuard {
+            task: tokio::task::JoinHandle<()>,
+        }
+        impl Drop for LeaseHeartbeatGuard {
+            fn drop(&mut self) {
+                self.task.abort();
+            }
+        }
+        let heartbeat_store = Arc::clone(&self.store);
+        let heartbeat_session_id = session.id;
+        let heartbeat_task = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_millis(
+                agena_storage::store::LEASE_STALENESS_MS as u64 / 2,
+            ));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // Skip the immediate first tick: the run just committed and the
+            // lease is fresh.
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                if !heartbeat_store.heartbeat_lease(heartbeat_session_id).await {
+                    tracing::warn!(
+                        session_id = heartbeat_session_id,
+                        "stable-run lease heartbeat stopped: no lease held by this owner"
+                    );
+                    break;
+                }
+                tracing::debug!(
+                    target: "agena::session::lease",
+                    session_id = heartbeat_session_id,
+                    "stable-run lease heartbeat extended"
+                );
+            }
+        });
+        let _heartbeat_guard = LeaseHeartbeatGuard {
+            task: heartbeat_task,
+        };
         loop {
-            let current_options =
-                self.apply_execution_context_to_run_options(&session, options.clone())?;
+            let current_options = self
+                .apply_execution_context_to_run_options_async(&session, options.clone())
+                .await?;
             if control.cancel.is_cancelled() {
                 return Err(AppError::Cancelled);
             }
@@ -284,10 +340,15 @@ impl SessionManager {
                 active_model_turn_id = latest_user;
                 observed_user_message_id = latest_user;
                 model_requested = true;
+                // New steer input starts a new turn: the next model turn opens a
+                // fresh assistant run marker instead of continuing the previous
+                // turn's marker.
+                turn_run_id = None;
             }
 
-            let mut current_options =
-                self.apply_execution_context_to_run_options(&session, options.clone())?;
+            let mut current_options = self
+                .apply_execution_context_to_run_options_async(&session, options.clone())
+                .await?;
             if let Some(budget) = usage_budget.as_ref() {
                 let aggregate_usage = session.aggregate_usage();
                 if let Some(message) = budget.prevents_next_model_turn(&aggregate_usage) {
@@ -541,7 +602,7 @@ impl SessionManager {
                         .and_then(serde_json::Value::as_str)
                         == Some("compaction")
             });
-            let session_usage = self.session_usage(&session)?;
+            let session_usage = self.session_usage_async(&session).await?;
             if state.config.auto_compaction.enabled
                 && !session.runtime.prompt_window.auto_compaction_disabled
                 && !already_auto_compacted_at_boundary
@@ -587,19 +648,55 @@ impl SessionManager {
                 .broadcast_pre_run(pre_run_input)
                 .await;
 
+            // One user message == one run marker (turn-scoped runs). The first
+            // model turn of a stable run starts the marker (durable before the
+            // provider call, design 17.4); every later model turn of the same
+            // turn reuses it. The marker's current content (accumulated round
+            // records, usage) is threaded into the processor so it can extend
+            // the round list.
+            let marker_run_id = match turn_run_id {
+                Some(run_id) => run_id,
+                None => {
+                    let run_id = self
+                        .store
+                        .start_run(
+                            session.id,
+                            "continue",
+                            crate::session::store::run_marker_content(
+                                "continue",
+                                Some(current_options.model.provider_id.as_ref()),
+                                Some(current_options.model.model_id.as_ref()),
+                                Some(control.turn_id()),
+                                Some(control.reply_id()),
+                            ),
+                        )
+                        .await?;
+                    turn_run_id = Some(run_id);
+                    run_id
+                }
+            };
+            let marker_content = session
+                .parts()
+                .iter()
+                .find(|part| part.part_id == marker_run_id)
+                .map(|marker| marker.content.clone());
+
             match Box::pin(self.run_model_turn(
                 session,
                 &current_options,
                 base_run_source,
+                marker_run_id,
+                marker_content,
                 state.clone(),
                 control.clone(),
             ))
             .await
             {
-                Ok((next_session, outcome)) => {
+                Ok((next_session, outcome, marker_run_id)) => {
                     session = next_session;
                     failure_retry_backoff_ms = 250;
                     model_requested = false;
+                    turn_run_id = Some(marker_run_id);
                     match should_continue_turn(
                         &outcome,
                         !session.pending_tools().is_empty(),
@@ -903,14 +1000,24 @@ impl SessionManager {
         Ok(session)
     }
 
+    /// Run one provider model turn. `marker_run_id` is the assistant run marker
+    /// this turn appends its parts under — the durable message id for the whole
+    /// turn. On the first model turn of a stable run the caller creates the
+    /// marker (`start_run`); every subsequent model turn of the same run (tool
+    /// results, follow-ups, truncations) reuses it so one user message == one
+    /// run marker == one turn (design: turn-scoped runs). `marker_content` is
+    /// the marker's current content (carrying any accumulated `rounds` and
+    /// `usage`), which the processor extends with this round's record.
     pub(in crate::session::manager) async fn run_model_turn(
         &self,
         mut session: Session,
         options: &SessionRunOptions,
         _run_source: ExecutionSource,
+        marker_run_id: i64,
+        marker_content: Option<serde_json::Value>,
         state: Arc<SessionManagerState>,
         control: Arc<ExecutionControl>,
-    ) -> Result<(Session, ModelTurnOutcome), AppError> {
+    ) -> Result<(Session, ModelTurnOutcome, i64), AppError> {
         let run_span = tracing::info_span!(
             "session.run",
             session_id = session.id,
@@ -923,12 +1030,13 @@ impl SessionManager {
                 provider_registry.native_compaction_enabled(&options.model)?;
             let scoped_executor = state
                 .tool_executor
-                .for_session_context(&session.runtime.execution);
+                .for_session_context_async(&session.runtime.execution)
+                .await;
             let agena_tool_mode = provider_registry.agena_tool_mode(&options.model)?;
             let tool_api_functions = if agena_tool_mode.is_disabled() {
                 Vec::new()
             } else {
-                scoped_executor.available_tool_api_bindings()
+                scoped_executor.available_tool_api_bindings_async().await
             };
             let request_tool_api_functions = tool_api_functions.clone();
             let request_system = options.system.clone();
@@ -1032,35 +1140,17 @@ impl SessionManager {
                 )
                 .await,
             );
-            let turn_id = control.turn_id();
-            let reply_id = control.reply_id();
-
-            // The attempt start is durable before the provider worker begins
-            // (design 17.4): the run marker exists before the provider call,
-            // so a crash at any point leaves an in-flight marker that startup
-            // reconciliation closes as `process_restart` — including a process
-            // crash before the first token. The marker's part id is the
-            // assistant message's durable id (design 4.1: a message == one run).
-            let marker_run_id = self
-                .store
-                .start_run(
-                    session.id,
-                    "continue",
-                    crate::session::store::run_marker_content(
-                        "continue",
-                        Some(options.model.provider_id.as_ref()),
-                        Some(options.model.model_id.as_ref()),
-                        Some(turn_id),
-                        Some(reply_id),
-                    ),
-                )
-                .await?;
-
+            // The run marker (started by the caller for the turn's first model
+            // turn) is the assistant message's durable id (design 4.1: a
+            // message == one run). Every model turn of one stable run appends
+            // its parts under the same marker, so a tool-calling reply persists
+            // as exactly one assistant run holding all its parts.
             let run = SessionRunRequest {
                 session_id: session.id,
                 model: options.model.clone(),
                 completion,
                 next_message_id: marker_run_id,
+                marker_content,
                 part_ids: Default::default(),
                 next_call_id: session.next_call_id(),
                 // R2: the processor persists this turn's parts itself through
@@ -1174,19 +1264,30 @@ impl SessionManager {
                     drop(request_tool_api_functions);
                     drop(prepared);
 
-                    // R2: the turn's durable state was written entirely by the
-                    // processor through parts (marker, streamed text/think
-                    // parts, deferred tool-call parts, and — when every part
-                    // was terminal — the `complete_run`/`cancel_run` marker
-                    // terminalization). The v1 projection built above fed the
-                    // prompt/digest/anchor path only; v2 has no in-memory
-                    // `messages` projection to push it into, so nothing here
-                    // re-persists the turn — parts are the only durable write
-                    // source. The marker stays in-flight for a turn with
-                    // pending tools so the session remains Running; the
-                    // tool-execution persist terminalizes it once the
-                    // operations resolve (17.3/17.5).
-                    session.refresh_derived();
+                    // R2: the processor already persisted this turn through
+                    // parts, so this is projection installation only — never
+                    // a second write. The stable-run loop operates on this
+                    // in-memory Session immediately after `run_model_turn`;
+                    // omitting the freshly persisted marker/children makes it
+                    // believe a tool-calling turn has no pending tools and
+                    // finish the execution while the database is left with a
+                    // pending `tool_call`. Upsert the authoritative engine
+                    // rows returned by the processor, preserving hook parts
+                    // that may have been recorded above, then restore the same
+                    // ordering used by the facade load path.
+                    let mut projected = session.parts().to_vec();
+                    for updated in std::iter::once(&result.run_marker).chain(result.parts.iter()) {
+                        if let Some(existing) = projected
+                            .iter_mut()
+                            .find(|part| part.part_id == updated.part_id)
+                        {
+                            *existing = updated.clone();
+                        } else {
+                            projected.push(updated.clone());
+                        }
+                    }
+                    projected.sort_by_key(|part| (part.created_at_ms, part.part_id));
+                    session.install_projected_parts(projected);
 
                     match termination {
                         SessionRunTermination::Completed => Ok((
@@ -1195,6 +1296,7 @@ impl SessionManager {
                                 follow_up_requested: result.follow_up_requested,
                                 finish_reason: result.finish_reason,
                             },
+                            marker_run_id,
                         )),
                         SessionRunTermination::Cancelled => Err(AppError::Cancelled),
                         SessionRunTermination::Failed(error) => Err(error),
@@ -1234,12 +1336,12 @@ impl SessionManager {
                             }
                         }
                     }
-                    // Terminalize the run marker started above (design 17.4):
-                    // the processor failed before any message was built, so the
-                    // marker has no content parts to persist. A user-cancelled
-                    // run is cancelled; every other failure completes the marker
-                    // as failed with its abort reason. Failures here are logged
-                    // and swallowed so the original run error is preserved.
+                    // Terminalize the run marker started above (design 17.4).
+                    // A provider can fail before yielding a stream, so the
+                    // processor has no opportunity to build content. Persist a
+                    // safe Error part first; otherwise the TUI can only render
+                    // an empty, non-expandable "Response failed" lifecycle row.
+                    // A user-cancelled run remains cancellation-only.
                     if matches!(reason, RunAbortReason::UserCancelled) {
                         self.store
                             .cancel_run(session_id, marker_run_id)
@@ -1253,6 +1355,17 @@ impl SessionManager {
                                 Ok::<(), AppError>(())
                             })?;
                     } else {
+                        if let Err(error) = self
+                            .store
+                            .append_failure_part(session_id, marker_run_id, &failure)
+                            .await
+                        {
+                            tracing::warn!(
+                                target: "agena::session::run",
+                                session_id,
+                                "failed to persist interrupted run detail: {error}"
+                            );
+                        }
                         self.store
                             .complete_run(
                                 session_id,
@@ -1336,11 +1449,16 @@ impl SessionManager {
         let mut ready_tools = Vec::new();
         let mut permission_requests = Vec::new();
         let mut sequential_tools = Vec::new();
+        let batch_executor = state
+            .tool_executor
+            .for_session_context_async(&session.runtime.execution)
+            .await;
         for pending_tool in pending_tools {
             match Box::pin(self.prepare_pending_tool_batch_member(
                 &mut session,
                 &pending_tool,
                 state.as_ref(),
+                &batch_executor,
             ))
             .await?
             {
@@ -1440,7 +1558,7 @@ impl SessionManager {
             for pending_tool in sequential_tools {
                 if session
                     .part(&pending_tool.part)
-                    .is_some_and(|part| part.state == PartState::Pending)
+                    .is_some_and(|part| part.state.is_in_flight())
                 {
                     session =
                         Box::pin(self.resolve_pending_tool(session, pending_tool, state.clone()))
@@ -1457,34 +1575,51 @@ impl SessionManager {
         session: &mut Session,
         pending_tool: &SessionPendingTool,
         state: &SessionManagerState,
+        batch_executor: &ToolExecutor,
     ) -> Result<PendingToolBatchMember, AppError> {
         self.refresh_execution_policy(session, state);
         let before_prepare = session.clone();
         let mut resolved = resolve_pending_tool(session, pending_tool)?;
         let cancellation = self.execution_registry.cancellation_token(session.id).await;
-        let scoped_executor = state
-            .tool_executor
-            .for_session_context(&session.runtime.execution)
-            .with_cancellation_token(cancellation);
-        if let Err(err) = scoped_executor.validate_advertised_tool_identity(
-            &resolved.invocation,
-            resolved.advertised_tool_identity.as_deref(),
-        ) {
-            *session = before_prepare;
-            tracing::debug!(
-                target: "agena::session::tools",
-                session_id = session.id,
-                call_id = resolved.call_id,
-                error = %err,
-                "deferring stale tool call to sequential failure handling"
-            );
-            return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
+        let invocation = resolved.invocation.clone();
+        let original_invocation = invocation.clone();
+        let advertised_identity = resolved.advertised_tool_identity.clone();
+        let call_id = resolved.call_id;
+        let session_id = session.id;
+        let scoped_executor = batch_executor.clone().with_cancellation_token(cancellation);
+        let prepared: Result<_, ToolError> = async {
+            scoped_executor
+                .validate_advertised_tool_identity(&invocation, advertised_identity.as_deref())?;
+            let prepared = scoped_executor
+                .prepare_invocation(&invocation, session_id, call_id)
+                .await?;
+            let (prepared_invocation, prepared_shell_command) = scoped_executor
+                .prepare_shell_invocation(&prepared.invocation, session_id, call_id)
+                .await?;
+            let permission_checks = scoped_executor
+                .collect_permission_checks_for_invocation_in_session(
+                    &prepared_invocation,
+                    Some(session_id),
+                )
+                .await?;
+            let concurrency_safe =
+                scoped_executor.is_concurrency_safe_invocation(&prepared_invocation);
+            Ok::<_, ToolError>((
+                prepared,
+                prepared_invocation,
+                prepared_shell_command,
+                permission_checks,
+                concurrency_safe,
+            ))
         }
-        let prepared = match scoped_executor.prepare_invocation(
-            &resolved.invocation,
-            session.id,
-            resolved.call_id,
-        ) {
+        .await;
+        let (
+            prepared,
+            prepared_invocation,
+            prepared_shell_command,
+            permission_checks,
+            concurrency_safe,
+        ) = match prepared {
             Ok(prepared) => prepared,
             Err(err) => {
                 if matches!(&err, ToolError::Cancelled) {
@@ -1492,37 +1627,19 @@ impl SessionManager {
                 }
                 tracing::debug!(
                     target: "agena::session::tools",
-                    session_id = session.id,
-                    call_id = resolved.call_id,
+                    session_id,
+                    call_id,
                     error = %err,
-                    "deferring tool preparation error to sequential failure handling"
+                    "deferring tool preflight error to sequential failure handling"
                 );
                 *session = before_prepare;
                 return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
             }
         };
-        let (prepared_invocation, prepared_shell_command) = match scoped_executor
-            .prepare_shell_invocation(&prepared.invocation, session.id, resolved.call_id)
-        {
-            Ok(prepared) => prepared,
-            Err(err) => {
-                if matches!(&err, ToolError::Cancelled) {
-                    return Err(AppError::Cancelled);
-                }
-                tracing::debug!(
-                    target: "agena::session::tools",
-                    session_id = session.id,
-                    call_id = resolved.call_id,
-                    error = %err,
-                    "deferring shell preparation error to sequential failure handling"
-                );
-                *session = before_prepare;
-                return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
-            }
-        };
+        let invocation_changed = prepared_invocation != original_invocation;
         resolved.prepared_shell_command = prepared_shell_command;
         resolved.invocation = prepared_invocation;
-        if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
+        if invocation_changed || prepared.title_override.is_some() {
             let authorization = operation_authorization(session, &resolved);
             let current_title = match session
                 .part(&resolved.pending.part)
@@ -1553,28 +1670,6 @@ impl SessionManager {
             .expect("operation content is always JSON serializable");
         }
 
-        let permission_checks = match scoped_executor
-            .collect_permission_checks_for_invocation_in_session(
-                &resolved.invocation,
-                Some(session.id),
-            ) {
-            Ok(checks) => checks,
-            Err(err) => {
-                if matches!(&err, ToolError::Cancelled) {
-                    return Err(AppError::Cancelled);
-                }
-                tracing::debug!(
-                    target: "agena::session::tools",
-                    session_id = session.id,
-                    call_id = resolved.call_id,
-                    error = %err,
-                    "deferring permission-check error to sequential failure handling"
-                );
-                *session = before_prepare;
-                return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
-            }
-        };
-
         let approved_actions = operation_permission_approved_actions(
             session,
             assistant_message_id(session, &resolved.pending.part)?,
@@ -1602,7 +1697,7 @@ impl SessionManager {
             AggregatedPermissionOutcome::Allow => {}
         }
 
-        if !scoped_executor.is_concurrency_safe_invocation(&resolved.invocation) {
+        if !concurrency_safe {
             *session = before_prepare;
             return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
         }
@@ -1624,12 +1719,20 @@ impl SessionManager {
         let cancellation = self.execution_registry.cancellation_token(session_id).await;
 
         let mut handles = Vec::with_capacity(pending_tools.len());
+        let batch_executor = match pending_tools.first() {
+            Some(pending_tool) => {
+                state
+                    .tool_executor
+                    .for_session_context_async(&pending_tool.session_runtime.execution)
+                    .await
+            }
+            None => return Ok(Vec::new()),
+        };
         for pending_tool in pending_tools {
-            let executor = state.tool_executor.clone();
             let command_event_sink =
                 self.command_event_sink_for_pending_if_needed(session_id, &pending_tool);
-            let scoped_executor = executor
-                .for_session_context(&pending_tool.session_runtime.execution)
+            let scoped_executor = batch_executor
+                .clone()
                 .with_cancellation_token(cancellation.clone())
                 .with_command_event_sink(command_event_sink);
             let acquire = semaphore.clone().acquire_owned();
@@ -1642,18 +1745,20 @@ impl SessionManager {
                 None => acquire.await,
             }
             .map_err(|err| AppError::Internal(format!("tool semaphore closed: {err}")))?;
-            handles.push(tokio::task::spawn_blocking(move || {
+            handles.push(tokio::spawn(async move {
                 let _permit = permit;
                 scoped_executor.validate_advertised_tool_identity(
                     &pending_tool.invocation,
                     pending_tool.advertised_tool_identity.as_deref(),
                 )?;
-                scoped_executor.execute_invocation_detailed_with_prepared_shell(
-                    &pending_tool.invocation,
-                    session_id,
-                    pending_tool.call_id,
-                    pending_tool.prepared_shell_command.clone(),
-                )
+                scoped_executor
+                    .execute_invocation_detailed_with_prepared_shell(
+                        &pending_tool.invocation,
+                        session_id,
+                        pending_tool.call_id,
+                        pending_tool.prepared_shell_command.clone(),
+                    )
+                    .await
             }));
         }
 
@@ -1666,7 +1771,7 @@ impl SessionManager {
         Ok(results)
     }
 
-    fn prepare_pending_tool_execution(
+    async fn prepare_pending_tool_execution(
         &self,
         session: &mut Session,
         mut resolved: ResolvedPendingTool,
@@ -1678,26 +1783,47 @@ impl SessionManager {
         // Carry the live execution context forward so the later execution
         // phase cannot reintroduce the persisted stale permission snapshot.
         resolved.session_runtime = session.runtime.clone();
-        let scoped_executor = state
-            .tool_executor
-            .for_session_context(&session.runtime.execution)
+        let execution_context = session.runtime.execution.clone();
+        let executor = state.tool_executor.clone();
+        let invocation = resolved.invocation.clone();
+        let advertised_identity = resolved.advertised_tool_identity.clone();
+        let session_id = session.id;
+        let call_id = resolved.call_id;
+        let original_invocation = invocation.clone();
+        let scoped_executor = executor
+            .for_session_context_async(&execution_context)
+            .await
             .with_cancellation_token(cancellation);
-        scoped_executor.validate_advertised_tool_identity(
-            &resolved.invocation,
-            resolved.advertised_tool_identity.as_deref(),
-        )?;
-        let prepared = scoped_executor.prepare_invocation(
-            &resolved.invocation,
-            session.id,
-            resolved.call_id,
-        )?;
-        let (prepared_invocation, prepared_shell_command) = scoped_executor
-            .prepare_shell_invocation(&prepared.invocation, session.id, resolved.call_id)?;
+        let (prepared, prepared_invocation, prepared_shell_command, permission_checks) = async {
+            scoped_executor
+                .validate_advertised_tool_identity(&invocation, advertised_identity.as_deref())?;
+            let prepared = scoped_executor
+                .prepare_invocation(&invocation, session_id, call_id)
+                .await?;
+            let (prepared_invocation, prepared_shell_command) = scoped_executor
+                .prepare_shell_invocation(&prepared.invocation, session_id, call_id)
+                .await?;
+            let permission_checks = scoped_executor
+                .collect_permission_checks_for_invocation_in_session(
+                    &prepared_invocation,
+                    Some(session_id),
+                )
+                .await?;
+            Ok::<_, ToolError>((
+                prepared,
+                prepared_invocation,
+                prepared_shell_command,
+                permission_checks,
+            ))
+        }
+        .await
+        .map_err(PendingToolPreparationError::Tool)?;
+        let invocation_changed = prepared_invocation != original_invocation;
         resolved.prepared_shell_command = prepared_shell_command;
         resolved.invocation = prepared_invocation;
 
         let mut session_changed = false;
-        if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
+        if invocation_changed || prepared.title_override.is_some() {
             let authorization = operation_authorization(session, &resolved);
             let current_title = match session
                 .part(&resolved.pending.part)
@@ -1729,13 +1855,9 @@ impl SessionManager {
             session_changed = true;
         }
 
-        let permission_checks = scoped_executor
-            .collect_permission_checks_for_invocation_in_session(
-                &resolved.invocation,
-                Some(session.id),
-            )?;
         Ok(PreparedPendingToolExecution {
             resolved,
+            scoped_executor,
             permission_checks,
             session_changed,
         })
@@ -1804,14 +1926,18 @@ impl SessionManager {
         let resolved = resolve_pending_tool(&session, &pending_tool)?;
         let PreparedPendingToolExecution {
             resolved,
+            scoped_executor,
             permission_checks,
             session_changed,
-        } = match self.prepare_pending_tool_execution(
-            &mut session,
-            resolved,
-            state.as_ref(),
-            cancellation.clone(),
-        ) {
+        } = match self
+            .prepare_pending_tool_execution(
+                &mut session,
+                resolved,
+                state.as_ref(),
+                cancellation.clone(),
+            )
+            .await
+        {
             Ok(prepared) => prepared,
             Err(PendingToolPreparationError::Session(error)) => return Err(error),
             Err(PendingToolPreparationError::Tool(error)) => {
@@ -1914,14 +2040,12 @@ impl SessionManager {
             .await?;
         }
 
-        let streaming_tool = match Box::pin(
-            state
-                .tool_executor
-                .for_session_context(&session.runtime.execution)
-                .with_cancellation_token(cancellation.clone())
-                .execute_invocation_streaming(&resolved.invocation, session.id, resolved.call_id),
-        )
-        .await
+        let scoped_executor = scoped_executor.with_command_event_sink(
+            self.command_event_sink_for_pending_if_needed(session.id, &resolved),
+        );
+        let streaming_tool = match scoped_executor
+            .execute_invocation_streaming(&resolved.invocation, session.id, resolved.call_id)
+            .await
         {
             Ok(stream) => stream,
             Err(error) => {
@@ -1948,19 +2072,18 @@ impl SessionManager {
         }
 
         let manager = self.background_handle();
-        let execution_state = state.clone();
         let execution_resolved = resolved.clone();
         let execution_session_id = session.id;
-        let execution = tokio::task::spawn_blocking(move || {
-            manager.execute_pending_tool(
-                execution_state.as_ref(),
+        let _host_user_input_sequence = manager
+            .host_user_input_sequence_guard(execution_session_id, execution_resolved.call_id);
+        let execution = scoped_executor
+            .execute_invocation_detailed_with_prepared_shell(
+                &execution_resolved.invocation,
                 execution_session_id,
-                &execution_resolved,
-                cancellation,
+                execution_resolved.call_id,
+                execution_resolved.prepared_shell_command.clone(),
             )
-        })
-        .await
-        .map_err(|err| AppError::Internal(format!("tool execution task failed: {err}")))?;
+            .await;
 
         let session = self.store.load_session(session.id).await?;
         Box::pin(self.apply_tool_execution_result(session, &resolved.pending, execution, state))

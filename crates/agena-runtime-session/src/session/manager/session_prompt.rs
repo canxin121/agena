@@ -19,6 +19,7 @@
 //! mid-session.
 
 use crate::session::model::Session;
+use crate::tool::ToolExecutor;
 use crate::tool::tool_registry::compact_tool_call_name;
 
 use super::SessionManager;
@@ -65,26 +66,11 @@ Do small tasks yourself instead of delegating them; do not fan out a single task
 }
 
 impl SessionManager {
-    /// Assemble the full system prompt for one session: the static identity
-    /// with workflow sections injected after `# Plan, ask, and delegate` only
-    /// when the corresponding execution tools are actually available. The
-    /// caller-supplied `user_system` (if any) is appended last so it keeps
-    /// precedence. Environment facts are queried on demand via
-    /// `context.environment`, not injected here.
-    pub(crate) fn assemble_session_system_prompt(
+    fn assemble_system_prompt_for_tool_names(
         &self,
-        session: &Session,
+        tool_names: Vec<String>,
         user_system: Option<&str>,
     ) -> String {
-        let state = self.execution_state();
-        let scoped_executor = state
-            .tool_executor
-            .for_session_context(&session.runtime.execution);
-        let tool_names = scoped_executor
-            .available_execution_tools()
-            .into_iter()
-            .map(|tool| compact_tool_call_name(&tool.canonical_name()))
-            .collect::<Vec<_>>();
         let has_plan = tool_names.iter().any(|name| name == "plan.set");
         let has_ask = tool_names.iter().any(|name| name == "interaction.ask");
         let has_tasks = tool_names.iter().any(|name| name == "tasks.run");
@@ -102,6 +88,45 @@ impl SessionManager {
 
         let base = crate::identity::system_prompt_with_sections(&sections);
         merge_system_prompts(Some(base.as_str()), user_system).unwrap_or(base)
+    }
+
+    /// Render prompt sections from a scoped executor whose definition
+    /// snapshot has already been captured. Status/usage code can use this to
+    /// avoid rebuilding the plugin catalog once for the prompt and again for
+    /// tool bindings.
+    pub(crate) fn assemble_session_system_prompt_with_executor(
+        &self,
+        scoped_executor: &ToolExecutor,
+        user_system: Option<&str>,
+    ) -> String {
+        let tool_names = scoped_executor
+            .available_execution_tools()
+            .into_iter()
+            .map(|tool| compact_tool_call_name(&tool.canonical_name()))
+            .collect::<Vec<_>>();
+        self.assemble_system_prompt_for_tool_names(tool_names, user_system)
+    }
+
+    /// Async catalog path used by model turns and other Tokio request flows.
+    /// Definition hooks are awaited directly instead of entering the legacy
+    /// synchronous plugin-host bridge.
+    pub(crate) async fn assemble_session_system_prompt_async(
+        &self,
+        session: &Session,
+        user_system: Option<&str>,
+    ) -> String {
+        let state = self.execution_state();
+        let scoped_executor = state
+            .tool_executor
+            .for_session_context_async(&session.runtime.execution)
+            .await;
+        let tool_names = scoped_executor
+            .available_execution_tools_async()
+            .await
+            .into_iter()
+            .map(|tool| compact_tool_call_name(&tool.canonical_name()))
+            .collect::<Vec<_>>();
+        self.assemble_system_prompt_for_tool_names(tool_names, user_system)
     }
 }
 

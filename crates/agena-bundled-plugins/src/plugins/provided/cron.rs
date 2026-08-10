@@ -61,7 +61,6 @@ impl CronPlugin {
         summary = "List registered cron jobs and wakeups.",
         read_only,
         scheduler,
-
         concurrency_safe
     )]
     async fn invoke_list(
@@ -83,8 +82,7 @@ impl CronPlugin {
         tags(mutate, scheduler),
         summary = "Create one cron schedule.",
         mutating,
-        scheduler,
-
+        scheduler
     )]
     async fn invoke_create(
         &self,
@@ -105,8 +103,7 @@ impl CronPlugin {
         tags(mutate, scheduler),
         summary = "Delete one cron schedule.",
         mutating,
-        scheduler,
-
+        scheduler
     )]
     async fn invoke_delete(
         &self,
@@ -127,8 +124,7 @@ impl CronPlugin {
         tags(mutate, scheduler),
         summary = "Update the prompt or schedule parameters of one retained job.",
         mutating,
-        scheduler,
-
+        scheduler
     )]
     async fn invoke_update(
         &self,
@@ -149,8 +145,7 @@ impl CronPlugin {
         tags(mutate, scheduler),
         summary = "Pause one scheduled job without deleting it.",
         mutating,
-        scheduler,
-
+        scheduler
     )]
     async fn invoke_pause(
         &self,
@@ -171,8 +166,7 @@ impl CronPlugin {
         tags(mutate, scheduler),
         summary = "Resume one paused scheduled job.",
         mutating,
-        scheduler,
-
+        scheduler
     )]
     async fn invoke_resume(
         &self,
@@ -194,7 +188,6 @@ impl CronPlugin {
         summary = "Inspect bounded persisted delivery history for scheduled jobs.",
         read_only,
         scheduler,
-
         concurrency_safe
     )]
     async fn invoke_history(
@@ -216,8 +209,7 @@ impl CronPlugin {
         tags(mutate, scheduler),
         summary = "Create one one-shot wakeup.",
         mutating,
-        scheduler,
-
+        scheduler
     )]
     async fn invoke_wakeup(
         &self,

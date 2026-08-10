@@ -35,7 +35,6 @@ pub async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Res
 
 async fn run(socket: WebSocket, state: AppState) {
     let (sink, mut stream) = socket.split();
-    let sink = Arc::new(Mutex::new(sink));
     let (tx, mut rx) = mpsc::channel::<ServerMessage>(256);
 
     // Greet the client with the protocol version.
@@ -45,8 +44,8 @@ async fn run(socket: WebSocket, state: AppState) {
         })
         .await;
 
-    let writer_sink = Arc::clone(&sink);
-    let writer = tokio::spawn(async move {
+    let mut writer = tokio::spawn(async move {
+        let mut sink = sink;
         while let Some(msg) = rx.recv().await {
             let payload = match serde_json::to_string(&msg) {
                 Ok(p) => p,
@@ -55,8 +54,7 @@ async fn run(socket: WebSocket, state: AppState) {
                     continue;
                 }
             };
-            let mut guard = writer_sink.lock().await;
-            if guard.send(Message::Text(payload.into())).await.is_err() {
+            if sink.send(Message::Text(payload.into())).await.is_err() {
                 break;
             }
         }
@@ -107,7 +105,13 @@ async fn run(socket: WebSocket, state: AppState) {
     }
     drop(guard);
     drop(tx);
-    let _ = writer.await;
+    if tokio::time::timeout(std::time::Duration::from_secs(1), &mut writer)
+        .await
+        .is_err()
+    {
+        writer.abort();
+        let _ = writer.await;
+    }
 }
 
 #[derive(Default)]

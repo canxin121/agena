@@ -207,21 +207,24 @@ impl ToolExecutor {
         Ok(())
     }
 
-    pub(crate) fn collect_dynamic_path_checks(
+    pub(crate) async fn collect_dynamic_path_checks_async(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
         registered_tool: &agena_plugin_host::registry::RegisteredTool,
         input: &serde_json::Value,
     ) -> Result<(), ToolError> {
-        let result = self.plugins.dispatch_tool_permission_paths_cancellable(
-            registered_tool,
-            PluginToolPermissionPathsInput {
-                tool_name: registered_tool.tool_name().to_string(),
-                workspace_root: self.workspace_root.to_string_lossy().to_string(),
-                input: input.clone(),
-            },
-            self.cancellation_token.clone(),
-        );
+        let result = self
+            .plugins
+            .dispatch_tool_permission_paths(
+                registered_tool,
+                PluginToolPermissionPathsInput {
+                    tool_name: registered_tool.tool_name().to_string(),
+                    workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                    input: input.clone(),
+                },
+                self.cancellation_token.clone(),
+            )
+            .await;
 
         let path_requests = match result {
             Ok(path_requests) => path_requests,
@@ -260,21 +263,24 @@ impl ToolExecutor {
         Ok(())
     }
 
-    pub(crate) fn collect_dynamic_network_checks(
+    pub(crate) async fn collect_dynamic_network_checks_async(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
         registered_tool: &agena_plugin_host::registry::RegisteredTool,
         input: &serde_json::Value,
     ) -> Result<(), ToolError> {
-        let result = self.plugins.dispatch_tool_permission_networks_cancellable(
-            registered_tool,
-            PluginToolPermissionNetworksInput {
-                tool_name: registered_tool.tool_name().to_string(),
-                workspace_root: self.workspace_root.to_string_lossy().to_string(),
-                input: input.clone(),
-            },
-            self.cancellation_token.clone(),
-        );
+        let result = self
+            .plugins
+            .dispatch_tool_permission_networks(
+                registered_tool,
+                PluginToolPermissionNetworksInput {
+                    tool_name: registered_tool.tool_name().to_string(),
+                    workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                    input: input.clone(),
+                },
+                self.cancellation_token.clone(),
+            )
+            .await;
 
         let network_requests = match result {
             Ok(network_requests) => network_requests,

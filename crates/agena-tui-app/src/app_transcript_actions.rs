@@ -127,7 +127,7 @@ impl App {
         entries
             .iter()
             .map(|entry| {
-                                render_entry_export(
+                render_entry_export(
                     entry,
                     &self.i18n,
                     &TranscriptDetailDefaults {

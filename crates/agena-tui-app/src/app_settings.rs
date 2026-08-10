@@ -8,37 +8,43 @@ impl App {
             InputDialogKeyResult::Close => true,
             InputDialogKeyResult::Submit(action, input) => {
                 match parse_settings_field_input(&self.i18n, &action, input.as_str()) {
-                    Ok(Some(value)) => match self
-                        .block_on_async(self.backend.set_config_setting(action.path.as_str(), value))
-                    {
-                        Ok(_) => {
-                            self.flash_success(settings_path_updated_message(
-                                &self.i18n,
-                                action.path.as_str(),
-                            ));
-                            self.refresh_current_route_after_local_edit();
-                            true
-                        }
-                        Err(error) => {
-                            self.flash_error(error);
-                            false
-                        }
-                    },
+                    Ok(Some(value)) => {
+                        let path = action.path.clone();
+                        self.dispatch_backend_operation(
+                            move |backend| async move {
+                                backend.set_config_setting(path.as_str(), value).await
+                            },
+                            move |app, result| match result {
+                                Ok(_) => {
+                                    app.flash_success(settings_path_updated_message(
+                                        &app.i18n,
+                                        action.path.as_str(),
+                                    ));
+                                    app.refresh_current_route_after_local_edit();
+                                }
+                                Err(error) => app.flash_error(error),
+                            },
+                        );
+                        true
+                    }
                     Ok(None) => {
-                        match self.block_on_async(self.backend.delete_config_setting(action.path.as_str())) {
-                            Ok(_) => {
-                                self.flash_success(settings_path_cleared_message(
-                                    &self.i18n,
-                                    action.path.as_str(),
-                                ));
-                                self.refresh_current_route_after_local_edit();
-                                true
-                            }
-                            Err(error) => {
-                                self.flash_error(error);
-                                false
-                            }
-                        }
+                        let path = action.path.clone();
+                        self.dispatch_backend_operation(
+                            move |backend| async move {
+                                backend.delete_config_setting(path.as_str()).await
+                            },
+                            move |app, result| match result {
+                                Ok(_) => {
+                                    app.flash_success(settings_path_cleared_message(
+                                        &app.i18n,
+                                        action.path.as_str(),
+                                    ));
+                                    app.refresh_current_route_after_local_edit();
+                                }
+                                Err(error) => app.flash_error(error),
+                            },
+                        );
+                        true
                     }
                     Err(error) => {
                         self.flash_warning(error);

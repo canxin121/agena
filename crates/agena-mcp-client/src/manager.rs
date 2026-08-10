@@ -7,8 +7,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use http::{HeaderName, HeaderValue};
@@ -26,6 +26,7 @@ use rmcp::{ClientHandler, ServiceExt};
 use serde_json::Value;
 use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock};
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use url::Url;
 
@@ -320,6 +321,10 @@ struct ReconnectAttempt {
 
 type RunningClient = RunningService<RoleClient, AgenaMcpClientHandler>;
 
+const TOOL_REFRESH_RUNNING: u8 = 1;
+const TOOL_REFRESH_PENDING: u8 = 2;
+const SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
 #[derive(Default)]
 struct ServerEventState {
     tools: RwLock<Vec<ToolDescriptor>>,
@@ -327,6 +332,8 @@ struct ServerEventState {
     resource_generation: AtomicU64,
     prompt_generation: AtomicU64,
     last_refresh_failure: RwLock<Option<agena_failure::Failure>>,
+    tool_refresh_state: AtomicU8,
+    shutdown: CancellationToken,
 }
 
 #[derive(Clone)]
@@ -352,28 +359,87 @@ impl ClientHandler for AgenaMcpClientHandler {
     }
 
     async fn on_tool_list_changed(&self, context: NotificationContext<RoleClient>) {
+        loop {
+            let previous = self
+                .events
+                .tool_refresh_state
+                .fetch_or(TOOL_REFRESH_PENDING, Ordering::AcqRel);
+            if previous & TOOL_REFRESH_RUNNING != 0 {
+                return;
+            }
+            if self
+                .events
+                .tool_refresh_state
+                .compare_exchange(
+                    TOOL_REFRESH_PENDING,
+                    TOOL_REFRESH_RUNNING,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                break;
+            }
+        }
+
         let events = Arc::clone(&self.events);
         let timeout = self.request_timeout;
         let server_name = self.server_name.clone();
         let tool_policy = self.tool_policy.clone();
         tokio::spawn(async move {
-            match tokio::time::timeout(timeout, context.peer.list_all_tools()).await {
-                Ok(Ok(tools)) => {
-                    *events.tools.write().await = filter_tools(tools, &tool_policy);
-                    events.tool_generation.fetch_add(1, Ordering::Relaxed);
-                    *events.last_refresh_failure.write().await = None;
+            loop {
+                let refresh = tokio::time::timeout(timeout, context.peer.list_all_tools());
+                tokio::select! {
+                    biased;
+                    _ = events.shutdown.cancelled() => return,
+                    result = refresh => match result {
+                        Ok(Ok(tools)) => {
+                            *events.tools.write().await = filter_tools(tools, &tool_policy);
+                            events.tool_generation.fetch_add(1, Ordering::Relaxed);
+                            *events.last_refresh_failure.write().await = None;
+                        }
+                        Ok(Err(error)) => {
+                            let error = McpError::from(error);
+                            let failure = mcp_failure(&error);
+                            warn!(target: "agena_mcp_client::manager", failure_id = %failure.id, server = %server_name, diagnostic = %error, "MCP tool list refresh failed");
+                            *events.last_refresh_failure.write().await = Some(failure);
+                        }
+                        Err(_) => {
+                            let error = McpError::Timeout;
+                            let failure = mcp_failure(&error);
+                            warn!(target: "agena_mcp_client::manager", failure_id = %failure.id, server = %server_name, diagnostic = %error, "MCP tool list refresh timed out");
+                            *events.last_refresh_failure.write().await = Some(failure);
+                        }
+                    }
                 }
-                Ok(Err(error)) => {
-                    let error = McpError::from(error);
-                    let failure = mcp_failure(&error);
-                    warn!(target: "agena_mcp_client::manager", failure_id = %failure.id, server = %server_name, diagnostic = %error, "MCP tool list refresh failed");
-                    *events.last_refresh_failure.write().await = Some(failure);
-                }
-                Err(_) => {
-                    let error = McpError::Timeout;
-                    let failure = mcp_failure(&error);
-                    warn!(target: "agena_mcp_client::manager", failure_id = %failure.id, server = %server_name, diagnostic = %error, "MCP tool list refresh timed out");
-                    *events.last_refresh_failure.write().await = Some(failure);
+
+                loop {
+                    let state = events.tool_refresh_state.load(Ordering::Acquire);
+                    if state & TOOL_REFRESH_PENDING != 0 {
+                        if events
+                            .tool_refresh_state
+                            .compare_exchange(
+                                TOOL_REFRESH_RUNNING | TOOL_REFRESH_PENDING,
+                                TOOL_REFRESH_RUNNING,
+                                Ordering::AcqRel,
+                                Ordering::Acquire,
+                            )
+                            .is_ok()
+                        {
+                            break;
+                        }
+                    } else if events
+                        .tool_refresh_state
+                        .compare_exchange(
+                            TOOL_REFRESH_RUNNING,
+                            0,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return;
+                    }
                 }
             }
         });
@@ -435,6 +501,12 @@ impl ConnectedServer {
     }
 }
 
+impl Drop for ConnectedServer {
+    fn drop(&mut self) {
+        self.events.shutdown.cancel();
+    }
+}
+
 /// Manages connections to MCP servers.
 pub struct McpConnectionManager {
     inner: Arc<RwLock<Inner>>,
@@ -444,6 +516,8 @@ pub struct McpConnectionManager {
     connect_timeout: Duration,
     request_timeout: Duration,
     roots: Arc<RwLock<Vec<Root>>>,
+    server_operations: Mutex<BTreeMap<String, Weak<Mutex<()>>>>,
+    lifecycle: RwLock<()>,
     reconnect_supervisor: std::sync::Mutex<Option<ReconnectSupervisor>>,
 }
 
@@ -494,6 +568,8 @@ impl McpConnectionManager {
             connect_timeout: Duration::from_secs(20),
             request_timeout: Duration::from_secs(60),
             roots: Arc::new(RwLock::new(Vec::new())),
+            server_operations: Mutex::new(BTreeMap::new()),
+            lifecycle: RwLock::new(()),
             reconnect_supervisor: std::sync::Mutex::new(None),
         }
     }
@@ -583,6 +659,27 @@ impl McpConnectionManager {
                 "MCP server name must not be empty".to_string(),
             ));
         }
+        let _lifecycle_guard = self.lifecycle.read().await;
+        self.add_server_in_lifecycle(name, spec).await
+    }
+
+    /// Add or replace one server while the caller holds a lifecycle read
+    /// permit. This split lets reconnect read its stored spec and connect it
+    /// in the same transaction without recursively acquiring the fair Tokio
+    /// `RwLock` (which can deadlock behind a queued shutdown writer).
+    async fn add_server_in_lifecycle(&self, name: &str, spec: ServerSpec) -> McpResult<()> {
+        let operation_lock = {
+            let mut operations = self.server_operations.lock().await;
+            operations.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(lock) = operations.get(name).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(Mutex::new(()));
+                operations.insert(name.to_string(), Arc::downgrade(&lock));
+                lock
+            }
+        };
+        let _operation_guard = operation_lock.lock().await;
         if let Some(existing) = {
             let mut inner = self.inner.write().await;
             inner.specs.insert(name.to_string(), spec.clone());
@@ -674,6 +771,7 @@ impl McpConnectionManager {
     }
 
     pub async fn reconnect(&self, name: &str) -> McpResult<()> {
+        let _lifecycle_guard = self.lifecycle.read().await;
         let spec = self
             .inner
             .read()
@@ -682,10 +780,23 @@ impl McpConnectionManager {
             .get(name)
             .cloned()
             .ok_or_else(|| McpError::ServerNotConnected(name.to_string()))?;
-        self.add_server(name, spec).await
+        self.add_server_in_lifecycle(name, spec).await
     }
 
     pub async fn remove_server(&self, name: &str) -> McpResult<()> {
+        let _lifecycle_guard = self.lifecycle.read().await;
+        let operation_lock = {
+            let mut operations = self.server_operations.lock().await;
+            operations.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(lock) = operations.get(name).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(Mutex::new(()));
+                operations.insert(name.to_string(), Arc::downgrade(&lock));
+                lock
+            }
+        };
+        let _operation_guard = operation_lock.lock().await;
         let removed = {
             let mut inner = self.inner.write().await;
             inner.specs.remove(name);
@@ -955,6 +1066,11 @@ impl McpConnectionManager {
     }
 
     pub async fn shutdown_all(&self) {
+        self.stop_reconnect_supervisor();
+        // Wait for in-flight add/remove transactions before draining. Without
+        // this gate an add could finish after the drain and leave a live MCP
+        // process in a manager that had already reported shutdown complete.
+        let _lifecycle_guard = self.lifecycle.write().await;
         let servers = {
             let mut inner = self.inner.write().await;
             inner.specs.clear();
@@ -963,9 +1079,11 @@ impl McpConnectionManager {
                 .into_values()
                 .collect::<Vec<_>>()
         };
+        let mut shutdowns = tokio::task::JoinSet::new();
         for server in servers {
-            shutdown_server(server).await;
+            shutdowns.spawn(shutdown_server(server));
         }
+        while shutdowns.join_next().await.is_some() {}
     }
 
     async fn get(&self, name: &str) -> McpResult<Arc<ConnectedServer>> {
@@ -1263,8 +1381,14 @@ async fn connect_http(
 }
 
 async fn shutdown_server(server: Arc<ConnectedServer>) {
-    if let Some(running) = server.running.lock().await.take() {
-        let _ = running.cancel().await;
+    server.events.shutdown.cancel();
+    // Take ownership of the cancellable connection before awaiting its
+    // shutdown. A cancellation may notify tasks that need to inspect the
+    // same `running` slot; holding the mutex across that await creates an
+    // avoidable lock cycle.
+    let running = server.running.lock().await.take();
+    if let Some(running) = running {
+        let _ = tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, running.cancel()).await;
     }
 }
 

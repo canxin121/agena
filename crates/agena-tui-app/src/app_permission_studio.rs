@@ -337,12 +337,15 @@ impl App {
         let Some(session_id) = self.transcript.session_id else {
             return;
         };
-        match self.block_on_async(self.backend.get_session_state(session_id)) {
-            Ok(execution) => {
-                let _ = self.apply_transcript_execution(execution);
-            }
-            Err(error) => self.flash_error(crate::UiFailure::internal(error)),
-        }
+        self.dispatch_backend_operation(
+            move |backend| async move { backend.get_session_state(session_id).await },
+            |app, result| match result {
+                Ok(execution) => {
+                    let _ = app.apply_transcript_execution(execution);
+                }
+                Err(error) => app.flash_error(error),
+            },
+        );
     }
 
     pub(crate) fn activate_settings_studio_selection(
@@ -407,16 +410,7 @@ impl App {
             }
             SettingsPickerAction::OpenSessionEffectivePermissionView(session_id) => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                match self.build_permission_studio_overlay(
-                    PermissionStudioSource::EffectiveSession { session_id },
-                    PermissionStudioPage::PathDefaults,
-                    Some(PermissionStudioSectionId::PathDefaults),
-                    None,
-                    PermissionStudioFocus::Items,
-                ) {
-                    Ok(permission) => self.current_route = Route::PermissionStudio(permission),
-                    Err(error) => self.flash_error(error),
-                }
+                self.open_effective_session_permission_studio(session_id);
                 false
             }
             SettingsPickerAction::OpenPluginWorkbench => {
@@ -659,9 +653,8 @@ use crate::{
     App, BTreeSet, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction, DialogHost,
     ModelCatalogStudioOverlay, Overlay, PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionConfig,
     PermissionMode, PermissionStudioAction, PermissionStudioCatalogKind,
-    PermissionStudioEditorAction, PermissionStudioFocus, PermissionStudioModeTarget,
-    PermissionStudioOverlay, PermissionStudioPage, PermissionStudioSectionId,
-    PermissionStudioSource, ProviderPickerPurpose, ProviderStudioOverlay, Route,
+    PermissionStudioEditorAction, PermissionStudioModeTarget, PermissionStudioOverlay,
+    PermissionStudioPage, ProviderPickerPurpose, ProviderStudioOverlay, Route,
     SelectionPickerOverlay, SelectionPickerQuery, SessionNavigationOverlay, SessionSearchOverlay,
     SettingsPickerAction, SettingsStudioFocus, SettingsStudioOverlay, TimelineOverlay,
     ToolPermissionRules, ui_text,

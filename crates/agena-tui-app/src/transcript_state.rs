@@ -959,7 +959,7 @@ impl TranscriptState {
             let rendered = render_entry_detailed(
                 entry,
                 width,
-                                &self.i18n,
+                &self.i18n,
                 &self.detail_expanded_by_default,
                 &self.node_expansions,
             );

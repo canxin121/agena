@@ -19,8 +19,6 @@ impl PluginHost {
             statuses,
             logs,
             timeouts: TimeoutsConfig::default(),
-            runtime: None,
-            runtime_handle: None,
             _host_handle: host_handle,
             transferred_to_successor: tokio::sync::Mutex::new(Default::default()),
             hook_runs: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -158,214 +156,120 @@ impl PluginHost {
         })
     }
 
-    pub(super) fn block_on<F>(&self, fut: F) -> F::Output
-    where
-        F: std::future::Future + Send,
-        F::Output: Send,
-    {
-        let current = tokio::runtime::Handle::try_current().ok();
-        let current_is_multithread = current.as_ref().is_some_and(|handle| {
-            handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
-        });
-
-        // Never `block_in_place(|| rt/handle.block_on(fut))` from inside the
-        // runtime the future is being scheduled on. That nested form occupies a
-        // runtime worker for the whole duration while the inner future is
-        // polled by the *same* worker pool: a hook whose dispatch never returns
-        // Pending (e.g. an in-proc plugin child task that is itself stuck)
-        // consumes that worker for the entire hang, and the timer that should
-        // bound the hook cannot advance, so its timeout never fires. A run task
-        // wedged there stops committing -> stops heartbeating -> the lease
-        // goes stale and maintenance abandons the turn. Driving the future
-        // from a scoped thread instead parks the caller and leaves every
-        // worker free, so the hook's internal timeout stays live and a stuck
-        // plugin degrades to its error arm.
-        if let Some(rt) = &self.runtime {
-            if current.is_some() {
-                return block_on_runtime_scoped_thread(rt, fut);
-            }
-            return rt.block_on(fut);
-        }
-
-        if let Some(handle) = &self.runtime_handle {
-            if current.is_some() {
-                return block_on_handle_scoped_thread(handle, fut);
-            }
-            return handle.block_on(fut);
-        }
-
-        if let Some(handle) = current {
-            return if current_is_multithread {
-                block_on_handle_scoped_thread(&handle, fut)
-            } else {
-                block_on_scoped_thread(fut)
-            };
-        }
-
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("plugin host fallback runtime");
-        rt.block_on(fut)
-    }
-
-    pub(super) fn block_on_static<F>(&self, fut: F) -> F::Output
-    where
-        F: std::future::Future + Send + 'static,
-        F::Output: Send + 'static,
-    {
-        if let Some(rt) = &self.runtime {
-            rt.block_on(fut)
-        } else if let Some(handle) = &self.runtime_handle {
-            block_on_handle_or_thread(handle.clone(), fut)
-        } else if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            block_on_handle_or_thread(handle, fut)
-        } else {
-            block_on_new_thread(fut)
-        }
-    }
-
-    // ------------------- sync wrappers used by ToolExecutor -------------------
-
-    pub fn dispatch_tool_before(
-        &self,
-        input: ToolBeforeInput,
-    ) -> Result<ToolBeforeInput, PluginError> {
-        self.dispatch_tool_before_cancellable(input, None)
-    }
-
-    pub fn dispatch_tool_before_cancellable(
+    /// Native asynchronous `tool.before` dispatch.
+    pub async fn dispatch_tool_before(
         &self,
         input: ToolBeforeInput,
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ToolBeforeInput, PluginError> {
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let plugins = self.plugins.clone();
-        self.block_on_static(async move {
-            let mut current = input;
-            for plugin in &plugins {
-                if !plugin.subscribes(HookSubscription::TOOL_BEFORE) {
-                    continue;
-                }
-                let params = serde_json::to_value(&current)
-                    .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-                let context = tool_hook_context(
-                    plugin,
-                    current.tool_name(),
-                    Some(current.session_id),
-                    Some(current.call_id),
-                    Some(current.workspace_root.clone()),
-                );
-                let value = await_transport_with_cancellation(
-                    cancellation.clone(),
-                    host_api::run_in_host_callback_context(
-                        context,
-                        call_with_timeout(plugin, method::HOOK_TOOL_BEFORE, params, timeout),
-                    ),
-                )
-                .await
-                .map_err(transport_to_plugin_error)?;
-                if matches!(&value, serde_json::Value::Null) {
-                    continue;
-                }
-                let patch: Option<ToolBeforePatch> = serde_json::from_value(value)
-                    .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-                let Some(patch) = patch else {
-                    continue;
-                };
-                if let Some(reason) = patch.abort_reason {
-                    return Err(PluginError::internal(reason));
-                }
-                if let Some(v) = patch.input {
-                    current.input = v;
-                }
-                if let Some(t) = patch.title_override {
-                    current.title_override = Some(t);
-                }
-                for (k, v) in patch.metadata {
-                    current.metadata.insert(k, v);
-                }
+        let mut current = input;
+        for plugin in &plugins {
+            if !plugin.subscribes(HookSubscription::TOOL_BEFORE) {
+                continue;
             }
-            Ok(current)
-        })
-    }
-
-    pub fn dispatch_tool_after(
-        &self,
-        input: ToolAfterInput,
-    ) -> Result<ToolAfterInput, PluginError> {
-        self.dispatch_tool_after_cancellable(input, None)
-    }
-
-    pub fn dispatch_tool_after_cancellable(
-        &self,
-        input: ToolAfterInput,
-        cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<ToolAfterInput, PluginError> {
-        let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
-        let plugins = self.plugins.clone();
-        let res = self.block_on_static(async move {
-            let session_id = Some(input.session_id);
-            let mut runs = Vec::new();
-            let result = await_transport_with_cancellation(
-                cancellation,
-                dispatcher::chain_patch_in_context::<ToolAfterInput, ToolAfterPatch, _, _>(
-                    &plugins,
-                    method::HOOK_TOOL_AFTER,
-                    HookSubscription::TOOL_AFTER,
-                    timeout,
-                    input,
-                    |inp, patch| {
-                        if let Some(t) = patch.title {
-                            inp.title = t;
-                        }
-                        if let Some(summary) = patch.summary {
-                            inp.summary = summary;
-                        }
-                        if let Some(o) = patch.output_text {
-                            inp.output_text = o;
-                        }
-                        if let Some(p) = patch.payload {
-                            inp.payload = Some(p);
-                        }
-                        for (k, v) in patch.metadata {
-                            inp.metadata.insert(k, v);
-                        }
-                    },
-                    |plugin, input| {
-                        Some(tool_hook_context(
-                            plugin,
-                            input.tool_name(),
-                            Some(input.session_id),
-                            Some(input.call_id),
-                            Some(input.workspace_root.clone()),
-                        ))
-                    },
-                    session_id,
-                    &mut runs,
+            let params = serde_json::to_value(&current)
+                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            let context = tool_hook_context(
+                plugin,
+                current.tool_name(),
+                Some(current.session_id),
+                Some(current.call_id),
+                Some(current.workspace_root.clone()),
+            );
+            let value = await_transport_with_cancellation(
+                cancellation.clone(),
+                host_api::run_in_host_callback_context(
+                    context,
+                    call_with_timeout(plugin, method::HOOK_TOOL_BEFORE, params, timeout),
                 ),
             )
-            .await;
-            // tool.after activity is intentionally not recorded (not part of
-            // the transcript hook-run scope); the runs are discarded.
-            let _ = runs;
-            result
-        });
+            .await
+            .map_err(transport_to_plugin_error)?;
+            if matches!(&value, serde_json::Value::Null) {
+                continue;
+            }
+            let patch: Option<ToolBeforePatch> = serde_json::from_value(value)
+                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+            let Some(patch) = patch else {
+                continue;
+            };
+            if let Some(reason) = patch.abort_reason {
+                return Err(PluginError::internal(reason));
+            }
+            if let Some(v) = patch.input {
+                current.input = v;
+            }
+            if let Some(t) = patch.title_override {
+                current.title_override = Some(t);
+            }
+            for (k, v) in patch.metadata {
+                current.metadata.insert(k, v);
+            }
+        }
+        Ok(current)
+    }
+
+    /// Native asynchronous `tool.after` dispatch for runtime request paths.
+    pub async fn dispatch_tool_after(
+        &self,
+        input: ToolAfterInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<ToolAfterInput, PluginError> {
+        let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
+        let plugins = self.plugins.clone();
+        let session_id = Some(input.session_id);
+        let mut runs = Vec::new();
+        let res = await_transport_with_cancellation(
+            cancellation,
+            dispatcher::chain_patch_in_context::<ToolAfterInput, ToolAfterPatch, _, _>(
+                &plugins,
+                method::HOOK_TOOL_AFTER,
+                HookSubscription::TOOL_AFTER,
+                timeout,
+                input,
+                |inp, patch| {
+                    if let Some(t) = patch.title {
+                        inp.title = t;
+                    }
+                    if let Some(summary) = patch.summary {
+                        inp.summary = summary;
+                    }
+                    if let Some(o) = patch.output_text {
+                        inp.output_text = o;
+                    }
+                    if let Some(p) = patch.payload {
+                        inp.payload = Some(p);
+                    }
+                    for (k, v) in patch.metadata {
+                        inp.metadata.insert(k, v);
+                    }
+                },
+                |plugin, input| {
+                    Some(tool_hook_context(
+                        plugin,
+                        input.tool_name(),
+                        Some(input.session_id),
+                        Some(input.call_id),
+                        Some(input.workspace_root.clone()),
+                    ))
+                },
+                session_id,
+                &mut runs,
+            ),
+        )
+        .await;
+        // tool.after activity is intentionally not recorded (not part of the
+        // transcript hook-run scope); the runs are discarded.
+        let _ = runs;
         res.map_err(transport_to_plugin_error)
     }
 
-    pub fn invoke_tool(
-        &self,
-        registered_tool: &RegisteredTool,
-        input: ToolInvokeInput,
-    ) -> Result<ToolInvokeOutput, PluginError> {
-        self.invoke_tool_cancellable(registered_tool, input, None)
-    }
-
-    /// Invoke a tool while allowing the owning agent turn to cancel the
-    /// transport future. This is separate from the ordinary timeout: user
-    /// interruption must not wait for a long-lived plugin timeout to elapse.
-    pub fn invoke_tool_cancellable(
+    /// Native asynchronous tool invocation. This is the canonical runtime
+    /// entry point; cancellation and the per-tool deadline are polled by the
+    /// same Tokio runtime that owns the transport.
+    pub async fn invoke_tool(
         &self,
         registered_tool: &RegisteredTool,
         input: ToolInvokeInput,
@@ -392,31 +296,29 @@ impl PluginHost {
         let tool_name = registered_tool.tool_name().to_string();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        let result = self.block_on_static(async move {
-            let invoke = host_api::run_in_host_callback_context(
-                HostCallbackContext {
-                    plugin_id: Some(plugin_id),
-                    session_id: Some(session_id),
-                    call_id: Some(call_id),
-                    workspace_root: Some(workspace_root),
-                    tool_name: Some(tool_name),
-                },
-                call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout),
-            );
-            match cancellation {
-                Some(cancellation) => tokio::select! {
-                    biased;
-                    _ = cancellation.cancelled() => Err(TransportError::Cancelled),
-                    result = invoke => result,
-                },
-                None => invoke.await,
-            }
-        });
+        let invoke = host_api::run_in_host_callback_context(
+            HostCallbackContext {
+                plugin_id: Some(plugin_id),
+                session_id: Some(session_id),
+                call_id: Some(call_id),
+                workspace_root: Some(workspace_root),
+                tool_name: Some(tool_name),
+            },
+            call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout),
+        );
+        let result = match cancellation {
+            Some(cancellation) => tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(TransportError::Cancelled),
+                result = invoke => result,
+            },
+            None => invoke.await,
+        };
         let value = result.map_err(transport_to_plugin_error)?;
         serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
     }
 
-    pub fn invoke_plugin_command(
+    pub async fn invoke_plugin_command_async(
         &self,
         plugin_id: &str,
         input: PluginCommandInvokeInput,
@@ -444,19 +346,17 @@ impl PluginHost {
         let command_id = input.command_id.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        let result = self.block_on_static(async move {
-            host_api::run_in_host_callback_context(
-                HostCallbackContext {
-                    plugin_id: Some(plugin_id),
-                    session_id,
-                    call_id,
-                    workspace_root,
-                    tool_name: None,
-                },
-                call_with_timeout(&plugin, method::COMMAND_INVOKE, params, timeout),
-            )
-            .await
-        });
+        let result = host_api::run_in_host_callback_context(
+            HostCallbackContext {
+                plugin_id: Some(plugin_id),
+                session_id,
+                call_id,
+                workspace_root,
+                tool_name: None,
+            },
+            call_with_timeout(&plugin, method::COMMAND_INVOKE, params, timeout),
+        )
+        .await;
         let value = result.map_err(transport_to_plugin_error)?;
         serde_json::from_value(value).map_err(|e| {
             PluginError::invalid_params(format!("invalid command output for `{command_id}`: {e}"))
@@ -474,15 +374,7 @@ impl PluginHost {
         base
     }
 
-    pub fn dispatch_tool_permission_paths(
-        &self,
-        registered_tool: &RegisteredTool,
-        input: ToolPermissionPathsInput,
-    ) -> Result<Vec<crate::sdk::PathRequest>, PluginError> {
-        self.dispatch_tool_permission_paths_cancellable(registered_tool, input, None)
-    }
-
-    pub fn dispatch_tool_permission_paths_cancellable(
+    pub async fn dispatch_tool_permission_paths(
         &self,
         registered_tool: &RegisteredTool,
         input: ToolPermissionPathsInput,
@@ -506,34 +398,24 @@ impl PluginHost {
         let plugin_id = registered_tool.plugin_full_name().clone();
         let tool_name = registered_tool.tool_name().to_string();
         let workspace_root = input.workspace_root.clone();
-        let result = self.block_on_static(async move {
-            await_transport_with_cancellation(
-                cancellation,
-                host_api::run_in_host_callback_context(
-                    HostCallbackContext {
-                        plugin_id: Some(plugin_id),
-                        workspace_root: Some(workspace_root),
-                        tool_name: Some(tool_name),
-                        ..Default::default()
-                    },
-                    call_with_timeout(&plugin, method::HOOK_TOOL_PERMISSION_PATHS, params, timeout),
-                ),
-            )
-            .await
-        });
+        let result = await_transport_with_cancellation(
+            cancellation,
+            host_api::run_in_host_callback_context(
+                HostCallbackContext {
+                    plugin_id: Some(plugin_id),
+                    workspace_root: Some(workspace_root),
+                    tool_name: Some(tool_name),
+                    ..Default::default()
+                },
+                call_with_timeout(&plugin, method::HOOK_TOOL_PERMISSION_PATHS, params, timeout),
+            ),
+        )
+        .await;
         let value = result.map_err(transport_to_plugin_error)?;
         serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
     }
 
-    pub fn dispatch_tool_permission_networks(
-        &self,
-        registered_tool: &RegisteredTool,
-        input: ToolPermissionNetworksInput,
-    ) -> Result<Vec<crate::sdk::NetworkRequest>, PluginError> {
-        self.dispatch_tool_permission_networks_cancellable(registered_tool, input, None)
-    }
-
-    pub fn dispatch_tool_permission_networks_cancellable(
+    pub async fn dispatch_tool_permission_networks(
         &self,
         registered_tool: &RegisteredTool,
         input: ToolPermissionNetworksInput,
@@ -557,26 +439,24 @@ impl PluginHost {
         let plugin_id = registered_tool.plugin_full_name().clone();
         let tool_name = registered_tool.tool_name().to_string();
         let workspace_root = input.workspace_root.clone();
-        let result = self.block_on_static(async move {
-            await_transport_with_cancellation(
-                cancellation,
-                host_api::run_in_host_callback_context(
-                    HostCallbackContext {
-                        plugin_id: Some(plugin_id),
-                        workspace_root: Some(workspace_root),
-                        tool_name: Some(tool_name),
-                        ..Default::default()
-                    },
-                    call_with_timeout(
-                        &plugin,
-                        method::HOOK_TOOL_PERMISSION_NETWORKS,
-                        params,
-                        timeout,
-                    ),
+        let result = await_transport_with_cancellation(
+            cancellation,
+            host_api::run_in_host_callback_context(
+                HostCallbackContext {
+                    plugin_id: Some(plugin_id),
+                    workspace_root: Some(workspace_root),
+                    tool_name: Some(tool_name),
+                    ..Default::default()
+                },
+                call_with_timeout(
+                    &plugin,
+                    method::HOOK_TOOL_PERMISSION_NETWORKS,
+                    params,
+                    timeout,
                 ),
-            )
-            .await
-        });
+            ),
+        )
+        .await;
         let value = result.map_err(transport_to_plugin_error)?;
         serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
     }
@@ -664,47 +544,42 @@ impl PluginHost {
         })
     }
 
-    pub fn dispatch_shell_env(&self, input: ShellEnvInput) -> Result<ShellEnvPatch, PluginError> {
-        self.dispatch_shell_env_cancellable(input, None)
-    }
-
-    pub fn dispatch_shell_env_cancellable(
+    pub async fn dispatch_shell_env(
         &self,
         input: ShellEnvInput,
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ShellEnvPatch, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
         let plugins = self.plugins.clone();
-        let res: Result<ShellEnvPatch, TransportError> = self.block_on_static(async move {
-            let mut set = std::collections::BTreeMap::new();
-            let mut unset = Vec::new();
-            for plugin in &plugins {
-                if !plugin.subscribes(HookSubscription::SHELL_ENV) {
-                    continue;
+        let mut set = std::collections::BTreeMap::new();
+        let mut unset = Vec::new();
+        for plugin in &plugins {
+            if !plugin.subscribes(HookSubscription::SHELL_ENV) {
+                continue;
+            }
+            let params = serde_json::to_value(&input)?;
+            let result = await_transport_with_cancellation(
+                cancellation.clone(),
+                call_with_timeout(plugin, method::HOOK_SHELL_ENV, params, timeout),
+            )
+            .await
+            .map_err(transport_to_plugin_error)?;
+            if matches!(&result, serde_json::Value::Null) {
+                continue;
+            }
+            let patch: Option<ShellEnvPatch> = serde_json::from_value(result)
+                .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+            if let Some(p) = patch {
+                for (k, v) in p.set {
+                    set.insert(k, v);
                 }
-                let params = serde_json::to_value(&input)?;
-                let result = await_transport_with_cancellation(
-                    cancellation.clone(),
-                    call_with_timeout(plugin, method::HOOK_SHELL_ENV, params, timeout),
-                )
-                .await?;
-                if matches!(&result, serde_json::Value::Null) {
-                    continue;
-                }
-                let patch: Option<ShellEnvPatch> = serde_json::from_value(result)?;
-                if let Some(p) = patch {
-                    for (k, v) in p.set {
-                        set.insert(k, v);
-                    }
-                    for k in p.unset {
-                        set.remove(&k);
-                        unset.push(k);
-                    }
+                for k in p.unset {
+                    set.remove(&k);
+                    unset.push(k);
                 }
             }
-            Ok(ShellEnvPatch { set, unset })
-        });
-        res.map_err(transport_to_plugin_error)
+        }
+        Ok(ShellEnvPatch { set, unset })
     }
 
     // -------------- async-only helpers for chat / permission etc. --------------
@@ -818,23 +693,6 @@ impl PluginHost {
         result.map_err(transport_to_plugin_error)
     }
 
-    /// Sync variant for code paths driven from a non-async context (the
-    /// provider request building path runs `block_on` from sync helpers).
-    pub fn dispatch_chat_headers_blocking(
-        &self,
-        input: ChatHeadersInput,
-    ) -> Result<ChatHeadersInput, PluginError> {
-        self.block_on(self.dispatch_chat_headers(input))
-    }
-
-    pub fn dispatch_chat_headers_blocking_cancellable(
-        &self,
-        input: ChatHeadersInput,
-        cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<ChatHeadersInput, PluginError> {
-        self.block_on(self.dispatch_chat_headers_cancellable(input, cancellation))
-    }
-
     pub async fn dispatch_chat_system_transform(
         &self,
         input: ChatSystemTransformInput,
@@ -883,13 +741,14 @@ impl PluginHost {
 
     pub async fn broadcast_notification(&self, input: NotificationInput) {
         let timeout = Duration::from_secs(5);
+        let mut notifications = Vec::new();
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::NOTIFICATION) {
                 continue;
             }
             let input = input.clone();
             let plugin = plugin.clone();
-            tokio::spawn(async move {
+            notifications.push(async move {
                 let params = match serde_json::to_value(&input) {
                     Ok(v) => v,
                     Err(_) => return,
@@ -901,6 +760,7 @@ impl PluginHost {
                 .await;
             });
         }
+        futures_util::future::join_all(notifications).await;
     }
 
     pub async fn dispatch_command_before(
@@ -979,13 +839,6 @@ impl PluginHost {
             }
         }
         Ok(CommandBeforeOutcome::Continue(current))
-    }
-
-    pub fn dispatch_command_before_blocking(
-        &self,
-        input: CommandBeforeInput,
-    ) -> Result<CommandBeforeOutcome, PluginError> {
-        self.block_on(self.dispatch_command_before(input))
     }
 
     pub async fn dispatch_auth(&self, input: AuthInput) -> Result<Option<AuthOutput>, PluginError> {
@@ -1120,13 +973,14 @@ impl PluginHost {
         T: serde::Serialize + Clone + Send + 'static,
     {
         let timeout = Duration::from_secs(5);
+        let mut notifications = Vec::new();
         for plugin in &self.plugins {
             if !plugin.subscribes(subscription) {
                 continue;
             }
             let input = input.clone();
             let plugin = plugin.clone();
-            tokio::spawn(async move {
+            notifications.push(async move {
                 let params = match serde_json::to_value(&input) {
                     Ok(v) => v,
                     Err(_) => return,
@@ -1135,6 +989,7 @@ impl PluginHost {
                     tokio::time::timeout(timeout, plugin.transport.notify(method, params)).await;
             });
         }
+        futures_util::future::join_all(notifications).await;
     }
 
     // ── session.start ──────────────────────────────────────────────────────
@@ -1206,18 +1061,26 @@ impl PluginHost {
 
     pub async fn broadcast_session_end(&self, input: SessionEndInput) {
         let timeout = Duration::from_secs(5);
-        let queue = Arc::clone(&self.hook_runs);
+        let mut notifications = Vec::new();
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::SESSION_END) {
                 continue;
             }
             let input = input.clone();
             let plugin = plugin.clone();
-            let queue = Arc::clone(&queue);
-            tokio::spawn(async move {
+            notifications.push(async move {
                 let params = match serde_json::to_value(&input) {
                     Ok(v) => v,
-                    Err(_) => return,
+                    Err(error) => {
+                        return HookRunRecord::new(
+                            "session.end",
+                            plugin.key().to_string(),
+                            Some(input.session_id),
+                            HookRunStatus::Failed,
+                            "session.end hook input serialization failed",
+                            Some(error.to_string()),
+                        );
+                    }
                 };
                 let context = HostCallbackContext {
                     plugin_id: Some(plugin.key().to_string()),
@@ -1232,7 +1095,7 @@ impl PluginHost {
                     ),
                 )
                 .await;
-                let record = if notified.is_ok() {
+                if notified.is_ok() {
                     HookRunRecord::new(
                         "session.end",
                         plugin.key().to_string(),
@@ -1250,10 +1113,11 @@ impl PluginHost {
                         "session.end hook timed out",
                         None,
                     )
-                };
-                push_hook_runs_into(&queue, vec![record]);
+                }
             });
         }
+        let records = futures_util::future::join_all(notifications).await;
+        self.push_hook_runs(records);
     }
 
     // ── user.prompt.submit ─────────────────────────────────────────────────
@@ -1337,25 +1201,18 @@ impl PluginHost {
         Ok(current)
     }
 
-    /// Blocking variant for callers in sync context.
-    pub fn dispatch_user_prompt_submit_blocking(
-        &self,
-        input: UserPromptSubmitInput,
-    ) -> Result<UserPromptSubmitInput, PluginError> {
-        self.block_on(self.dispatch_user_prompt_submit(input))
-    }
-
     // ── tool.execute.failure ───────────────────────────────────────────────
 
     pub async fn broadcast_tool_failure(&self, input: ToolFailureInput) {
         let timeout = Duration::from_secs(5);
+        let mut notifications = Vec::new();
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::TOOL_FAILURE) {
                 continue;
             }
             let input = input.clone();
             let plugin = plugin.clone();
-            tokio::spawn(async move {
+            notifications.push(async move {
                 let params = match serde_json::to_value(&input) {
                     Ok(v) => v,
                     Err(_) => return,
@@ -1367,6 +1224,7 @@ impl PluginHost {
                 .await;
             });
         }
+        futures_util::future::join_all(notifications).await;
     }
 
     // ── tool.definition ────────────────────────────────────────────────────
@@ -1417,34 +1275,33 @@ impl PluginHost {
         result.map_err(transport_to_plugin_error)
     }
 
-    pub fn dispatch_tool_definition_blocking(
-        self: &Arc<Self>,
-        input: ToolDefinitionInput,
-    ) -> Result<ToolDefinitionInput, PluginError> {
-        // `block_on` already runs the chain on a dedicated thread with the 2s
-        // hook timeout live, so a stuck plugin degrades to the error arm
-        // instead of wedging the caller. A std-channel deadline is added as
-        // the hard guarantee: if the worker pool is ever starved by something
-        // else, the internal timeout cannot advance and a bare `block_on`
-        // would block the caller — and its lease-owning run task — forever.
-        // This bound is driven by a plain channel recv, not the tokio timer,
-        // so it always fires.
-        let host = Arc::clone(self);
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(host.block_on(host.dispatch_tool_definition(input)));
-        });
-        let remaining = Duration::from_secs(5)
-            .checked_sub(std::time::Instant::now().elapsed())
-            .unwrap_or(Duration::ZERO);
-        match rx.recv_timeout(remaining) {
-            Ok(result) => result,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(PluginError::internal(
-                "tool.definition hook chain did not complete within 5s",
-            )),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(PluginError::internal(
-                "tool.definition hook chain thread panicked",
-            )),
+    /// Apply `tool.definition` hooks to one registry snapshot while crossing
+    /// the async boundary only once. Catalog consumers commonly need every
+    /// definition together; entering a blocking runtime once per tool causes
+    /// unnecessary scheduler churn and can exhaust the blocking pool when
+    /// several catalog readers run concurrently.
+    pub async fn dispatch_tool_definitions(
+        &self,
+        inputs: Vec<ToolDefinitionInput>,
+    ) -> Vec<Result<ToolDefinitionInput, PluginError>> {
+        const CATALOG_DEADLINE: Duration = Duration::from_secs(5);
+        let input_count = inputs.len();
+        let dispatch = async {
+            let mut outputs = Vec::with_capacity(input_count);
+            for input in inputs {
+                outputs.push(self.dispatch_tool_definition(input).await);
+            }
+            outputs
+        };
+        match tokio::time::timeout(CATALOG_DEADLINE, dispatch).await {
+            Ok(outputs) => outputs,
+            Err(_) => (0..input_count)
+                .map(|_| {
+                    Err(PluginError::internal(
+                        "tool.definition catalog pass did not complete within 5s",
+                    ))
+                })
+                .collect(),
         }
     }
 
@@ -1621,13 +1478,6 @@ impl PluginHost {
         result.map_err(transport_to_plugin_error)
     }
 
-    pub fn dispatch_command_after_blocking(
-        &self,
-        input: CommandAfterInput,
-    ) -> Result<CommandAfterInput, PluginError> {
-        self.block_on(self.dispatch_command_after(input))
-    }
-
     // ── chat.messages.transform ────────────────────────────────────────────
 
     pub async fn dispatch_chat_messages_transform(
@@ -1663,13 +1513,14 @@ impl PluginHost {
     /// error propagation — events are notifications).
     pub async fn broadcast_event(&self, env: EventEnvelope) {
         let timeout = Duration::from_secs(2);
+        let mut notifications = Vec::new();
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::EVENT) {
                 continue;
             }
             let env = env.clone();
             let plugin = plugin.clone();
-            tokio::spawn(async move {
+            notifications.push(async move {
                 let params = match serde_json::to_value(&env) {
                     Ok(v) => v,
                     Err(_) => return,
@@ -1681,6 +1532,7 @@ impl PluginHost {
                 .await;
             });
         }
+        futures_util::future::join_all(notifications).await;
     }
 
     /// Async shutdown — sends `meta/shutdown` and closes every transport.
@@ -1950,10 +1802,8 @@ use super::{
     ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolInvokeStream, ToolKey,
     ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolRegistryChangedEvent,
     ToolStreamChunk, ToolStreamEnd, TransportError, UserPromptSubmitInput, UserPromptSubmitPatch,
-    block_on_handle_or_thread, block_on_handle_scoped_thread, block_on_new_thread,
-    block_on_runtime_scoped_thread, block_on_scoped_thread, call_with_timeout, dispatcher,
-    hook_registration_for_plugin, host_api, merge_json, method, push_hook_runs_into,
-    shutdown_transport, tool_hook_context, transport_to_plugin_error,
+    call_with_timeout, dispatcher, hook_registration_for_plugin, host_api, merge_json, method,
+    push_hook_runs_into, shutdown_transport, tool_hook_context, transport_to_plugin_error,
 };
 
 #[cfg(test)]
@@ -2035,17 +1885,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn wedged_tool_definition_hook_cannot_hang_the_caller() {
-        // Regression for the session-5 interrupted-turn wedge: the
-        // `block_on` used by `dispatch_tool_definition_blocking` drove the
-        // hook chain with `block_in_place(|| handle.block_on(fut))`, pinning a
-        // runtime worker for the whole duration. A hook transport that spawns
-        // a task which never resolves (the in-proc shape) then consumes a
-        // worker forever; with the timer unable to advance, the 2s hook
-        // timeout never fired and the lease-owning run task hung past the
-        // lease-reap window. The chain must now degrade to its error arm
-        // within a hard std-channel deadline instead.
+    #[tokio::test(flavor = "current_thread")]
+    async fn wedged_tool_definition_hook_times_out_without_blocking_the_runtime() {
         use crate::transport::PluginTransport;
 
         struct HangingTransport;
@@ -2056,78 +1897,69 @@ mod tests {
                 _method: &str,
                 _params: serde_json::Value,
             ) -> Result<serde_json::Value, TransportError> {
-                // Mirror the in-proc transport: the hook runs in a spawned
-                // task that here never resolves.
-                let join = tokio::spawn(async {
-                    std::future::pending::<serde_json::Value>().await
-                });
-                join.await.map_err(|_| TransportError::Disconnected)
+                std::future::pending().await
             }
         }
 
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .expect("test runtime");
-        rt.block_on(async {
-            let tool_registry = Arc::new(RwLock::new(PluginToolRegistry::new()));
-            let statuses = Arc::new(crate::status::StatusRegistry::new());
-            let logs = Arc::new(PluginLogStore::default());
-            let host = Arc::new(PluginHost {
-                plugins: vec![Arc::new(LoadedPlugin::new(
-                    "static",
-                    crate::config::ConfiguredPlugin {
-                        enabled: true,
-                        package: crate::config::PluginPackage::Static {},
-                        config: serde_json::json!({}),
-                        timeouts: TimeoutsConfig::default(),
-                    },
-                    Arc::new(HangingTransport),
-                    PluginManifest {
-                        schema_version: 1,
-                        namespace: "test".to_string(),
-                        name: "hanging".to_string(),
-                        version: "0.1.0".to_string(),
-                        summary: None,
-                        help: None,
-                        authors: Vec::new(),
-                        transports: Vec::new(),
-                        hooks: HookSubscription::TOOL_DEFINITION,
-                        tools: Vec::new(),
-                        commands: Vec::new(),
-                        activity_kinds: Vec::new(),
-                        tags: Vec::new(),
-                        skills: Vec::new(),
-                        ui: Default::default(),
-                        config_schema: None,
-                        config_schema_i18n: Default::default(),
-                    },
-                    "test".to_string(),
-                    Vec::new(),
-                ))],
-                plugins_by_id: Default::default(),
-                tool_registry: Arc::clone(&tool_registry),
-                statuses: Arc::clone(&statuses),
-                logs: Arc::clone(&logs),
-                timeouts: TimeoutsConfig::default(),
-                runtime: None,
-                runtime_handle: Some(tokio::runtime::Handle::current()),
-                _host_handle: Arc::new(HostHandle::new_with_components(
-                    Arc::new(NoopHostClient),
-                    Arc::clone(&tool_registry),
-                    Arc::new(RwLock::new(HashMap::new())),
-                    Arc::new(RwLock::new(HashMap::new())),
-                    Arc::clone(&statuses),
-                    Arc::clone(&logs),
-                    None,
-                )),
-                transferred_to_successor: tokio::sync::Mutex::new(Default::default()),
-                hook_runs: Arc::new(std::sync::Mutex::new(Vec::new())),
-            });
+        let tool_registry = Arc::new(RwLock::new(PluginToolRegistry::new()));
+        let statuses = Arc::new(crate::status::StatusRegistry::new());
+        let logs = Arc::new(PluginLogStore::default());
+        let host = Arc::new(PluginHost {
+            plugins: vec![Arc::new(LoadedPlugin::new(
+                "static",
+                crate::config::ConfiguredPlugin {
+                    enabled: true,
+                    package: crate::config::PluginPackage::Static {},
+                    config: serde_json::json!({}),
+                    timeouts: TimeoutsConfig::default(),
+                },
+                Arc::new(HangingTransport),
+                PluginManifest {
+                    schema_version: 1,
+                    namespace: "test".to_string(),
+                    name: "hanging".to_string(),
+                    version: "0.1.0".to_string(),
+                    summary: None,
+                    help: None,
+                    authors: Vec::new(),
+                    transports: Vec::new(),
+                    hooks: HookSubscription::TOOL_DEFINITION,
+                    tools: Vec::new(),
+                    commands: Vec::new(),
+                    activity_kinds: Vec::new(),
+                    tags: Vec::new(),
+                    skills: Vec::new(),
+                    ui: Default::default(),
+                    config_schema: None,
+                    config_schema_i18n: Default::default(),
+                },
+                "test".to_string(),
+                Vec::new(),
+            ))],
+            plugins_by_id: Default::default(),
+            tool_registry: Arc::clone(&tool_registry),
+            statuses: Arc::clone(&statuses),
+            logs: Arc::clone(&logs),
+            timeouts: TimeoutsConfig {
+                fast: Some(crate::config::DurationSpec(Duration::from_millis(20))),
+                ..Default::default()
+            },
+            _host_handle: Arc::new(HostHandle::new_with_components(
+                Arc::new(NoopHostClient),
+                Arc::clone(&tool_registry),
+                Arc::new(RwLock::new(HashMap::new())),
+                Arc::new(RwLock::new(HashMap::new())),
+                Arc::clone(&statuses),
+                Arc::clone(&logs),
+                None,
+            )),
+            transferred_to_successor: tokio::sync::Mutex::new(Default::default()),
+            hook_runs: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
 
-            let started = std::time::Instant::now();
-            let result = host.dispatch_tool_definition_blocking(ToolDefinitionInput {
+        let started = std::time::Instant::now();
+        let result = host
+            .dispatch_tool_definitions(vec![ToolDefinitionInput {
                 tool: ToolKey::new(
                     PluginKey::new("test", "hanging").expect("valid key"),
                     "example",
@@ -2136,26 +1968,15 @@ mod tests {
                 summary: "s".to_string(),
                 help: None,
                 input_schema: serde_json::json!({}),
-            });
-            let elapsed = started.elapsed();
-            assert!(
-                result.is_err(),
-                "a wedged hook must degrade to the error arm, got {result:?}"
-            );
-            assert!(
-                elapsed < std::time::Duration::from_secs(10),
-                "the blocking dispatch must be bounded by the std deadline, took {elapsed:?}"
-            );
-            // The worker pool must survive the wedged hook: under the old
-            // block_in_place nesting the workers were pinned and this fresh
-            // task would starve.
-            let started = std::time::Instant::now();
-            tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                tokio::task::yield_now().await;
-            })
+            }])
             .await
-            .expect("the runtime must remain responsive after a wedged hook");
-            assert!(started.elapsed() < std::time::Duration::from_secs(2));
-        });
+            .pop()
+            .expect("one result");
+        assert!(result.is_err(), "wedged hook must time out: {result:?}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        tokio::time::timeout(Duration::from_millis(50), tokio::task::yield_now())
+            .await
+            .expect("current-thread runtime remains responsive");
     }
 }

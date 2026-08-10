@@ -39,15 +39,12 @@ mod in_memory {
 
     /// In-memory LSP transport for tests.
     pub struct InMemoryTransport {
-        outbox: mpsc::UnboundedSender<Value>,
-        inbox: Mutex<mpsc::UnboundedReceiver<InboundMessage>>,
+        outbox: mpsc::Sender<Value>,
+        inbox: Mutex<mpsc::Receiver<InboundMessage>>,
     }
 
     impl InMemoryTransport {
-        pub fn new(
-            outbox: mpsc::UnboundedSender<Value>,
-            inbox: mpsc::UnboundedReceiver<InboundMessage>,
-        ) -> Self {
+        pub fn new(outbox: mpsc::Sender<Value>, inbox: mpsc::Receiver<InboundMessage>) -> Self {
             Self {
                 outbox,
                 inbox: Mutex::new(inbox),
@@ -56,11 +53,11 @@ mod in_memory {
 
         pub fn pair() -> (
             Arc<Self>,
-            mpsc::UnboundedReceiver<Value>,
-            mpsc::UnboundedSender<InboundMessage>,
+            mpsc::Receiver<Value>,
+            mpsc::Sender<InboundMessage>,
         ) {
-            let (out_tx, out_rx) = mpsc::unbounded_channel();
-            let (in_tx, in_rx) = mpsc::unbounded_channel();
+            let (out_tx, out_rx) = mpsc::channel(64);
+            let (in_tx, in_rx) = mpsc::channel(64);
             (Arc::new(Self::new(out_tx, in_rx)), out_rx, in_tx)
         }
     }
@@ -70,6 +67,7 @@ mod in_memory {
         async fn send(&self, payload: Value) -> LspResult<()> {
             self.outbox
                 .send(payload)
+                .await
                 .map_err(|e| LspError::Transport(e.to_string()))
         }
 

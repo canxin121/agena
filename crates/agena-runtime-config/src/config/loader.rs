@@ -448,7 +448,7 @@ mod tests {
             values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
         };
 
-                std::fs::write(
+        std::fs::write(
             &config_path,
             r#"{"runtime":{"providers":{"http":{"timeout_secs":30}}}}"#,
         )

@@ -352,4 +352,3 @@ pub enum HttpAuth {
         password_env: Option<String>,
     },
 }
-

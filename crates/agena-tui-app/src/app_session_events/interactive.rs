@@ -56,6 +56,7 @@ impl App {
             while let Some(live) = rx.recv().await {
                 if tx
                     .send(AppMessage::SessionEventArrived { session_id, live })
+                    .await
                     .is_err()
                 {
                     break;

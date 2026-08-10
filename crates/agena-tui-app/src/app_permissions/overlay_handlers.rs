@@ -126,18 +126,30 @@ impl App {
             // Ctrl+R refreshes the exact client versions from npm, then
             // rebuilds this interface in place so the user stays here.
             agena_tui_settings::SettingsStudioEffect::Refresh => {
-                match self.block_on_async(self.backend.refresh_provider_client_versions()) {
-                    Ok(versions) => self.flash_success(self.i18n.text_args(
-                        "flash-provider-client-versions-refreshed",
-                        &agena_tui::fl_args!(
-                            "codex" => versions.codex,
-                            "claude" => versions.claude,
-                            "gemini" => versions.gemini,
-                        ),
-                    )),
-                    Err(error) => self.flash_error(error),
-                }
-                self.refresh_client_versions_studio_overlay(dialog);
+                self.dispatch_backend_operation(
+                    |backend| async move { backend.refresh_provider_client_versions().await },
+                    |app, result| {
+                        match result {
+                            Ok(versions) => app.flash_success(app.i18n.text_args(
+                                "flash-provider-client-versions-refreshed",
+                                &agena_tui::fl_args!(
+                                    "codex" => versions.codex,
+                                    "claude" => versions.claude,
+                                    "gemini" => versions.gemini,
+                                ),
+                            )),
+                            Err(error) => app.flash_error(error),
+                        }
+                        let route = std::mem::replace(&mut app.current_route, Route::Main);
+                        app.current_route = match route {
+                            Route::ClientVersionsStudio(mut dialog) => {
+                                app.refresh_client_versions_studio_overlay(&mut dialog);
+                                Route::ClientVersionsStudio(dialog)
+                            }
+                            route => route,
+                        };
+                    },
+                );
                 false
             }
             agena_tui_settings::SettingsStudioEffect::Activate => {
@@ -274,14 +286,14 @@ impl App {
             }
             agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioEffect::Save => {
                 match self.commit_permission_rule_studio_save(dialog) {
-                    Ok(()) if dialog.return_permission.is_some() => return true,
                     Ok(()) => {}
                     Err(error) => self.flash_error(error),
                 }
                 false
             }
             agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioEffect::Delete => {
-                self.revoke_permission_rule_studio_rule(dialog)
+                self.revoke_permission_rule_studio_rule(dialog);
+                false
             }
             agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioEffect::Activate => {
                 self.activate_permission_rule_studio_selection(dialog)

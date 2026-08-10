@@ -5,7 +5,6 @@ use std::{
     fmt::Display,
     fs, io,
     path::{Path, PathBuf},
-    process::Command,
     sync::Arc,
 };
 
@@ -43,6 +42,8 @@ use crate::{
 };
 
 type ApplicationResult<T> = Result<T, ApplicationError>;
+
+pub(crate) static SNAPSHOT_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 
 pub(crate) mod execution;
 mod git;

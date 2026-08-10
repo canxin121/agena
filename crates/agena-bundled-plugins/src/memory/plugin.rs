@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use agena_storage::MemoryType;
 use agena_storage::{MemoryError, MemoryRecord, MemoryRepository, NewMemory};
@@ -97,7 +97,7 @@ fn default_memory_config() -> MemoryConfig {
 pub struct MemoryPlugin {
     config: OnceLock<MemoryConfig>,
     workspace_root: OnceLock<PathBuf>,
-    sync_lock: Mutex<()>,
+    sync_lock: Arc<Mutex<()>>,
 }
 
 impl Default for MemoryPlugin {
@@ -184,7 +184,7 @@ impl MemoryPlugin {
         Self {
             config: OnceLock::new(),
             workspace_root: OnceLock::new(),
-            sync_lock: Mutex::new(()),
+            sync_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -235,49 +235,41 @@ impl MemoryPlugin {
         Ok(MemoryStore::for_workspace(self.workspace_root()?))
     }
 
-    fn search_index(&self) -> SdkResult<MemoryIndex> {
-        Ok(MemoryIndex::for_workspace(self.workspace_root()?))
-    }
-
-    fn sync_documents(&self, store: &dyn MemoryRepository) -> SdkResult<Vec<MemorySearchDocument>> {
-        Ok(store
-            .list()
-            .map_err(memory_error_to_plugin)?
-            .into_iter()
-            .map(memory_document_from_entry)
-            .collect())
-    }
-
-    fn sync_index(&self, documents: &[MemorySearchDocument]) -> SdkResult<()> {
-        self.search_index()?
-            .replace_documents(documents)
-            .map_err(|err| PluginError::internal(format!("failed to rebuild memory index: {err}")))
-    }
-
-    fn run_search(
-        &self,
-        query: &str,
-        limit: usize,
-        documents: &[MemorySearchDocument],
-    ) -> SdkResult<Vec<MemorySearchDocument>> {
-        if documents.is_empty() {
-            return Ok(Vec::new());
-        }
-        self.search_index()?
-            .search(query, limit)
-            .map_err(|err| PluginError::internal(format!("memory search failed: {err}")))
-    }
-
     async fn sync_and_search_documents(
         &self,
         query: &str,
         limit: usize,
     ) -> SdkResult<Vec<MemorySearchDocument>> {
-        let store = self.store()?;
-        let documents = self.sync_documents(&store)?;
-        let _guard = self.sync_lock.lock().await;
-        self.sync_index(&documents)?;
-        self.run_search(query, limit, &documents)
+        let workspace_root = self.workspace_root()?.to_path_buf();
+        let query = query.to_string();
+        let guard = Arc::clone(&self.sync_lock).lock_owned().await;
+        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
+            .acquire()
+            .await
+            .map_err(|_| PluginError::internal("memory worker pool is unavailable"))?;
+        tokio::task::spawn_blocking(move || {
+            let _worker_permit = worker_permit;
+            let _guard = guard;
+            let store = MemoryStore::for_workspace(&workspace_root);
+            let documents = store
+                .list()
+                .map_err(memory_error_to_plugin)?
+                .into_iter()
+                .map(memory_document_from_entry)
+                .collect::<Vec<_>>();
+            if documents.is_empty() {
+                return Ok(Vec::new());
+            }
+            let index = MemoryIndex::for_workspace(&workspace_root);
+            index.replace_documents(&documents).map_err(|error| {
+                PluginError::internal(format!("failed to rebuild memory index: {error}"))
+            })?;
+            index
+                .search(query.as_str(), limit)
+                .map_err(|error| PluginError::internal(format!("memory search failed: {error}")))
+        })
+        .await
+        .map_err(|error| PluginError::internal(format!("memory index worker failed: {error}")))?
     }
 
     async fn search_documents(
@@ -336,21 +328,26 @@ impl MemoryPlugin {
         path(read = self.store_dir_permission_path()?)
     )]
     async fn invoke_get(&self, input: &MemoryGetInput) -> SdkResult<ToolInvokeOutput> {
-        let store = self.store()?;
-        let repository: &dyn MemoryRepository = &store;
-        let entry = repository
-            .get(input.name.as_str())
-            .map_err(memory_error_to_plugin)?;
-        let payload = serde_json::to_value(memory_record_output(&entry))
-            .map_err(|err| PluginError::internal(err.to_string()))?;
-        Ok(ToolInvokeOutput::from_parts(
-            format!("Read memory · {}", memory_name(&entry)),
-            format!("Loaded {}", memory_name(&entry)),
-            format_memory_entry(&entry),
-            Some(payload),
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
+        let workspace_root = self.workspace_root()?.to_path_buf();
+        let name = input.name.clone();
+        run_memory_blocking(move || {
+            let store = MemoryStore::for_workspace(&workspace_root);
+            let repository: &dyn MemoryRepository = &store;
+            let entry = repository
+                .get(name.as_str())
+                .map_err(memory_error_to_plugin)?;
+            let payload = serde_json::to_value(memory_record_output(&entry))
+                .map_err(|err| PluginError::internal(err.to_string()))?;
+            Ok(ToolInvokeOutput::from_parts(
+                format!("Read memory · {}", memory_name(&entry)),
+                format!("Loaded {}", memory_name(&entry)),
+                format_memory_entry(&entry),
+                Some(payload),
+                std::collections::BTreeMap::new(),
+                Vec::new(),
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -360,48 +357,52 @@ impl MemoryPlugin {
         path(read = self.store_dir_permission_path()?)
     )]
     async fn invoke_list(&self, input: &MemoryListInput) -> SdkResult<ToolInvokeOutput> {
-        let store = self.store()?;
-        let repository: &dyn MemoryRepository = &store;
+        let workspace_root = self.workspace_root()?.to_path_buf();
         let limit = input.limit.unwrap_or(50).clamp(1, 200) as usize;
-        let entries = repository
-            .list()
-            .map_err(memory_error_to_plugin)?
-            .into_iter()
-            .take(limit)
-            .collect::<Vec<_>>();
-        let memories = entries.iter().map(memory_record_output).collect::<Vec<_>>();
-        let payload = serde_json::json!({
-            "limit": limit,
-            "memories": memories,
-        });
-        let text = if entries.is_empty() {
-            "No memory records found.".to_string()
-        } else {
-            entries
-                .iter()
-                .map(|entry| {
-                    format!(
-                        "- {} [{}]: {}",
-                        memory_name(entry),
-                        entry
-                            .frontmatter
-                            .r#type
-                            .map(MemoryType::label)
-                            .unwrap_or("untyped"),
-                        memory_description(entry)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        Ok(ToolInvokeOutput::from_parts(
-            "List memory",
-            format!("{} records", entries.len()),
-            text,
-            Some(payload),
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
+        run_memory_blocking(move || {
+            let store = MemoryStore::for_workspace(&workspace_root);
+            let repository: &dyn MemoryRepository = &store;
+            let entries = repository
+                .list()
+                .map_err(memory_error_to_plugin)?
+                .into_iter()
+                .take(limit)
+                .collect::<Vec<_>>();
+            let memories = entries.iter().map(memory_record_output).collect::<Vec<_>>();
+            let payload = serde_json::json!({
+                "limit": limit,
+                "memories": memories,
+            });
+            let text = if entries.is_empty() {
+                "No memory records found.".to_string()
+            } else {
+                entries
+                    .iter()
+                    .map(|entry| {
+                        format!(
+                            "- {} [{}]: {}",
+                            memory_name(entry),
+                            entry
+                                .frontmatter
+                                .r#type
+                                .map(MemoryType::label)
+                                .unwrap_or("untyped"),
+                            memory_description(entry)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            Ok(ToolInvokeOutput::from_parts(
+                "List memory",
+                format!("{} records", entries.len()),
+                text,
+                Some(payload),
+                std::collections::BTreeMap::new(),
+                Vec::new(),
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -411,34 +412,43 @@ impl MemoryPlugin {
         path(write = self.store_dir_permission_path()?)
     )]
     async fn invoke_write(&self, input: &MemoryWriteInput) -> SdkResult<ToolInvokeOutput> {
+        let workspace_root = self.workspace_root()?.to_path_buf();
         let name = input.name.clone();
-        let content = input.content.as_str();
-        let store = self.store()?;
-        let repository: &dyn MemoryRepository = &store;
-        match repository.forget(name.as_str()) {
-            Ok(()) | Err(MemoryError::NotFound(_)) => {}
-            Err(err) => return Err(memory_error_to_plugin(err)),
-        }
-        let description = input.description.as_str();
-        let entry = repository
-            .save(NewMemory {
-                name: name.clone(),
-                description: description.to_string(),
-                memory_type: input.memory_type,
-                body: content.to_string(),
-                index_line: Some(memory_index_line(name.as_str(), description, content)),
-            })
-            .map_err(memory_error_to_plugin)?;
-        let payload = serde_json::to_value(memory_record_output(&entry))
-            .map_err(|err| PluginError::internal(err.to_string()))?;
-        Ok(ToolInvokeOutput::from_parts(
-            format!("Write memory · {}", memory_name(&entry)),
-            format!("Saved {}", memory_name(&entry)),
-            format!("Saved memory '{}'.", memory_name(&entry)),
-            Some(payload),
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
+        let content = input.content.clone();
+        let description = input.description.clone();
+        let memory_type = input.memory_type;
+        run_memory_blocking(move || {
+            let store = MemoryStore::for_workspace(&workspace_root);
+            let repository: &dyn MemoryRepository = &store;
+            match repository.forget(name.as_str()) {
+                Ok(()) | Err(MemoryError::NotFound(_)) => {}
+                Err(err) => return Err(memory_error_to_plugin(err)),
+            }
+            let entry = repository
+                .save(NewMemory {
+                    name: name.clone(),
+                    description: description.clone(),
+                    memory_type,
+                    body: content.clone(),
+                    index_line: Some(memory_index_line(
+                        name.as_str(),
+                        description.as_str(),
+                        content.as_str(),
+                    )),
+                })
+                .map_err(memory_error_to_plugin)?;
+            let payload = serde_json::to_value(memory_record_output(&entry))
+                .map_err(|err| PluginError::internal(err.to_string()))?;
+            Ok(ToolInvokeOutput::from_parts(
+                format!("Write memory · {}", memory_name(&entry)),
+                format!("Saved {}", memory_name(&entry)),
+                format!("Saved memory '{}'.", memory_name(&entry)),
+                Some(payload),
+                std::collections::BTreeMap::new(),
+                Vec::new(),
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -448,20 +458,24 @@ impl MemoryPlugin {
         path(write = self.store_dir_permission_path()?)
     )]
     async fn invoke_delete(&self, input: &MemoryDeleteInput) -> SdkResult<ToolInvokeOutput> {
+        let workspace_root = self.workspace_root()?.to_path_buf();
         let name = input.name.clone();
-        let store = self.store()?;
-        let repository: &dyn MemoryRepository = &store;
-        repository
-            .forget(name.as_str())
-            .map_err(memory_error_to_plugin)?;
-        Ok(ToolInvokeOutput::from_parts(
-            format!("Delete memory · {name}"),
-            format!("Deleted {name}"),
-            format!("Deleted memory '{}'.", name),
-            None,
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
+        run_memory_blocking(move || {
+            let store = MemoryStore::for_workspace(&workspace_root);
+            let repository: &dyn MemoryRepository = &store;
+            repository
+                .forget(name.as_str())
+                .map_err(memory_error_to_plugin)?;
+            Ok(ToolInvokeOutput::from_parts(
+                format!("Delete memory · {name}"),
+                format!("Deleted {name}"),
+                format!("Deleted memory '{}'.", name),
+                None,
+                std::collections::BTreeMap::new(),
+                Vec::new(),
+            ))
+        })
+        .await
     }
 
     fn store_dir_permission_path(&self) -> SdkResult<String> {
@@ -663,6 +677,23 @@ fn memory_index_line(name: &str, description: &str, content: &str) -> String {
         truncate_body(description.trim(), 120)
     };
     format!("- [{name}]({name}.md) — {hook}")
+}
+
+async fn run_memory_blocking<T, F>(operation: F) -> SdkResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> SdkResult<T> + Send + 'static,
+{
+    let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
+        .acquire()
+        .await
+        .map_err(|_| PluginError::internal("memory worker pool is unavailable"))?;
+    tokio::task::spawn_blocking(move || {
+        let _worker_permit = worker_permit;
+        operation()
+    })
+    .await
+    .map_err(|error| PluginError::internal(format!("memory blocking task failed: {error}")))?
 }
 
 #[cfg(test)]

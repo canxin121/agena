@@ -80,7 +80,6 @@ impl ContextPlugin {
         tags(query, discovery),
         summary = "Inspect remaining context budget, model identity, and compaction health without exposing prompts.",
         read_only,
-
         concurrency_safe
     )]
     async fn status(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
@@ -190,12 +189,23 @@ impl ContextPlugin {
             .host
             .get()
             .ok_or_else(|| PluginError::internal("context plugin invoked before init"))?;
-        let workspace = Path::new(context.workspace_root);
-        let mut lines = vec![format!("Working directory: {}", workspace.display())];
+        let workspace_root = context.workspace_root.to_string();
+        let mut lines = vec![format!("Working directory: {}", workspace_root)];
         let mut git_branch = None::<String>;
         let mut git_short_sha = None::<String>;
         let mut git_dirty = false;
-        if let Some(facts) = git_facts(workspace) {
+        let git_workspace = workspace_root.clone();
+        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
+            .acquire()
+            .await
+            .map_err(|_| PluginError::internal("context worker pool is unavailable"))?;
+        let facts = tokio::task::spawn_blocking(move || {
+            let _worker_permit = worker_permit;
+            git_facts(Path::new(&git_workspace))
+        })
+        .await
+        .map_err(|error| PluginError::internal(format!("git inspection failed: {error}")))?;
+        if let Some(facts) = facts {
             git_branch = facts.branch;
             git_short_sha = facts.short_sha;
             git_dirty = facts.dirty;
@@ -239,7 +249,7 @@ impl ContextPlugin {
         }
         let text = lines.join("\n");
         let payload = serde_json::json!({
-            "workspace_root": context.workspace_root,
+            "workspace_root": workspace_root,
             "git_branch": git_branch,
             "git_short_sha": git_short_sha,
             "git_dirty": git_dirty,

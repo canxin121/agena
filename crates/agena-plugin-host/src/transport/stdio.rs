@@ -7,14 +7,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 use crate::config::{RestartMode, RestartPolicy};
 use crate::error::TransportError;
@@ -41,6 +42,12 @@ pub type HostHandler = Arc<
         + Sync,
 >;
 
+const HOST_CALLBACK_CONCURRENCY: usize = 64;
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+const MAX_BUFFERED_STREAMS: usize = 128;
+const MAX_BUFFERED_STREAM_EVENTS: usize = 64;
+
 #[derive(Clone)]
 struct SpawnSpec {
     command: String,
@@ -57,13 +64,21 @@ pub struct StdioTransport {
 struct Inner {
     spawn_spec: SpawnSpec,
     restart_policy: RestartPolicy,
-    /// Active child / stdin pair. `None` while a respawn is in flight.
+    /// Active child and its writer mailbox. `None` while a respawn is in
+    /// flight. The writer task owns stdin so lifecycle code never waits for
+    /// pipe I/O while holding this mutex.
     handles: Mutex<Option<ChildHandles>>,
-    next_id: Mutex<i64>,
+    /// Serialize spawn/backoff/install against close. Reader tasks carry a
+    /// generation and may only tear down the child they were created for.
+    spawn_lock: Mutex<()>,
+    child_generation: AtomicU64,
+    next_id: AtomicI64,
     pending: DashMap<RequestId, oneshot::Sender<Response>>,
     active_streams: Mutex<HashMap<String, ActiveStreamState>>,
     buffered_streams: Mutex<HashMap<String, Vec<BufferedStreamEvent>>>,
     host_handler: Mutex<Option<HostHandler>>,
+    host_call_slots: Arc<Semaphore>,
+    shutdown: CancellationToken,
     closed: std::sync::atomic::AtomicBool,
     restart_attempts: AtomicU32,
     plugin_id: Option<PluginKey>,
@@ -72,13 +87,20 @@ struct Inner {
 }
 
 struct ChildHandles {
+    generation: u64,
     child: Child,
-    stdin: tokio::process::ChildStdin,
+    writer: mpsc::Sender<WriteRequest>,
+}
+
+struct WriteRequest {
+    body: Vec<u8>,
+    completion: oneshot::Sender<Result<(), String>>,
 }
 
 struct ActiveStreamState {
     chunks: mpsc::Sender<ToolStreamChunk>,
     end: oneshot::Sender<Result<ToolStreamEnd, PluginError>>,
+    monitor_stop: CancellationToken,
 }
 
 /// Remove an in-flight request slot when its dispatch future is dropped by a
@@ -175,11 +197,15 @@ impl StdioTransport {
             spawn_spec: spawn_spec.clone(),
             restart_policy,
             handles: Mutex::new(None),
-            next_id: Mutex::new(1),
+            spawn_lock: Mutex::new(()),
+            child_generation: AtomicU64::new(0),
+            next_id: AtomicI64::new(1),
             pending: DashMap::new(),
             active_streams: Mutex::new(HashMap::new()),
             buffered_streams: Mutex::new(HashMap::new()),
             host_handler: Mutex::new(host_handler),
+            host_call_slots: Arc::new(Semaphore::new(HOST_CALLBACK_CONCURRENCY)),
+            shutdown: CancellationToken::new(),
             closed: std::sync::atomic::AtomicBool::new(false),
             restart_attempts: AtomicU32::new(0),
             plugin_id,
@@ -208,6 +234,7 @@ impl Inner {
     }
 
     async fn spawn_child_inner(self: Arc<Self>, is_restart: bool) -> Result<(), TransportError> {
+        let _spawn_guard = self.spawn_lock.lock().await;
         if self.closed.load(Ordering::SeqCst) {
             return Err(TransportError::Disconnected);
         }
@@ -240,14 +267,22 @@ impl Inner {
                 backoff_ms = backoff.as_millis() as u64,
                 "respawning stdio plugin after exit"
             );
-            tokio::time::sleep(backoff).await;
+            tokio::select! {
+                biased;
+                _ = self.shutdown.cancelled() => return Err(TransportError::Disconnected),
+                _ = tokio::time::sleep(backoff) => {}
+            }
+            if self.closed.load(Ordering::SeqCst) {
+                return Err(TransportError::Disconnected);
+            }
         }
 
         let mut cmd = Command::new(&self.spawn_spec.command);
         cmd.args(&self.spawn_spec.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
         for (k, v) in &self.spawn_spec.env {
             cmd.env(k, v);
         }
@@ -280,6 +315,59 @@ impl Inner {
             .take()
             .ok_or_else(|| TransportError::Io("no stdout".into()))?;
         let stderr = child.stderr.take();
+        let generation = self.child_generation.fetch_add(1, Ordering::SeqCst) + 1;
+
+        // One task owns stdin for the lifetime of this child. A bounded
+        // mailbox preserves frame ordering and applies backpressure without
+        // coupling a blocked pipe write to the child/restart state mutex.
+        let (writer, mut write_requests) = mpsc::channel::<WriteRequest>(64);
+        let writer_shutdown = self.shutdown.clone();
+        tokio::spawn(async move {
+            let mut stdin = stdin;
+            loop {
+                let request = tokio::select! {
+                    biased;
+                    _ = writer_shutdown.cancelled() => return,
+                    request = write_requests.recv() => request,
+                };
+                let Some(request) = request else { return };
+                let header = format!("Content-Length: {}\r\n\r\n", request.body.len());
+                let write = async {
+                    tokio::select! {
+                        biased;
+                        _ = writer_shutdown.cancelled() => {
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::Interrupted,
+                                "plugin transport closed",
+                            ))
+                        }
+                        result = async {
+                            stdin.write_all(header.as_bytes()).await?;
+                            stdin.write_all(request.body.as_slice()).await?;
+                            stdin.flush().await
+                        } => result,
+                    }
+                };
+                let result = tokio::time::timeout(WRITE_TIMEOUT, write)
+                    .await
+                    .map_err(|_| "plugin stdin write timed out".to_string())
+                    .and_then(|result| result.map_err(|error| error.to_string()));
+                let failed = result.is_err();
+                let _ = request.completion.send(result);
+                if failed {
+                    break;
+                }
+            }
+        });
+
+        // Publish lifecycle state before a short-lived child can make its
+        // stdout reader observe EOF. Otherwise the exit task can run while
+        // handles is still None, then startup publishes an already-dead child.
+        *self.handles.lock().await = Some(ChildHandles {
+            generation,
+            child,
+            writer,
+        });
 
         // stdout reader
         {
@@ -287,7 +375,12 @@ impl Inner {
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
                 loop {
-                    match read_frame(&mut reader).await {
+                    let frame = tokio::select! {
+                        biased;
+                        _ = this.shutdown.cancelled() => break,
+                        frame = read_frame(&mut reader) => frame,
+                    };
+                    match frame {
                         Ok(Some(frame)) => {
                             this.handle_inbound(frame).await;
                         }
@@ -302,7 +395,7 @@ impl Inner {
                     }
                 }
                 // Reader exited -> child likely gone. Tear down and respawn.
-                this.handle_child_exit().await;
+                this.handle_child_exit(generation).await;
             });
         }
 
@@ -310,9 +403,16 @@ impl Inner {
         if let Some(stderr) = stderr {
             let plugin_id = self.plugin_id.clone();
             let log_sink = self.log_sink.clone();
+            let shutdown = self.shutdown.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = reader.next_line().await {
+                loop {
+                    let line = tokio::select! {
+                        biased;
+                        _ = shutdown.cancelled() => return,
+                        line = reader.next_line() => line,
+                    };
+                    let Ok(Some(line)) = line else { return };
                     tracing::info!(target: "agena_plugin_host::stdio_err", "{line}");
                     if let (Some(sink), Some(plugin_id)) = (log_sink.as_ref(), plugin_id.as_ref()) {
                         sink.append(
@@ -327,7 +427,6 @@ impl Inner {
             });
         }
 
-        *self.handles.lock().await = Some(ChildHandles { child, stdin });
         self.record_status(|sink, plugin_id| {
             sink.record_started(plugin_id, pid, is_restart);
         });
@@ -347,42 +446,31 @@ impl Inner {
         Ok(())
     }
 
-    async fn handle_child_exit(self: Arc<Self>) {
+    async fn handle_child_exit(self: Arc<Self>, generation: u64) {
         if self.closed.load(Ordering::SeqCst) {
             return;
         }
         // Drop current handles + fail every in-flight request.
-        let exit_code = {
+        let Some(exit_code) = ({
             let mut handles_lock = self.handles.lock().await;
-            let exit_code = if let Some(handles) = handles_lock.as_mut() {
-                handles
-                    .child
-                    .try_wait()
-                    .ok()
-                    .flatten()
-                    .and_then(|status| status.code())
-            } else {
-                None
-            };
-            *handles_lock = None;
-            exit_code
-        };
-        let pending: Vec<_> = self.pending.iter().map(|e| e.key().clone()).collect();
-        for id in pending {
-            if let Some((_, slot)) = self.pending.remove(&id) {
-                let _ = slot.send(Response {
-                    jsonrpc: JsonRpcVersion,
-                    id: id.clone(),
-                    payload: ResponsePayload::Err {
-                        error: ErrorObject {
-                            code: crate::sdk::rpc::codes::PLUGIN_DISCONNECTED,
-                            message: "plugin disconnected".into(),
-                            data: None,
-                        },
-                    },
-                });
+            match handles_lock.as_mut() {
+                Some(handles) if handles.generation == generation => {
+                    let exit_code = handles
+                        .child
+                        .try_wait()
+                        .ok()
+                        .flatten()
+                        .and_then(|status| status.code());
+                    *handles_lock = None;
+                    Some(exit_code)
+                }
+                // A stale reader must never tear down a newer generation.
+                _ => None,
             }
-        }
+        }) else {
+            return;
+        };
+        self.fail_pending("plugin disconnected");
         self.fail_active_streams(PluginError::internal("plugin disconnected"))
             .await;
 
@@ -417,15 +505,12 @@ impl Inner {
         match self.restart_policy.policy {
             RestartMode::Never => {}
             RestartMode::OnFailure | RestartMode::Always => {
-                let inner = Arc::clone(&self);
-                tokio::spawn(async move {
-                    if let Err(err) = Inner::spawn_child(&inner, true).await {
-                        tracing::warn!(
-                            target: "agena_plugin_host::stdio",
-                            "respawn failed: {err}"
-                        );
-                    }
-                });
+                if let Err(err) = Inner::spawn_child(&self, true).await {
+                    tracing::warn!(
+                        target: "agena_plugin_host::stdio",
+                        "respawn failed: {err}"
+                    );
+                }
             }
         }
     }
@@ -438,16 +523,42 @@ impl Inner {
                 }
             }
             Frame::Request(req) => {
+                let callback_slot = Arc::clone(&self.host_call_slots).try_acquire_owned();
+                let Ok(callback_slot) = callback_slot else {
+                    let response = Response {
+                        jsonrpc: JsonRpcVersion,
+                        id: req.id,
+                        payload: ResponsePayload::Err {
+                            error: ErrorObject {
+                                code: crate::sdk::rpc::codes::PLUGIN_GENERIC,
+                                message: "host callback capacity exhausted".to_string(),
+                                data: None,
+                            },
+                        },
+                    };
+                    if let Ok(body) = serde_json::to_vec(&response) {
+                        let _ = self.write_frame(&body).await;
+                    }
+                    return;
+                };
                 let inner = Arc::clone(self);
                 tokio::spawn(async move {
+                    let _callback_slot = callback_slot;
                     let id = req.id.clone();
-                    let result = if let Some(handler) = inner.host_handler.lock().await.clone() {
-                        handler(req.method, req.params.unwrap_or(serde_json::Value::Null)).await
-                    } else {
-                        Err(PluginError::from_kind(
-                            crate::sdk::PluginErrorKind::HostUnavailable,
-                            "no host handler installed",
-                        ))
+                    let callback = async {
+                        if let Some(handler) = inner.host_handler.lock().await.clone() {
+                            handler(req.method, req.params.unwrap_or(serde_json::Value::Null)).await
+                        } else {
+                            Err(PluginError::from_kind(
+                                crate::sdk::PluginErrorKind::HostUnavailable,
+                                "no host handler installed",
+                            ))
+                        }
+                    };
+                    let result = tokio::select! {
+                        biased;
+                        _ = inner.shutdown.cancelled() => return,
+                        result = callback => result,
                     };
                     let resp = match result {
                         Ok(v) => Response {
@@ -478,8 +589,13 @@ impl Inner {
                 ) {
                     self.clone().handle_notification(notif).await;
                 } else {
+                    let callback_slot = Arc::clone(&self.host_call_slots).try_acquire_owned();
+                    let Ok(callback_slot) = callback_slot else {
+                        return;
+                    };
                     let inner = Arc::clone(self);
                     tokio::spawn(async move {
+                        let _callback_slot = callback_slot;
                         inner.handle_notification(notif).await;
                     });
                 }
@@ -488,20 +604,61 @@ impl Inner {
     }
 
     async fn write_frame(&self, body: &[u8]) -> Result<(), TransportError> {
-        let mut handles = self.handles.lock().await;
-        let h = handles.as_mut().ok_or(TransportError::Disconnected)?;
-        let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        h.stdin.write_all(header.as_bytes()).await?;
-        h.stdin.write_all(body).await?;
-        h.stdin.flush().await?;
-        Ok(())
+        let writer = {
+            let handles = self.handles.lock().await;
+            handles
+                .as_ref()
+                .map(|handles| handles.writer.clone())
+                .ok_or(TransportError::Disconnected)?
+        };
+        let (completion, result) = oneshot::channel();
+        let write = async {
+            writer
+                .send(WriteRequest {
+                    body: body.to_vec(),
+                    completion,
+                })
+                .await
+                .map_err(|_| TransportError::Disconnected)?;
+            result
+                .await
+                .map_err(|_| TransportError::Disconnected)?
+                .map_err(TransportError::Io)
+        };
+        tokio::select! {
+            biased;
+            _ = self.shutdown.cancelled() => Err(TransportError::Disconnected),
+            result = tokio::time::timeout(WRITE_TIMEOUT, write) => {
+                result.map_err(|_| TransportError::Io("plugin frame write timed out".to_string()))?
+            }
+        }
     }
 
-    async fn next_id(&self) -> i64 {
-        let mut id = self.next_id.lock().await;
-        let v = *id;
-        *id += 1;
-        v
+    fn next_id(&self) -> i64 {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn fail_pending(&self, message: &str) {
+        let pending = self
+            .pending
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for id in pending {
+            if let Some((_, slot)) = self.pending.remove(&id) {
+                let _ = slot.send(Response {
+                    jsonrpc: JsonRpcVersion,
+                    id,
+                    payload: ResponsePayload::Err {
+                        error: ErrorObject {
+                            code: crate::sdk::rpc::codes::PLUGIN_DISCONNECTED,
+                            message: message.to_string(),
+                            data: None,
+                        },
+                    },
+                });
+            }
+        }
     }
 
     fn record_status<F>(&self, mutate: F)
@@ -554,7 +711,11 @@ impl Inner {
                 if let Some(handler) = self.host_handler.lock().await.clone() {
                     let method = notif.method;
                     let params = notif.params.unwrap_or(serde_json::Value::Null);
-                    let _ = handler(method, params).await;
+                    tokio::select! {
+                        biased;
+                        _ = self.shutdown.cancelled() => {}
+                        _ = handler(method, params) => {}
+                    }
                 }
             }
         }
@@ -567,14 +728,47 @@ impl Inner {
             active.get(&stream_id).map(|state| state.chunks.clone())
         };
         if let Some(sender) = sender {
-            let _ = sender.send(chunk).await;
+            match sender.try_send(chunk) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    self.remove_abandoned_stream(stream_id.as_str()).await;
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    let state = {
+                        let mut active = self.active_streams.lock().await;
+                        active.remove(stream_id.as_str())
+                    };
+                    if let Some(state) = state {
+                        state.monitor_stop.cancel();
+                        let _ = state.end.send(Err(PluginError::internal(
+                            "plugin stream consumer exceeded the 64-chunk buffer",
+                        )));
+                    }
+                }
+            }
             return;
         }
         let mut buffered = self.buffered_streams.lock().await;
-        buffered
-            .entry(stream_id)
-            .or_default()
-            .push(BufferedStreamEvent::Chunk(chunk));
+        if !buffered.contains_key(stream_id.as_str()) && buffered.len() >= MAX_BUFFERED_STREAMS {
+            tracing::warn!(
+                target: "agena_plugin_host::stdio",
+                stream_id,
+                "dropping an event for an unknown plugin stream because the pre-registration buffer is full"
+            );
+            return;
+        }
+        let events = buffered.entry(stream_id.clone()).or_default();
+        if events.len() >= MAX_BUFFERED_STREAM_EVENTS {
+            events.clear();
+            events.push(BufferedStreamEvent::Error(ToolStreamError {
+                stream_id,
+                error: PluginError::internal(
+                    "plugin stream exceeded the 64-event pre-registration buffer",
+                ),
+            }));
+        } else {
+            events.push(BufferedStreamEvent::Chunk(chunk));
+        }
     }
 
     async fn finish_stream(&self, stream_id: String, result: Result<ToolStreamEnd, PluginError>) {
@@ -583,6 +777,7 @@ impl Inner {
             active.remove(&stream_id)
         };
         if let Some(state) = state {
+            state.monitor_stop.cancel();
             let _ = state.end.send(result);
             return;
         }
@@ -594,20 +789,62 @@ impl Inner {
             }),
         };
         let mut buffered = self.buffered_streams.lock().await;
-        buffered.entry(stream_id).or_default().push(event);
+        if !buffered.contains_key(stream_id.as_str()) && buffered.len() >= MAX_BUFFERED_STREAMS {
+            tracing::warn!(
+                target: "agena_plugin_host::stdio",
+                stream_id,
+                "dropping a terminal event for an unknown plugin stream because the pre-registration buffer is full"
+            );
+            return;
+        }
+        let events = buffered.entry(stream_id).or_default();
+        if events.len() >= MAX_BUFFERED_STREAM_EVENTS {
+            events.clear();
+        }
+        events.push(event);
     }
 
     async fn register_stream(
-        &self,
+        self: &Arc<Self>,
         stream_id: String,
         chunks: mpsc::Sender<ToolStreamChunk>,
         end: oneshot::Sender<Result<ToolStreamEnd, PluginError>>,
     ) {
+        let monitor_stop = CancellationToken::new();
         {
             let mut active = self.active_streams.lock().await;
-            active.insert(stream_id.clone(), ActiveStreamState { chunks, end });
+            active.insert(
+                stream_id.clone(),
+                ActiveStreamState {
+                    chunks: chunks.clone(),
+                    end,
+                    monitor_stop: monitor_stop.clone(),
+                },
+            );
         }
+        let weak = Arc::downgrade(self);
+        let shutdown = self.shutdown.clone();
+        let abandoned_stream_id = stream_id.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                _ = monitor_stop.cancelled() => {}
+                _ = shutdown.cancelled() => {}
+                _ = chunks.closed() => {
+                    if let Some(inner) = weak.upgrade() {
+                        inner.remove_abandoned_stream(abandoned_stream_id.as_str()).await;
+                    }
+                }
+            }
+        });
         self.drain_buffered_stream_events(stream_id).await;
+    }
+
+    async fn remove_abandoned_stream(&self, stream_id: &str) {
+        if let Some(state) = self.active_streams.lock().await.remove(stream_id) {
+            state.monitor_stop.cancel();
+        }
+        self.buffered_streams.lock().await.remove(stream_id);
     }
 
     async fn fail_active_streams(&self, error: PluginError) {
@@ -620,6 +857,7 @@ impl Inner {
             buffered.clear();
         }
         for state in active {
+            state.monitor_stop.cancel();
             let _ = state.end.send(Err(error.clone()));
         }
     }
@@ -680,6 +918,11 @@ async fn read_frame<R: AsyncBufReadExt + Unpin>(
         }
     }
     let len = content_length.ok_or_else(|| TransportError::Rpc("missing Content-Length".into()))?;
+    if len > MAX_FRAME_BYTES {
+        return Err(TransportError::Rpc(format!(
+            "plugin frame exceeds the {MAX_FRAME_BYTES}-byte limit"
+        )));
+    }
     let mut buf = vec![0u8; len];
     reader.read_exact(&mut buf).await?;
     let frame: Frame = serde_json::from_slice(&buf)?;
@@ -693,7 +936,7 @@ impl PluginTransport for StdioTransport {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, TransportError> {
-        let id = self.inner.next_id().await;
+        let id = self.inner.next_id();
         let req_id = RequestId::Num(id);
         let req = Request {
             jsonrpc: JsonRpcVersion,
@@ -738,7 +981,7 @@ impl PluginTransport for StdioTransport {
         &self,
         input: ToolInvokeInput,
     ) -> Result<Option<crate::transport::ToolStreamHandle>, TransportError> {
-        let id = self.inner.next_id().await;
+        let id = self.inner.next_id();
         let req_id = RequestId::Num(id);
         let req = Request {
             jsonrpc: JsonRpcVersion,
@@ -784,6 +1027,13 @@ impl PluginTransport for StdioTransport {
 
     async fn close(&self) -> Result<(), TransportError> {
         self.inner.closed.store(true, Ordering::SeqCst);
+        self.inner.shutdown.cancel();
+        self.inner.fail_pending("plugin transport closed");
+        // A spawn already past its closed check may still be installing a
+        // child. Wait for that transaction, then take exactly the published
+        // generation. A spawn sleeping in restart backoff observes `closed`
+        // after waking and exits without resurrecting the transport.
+        let _spawn_guard = self.inner.spawn_lock.lock().await;
         self.inner
             .fail_active_streams(PluginError::internal("plugin transport closed"))
             .await;
@@ -800,5 +1050,18 @@ impl PluginTransport for StdioTransport {
             serde_json::Value::Null,
         );
         Ok(())
+    }
+}
+
+impl Drop for StdioTransport {
+    fn drop(&mut self) {
+        self.inner.closed.store(true, Ordering::SeqCst);
+        self.inner.shutdown.cancel();
+        self.inner.fail_pending("plugin transport dropped");
+        if let Ok(mut handles) = self.inner.handles.try_lock()
+            && let Some(handles) = handles.as_mut()
+        {
+            let _ = handles.child.start_kill();
+        }
     }
 }

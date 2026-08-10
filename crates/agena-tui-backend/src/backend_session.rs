@@ -220,16 +220,25 @@ impl Backend {
 
     /// Subscribe through the Runtime-owned typed presentation stream. Generic
     /// transport events remain available separately for timeline consumers.
-    pub fn subscribe_session_events(
-        &self,
-        session_id: i64,
-    ) -> Option<mpsc::UnboundedReceiver<LiveEvent>> {
+    pub fn subscribe_session_events(&self, session_id: i64) -> Option<mpsc::Receiver<LiveEvent>> {
+        const SESSION_CHANGE_QUEUE_CAPACITY: usize = 256;
+        const LIVE_EVENT_QUEUE_CAPACITY: usize = 256;
+
         let store = self.application.session_store_facade().ok()?;
         let queries = self.application.session_execution_services().ok()?.queries;
-        let (tx, rx) = mpsc::unbounded_channel::<LiveEvent>();
-        let (change_tx, mut change_rx) = mpsc::unbounded_channel();
-        let subscription = store.subscribe_all(std::sync::Arc::new(move |change| {
-            let _ = change_tx.send(change);
+        let (tx, rx) = mpsc::channel::<LiveEvent>(LIVE_EVENT_QUEUE_CAPACITY);
+        let (change_tx, mut change_rx) = mpsc::channel(SESSION_CHANGE_QUEUE_CAPACITY);
+        let (overflow_tx, mut overflow_rx) = tokio::sync::watch::channel(0u64);
+        let subscription = store.subscribe_all(std::sync::Arc::new(move |change| match change_tx
+            .try_send(change)
+        {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                overflow_tx.send_modify(|generation| {
+                    *generation = generation.wrapping_add(1);
+                });
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {}
         }));
         let change_output = tx.clone();
         tokio::spawn(async move {
@@ -237,6 +246,23 @@ impl Backend {
             loop {
                 let change = tokio::select! {
                     change = change_rx.recv() => change,
+                    changed = overflow_rx.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        if change_output
+                            .send(LiveEvent {
+                                event: None,
+                                triggers_refresh: true,
+                                force_refresh: true,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        continue;
+                    }
                     _ = change_output.closed() => break,
                 };
                 let Some(change) = change else { break };
@@ -261,6 +287,7 @@ impl Backend {
                             triggers_refresh: true,
                             force_refresh: true,
                         })
+                        .await
                         .is_err()
                     {
                         break;
@@ -272,7 +299,7 @@ impl Backend {
                     triggers_refresh: true,
                     force_refresh: false,
                 };
-                if change_output.send(live).is_err() {
+                if change_output.send(live).await.is_err() {
                     break;
                 }
             }
@@ -288,7 +315,7 @@ impl Backend {
                     let Some(item) = item else { break };
                     let live = live_event_from_runtime_signal(item, session_id);
                     if let Some(live) = live
-                        && tx.send(live).is_err()
+                        && tx.send(live).await.is_err()
                     {
                         break;
                     }

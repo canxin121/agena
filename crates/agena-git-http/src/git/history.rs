@@ -10,7 +10,7 @@ use crate::git2_utils;
 
 use super::{
     DirectoryQuery, MAX_BLOB_BYTES, abs_path, git_success_response, git2_open_error_response,
-    is_safe_repo_rel_path, run_git, run_git_checked, run_locked_git_checked,
+    is_safe_repo_rel_path, run_git, run_git_checked, run_locked_git_checked, spawn_libgit2,
 };
 
 #[derive(Debug, Serialize)]
@@ -767,7 +767,7 @@ pub async fn git_commit_file_content(Query(q): Query<GitCommitFileContentQuery>)
 
     let commit = commit.to_string();
     let path = path.to_string();
-    let read_result = tokio::task::spawn_blocking(move || {
+    let read_result = spawn_libgit2(move || {
         let repo = git2_utils::open_repo_discover(&dir)?;
 
         let commit_obj = repo

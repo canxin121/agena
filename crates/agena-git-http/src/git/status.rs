@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::git2_utils;
 
-use super::{MAX_BLOB_BYTES, git2_open_error_response, require_directory_raw, run_git};
+use super::{
+    MAX_BLOB_BYTES, git2_open_error_response, require_directory_raw, run_git, spawn_libgit2,
+};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -173,7 +175,7 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
 
     // Use libgit2 for stable, structured status.
     // Keep output compatible with our current UI (porcelain-like index + working_dir codes).
-    let snapshot = tokio::task::spawn_blocking({
+    let snapshot = spawn_libgit2({
         let dir = dir.clone();
         move || {
             use git2::{BranchType, Status, StatusOptions};
@@ -491,7 +493,7 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
     };
 
     // Validate repository early so the client gets a normal JSON response.
-    let probe = tokio::task::spawn_blocking({
+    let probe = spawn_libgit2({
         let dir = dir.clone();
         move || git2_utils::open_repo_discover(&dir).map(|_| ())
     })
@@ -516,7 +518,7 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
         loop {
             ticker.tick().await;
 
-            let snapshot = tokio::task::spawn_blocking({
+            let snapshot = spawn_libgit2({
                 let dir = dir.clone();
                 move || -> Result<GitWatchStatusPayload, git2_utils::Git2OpenError> {
                     use git2::{BranchType, Status, StatusOptions};

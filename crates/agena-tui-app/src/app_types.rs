@@ -1,6 +1,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    future::Future,
     path::PathBuf,
+    pin::Pin,
     time::{Duration, Instant},
 };
 
@@ -16,7 +18,7 @@ use agena_domain::PermissionMode;
 use agena_domain::PermissionReplyKind;
 use agena_domain::UsagePeriod;
 use agena_domain::UsageStats;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::composer_queue::ComposerQueue;
 use crate::notifications::NotificationStore;
@@ -28,7 +30,7 @@ use agena_tui::main_focus::Focus;
 use agena_tui::presentation_config::TuiConfig;
 use agena_tui::status_line::StatusLinePresentation;
 use agena_tui::usage::{UsageDashboardData, UsageDashboardPresentation};
-use agena_tui_backend::{Backend, LiveEvent, SessionRefresh};
+use agena_tui_backend::{Backend, LiveEvent, SessionPermissionStudioState, SessionRefresh};
 use agena_tui_components::{Editor, InputDialogState};
 use agena_tui_media::{MathGraphicsConfig, MathGraphicsRenderer, MathRenderContext};
 use agena_tui_platform::terminal::TerminalContext;
@@ -62,6 +64,9 @@ pub(super) const TIMELINE_EVENT_LIMIT: u64 = 200;
 // rich tool cards. Ten frames per second keeps spinners responsive without
 // continuously re-rendering a large transcript at ~31 FPS while a tool waits.
 pub(super) const UI_TICK_MS: u64 = 100;
+pub(super) const UI_COMMAND_QUEUE_CAPACITY: usize = 64;
+pub(super) const UI_COMMAND_MAX_CONCURRENCY: usize = 8;
+pub(super) const APP_MESSAGE_QUEUE_CAPACITY: usize = 512;
 pub(super) const REFRESH_INTERVAL_MS: u64 = 250;
 /// Maximum time an in-flight session refresh or state load may remain
 /// unresolved before the TUI force-clears the in-flight flag and resumes
@@ -434,8 +439,17 @@ pub(super) struct PlanDisplayRefreshState {
 pub struct App {
     pub(super) backend: Backend,
     pub(super) i18n: I18n,
-    pub(super) tx: UnboundedSender<AppMessage>,
-    pub(super) rx: UnboundedReceiver<AppMessage>,
+    pub(super) tx: Sender<AppMessage>,
+    pub(super) rx: Receiver<AppMessage>,
+    /// Bounded ingress for backend work initiated by synchronous key/mouse
+    /// handlers. The actor owns concurrency and completion delivery so UI
+    /// code never blocks a Tokio worker to obtain an async result.
+    pub(super) command_tx: Sender<UiCommand>,
+    pub(super) command_rx: Option<Receiver<UiCommand>>,
+    pub(super) command_actor: Option<tokio::task::JoinHandle<()>>,
+    pub(super) settings_runtime_snapshot_summary: Option<String>,
+    pub(super) settings_session_permission: Option<(i64, SessionPermissionStudioState)>,
+    pub(super) session_selection_revision: u64,
     pub(super) launch: LaunchOptions,
     pub(super) math_renderer: Option<MathGraphicsRenderer>,
     pub(super) math_render_context: MathRenderContext,
@@ -560,6 +574,13 @@ pub struct App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        self.rx.close();
+        if let Some(actor) = self.command_actor.take() {
+            actor.abort();
+        }
+        if let Some(subscription) = self.active_subscription.take() {
+            subscription.abort();
+        }
         self.sync_current_draft_slot();
         let _ = self.try_persist_draft_store(true);
         cleanup_temporary_composer_items(self.composer_items.as_slice());
@@ -567,8 +588,8 @@ impl Drop for App {
     }
 }
 
-#[derive(Debug, Clone)]
 pub(super) enum AppMessage {
+    AsyncOperationCompleted(UiCompletion),
     BackgroundActivitySummaryLoaded {
         count: usize,
     },
@@ -742,6 +763,9 @@ pub(super) enum AppMessage {
         parent_id: i64,
     },
 }
+
+pub(super) type UiCompletion = Box<dyn FnOnce(&mut App) + Send + 'static>;
+pub(super) type UiCommand = Pin<Box<dyn Future<Output = UiCompletion> + Send + 'static>>;
 
 #[derive(Debug, Clone)]
 pub(super) enum UiAction {

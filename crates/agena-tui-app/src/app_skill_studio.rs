@@ -128,8 +128,6 @@ impl App {
                 match self.commit_skill_studio_editor(action, document.as_str()) {
                     Ok(()) => {
                         dialog.editor = None;
-                        dialog.detail = None;
-                        self.load_skill_studio_page(dialog, dialog.offset);
                     }
                     Err(error) => self.flash_error(error),
                 }
@@ -208,20 +206,50 @@ impl App {
         dialog.presentation.set_loading(true);
         dialog.presentation.error_message = None;
         dialog.actions.clear();
-        let result = self.skill_studio_session_id().and_then(|session_id| {
-            self.block_on_async(self.backend.invoke_plugin_ui_tool(
-                "agena.skills",
-                "list",
-                serde_json::json!({
-                    "kind": "skill",
-                    "offset": offset,
-                    "limit": dialog.limit,
-                    "verbose": true,
-                }),
-                Some(session_id),
-            ))
-            .map_err(crate::UiFailure::internal)
-        });
+        dialog.offset = offset;
+        let session_id = match self.skill_studio_session_id() {
+            Ok(session_id) => session_id,
+            Err(error) => {
+                dialog.presentation.error_message = Some(error.to_string());
+                dialog.presentation.set_loading(false);
+                return;
+            }
+        };
+        let limit = dialog.limit;
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .invoke_plugin_ui_tool(
+                        "agena.skills",
+                        "list",
+                        serde_json::json!({
+                            "kind": "skill",
+                            "offset": offset,
+                            "limit": limit,
+                            "verbose": true,
+                        }),
+                        Some(session_id),
+                    )
+                    .await
+            },
+            move |app, result| {
+                let route = std::mem::replace(&mut app.current_route, Route::Main);
+                app.current_route = match route {
+                    Route::SkillStudio(mut dialog) if dialog.offset == offset => {
+                        app.apply_skill_studio_page(&mut dialog, result);
+                        Route::SkillStudio(dialog)
+                    }
+                    route => route,
+                };
+            },
+        );
+    }
+
+    fn apply_skill_studio_page(
+        &mut self,
+        dialog: &mut SkillStudioOverlay,
+        result: UiResult<agena_plugin_host::PluginUiToolInvokeResponse>,
+    ) {
         match result.and_then(|response| skill_studio_page(response.payload)) {
             Ok(page) => {
                 dialog.offset = page.offset;
@@ -280,20 +308,46 @@ impl App {
         )
     }
 
-    fn open_skill_studio_detail(&mut self, dialog: &mut SkillStudioOverlay, item: SkillStudioItem) {
-        let result = self.skill_studio_session_id().and_then(|session_id| {
-            self.block_on_async(self.backend.invoke_plugin_ui_tool(
-                "agena.skills",
-                "get",
-                serde_json::json!({ "name": item.name }),
-                Some(session_id),
-            ))
-            .map_err(crate::UiFailure::internal)
-        });
-        match result.and_then(|response| skill_studio_detail(response.payload, item)) {
-            Ok(detail) => dialog.detail = Some(detail),
-            Err(error) => self.flash_error(error),
-        }
+    fn open_skill_studio_detail(
+        &mut self,
+        _dialog: &mut SkillStudioOverlay,
+        item: SkillStudioItem,
+    ) {
+        let session_id = match self.skill_studio_session_id() {
+            Ok(session_id) => session_id,
+            Err(error) => {
+                self.flash_error(error);
+                return;
+            }
+        };
+        let requested_name = item.name.clone();
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .invoke_plugin_ui_tool(
+                        "agena.skills",
+                        "get",
+                        serde_json::json!({ "name": requested_name }),
+                        Some(session_id),
+                    )
+                    .await
+            },
+            move |app, result| {
+                let result =
+                    result.and_then(|response| skill_studio_detail(response.payload, item));
+                let route = std::mem::replace(&mut app.current_route, Route::Main);
+                app.current_route = match route {
+                    Route::SkillStudio(mut dialog) => {
+                        match result {
+                            Ok(detail) => dialog.detail = Some(detail),
+                            Err(error) => app.flash_error(error),
+                        }
+                        Route::SkillStudio(dialog)
+                    }
+                    route => route,
+                };
+            },
+        );
     }
 
     fn open_skill_studio_create_editor(&mut self, dialog: &mut SkillStudioOverlay) {
@@ -341,21 +395,37 @@ impl App {
                 serde_json::json!({ "name": name, "document": document }),
             ),
         };
-        let response = self.block_on_async(self.backend.invoke_plugin_ui_tool(
-            "agena.skills",
-            tool,
-            input,
-            Some(session_id),
-        ));
-        let response = response.map_err(crate::UiFailure::internal)?;
-        let message = response
-            .payload
-            .as_ref()
-            .and_then(|payload| payload.get("operation"))
-            .and_then(Value::as_str)
-            .map(|operation| format!("Skill {operation}."))
-            .unwrap_or_else(|| ui_text::t(&self.i18n, "flash-skill-studio-saved"));
-        self.flash_success(message);
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .invoke_plugin_ui_tool("agena.skills", tool, input, Some(session_id))
+                    .await
+            },
+            |app, result| match result {
+                Ok(response) => {
+                    let message = response
+                        .payload
+                        .as_ref()
+                        .and_then(|payload| payload.get("operation"))
+                        .and_then(Value::as_str)
+                        .map(|operation| format!("Skill {operation}."))
+                        .unwrap_or_else(|| ui_text::t(&app.i18n, "flash-skill-studio-saved"));
+                    app.flash_success(message);
+                    let route = std::mem::replace(&mut app.current_route, Route::Main);
+                    app.current_route = match route {
+                        Route::SkillStudio(mut dialog) => {
+                            dialog.editor = None;
+                            dialog.detail = None;
+                            let offset = dialog.offset;
+                            app.load_skill_studio_page(&mut dialog, offset);
+                            Route::SkillStudio(dialog)
+                        }
+                        route => route,
+                    };
+                }
+                Err(error) => app.flash_error(error),
+            },
+        );
         Ok(())
     }
 
@@ -374,31 +444,42 @@ impl App {
     }
 
     pub(crate) fn delete_skill_studio_skill(&mut self, name: &str) {
-        let route = std::mem::replace(&mut self.current_route, Route::Main);
-        let Route::SkillStudio(mut dialog) = route else {
-            self.flash_error("Skill management context was lost.".to_owned());
-            self.current_route = route;
-            return;
-        };
-        let result = self.skill_studio_session_id().and_then(|session_id| {
-            self.block_on_async(self.backend.invoke_plugin_ui_tool(
-                "agena.skills",
-                "delete",
-                serde_json::json!({ "name": name }),
-                Some(session_id),
-            ))
-            .map_err(crate::UiFailure::internal)
-        });
-        match result {
-            Ok(_) => {
-                dialog.detail = None;
-                let offset = dialog.offset;
-                self.load_skill_studio_page(&mut dialog, offset);
-                self.flash_success(ui_text::t(&self.i18n, "flash-skill-studio-deleted"));
+        let session_id = match self.skill_studio_session_id() {
+            Ok(session_id) => session_id,
+            Err(error) => {
+                self.flash_error(error);
+                return;
             }
-            Err(error) => self.flash_error(error),
-        }
-        self.current_route = Route::SkillStudio(dialog);
+        };
+        let name = name.to_string();
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .invoke_plugin_ui_tool(
+                        "agena.skills",
+                        "delete",
+                        serde_json::json!({ "name": name }),
+                        Some(session_id),
+                    )
+                    .await
+            },
+            |app, result| match result {
+                Ok(_) => {
+                    let route = std::mem::replace(&mut app.current_route, Route::Main);
+                    app.current_route = match route {
+                        Route::SkillStudio(mut dialog) => {
+                            dialog.detail = None;
+                            let offset = dialog.offset;
+                            app.load_skill_studio_page(&mut dialog, offset);
+                            Route::SkillStudio(dialog)
+                        }
+                        route => route,
+                    };
+                    app.flash_success(ui_text::t(&app.i18n, "flash-skill-studio-deleted"));
+                }
+                Err(error) => app.flash_error(error),
+            },
+        );
     }
 
     fn skill_studio_session_id(&self) -> UiResult<i64> {

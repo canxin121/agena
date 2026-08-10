@@ -1,6 +1,9 @@
 use std::{
     collections::BTreeMap,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -113,11 +116,18 @@ impl Harness {
         input: Value,
         expected_text: &str,
     ) -> anyhow::Result<ToolApiOutcome> {
-        let (change_tx, mut changes) = tokio::sync::mpsc::unbounded_channel();
+        let (change_tx, mut changes) = tokio::sync::mpsc::channel(256);
+        let changes_overflowed = Arc::new(AtomicBool::new(false));
+        let callback_overflowed = Arc::clone(&changes_overflowed);
         let _subscription = self.session_store.subscribe(
             session_id,
             Arc::new(move |change| {
-                let _ = change_tx.send(change);
+                if matches!(
+                    change_tx.try_send(change),
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_))
+                ) {
+                    callback_overflowed.store(true, Ordering::Release);
+                }
             }),
         );
         let outcome = self
@@ -130,7 +140,14 @@ impl Harness {
                 true,
             )
             .await?;
-        assert_outer_tool_api_stream_update(&mut changes, tool_name, &input, expected_text).await?;
+        assert_outer_tool_api_stream_update(
+            &mut changes,
+            changes_overflowed.as_ref(),
+            tool_name,
+            &input,
+            expected_text,
+        )
+        .await?;
         Ok(outcome)
     }
 
@@ -710,7 +727,8 @@ pub(super) fn assert_contains(outcome: &ToolApiOutcome, expected: &str) -> anyho
 /// same text. Require a live v2 part patch where the outer Tool API operation
 /// is still in progress and contains a streamed chunk.
 pub(super) async fn assert_outer_tool_api_stream_update(
-    changes: &mut tokio::sync::mpsc::UnboundedReceiver<SessionChange>,
+    changes: &mut tokio::sync::mpsc::Receiver<SessionChange>,
+    changes_overflowed: &AtomicBool,
     tool_name: &str,
     input: &Value,
     expected_text: &str,
@@ -718,6 +736,10 @@ pub(super) async fn assert_outer_tool_api_stream_update(
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut observed_operations = Vec::new();
     loop {
+        ensure!(
+            !changes_overflowed.load(Ordering::Acquire),
+            "session change queue overflowed while awaiting streamed Tool API update"
+        );
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             bail!(

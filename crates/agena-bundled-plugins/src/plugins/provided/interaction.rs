@@ -37,8 +37,7 @@ impl InteractionPlugin {
         tags(interactive),
         summary = "Ask the user for short structured input.",
         help = "Use only when you are blocked on a decision that belongs to the user: a preference, a direction choice, or a choice with no reasonable default. If a sensible default exists or you can verify the answer yourself, proceed instead of asking. Ask all necessary clarifying questions at once. Never use this tool to ask whether you should proceed or to seek plan approval.",
-        interactive,
-
+        interactive
     )]
     async fn ask(&self, input: &AskUserToolInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_ask_user(input).await

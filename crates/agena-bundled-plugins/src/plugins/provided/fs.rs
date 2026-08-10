@@ -128,7 +128,6 @@ impl FsPlugin {
         summary = "Read workspace files.",
         help = "Use `read` for text previews, directory listings, or file attachments via `mode = text|attachment|auto` (default `auto`).",
         read_only,
-
         examples(r#"{"path":"Cargo.toml"}"#),
         concurrency_safe
     )]
@@ -137,7 +136,7 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         args: ReadToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        invoke_internal(context, "read", args)
+        invoke_internal(context, "read", args).await
     }
 
     #[tool(
@@ -145,7 +144,6 @@ impl FsPlugin {
         summary = "Find paths with glob patterns.",
         help = "Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and dependency/VCS/build directories are skipped unless `include_ignored` is true or the base path explicitly names one.",
         read_only,
-
         discovery,
         examples(r#"{"pattern":"**/*.rs","path":"crates"}"#),
         concurrency_safe
@@ -155,7 +153,7 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         args: GlobToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        invoke_internal(context, "glob", args)
+        invoke_internal(context, "glob", args).await
     }
 
     #[tool(
@@ -163,7 +161,6 @@ impl FsPlugin {
         summary = "Search file contents with regex.",
         help = "Use `grep` for regex text search. `path` may be a directory (searched recursively) or a single file; it defaults to the workspace root.",
         read_only,
-
         discovery,
         examples(r#"{"pattern":"agena_plugin","path":"crates"}"#),
         concurrency_safe
@@ -173,7 +170,7 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         args: GrepToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        invoke_internal(context, "grep", args)
+        invoke_internal(context, "grep", args).await
     }
 
     #[tool(
@@ -191,7 +188,7 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         args: ApplyPatchToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        invoke_internal(context, "apply_patch", args)
+        invoke_internal(context, "apply_patch", args).await
     }
 
     #[tool(
@@ -208,64 +205,69 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &WriteFileInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let target = resolve_path(context.workspace_root, input.path.as_str());
-        let existed = target.exists();
-        if existed {
-            let expected = input.expected_sha256.as_deref().ok_or_else(|| {
-                PluginError::invalid_params(
-                    "expected_sha256 is required when fs.write replaces an existing file",
-                )
-            })?;
-            verify_expected_hash(&target, expected)?;
-        } else if input.expected_sha256.is_some() {
-            return Err(PluginError::invalid_params(
-                "expected_sha256 was supplied but the target does not exist",
-            ));
-        }
-        if let Some(parent) = target.parent()
-            && !parent.exists()
-        {
-            if input.create_parents {
-                std::fs::create_dir_all(parent).map_err(fs_error)?;
-            } else {
-                return Err(PluginError::invalid_params(format!(
-                    "parent directory does not exist: {}",
-                    parent.display()
-                )));
+        let workspace_root = context.workspace_root.to_string();
+        let input = input.clone();
+        run_fs_blocking(move || {
+            let target = resolve_path(workspace_root.as_str(), input.path.as_str());
+            let existed = target.exists();
+            if existed {
+                let expected = input.expected_sha256.as_deref().ok_or_else(|| {
+                    PluginError::invalid_params(
+                        "expected_sha256 is required when fs.write replaces an existing file",
+                    )
+                })?;
+                verify_expected_hash(&target, expected)?;
+            } else if input.expected_sha256.is_some() {
+                return Err(PluginError::invalid_params(
+                    "expected_sha256 was supplied but the target does not exist",
+                ));
             }
-        }
-        std::fs::write(&target, input.content.as_bytes()).map_err(fs_error)?;
-        let hash = sha256_bytes(input.content.as_bytes());
-        Ok(ToolInvokeOutput::from_parts(
-            format!(
-                "{} {}",
-                if existed { "updated" } else { "created" },
-                input.path
-            ),
-            format!(
-                "{} · {} bytes",
-                if existed { "Updated" } else { "Created" },
-                input.content.len()
-            ),
-            format!(
-                "{} '{}' ({} bytes, sha256={hash}).",
-                if existed { "Updated" } else { "Created" },
-                input.path,
-                input.content.len()
-            ),
-            Some(serde_json::json!({
-                "path": input.path,
-                "kind": if existed { "updated" } else { "created" },
-                "bytes": input.content.len(),
-                "sha256": hash,
-            })),
-            std::collections::BTreeMap::from([
-                ("agena.effect".to_string(), "file_changes".to_string()),
-                ("path".to_string(), input.path.clone()),
-                ("sha256".to_string(), hash),
-            ]),
-            Vec::new(),
-        ))
+            if let Some(parent) = target.parent()
+                && !parent.exists()
+            {
+                if input.create_parents {
+                    std::fs::create_dir_all(parent).map_err(fs_error)?;
+                } else {
+                    return Err(PluginError::invalid_params(format!(
+                        "parent directory does not exist: {}",
+                        parent.display()
+                    )));
+                }
+            }
+            std::fs::write(&target, input.content.as_bytes()).map_err(fs_error)?;
+            let hash = sha256_bytes(input.content.as_bytes());
+            Ok(ToolInvokeOutput::from_parts(
+                format!(
+                    "{} {}",
+                    if existed { "updated" } else { "created" },
+                    input.path
+                ),
+                format!(
+                    "{} · {} bytes",
+                    if existed { "Updated" } else { "Created" },
+                    input.content.len()
+                ),
+                format!(
+                    "{} '{}' ({} bytes, sha256={hash}).",
+                    if existed { "Updated" } else { "Created" },
+                    input.path,
+                    input.content.len()
+                ),
+                Some(serde_json::json!({
+                    "path": input.path,
+                    "kind": if existed { "updated" } else { "created" },
+                    "bytes": input.content.len(),
+                    "sha256": hash,
+                })),
+                std::collections::BTreeMap::from([
+                    ("agena.effect".to_string(), "file_changes".to_string()),
+                    ("path".to_string(), input.path.clone()),
+                    ("sha256".to_string(), hash),
+                ]),
+                Vec::new(),
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -282,57 +284,62 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &ReplaceFileInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let target = resolve_path(context.workspace_root, input.path.as_str());
-        if !target.is_file() {
-            return Err(PluginError::invalid_params(format!(
-                "replace target is not a file: {}",
-                input.path
-            )));
-        }
-        if let Some(expected) = input.expected_sha256.as_deref() {
-            verify_expected_hash(&target, expected)?;
-        }
-        let original = std::fs::read_to_string(&target).map_err(fs_error)?;
-        let occurrences = original.match_indices(input.old.as_str()).count();
-        if occurrences != input.expected_occurrences as usize {
-            return Err(PluginError::invalid_params(format!(
-                "expected {} occurrence(s) of old text in '{}', found {occurrences}",
-                input.expected_occurrences, input.path
-            )));
-        }
-        let updated = if input.replace_all {
-            original.replace(input.old.as_str(), input.new.as_str())
-        } else {
-            original.replacen(input.old.as_str(), input.new.as_str(), 1)
-        };
-        std::fs::write(&target, updated.as_bytes()).map_err(fs_error)?;
-        let before_sha256 = sha256_bytes(original.as_bytes());
-        let after_sha256 = sha256_bytes(updated.as_bytes());
-        Ok(ToolInvokeOutput::from_parts(
-            format!("replaced text in {}", input.path),
-            format!(
-                "{} replacements",
-                if input.replace_all { occurrences } else { 1 }
-            ),
-            format!(
-                "Replaced {} occurrence(s) in '{}' (sha256 {before_sha256} -> {after_sha256}).",
-                if input.replace_all { occurrences } else { 1 },
-                input.path
-            ),
-            Some(serde_json::json!({
-                "path": input.path,
-                "replacements": if input.replace_all { occurrences } else { 1 },
-                "before_sha256": before_sha256,
-                "after_sha256": after_sha256,
-            })),
-            std::collections::BTreeMap::from([
-                ("agena.effect".to_string(), "file_changes".to_string()),
-                ("path".to_string(), input.path.clone()),
-                ("before_sha256".to_string(), before_sha256),
-                ("after_sha256".to_string(), after_sha256),
-            ]),
-            Vec::new(),
-        ))
+        let workspace_root = context.workspace_root.to_string();
+        let input = input.clone();
+        run_fs_blocking(move || {
+            let target = resolve_path(workspace_root.as_str(), input.path.as_str());
+            if !target.is_file() {
+                return Err(PluginError::invalid_params(format!(
+                    "replace target is not a file: {}",
+                    input.path
+                )));
+            }
+            if let Some(expected) = input.expected_sha256.as_deref() {
+                verify_expected_hash(&target, expected)?;
+            }
+            let original = std::fs::read_to_string(&target).map_err(fs_error)?;
+            let occurrences = original.match_indices(input.old.as_str()).count();
+            if occurrences != input.expected_occurrences as usize {
+                return Err(PluginError::invalid_params(format!(
+                    "expected {} occurrence(s) of old text in '{}', found {occurrences}",
+                    input.expected_occurrences, input.path
+                )));
+            }
+            let updated = if input.replace_all {
+                original.replace(input.old.as_str(), input.new.as_str())
+            } else {
+                original.replacen(input.old.as_str(), input.new.as_str(), 1)
+            };
+            std::fs::write(&target, updated.as_bytes()).map_err(fs_error)?;
+            let before_sha256 = sha256_bytes(original.as_bytes());
+            let after_sha256 = sha256_bytes(updated.as_bytes());
+            Ok(ToolInvokeOutput::from_parts(
+                format!("replaced text in {}", input.path),
+                format!(
+                    "{} replacements",
+                    if input.replace_all { occurrences } else { 1 }
+                ),
+                format!(
+                    "Replaced {} occurrence(s) in '{}' (sha256 {before_sha256} -> {after_sha256}).",
+                    if input.replace_all { occurrences } else { 1 },
+                    input.path
+                ),
+                Some(serde_json::json!({
+                    "path": input.path,
+                    "replacements": if input.replace_all { occurrences } else { 1 },
+                    "before_sha256": before_sha256,
+                    "after_sha256": after_sha256,
+                })),
+                std::collections::BTreeMap::from([
+                    ("agena.effect".to_string(), "file_changes".to_string()),
+                    ("path".to_string(), input.path.clone()),
+                    ("before_sha256".to_string(), before_sha256),
+                    ("after_sha256".to_string(), after_sha256),
+                ]),
+                Vec::new(),
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -348,59 +355,66 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &ReadManyInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let mut remaining = input.max_total_bytes as usize;
-        let mut sections = Vec::new();
-        let mut entries = Vec::new();
-        let mut truncated = false;
-        for path in &input.paths {
-            let target = resolve_path(context.workspace_root, path);
-            if !target.is_file() {
-                entries.push(serde_json::json!({ "path": path, "error": "not a file" }));
-                continue;
+        let workspace_root = context.workspace_root.to_string();
+        let input = input.clone();
+        run_fs_blocking(move || {
+            let mut remaining = input.max_total_bytes as usize;
+            let mut sections = Vec::new();
+            let mut entries = Vec::new();
+            let mut truncated = false;
+            for path in &input.paths {
+                let target = resolve_path(workspace_root.as_str(), path);
+                if !target.is_file() {
+                    entries.push(serde_json::json!({ "path": path, "error": "not a file" }));
+                    continue;
+                }
+                let bytes = std::fs::read(&target).map_err(fs_error)?;
+                let text = String::from_utf8(bytes).map_err(|_| {
+                    PluginError::invalid_params(format!(
+                        "read_many target is not UTF-8 text: {path}"
+                    ))
+                })?;
+                let take = text.len().min(remaining);
+                let boundary = floor_char_boundary(text.as_str(), take);
+                let preview = &text[..boundary];
+                let file_truncated = boundary < text.len();
+                sections.push(format!("===== {path} =====\n{preview}"));
+                entries.push(serde_json::json!({
+                    "path": path,
+                    "bytes": text.len(),
+                    "returned_bytes": boundary,
+                    "truncated": file_truncated,
+                    "sha256": sha256_bytes(text.as_bytes()),
+                }));
+                remaining = remaining.saturating_sub(boundary);
+                truncated |= file_truncated;
+                if remaining == 0 {
+                    truncated |= entries.len() < input.paths.len();
+                    break;
+                }
             }
-            let bytes = std::fs::read(&target).map_err(fs_error)?;
-            let text = String::from_utf8(bytes).map_err(|_| {
-                PluginError::invalid_params(format!("read_many target is not UTF-8 text: {path}"))
-            })?;
-            let take = text.len().min(remaining);
-            let boundary = floor_char_boundary(text.as_str(), take);
-            let preview = &text[..boundary];
-            let file_truncated = boundary < text.len();
-            sections.push(format!("===== {path} =====\n{preview}"));
-            entries.push(serde_json::json!({
-                "path": path,
-                "bytes": text.len(),
-                "returned_bytes": boundary,
-                "truncated": file_truncated,
-                "sha256": sha256_bytes(text.as_bytes()),
-            }));
-            remaining = remaining.saturating_sub(boundary);
-            truncated |= file_truncated;
-            if remaining == 0 {
-                truncated |= entries.len() < input.paths.len();
-                break;
-            }
-        }
-        Ok(ToolInvokeOutput::from_parts(
-            format!("read {} files", entries.len()),
-            if truncated {
-                format!("{} files · truncated", entries.len())
-            } else {
-                format!("{} files", entries.len())
-            },
-            sections.join("\n\n"),
-            Some(serde_json::json!({
-                "files": entries,
-                "max_total_bytes": input.max_total_bytes,
-                "remaining_bytes": remaining,
-                "truncated": truncated,
-            })),
-            std::collections::BTreeMap::from([
-                ("file_count".to_string(), entries.len().to_string()),
-                ("truncated".to_string(), truncated.to_string()),
-            ]),
-            Vec::new(),
-        ))
+            Ok(ToolInvokeOutput::from_parts(
+                format!("read {} files", entries.len()),
+                if truncated {
+                    format!("{} files · truncated", entries.len())
+                } else {
+                    format!("{} files", entries.len())
+                },
+                sections.join("\n\n"),
+                Some(serde_json::json!({
+                    "files": entries,
+                    "max_total_bytes": input.max_total_bytes,
+                    "remaining_bytes": remaining,
+                    "truncated": truncated,
+                })),
+                std::collections::BTreeMap::from([
+                    ("file_count".to_string(), entries.len().to_string()),
+                    ("truncated".to_string(), truncated.to_string()),
+                ]),
+                Vec::new(),
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -416,51 +430,56 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &StatInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let target = resolve_path(context.workspace_root, input.path.as_str());
-        let metadata = std::fs::symlink_metadata(&target).map_err(fs_error)?;
-        let file_type = if metadata.file_type().is_symlink() {
-            "symlink"
-        } else if metadata.is_dir() {
-            "directory"
-        } else if metadata.is_file() {
-            "file"
-        } else {
-            "other"
-        };
-        let modified_at_ms = metadata
-            .modified()
-            .ok()
-            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-            .and_then(|value| i64::try_from(value.as_millis()).ok());
-        let hash = if input.hash && metadata.is_file() {
-            Some(sha256_file(&target)?)
-        } else {
-            None
-        };
-        let symlink_target = metadata
-            .file_type()
-            .is_symlink()
-            .then(|| std::fs::read_link(&target).ok())
-            .flatten()
-            .map(|path| path.display().to_string());
-        let payload = serde_json::json!({
-            "path": input.path,
-            "kind": file_type,
-            "size": metadata.len(),
-            "modified_at_ms": modified_at_ms,
-            "readonly": metadata.permissions().readonly(),
-            "sha256": hash,
-            "symlink_target": symlink_target,
-        });
-        Ok(ToolInvokeOutput::from_parts(
-            format!("stat {}", input.path),
-            format!("{file_type} · {} bytes", metadata.len()),
-            serde_json::to_string_pretty(&payload)
-                .map_err(|error| PluginError::internal(error.to_string()))?,
-            Some(payload),
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
+        let workspace_root = context.workspace_root.to_string();
+        let input = input.clone();
+        run_fs_blocking(move || {
+            let target = resolve_path(workspace_root.as_str(), input.path.as_str());
+            let metadata = std::fs::symlink_metadata(&target).map_err(fs_error)?;
+            let file_type = if metadata.file_type().is_symlink() {
+                "symlink"
+            } else if metadata.is_dir() {
+                "directory"
+            } else if metadata.is_file() {
+                "file"
+            } else {
+                "other"
+            };
+            let modified_at_ms = metadata
+                .modified()
+                .ok()
+                .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+                .and_then(|value| i64::try_from(value.as_millis()).ok());
+            let hash = if input.hash && metadata.is_file() {
+                Some(sha256_file(&target)?)
+            } else {
+                None
+            };
+            let symlink_target = metadata
+                .file_type()
+                .is_symlink()
+                .then(|| std::fs::read_link(&target).ok())
+                .flatten()
+                .map(|path| path.display().to_string());
+            let payload = serde_json::json!({
+                "path": input.path,
+                "kind": file_type,
+                "size": metadata.len(),
+                "modified_at_ms": modified_at_ms,
+                "readonly": metadata.permissions().readonly(),
+                "sha256": hash,
+                "symlink_target": symlink_target,
+            });
+            Ok(ToolInvokeOutput::from_parts(
+                format!("stat {}", input.path),
+                format!("{file_type} · {} bytes", metadata.len()),
+                serde_json::to_string_pretty(&payload)
+                    .map_err(|error| PluginError::internal(error.to_string()))?,
+                Some(payload),
+                std::collections::BTreeMap::new(),
+                Vec::new(),
+            ))
+        })
+        .await
     }
 
     #[tool(
@@ -476,85 +495,105 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &ViewImageInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let target = resolve_path(context.workspace_root, input.path.as_str());
-        let metadata = std::fs::metadata(&target).map_err(fs_error)?;
-        if !metadata.is_file() {
-            return Err(PluginError::invalid_params(format!(
-                "image target is not a file: {}",
-                input.path
-            )));
-        }
-        const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
-        if metadata.len() > MAX_IMAGE_BYTES {
-            return Err(PluginError::invalid_params(format!(
-                "image exceeds the {} MiB safety limit",
-                MAX_IMAGE_BYTES / 1024 / 1024
-            )));
-        }
-        let mime = image_mime(&target).ok_or_else(|| {
-            PluginError::invalid_params(
-                "unsupported image extension; expected png, jpg/jpeg, gif, webp, bmp, or svg",
-            )
-        })?;
-        let hash = sha256_file(&target)?;
-        let detail = match input.detail {
-            ImageDetail::Low => "low",
-            ImageDetail::High => "high",
-            ImageDetail::Original => "original",
-        };
-        let attachment = AttachmentItem {
-            kind: AttachmentKind::Image,
-            mime: mime.to_string(),
-            source: AttachmentSource::LocalPath {
-                path: target.to_string_lossy().to_string(),
-            },
-            filename: target
-                .file_name()
-                .and_then(|value| value.to_str())
-                .map(ToOwned::to_owned),
-            title: Some(format!("{} ({detail} detail)", input.path)),
-            size_bytes: Some(metadata.len()),
-            sha256: Some(hash.clone()),
-            width: None,
-            height: None,
-            duration_ms: None,
-            page_count: None,
-        };
-        Ok(ToolInvokeOutput::from_parts(
-            format!("view image {}", input.path),
-            format!("{mime} · {} bytes · {detail}", metadata.len()),
-            format!(
-                "Attached '{}' for visual inspection (detail={detail}, {} bytes).",
-                input.path,
-                metadata.len()
-            ),
-            Some(serde_json::json!({
-                "path": input.path,
-                "detail": detail,
-                "mime": mime,
-                "size_bytes": metadata.len(),
-                "sha256": hash,
-            })),
-            std::collections::BTreeMap::from([
-                ("detail".to_string(), detail.to_string()),
-                ("sha256".to_string(), hash),
-            ]),
-            vec![attachment],
-        ))
+        let workspace_root = context.workspace_root.to_string();
+        let input = input.clone();
+        run_fs_blocking(move || {
+            let target = resolve_path(workspace_root.as_str(), input.path.as_str());
+            let metadata = std::fs::metadata(&target).map_err(fs_error)?;
+            if !metadata.is_file() {
+                return Err(PluginError::invalid_params(format!(
+                    "image target is not a file: {}",
+                    input.path
+                )));
+            }
+            const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
+            if metadata.len() > MAX_IMAGE_BYTES {
+                return Err(PluginError::invalid_params(format!(
+                    "image exceeds the {} MiB safety limit",
+                    MAX_IMAGE_BYTES / 1024 / 1024
+                )));
+            }
+            let mime = image_mime(&target).ok_or_else(|| {
+                PluginError::invalid_params(
+                    "unsupported image extension; expected png, jpg/jpeg, gif, webp, bmp, or svg",
+                )
+            })?;
+            let hash = sha256_file(&target)?;
+            let detail = match input.detail {
+                ImageDetail::Low => "low",
+                ImageDetail::High => "high",
+                ImageDetail::Original => "original",
+            };
+            let attachment = AttachmentItem {
+                kind: AttachmentKind::Image,
+                mime: mime.to_string(),
+                source: AttachmentSource::LocalPath {
+                    path: target.to_string_lossy().to_string(),
+                },
+                filename: target
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .map(ToOwned::to_owned),
+                title: Some(format!("{} ({detail} detail)", input.path)),
+                size_bytes: Some(metadata.len()),
+                sha256: Some(hash.clone()),
+                width: None,
+                height: None,
+                duration_ms: None,
+                page_count: None,
+            };
+            Ok(ToolInvokeOutput::from_parts(
+                format!("view image {}", input.path),
+                format!("{mime} · {} bytes · {detail}", metadata.len()),
+                format!(
+                    "Attached '{}' for visual inspection (detail={detail}, {} bytes).",
+                    input.path,
+                    metadata.len()
+                ),
+                Some(serde_json::json!({
+                    "path": input.path,
+                    "detail": detail,
+                    "mime": mime,
+                    "size_bytes": metadata.len(),
+                    "sha256": hash,
+                })),
+                std::collections::BTreeMap::from([
+                    ("detail".to_string(), detail.to_string()),
+                    ("sha256".to_string(), hash),
+                ]),
+                vec![attachment],
+            ))
+        })
+        .await
     }
 }
 
-fn invoke_internal<T: Serialize>(
+async fn invoke_internal<T: Serialize + Send + 'static>(
     context: &ToolInvokeContext<'_>,
-    tool: &str,
+    tool: &'static str,
     input: T,
 ) -> SdkResult<ToolInvokeOutput> {
-    router::invoke_tool(
-        tool,
-        json_input(input)?,
-        context.session_id,
-        context.call_id,
-    )
+    let input = json_input(input)?;
+    let session_id = context.session_id;
+    let call_id = context.call_id;
+    run_fs_blocking(move || router::invoke_tool(tool, input, session_id, call_id)).await
+}
+
+async fn run_fs_blocking<T, F>(operation: F) -> SdkResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> SdkResult<T> + Send + 'static,
+{
+    let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
+        .acquire()
+        .await
+        .map_err(|_| PluginError::internal("filesystem worker pool is unavailable"))?;
+    tokio::task::spawn_blocking(move || {
+        let _worker_permit = worker_permit;
+        operation()
+    })
+    .await
+    .map_err(|error| PluginError::internal(format!("filesystem worker failed: {error}")))?
 }
 
 fn permission_paths_internal<T: Serialize + ?Sized>(

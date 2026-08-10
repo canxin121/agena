@@ -12,7 +12,6 @@ pub(crate) mod glob;
 pub(crate) mod grep;
 pub mod human_view;
 pub(crate) mod lsp;
-pub(crate) mod mcp;
 pub(crate) mod orchestrator;
 mod output_helpers;
 pub mod payload;

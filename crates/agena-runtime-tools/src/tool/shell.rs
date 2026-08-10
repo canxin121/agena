@@ -8,13 +8,24 @@
 use std::collections::HashMap;
 use std::io::{self, Read};
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::{Arc, LazyLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use agena_domain::CommandOutputStream;
 use agena_tool::{ShellError, ShellOutput, ShellRequest};
 use tokio_util::sync::CancellationToken;
+
+const OUTPUT_CHUNK_QUEUE_CAPACITY: usize = 128;
+const MAX_CAPTURE_BYTES_PER_STREAM: usize = 8 * 1024 * 1024;
+const MAX_CONCURRENT_SHELL_WORKERS: usize = 16;
+static SHELL_WORKERS: LazyLock<Arc<tokio::sync::Semaphore>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_SHELL_WORKERS)));
+
+pub(crate) async fn acquire_worker_permit() -> Option<tokio::sync::OwnedSemaphorePermit> {
+    Arc::clone(&SHELL_WORKERS).acquire_owned().await.ok()
+}
 
 /// Run a command synchronously, scrubbing dangerous loader env vars and
 /// enforcing `timeout_ms` via a watchdog thread.
@@ -67,7 +78,7 @@ pub fn execute_with_callback(
 
     // Drain stdout / stderr off-thread so a child that fills its pipe
     // buffers cannot deadlock the parent.
-    let (chunk_tx, chunk_rx) = mpsc::channel();
+    let (chunk_tx, chunk_rx) = mpsc::sync_channel(OUTPUT_CHUNK_QUEUE_CAPACITY);
     let stdout_handle = child
         .stdout
         .take()
@@ -288,24 +299,31 @@ struct OutputChunk {
 fn spawn_drain<R>(
     mut reader: R,
     stream: CommandOutputStream,
-    sender: Sender<OutputChunk>,
+    sender: SyncSender<OutputChunk>,
 ) -> thread::JoinHandle<io::Result<String>>
 where
     R: Read + Send + 'static,
 {
     thread::spawn(move || {
         let mut buf = Vec::new();
+        let mut truncated = false;
         let mut chunk = [0_u8; 8 * 1024];
         loop {
             let read = reader.read(&mut chunk)?;
             if read == 0 {
                 break;
             }
-            buf.extend_from_slice(&chunk[..read]);
-            let _ = sender.send(OutputChunk {
+            let remaining = MAX_CAPTURE_BYTES_PER_STREAM.saturating_sub(buf.len());
+            let captured = remaining.min(read);
+            buf.extend_from_slice(&chunk[..captured]);
+            truncated |= captured < read;
+            let _ = sender.try_send(OutputChunk {
                 stream: stream.clone(),
                 bytes: chunk[..read].to_vec(),
             });
+        }
+        if truncated {
+            buf.extend_from_slice(b"\n[output truncated after 8 MiB]\n");
         }
         Ok(String::from_utf8_lossy(&buf).into_owned())
     })

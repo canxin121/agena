@@ -488,6 +488,10 @@ pub struct PreparedToolInvocation {
 pub struct PreparedShellCommand {
     pub command: String,
     pub cwd: std::path::PathBuf,
+    /// Fully resolved environment after `shell.env` and `command.before`
+    /// hooks. Carrying it with the prepared command prevents execution from
+    /// re-entering synchronous plugin hooks on a blocking worker.
+    pub env: std::collections::HashMap<String, String>,
 }
 
 /// Maximum-character policy applied by concrete tool-output truncators.
@@ -572,6 +576,7 @@ mod tests {
         let command = PreparedShellCommand {
             command: "echo ok".to_string(),
             cwd: std::path::PathBuf::from("/tmp"),
+            env: std::collections::HashMap::new(),
         };
         assert_eq!(command.command, "echo ok");
         assert_eq!(command.cwd, std::path::Path::new("/tmp"));

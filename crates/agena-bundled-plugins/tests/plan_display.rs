@@ -113,12 +113,8 @@ impl HostClient for FakeHostClient {
     }
 }
 
-fn build_host(
-    runtime: &tokio::runtime::Runtime,
-    tmp: &tempfile::TempDir,
-    host_client: Arc<dyn HostClient>,
-) -> Arc<PluginHost> {
-    build_host_with_previous(runtime, tmp, host_client, None, HashMap::new())
+async fn build_host(tmp: &tempfile::TempDir, host_client: Arc<dyn HostClient>) -> Arc<PluginHost> {
+    build_host_with_previous(tmp, host_client, None, HashMap::new()).await
 }
 
 /// Like [`build_host`] but allows simulating a runtime reload / process
@@ -128,8 +124,7 @@ fn build_host(
 /// `RuntimeSnapshot::build_inner` derives from the previous `PluginsConfig`
 /// (`PluginHostBuildConfig::previous_plugins`) so the hot-reload transport
 /// reuse path is exercised when the config is byte-identical.
-fn build_host_with_previous(
-    runtime: &tokio::runtime::Runtime,
+async fn build_host_with_previous(
     tmp: &tempfile::TempDir,
     host_client: Arc<dyn HostClient>,
     previous: Option<Arc<PluginHost>>,
@@ -137,33 +132,32 @@ fn build_host_with_previous(
 ) -> Arc<PluginHost> {
     let mut list = BTreeMap::new();
     list.insert("agena.plan".to_string(), ConfiguredPlugin::static_default());
-    runtime
-        .block_on(PluginHost::new(PluginHostBuildConfig {
-            static_plugins: vec![StaticPluginRegistration::new(
-                "agena.plan".parse().unwrap(),
-                agena_bundled_plugins::tool::new_plan_plugin(),
-            )],
-            config: PluginsConfig {
-                list,
-                ..Default::default()
-            },
-            workspace_root: tmp.path().to_path_buf(),
-            agena_version: "test".to_string(),
-            callback_base_url: None,
-            host_client: Some(host_client),
-            previous,
-            previous_plugins,
-        }))
-        .unwrap()
+    PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![StaticPluginRegistration::new(
+            "agena.plan".parse().unwrap(),
+            agena_bundled_plugins::tool::new_plan_plugin(),
+        )],
+        config: PluginsConfig {
+            list,
+            ..Default::default()
+        },
+        workspace_root: tmp.path().to_path_buf(),
+        agena_version: "test".to_string(),
+        callback_base_url: None,
+        host_client: Some(host_client),
+        previous,
+        previous_plugins,
+    })
+    .await
+    .unwrap()
 }
 
 /// `agena.plan.set` with two AI steps, auto-approved, must register a
 /// `plan:{session_id}` status-line contribution showing active progress.
-#[test]
-fn plan_set_registers_status_line_contribution() {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+#[tokio::test]
+async fn plan_set_registers_status_line_contribution() {
     let tmp = tempfile::tempdir().unwrap();
-    let host = build_host(&runtime, &tmp, Arc::new(FakeHostClient::default()));
+    let host = build_host(&tmp, Arc::new(FakeHostClient::default())).await;
 
     let registered: RegisteredTool = host.lookup_tool("agena.plan.set").unwrap();
     let input = ToolInvokeInput {
@@ -180,7 +174,8 @@ fn plan_set_registers_status_line_contribution() {
         }),
     };
 
-    host.invoke_tool_cancellable(&registered, input, None)
+    host.invoke_tool(&registered, input, None)
+        .await
         .expect("agena.plan.set must succeed");
 
     let contributions = host.display_contributions();
@@ -212,21 +207,16 @@ fn plan_set_registers_status_line_contribution() {
 /// own handle, so `plan.set` through the SECOND host lands `plan:{session}` on
 /// the SECOND host's contribution map (this failed before the static-reuse
 /// guard: the plugin wrote to the first host instead).
-#[test]
-fn hot_reload_recreates_static_plan_plugin_against_successor_host() {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+#[tokio::test]
+async fn hot_reload_recreates_static_plan_plugin_against_successor_host() {
     let tmp = tempfile::tempdir().unwrap();
     let shared_client = Arc::new(FakeHostClient::default());
 
     // First host: create a plan so durable storage holds it.
-    let first = build_host(
-        &runtime,
-        &tmp,
-        Arc::clone(&shared_client) as Arc<dyn HostClient>,
-    );
+    let first = build_host(&tmp, Arc::clone(&shared_client) as Arc<dyn HostClient>).await;
     let set: RegisteredTool = first.lookup_tool("agena.plan.set").unwrap();
     first
-        .invoke_tool_cancellable(
+        .invoke_tool(
             &set,
             ToolInvokeInput {
                 tool_name: "set".to_string(),
@@ -243,6 +233,7 @@ fn hot_reload_recreates_static_plan_plugin_against_successor_host() {
             },
             None,
         )
+        .await
         .expect("agena.plan.set must succeed");
     assert!(
         first
@@ -261,12 +252,12 @@ fn hot_reload_recreates_static_plan_plugin_against_successor_host() {
         ..Default::default()
     };
     let second = build_host_with_previous(
-        &runtime,
         &tmp,
         Arc::clone(&shared_client) as Arc<dyn HostClient>,
         Some(Arc::clone(&first)),
         PluginHostBuildConfig::previous_plugins(&previous_config),
-    );
+    )
+    .await;
     assert!(
         !second
             .display_contributions()
@@ -279,7 +270,7 @@ fn hot_reload_recreates_static_plan_plugin_against_successor_host() {
     // would still write to the FIRST host's map and this lookup would fail.
     let set2: RegisteredTool = second.lookup_tool("agena.plan.set").unwrap();
     second
-        .invoke_tool_cancellable(
+        .invoke_tool(
             &set2,
             ToolInvokeInput {
                 tool_name: "set".to_string(),
@@ -296,6 +287,7 @@ fn hot_reload_recreates_static_plan_plugin_against_successor_host() {
             },
             None,
         )
+        .await
         .expect("agena.plan.set on the successor host must succeed");
 
     let contributions = second.display_contributions();
@@ -321,12 +313,11 @@ fn hot_reload_recreates_static_plan_plugin_against_successor_host() {
 
 /// `request_approval: false` must save the plan in `planning` without asking
 /// the user: the review path (host ask_user) is never entered.
-#[test]
-fn plan_set_skips_review_when_request_approval_is_false() {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+#[tokio::test]
+async fn plan_set_skips_review_when_request_approval_is_false() {
     let tmp = tempfile::tempdir().unwrap();
     let client = Arc::new(FakeHostClient::default());
-    let host = build_host(&runtime, &tmp, Arc::clone(&client) as Arc<dyn HostClient>);
+    let host = build_host(&tmp, Arc::clone(&client) as Arc<dyn HostClient>).await;
 
     let registered: RegisteredTool = host.lookup_tool("agena.plan.set").unwrap();
     let input = ToolInvokeInput {
@@ -344,7 +335,8 @@ fn plan_set_skips_review_when_request_approval_is_false() {
         }),
     };
 
-    host.invoke_tool_cancellable(&registered, input, None)
+    host.invoke_tool(&registered, input, None)
+        .await
         .expect("agena.plan.set with request_approval=false must succeed");
 
     assert_eq!(
@@ -375,11 +367,10 @@ fn plan_set_skips_review_when_request_approval_is_false() {
 /// Clearing the plan (via plan.set after approval path is not used here — this
 /// exercises `plan:get` after `set` plus a second `set` to confirm the same
 /// contribution id is reused for the same session rather than duplicated).
-#[test]
-fn plan_contribution_is_keyed_per_session() {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+#[tokio::test]
+async fn plan_contribution_is_keyed_per_session() {
     let tmp = tempfile::tempdir().unwrap();
-    let host = build_host(&runtime, &tmp, Arc::new(FakeHostClient::default()));
+    let host = build_host(&tmp, Arc::new(FakeHostClient::default())).await;
 
     let registered: RegisteredTool = host.lookup_tool("agena.plan.set").unwrap();
     for call_id in [7i64, 8i64] {
@@ -396,7 +387,8 @@ fn plan_contribution_is_keyed_per_session() {
                 ],
             }),
         };
-        host.invoke_tool_cancellable(&registered, input, None)
+        host.invoke_tool(&registered, input, None)
+            .await
             .expect("agena.plan.set must succeed");
     }
 
@@ -410,11 +402,10 @@ fn plan_contribution_is_keyed_per_session() {
 
 /// A different session id yields a different contribution id, so the TUI never
 /// renders another session's plan in the active session's chip.
-#[test]
-fn plan_contribution_is_qualified_by_session() {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+#[tokio::test]
+async fn plan_contribution_is_qualified_by_session() {
     let tmp = tempfile::tempdir().unwrap();
-    let host = build_host(&runtime, &tmp, Arc::new(FakeHostClient::default()));
+    let host = build_host(&tmp, Arc::new(FakeHostClient::default())).await;
 
     let registered: RegisteredTool = host.lookup_tool("agena.plan.set").unwrap();
     for session_id in [42i64, 43i64] {
@@ -431,7 +422,8 @@ fn plan_contribution_is_qualified_by_session() {
                 ],
             }),
         };
-        host.invoke_tool_cancellable(&registered, input, None)
+        host.invoke_tool(&registered, input, None)
+            .await
             .expect("agena.plan.set must succeed");
     }
 
@@ -449,15 +441,14 @@ fn plan_contribution_is_qualified_by_session() {
 /// exact method `SessionManager::execute_session_tool` uses to run application
 /// tools (plan viewer autorun toggle, session tool execution) — must still land
 /// the plan contribution on the shared host.
-#[test]
-fn plan_contribution_survives_real_tool_executor_route() {
+#[tokio::test]
+async fn plan_contribution_survives_real_tool_executor_route() {
     use agena_domain::{StructuredObject, ToolInvocation};
     use agena_runtime_tools::tool::ToolExecutor;
     use agena_runtime_tools::{authorization, permission};
 
-    let runtime = tokio::runtime::Runtime::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
-    let host = build_host(&runtime, &tmp, Arc::new(FakeHostClient::default()));
+    let host = build_host(&tmp, Arc::new(FakeHostClient::default())).await;
 
     let executor = ToolExecutor::new(
         tmp.path().to_path_buf(),
@@ -469,7 +460,6 @@ fn plan_contribution_survives_real_tool_executor_route() {
         None,
         None,
         None,
-        
     );
 
     let invocation = ToolInvocation::plugin_named(
@@ -486,6 +476,7 @@ fn plan_contribution_survives_real_tool_executor_route() {
     );
     let execution = executor
         .execute_invocation_detailed(&invocation, 42, 7)
+        .await
         .expect("plan.set through the real tool executor must succeed");
     assert!(
         execution.summary().summary.contains("Approve"),
@@ -520,21 +511,16 @@ fn plan_contribution_survives_real_tool_executor_route() {
 /// `PluginHost` is built with the same session storage. Reading the plan
 /// (`agena.plan.get`, which the TUI also calls to heal the chip) re-publishes
 /// the `plan:{session}` contribution.
-#[test]
-fn plan_get_restores_status_line_contribution_after_host_rebuild() {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+#[tokio::test]
+async fn plan_get_restores_status_line_contribution_after_host_rebuild() {
     let tmp = tempfile::tempdir().unwrap();
     let shared_client = Arc::new(FakeHostClient::default());
 
     // First host: create a plan. The contribution lands in memory.
-    let first = build_host(
-        &runtime,
-        &tmp,
-        Arc::clone(&shared_client) as Arc<dyn HostClient>,
-    );
+    let first = build_host(&tmp, Arc::clone(&shared_client) as Arc<dyn HostClient>).await;
     let registered: RegisteredTool = first.lookup_tool("agena.plan.set").unwrap();
     first
-        .invoke_tool_cancellable(
+        .invoke_tool(
             &registered,
             ToolInvokeInput {
                 tool_name: "set".to_string(),
@@ -548,6 +534,7 @@ fn plan_get_restores_status_line_contribution_after_host_rebuild() {
             },
             None,
         )
+        .await
         .expect("agena.plan.set must succeed");
     assert!(
         first
@@ -560,12 +547,12 @@ fn plan_get_restores_status_line_contribution_after_host_rebuild() {
     // Simulate restart / reload: a successor host shares the same storage
     // (the fake host client) but starts with an empty contribution map.
     let second = build_host_with_previous(
-        &runtime,
         &tmp,
         Arc::clone(&shared_client) as Arc<dyn HostClient>,
         Some(Arc::clone(&first)),
         HashMap::new(),
-    );
+    )
+    .await;
     assert!(
         !second
             .display_contributions()
@@ -578,7 +565,7 @@ fn plan_get_restores_status_line_contribution_after_host_rebuild() {
     // heal the chip) must restore the contribution from durable storage.
     let get: RegisteredTool = second.lookup_tool("agena.plan.get").unwrap();
     second
-        .invoke_tool_cancellable(
+        .invoke_tool(
             &get,
             ToolInvokeInput {
                 tool_name: "get".to_string(),
@@ -589,6 +576,7 @@ fn plan_get_restores_status_line_contribution_after_host_rebuild() {
             },
             None,
         )
+        .await
         .expect("agena.plan.get must succeed");
 
     let contributions = second.display_contributions();

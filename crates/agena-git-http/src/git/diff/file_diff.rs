@@ -13,7 +13,7 @@ use crate::git2_utils;
 
 use super::super::{
     MAX_BLOB_BYTES, abs_path, git2_open_error_response, is_safe_repo_rel_path, map_git_failure,
-    run_git,
+    run_git, spawn_libgit2,
 };
 
 fn is_image_file(path: &str) -> bool {
@@ -99,7 +99,7 @@ pub async fn git_file_diff(Query(q): Query<GitFileDiffQuery>) -> Response {
     if is_image_file(file_path) {
         let mime = image_mime(file_path);
 
-        let repo_bytes = tokio::task::spawn_blocking({
+        let repo_bytes = spawn_libgit2({
             let dir = dir.clone();
             let file_path = file_path.to_string();
             move || -> Result<(Vec<u8>, Vec<u8>), git2_utils::Git2OpenError> {
@@ -164,7 +164,7 @@ pub async fn git_file_diff(Query(q): Query<GitFileDiffQuery>) -> Response {
             modified = format!("data:{mime};base64,{b64}");
         }
     } else {
-        let repo_text = tokio::task::spawn_blocking({
+        let repo_text = spawn_libgit2({
             let dir = dir.clone();
             let file_path = file_path.to_string();
             move || -> Result<(String, String), git2_utils::Git2OpenError> {

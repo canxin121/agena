@@ -268,86 +268,6 @@ impl LoadedPlugin {
     }
 }
 
-fn block_on_handle_or_thread<F>(handle: tokio::runtime::Handle, fut: F) -> F::Output
-where
-    F: std::future::Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    if tokio::runtime::Handle::try_current().is_ok() {
-        // Drive the future on a dedicated thread. `handle.block_on` parks the
-        // calling thread, so unlike `block_in_place(|| handle.block_on(fut))`
-        // this never occupies a runtime worker while a hook runs: a hung hook
-        // cannot starve the worker pool that bounds it via its own timeout,
-        // and the caller's run task is only ever blocked on this join.
-        return std::thread::spawn(move || handle.block_on(fut))
-            .join()
-            .expect("plugin host runtime thread panicked");
-    }
-
-    handle.block_on(fut)
-}
-
-fn block_on_new_thread<F>(fut: F) -> F::Output
-where
-    F: std::future::Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("plugin host fallback runtime");
-        rt.block_on(fut)
-    })
-    .join()
-    .expect("plugin host fallback runtime thread panicked")
-}
-
-fn block_on_scoped_thread<F>(fut: F) -> F::Output
-where
-    F: std::future::Future + Send,
-    F::Output: Send,
-{
-    std::thread::scope(|scope| {
-        scope
-            .spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("plugin host fallback runtime");
-                rt.block_on(fut)
-            })
-            .join()
-            .expect("plugin host fallback runtime thread panicked")
-    })
-}
-
-fn block_on_runtime_scoped_thread<F>(runtime: &tokio::runtime::Runtime, fut: F) -> F::Output
-where
-    F: std::future::Future + Send,
-    F::Output: Send,
-{
-    std::thread::scope(|scope| {
-        scope
-            .spawn(move || runtime.block_on(fut))
-            .join()
-            .expect("plugin host runtime thread panicked")
-    })
-}
-
-fn block_on_handle_scoped_thread<F>(handle: &tokio::runtime::Handle, fut: F) -> F::Output
-where
-    F: std::future::Future + Send,
-    F::Output: Send,
-{
-    std::thread::scope(|scope| {
-        scope
-            .spawn(move || handle.block_on(fut))
-            .join()
-            .expect("plugin host runtime thread panicked")
-    })
-}
-
 #[derive(Debug, Clone, Serialize)]
 /// Summary of a plugin authority and capabilities.
 pub struct PluginAuthoritySummary {
@@ -463,8 +383,7 @@ pub struct ToolInvokeStream {
     pub end: tokio::sync::oneshot::Receiver<Result<ToolStreamEnd, PluginError>>,
 }
 
-/// Result-bearing facade for a tool call. Wraps async dispatch in a runtime
-/// `block_on` so callers from sync code (like `ToolExecutor`) can use it.
+/// Result-bearing asynchronous facade for plugin hooks and tool calls.
 pub struct PluginHost {
     plugins: Vec<Arc<LoadedPlugin>>,
     plugins_by_id: HashMap<PluginKey, Arc<LoadedPlugin>>,
@@ -472,12 +391,6 @@ pub struct PluginHost {
     statuses: Arc<crate::status::StatusRegistry>,
     logs: Arc<PluginLogStore>,
     timeouts: TimeoutsConfig,
-    /// Dedicated runtime used to block_on async transport calls when invoked
-    /// from sync code.
-    runtime: Option<Arc<tokio::runtime::Runtime>>,
-    /// Handle to the runtime that built us (preferred for block_on when sync
-    /// callers are themselves driven by an outer runtime).
-    runtime_handle: Option<tokio::runtime::Handle>,
     /// Underlying host handle; kept alive for callbacks.
     _host_handle: Arc<HostHandle>,
     /// Plugin ids whose transports we transferred to a successor host;

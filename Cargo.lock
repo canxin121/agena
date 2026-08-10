@@ -468,6 +468,7 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-util",
  "tracing",
  "url",
 ]
@@ -543,6 +544,7 @@ dependencies = [
  "blake3",
  "dashmap",
  "ed25519-dalek",
+ "futures-util",
  "hex",
  "regex",
  "reqwest 0.13.4",

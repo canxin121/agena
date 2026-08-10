@@ -195,6 +195,15 @@ pub trait SessionStore: Send + Sync {
         outcome: RunOutcome,
     ) -> Result<Part, StoreError>;
 
+    /// Extend the session lease without mutating any part. Long stable runs
+    /// (a slow reasoning stream, a multi-second tool execution) can exceed
+    /// `LEASE_STALENESS_MS` between commits; a background heartbeat keeps the
+    /// run's ownership fresh so the next write is not treated as a stale
+    /// steal. Returns `false` when no lease row for this owner exists (already
+    /// stolen, released, or never held) — the caller lets the next commit
+    /// surface that authoritatively rather than raising mid-stream.
+    async fn heartbeat_lease(&self, session_id: i64, owner_id: &str) -> Result<bool, StoreError>;
+
     /// Start a fresh run without user input (`continue`, `compaction`,
     /// `background`, `steer`). Creates a run marker with the given `run_kind`
     /// and returns the full [`SubmitOutcome`] (marker plus created parts).
@@ -340,6 +349,11 @@ struct StreamingBuffer {
     owner_id: String,
     part: Part,
     pending_deltas: usize,
+    /// Last time the session lease was heartbeated for this buffer. The
+    /// buffered path commits no rows per delta, so a long reasoning stream
+    /// would otherwise let the lease age past `LEASE_STALENESS_MS` and be
+    /// stolen by the next commit, aborting the in-flight run mid-stream.
+    last_heartbeat_at_ms: i64,
 }
 
 /// The internal memory layer (15.3): a per-session LRU cache of
@@ -825,12 +839,13 @@ where
             )));
         }
 
-        let flush = {
+        let (flush, needs_heartbeat) = {
             let mut streaming = self.memory.streaming.lock().expect("streaming lock");
             let buffer = streaming.entry(key).or_insert_with(|| StreamingBuffer {
                 owner_id: owner_id.to_owned(),
                 part: persisted_base.expect("missing stream buffer has a persisted base"),
                 pending_deltas: 0,
+                last_heartbeat_at_ms: self.now(),
             });
             if buffer.owner_id != owner_id {
                 return Err(StoreError::InvalidState(format!(
@@ -842,8 +857,18 @@ where
                     "part {part_id} is shared; only its origin session may update it in place"
                 )));
             }
+            // The buffered path commits no row per delta, so a long reasoning
+            // stream would let the lease age past LEASE_STALENESS_MS and get
+            // stolen (aborting the in-flight run) on the next commit. Heartbeat
+            // at half the staleness window: never a database write per chunk,
+            // only every ~7.5s of uninterrupted streaming.
+            let now = self.now();
+            let needs_heartbeat = now - buffer.last_heartbeat_at_ms > LEASE_STALENESS_MS / 2;
+            if needs_heartbeat {
+                buffer.last_heartbeat_at_ms = now;
+            }
             let mut next_part = buffer.part.clone();
-            let state_changed = apply_buffered_delta(&mut next_part, delta, self.now())?;
+            let state_changed = apply_buffered_delta(&mut next_part, delta, now)?;
             buffer.part = next_part;
             buffer.pending_deltas += 1;
             // End-only streaming: commit once when the part transitions state
@@ -854,14 +879,31 @@ where
             // ~100+ times per second during reasoning; the durable row is only
             // meaningful at part completion and reads of the in-memory buffer
             // already overlay live content.
-            let should_flush = state_changed
-                || buffer.pending_deltas >= self.streaming_flush_delta_count;
-            should_flush.then(|| {
-                streaming
-                    .remove(&key)
-                    .expect("stream buffer exists while flushing")
-            })
+            let should_flush =
+                state_changed || buffer.pending_deltas >= self.streaming_flush_delta_count;
+            (
+                should_flush.then(|| {
+                    streaming
+                        .remove(&key)
+                        .expect("stream buffer exists while flushing")
+                }),
+                needs_heartbeat,
+            )
         };
+
+        if needs_heartbeat {
+            // Extend the lease so the stream survives a model turn longer than
+            // the staleness window. `heartbeat_lease` is a single UPDATE keyed
+            // on our owner id: if the lease was already stolen or released it
+            // reports `false`, which the next flush/commit surfaces
+            // authoritatively — no error to raise mid-stream.
+            let heartbeat = self.heartbeat_lease(session_id, owner_id).await?;
+            if heartbeat {
+                tracing::debug!(%session_id, %part_id, "streaming lease heartbeat extended");
+            } else {
+                tracing::warn!(%session_id, %part_id, "streaming heartbeat had no lease row");
+            }
+        }
 
         match flush {
             Some(buffer) => self
@@ -944,7 +986,8 @@ where
             // every time a run ends. `apply_committed` keeps the warm cache
             // authoritative (and lets `load_cached` stay a hit).
             let meta = self.engine.session_meta(session_id).await?;
-            self.memory.apply_committed(session_id, &flushed, Some(meta.version));
+            self.memory
+                .apply_committed(session_id, &flushed, Some(meta.version));
             for part in flushed {
                 self.bus
                     .emit(SessionChange::PartUpdated { session_id, part });
@@ -1174,8 +1217,11 @@ where
                 // cache (the buffer no longer overlays it) and notify (D10 —
                 // notifications follow committed flushes).
                 let meta = self.engine.session_meta(session_id).await?;
-                self.memory
-                    .apply_committed(session_id, std::slice::from_ref(&updated), Some(meta.version));
+                self.memory.apply_committed(
+                    session_id,
+                    std::slice::from_ref(&updated),
+                    Some(meta.version),
+                );
                 self.bus.emit(SessionChange::PartUpdated {
                     session_id,
                     part: updated.clone(),
@@ -1240,6 +1286,13 @@ where
         self.bus
             .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         Ok(marker)
+    }
+
+    async fn heartbeat_lease(&self, session_id: i64, owner_id: &str) -> Result<bool, StoreError> {
+        let owner = self.owner(owner_id);
+        self.engine
+            .heartbeat_lease(session_id, &owner, self.now())
+            .await
     }
 
     async fn start_run(
@@ -1906,7 +1959,7 @@ mod tests {
     async fn in_progress_content_updates_are_end_only_and_terminalize_in_one_write() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "stream").await;
-        let outcome = facade
+        let _outcome = facade
             .submit_user_run(
                 session_id,
                 "owner-a",
@@ -1987,7 +2040,15 @@ mod tests {
             "session version must not advance on buffered content deltas"
         );
         assert_eq!(
-            facade.load(session_id).await.expect("overlay").parts.iter().find(|part| part.part_id == part_id).expect("overlaid part").content["summary"],
+            facade
+                .load(session_id)
+                .await
+                .expect("overlay")
+                .parts
+                .iter()
+                .find(|part| part.part_id == part_id)
+                .expect("overlaid part")
+                .content["summary"],
             json!(["t39"]),
             "same-process readers see the live stream through the buffer overlay"
         );
@@ -2016,7 +2077,10 @@ mod tests {
             .iter()
             .find(|part| part.part_id == part_id)
             .expect("terminal part present");
-        assert_eq!(terminal_part.revision, 2, "one terminal write commits all deltas");
+        assert_eq!(
+            terminal_part.revision, 2,
+            "one terminal write commits all deltas"
+        );
         assert_eq!(terminal_part.content["summary"], json!(["final"]));
         let content_flushes = seen
             .lock()
@@ -2029,7 +2093,10 @@ mod tests {
                 )
             })
             .count();
-        assert_eq!(content_flushes, 1, "one notification for the end-only flush");
+        assert_eq!(
+            content_flushes, 1,
+            "one notification for the end-only flush"
+        );
     }
 
     #[tokio::test]

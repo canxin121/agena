@@ -13,7 +13,7 @@ use crate::{
 };
 use agena_domain::PermissionMode;
 use agena_plugin_host::{
-        ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
+    ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
 };
 use agena_tool::SnapshotBackend;
 
@@ -234,7 +234,6 @@ async fn compact_builtin_targets_execute_through_the_orchestrator() {
         None,
         None,
         None,
-        
     );
 
     let shell_input = StructuredObject::try_from(serde_json::json!({
@@ -261,9 +260,11 @@ async fn compact_builtin_targets_execute_through_the_orchestrator() {
     };
     let prepared = executor
         .prepare_invocation(&shell_invocation, 1, 1)
+        .await
         .expect("prepare compact shell invocation");
     let (prepared_shell_invocation, prepared_shell) = executor
         .prepare_shell_invocation(&prepared.invocation, 1, 1)
+        .await
         .expect("prepare compact shell command");
     let shell_execution = executor
         .execute_invocation_detailed_with_prepared_shell(
@@ -272,6 +273,7 @@ async fn compact_builtin_targets_execute_through_the_orchestrator() {
             1,
             prepared_shell,
         )
+        .await
         .expect("execute compact shell target");
     assert!(shell_execution.view.output_text.contains("Python"));
     assert!(
@@ -288,9 +290,11 @@ async fn compact_builtin_targets_execute_through_the_orchestrator() {
     );
     let prepared_read = executor
         .prepare_invocation(&read_invocation, 1, 2)
+        .await
         .expect("prepare compact read invocation");
     let read_execution = executor
         .execute_invocation_detailed(&prepared_read.invocation, 1, 2)
+        .await
         .expect("execute compact read target");
     assert!(
         read_execution
@@ -349,7 +353,6 @@ async fn grep_targets_a_single_file_or_a_directory() {
         None,
         None,
         None,
-        
     );
 
     let file_invocation = ToolInvocation::new(
@@ -362,9 +365,11 @@ async fn grep_targets_a_single_file_or_a_directory() {
     );
     let prepared_file = executor
         .prepare_invocation(&file_invocation, 1, 1)
+        .await
         .expect("prepare grep file");
     let file_execution = executor
         .execute_invocation_detailed(&prepared_file.invocation, 1, 1)
+        .await
         .expect("execute grep file");
     assert!(
         file_execution
@@ -396,9 +401,11 @@ async fn grep_targets_a_single_file_or_a_directory() {
     );
     let prepared_dir = executor
         .prepare_invocation(&dir_invocation, 1, 2)
+        .await
         .expect("prepare grep dir");
     let dir_execution = executor
         .execute_invocation_detailed(&prepared_dir.invocation, 1, 2)
+        .await
         .expect("execute grep dir");
     assert!(
         dir_execution
@@ -453,7 +460,6 @@ async fn snapshot_internal_dispatch_does_not_depend_on_public_tool_registration(
         Some(Arc::clone(&registry)),
         None,
         None,
-        
     );
 
     let entered = executor
@@ -542,7 +548,6 @@ async fn only_five_gateway_functions_are_provider_visible() {
         None,
         None,
         None,
-        
     );
 
     let bindings = executor.available_tool_api_bindings();
@@ -575,7 +580,8 @@ async fn only_five_gateway_functions_are_provider_visible() {
         });
         assert!(
             executor
-                .collect_permission_checks_for_invocation(&invocation)
+                .collect_permission_checks_for_invocation_in_session(&invocation, None)
+                .await
                 .expect("collect Tool API permission checks")
                 .is_empty(),
             "provider function {} must not enter the permission system",
@@ -600,7 +606,8 @@ async fn only_five_gateway_functions_are_provider_visible() {
         input: StructuredObject::default(),
     };
     let checks = executor
-        .collect_permission_checks_for_invocation(&invocation)
+        .collect_permission_checks_for_invocation_in_session(&invocation, None)
+        .await
         .expect("collect execution-tool permission checks");
     assert_eq!(checks.len(), 1);
     assert!(matches!(
@@ -650,11 +657,11 @@ async fn read_only_access_filters_live_tools_and_preserves_gateway_discovery() {
         None,
         None,
         None,
-        
     )
-    .for_session_context(&TestSessionContext {
+    .for_session_context_async(&TestSessionContext {
         access: agena_domain::ExecutionAccess::ReadOnly,
-    });
+    })
+    .await;
 
     let execution_tools = executor
         .available_execution_tools()
@@ -676,6 +683,7 @@ async fn read_only_access_filters_live_tools_and_preserves_gateway_discovery() {
             &ToolInvocation::new("test.access.mutate", StructuredObject::default()),
             Some(1),
         )
+        .await
         .expect_err("read-only access must reject a mutating live tool");
     assert!(
         matches!(&error, ToolError::CapabilityUnavailable(_)),
@@ -778,7 +786,6 @@ async fn gateway_tools_call_without_a_target_is_rejected_as_invalid_input() {
         None,
         None,
         None,
-        
     );
 
     // A `tools_call` that still names the gateway function itself (no `tool`
@@ -802,6 +809,7 @@ async fn gateway_tools_call_without_a_target_is_rejected_as_invalid_input() {
 
         let error = executor
             .prepare_invocation(&invocation, 1, 1)
+            .await
             .expect_err("gateway without a target must fail before execution");
         assert!(
             matches!(error, ToolError::InvalidInput { .. }),
@@ -845,7 +853,6 @@ async fn gateway_tools_call_surfaces_the_arguments_shape_diagnostic() {
         None,
         None,
         None,
-        
     );
 
     // A diagnostic stamped by the session processor (string-encoded or
@@ -870,6 +877,7 @@ async fn gateway_tools_call_surfaces_the_arguments_shape_diagnostic() {
 
     let error = executor
         .prepare_invocation(&invocation, 1, 1)
+        .await
         .expect_err("gateway with a shape diagnostic must fail before execution");
     assert!(
         matches!(error, ToolError::InvalidInput { .. }),

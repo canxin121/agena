@@ -12,6 +12,16 @@ use tokio::process::Command;
 
 use super::{DirectoryQuery, map_git_failure, require_directory, run_git};
 
+const GPG_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+async fn gpg_output(command: &mut Command) -> Result<std::process::Output, String> {
+    command.kill_on_drop(true);
+    tokio::time::timeout(GPG_COMMAND_TIMEOUT, command.output())
+        .await
+        .map_err(|_| "GPG command timed out".to_string())?
+        .map_err(|error| error.to_string())
+}
+
 fn hex_encode_utf8(s: &str) -> String {
     s.as_bytes().iter().map(|b| format!("{:02x}", b)).collect()
 }
@@ -24,14 +34,13 @@ struct GpgSecretKeyInfo {
 }
 
 async fn gpg_list_secret_keys_with_grip() -> Result<Vec<GpgSecretKeyInfo>, String> {
-    let output = Command::new("gpg")
+    let mut command = Command::new("gpg");
+    command
         .args(["--with-colons", "--with-keygrip", "--list-secret-keys"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
+        .stderr(Stdio::piped());
+    let output = gpg_output(&mut command).await?;
 
     let code = output.status.code().unwrap_or(1);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -107,15 +116,14 @@ fn pick_keygrip(keys: &[GpgSecretKeyInfo], signing_key: Option<&str>) -> Option<
 async fn gpg_preset_passphrase(keygrip: &str, passphrase: &str) -> Result<(), String> {
     let hex = hex_encode_utf8(passphrase);
     let cmd = format!("PRESET_PASSPHRASE {} -1 {}", keygrip, hex);
-    let output = Command::new("gpg-connect-agent")
+    let mut command = Command::new("gpg-connect-agent");
+    command
         .arg(cmd)
         .arg("/bye")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
+        .stderr(Stdio::piped());
+    let output = gpg_output(&mut command).await?;
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -161,14 +169,13 @@ async fn gpg_agent_enable_allow_preset_passphrase() -> Result<bool, String> {
     }
 
     // Restart agent so the config applies.
-    let out = Command::new("gpgconf")
+    let mut command = Command::new("gpgconf");
+    command
         .args(["--kill", "gpg-agent"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
+        .stderr(Stdio::piped());
+    let out = gpg_output(&mut command).await?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(if err.is_empty() {

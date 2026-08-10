@@ -140,9 +140,7 @@ pub(crate) fn activity_kind_id_for_part(part: &TranscriptEntryPart) -> Option<&'
         // User documents group multiple activities and text; no single kind.
         TranscriptPartContent::UserDocument(_) => None,
         TranscriptPartContent::Activity(content) => match content {
-            TranscriptActivityContent::Reasoning(_) => {
-                Some(agena_domain::ACTIVITY_KIND_REASONING)
-            }
+            TranscriptActivityContent::Reasoning(_) => Some(agena_domain::ACTIVITY_KIND_REASONING),
             TranscriptActivityContent::Operation(_) => Some(agena_domain::ACTIVITY_KIND_OPERATION),
             TranscriptActivityContent::Attachment(_) => Some(agena_domain::ACTIVITY_KIND_RESOURCE),
             TranscriptActivityContent::SkillReference(_) => {
@@ -1207,21 +1205,18 @@ pub(crate) fn render_part_node(
                 entry_id: message.id,
                 content_id: part.id,
             };
-                        // Reasoning must never be truncated: it is the model's full
+            // Reasoning must never be truncated: it is the model's full
             // thought trail, for both the provider and the human reading the
             // transcript. It defaults to expanded (so the full trail is
             // immediately visible) but the user may still collapse it via the
             // normal toggle or a per-kind expansion setting.
-            let expanded = expansions
-                .get(&key)
-                .copied()
-                .unwrap_or_else(|| {
-                    defaults
-                        .kind_defaults
-                        .get(agena_domain::ACTIVITY_KIND_REASONING)
-                        .copied()
-                        .unwrap_or(true)
-                });
+            let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
+                defaults
+                    .kind_defaults
+                    .get(agena_domain::ACTIVITY_KIND_REASONING)
+                    .copied()
+                    .unwrap_or(true)
+            });
             let summary = reasoning.preferred_text();
             let headline = summary
                 .lines()
@@ -1264,12 +1259,9 @@ pub(crate) fn render_part_node(
                 entry_id: message.id,
                 content_id: part.id,
             };
-                        let expanded = expansions
-                .get(&key)
-                .copied()
-                .unwrap_or_else(|| {
-                    defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_OPERATION))
-                });
+            let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
+                defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_OPERATION))
+            });
             render_tool_execution(part, tool, out, width, i18n, expanded);
             RenderedNodeDraft {
                 key,
@@ -1384,12 +1376,9 @@ pub(crate) fn render_part_node(
                 entry_id: message.id,
                 content_id: part.id,
             };
-                        let expanded = expansions
-                .get(&key)
-                .copied()
-                .unwrap_or_else(|| {
-                    defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_RESOURCE))
-                });
+            let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
+                defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_RESOURCE))
+            });
             let mut labels = Vec::new();
             for item in &attachment.attachments {
                 let label = item
@@ -1441,12 +1430,9 @@ pub(crate) fn render_part_node(
                 entry_id: message.id,
                 content_id: part.id,
             };
-                        let expanded = expansions
-                .get(&key)
-                .copied()
-                .unwrap_or_else(|| {
-                    defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_SKILL_REFERENCE))
-                });
+            let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
+                defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_SKILL_REFERENCE))
+            });
             let mut labels = Vec::new();
             for skill in &reference.skills {
                 labels.push(skill.name.clone());
@@ -1563,7 +1549,7 @@ fn render_activity_canonical(
     // collapsed until the user opens them, regardless of the global activity
     // default, so a multi-step tool run reads as a stack of blocks with one
     // visible answer at the end.
-        let is_text_segment = matches!(payload, agena_domain::ActivityPayload::TextSegment(_));
+    let is_text_segment = matches!(payload, agena_domain::ActivityPayload::TextSegment(_));
     let default_expanded = if is_text_segment {
         false
     } else {

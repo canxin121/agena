@@ -610,7 +610,11 @@ pub(crate) async fn git_config_get(
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::null());
-    let out = cmd.output().await.ok()?;
+    cmd.kill_on_drop(true);
+    let out = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output())
+        .await
+        .ok()?
+        .ok()?;
     if !out.status.success() {
         return None;
     }

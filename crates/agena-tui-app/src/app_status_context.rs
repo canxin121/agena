@@ -15,29 +15,44 @@ impl App {
         }
     }
 
-    pub(crate) fn block_on_async<F, T, E>(&self, fut: F) -> UiResult<T>
-    where
-        F: std::future::Future<Output = std::result::Result<T, E>>,
-        E: Into<anyhow::Error>,
+    pub(crate) fn start_command_actor(&mut self) {
+        if self.command_actor.is_some() {
+            return;
+        }
+        let Some(command_rx) = self.command_rx.take() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        self.command_actor = Some(tokio::spawn(run_command_actor(command_rx, tx)));
+    }
+
+    pub(crate) fn dispatch_backend_operation<T, E, Op, Fut, Complete>(
+        &mut self,
+        operation: Op,
+        complete: Complete,
+    ) where
+        T: Send + 'static,
+        E: Into<anyhow::Error> + Send + 'static,
+        Op: FnOnce(agena_tui_backend::Backend) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = std::result::Result<T, E>> + Send + 'static,
+        Complete: FnOnce(&mut App, UiResult<T>) + Send + 'static,
     {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => match handle.runtime_flavor() {
-                tokio::runtime::RuntimeFlavor::MultiThread => {
-                    tokio::task::block_in_place(|| handle.block_on(fut))
-                        .map_err(|error| crate::UiFailure::from_backend(error.into()))
-                }
-                _ => Err(crate::UiFailure::internal(
-                    "cannot synchronously wait for async work inside the current-thread runtime",
-                )),
-            },
-            Err(_) => {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(crate::UiFailure::internal)?;
-                runtime
-                    .block_on(fut)
-                    .map_err(|error| crate::UiFailure::from_backend(error.into()))
+        let backend = self.backend.clone();
+        let command: crate::UiCommand = Box::pin(async move {
+            let result = operation(backend)
+                .await
+                .map_err(|error| crate::UiFailure::from_backend(error.into()));
+            let completion: crate::UiCompletion =
+                Box::new(move |app: &mut App| complete(app, result));
+            completion
+        });
+        match self.command_tx.try_send(command) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                self.flash_error("UI backend command queue is full; wait for current operations")
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                self.flash_error("UI backend command actor is unavailable")
             }
         }
     }
@@ -284,6 +299,51 @@ impl App {
     }
 }
 
+async fn run_command_actor(
+    mut command_rx: tokio::sync::mpsc::Receiver<crate::UiCommand>,
+    tx: tokio::sync::mpsc::Sender<crate::AppMessage>,
+) {
+    let mut active = tokio::task::JoinSet::new();
+    let mut ingress_open = true;
+    while ingress_open || !active.is_empty() {
+        if active.len() >= crate::UI_COMMAND_MAX_CONCURRENCY || !ingress_open {
+            if let Some(result) = active.join_next().await {
+                send_command_completion(&tx, result).await;
+            }
+            continue;
+        }
+        tokio::select! {
+            biased;
+            result = active.join_next(), if !active.is_empty() => {
+                if let Some(result) = result {
+                    send_command_completion(&tx, result).await;
+                }
+            }
+            command = command_rx.recv() => match command {
+                Some(command) => {
+                    active.spawn(command);
+                }
+                None => ingress_open = false,
+            }
+        }
+    }
+}
+
+async fn send_command_completion(
+    tx: &tokio::sync::mpsc::Sender<crate::AppMessage>,
+    result: Result<crate::UiCompletion, tokio::task::JoinError>,
+) {
+    let completion = match result {
+        Ok(completion) => completion,
+        Err(error) => Box::new(move |app: &mut App| {
+            app.flash_error(format!("UI backend command task failed: {error}"));
+        }) as crate::UiCompletion,
+    };
+    let _ = tx
+        .send(crate::AppMessage::AsyncOperationCompleted(completion))
+        .await;
+}
+
 /// Picks the first non-empty status mode value from the execution context,
 /// run-options overrides, and the resolved model defaults. The composer
 /// status shows the modes a run actually used once a message has been sent,
@@ -340,5 +400,101 @@ mod status_mode_value_tests {
     fn returns_none_when_no_mode_is_available() {
         assert_eq!(status_mode_value(None, None, None), None);
         assert_eq!(status_mode_value(Some(""), Some("  "), Some("")), None);
+    }
+}
+
+#[cfg(test)]
+mod command_actor_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::time::Duration;
+
+    use tokio::sync::{Semaphore, mpsc};
+
+    use super::run_command_actor;
+    use crate::{
+        AppMessage, UI_COMMAND_MAX_CONCURRENCY, UI_COMMAND_QUEUE_CAPACITY, UiCommand, UiCompletion,
+    };
+
+    fn empty_completion() -> UiCompletion {
+        Box::new(|_| {})
+    }
+
+    fn pending_command() -> UiCommand {
+        Box::pin(std::future::pending())
+    }
+
+    #[test]
+    fn command_ingress_is_bounded() {
+        let (tx, _rx) = mpsc::channel::<UiCommand>(UI_COMMAND_QUEUE_CAPACITY);
+        for _ in 0..UI_COMMAND_QUEUE_CAPACITY {
+            tx.try_send(pending_command()).expect("queue has capacity");
+        }
+
+        assert!(matches!(
+            tx.try_send(pending_command()),
+            Err(mpsc::error::TrySendError::Full(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn command_actor_enforces_the_concurrency_limit_and_drains_on_close() {
+        let command_count = UI_COMMAND_MAX_CONCURRENCY * 3;
+        let (command_tx, command_rx) = mpsc::channel::<UiCommand>(command_count);
+        let (message_tx, mut message_rx) = mpsc::channel(command_count);
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let started = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(Semaphore::new(0));
+
+        for _ in 0..command_count {
+            let active = Arc::clone(&active);
+            let peak = Arc::clone(&peak);
+            let started = Arc::clone(&started);
+            let gate = Arc::clone(&gate);
+            command_tx
+                .send(Box::pin(async move {
+                    let now_active = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now_active, Ordering::SeqCst);
+                    started.fetch_add(1, Ordering::SeqCst);
+                    let permit = gate.acquire().await.expect("test gate remains open");
+                    permit.forget();
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    empty_completion()
+                }))
+                .await
+                .expect("actor ingress remains open");
+        }
+        drop(command_tx);
+
+        let actor = tokio::spawn(run_command_actor(command_rx, message_tx));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while started.load(Ordering::SeqCst) < UI_COMMAND_MAX_CONCURRENCY {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first command batch starts");
+
+        assert_eq!(started.load(Ordering::SeqCst), UI_COMMAND_MAX_CONCURRENCY);
+        assert_eq!(peak.load(Ordering::SeqCst), UI_COMMAND_MAX_CONCURRENCY);
+
+        gate.add_permits(command_count);
+        tokio::time::timeout(Duration::from_secs(1), actor)
+            .await
+            .expect("actor drains accepted commands")
+            .expect("actor does not panic");
+
+        let mut completions = 0;
+        while let Ok(message) = message_rx.try_recv() {
+            if matches!(message, AppMessage::AsyncOperationCompleted(_)) {
+                completions += 1;
+            }
+        }
+        assert_eq!(completions, command_count);
+        assert_eq!(started.load(Ordering::SeqCst), command_count);
+        assert!(peak.load(Ordering::SeqCst) <= UI_COMMAND_MAX_CONCURRENCY);
     }
 }

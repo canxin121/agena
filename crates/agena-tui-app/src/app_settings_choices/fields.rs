@@ -66,14 +66,14 @@ impl App {
                     .map(|level| choice_item(level, "log level"))
                     .collect(),
             ),
-                        "session.compaction.auto" => Some(boolean_choice_items(
+            "session.compaction.auto" => Some(boolean_choice_items(
                 ui_text::t(
                     &self.i18n,
                     "settings-field-session-compaction-auto-description",
                 )
                 .as_str(),
             )),
-                        "ui.tui.transcript.activity_default_expanded" => Some(boolean_choice_items(
+            "ui.tui.transcript.activity_default_expanded" => Some(boolean_choice_items(
                 ui_text::t(
                     &self.i18n,
                     "settings-field-activity-default-expanded-description",
@@ -89,7 +89,7 @@ impl App {
         }
     }
 
-        pub(crate) fn settings_field_choice_overlay_style(
+    pub(crate) fn settings_field_choice_overlay_style(
         field: &SettingsFieldSpec,
     ) -> agena_tui::choice::ChoicePresentationStyle {
         match field.path.as_str() {
@@ -97,15 +97,14 @@ impl App {
             "ui.locale"
             | "ui.tui.color_scheme"
             | "ui.tui.graphics"
-                        | "tracing.filter"
+            | "tracing.filter"
             | "tracing.database"
             | "tracing.adapter"
             | "session.compaction.auto"
-            | "ui.tui.transcript.activity_default_expanded"
-            => {
+            | "ui.tui.transcript.activity_default_expanded" => {
                 agena_tui::choice::ChoicePresentationStyle::SelectOnly
             }
-                        "ui.tui.theme" => agena_tui::choice::ChoicePresentationStyle::SearchableSelect,
+            "ui.tui.theme" => agena_tui::choice::ChoicePresentationStyle::SearchableSelect,
             path if path.starts_with("ui.tui.transcript.activity_kinds.") => {
                 agena_tui::choice::ChoicePresentationStyle::SelectOnly
             }
@@ -371,7 +370,7 @@ use crate::{
 
 #[cfg(test)]
 mod tests {
-        use crate::{App, settings_fields};
+    use crate::{App, settings_fields};
 
     #[test]
     fn registered_default_catalogs_do_not_offer_arbitrary_typed_values() {
@@ -379,7 +378,7 @@ mod tests {
             .into_iter()
             .find(|field| field.path == "providers.default")
             .expect("settings field");
-                assert_eq!(
+        assert_eq!(
             App::settings_field_choice_overlay_style(&field),
             agena_tui::choice::ChoicePresentationStyle::SearchableSelect
         );

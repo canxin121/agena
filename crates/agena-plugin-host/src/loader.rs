@@ -5,6 +5,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::config::{ConfiguredPlugin, PluginPackage, PluginSignature};
 use crate::error::{HostError, TransportError};
@@ -15,6 +16,20 @@ use crate::sdk::{InitContext, InitOutcome, PluginKey, PluginManifest};
 use crate::transport::{
     PluginTransport, cdylib::CdylibTransport, http::HttpTransport, stdio::StdioTransport,
 };
+
+const TRANSPORT_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
+const TRANSPORT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn dispatch_transport_with_timeout(
+    transport: &dyn PluginTransport,
+    method: &str,
+    params: serde_json::Value,
+    timeout: Duration,
+) -> Result<serde_json::Value, TransportError> {
+    tokio::time::timeout(timeout, transport.dispatch(method, params))
+        .await
+        .map_err(|_| TransportError::Timeout)?
+}
 
 /// Static plugin registration entry.
 pub struct StaticRegistration {
@@ -206,7 +221,7 @@ pub async fn load_entry(
         // A stdio transport owns a child process and does not kill it merely
         // because the final Arc is dropped. Failed initialization must close
         // every transport explicitly before the host proceeds.
-        let _ = transport.close().await;
+        let _ = tokio::time::timeout(TRANSPORT_SHUTDOWN_TIMEOUT, transport.close()).await;
     }
     initialization
 }
@@ -229,16 +244,20 @@ async fn initialize_transport(
             message: e.to_string(),
         })?;
 
-    let prefetched_manifest_value = transport
-        .dispatch(
-            method::META_MANIFEST,
-            serde_json::Value::Object(Default::default()),
-        )
-        .await
-        .map_err(|e| HostError::Init {
-            plugin: plugin_id.to_string(),
-            message: format!("{e}"),
-        })?;
+    let prefetched_manifest_value = dispatch_transport_with_timeout(
+        transport.as_ref(),
+        method::META_MANIFEST,
+        serde_json::Value::Object(Default::default()),
+        TRANSPORT_INITIALIZATION_TIMEOUT,
+    )
+    .await
+    .map_err(|error| HostError::Init {
+        plugin: plugin_id.to_string(),
+        message: match error {
+            TransportError::Timeout => "meta/manifest timed out".to_string(),
+            error => error.to_string(),
+        },
+    })?;
     let prefetched_manifest: PluginManifest = serde_json::from_value(prefetched_manifest_value)
         .map_err(|e| HostError::Init {
             plugin: plugin_id.to_string(),
@@ -272,13 +291,20 @@ async fn initialize_transport(
         message: e.to_string(),
     })?;
 
-    let outcome_value = transport
-        .dispatch(method::META_INIT, init_params)
-        .await
-        .map_err(|e| HostError::Init {
-            plugin: plugin_id.to_string(),
-            message: format!("{e}"),
-        })?;
+    let outcome_value = dispatch_transport_with_timeout(
+        transport.as_ref(),
+        method::META_INIT,
+        init_params,
+        TRANSPORT_INITIALIZATION_TIMEOUT,
+    )
+    .await
+    .map_err(|error| HostError::Init {
+        plugin: plugin_id.to_string(),
+        message: match error {
+            TransportError::Timeout => "meta/init timed out".to_string(),
+            error => error.to_string(),
+        },
+    })?;
 
     let outcome: InitOutcome =
         serde_json::from_value(outcome_value).map_err(|e| HostError::Init {
@@ -1140,13 +1166,16 @@ fn pattern_key_matches(pattern: &str, key: &str) -> bool {
 }
 
 pub async fn shutdown_transport(transport: Arc<dyn PluginTransport>) -> Result<(), TransportError> {
-    let _ = transport
-        .dispatch(
-            method::META_SHUTDOWN,
-            serde_json::Value::Object(Default::default()),
-        )
-        .await;
-    transport.close().await
+    let _ = dispatch_transport_with_timeout(
+        transport.as_ref(),
+        method::META_SHUTDOWN,
+        serde_json::Value::Object(Default::default()),
+        TRANSPORT_SHUTDOWN_TIMEOUT,
+    )
+    .await;
+    tokio::time::timeout(TRANSPORT_SHUTDOWN_TIMEOUT, transport.close())
+        .await
+        .map_err(|_| TransportError::Timeout)?
 }
 
 /// Verify the sha256 of a file against an expected hex digest. Used by both
@@ -1217,11 +1246,43 @@ pub fn verify_signature_bytes(
 
 #[cfg(test)]
 mod manifest_tests {
-    use super::{validate_json_schema_value, validate_manifest};
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+
+    use super::{dispatch_transport_with_timeout, validate_json_schema_value, validate_manifest};
+    use crate::error::TransportError;
     use crate::sdk::{
         PluginCommandDefinition, PluginKey, PluginManifest, PluginSkillDefinition,
         PluginStudioControl, ToolDefinition,
     };
+    use crate::transport::PluginTransport;
+
+    struct SilentTransport;
+
+    #[async_trait]
+    impl PluginTransport for SilentTransport {
+        async fn dispatch(
+            &self,
+            _method: &str,
+            _params: serde_json::Value,
+        ) -> Result<serde_json::Value, TransportError> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn silent_plugin_initialization_is_bounded_by_a_deadline() {
+        let error = dispatch_transport_with_timeout(
+            &SilentTransport,
+            "meta/manifest",
+            serde_json::Value::Null,
+            Duration::from_millis(20),
+        )
+        .await
+        .expect_err("silent transport must time out");
+        assert!(matches!(error, TransportError::Timeout));
+    }
 
     fn manifest_with_tools(names: &[&str]) -> PluginManifest {
         let mut manifest = PluginManifest::new("example", "plugin", "1.0.0");

@@ -80,11 +80,14 @@ pub(crate) fn find_search_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
     agena_tui_session::session_helpers::find_search_ranges(text, query)
 }
 
-pub(crate) fn run_status_line_command(
+pub(crate) async fn run_status_line_command(
     command: String,
     session_id: Option<String>,
     focus: String,
 ) -> Option<String> {
+    const STATUS_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
+    const STATUS_COMMAND_OUTPUT_LIMIT: u64 = 64 * 1024;
+
     let mut cmd = if cfg!(windows) {
         let mut cmd = Command::new("cmd");
         cmd.args(["/d", "/s", "/c", command.as_str()]);
@@ -94,18 +97,31 @@ pub(crate) fn run_status_line_command(
         cmd.args(["-lc", command.as_str()]);
         cmd
     };
-    cmd.stdin(Stdio::null()).stderr(Stdio::null());
+    cmd.kill_on_drop(true)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     cmd.env("AGENA_TUI_FOCUS", focus);
     if let Some(session_id) = session_id {
         cmd.env("AGENA_SESSION_ID", session_id);
     }
-    let output = cmd.output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let line = text.lines().next().unwrap_or_default().trim();
-    (!line.is_empty()).then(|| line.to_string())
+    tokio::time::timeout(STATUS_COMMAND_TIMEOUT, async move {
+        let mut child = cmd.spawn().ok()?;
+        let stdout = child.stdout.take()?;
+        let mut output = Vec::new();
+        let mut limited = stdout.take(STATUS_COMMAND_OUTPUT_LIMIT);
+        let (read, status) = tokio::join!(limited.read_to_end(&mut output), child.wait());
+        read.ok()?;
+        if !status.ok()?.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output);
+        let line = text.lines().next().unwrap_or_default().trim();
+        (!line.is_empty()).then(|| line.to_string())
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 pub(crate) fn next_grapheme_boundary(text: &str, index: usize) -> usize {
@@ -167,11 +183,12 @@ pub(crate) fn find_placeholder_occurrence(
     None
 }
 use crate::{
-    AttachmentKind, Command, ComposerDraft, ComposerItem, I18n, ModelRef, Path, Range,
+    AttachmentKind, Command, ComposerDraft, ComposerItem, Duration, I18n, ModelRef, Path, Range,
     SessionExecutionContextResource, Stdio, UnicodeWidthChar, UserInputQuestion,
     sanitize_terminal_text, ui_text,
 };
 use agena_tui::user_input::UserInputAnswerDraft;
+use tokio::io::AsyncReadExt;
 
 #[cfg(test)]
 mod tests {

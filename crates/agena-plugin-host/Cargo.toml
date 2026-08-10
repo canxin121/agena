@@ -9,6 +9,7 @@ agena-failure = { workspace = true }
 agena-plugin-sdk = { workspace = true, features = ["cdylib", "stdio", "http"] }
 abi_stable = { workspace = true }
 async-trait = { workspace = true }
+futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

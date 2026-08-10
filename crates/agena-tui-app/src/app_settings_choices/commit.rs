@@ -20,35 +20,43 @@ impl App {
             ChoiceOverlayAction::SettingsField(field) => {
                 let input = choice_selection_value(&selection);
                 match parse_settings_field_input(&self.i18n, &field, input.as_str()) {
-                    Ok(Some(value)) => match self
-                        .block_on_async(self.backend.set_config_setting(field.path.as_str(), value))
-                    {
-                        Ok(_) => {
-                            self.flash_success(settings_path_updated_message(
-                                &self.i18n, field.path.as_str(),
-                            ));
-                            self.refresh_current_route_after_local_edit();
-                            true
-                        }
-                        Err(error) => {
-                            self.flash_error(error);
-                            false
-                        }
-                    },
+                    Ok(Some(value)) => {
+                        let path = field.path.clone();
+                        self.dispatch_backend_operation(
+                            move |backend| async move {
+                                backend.set_config_setting(path.as_str(), value).await
+                            },
+                            move |app, result| match result {
+                                Ok(_) => {
+                                    app.flash_success(settings_path_updated_message(
+                                        &app.i18n,
+                                        field.path.as_str(),
+                                    ));
+                                    app.refresh_current_route_after_local_edit();
+                                }
+                                Err(error) => app.flash_error(error),
+                            },
+                        );
+                        true
+                    }
                     Ok(None) => {
-                        match self.block_on_async(self.backend.delete_config_setting(field.path.as_str())) {
-                            Ok(_) => {
-                                self.flash_success(settings_path_cleared_message(
-                                    &self.i18n, field.path.as_str(),
-                                ));
-                                self.refresh_current_route_after_local_edit();
-                                true
-                            }
-                            Err(error) => {
-                                self.flash_error(error);
-                                false
-                            }
-                        }
+                        let path = field.path.clone();
+                        self.dispatch_backend_operation(
+                            move |backend| async move {
+                                backend.delete_config_setting(path.as_str()).await
+                            },
+                            move |app, result| match result {
+                                Ok(_) => {
+                                    app.flash_success(settings_path_cleared_message(
+                                        &app.i18n,
+                                        field.path.as_str(),
+                                    ));
+                                    app.refresh_current_route_after_local_edit();
+                                }
+                                Err(error) => app.flash_error(error),
+                            },
+                        );
+                        true
                     }
                     Err(error) => {
                         self.flash_warning(error);
@@ -61,7 +69,7 @@ impl App {
                 let previous = self.run_options.clone();
                 self.run_options
                     .apply_model_mode_input(step, input.as_str());
-                if !self.persist_current_session_model_stack() {
+                if !self.persist_current_session_model_stack(previous.clone()) {
                     self.run_options = previous;
                     return false;
                 }
@@ -326,7 +334,8 @@ impl App {
                 return;
             }
         };
-        let file_value = get_json_path(&sources.file, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
+        let file_value =
+            get_json_path(&sources.file, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
         let effective_value =
             get_json_path(&sources.effective, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
         let prefill = if !file_value.is_null() {
@@ -334,7 +343,7 @@ impl App {
         } else {
             JsonValue::Null
         };
-                if let Some(all_items) = self.settings_field_choice_items(&field) {
+        if let Some(all_items) = self.settings_field_choice_items(&field) {
             let current_value = (!prefill.is_null()).then(|| setting_value_input_text(&prefill));
             let overlay_style = Self::settings_field_choice_overlay_style(&field);
             self.open_choice_overlay(self.build_choice_overlay(

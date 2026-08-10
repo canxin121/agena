@@ -18,10 +18,10 @@
 #![cfg(feature = "wasm")]
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use wasmtime::{Engine, Instance, Linker, Module, Store, TypedFunc};
+use wasmtime::{Config, Engine, Instance, Linker, Module, Store, TypedFunc};
 use wasmtime_wasi::WasiCtxBuilder;
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 
@@ -30,10 +30,13 @@ use crate::sdk::PluginError;
 use crate::transport::PluginTransport;
 
 const ERROR_FLAG: u64 = 1 << 31;
+const FUEL_PER_DISPATCH: u64 = 100_000_000;
+const MAX_WASM_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Plugin transport over a WASM module.
 pub struct WasmTransport {
-    inner: Mutex<WasmInner>,
+    inner: Arc<Mutex<WasmInner>>,
+    dispatch_slot: Arc<tokio::sync::Semaphore>,
 }
 
 struct WasmInner {
@@ -51,7 +54,10 @@ impl WasmTransport {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, TransportError> {
-        let engine = Engine::default();
+        let mut config = Config::new();
+        config.consume_fuel(true);
+        let engine = Engine::new(&config)
+            .map_err(|error| TransportError::Io(format!("configure wasm engine: {error}")))?;
         let module = Module::new(&engine, bytes)
             .map_err(|e| TransportError::Io(format!("compile wasm: {e}")))?;
         let wasi = build_wasi_ctx();
@@ -75,12 +81,13 @@ impl WasmTransport {
                 )
             })?;
         Ok(Self {
-            inner: Mutex::new(WasmInner {
+            inner: Arc::new(Mutex::new(WasmInner {
                 store,
                 instance,
                 alloc,
                 dispatch,
-            }),
+            })),
+            dispatch_slot: Arc::new(tokio::sync::Semaphore::new(1)),
         })
     }
 }
@@ -98,10 +105,30 @@ impl PluginTransport for WasmTransport {
     ) -> Result<serde_json::Value, TransportError> {
         let method_bytes = method.as_bytes().to_vec();
         let params_bytes = serde_json::to_vec(&params)?;
+        if method_bytes.len() > MAX_WASM_MESSAGE_BYTES
+            || params_bytes.len() > MAX_WASM_MESSAGE_BYTES
+        {
+            return Err(TransportError::Rpc(format!(
+                "wasm request exceeds the {MAX_WASM_MESSAGE_BYTES}-byte limit"
+            )));
+        }
 
-        let result_bytes = tokio::task::block_in_place(|| {
-            let mut guard = self.inner.lock().expect("wasm transport poisoned");
+        let dispatch_slot = Arc::clone(&self.dispatch_slot)
+            .acquire_owned()
+            .await
+            .map_err(|_| TransportError::Disconnected)?;
+
+        let inner = Arc::clone(&self.inner);
+        let result_bytes = tokio::task::spawn_blocking(move || {
+            let _dispatch_slot = dispatch_slot;
+            let mut guard = inner
+                .lock()
+                .map_err(|_| TransportError::Io("wasm transport lock poisoned".to_string()))?;
             let inner = &mut *guard;
+            inner
+                .store
+                .set_fuel(FUEL_PER_DISPATCH)
+                .map_err(|error| TransportError::Io(format!("reset wasm fuel: {error}")))?;
             let memory = inner
                 .instance
                 .get_memory(&mut inner.store, "memory")
@@ -115,6 +142,12 @@ impl PluginTransport for WasmTransport {
                 .alloc
                 .call(&mut inner.store, params_bytes.len() as i32)
                 .map_err(|e| TransportError::Io(format!("agena_alloc params: {e}")))?;
+
+            if method_ptr < 0 || params_ptr < 0 {
+                return Err(TransportError::Io(
+                    "wasm allocator returned a negative memory pointer".to_string(),
+                ));
+            }
 
             memory
                 .write(&mut inner.store, method_ptr as usize, &method_bytes)
@@ -140,6 +173,11 @@ impl PluginTransport for WasmTransport {
             let raw_len = (packed & 0xFFFF_FFFF) as u32;
             let is_err = (raw_len as u64) & ERROR_FLAG != 0;
             let result_len = (raw_len & 0x7FFF_FFFF) as usize;
+            if result_len > MAX_WASM_MESSAGE_BYTES {
+                return Err(TransportError::Rpc(format!(
+                    "wasm response exceeds the {MAX_WASM_MESSAGE_BYTES}-byte limit"
+                )));
+            }
             let mut buf = vec![0u8; result_len];
             if result_len > 0 {
                 memory
@@ -147,7 +185,9 @@ impl PluginTransport for WasmTransport {
                     .map_err(|e| TransportError::Io(format!("wasm memory read: {e}")))?;
             }
             Ok::<(bool, Vec<u8>), TransportError>((is_err, buf))
-        })?;
+        })
+        .await
+        .map_err(|error| TransportError::Io(format!("wasm dispatch worker failed: {error}")))??;
 
         let (is_err, buf) = result_bytes;
         if is_err {

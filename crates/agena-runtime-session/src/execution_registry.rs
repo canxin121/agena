@@ -42,20 +42,19 @@ pub struct ExecutionControl<T> {
     turn_id: agena_domain::TurnId,
     reply_id: agena_domain::AssistantReplyId,
     pub cancel: CancellationToken,
-    pub steer_tx: mpsc::UnboundedSender<Vec<T>>,
+    pub steer_tx: mpsc::Sender<Vec<T>>,
     lifecycle: Mutex<ExecutionLifecycle>,
-    operation_abort: Mutex<Option<tokio::task::AbortHandle>>,
     interaction_epoch: AtomicU64,
     interaction_notify: Notify,
 }
 
-const OPERATION_CANCELLATION_GRACE: Duration = Duration::from_millis(500);
+const STEER_QUEUE_CAPACITY: usize = 64;
 
 impl<T> ExecutionControl<T> {
     fn new(
         turn_id: agena_domain::TurnId,
         reply_id: agena_domain::AssistantReplyId,
-        steer_tx: mpsc::UnboundedSender<Vec<T>>,
+        steer_tx: mpsc::Sender<Vec<T>>,
     ) -> Self {
         let execution_id = ExecutionId::new();
         Self {
@@ -65,7 +64,6 @@ impl<T> ExecutionControl<T> {
             cancel: CancellationToken::new(),
             steer_tx,
             lifecycle: Mutex::new(ExecutionLifecycle::start(execution_id)),
-            operation_abort: Mutex::new(None),
             interaction_epoch: AtomicU64::new(0),
             interaction_notify: Notify::new(),
         }
@@ -103,14 +101,6 @@ impl<T> ExecutionControl<T> {
         self.lifecycle.lock().await.clone()
     }
 
-    pub async fn attach_operation_abort(&self, abort: tokio::task::AbortHandle) {
-        *self.operation_abort.lock().await = Some(abort);
-    }
-
-    pub async fn clear_operation_abort(&self) {
-        self.operation_abort.lock().await.take();
-    }
-
     /// Observe the durable-interaction signal generation before checking the
     /// session projection. Waiting with this generation is race-free: a reply
     /// persisted between the projection check and the await cannot be lost.
@@ -130,12 +120,6 @@ impl<T> ExecutionControl<T> {
                 return;
             }
             notified.await;
-        }
-    }
-
-    async fn abort_operation(&self) {
-        if let Some(abort) = self.operation_abort.lock().await.as_ref() {
-            abort.abort();
         }
     }
 }
@@ -167,21 +151,20 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
         session_id: i64,
         turn_id: agena_domain::TurnId,
         reply_id: agena_domain::AssistantReplyId,
-    ) -> Result<(Arc<ExecutionControl<T>>, mpsc::UnboundedReceiver<Vec<T>>), ExecutionControlError>
-    {
-        // Local exclusivity: this process must not run the session twice. The
-        // cross-process lease is taken atomically by the facade on the first
-        // write of the run (design 15.6 step 1).
-        {
-            let guard = self.inner.lock().await;
-            if guard.contains_key(&session_id) {
-                return Err(ExecutionControlError::AlreadyActive(session_id));
-            }
-        }
-
-        let (tx, rx) = mpsc::unbounded_channel();
+    ) -> Result<(Arc<ExecutionControl<T>>, mpsc::Receiver<Vec<T>>), ExecutionControlError> {
+        let (tx, rx) = mpsc::channel(STEER_QUEUE_CAPACITY);
         let control = Arc::new(ExecutionControl::new(turn_id, reply_id, tx));
+
+        // Check and insert while holding one guard. Splitting these into two
+        // critical sections lets concurrent starters both observe the slot as
+        // empty and then overwrite each other, leaving two live executions
+        // for one session while only the newer control remains cancellable.
+        // The cross-process lease is still taken atomically by the facade on
+        // the first write of the run (design 15.6 step 1).
         let mut guard = self.inner.lock().await;
+        if guard.contains_key(&session_id) {
+            return Err(ExecutionControlError::AlreadyActive(session_id));
+        }
         guard.insert(session_id, Arc::clone(&control));
         drop(guard);
 
@@ -245,10 +228,6 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
             .ok_or(ExecutionControlError::NoActiveExecution(session_id))?;
         control.transition(ExecutionPhase::Cancelling).await?;
         control.cancel.cancel();
-        tokio::spawn(async move {
-            tokio::time::sleep(OPERATION_CANCELLATION_GRACE).await;
-            control.abort_operation().await;
-        });
         Ok(())
     }
 
@@ -271,10 +250,6 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
         }
         control.transition(ExecutionPhase::Cancelling).await?;
         control.cancel.cancel();
-        tokio::spawn(async move {
-            tokio::time::sleep(OPERATION_CANCELLATION_GRACE).await;
-            control.abort_operation().await;
-        });
         Ok(CancellationResult::CancellationRequested)
     }
 
@@ -287,13 +262,16 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
     }
 
     pub async fn steer(&self, session_id: i64, parts: Vec<T>) -> Result<(), ExecutionControlError> {
-        let guard = self.inner.lock().await;
-        let control = guard
+        let steer_tx = self
+            .inner
+            .lock()
+            .await
             .get(&session_id)
+            .map(|control| control.steer_tx.clone())
             .ok_or(ExecutionControlError::NoActiveExecution(session_id))?;
-        control
-            .steer_tx
+        steer_tx
             .send(parts)
+            .await
             .map_err(|_| ExecutionControlError::SteerClosed)
     }
 
@@ -332,7 +310,7 @@ mod tests {
     use std::time::Duration;
 
     use agena_domain::{CancellationResult, ExecutionLifecycle, ExecutionPhase};
-    use tokio::sync::mpsc;
+    use tokio::sync::{Barrier, mpsc};
 
     use super::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
 
@@ -368,6 +346,40 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn concurrent_registration_has_one_winner() {
+        const STARTERS: usize = 32;
+        let registry = Arc::new(ExecutionRegistry::<()>::new());
+        let barrier = Arc::new(Barrier::new(STARTERS));
+        let mut tasks = Vec::with_capacity(STARTERS);
+        for _ in 0..STARTERS {
+            let registry = Arc::clone(&registry);
+            let barrier = Arc::clone(&barrier);
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                registry
+                    .register(
+                        42,
+                        agena_domain::TurnId::new(),
+                        agena_domain::AssistantReplyId::new(),
+                    )
+                    .await
+            }));
+        }
+
+        let mut winners = 0;
+        let mut already_active = 0;
+        for task in tasks {
+            match task.await.expect("registration task") {
+                Ok(_) => winners += 1,
+                Err(ExecutionControlError::AlreadyActive(42)) => already_active += 1,
+                Err(error) => panic!("unexpected registration error: {error}"),
+            }
+        }
+        assert_eq!(winners, 1);
+        assert_eq!(already_active, STARTERS - 1);
     }
 
     #[tokio::test]
@@ -440,7 +452,7 @@ mod tests {
         let unrelated = Arc::new(ExecutionControl::new(
             agena_domain::TurnId::new(),
             agena_domain::AssistantReplyId::new(),
-            mpsc::unbounded_channel().0,
+            mpsc::channel(1).0,
         ));
         registry.unregister_if_matches(11, &unrelated).await;
         assert!(registry.is_active(11).await);

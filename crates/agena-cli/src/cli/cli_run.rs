@@ -532,13 +532,13 @@ impl AgenaCli {
     }
 
     pub(super) async fn run_commit(self, args: CommitArgs) -> Result<(), AppError> {
-        let output = self.render_commit_command(args)?;
+        let output = self.render_commit_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_pr(self, args: PrArgs) -> Result<(), AppError> {
-        let output = self.render_pr_command(args)?;
+        let output = self.render_pr_command(args).await?;
         println!("{output}");
         Ok(())
     }

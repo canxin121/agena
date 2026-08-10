@@ -21,8 +21,7 @@ use super::{
     model_output_boundary_context, model_output_exceeds_boundary, normalize_path_for_display,
     parse_invocation_from_json, persist_tool_result_output, plugin_invocation_name,
     resolve_managed_project_path_alias, resolved_plugin_invocation_input_value,
-    resolved_tool_input_value,
-    sdk_path_kind_to_access_kind, shell, shell_command_from_invocation, suggest_tool_names,
-    tool_summary, truncate_to_char_count, unique_registered_tool_match, unknown_tool_hint,
-    validate_shell_filesystem_effects,
+    resolved_tool_input_value, sdk_path_kind_to_access_kind, shell, shell_command_from_invocation,
+    suggest_tool_names, tool_summary, truncate_to_char_count, unique_registered_tool_match,
+    unknown_tool_hint, validate_shell_filesystem_effects,
 };

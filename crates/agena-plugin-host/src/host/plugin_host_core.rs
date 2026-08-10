@@ -168,31 +168,35 @@ impl PluginHost {
             handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
         });
 
+        // Never `block_in_place(|| rt/handle.block_on(fut))` from inside the
+        // runtime the future is being scheduled on. That nested form occupies a
+        // runtime worker for the whole duration while the inner future is
+        // polled by the *same* worker pool: a hook whose dispatch never returns
+        // Pending (e.g. an in-proc plugin child task that is itself stuck)
+        // consumes that worker for the entire hang, and the timer that should
+        // bound the hook cannot advance, so its timeout never fires. A run task
+        // wedged there stops committing -> stops heartbeating -> the lease
+        // goes stale and maintenance abandons the turn. Driving the future
+        // from a scoped thread instead parks the caller and leaves every
+        // worker free, so the hook's internal timeout stays live and a stuck
+        // plugin degrades to its error arm.
         if let Some(rt) = &self.runtime {
             if current.is_some() {
-                return if current_is_multithread {
-                    tokio::task::block_in_place(|| rt.block_on(fut))
-                } else {
-                    block_on_runtime_scoped_thread(rt, fut)
-                };
+                return block_on_runtime_scoped_thread(rt, fut);
             }
             return rt.block_on(fut);
         }
 
         if let Some(handle) = &self.runtime_handle {
             if current.is_some() {
-                return if current_is_multithread {
-                    tokio::task::block_in_place(|| handle.block_on(fut))
-                } else {
-                    block_on_handle_scoped_thread(handle, fut)
-                };
+                return block_on_handle_scoped_thread(handle, fut);
             }
             return handle.block_on(fut);
         }
 
         if let Some(handle) = current {
             return if current_is_multithread {
-                tokio::task::block_in_place(|| handle.block_on(fut))
+                block_on_handle_scoped_thread(&handle, fut)
             } else {
                 block_on_scoped_thread(fut)
             };
@@ -1414,10 +1418,34 @@ impl PluginHost {
     }
 
     pub fn dispatch_tool_definition_blocking(
-        &self,
+        self: &Arc<Self>,
         input: ToolDefinitionInput,
     ) -> Result<ToolDefinitionInput, PluginError> {
-        self.block_on(self.dispatch_tool_definition(input))
+        // `block_on` already runs the chain on a dedicated thread with the 2s
+        // hook timeout live, so a stuck plugin degrades to the error arm
+        // instead of wedging the caller. A std-channel deadline is added as
+        // the hard guarantee: if the worker pool is ever starved by something
+        // else, the internal timeout cannot advance and a bare `block_on`
+        // would block the caller — and its lease-owning run task — forever.
+        // This bound is driven by a plain channel recv, not the tokio timer,
+        // so it always fires.
+        let host = Arc::clone(self);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(host.block_on(host.dispatch_tool_definition(input)));
+        });
+        let remaining = Duration::from_secs(5)
+            .checked_sub(std::time::Instant::now().elapsed())
+            .unwrap_or(Duration::ZERO);
+        match rx.recv_timeout(remaining) {
+            Ok(result) => result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(PluginError::internal(
+                "tool.definition hook chain did not complete within 5s",
+            )),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(PluginError::internal(
+                "tool.definition hook chain thread panicked",
+            )),
+        }
     }
 
     // ── agent.stop ─────────────────────────────────────────────────────────
@@ -1931,6 +1959,7 @@ use super::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PluginManifest;
 
     #[test]
     fn hook_run_queue_drains_by_session_and_claims_unattributed() {
@@ -2004,5 +2033,129 @@ mod tests {
             drained[0].summary,
             format!("run {}", total - super::super::MAX_PENDING_HOOK_RUNS)
         );
+    }
+
+    #[test]
+    fn wedged_tool_definition_hook_cannot_hang_the_caller() {
+        // Regression for the session-5 interrupted-turn wedge: the
+        // `block_on` used by `dispatch_tool_definition_blocking` drove the
+        // hook chain with `block_in_place(|| handle.block_on(fut))`, pinning a
+        // runtime worker for the whole duration. A hook transport that spawns
+        // a task which never resolves (the in-proc shape) then consumes a
+        // worker forever; with the timer unable to advance, the 2s hook
+        // timeout never fired and the lease-owning run task hung past the
+        // lease-reap window. The chain must now degrade to its error arm
+        // within a hard std-channel deadline instead.
+        use crate::transport::PluginTransport;
+
+        struct HangingTransport;
+        #[async_trait::async_trait]
+        impl PluginTransport for HangingTransport {
+            async fn dispatch(
+                &self,
+                _method: &str,
+                _params: serde_json::Value,
+            ) -> Result<serde_json::Value, TransportError> {
+                // Mirror the in-proc transport: the hook runs in a spawned
+                // task that here never resolves.
+                let join = tokio::spawn(async {
+                    std::future::pending::<serde_json::Value>().await
+                });
+                join.await.map_err(|_| TransportError::Disconnected)
+            }
+        }
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        rt.block_on(async {
+            let tool_registry = Arc::new(RwLock::new(PluginToolRegistry::new()));
+            let statuses = Arc::new(crate::status::StatusRegistry::new());
+            let logs = Arc::new(PluginLogStore::default());
+            let host = Arc::new(PluginHost {
+                plugins: vec![Arc::new(LoadedPlugin::new(
+                    "static",
+                    crate::config::ConfiguredPlugin {
+                        enabled: true,
+                        package: crate::config::PluginPackage::Static {},
+                        config: serde_json::json!({}),
+                        timeouts: TimeoutsConfig::default(),
+                    },
+                    Arc::new(HangingTransport),
+                    PluginManifest {
+                        schema_version: 1,
+                        namespace: "test".to_string(),
+                        name: "hanging".to_string(),
+                        version: "0.1.0".to_string(),
+                        summary: None,
+                        help: None,
+                        authors: Vec::new(),
+                        transports: Vec::new(),
+                        hooks: HookSubscription::TOOL_DEFINITION,
+                        tools: Vec::new(),
+                        commands: Vec::new(),
+                        activity_kinds: Vec::new(),
+                        tags: Vec::new(),
+                        skills: Vec::new(),
+                        ui: Default::default(),
+                        config_schema: None,
+                        config_schema_i18n: Default::default(),
+                    },
+                    "test".to_string(),
+                    Vec::new(),
+                ))],
+                plugins_by_id: Default::default(),
+                tool_registry: Arc::clone(&tool_registry),
+                statuses: Arc::clone(&statuses),
+                logs: Arc::clone(&logs),
+                timeouts: TimeoutsConfig::default(),
+                runtime: None,
+                runtime_handle: Some(tokio::runtime::Handle::current()),
+                _host_handle: Arc::new(HostHandle::new_with_components(
+                    Arc::new(NoopHostClient),
+                    Arc::clone(&tool_registry),
+                    Arc::new(RwLock::new(HashMap::new())),
+                    Arc::new(RwLock::new(HashMap::new())),
+                    Arc::clone(&statuses),
+                    Arc::clone(&logs),
+                    None,
+                )),
+                transferred_to_successor: tokio::sync::Mutex::new(Default::default()),
+                hook_runs: Arc::new(std::sync::Mutex::new(Vec::new())),
+            });
+
+            let started = std::time::Instant::now();
+            let result = host.dispatch_tool_definition_blocking(ToolDefinitionInput {
+                tool: ToolKey::new(
+                    PluginKey::new("test", "hanging").expect("valid key"),
+                    "example",
+                )
+                .expect("valid tool key"),
+                summary: "s".to_string(),
+                help: None,
+                input_schema: serde_json::json!({}),
+            });
+            let elapsed = started.elapsed();
+            assert!(
+                result.is_err(),
+                "a wedged hook must degrade to the error arm, got {result:?}"
+            );
+            assert!(
+                elapsed < std::time::Duration::from_secs(10),
+                "the blocking dispatch must be bounded by the std deadline, took {elapsed:?}"
+            );
+            // The worker pool must survive the wedged hook: under the old
+            // block_in_place nesting the workers were pinned and this fresh
+            // task would starve.
+            let started = std::time::Instant::now();
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                tokio::task::yield_now().await;
+            })
+            .await
+            .expect("the runtime must remain responsive after a wedged hook");
+            assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        });
     }
 }

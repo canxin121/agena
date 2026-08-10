@@ -273,14 +273,15 @@ where
     F: std::future::Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    if let Ok(current) = tokio::runtime::Handle::try_current() {
-        return if current.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
-            tokio::task::block_in_place(|| handle.block_on(fut))
-        } else {
-            std::thread::spawn(move || handle.block_on(fut))
-                .join()
-                .expect("plugin host runtime thread panicked")
-        };
+    if tokio::runtime::Handle::try_current().is_ok() {
+        // Drive the future on a dedicated thread. `handle.block_on` parks the
+        // calling thread, so unlike `block_in_place(|| handle.block_on(fut))`
+        // this never occupies a runtime worker while a hook runs: a hung hook
+        // cannot starve the worker pool that bounds it via its own timeout,
+        // and the caller's run task is only ever blocked on this join.
+        return std::thread::spawn(move || handle.block_on(fut))
+            .join()
+            .expect("plugin host runtime thread panicked");
     }
 
     handle.block_on(fut)

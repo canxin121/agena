@@ -1,0 +1,81 @@
+# Built-in tool runtime and dependency audit
+
+Date: 2026-08-11
+
+## Goal and guarantee boundary
+
+This audit covers the built-in execution tools, their shared discovery and I/O layers, background process monitoring, provider-backed tools, Git helpers, OAuth transports, and the most important async/synchronous boundaries used by the runtime.
+
+No non-trivial concurrent application can honestly promise that a deadlock is *mathematically impossible*. The enforceable project standard is instead:
+
+- never perform unbounded filesystem, process, network, or decoding work on a Tokio worker;
+- never retain a synchronous or Tokio lock guard across `.await`;
+- use Tokio for async process and pipe I/O;
+- isolate unavoidable synchronous APIs behind a bounded semaphore plus `spawn_blocking`;
+- put explicit count, byte, time, and concurrency budgets around work controlled by a tool request;
+- use established libraries for general-purpose search, parsing, matching, HTTP, scheduling, and process control;
+- make every truncation or timeout visible in tool output rather than silently appearing to hang.
+
+`cargo clippy` is run with `clippy::await_holding_lock` denied for the audited crates.
+
+## Incident findings
+
+### Session 25: failed-tool ready-future livelock
+
+A failed tool call was still classified as pending. The session runner repeatedly awaited a future that was already ready without changing state, producing a tight 100% CPU loop. The pending predicate now means genuinely in-flight work, and the stable-run loop has an explicit progress invariant and regression tests.
+
+### Session 26: unbounded `fs.grep`
+
+Two broad `fs.grep` calls omitted `path`; the older implementation recursively visited the whole workspace with `walkdir`, including the 13 GiB `target` tree and 2.4 GiB `.agena` data, then called `read_to_string` on every file. The call ran in `spawn_blocking`, so it did not lock a Tokio worker, but it occupied blocking workers indefinitely and allocated without useful limits. This was a runaway scan, distinct from the session 25 state-machine livelock.
+
+## Tool-by-tool decisions
+
+| Area | Decision | Runtime boundary and limits |
+| --- | --- | --- |
+| `fs.grep` | Replaced custom traversal/full-file reads with the ripgrep ecosystem: `ignore`, `grep-regex`, and `grep-searcher`. | Honors ignore/hidden rules, detects binary data, streams matches, skips generated trees, and caps matches, entries, files, file bytes, total bytes, heap, and elapsed time. |
+| `fs.glob` | Replaced direct `walkdir` traversal with the shared `ignore::WalkBuilder`. | Standard ignore rules plus generated-directory policy; result pagination, visited entries, and elapsed scan time are bounded and truncation is visible. |
+| `fs.read` / `fs.read_many` / attachments | Kept thin filesystem wrappers; replaced ad-hoc binary guessing with `content_inspector`. | Bounded prefix/classification reads, 8 MiB text limit, bounded multi-file byte budget, 20,000-entry directory scan ceiling, streaming hashes, and no whole sparse-file allocation. |
+| `fs.stat` | Kept standard metadata calls and SHA-256 because this is a thin wrapper, not a search engine. | Hashing streams in 64 KiB chunks and is skipped above 64 MiB. |
+| `fs.write` / `fs.replace` | Retained because they implement Agena revision/permission semantics. | Mutating text is capped at 16 MiB and runs in the bounded filesystem worker pool. Revision hashes prevent stale concurrent overwrites. Atomic multi-file transactions remain a separate correctness improvement. |
+| `fs.apply_patch` | Retained the Agena patch parser because the wire format, permission preflight, inverse patch, and operation metadata are product-specific. The `diff` crate remains the line-diff implementation. | Patch payload and target files are capped at 16 MiB. It runs off Tokio workers. A mature library is not a drop-in replacement for this protocol. Multi-file rollback/atomicity remains a separate correctness improvement. |
+| `code.search_ast` / syntax tree | Retained `ast-grep` and Tree-sitter, replaced unfiltered `walkdir` collection with `ignore`. | Parsing moved from the async method into the bounded blocking pool; generated trees are skipped; entry, file, single-file, total-byte, output, and 20-second limits are enforced. |
+| `tools_search` and typo suggestions | Replaced a per-request Tantivy RAM index, commit, and custom edit-distance fallback with `nucleo-matcher`. | The catalog is small and in memory; fuzzy token matching is deterministic and has a caller-provided result limit. Tantivy remains only where a persistent index is appropriate. |
+| foreground `shell.run` | Replaced `std::process`, reader OS threads, synchronous channels, and sleep polling with `tokio::process`, async pipe drains, `tokio::select!`, and Tokio cancellation/timeouts. | Sixteen foreground commands maximum, 8 MiB retained per stream while continuing to drain, process-group termination on Unix, bounded post-exit pipe joins, and regressions for cancellation plus descendants that inherit pipes. |
+| background shell monitor | Uses `tokio::process`, Tokio pipe readers, Tokio timeouts, cancellation, and `tokio_util::codec::LinesCodec`. | Ring buffer and UTF-8 line caps are enforced during decoding rather than after an unbounded `read_until`; Unix process trees are owned and terminated as a group. The synchronous compatibility `read` waits on a condition variable; async callers invoke it through `spawn_blocking`, so it never blocks a Tokio worker. |
+| background activity log reads | Fixed synchronous monitor waits that were called directly from async runtime/host methods. | Both async call sites now use `spawn_blocking`; no 30-second condition-variable wait can occupy a Tokio worker. |
+| delegated tasks | Retained short `std::sync::Mutex` sections because the state is data-only and guards are released before every `.await`. | Maximum eight active tasks per parent; notification-based waits; `await_holding_lock` check passes. Replacing these locks with async mutexes would add overhead without improving correctness. |
+| LSP | Retained the typed `agena-lsp` client and `lsp-types`; no protocol should be reimplemented in the tool layer. | Tokio stdio transport and request timeouts remain; document synchronization is capped at 16 MiB. |
+| Skill discovery | Replaced `walkdir` with `ignore`; centralized the 1 MiB file limit in `agena-skills`. | Dedicated roots, depth and entry ceilings, bounded reads before allocation, diagnostics for skipped/oversized definitions, and blocking-pool execution. |
+| memory | Retained Tantivy because memory is a persistent, queryable index where an index is appropriate. | Existing memory service ownership and limits remain; this is intentionally different from rebuilding an index for every `tools_search` call. |
+| web fetch/search/browser | Retained `reqwest`, `spider`, `crw-extract`, and `chromey`. | HTTP bodies are capped while streaming, and browser startup, CDP commands, waits, authorization, and concurrency have explicit limits. Both direct CDP and spider-rendered browser discovery/startup calls are isolated with `spawn_blocking`. |
+| MCP | Retained `rmcp` and the typed MCP client. | Library-owned protocol timeouts and reconnect behavior; catalog/result bounds remain at the plugin layer. |
+| cron | Retained the `cron` parser and `agena-scheduler`. | The plugin delegates scheduling instead of implementing timers or parser logic itself. |
+| provider image tools | Retained `reqwest` multipart/JSON implementations because provider endpoints differ. | Requests have explicit timeouts; each request has a 50 MiB aggregate input budget; files are bounded during the actual read; JSON/base64 response bodies are capped before decoding. |
+| provider/OAuth HTTP | Retained `reqwest` and `oauth2`. | Clients are cached, connect/request timeouts are explicit, redirects follow OAuth policy, provider JSON is capped at 64 MiB, and auth/error response bodies are capped at 1 MiB while streaming. The synchronous loopback callback listener is isolated with `spawn_blocking` in both application and CLI flows. |
+| Agena HTTP/SSE client | Replaced the hand-written SSE framing and buffer manipulation with `tokio_sse_codec` over `tokio_util::codec::FramedRead`. | SSE events are decoded incrementally with a 4 MiB event limit. Regular JSON, text, and error responses are capped at 64 MiB, 16 MiB, and 1 MiB respectively while streaming; connection setup has a ten-second timeout. |
+| plugin HTTP transport | Retained `reqwest`. | Both host transport and plugin callback clients use sixty-second request timeouts and streaming 16 MiB response caps; neither trusts content length or calls unbounded `text()`/`bytes()`. |
+| model-catalog fetch | Retained `reqwest` and typed parsers. | Twenty-second HTTP timeout and streaming 8 MiB source cap, including parallel official-reference pages. |
+| Git HTTP | Retained Tokio process execution and `git2` for the operations each handles well. | Tokio command timeout, repository locks with acquisition timeout, bounded concurrent libgit2 work, bounded stdout/stderr drains, concurrent stdin/output handling, Unix process-group cleanup, and bounded nested-repository discovery moved off runtime workers. |
+| snapshots and context Git facts | Retained Git/Rift CLIs because their worktree and Rift semantics are the source of truth; replacing them with `git2` would change behavior. | `process_control` now provides cross-platform process time limits, termination, and pipe filtering. Commands run only on blocking workers; output is bounded while pipes continue to drain. Snapshot probes use 10 seconds, context facts 15 seconds, inspections 60 seconds, and mutations 120 seconds. |
+| notebooks | Retained `serde_json`, the native format of `.ipynb`. | Input notebook files are capped at 32 MiB and edits run in the bounded blocking pool. |
+| terminal/UI helper processes | Retained the synchronous boundary because these helpers inherit the user's terminal, temporarily coordinate SIGINT, and are called by synchronous platform APIs. | Explicit timeout/kill/reap behavior and output caps exist. Probe reader/writer threads are scoped and joined; they are not Tokio work. Converting this boundary requires an async platform API, not a nested runtime. |
+| managed browser janitor | Retained one process-wide janitor OS thread. | It owns no async lock and only checks a single browser state every 15 seconds. Browser calls themselves are isolated from Tokio workers. This is an intentional lifecycle thread, not one thread per tool call. |
+| native plugin ABI | Retained one bounded actor OS thread per loaded `cdylib`, because arbitrary foreign plugin code cannot safely execute or unwind on a Tokio worker. | Tokio communicates through a bounded channel and oneshots. Graceful close is timed and the join runs in `spawn_blocking`; `Drop` deliberately never waits for native code that may be permanently wedged. |
+
+## Concurrency rules for future changes
+
+1. Async tool handlers must not call recursive filesystem traversal, parser-heavy work, synchronous process waits, or condition-variable waits directly.
+2. CPU/synchronous work must acquire the relevant bounded semaphore *before* entering `spawn_blocking`, and the permit must live until the work returns.
+3. Tokio tasks must never hold `std::sync` or Tokio lock guards across `.await`; clone the needed value under the lock and release the guard first.
+4. A timeout without cancellation is insufficient. Child processes must be killed and reaped, streams must keep draining after their retained-output limit, and abandoned async work must receive cancellation.
+5. Content length is only a hint. Network and file readers must enforce limits while streaming because the source can grow or omit/misreport its length.
+6. General-purpose search, protocol, parser, scheduler, fuzzy-match, and process-control code should use a maintained library. Product-specific permission, presentation, and revision glue should stay small and bounded.
+7. Every broad discovery tool must expose truncation and tell the caller how to narrow the request.
+
+## Known follow-up correctness work
+
+These are not current deadlock causes, but they should not be conflated with the completed runtime fixes:
+
+- `apply_patch` can still partially apply a multi-file patch if a later filesystem mutation fails. Add complete preflight plus rollback or a transaction journal before promising all-or-nothing behavior.
+- `fs.write` and `fs.replace` use revision checks but are not yet atomic replace-on-disk operations on every supported platform.
+- The Background Activities TUI has selection/filter/rendering defects documented separately in `docs/background-activities-audit.md`.

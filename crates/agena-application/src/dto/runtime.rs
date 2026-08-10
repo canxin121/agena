@@ -1,75 +1,3 @@
-#[derive(Debug, Clone, Serialize)]
-/// Runtime operator surface: MCP, LSP, agent, skills, and plugin UI.
-pub struct RuntimeOperatorResource {
-    pub mcp: RuntimeMcpResource,
-    pub lsp: RuntimeLspResource,
-    pub agent_id: String,
-    pub skills: RuntimeSkillsResource,
-    pub ui: RuntimePluginUiResource,
-}
-
-#[derive(Debug, Clone, Serialize)]
-/// Plugin UI catalog with the tool registry generation it reflects.
-pub struct RuntimePluginUiResource {
-    pub catalog: agena_plugin_host::PluginUiCatalog,
-    pub tool_registry_generation: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_registry_last_event:
-        Option<agena_plugin_host::sdk::host_api::ToolRegistryChangedEvent>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-/// MCP servers running inside the runtime.
-pub struct RuntimeMcpResource {
-    pub server_count: usize,
-    pub tool_count: usize,
-    pub servers: Vec<RuntimeMcpServerResource>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-/// One MCP server with its tool count.
-pub struct RuntimeMcpServerResource {
-    pub name: String,
-    pub tool_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-/// LSP servers and diagnostics overview.
-pub struct RuntimeLspResource {
-    pub server_count: usize,
-    pub diagnostics_count: usize,
-    pub files_with_diagnostics: usize,
-    pub servers: Vec<RuntimeLspServerResource>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-/// One LSP server definition.
-pub struct RuntimeLspServerResource {
-    pub name: String,
-    pub command: String,
-    pub file_extensions: Vec<String>,
-    pub root_markers: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-/// Loaded skills and skill commands.
-pub struct RuntimeSkillsResource {
-    pub skill_count: usize,
-    pub command_count: usize,
-    pub skills: Vec<RuntimeSkillResource>,
-    pub commands: Vec<RuntimeSkillResource>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-/// One loaded skill or skill command.
-pub struct RuntimeSkillResource {
-    pub name: String,
-    pub description: String,
-    pub aliases: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_path: Option<String>,
-}
-
 /// Application-facing projection of Runtime process counters.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct RuntimeMetricsResource {
@@ -189,42 +117,16 @@ impl From<agena_runtime::RuntimeUiConfiguration> for TuiPreferencesResource {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-/// Response to a runtime configuration reload.
-pub struct RuntimeReloadResponse {
-    pub cause: &'static str,
-    pub previous_generation: u64,
-    pub generation: u64,
-    pub loaded_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-/// A runtime background task.
-pub struct RuntimeBackgroundTaskResource {
-    pub id: String,
-    pub kind: RuntimeBackgroundTaskKind,
-    pub origin: RuntimeBackgroundTaskOrigin,
-    pub title: String,
-    pub status: RuntimeBackgroundTaskStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure: Option<agena_failure::UserProblem>,
-    pub created_at: DateTime<Utc>,
-    pub started_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub finished_at: Option<DateTime<Utc>>,
-    pub cancellable: bool,
-}
-
-impl From<RuntimeBackgroundTask> for RuntimeBackgroundTaskResource {
-    fn from(value: RuntimeBackgroundTask) -> Self {
+impl From<agena_runtime::RuntimeBackgroundTask>
+    for agena_api::resource::RuntimeBackgroundTaskResource
+{
+    fn from(value: agena_runtime::RuntimeBackgroundTask) -> Self {
         Self {
             id: value.id,
-            kind: value.kind,
-            origin: value.origin,
+            kind: runtime_background_task_kind_from_domain(value.kind),
+            origin: runtime_background_task_origin_from_domain(value.origin),
             title: value.title,
-            status: value.status,
+            status: runtime_background_task_status_from_domain(value.status),
             message: value.message,
             failure: value.failure.map(Into::into),
             created_at: value.created_at,
@@ -235,19 +137,60 @@ impl From<RuntimeBackgroundTask> for RuntimeBackgroundTaskResource {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-/// Response to starting a runtime background task.
-pub struct RuntimeBackgroundTaskStartResponse {
-    pub started: bool,
-    pub task: RuntimeBackgroundTaskResource,
+const fn runtime_background_task_kind_from_domain(
+    value: agena_runtime::RuntimeBackgroundTaskKind,
+) -> agena_api::resource::RuntimeBackgroundTaskKind {
+    match value {
+        agena_runtime::RuntimeBackgroundTaskKind::ModelCatalogRefresh => {
+            agena_api::resource::RuntimeBackgroundTaskKind::ModelCatalogRefresh
+        }
+        agena_runtime::RuntimeBackgroundTaskKind::RuntimeReload => {
+            agena_api::resource::RuntimeBackgroundTaskKind::RuntimeReload
+        }
+        agena_runtime::RuntimeBackgroundTaskKind::MarketplaceRegistrySync => {
+            agena_api::resource::RuntimeBackgroundTaskKind::MarketplaceRegistrySync
+        }
+        agena_runtime::RuntimeBackgroundTaskKind::MarketplacePluginInstall => {
+            agena_api::resource::RuntimeBackgroundTaskKind::MarketplacePluginInstall
+        }
+        agena_runtime::RuntimeBackgroundTaskKind::MarketplacePluginUninstall => {
+            agena_api::resource::RuntimeBackgroundTaskKind::MarketplacePluginUninstall
+        }
+        agena_runtime::RuntimeBackgroundTaskKind::MarketplacePluginUpgrade => {
+            agena_api::resource::RuntimeBackgroundTaskKind::MarketplacePluginUpgrade
+        }
+    }
 }
 
-#[derive(Debug, Clone, Serialize)]
-/// Response to cancelling a runtime background task.
-pub struct RuntimeBackgroundTaskCancelResponse {
-    pub task: RuntimeBackgroundTaskResource,
+const fn runtime_background_task_origin_from_domain(
+    value: agena_runtime::RuntimeBackgroundTaskOrigin,
+) -> agena_api::resource::RuntimeBackgroundTaskOrigin {
+    match value {
+        agena_runtime::RuntimeBackgroundTaskOrigin::System => {
+            agena_api::resource::RuntimeBackgroundTaskOrigin::System
+        }
+        agena_runtime::RuntimeBackgroundTaskOrigin::User => {
+            agena_api::resource::RuntimeBackgroundTaskOrigin::User
+        }
+    }
 }
-use super::{
-    DateTime, RuntimeBackgroundTask, RuntimeBackgroundTaskKind, RuntimeBackgroundTaskOrigin,
-    RuntimeBackgroundTaskStatus, Serialize, Utc,
-};
+
+const fn runtime_background_task_status_from_domain(
+    value: agena_runtime::RuntimeBackgroundTaskStatus,
+) -> agena_api::resource::RuntimeBackgroundTaskStatus {
+    match value {
+        agena_runtime::RuntimeBackgroundTaskStatus::Running => {
+            agena_api::resource::RuntimeBackgroundTaskStatus::Running
+        }
+        agena_runtime::RuntimeBackgroundTaskStatus::Succeeded => {
+            agena_api::resource::RuntimeBackgroundTaskStatus::Succeeded
+        }
+        agena_runtime::RuntimeBackgroundTaskStatus::Failed => {
+            agena_api::resource::RuntimeBackgroundTaskStatus::Failed
+        }
+        agena_runtime::RuntimeBackgroundTaskStatus::Cancelled => {
+            agena_api::resource::RuntimeBackgroundTaskStatus::Cancelled
+        }
+    }
+}
+use super::{DateTime, Serialize, Utc};

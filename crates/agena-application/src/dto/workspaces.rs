@@ -1,14 +1,3 @@
-#[derive(Debug, Clone, Serialize)]
-/// A workspace resource.
-pub struct WorkspaceResource {
-    pub id: i64,
-    pub path: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_count: Option<u64>,
-}
-
 #[derive(Debug, Clone, Deserialize, Default)]
 /// Query for listing workspaces.
 pub struct WorkspaceListQuery {

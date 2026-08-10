@@ -1,47 +1,4 @@
 #[derive(Debug, Clone, Serialize)]
-/// A persisted permission rule.
-pub struct PermissionRuleResource {
-    pub id: i64,
-    pub action_key: String,
-    pub subject_kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub qualifier: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path_access_kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub workspace_root: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network_target: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network_host: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network_port: Option<u16>,
-    pub mode: agena_domain::PermissionMode,
-    pub scope: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub workspace_id: Option<i64>,
-    pub source: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operator: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub revoked_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub revoked_reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub revoked_by: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 /// Git status of a workspace.
 pub struct GitStatusResource {
     pub workspace_root: String,
@@ -188,5 +145,5 @@ pub struct PermissionRuleRevokeRequest {
     pub reason: Option<String>,
 }
 
-use super::{DateTime, Deserialize, Serialize, Utc};
+use super::{Deserialize, Serialize};
 use agena_api::resource::PermissionMode as ApiPermissionMode;

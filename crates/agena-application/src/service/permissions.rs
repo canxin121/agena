@@ -276,7 +276,7 @@ fn permission_rule_resource(
         network_target,
         network_host,
         network_port,
-        mode: permission_mode_from_string(row.mode.as_str())?,
+        mode: permission_mode_to_resource(permission_mode_from_string(row.mode.as_str())?),
         scope: row.scope.clone(),
         session_id: row.session_id,
         workspace_id: row.workspace_id,
@@ -452,6 +452,17 @@ const fn permission_mode_to_domain(
         agena_api::resource::PermissionMode::Auto => agena_domain::PermissionMode::Auto,
         agena_api::resource::PermissionMode::Ask => agena_domain::PermissionMode::Ask,
         agena_api::resource::PermissionMode::Deny => agena_domain::PermissionMode::Deny,
+    }
+}
+
+const fn permission_mode_to_resource(
+    mode: agena_domain::PermissionMode,
+) -> agena_api::resource::PermissionMode {
+    match mode {
+        agena_domain::PermissionMode::Allow => agena_api::resource::PermissionMode::Allow,
+        agena_domain::PermissionMode::Auto => agena_api::resource::PermissionMode::Auto,
+        agena_domain::PermissionMode::Ask => agena_api::resource::PermissionMode::Ask,
+        agena_domain::PermissionMode::Deny => agena_api::resource::PermissionMode::Deny,
     }
 }
 

@@ -8,10 +8,8 @@ use crate::{
     Application, ApplicationError,
     dto::{
         CursorPaginationQuery, ModelCatalogResponse as ApplicationModelCatalogResponse,
-        PermissionRuleResource as ApplicationPermissionRuleResource, PermissionRuleWriteRequest,
-        RuntimeBackgroundTaskResource as ApplicationRuntimeBackgroundTaskResource,
-        SearchPaginationQuery, SessionListQuery, WorkspaceListQuery, WorkspacePathRequest,
-        WorkspaceResolveRequest, WorkspaceResource as ApplicationWorkspaceResource,
+        PermissionRuleWriteRequest, SearchPaginationQuery, SessionListQuery, WorkspaceListQuery,
+        WorkspacePathRequest, WorkspaceResolveRequest,
     },
     pagination::PaginatedResponse as ApplicationPaginatedResponse,
     service::{scheduled_job_resource, sort_jobs_for_display},
@@ -76,19 +74,6 @@ impl<T> IntoWire<T> for T {
     }
 }
 
-impl IntoWire<WorkspaceResource> for ApplicationWorkspaceResource {
-    fn into_wire(self) -> WorkspaceResource {
-        let value = self;
-        WorkspaceResource {
-            id: value.id,
-            path: value.path,
-            created_at: value.created_at,
-            updated_at: value.updated_at,
-            session_count: value.session_count,
-        }
-    }
-}
-
 impl IntoWire<ModelCatalogResponse> for ApplicationModelCatalogResponse {
     fn into_wire(self) -> ModelCatalogResponse {
         let value = self;
@@ -101,67 +86,6 @@ impl IntoWire<ModelCatalogResponse> for ApplicationModelCatalogResponse {
             last_failure: value.last_failure,
             model_count: value.model_count,
         }
-    }
-}
-
-impl IntoWire<RuntimeBackgroundTaskResource> for ApplicationRuntimeBackgroundTaskResource {
-    fn into_wire(self) -> RuntimeBackgroundTaskResource {
-        let value = self;
-        RuntimeBackgroundTaskResource {
-            id: value.id,
-            kind: runtime_background_task_kind_from_domain(value.kind),
-            origin: runtime_background_task_origin_from_domain(value.origin),
-            title: value.title,
-            status: runtime_background_task_status_from_domain(value.status),
-            message: value.message,
-            failure: value.failure,
-            created_at: value.created_at,
-            started_at: value.started_at,
-            finished_at: value.finished_at,
-            cancellable: value.cancellable,
-        }
-    }
-}
-
-impl IntoWire<agena_api::resource::PermissionRuleResource> for ApplicationPermissionRuleResource {
-    fn into_wire(self) -> agena_api::resource::PermissionRuleResource {
-        let value = self;
-        agena_api::resource::PermissionRuleResource {
-            id: value.id,
-            action_key: value.action_key,
-            subject_kind: value.subject_kind,
-            tool_name: value.tool_name,
-            qualifier: value.qualifier,
-            path_access_kind: value.path_access_kind,
-            workspace_root: value.workspace_root,
-            target_path: value.target_path,
-            network_target: value.network_target,
-            network_host: value.network_host,
-            network_port: value.network_port,
-            mode: permission_mode_to_wire(value.mode),
-            scope: value.scope,
-            session_id: value.session_id,
-            workspace_id: value.workspace_id,
-            source: value.source,
-            reason: value.reason,
-            operator: value.operator,
-            revoked_at: value.revoked_at,
-            revoked_reason: value.revoked_reason,
-            revoked_by: value.revoked_by,
-            created_at: value.created_at,
-            updated_at: value.updated_at,
-        }
-    }
-}
-
-const fn permission_mode_to_wire(
-    value: agena_domain::PermissionMode,
-) -> agena_api::resource::PermissionMode {
-    match value {
-        agena_domain::PermissionMode::Allow => agena_api::resource::PermissionMode::Allow,
-        agena_domain::PermissionMode::Auto => agena_api::resource::PermissionMode::Auto,
-        agena_domain::PermissionMode::Ask => agena_api::resource::PermissionMode::Ask,
-        agena_domain::PermissionMode::Deny => agena_api::resource::PermissionMode::Deny,
     }
 }
 
@@ -218,8 +142,7 @@ async fn runtime_status_response(state: &Application) -> RuntimeStatusResponse {
     let background_tasks = status
         .background_tasks
         .into_iter()
-        .map(ApplicationRuntimeBackgroundTaskResource::from)
-        .map(IntoWire::into_wire)
+        .map(Into::into)
         .collect();
     let session_cache = status
         .session_cache
@@ -533,63 +456,6 @@ fn plugin_ui_action_resource_from_domain(
         }
         agena_plugin_host::sdk::PluginUiAction::InvokeCommand { command, input } => {
             agena_api::resource::PluginUiActionResource::InvokeCommand { command, input }
-        }
-    }
-}
-
-const fn runtime_background_task_kind_from_domain(
-    value: agena_runtime::RuntimeBackgroundTaskKind,
-) -> agena_api::resource::RuntimeBackgroundTaskKind {
-    match value {
-        agena_runtime::RuntimeBackgroundTaskKind::ModelCatalogRefresh => {
-            agena_api::resource::RuntimeBackgroundTaskKind::ModelCatalogRefresh
-        }
-        agena_runtime::RuntimeBackgroundTaskKind::RuntimeReload => {
-            agena_api::resource::RuntimeBackgroundTaskKind::RuntimeReload
-        }
-        agena_runtime::RuntimeBackgroundTaskKind::MarketplaceRegistrySync => {
-            agena_api::resource::RuntimeBackgroundTaskKind::MarketplaceRegistrySync
-        }
-        agena_runtime::RuntimeBackgroundTaskKind::MarketplacePluginInstall => {
-            agena_api::resource::RuntimeBackgroundTaskKind::MarketplacePluginInstall
-        }
-        agena_runtime::RuntimeBackgroundTaskKind::MarketplacePluginUninstall => {
-            agena_api::resource::RuntimeBackgroundTaskKind::MarketplacePluginUninstall
-        }
-        agena_runtime::RuntimeBackgroundTaskKind::MarketplacePluginUpgrade => {
-            agena_api::resource::RuntimeBackgroundTaskKind::MarketplacePluginUpgrade
-        }
-    }
-}
-
-const fn runtime_background_task_origin_from_domain(
-    value: agena_runtime::RuntimeBackgroundTaskOrigin,
-) -> agena_api::resource::RuntimeBackgroundTaskOrigin {
-    match value {
-        agena_runtime::RuntimeBackgroundTaskOrigin::System => {
-            agena_api::resource::RuntimeBackgroundTaskOrigin::System
-        }
-        agena_runtime::RuntimeBackgroundTaskOrigin::User => {
-            agena_api::resource::RuntimeBackgroundTaskOrigin::User
-        }
-    }
-}
-
-const fn runtime_background_task_status_from_domain(
-    value: agena_runtime::RuntimeBackgroundTaskStatus,
-) -> agena_api::resource::RuntimeBackgroundTaskStatus {
-    match value {
-        agena_runtime::RuntimeBackgroundTaskStatus::Running => {
-            agena_api::resource::RuntimeBackgroundTaskStatus::Running
-        }
-        agena_runtime::RuntimeBackgroundTaskStatus::Succeeded => {
-            agena_api::resource::RuntimeBackgroundTaskStatus::Succeeded
-        }
-        agena_runtime::RuntimeBackgroundTaskStatus::Failed => {
-            agena_api::resource::RuntimeBackgroundTaskStatus::Failed
-        }
-        agena_runtime::RuntimeBackgroundTaskStatus::Cancelled => {
-            agena_api::resource::RuntimeBackgroundTaskStatus::Cancelled
         }
     }
 }

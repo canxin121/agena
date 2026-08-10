@@ -336,15 +336,24 @@ impl App {
         // parked force refresh (bus lag, terminal safety net) rides the same
         // gate — the terminal state converges a fraction of a second later.
         if let Some(session_id) = self.transcript.session_id
-            && self.refresh_pending
             && !self.transcript.refreshing
             && !self.transcript.state_loading
             && self.last_refresh_at.elapsed() >= Duration::from_millis(REFRESH_INTERVAL_MS)
         {
-            self.refresh_pending = false;
             self.last_refresh_at = Instant::now();
             let force = self.pending_refresh.take().is_some();
-            self.request_refresh(session_id, force);
+            self.refresh_pending = false;
+            // While a run is executing, storage commits streamed parts only
+            // at part completion (end-only flush), so the in-memory overlay
+            // advances without bumping the durable watermark. A changed-gated
+            // reload would see "no new events" and never repaint; force the
+            // reload so reasoning/tool deltas stream live into the transcript.
+            let streaming_live = self
+                .transcript
+                .execution
+                .as_ref()
+                .is_some_and(|execution| execution.active_execution.is_some());
+            self.request_refresh(session_id, force || streaming_live);
         }
 
         self.sync_current_draft_slot();

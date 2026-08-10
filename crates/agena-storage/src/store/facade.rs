@@ -34,13 +34,19 @@ use serde_json::{Value, json};
 
 use super::{
     LEASE_STALENESS_MS, LeaseAcquire, MaintenanceOutcome, NewPart, NewSession, Part, PartDelta,
-    PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
+    PartState, PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
     SessionPresentation, SessionState, SessionSummary, SessionView, StateInputs, StoreError,
     SubmitOutcome, UsageQuery, UsageRecord, UsageStats, apply_part_transition, presentation,
 };
 
-/// Default number of text deltas coalesced into one durable part update (D10).
-pub const STREAMING_FLUSH_DELTA_COUNT: usize = 8;
+/// Safety ceiling for streaming deltas buffered in memory before one durable
+/// part update. Streaming is end-only by default: a part's deltas accumulate
+/// in the in-memory buffer and are committed once when the part reaches a
+/// terminal/state change (or when its run ends), so a run's mid-flight
+/// streaming never writes the database repeatedly. This threshold only
+/// bounds an unusually long single part so an unbounded buffer cannot grow
+/// without ever touching the durable store (crash-safety backstop).
+pub const STREAMING_FLUSH_DELTA_COUNT: usize = 512;
 
 /// A session subscription handle. Dropping it unsubscribes (15.5).
 pub struct Subscription {
@@ -794,10 +800,13 @@ where
             .lock()
             .expect("streaming lock")
             .contains_key(&key);
+        // Seed the stream buffer from the facade's cached view rather than a
+        // direct engine reload: the cache is kept current by `apply_committed`
+        // on every commit, and a warm cache keeps streaming setup off the
+        // database read path entirely.
         let persisted_base = if needs_base {
             Some(
-                self.engine
-                    .load_session(session_id)
+                self.load_cached(session_id)
                     .await?
                     .parts
                     .into_iter()
@@ -816,9 +825,6 @@ where
             )));
         }
 
-        let is_text_delta = delta.content.is_none()
-            && delta.content_text_delta.is_some()
-            && delta.finished_at_ms.is_none();
         let flush = {
             let mut streaming = self.memory.streaming.lock().expect("streaming lock");
             let buffer = streaming.entry(key).or_insert_with(|| StreamingBuffer {
@@ -840,8 +846,15 @@ where
             let state_changed = apply_buffered_delta(&mut next_part, delta, self.now())?;
             buffer.part = next_part;
             buffer.pending_deltas += 1;
-            let should_flush = !is_text_delta
-                || state_changed
+            // End-only streaming: commit once when the part transitions state
+            // (terminalize, tool-call completion) or when a pathological
+            // single part exceeds the safety ceiling. The former `!is_text_delta`
+            // clause flushed every non-text delta (think parts rewrite their
+            // whole content document per token), which wrote the database
+            // ~100+ times per second during reasoning; the durable row is only
+            // meaningful at part completion and reads of the in-memory buffer
+            // already overlay live content.
+            let should_flush = state_changed
                 || buffer.pending_deltas >= self.streaming_flush_delta_count;
             should_flush.then(|| {
                 streaming
@@ -920,11 +933,22 @@ where
             }
             buffers
         };
+        let mut flushed = Vec::with_capacity(buffers.len());
         for buffer in buffers {
-            let part = self.flush_streaming_buffer(session_id, buffer).await?;
-            self.memory.invalidate(session_id);
-            self.bus
-                .emit(SessionChange::PartUpdated { session_id, part });
+            flushed.push(self.flush_streaming_buffer(session_id, buffer).await?);
+        }
+        if !flushed.is_empty() {
+            // Merge the committed rows into the cache instead of invalidating
+            // it: flushing on part completion is the normal tail of a run, and
+            // invalidating here would force the next read back to the engine
+            // every time a run ends. `apply_committed` keeps the warm cache
+            // authoritative (and lets `load_cached` stay a hit).
+            let meta = self.engine.session_meta(session_id).await?;
+            self.memory.apply_committed(session_id, &flushed, Some(meta.version));
+            for part in flushed {
+                self.bus
+                    .emit(SessionChange::PartUpdated { session_id, part });
+            }
         }
         Ok(())
     }
@@ -1130,15 +1154,28 @@ where
             self.ensure_lease(session_id, &owner).await?;
         }
         let is_text_delta = delta.content.is_none() && delta.content_text_delta.is_some();
-        if has_buffer || is_text_delta {
+        // Route an in-progress content update (think/tool-call whole-document
+        // deltas are `content`-shaped, not `content_text_delta`-shaped)
+        // through the streaming buffer too. Without this, reasoning deltas
+        // bypass the buffer entirely and write the database once per token
+        // (~100+ writes per second while thinking). The buffer keeps them in
+        // memory and commits once when the part terminalizes or its run ends.
+        // A content update with a terminal state (a checkpoint editing a
+        // completed part) is a durable edit and stays on the direct commit
+        // path so its revision advances.
+        let streaming_content_update =
+            delta.content.is_some() && delta.state == Some(PartState::InProgress);
+        if has_buffer || is_text_delta || streaming_content_update {
             if let Some(updated) = self
                 .update_streaming_part(session_id, &owner, part_id, delta)
                 .await?
             {
-                // The delta was flushed: notify (D10 — notifications follow
-                // committed flushes) and return the durable row. The streaming
-                // buffer overlay owns the part for same-process reads, so do
-                // not seed the persisted cache here.
+                // The delta was flushed: merge the committed row into the
+                // cache (the buffer no longer overlays it) and notify (D10 —
+                // notifications follow committed flushes).
+                let meta = self.engine.session_meta(session_id).await?;
+                self.memory
+                    .apply_committed(session_id, std::slice::from_ref(&updated), Some(meta.version));
                 self.bus.emit(SessionChange::PartUpdated {
                     session_id,
                     part: updated.clone(),
@@ -1863,6 +1900,136 @@ mod tests {
             })
             .count();
         assert_eq!(content_flushes, 2, "notifications follow committed flushes");
+    }
+
+    #[tokio::test]
+    async fn in_progress_content_updates_are_end_only_and_terminalize_in_one_write() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "stream").await;
+        let outcome = facade
+            .submit_user_run(
+                session_id,
+                "owner-a",
+                vec![NewPart {
+                    kind: "think".to_owned(),
+                    role: PartRole::Assistant,
+                    content: json!({"summary": []}),
+                    summary: None,
+                    visibility: crate::store::PartVisibility::Both,
+                    rendered_markdown: None,
+                    parent_part_id: None,
+                    state: PartState::InProgress,
+                }],
+                None,
+            )
+            .await
+            .expect("start streamed part");
+        let part_id = facade
+            .engine()
+            .load_session(session_id)
+            .await
+            .expect("load persisted stream")
+            .parts[1]
+            .part_id;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let observer: SessionObserver = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |change| seen.lock().expect("seen lock").push(change))
+        };
+        let _subscription = facade.subscribe(session_id, observer);
+
+        // A long in-progress content stream (a reasoning part rewriting its
+        // whole content document per token) must stay in the in-memory buffer:
+        // zero durable writes and zero session version bumps until the part
+        // terminalizes.
+        for i in 0..40 {
+            facade
+                .update_part(
+                    session_id,
+                    "owner-a",
+                    part_id,
+                    PartDelta {
+                        state: Some(PartState::InProgress),
+                        content: Some(json!({"summary": [format!("t{i}")]})),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("buffer content delta");
+        }
+        let persisted_mid_stream = facade
+            .engine()
+            .load_session(session_id)
+            .await
+            .expect("load mid-stream");
+        let persisted_part = persisted_mid_stream
+            .parts
+            .iter()
+            .find(|part| part.part_id == part_id)
+            .expect("streamed part present");
+        assert_eq!(
+            persisted_part.revision, 1,
+            "in-progress content deltas must not write the durable store"
+        );
+        assert_eq!(
+            persisted_part.content["summary"],
+            json!([]),
+            "the durable row stays at its creation shape"
+        );
+        assert_eq!(
+            facade
+                .engine()
+                .session_meta(session_id)
+                .await
+                .expect("session meta")
+                .version,
+            persisted_mid_stream.parts[0].part_id + 1,
+            "session version must not advance on buffered content deltas"
+        );
+        assert_eq!(
+            facade.load(session_id).await.expect("overlay").parts.iter().find(|part| part.part_id == part_id).expect("overlaid part").content["summary"],
+            json!(["t39"]),
+            "same-process readers see the live stream through the buffer overlay"
+        );
+
+        // Terminalizing the part flushes exactly once.
+        facade
+            .update_part(
+                session_id,
+                "owner-a",
+                part_id,
+                PartDelta {
+                    state: Some(PartState::Completed),
+                    content: Some(json!({"summary": ["final"]})),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("terminalize flushes");
+        let persisted_after = facade
+            .engine()
+            .load_session(session_id)
+            .await
+            .expect("load after terminalize");
+        let terminal_part = persisted_after
+            .parts
+            .iter()
+            .find(|part| part.part_id == part_id)
+            .expect("terminal part present");
+        assert_eq!(terminal_part.revision, 2, "one terminal write commits all deltas");
+        assert_eq!(terminal_part.content["summary"], json!(["final"]));
+        let content_flushes = seen
+            .lock()
+            .expect("seen lock")
+            .iter()
+            .filter(|change| {
+                matches!(
+                    change,
+                    SessionChange::PartUpdated { part, .. } if part.part_id == part_id
+                )
+            })
+            .count();
+        assert_eq!(content_flushes, 1, "one notification for the end-only flush");
     }
 
     #[tokio::test]

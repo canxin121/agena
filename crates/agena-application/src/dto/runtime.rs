@@ -117,23 +117,21 @@ impl From<agena_runtime::RuntimeUiConfiguration> for TuiPreferencesResource {
     }
 }
 
-impl From<agena_runtime::RuntimeBackgroundTask>
-    for agena_api::resource::RuntimeBackgroundTaskResource
-{
-    fn from(value: agena_runtime::RuntimeBackgroundTask) -> Self {
-        Self {
-            id: value.id,
-            kind: runtime_background_task_kind_from_domain(value.kind),
-            origin: runtime_background_task_origin_from_domain(value.origin),
-            title: value.title,
-            status: runtime_background_task_status_from_domain(value.status),
-            message: value.message,
-            failure: value.failure.map(Into::into),
-            created_at: value.created_at,
-            started_at: value.started_at,
-            finished_at: value.finished_at,
-            cancellable: value.cancellable,
-        }
+pub(crate) fn runtime_background_task_resource(
+    value: agena_runtime::RuntimeBackgroundTask,
+) -> agena_api::resource::RuntimeBackgroundTaskResource {
+    agena_api::resource::RuntimeBackgroundTaskResource {
+        id: value.id,
+        kind: runtime_background_task_kind_from_domain(value.kind),
+        origin: runtime_background_task_origin_from_domain(value.origin),
+        title: value.title,
+        status: runtime_background_task_status_from_domain(value.status),
+        message: value.message,
+        failure: value.failure.map(Into::into),
+        created_at: value.created_at,
+        started_at: value.started_at,
+        finished_at: value.finished_at,
+        cancellable: value.cancellable,
     }
 }
 

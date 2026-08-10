@@ -9,9 +9,8 @@ use crate::dto::{
     AuthBrowserStartResource, AuthCredentialIssuerResource, AuthCredentialType,
     AuthDeviceStartResource, AuthLoginKindResource, AuthLoginResultResource, AuthProviderResource,
     CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse, ModelCatalogRefreshResponse,
-    ModelCatalogResponse, ModelCatalogSourceKind, RuntimeBackgroundTaskResource,
-    RuntimeDiagnosticsResource, RuntimeMetricsResource, RuntimeSnapshotSummaryResource,
-    TuiPreferencesResource,
+    ModelCatalogResponse, ModelCatalogSourceKind, RuntimeDiagnosticsResource,
+    RuntimeMetricsResource, RuntimeSnapshotSummaryResource, TuiPreferencesResource,
 };
 use crate::service::{ApplicationService, SNAPSHOT_WORKERS};
 
@@ -457,7 +456,7 @@ impl Application {
         let catalog = self.model_catalog_runtime.model_catalog_response();
         Ok(ModelCatalogRefreshResponse {
             started: task.started,
-            task: RuntimeBackgroundTaskResource::from(task.task),
+            task: crate::dto::runtime_background_task_resource(task.task),
             summary: model_catalog_summary(self.model_catalog_runtime.as_ref(), &catalog),
         })
     }

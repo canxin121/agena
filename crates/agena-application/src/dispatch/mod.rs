@@ -35,11 +35,10 @@ use agena_api::{
     },
     resource::{
         DefaultSelectionResource, ModelCatalogResponse, ModelCatalogSourceKind,
-        OperationDetailResource, RuntimeAutomationResource, RuntimeBackgroundTaskResource,
-        RuntimeLspResource, RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
+        OperationDetailResource, RuntimeAutomationResource, RuntimeLspResource,
+        RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
         RuntimeOperatorResource, RuntimePluginUiResource, RuntimeSessionCacheResource,
         RuntimeSkillResource, RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
-        WorkspaceResource,
     },
 };
 
@@ -142,7 +141,7 @@ async fn runtime_status_response(state: &Application) -> RuntimeStatusResponse {
     let background_tasks = status
         .background_tasks
         .into_iter()
-        .map(Into::into)
+        .map(crate::dto::runtime_background_task_resource)
         .collect();
     let session_cache = status
         .session_cache

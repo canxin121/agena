@@ -18,9 +18,9 @@ mod workspaces;
 
 pub use access::*;
 pub use agena_api::resource::{
-    HealthResponse, PermissionRuleResource, RuntimeBackgroundTaskResource,
-    RuntimeBackgroundTaskCancelResponse, RuntimeBackgroundTaskStartResponse,
-    ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource, WorkspaceResource,
+    HealthResponse, PermissionRuleResource, RuntimeBackgroundTaskCancelResponse,
+    RuntimeBackgroundTaskResource, RuntimeBackgroundTaskStartResponse, ScheduledJobResource,
+    ScheduledJobRunResource, SessionAutomationResource, WorkspaceResource,
 };
 pub use auth::*;
 pub use marketplace::*;

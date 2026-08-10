@@ -112,7 +112,7 @@ pub fn resolve_link_url(base: &Url, href: &str) -> Option<Url> {
 }
 
 async fn response_to_page(
-    response: reqwest::Response,
+    mut response: reqwest::Response,
     requested_url: &Url,
     options: &FetchOptions,
 ) -> Result<FetchedPage, CrawlError> {
@@ -134,13 +134,29 @@ async fn response_to_page(
         .get(LAST_MODIFIED)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    let bytes = response.bytes().await?;
-    let truncated = bytes.len() > options.max_body_bytes;
-    let body = if truncated {
-        String::from_utf8_lossy(&bytes[..options.max_body_bytes]).into_owned()
-    } else {
-        String::from_utf8_lossy(&bytes).into_owned()
-    };
+    // Content-Length is not authoritative (and chunked responses omit it), so
+    // enforce the body limit while streaming instead of allocating the entire
+    // response before truncating it.
+    let mut bytes = Vec::with_capacity(options.max_body_bytes.min(64 * 1024));
+    let mut truncated = false;
+    while let Some(chunk) = response.chunk().await? {
+        let remaining = options.max_body_bytes.saturating_sub(bytes.len());
+        if chunk.len() > remaining {
+            bytes.extend_from_slice(&chunk[..remaining]);
+            truncated = true;
+            break;
+        }
+        bytes.extend_from_slice(&chunk);
+        if bytes.len() == options.max_body_bytes {
+            // Read one more chunk to distinguish an exactly-at-limit response
+            // from a larger chunked response without retaining extra bytes.
+            if response.chunk().await?.is_some() {
+                truncated = true;
+            }
+            break;
+        }
+    }
+    let body = String::from_utf8_lossy(&bytes).into_owned();
     Ok(extract_page_from_body(
         requested_url,
         &final_url,
@@ -230,7 +246,10 @@ fn should_upgrade_http(raw_url: &str) -> bool {
 mod tests {
     use std::time::Duration;
 
-    use super::{MAX_RETRY_DELAY_MS, retry_delay, should_retry_status};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::net::TcpListener;
+
+    use super::{FetchOptions, MAX_RETRY_DELAY_MS, fetch_page, retry_delay, should_retry_status};
 
     #[test]
     fn retry_statuses_are_limited_to_rate_limits_and_server_errors() {
@@ -255,5 +274,35 @@ mod tests {
             retry_delay(usize::MAX),
             Duration::from_millis(MAX_RETRY_DELAY_MS)
         );
+    }
+
+    #[tokio::test]
+    async fn response_body_is_truncated_while_streaming() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 10\r\nConnection: close\r\n\r\nabcdefghij",
+                )
+                .await
+                .unwrap();
+        });
+        let options = FetchOptions {
+            max_body_bytes: 5,
+            max_retries: 0,
+            ..FetchOptions::default()
+        };
+        let url = url::Url::parse(format!("http://{address}/oversized").as_str()).unwrap();
+
+        let page = fetch_page(&url, &options).await.unwrap();
+
+        assert!(page.truncated);
+        assert!(page.markdown.contains("abcde"));
+        assert!(!page.markdown.contains('f'));
+        server.await.unwrap();
     }
 }

@@ -59,7 +59,8 @@ impl CodePlugin {
         context: &ToolInvokeContext<'_>,
         input: CodeSearchAstInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.invoke_search_ast(context.workspace_root, input)
+        let workspace_root = context.workspace_root.to_owned();
+        run_code_blocking(move || Self::invoke_search_ast(&workspace_root, input)).await
     }
 
     #[tool(
@@ -75,11 +76,11 @@ impl CodePlugin {
         context: &ToolInvokeContext<'_>,
         input: CodeSyntaxTreeInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.invoke_syntax_tree(context.workspace_root, input)
+        let workspace_root = context.workspace_root.to_owned();
+        run_code_blocking(move || Self::invoke_syntax_tree(&workspace_root, input)).await
     }
 
     fn invoke_search_ast(
-        &self,
         workspace_root: &str,
         input: CodeSearchAstInput,
     ) -> SdkResult<ToolInvokeOutput> {
@@ -113,7 +114,6 @@ impl CodePlugin {
     }
 
     fn invoke_syntax_tree(
-        &self,
         workspace_root: &str,
         input: CodeSyntaxTreeInput,
     ) -> SdkResult<ToolInvokeOutput> {
@@ -154,6 +154,23 @@ impl CodePlugin {
 
 pub(crate) fn new_plugin() -> CodePlugin {
     CodePlugin
+}
+
+async fn run_code_blocking<T, F>(work: F) -> SdkResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> SdkResult<T> + Send + 'static,
+{
+    let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
+        .acquire()
+        .await
+        .map_err(|_| PluginError::internal("code worker pool is unavailable"))?;
+    tokio::task::spawn_blocking(move || {
+        let _worker_permit = worker_permit;
+        work()
+    })
+    .await
+    .map_err(|error| PluginError::internal(format!("code worker failed: {error}")))?
 }
 
 fn code_search_error_to_plugin(error: CodeSearchError) -> PluginError {

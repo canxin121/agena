@@ -286,13 +286,23 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                         activity_id,
                     ));
                 };
-                crate::activity::read_shell_logs(
-                    monitor.as_ref(),
-                    activity_id,
-                    since_seq,
-                    limit,
-                    wait_ms,
-                )
+                let monitor = Arc::clone(monitor);
+                let activity_id = activity_id.to_string();
+                tokio::task::spawn_blocking(move || {
+                    crate::activity::read_shell_logs(
+                        monitor.as_ref(),
+                        activity_id.as_str(),
+                        since_seq,
+                        limit,
+                        wait_ms,
+                    )
+                })
+                .await
+                .map_err(|error| {
+                    agena_runtime::ActivityControlError::internal(format!(
+                        "shell log worker failed: {error}"
+                    ))
+                })?
                 .map_err(|err| agena_runtime::ActivityControlError::internal(err.to_string()))
             }
             agena_domain::BackgroundActivityKind::Task => {

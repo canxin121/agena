@@ -3753,6 +3753,7 @@ Filesystem command tools for read/search and explicit edits.
   "properties": {
     "patch": {
       "description": "Unified patch text to apply to the workspace.",
+      "maxLength": 16777216,
       "type": "string",
       "x-agena-order": "000000"
     }
@@ -3773,7 +3774,7 @@ Filesystem command tools for read/search and explicit edits.
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and dependency/VCS/build directories are skipped unless `include_ignored` is true or the base path explicitly names one.
+> Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory.
 
 **Examples**:
 ```json
@@ -3856,7 +3857,7 @@ Filesystem command tools for read/search and explicit edits.
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Use `grep` for regex text search. `path` may be a directory (searched recursively) or a single file; it defaults to the workspace root.
+> Use `grep` for ripgrep-compatible, streaming regex text search. `path` may be a directory or a single file and defaults to the workspace root. Hidden/ignored files, binary files, oversized files, and runaway scans are bounded by default; narrow `path` or `include` when a search is truncated.
 
 **Examples**:
 ```json
@@ -3870,6 +3871,7 @@ Filesystem command tools for read/search and explicit edits.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `include` | `string / null` | — | — | Optional glob filter applied before matching lines. |
+| `include_ignored` | `boolean` | — | `false` | Include hidden and ignored files that are skipped by default according<br>to ripgrep-compatible ignore rules. |
 | `path` | `string / null` | — | — | Optional target: a directory to search recursively, or a single file.<br>Defaults to the workspace root. |
 | `pattern` | `string` | ✓ | — | Regex pattern to search for. |
 
@@ -3886,6 +3888,12 @@ Filesystem command tools for read/search and explicit edits.
         "null"
       ],
       "x-agena-order": "000002"
+    },
+    "include_ignored": {
+      "default": false,
+      "description": "Include hidden and ignored files that are skipped by default according\nto ripgrep-compatible ignore rules.",
+      "type": "boolean",
+      "x-agena-order": "000003"
     },
     "path": {
       "description": "Optional target: a directory to search recursively, or a single file.\nDefaults to the workspace root.",

@@ -1,70 +1,114 @@
-use std::{fs, path::Path};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
-use globset::Glob;
-use regex::Regex;
-use walkdir::WalkDir;
+use globset::{Glob, GlobMatcher};
+use grep_regex::{RegexMatcher, RegexMatcherBuilder};
+use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::Lossy};
 
 use crate::part::GrepToolInput;
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
+    discovery::{effective_include_ignored, walk_builder},
     normalize_path_for_display,
 };
 
 const MAX_MATCHES: usize = 500;
+const MAX_VISITED_ENTRIES: usize = 100_000;
+const MAX_SEARCHED_FILES: usize = 25_000;
+const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_SEARCH_DURATION: Duration = Duration::from_secs(20);
+const SEARCHER_HEAP_BYTES: usize = 2 * 1024 * 1024;
 
-/// Whether `search_file` should keep scanning further files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StopSearch {
-    Continue,
-    Stop,
+enum StopReason {
+    Matches,
+    Entries,
+    Files,
+    Bytes,
+    Deadline,
 }
 
-/// Search one file for lines matching `pattern`, appending `path:line: text`
-/// results to `matches`. Returns `Stop` once the result cap is reached so the
-/// caller can abort the whole search.
-fn search_file(
-    executor: &ToolExecutor,
-    path: &Path,
-    pattern: &Regex,
-    matches: &mut Vec<String>,
-    truncated: &mut bool,
-) -> StopSearch {
-    let Ok(text) = fs::read_to_string(path) else {
-        return StopSearch::Continue;
-    };
-    search_text(
-        &executor.display_path(path),
-        &text,
-        pattern,
-        matches,
-        truncated,
-    )
-}
-
-/// Match every line of `text` against `pattern`, appending
-/// `display_path:line: text` results to `matches`. Returns `Stop` once the
-/// result cap is reached so the caller can abort the whole search.
-fn search_text(
-    display_path: &str,
-    text: &str,
-    pattern: &Regex,
-    matches: &mut Vec<String>,
-    truncated: &mut bool,
-) -> StopSearch {
-    for (index, line) in text.replace("\r\n", "\n").lines().enumerate() {
-        if !pattern.is_match(line) {
-            continue;
-        }
-
-        matches.push(format!("{}:{}: {}", display_path, index + 1, line));
-
-        if matches.len() >= MAX_MATCHES {
-            *truncated = true;
-            return StopSearch::Stop;
+impl StopReason {
+    fn message(self) -> &'static str {
+        match self {
+            Self::Matches => "match limit reached",
+            Self::Entries => "workspace entry limit reached",
+            Self::Files => "searched-file limit reached",
+            Self::Bytes => "total-byte limit reached",
+            Self::Deadline => "20-second search deadline reached",
         }
     }
-    StopSearch::Continue
+}
+
+#[derive(Debug)]
+struct SearchLimits {
+    max_matches: usize,
+    max_visited_entries: usize,
+    max_searched_files: usize,
+    max_file_bytes: u64,
+    max_total_bytes: u64,
+    max_duration: Duration,
+}
+
+impl Default for SearchLimits {
+    fn default() -> Self {
+        Self {
+            max_matches: MAX_MATCHES,
+            max_visited_entries: MAX_VISITED_ENTRIES,
+            max_searched_files: MAX_SEARCHED_FILES,
+            max_file_bytes: MAX_FILE_BYTES,
+            max_total_bytes: MAX_TOTAL_BYTES,
+            max_duration: MAX_SEARCH_DURATION,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct SearchStats {
+    visited_entries: usize,
+    searched_files: usize,
+    searched_bytes: u64,
+    skipped_large_files: usize,
+    skipped_io_errors: usize,
+    stop_reason: Option<StopReason>,
+}
+
+impl SearchStats {
+    fn truncated(&self) -> bool {
+        self.stop_reason.is_some() || self.skipped_large_files > 0 || self.skipped_io_errors > 0
+    }
+
+    fn truncation_note(&self) -> Option<String> {
+        if !self.truncated() {
+            return None;
+        }
+
+        let mut reasons = Vec::new();
+        if let Some(reason) = self.stop_reason {
+            reasons.push(reason.message().to_string());
+        }
+        if self.skipped_large_files > 0 {
+            reasons.push(format!(
+                "{} file(s) larger than {} MiB skipped",
+                self.skipped_large_files,
+                MAX_FILE_BYTES / (1024 * 1024),
+            ));
+        }
+        if self.skipped_io_errors > 0 {
+            reasons.push(format!(
+                "{} unreadable path(s) skipped",
+                self.skipped_io_errors
+            ));
+        }
+        Some(format!(
+            "...search truncated: {}. Narrow `path` or `include` and retry.",
+            reasons.join("; ")
+        ))
+    }
 }
 
 pub(super) fn execute(
@@ -88,86 +132,51 @@ pub(super) fn execute(
         ));
     }
 
-    let pattern = Regex::new(&input.pattern)?;
+    let matcher = RegexMatcherBuilder::new()
+        .build(&input.pattern)
+        .map_err(|error| {
+            ToolError::invalid_field(
+                "pattern",
+                agena_failure::FieldIssueKind::Invalid,
+                format!("invalid grep pattern: {error}"),
+            )
+        })?;
     let include = input
         .include
         .as_ref()
         .map(|glob| Glob::new(glob).map(|compiled| compiled.compile_matcher()))
         .transpose()?;
+    let include_ignored =
+        effective_include_ignored(input.include_ignored, &base_path, executor.workspace_root());
 
-    let mut matches = Vec::new();
-    let mut truncated = false;
+    let limits = SearchLimits::default();
+    let (matches, stats) = collect_matches(
+        executor,
+        &base_path,
+        &matcher,
+        include.as_ref(),
+        include_ignored,
+        &limits,
+    )?;
+    let truncated = stats.truncated();
 
-    if base_path.is_file() {
-        // A single file target greps just that file. The include glob is
-        // matched against the file name, mirroring how a directory walk
-        // matches each file's path relative to the base.
-        let relative = base_path
-            .file_name()
-            .map(Path::new)
-            .unwrap_or_else(|| Path::new(""));
-        let relative_norm = normalize_path_for_display(relative);
-        if !include
-            .as_ref()
-            .is_some_and(|matcher| !matcher.is_match(&relative_norm))
-        {
-            search_file(executor, &base_path, &pattern, &mut matches, &mut truncated);
-        }
-    } else {
-        'walk: for entry in WalkDir::new(&base_path)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(Result::ok)
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-
-            let relative = entry.path().strip_prefix(&base_path).map_err(|err| {
-                ToolError::invalid_input(format!(
-                    "grep failed to build relative path for '{}': {err}",
-                    entry.path().display()
-                ))
-            })?;
-            let relative_norm = normalize_path_for_display(relative);
-
-            if include
-                .as_ref()
-                .is_some_and(|matcher| !matcher.is_match(&relative_norm))
-            {
-                continue;
-            }
-
-            if search_file(
-                executor,
-                entry.path(),
-                &pattern,
-                &mut matches,
-                &mut truncated,
-            ) == StopSearch::Stop
-            {
-                break 'walk;
-            }
-        }
-    }
-
-    let output_text = if matches.is_empty() {
+    let mut output_text = if matches.is_empty() {
         "No lines matched the grep pattern.".to_string()
     } else {
-        let mut text = matches.join("\n");
-        if truncated {
-            text.push_str("\n...truncated");
-        }
-        text
+        matches.join("\n")
     };
+    if let Some(note) = stats.truncation_note() {
+        output_text.push('\n');
+        output_text.push_str(&note);
+    }
+
     let output = ToolPayloadOutput::Grep {
         matches: Some(matches.len() as u32),
         results: matches.clone(),
         truncated,
     };
-
     let summary = if truncated {
-        format!("{} matches · truncated", matches.len())
+        format!("{} matches · search truncated", matches.len())
     } else {
         format!("{} matches", matches.len())
     };
@@ -181,73 +190,193 @@ pub(super) fn execute(
     view.metadata
         .insert("base_path".to_string(), executor.display_path(&base_path));
     view.metadata
+        .insert("include_ignored".to_string(), include_ignored.to_string());
+    view.metadata
         .insert("matches".to_string(), matches.len().to_string());
+    view.metadata.insert(
+        "visited_entries".to_string(),
+        stats.visited_entries.to_string(),
+    );
+    view.metadata.insert(
+        "searched_files".to_string(),
+        stats.searched_files.to_string(),
+    );
+    view.metadata.insert(
+        "searched_bytes".to_string(),
+        stats.searched_bytes.to_string(),
+    );
+    view.metadata.insert(
+        "skipped_large_files".to_string(),
+        stats.skipped_large_files.to_string(),
+    );
+    view.metadata.insert(
+        "skipped_io_errors".to_string(),
+        stats.skipped_io_errors.to_string(),
+    );
     view.metadata
         .insert("truncated".to_string(), truncated.to_string());
+    if let Some(reason) = stats.stop_reason {
+        view.metadata
+            .insert("stop_reason".to_string(), reason.message().to_string());
+    }
 
     Ok(ToolPayloadExecution::new(output, view))
 }
 
+fn collect_matches(
+    executor: &ToolExecutor,
+    base_path: &Path,
+    matcher: &RegexMatcher,
+    include: Option<&GlobMatcher>,
+    include_ignored: bool,
+    limits: &SearchLimits,
+) -> Result<(Vec<String>, SearchStats), ToolError> {
+    let started = Instant::now();
+    let mut matches = Vec::new();
+    let mut stats = SearchStats::default();
+
+    for entry in walk_builder(base_path, include_ignored).build() {
+        if started.elapsed() >= limits.max_duration {
+            stats.stop_reason = Some(StopReason::Deadline);
+            break;
+        }
+        stats.visited_entries += 1;
+        if stats.visited_entries > limits.max_visited_entries {
+            stats.stop_reason = Some(StopReason::Entries);
+            break;
+        }
+
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                stats.skipped_io_errors += 1;
+                continue;
+            }
+        };
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+
+        let relative = if base_path.is_file() {
+            entry
+                .path()
+                .file_name()
+                .map(Path::new)
+                .unwrap_or_else(|| Path::new(""))
+        } else {
+            entry.path().strip_prefix(base_path).unwrap_or_else(|_| {
+                entry
+                    .path()
+                    .file_name()
+                    .map(Path::new)
+                    .unwrap_or_else(|| Path::new(""))
+            })
+        };
+        let relative_norm = normalize_path_for_display(relative);
+        if include
+            .as_ref()
+            .is_some_and(|matcher| !matcher.is_match(&relative_norm))
+        {
+            continue;
+        }
+
+        if stats.searched_files >= limits.max_searched_files {
+            stats.stop_reason = Some(StopReason::Files);
+            break;
+        }
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                stats.skipped_io_errors += 1;
+                continue;
+            }
+        };
+        if metadata.len() > limits.max_file_bytes {
+            stats.skipped_large_files += 1;
+            continue;
+        }
+        if stats.searched_bytes.saturating_add(metadata.len()) > limits.max_total_bytes {
+            stats.stop_reason = Some(StopReason::Bytes);
+            break;
+        }
+
+        stats.searched_files += 1;
+        stats.searched_bytes += metadata.len();
+        let display_path = executor.display_path(entry.path());
+        if search_file(
+            entry.path(),
+            &display_path,
+            matcher,
+            &mut matches,
+            limits.max_matches,
+        )
+        .is_err()
+        {
+            stats.skipped_io_errors += 1;
+            continue;
+        }
+        if matches.len() >= limits.max_matches {
+            stats.stop_reason = Some(StopReason::Matches);
+            break;
+        }
+    }
+
+    Ok((matches, stats))
+}
+
+fn search_file(
+    path: &Path,
+    display_path: &str,
+    matcher: &RegexMatcher,
+    matches: &mut Vec<String>,
+    max_matches: usize,
+) -> std::io::Result<()> {
+    SearcherBuilder::new()
+        .line_number(true)
+        .binary_detection(BinaryDetection::quit(b'\0'))
+        .heap_limit(Some(SEARCHER_HEAP_BYTES))
+        .build()
+        .search_path(
+            matcher,
+            path,
+            Lossy(|line_number, line| {
+                let line = line.strip_suffix('\n').unwrap_or(line);
+                let line = line.strip_suffix('\r').unwrap_or(line);
+                matches.push(format!("{display_path}:{line_number}: {line}"));
+                Ok(matches.len() < max_matches)
+            }),
+        )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MAX_MATCHES, StopSearch, search_text};
+    use std::time::Duration;
+
+    use super::{SearchLimits, SearchStats, StopReason};
 
     #[test]
-    fn search_text_reports_path_line_and_matching_text() {
-        let pattern = regex::Regex::new("alpha").unwrap();
-        let mut matches = Vec::new();
-        let mut truncated = false;
+    fn truncated_search_explains_every_applied_guardrail() {
+        let stats = SearchStats {
+            skipped_large_files: 2,
+            skipped_io_errors: 1,
+            stop_reason: Some(StopReason::Bytes),
+            ..SearchStats::default()
+        };
 
-        let result = search_text(
-            "fixture.txt",
-            "alpha\nbeta\nalpha again\n",
-            &pattern,
-            &mut matches,
-            &mut truncated,
-        );
-
-        assert_eq!(result, StopSearch::Continue);
-        assert_eq!(
-            matches,
-            vec!["fixture.txt:1: alpha", "fixture.txt:3: alpha again"]
-        );
-        assert!(!truncated);
+        let note = stats.truncation_note().expect("truncation note");
+        assert!(note.contains("total-byte limit reached"));
+        assert!(note.contains("2 file(s) larger than 32 MiB skipped"));
+        assert!(note.contains("1 unreadable path(s) skipped"));
+        assert!(note.contains("Narrow `path` or `include`"));
     }
 
     #[test]
-    fn search_text_normalizes_crlf_before_matching() {
-        let pattern = regex::Regex::new("hit").unwrap();
-        let mut matches = Vec::new();
-        let mut truncated = false;
+    fn production_search_limits_are_finite() {
+        let limits = SearchLimits::default();
 
-        search_text(
-            "win.txt",
-            "hit\r\nmiss\r\nhit\r\n",
-            &pattern,
-            &mut matches,
-            &mut truncated,
-        );
-
-        assert_eq!(matches, vec!["win.txt:1: hit", "win.txt:3: hit"]);
-        assert!(!truncated);
-    }
-
-    #[test]
-    fn search_text_stops_at_the_result_cap() {
-        let pattern = regex::Regex::new("hit").unwrap();
-        let mut matches = Vec::new();
-        let mut truncated = false;
-
-        let result = search_text(
-            "big.txt",
-            "hit\n".repeat(600).as_str(),
-            &pattern,
-            &mut matches,
-            &mut truncated,
-        );
-
-        assert_eq!(result, StopSearch::Stop);
-        assert_eq!(matches.len(), MAX_MATCHES);
-        assert!(truncated);
+        assert!(limits.max_matches > 0);
+        assert!(limits.max_visited_entries > limits.max_searched_files);
+        assert!(limits.max_file_bytes < limits.max_total_bytes);
+        assert!(limits.max_duration > Duration::ZERO);
     }
 }

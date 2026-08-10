@@ -138,6 +138,7 @@ async-stream = "0.3.6"
 futures = "0.3.32"
 futures-util = "0.3.32"
 tokio-stream = "0.1.18"
+tokio_sse_codec = "0.0.2"
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 tokio-util = "0.7.18"
 
@@ -213,6 +214,7 @@ blake3 = "1.8.5"
 clap_complete = "4.6.7"
 cron = "0.17.0"
 crossterm = "0.29.0"
+content_inspector = "0.2.4"
 derive_more = "2.1.1"
 fluent-templates = "0.14.0"
 futures-core = "0.3.32"
@@ -220,7 +222,10 @@ gcp_auth = "0.12.7"
 getrandom = "0.4.3"
 governor = "0.10.4"
 globset = "0.4.18"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.17"
 notify = "8.2.0"
+nucleo-matcher = "0.3.1"
 html_escape = { package = "html-escape", version = "0.2.14" }
 ignore = "0.4.28"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
@@ -236,6 +241,7 @@ moka = { version = "0.12.15", features = ["future"] }
 mockito = "1.7.2"
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 path-clean = "1.0.1"
+process_control = "5.2.0"
 ratatui = "0.30.2"
 ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
 resvg = { version = "=0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }

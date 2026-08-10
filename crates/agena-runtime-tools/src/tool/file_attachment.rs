@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -94,7 +95,7 @@ fn prepare_file_attachment(
         )));
     }
 
-    let bytes = fs::read(&target)?;
+    let bytes = read_bounded(&target, MAX_FILE_BYTES)?;
     if bytes.is_empty() {
         return Err(ToolError::invalid_input(format!(
             "file attachment target is empty: {}",
@@ -102,14 +103,27 @@ fn prepare_file_attachment(
         )));
     }
 
-    if bytes.len() > MAX_FILE_BYTES {
+    Ok(build_file_attachment(executor, &target, &bytes))
+}
+
+fn read_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, ToolError> {
+    let file = fs::File::open(path)?;
+    let mut bytes = Vec::with_capacity(
+        file.metadata()
+            .ok()
+            .and_then(|metadata| usize::try_from(metadata.len()).ok())
+            .unwrap_or_default()
+            .min(max_bytes),
+    );
+    file.take((max_bytes as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
         return Err(ToolError::invalid_input(format!(
-            "file attachment mode supports files up to {} bytes: {}",
-            MAX_FILE_BYTES, input_path
+            "file attachment mode supports files up to {max_bytes} bytes: {}",
+            path.display()
         )));
     }
-
-    Ok(build_file_attachment(executor, &target, &bytes))
+    Ok(bytes)
 }
 
 fn build_file_attachment(
@@ -232,10 +246,5 @@ fn detect_mime(path: &Path, _bytes: &[u8]) -> String {
 }
 
 fn looks_like_utf8_text(bytes: &[u8]) -> bool {
-    std::str::from_utf8(bytes)
-        .map(|text| {
-            text.chars()
-                .all(|ch| ch == '\n' || ch == '\r' || ch == '\t' || !ch.is_control())
-        })
-        .unwrap_or(false)
+    content_inspector::inspect(bytes).is_text() && std::str::from_utf8(bytes).is_ok()
 }

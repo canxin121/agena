@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
+use std::{fs::File, io::Read};
 
 use crate::part::{ApplyPatchToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
 use crate::plugins::provided::router;
@@ -16,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub(crate) const FS_PLUGIN_ID: &str = "agena.fs";
+const MAX_MUTATING_TEXT_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_STAT_HASH_BYTES: u64 = 64 * 1024 * 1024;
 
 pub(crate) struct FsPlugin;
 
@@ -142,7 +145,7 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem, discovery),
         summary = "Find paths with glob patterns.",
-        help = "Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and dependency/VCS/build directories are skipped unless `include_ignored` is true or the base path explicitly names one.",
+        help = "Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and ripgrep-compatible hidden/ignore rules are applied unless `include_ignored` is true or the base path explicitly names an ignored directory.",
         read_only,
         discovery,
         examples(r#"{"pattern":"**/*.rs","path":"crates"}"#),
@@ -159,7 +162,7 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem, discovery),
         summary = "Search file contents with regex.",
-        help = "Use `grep` for regex text search. `path` may be a directory (searched recursively) or a single file; it defaults to the workspace root.",
+        help = "Use `grep` for ripgrep-compatible, streaming regex text search. `path` may be a directory or a single file and defaults to the workspace root. Hidden/ignored files, binary files, oversized files, and runaway scans are bounded by default; narrow `path` or `include` when a search is truncated.",
         read_only,
         discovery,
         examples(r#"{"pattern":"agena_plugin","path":"crates"}"#),
@@ -297,7 +300,17 @@ impl FsPlugin {
             if let Some(expected) = input.expected_sha256.as_deref() {
                 verify_expected_hash(&target, expected)?;
             }
-            let original = std::fs::read_to_string(&target).map_err(fs_error)?;
+            let original = String::from_utf8(read_file_bounded(
+                &target,
+                MAX_MUTATING_TEXT_BYTES,
+                "fs.replace",
+            )?)
+            .map_err(|_| {
+                PluginError::invalid_params(format!(
+                    "replace target is not UTF-8 text: {}",
+                    input.path
+                ))
+            })?;
             let occurrences = original.match_indices(input.old.as_str()).count();
             if occurrences != input.expected_occurrences as usize {
                 return Err(PluginError::invalid_params(format!(
@@ -363,30 +376,28 @@ impl FsPlugin {
             let mut entries = Vec::new();
             let mut truncated = false;
             for path in &input.paths {
+                if remaining == 0 {
+                    truncated = true;
+                    break;
+                }
                 let target = resolve_path(workspace_root.as_str(), path);
                 if !target.is_file() {
                     entries.push(serde_json::json!({ "path": path, "error": "not a file" }));
                     continue;
                 }
-                let bytes = std::fs::read(&target).map_err(fs_error)?;
-                let text = String::from_utf8(bytes).map_err(|_| {
-                    PluginError::invalid_params(format!(
-                        "read_many target is not UTF-8 text: {path}"
-                    ))
-                })?;
-                let take = text.len().min(remaining);
-                let boundary = floor_char_boundary(text.as_str(), take);
-                let preview = &text[..boundary];
-                let file_truncated = boundary < text.len();
+                let metadata = std::fs::metadata(&target).map_err(fs_error)?;
+                let (preview, returned_bytes, file_truncated) =
+                    read_utf8_prefix(&target, remaining, path)?;
                 sections.push(format!("===== {path} =====\n{preview}"));
+                let hash = (!file_truncated).then(|| sha256_bytes(preview.as_bytes()));
                 entries.push(serde_json::json!({
                     "path": path,
-                    "bytes": text.len(),
-                    "returned_bytes": boundary,
+                    "bytes": metadata.len(),
+                    "returned_bytes": returned_bytes,
                     "truncated": file_truncated,
-                    "sha256": sha256_bytes(text.as_bytes()),
+                    "sha256": hash,
                 }));
-                remaining = remaining.saturating_sub(boundary);
+                remaining = remaining.saturating_sub(returned_bytes);
                 truncated |= file_truncated;
                 if remaining == 0 {
                     truncated |= entries.len() < input.paths.len();
@@ -449,7 +460,9 @@ impl FsPlugin {
                 .ok()
                 .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
                 .and_then(|value| i64::try_from(value.as_millis()).ok());
-            let hash = if input.hash && metadata.is_file() {
+            let hash_skipped =
+                input.hash && metadata.is_file() && metadata.len() > MAX_STAT_HASH_BYTES;
+            let hash = if input.hash && metadata.is_file() && !hash_skipped {
                 Some(sha256_file(&target)?)
             } else {
                 None
@@ -467,6 +480,7 @@ impl FsPlugin {
                 "modified_at_ms": modified_at_ms,
                 "readonly": metadata.permissions().readonly(),
                 "sha256": hash,
+                "hash_skipped": hash_skipped,
                 "symlink_target": symlink_target,
             });
             Ok(ToolInvokeOutput::from_parts(
@@ -622,9 +636,66 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 }
 
 fn sha256_file(path: &Path) -> SdkResult<String> {
-    std::fs::read(path)
-        .map(|bytes| sha256_bytes(bytes.as_slice()))
-        .map_err(fs_error)
+    let mut file = File::open(path).map_err(fs_error)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(fs_error)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
+fn read_file_bounded(path: &Path, max_bytes: u64, operation: &str) -> SdkResult<Vec<u8>> {
+    let file = File::open(path).map_err(fs_error)?;
+    let mut bytes = Vec::with_capacity(
+        file.metadata()
+            .ok()
+            .and_then(|metadata| usize::try_from(metadata.len().min(max_bytes)).ok())
+            .unwrap_or_default(),
+    );
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(fs_error)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(PluginError::invalid_params(format!(
+            "{operation} supports files up to {} MiB: {}",
+            max_bytes / 1024 / 1024,
+            path.display()
+        )));
+    }
+    Ok(bytes)
+}
+
+fn read_utf8_prefix(
+    path: &Path,
+    max_bytes: usize,
+    display_path: &str,
+) -> SdkResult<(String, usize, bool)> {
+    let mut file = File::open(path).map_err(fs_error)?;
+    let metadata = file.metadata().map_err(fs_error)?;
+    let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
+    file.by_ref()
+        .take(max_bytes as u64)
+        .read_to_end(&mut bytes)
+        .map_err(fs_error)?;
+    let truncated = metadata.len() > bytes.len() as u64;
+    let valid_bytes = match std::str::from_utf8(&bytes) {
+        Ok(_) => bytes.as_slice(),
+        Err(error) if truncated && error.error_len().is_none() => &bytes[..error.valid_up_to()],
+        Err(_) => {
+            return Err(PluginError::invalid_params(format!(
+                "read_many target is not UTF-8 text: {display_path}"
+            )));
+        }
+    };
+    let text = std::str::from_utf8(valid_bytes)
+        .expect("valid UTF-8 prefix was checked above")
+        .to_string();
+    Ok((text, valid_bytes.len(), truncated))
 }
 
 fn image_mime(path: &Path) -> Option<&'static str> {
@@ -656,14 +727,6 @@ fn verify_expected_hash(path: &Path, expected: &str) -> SdkResult<()> {
             actual
         )))
     }
-}
-
-fn floor_char_boundary(value: &str, mut index: usize) -> usize {
-    index = index.min(value.len());
-    while index > 0 && !value.is_char_boundary(index) {
-        index -= 1;
-    }
-    index
 }
 
 fn fs_error(error: std::io::Error) -> PluginError {
@@ -759,7 +822,15 @@ mod tests {
 
     #[test]
     fn byte_budget_never_splits_utf8() {
-        assert_eq!(floor_char_boundary("a你b", 2), 1);
-        assert_eq!(floor_char_boundary("a你b", 4), 4);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("utf8.txt");
+        std::fs::write(&path, "a你b").expect("write UTF-8 fixture");
+
+        let (prefix, returned, truncated) =
+            read_utf8_prefix(&path, 2, "utf8.txt").expect("bounded UTF-8 prefix");
+
+        assert_eq!(prefix, "a");
+        assert_eq!(returned, 1);
+        assert!(truncated);
     }
 }

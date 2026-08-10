@@ -2,7 +2,9 @@
 //! environment facts.
 
 use std::path::Path;
+use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
@@ -11,6 +13,7 @@ use agena_plugin_host::sdk::host_api::{
 use agena_plugin_host::sdk::{
     InitContext, InitOutcome, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
 };
+use process_control::{ChildExt as _, Control as _};
 
 pub(crate) const CONTEXT_PLUGIN_ID: &str = "agena.context";
 
@@ -26,12 +29,39 @@ struct GitFacts {
 }
 
 fn run_git(workspace: &Path, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new("git")
+    const MAX_GIT_FACT_BYTES: usize = 4 * 1024 * 1024;
+    let child = std::process::Command::new("git")
         .arg("-C")
         .arg(workspace)
         .args(args)
-        .output()
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
+        .env("GIT_EDITOR", "true")
+        .env("EDITOR", "true")
+        .env("GPG_TTY", "")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        // Git facts are best-effort and never surface stderr. Discard it so a
+        // broken hook or wrapper cannot make this probe retain unbounded data.
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
+    let mut retained = 0_usize;
+    let output = child
+        .controlled_with_output()
+        .stdout_filter(move |chunk: &[u8]| {
+            if retained.saturating_add(chunk.len()) <= MAX_GIT_FACT_BYTES {
+                retained += chunk.len();
+                Ok(true)
+            } else {
+                retained = MAX_GIT_FACT_BYTES;
+                Ok(false)
+            }
+        })
+        .time_limit(Duration::from_secs(15))
+        .terminate_for_timeout()
+        .wait()
+        .ok()??;
     output
         .status
         .success()

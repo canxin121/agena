@@ -18,6 +18,8 @@ use agena_provider::OAuthTokenResponse;
 pub(super) const OPENAI_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub(super) const OPENAI_ISSUER: &str = "https://auth.openai.com";
 pub(super) const COPILOT_CLIENT_ID: &str = "Ov23li8tweQw6odWQebz";
+const OAUTH_HTTP_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_OAUTH_RESPONSE_BYTES: usize = 1024 * 1024;
 
 pub(super) type OAuthClient = BasicClient<
     EndpointSet,
@@ -36,6 +38,47 @@ pub(super) fn normalize_domain(url_or_domain: &str) -> String {
         .trim_start_matches("http://")
         .trim_end_matches('/')
         .to_owned()
+}
+
+pub(super) fn provider_http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(OAUTH_HTTP_TIMEOUT)
+            .build()
+            .expect("provider OAuth HTTP client should build")
+    })
+}
+
+pub(super) async fn response_body_bounded(
+    mut response: reqwest::Response,
+) -> Result<Vec<u8>, ProviderError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_OAUTH_RESPONSE_BYTES as u64)
+    {
+        return Err(ProviderError::Provider(
+            "OAuth response exceeds the 1 MiB limit".to_owned(),
+        ));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len().saturating_add(chunk.len()) > MAX_OAUTH_RESPONSE_BYTES {
+            return Err(ProviderError::Provider(
+                "OAuth response exceeds the 1 MiB limit".to_owned(),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+pub(super) async fn response_json_bounded<T: serde::de::DeserializeOwned>(
+    response: reqwest::Response,
+) -> Result<T, ProviderError> {
+    Ok(serde_json::from_slice(
+        &response_body_bounded(response).await?,
+    )?)
 }
 
 pub(super) fn oauth_client(
@@ -272,10 +315,10 @@ pub(super) async fn ensure_http_success(
     }
 
     let status = response.status();
-    let body = response
-        .text()
+    let body = response_body_bounded(response)
         .await
-        .unwrap_or_else(|_| "<empty>".to_owned());
+        .map(|body| String::from_utf8_lossy(&body).into_owned())
+        .unwrap_or_else(|_| "<empty or oversized>".to_owned());
     let body = oauth_error_summary(body.as_str());
     let body = match context {
         Some(context) => format!("{context}: {body}"),
@@ -310,6 +353,7 @@ pub(super) fn oauth_http_client(use_codex_user_agent: bool) -> &'static oauth2::
             oauth2::reqwest::ClientBuilder::new()
                 .redirect(oauth2::reqwest::redirect::Policy::none())
                 .user_agent(crate::codex_user_agent())
+                .timeout(OAUTH_HTTP_TIMEOUT)
                 .build()
                 .expect("oauth reqwest client should build")
         })
@@ -317,6 +361,7 @@ pub(super) fn oauth_http_client(use_codex_user_agent: bool) -> &'static oauth2::
         DEFAULT_CLIENT.get_or_init(|| {
             oauth2::reqwest::ClientBuilder::new()
                 .redirect(oauth2::reqwest::redirect::Policy::none())
+                .timeout(OAUTH_HTTP_TIMEOUT)
                 .build()
                 .expect("oauth reqwest client should build")
         })

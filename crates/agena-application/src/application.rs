@@ -278,10 +278,18 @@ impl Application {
         pkce_verifier: String,
         redirect_uri: String,
     ) -> Result<AuthLoginResultResource, ApplicationError> {
-        let callback = self
-            .runtime_authentication
-            .wait_auth_browser_callback(port, expected_state, timeout)
-            .map_err(application_error_from_runtime_authentication)?;
+        // The callback server uses a synchronous loopback listener. Keep its
+        // potentially minutes-long poll loop off Tokio's async worker threads.
+        let authentication = Arc::clone(&self.runtime_authentication);
+        let expected_state = expected_state.to_owned();
+        let callback = tokio::task::spawn_blocking(move || {
+            authentication.wait_auth_browser_callback(port, expected_state.as_str(), timeout)
+        })
+        .await
+        .map_err(|error| {
+            ApplicationError::internal(format!("OAuth callback worker failed: {error}"))
+        })?
+        .map_err(application_error_from_runtime_authentication)?;
         self.finish_auth_browser(
             provider_id,
             kind,

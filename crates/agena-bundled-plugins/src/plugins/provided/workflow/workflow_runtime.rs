@@ -592,8 +592,7 @@ impl WorkflowPlugin {
             .iter()
             .map(Self::tool_search_document)
             .collect::<Vec<_>>();
-        let results = search_tools(&documents, query, documents.len())
-            .map_err(|err| PluginError::internal(format!("tool search failed: {err}")))?;
+        let results = search_tools(&documents, query, documents.len());
         let (results, total, offset) = Self::paginate(&results, input.offset, Some(limit));
         let mut lines = vec![format!(
             "Matching tools for {}: returned {} of {} starting at offset {}.",
@@ -835,8 +834,7 @@ impl WorkflowPlugin {
             .iter()
             .map(Self::plugin_search_document)
             .collect::<Vec<_>>();
-        let results = search_tools(&documents, query, documents.len())
-            .map_err(|err| PluginError::internal(format!("plugin search failed: {err}")))?;
+        let results = search_tools(&documents, query, documents.len());
         let (results, total, offset) = Self::paginate(&results, input.offset, Some(limit));
         let mut lines = vec![format!(
             "Matching plugins for {}: returned {} of {} starting at offset {}.",
@@ -1063,16 +1061,12 @@ impl WorkflowPlugin {
                 })
                 .map(|record| Self::tool_search_document(&record))
                 .collect::<Vec<_>>();
-            if let Ok(results) = search_tools(&documents, requested, 3) {
-                for tool in results {
-                    if !tool.name.eq_ignore_ascii_case(requested)
-                        && !suggestions.contains(&tool.name)
-                    {
-                        suggestions.push(tool.name);
-                    }
-                    if suggestions.len() >= 3 {
-                        break;
-                    }
+            for tool in search_tools(&documents, requested, 3) {
+                if !tool.name.eq_ignore_ascii_case(requested) && !suggestions.contains(&tool.name) {
+                    suggestions.push(tool.name);
+                }
+                if suggestions.len() >= 3 {
+                    break;
                 }
             }
         }

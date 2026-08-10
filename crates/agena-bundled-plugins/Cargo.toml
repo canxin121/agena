@@ -30,7 +30,8 @@ futures-util = { workspace = true }
 globset = { workspace = true }
 hex = { workspace = true }
 notify = { workspace = true }
-reqwest = { workspace = true, features = ["rustls", "multipart"] }
+process_control = { workspace = true }
+reqwest = { workspace = true, features = ["rustls", "multipart", "stream"] }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -23,6 +23,8 @@ use crate::rpc::{
     ErrorObject, JsonRpcVersion, Request, RequestId, Response, ResponsePayload, codes, method,
 };
 
+const MAX_CALLBACK_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 struct HttpDriverState<P: Plugin> {
     dispatcher: Arc<PluginDispatcher<P>>,
     callback_client: RwLock<Option<Arc<HttpCallbackHostClient>>>,
@@ -69,11 +71,27 @@ impl HttpCallbackHostClient {
         if let Some(header) = &self.auth_header {
             builder = builder.header("authorization", header);
         }
-        let resp = builder.send().await.map_err(|error| {
+        let mut resp = builder.send().await.map_err(|error| {
             PluginError::from_kind(PluginErrorKind::Disconnected, error).with_hook(method_name)
         })?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|error| {
+        let mut body = Vec::new();
+        while let Some(chunk) = resp.chunk().await.map_err(|error| {
+            PluginError::from_kind(PluginErrorKind::Disconnected, error).with_hook(method_name)
+        })? {
+            if body.len().saturating_add(chunk.len()) > MAX_CALLBACK_RESPONSE_BYTES {
+                return Err(PluginError::from_kind(
+                    PluginErrorKind::Disconnected,
+                    format_args!(
+                        "host callback response exceeds the {} MiB limit",
+                        MAX_CALLBACK_RESPONSE_BYTES / 1024 / 1024
+                    ),
+                )
+                .with_hook(method_name));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let body = String::from_utf8(body).map_err(|error| {
             PluginError::from_kind(PluginErrorKind::Disconnected, error).with_hook(method_name)
         })?;
         let resp: Response = serde_json::from_str(&body).map_err(|error| {

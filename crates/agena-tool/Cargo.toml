@@ -12,16 +12,19 @@ agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 ast-grep-core = { workspace = true }
 ast-grep-language = { workspace = true }
+ignore = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 thiserror.workspace = true
-tantivy.workspace = true
+nucleo-matcher.workspace = true
 tracing.workspace = true
 tree-sitter = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
-walkdir = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = { workspace = true }

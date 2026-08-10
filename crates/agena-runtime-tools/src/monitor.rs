@@ -17,26 +17,26 @@
 //!
 //! # Concurrency model
 //!
-//! Tool execution is synchronous (`ToolExecutor::execute_tool_payload_*`) but the
-//! runner is async. The registry caches a `tokio::runtime::Handle` for process
-//! startup. Synchronous log reads wait with a short polling loop so they work
-//! from regular threads, tokio workers, and single-thread runtimes.
+//! The process runner, pipe readers, timeout, cancellation, and child wait all
+//! run on the caller's Tokio runtime. The registry retains a synchronous
+//! compatibility surface for non-async consumers; those reads sleep on a
+//! condition variable and async callers isolate them with `spawn_blocking`.
 
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
 use std::sync::{
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
     atomic::{AtomicI64, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use futures_util::StreamExt as _;
 use regex::Regex;
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::runtime::Handle;
-use tokio::sync::Notify;
+use tokio_util::codec::{FramedRead, LinesCodec};
 use uuid::Uuid;
 
 use agena_domain::{ProcessEvent, ProcessStatus, ProcessStream, ProcessSummary};
@@ -145,7 +145,7 @@ struct MonitorState {
     /// Cumulative count of evicted lines.
     dropped_lines: AtomicU64,
     inner: Mutex<MonitorInner>,
-    notify: Notify,
+    changed: Condvar,
     /// Optional observer notified on start/finish transitions.
     listener: Option<Arc<dyn MonitorListener>>,
 }
@@ -290,7 +290,7 @@ impl MonitorService for MonitorRegistry {
                 abort: Some(abort_tx),
                 worker: None,
             }),
-            notify: Notify::new(),
+            changed: Condvar::new(),
             listener: self.listener.clone(),
         });
 
@@ -352,36 +352,31 @@ impl MonitorService for MonitorRegistry {
             .map(|n| (n as usize).clamp(1, MAX_READ_LIMIT))
             .unwrap_or(DEFAULT_READ_LIMIT);
         let wait_ms = params.wait_ms.min(MAX_WAIT_MS);
-
-        // Fast path: try once.
-        if let Some(read) = collect_events(&state, params.since_seq, limit)
-            && (!read.events.is_empty() || wait_ms == 0 || read.status != ProcessStatus::Running)
-        {
-            return Ok(read);
-        }
-
-        if wait_ms == 0 {
-            // No events and no wait requested: still return a valid (possibly empty) snapshot.
-            return Ok(collect_events(&state, params.since_seq, limit)
-                .unwrap_or_else(|| empty_read(&state, params.since_seq)));
-        }
-
         let deadline = Instant::now() + Duration::from_millis(wait_ms);
+        let mut inner = state.inner.lock().unwrap();
         loop {
-            if let Some(read) = collect_events(&state, params.since_seq, limit)
-                && (!read.events.is_empty() || read.status != ProcessStatus::Running)
-            {
+            let read = collect_events_locked(&state, &inner, params.since_seq, limit);
+            if !read.events.is_empty() || wait_ms == 0 || read.status != ProcessStatus::Running {
                 return Ok(read);
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                break;
+                return Ok(read);
             }
-            std::thread::sleep(remaining.min(Duration::from_millis(20)));
+            let (next_inner, timeout) = state
+                .changed
+                .wait_timeout(inner, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            inner = next_inner;
+            if timeout.timed_out() {
+                return Ok(collect_events_locked(
+                    &state,
+                    &inner,
+                    params.since_seq,
+                    limit,
+                ));
+            }
         }
-
-        Ok(collect_events(&state, params.since_seq, limit)
-            .unwrap_or_else(|| empty_read(&state, params.since_seq)))
     }
 
     fn stop(&self, monitor_id: &str) -> Result<MonitorStopOutcome, MonitorError> {
@@ -398,7 +393,7 @@ impl MonitorService for MonitorRegistry {
                 }
             }
         }
-        state.notify.notify_waiters();
+        state.changed.notify_all();
         if let Some(listener) = state.listener.as_ref() {
             listener.on_finished(&state.snapshot());
         }
@@ -422,29 +417,21 @@ impl Drop for MonitorRegistry {
             if let Some(abort) = inner.abort.take() {
                 let _ = abort.send(());
             }
-            if let Some(worker) = inner.worker.take() {
-                worker.abort();
-            }
+            // Let the runner receive the abort signal and terminate its whole
+            // process tree. Aborting the task here would only drop the direct
+            // child handle and could leave descendants alive with inherited
+            // stdout/stderr pipes.
+            inner.worker.take();
         }
     }
 }
 
-fn empty_read(state: &MonitorState, since_seq: u64) -> MonitorRead {
-    let summary = state.snapshot();
-    MonitorRead {
-        monitor_id: summary.process_id.clone(),
-        status: summary.status,
-        events: Vec::new(),
-        last_seq: since_seq,
-        has_more: summary.last_seq > since_seq,
-        dropped_lines: summary.dropped_lines,
-        exit_code: summary.exit_code,
-        completion_reason: summary.completion_reason,
-    }
-}
-
-fn collect_events(state: &MonitorState, since_seq: u64, limit: usize) -> Option<MonitorRead> {
-    let inner = state.inner.lock().unwrap();
+fn collect_events_locked(
+    state: &MonitorState,
+    inner: &MonitorInner,
+    since_seq: u64,
+    limit: usize,
+) -> MonitorRead {
     let status = inner.status;
     let exit_code = inner.exit_code;
     let mut events = Vec::with_capacity(limit.min(64));
@@ -459,7 +446,7 @@ fn collect_events(state: &MonitorState, since_seq: u64, limit: usize) -> Option<
     let last_seq_in_batch = events.last().map(|e| e.seq).unwrap_or(since_seq);
     let global_last = state.last_seq.load(Ordering::Acquire);
     let has_more = global_last > last_seq_in_batch;
-    Some(MonitorRead {
+    MonitorRead {
         monitor_id: state.monitor_id.clone(),
         status,
         events,
@@ -468,7 +455,7 @@ fn collect_events(state: &MonitorState, since_seq: u64, limit: usize) -> Option<
         dropped_lines: state.dropped_lines.load(Ordering::Acquire),
         exit_code,
         completion_reason: inner.completion_reason.clone(),
-    })
+    }
 }
 
 fn compile_optional_pattern(pattern: Option<&str>) -> Result<Option<Regex>, MonitorError> {
@@ -509,6 +496,9 @@ async fn run_monitor(
         cmd.stderr(Stdio::null());
     }
 
+    #[cfg(unix)]
+    cmd.process_group(0);
+
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(err) => {
@@ -516,6 +506,8 @@ async fn run_monitor(
             return;
         }
     };
+    #[cfg(unix)]
+    let process_group = UnixProcessGroupGuard::new(&child);
 
     let stdout = child.stdout.take();
     let stderr = if capture_stderr {
@@ -636,12 +628,9 @@ async fn run_monitor(
         }
     };
 
-    if let Some(handle) = stdout_task {
-        let _ = handle.await;
-    }
-    if let Some(handle) = stderr_task {
-        let _ = handle.await;
-    }
+    #[cfg(unix)]
+    process_group.force_kill();
+    join_stream_tasks(stdout_task, stderr_task).await;
 
     {
         let mut inner = state.inner.lock().unwrap();
@@ -660,14 +649,109 @@ async fn run_monitor(
         inner.abort = None;
         inner.worker = None;
     }
-    state.notify.notify_waiters();
+    state.changed.notify_all();
     if let Some(listener) = state.listener.as_ref() {
         listener.on_finished(&state.snapshot());
     }
 }
 
 async fn kill_child(child: &mut tokio::process::Child) {
-    let _ = child.start_kill();
+    #[cfg(unix)]
+    {
+        if let Some(child_id) = child.id() {
+            signal_process_group(child_id, libc::SIGTERM);
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            signal_process_group(child_id, libc::SIGKILL);
+        }
+        let _ = child.start_kill();
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(child_id) = child.id() {
+            let _ = Command::new("taskkill")
+                .args(["/PID", child_id.to_string().as_str(), "/T", "/F"])
+                .status()
+                .await;
+        }
+        let _ = child.start_kill();
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
+    {
+        let _ = child.start_kill();
+    }
+}
+
+async fn join_stream_tasks(
+    stdout_task: Option<tokio::task::JoinHandle<()>>,
+    stderr_task: Option<tokio::task::JoinHandle<()>>,
+) {
+    let stdout_abort = stdout_task
+        .as_ref()
+        .map(tokio::task::JoinHandle::abort_handle);
+    let stderr_abort = stderr_task
+        .as_ref()
+        .map(tokio::task::JoinHandle::abort_handle);
+    let joined = async move {
+        if let Some(handle) = stdout_task {
+            let _ = handle.await;
+        }
+        if let Some(handle) = stderr_task {
+            let _ = handle.await;
+        }
+    };
+    if tokio::time::timeout(Duration::from_secs(2), joined)
+        .await
+        .is_err()
+    {
+        if let Some(abort) = stdout_abort {
+            abort.abort();
+        }
+        if let Some(abort) = stderr_abort {
+            abort.abort();
+        }
+        tracing::warn!(
+            target: "agena_runtime::monitor",
+            "background process pipes did not close after termination; reader tasks were aborted"
+        );
+    }
+}
+
+#[cfg(unix)]
+fn signal_process_group(child_id: u32, signal: i32) {
+    // SAFETY: monitored commands are started as leaders of dedicated process
+    // groups. ESRCH is harmless when the group has already exited.
+    unsafe {
+        libc::kill(-(child_id as i32), signal);
+    }
+}
+
+#[cfg(unix)]
+struct UnixProcessGroupGuard {
+    child_id: Option<u32>,
+}
+
+#[cfg(unix)]
+impl UnixProcessGroupGuard {
+    fn new(child: &tokio::process::Child) -> Self {
+        Self {
+            child_id: child.id(),
+        }
+    }
+
+    fn force_kill(&self) {
+        if let Some(child_id) = self.child_id {
+            signal_process_group(child_id, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for UnixProcessGroupGuard {
+    fn drop(&mut self) {
+        self.force_kill();
+    }
 }
 
 enum TerminationCause {
@@ -694,7 +778,7 @@ fn mark_failed(state: &MonitorState, reason: String) {
     inner.abort = None;
     inner.worker = None;
     drop(inner);
-    state.notify.notify_waiters();
+    state.changed.notify_all();
     if let Some(listener) = state.listener.as_ref() {
         listener.on_finished(&state.snapshot());
     }
@@ -711,23 +795,24 @@ async fn stream_lines<R>(
 ) where
     R: tokio::io::AsyncRead + Unpin + Send,
 {
-    let mut reader = BufReader::new(reader);
-    let mut buf = Vec::with_capacity(1024);
+    let mut reader = FramedRead::new(
+        reader,
+        LinesCodec::new_with_max_length(READER_LINE_BYTE_CAP),
+    );
+    let mut resume_after_decoder_error = false;
     loop {
-        buf.clear();
-        match reader.read_until(b'\n', &mut buf).await {
-            Ok(0) => break,
-            Ok(_) => {
-                if buf.ends_with(b"\n") {
-                    buf.pop();
-                    if buf.ends_with(b"\r") {
-                        buf.pop();
-                    }
-                }
-                if buf.len() > READER_LINE_BYTE_CAP {
-                    buf.truncate(READER_LINE_BYTE_CAP);
-                }
-                let line = String::from_utf8_lossy(&buf).into_owned();
+        match reader.next().await {
+            // FramedRead returns one transitional `None` after a decoder
+            // error. LinesCodec itself remains recoverable and discards the
+            // rest of the overlong line, so poll it again instead of treating
+            // that transitional value as pipe EOF.
+            None if resume_after_decoder_error => {
+                resume_after_decoder_error = false;
+                continue;
+            }
+            None => break,
+            Some(Ok(line)) => {
+                resume_after_decoder_error = false;
                 state
                     .last_activity_ms
                     .store(Utc::now().timestamp_millis(), Ordering::Release);
@@ -749,7 +834,16 @@ async fn stream_lines<R>(
                 }
                 push_event(&state, stream, line);
             }
-            Err(_) => break,
+            Some(Err(error)) => {
+                resume_after_decoder_error = true;
+                push_event(
+                    &state,
+                    ProcessStream::Stderr,
+                    format!(
+                        "background output line was discarded after exceeding the {READER_LINE_BYTE_CAP}-byte UTF-8 line limit: {error}"
+                    ),
+                );
+            }
         }
     }
 }
@@ -786,7 +880,7 @@ fn push_event(state: &MonitorState, stream: ProcessStream, line: String) {
         }
         inner.buffer.push_back(event);
     }
-    state.notify.notify_waiters();
+    state.changed.notify_all();
 }
 
 fn build_command(command: &str) -> Command {
@@ -830,18 +924,35 @@ mod tests {
     }
 
     async fn wait_for_terminal(registry: Arc<MonitorRegistry>, id: String) -> MonitorRead {
-        tokio::task::spawn_blocking(move || {
-            registry
-                .read(ReadParams {
-                    monitor_id: id,
-                    since_seq: 0,
-                    limit: Some(32),
-                    wait_ms: 2_000,
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let mut since_seq = 0;
+            let mut events = Vec::new();
+            loop {
+                let registry = Arc::clone(&registry);
+                let id = id.clone();
+                let read = tokio::task::spawn_blocking(move || {
+                    registry
+                        .read(ReadParams {
+                            monitor_id: id,
+                            since_seq,
+                            limit: Some(32),
+                            wait_ms: 250,
+                        })
+                        .expect("read monitor")
                 })
-                .expect("read monitor")
+                .await
+                .expect("join read");
+                let mut read = read;
+                since_seq = read.last_seq;
+                events.append(&mut read.events);
+                if read.status != ProcessStatus::Running {
+                    read.events = events;
+                    return read;
+                }
+            }
         })
         .await
-        .expect("join read")
+        .expect("monitor reaches terminal state")
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -915,5 +1026,66 @@ mod tests {
         .await
         .expect("registry drop kills the persistent process");
         let _ = std::fs::remove_file(pid_path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stopping_monitor_kills_shell_descendants() {
+        let pid_path = std::env::temp_dir().join(format!(
+            "agena-monitor-descendant-{}-{}.pid",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let registry = Arc::new(MonitorRegistry::from_handle(Handle::current()));
+        let mut params = start_params(
+            format!("sleep 30 & echo $! > {}; wait", pid_path.to_string_lossy()).as_str(),
+        );
+        params.persistent = true;
+        params.timeout_ms = None;
+        let id = registry
+            .start(params)
+            .expect("start monitor")
+            .summary
+            .process_id;
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !pid_path.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("monitor publishes descendant pid");
+        let pid = std::fs::read_to_string(&pid_path)
+            .expect("read descendant pid")
+            .trim()
+            .parse::<i32>()
+            .expect("valid descendant pid");
+        registry.stop(&id).expect("stop monitor");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while process_exists(pid) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("monitor stop should terminate descendants");
+        let _ = std::fs::remove_file(pid_path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn oversized_output_line_is_bounded_and_following_lines_are_observed() {
+        let registry = Arc::new(MonitorRegistry::from_handle(Handle::current()));
+        let mut params = start_params(
+            "head -c 100000 /dev/zero | LC_ALL=C tr '\\000' x; printf '\\nREADY\\n'; exec sleep 30",
+        );
+        params.success_pattern = Some("^READY$".to_string());
+        let id = registry.start(params).expect("start").summary.process_id;
+        let read = wait_for_terminal(registry, id).await;
+
+        assert_eq!(read.completion_reason.as_deref(), Some("success_pattern"));
+        assert!(read.events.iter().any(|event| event.line == "READY"));
+        assert!(read.events.iter().any(|event| {
+            event
+                .line
+                .contains("discarded after exceeding the 65536-byte UTF-8 line limit")
+        }));
     }
 }

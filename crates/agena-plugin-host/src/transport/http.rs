@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures_util::StreamExt as _;
 use reqwest::Client;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -79,7 +80,7 @@ impl HttpTransport {
             client: Client::builder()
                 .timeout(Duration::from_secs(60))
                 .build()
-                .unwrap_or_else(|_| Client::new()),
+                .expect("plugin HTTP client with static configuration should build"),
             url,
             auth_header,
             stream_callbacks,
@@ -111,14 +112,16 @@ impl HttpTransport {
                     "plugin HTTP response exceeds the {MAX_HTTP_RESPONSE_BYTES}-byte limit"
                 )));
             }
-            let body = response
-                .bytes()
-                .await
-                .map_err(|error| TransportError::Rpc(error.to_string()))?;
-            if body.len() > MAX_HTTP_RESPONSE_BYTES {
-                return Err(TransportError::Rpc(format!(
-                    "plugin HTTP response exceeds the {MAX_HTTP_RESPONSE_BYTES}-byte limit"
-                )));
+            let mut body = Vec::new();
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|error| TransportError::Rpc(error.to_string()))?;
+                if body.len().saturating_add(chunk.len()) > MAX_HTTP_RESPONSE_BYTES {
+                    return Err(TransportError::Rpc(format!(
+                        "plugin HTTP response exceeds the {MAX_HTTP_RESPONSE_BYTES}-byte limit"
+                    )));
+                }
+                body.extend_from_slice(&chunk);
             }
             serde_json::from_slice(&body).map_err(TransportError::from)
         };

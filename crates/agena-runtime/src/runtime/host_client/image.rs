@@ -2,6 +2,7 @@ use std::path::Path;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt as _;
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
@@ -128,9 +129,19 @@ async fn prepare_path_image(
             metadata.len()
         ));
     }
-    let bytes = tokio::fs::read(&target)
+    let file = tokio::fs::File::open(&target)
         .await
         .map_err(|error| format!("cannot read image path `{}`: {error}", target.display()))?;
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or_default());
+    file.take(route_limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|error| format!("cannot read image path `{}`: {error}", target.display()))?;
+    if bytes.len() as u64 > route_limit {
+        return Err(format!(
+            "image file grew beyond the active route limit of {route_limit} bytes while being read"
+        ));
+    }
     let filename = target
         .file_name()
         .and_then(|value| value.to_str())

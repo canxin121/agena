@@ -98,6 +98,15 @@ pub fn wait_for_oauth_callback(
     while started.elapsed() < timeout {
         match listener.accept() {
             Ok((mut stream, _)) => {
+                // A local peer can connect and then send nothing. Bound socket
+                // I/O so the callback worker cannot be held forever by a
+                // half-open connection.
+                let io_timeout = timeout
+                    .saturating_sub(started.elapsed())
+                    .min(Duration::from_secs(2))
+                    .max(Duration::from_millis(1));
+                stream.set_read_timeout(Some(io_timeout))?;
+                stream.set_write_timeout(Some(io_timeout))?;
                 let mut bytes = [0; 4096];
                 let count = stream.read(&mut bytes)?;
                 let request = String::from_utf8_lossy(&bytes[..count]);

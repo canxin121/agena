@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use super::official_service::{
     ProviderUsageKind, append_prompt_to_items, configured_model, endpoint, env_secret,
-    merge_object_options, post_json, provider_output, resolve_local_path,
+    merge_object_options, post_json, provider_output, read_image_input_bounded, resolve_local_path,
 };
 
 pub(crate) const GEMINI_PLUGIN_ID: &str = "agena.gemini";
@@ -502,11 +502,10 @@ impl GeminiToolsPlugin {
     async fn image_edit(&self, input: GeminiImageEditInput) -> SdkResult<ToolInvokeOutput> {
         let model = self.image_model(input.model, "gemini.image_edit")?;
         let mut parts = Vec::new();
+        let mut image_input_bytes = 0_u64;
         for source in input.images {
             let path = resolve_local_path(self.workspace_root()?, source.as_str())?;
-            let bytes = tokio::fs::read(&path).await.map_err(|error| {
-                PluginError::internal(format!("cannot read image '{}': {error}", path.display()))
-            })?;
+            let bytes = read_image_input_bounded(&path, &mut image_input_bytes, "Gemini").await?;
             let mime = match path
                 .extension()
                 .and_then(|value| value.to_str())

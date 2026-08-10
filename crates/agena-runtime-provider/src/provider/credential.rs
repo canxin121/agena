@@ -778,15 +778,20 @@ async fn resolve_sap_ai_core_credential(
         .await
         .map_err(ProviderError::from)?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+    let status = response.status();
+    let body = utils::response_text_bounded(
+        response,
+        utils::MAX_PROVIDER_ERROR_RESPONSE_BYTES,
+        "SAP AI Core token response",
+    )
+    .await?;
+    if !status.is_success() {
         return Err(ProviderError::Config(format!(
             "{provider_id} SAP AI Core token exchange failed with status {status}: {body}"
         )));
     }
 
-    let token = response.json::<SapAiCoreTokenResponse>().await?;
+    let token = serde_json::from_str::<SapAiCoreTokenResponse>(&body)?;
     Ok(CachedCredential {
         secret: token.access_token,
         expires_at_ms: token

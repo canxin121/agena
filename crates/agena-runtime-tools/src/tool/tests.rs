@@ -323,6 +323,27 @@ async fn grep_targets_a_single_file_or_a_directory() {
     .expect("write grep fixture");
     std::fs::write(workspace_root.join("nested/other.txt"), "alpha only\n")
         .expect("write nested grep fixture");
+    std::fs::create_dir_all(workspace_root.join("target")).expect("create ignored target");
+    std::fs::create_dir_all(workspace_root.join(".hidden")).expect("create hidden fixture");
+    std::fs::write(workspace_root.join(".gitignore"), "target/\n")
+        .expect("write grep ignore rules");
+    std::fs::write(
+        workspace_root.join("target/generated.txt"),
+        "alpha generated\n",
+    )
+    .expect("write ignored grep fixture");
+    std::fs::write(workspace_root.join(".hidden/private.txt"), "alpha hidden\n")
+        .expect("write hidden grep fixture");
+    std::fs::write(
+        workspace_root.join("binary.dat"),
+        b"alpha before binary\0alpha after binary\n",
+    )
+    .expect("write binary grep fixture");
+    let oversized = std::fs::File::create(workspace_root.join("oversized.txt"))
+        .expect("create oversized grep fixture");
+    oversized
+        .set_len(33 * 1024 * 1024)
+        .expect("make sparse oversized grep fixture");
 
     let mut plugins_config = PluginsConfig::default();
     plugins_config
@@ -414,6 +435,102 @@ async fn grep_targets_a_single_file_or_a_directory() {
             .contains("nested/other.txt:1: alpha only")
     );
     assert!(!dir_execution.view.output_text.contains("fixture.txt"));
+
+    let workspace_invocation = ToolInvocation::new(
+        "fs.grep",
+        StructuredObject::try_from(serde_json::json!({
+            "pattern": "alpha"
+        }))
+        .expect("valid workspace grep input"),
+    );
+    let prepared_workspace = executor
+        .prepare_invocation(&workspace_invocation, 1, 3)
+        .await
+        .expect("prepare workspace grep");
+    let workspace_execution = executor
+        .execute_invocation_detailed(&prepared_workspace.invocation, 1, 3)
+        .await
+        .expect("execute workspace grep");
+    assert!(workspace_execution.view.output_text.contains("fixture.txt"));
+    assert!(
+        workspace_execution
+            .view
+            .output_text
+            .contains("nested/other.txt")
+    );
+    assert!(
+        !workspace_execution
+            .view
+            .output_text
+            .contains("target/generated.txt")
+    );
+    assert!(
+        !workspace_execution
+            .view
+            .output_text
+            .contains(".hidden/private.txt")
+    );
+    assert!(!workspace_execution.view.output_text.contains("binary.dat"));
+    assert!(
+        workspace_execution
+            .view
+            .output_text
+            .contains("1 file(s) larger than 32 MiB skipped")
+    );
+
+    let ignored_invocation = ToolInvocation::new(
+        "fs.grep",
+        StructuredObject::try_from(serde_json::json!({
+            "pattern": "alpha",
+            "include_ignored": true
+        }))
+        .expect("valid ignored grep input"),
+    );
+    let prepared_ignored = executor
+        .prepare_invocation(&ignored_invocation, 1, 4)
+        .await
+        .expect("prepare ignored grep");
+    let ignored_execution = executor
+        .execute_invocation_detailed(&prepared_ignored.invocation, 1, 4)
+        .await
+        .expect("execute ignored grep");
+    assert!(
+        ignored_execution
+            .view
+            .output_text
+            .contains("target/generated.txt")
+    );
+    assert!(
+        ignored_execution
+            .view
+            .output_text
+            .contains(".hidden/private.txt")
+    );
+
+    let concurrent = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::join!(
+            executor.execute_invocation_detailed(&prepared_workspace.invocation, 1, 5),
+            executor.execute_invocation_detailed(&prepared_workspace.invocation, 1, 6),
+        )
+    })
+    .await
+    .expect("concurrent grep calls must remain responsive");
+    assert!(
+        concurrent
+            .0
+            .expect("first concurrent grep")
+            .view
+            .output_text
+            .contains("fixture.txt")
+    );
+    assert!(
+        concurrent
+            .1
+            .expect("second concurrent grep")
+            .view
+            .output_text
+            .contains("fixture.txt")
+    );
 
     std::fs::remove_dir_all(workspace_root).expect("remove grep workspace");
 }

@@ -13,6 +13,105 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 
 const DEFAULT_GIT_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_GIT_STREAM_BYTES: usize = 16 * 1024 * 1024;
+
+async fn read_git_stream<R>(mut reader: R) -> (Vec<u8>, bool)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt as _;
+
+    let mut retained = Vec::new();
+    let mut truncated = false;
+    let mut chunk = [0_u8; 16 * 1024];
+    loop {
+        let read = match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => read,
+        };
+        let remaining = MAX_GIT_STREAM_BYTES.saturating_sub(retained.len());
+        retained.extend_from_slice(&chunk[..read.min(remaining)]);
+        truncated |= read > remaining;
+    }
+    (retained, truncated)
+}
+
+async fn join_git_streams(
+    stdout_task: tokio::task::JoinHandle<(Vec<u8>, bool)>,
+    stderr_task: tokio::task::JoinHandle<(Vec<u8>, bool)>,
+) -> ((Vec<u8>, bool), (Vec<u8>, bool)) {
+    let stdout_abort = stdout_task.abort_handle();
+    let stderr_abort = stderr_task.abort_handle();
+    match tokio::time::timeout(Duration::from_secs(2), async move {
+        let (stdout, stderr) = tokio::join!(stdout_task, stderr_task);
+        (stdout.unwrap_or_default(), stderr.unwrap_or_default())
+    })
+    .await
+    {
+        Ok(output) => output,
+        Err(_) => {
+            stdout_abort.abort();
+            stderr_abort.abort();
+            ((Vec::new(), true), (Vec::new(), true))
+        }
+    }
+}
+
+async fn terminate_git_process_tree(
+    child: &mut tokio::process::Child,
+) -> std::io::Result<std::process::ExitStatus> {
+    #[cfg(unix)]
+    {
+        let Some(child_id) = child.id() else {
+            return child.wait().await;
+        };
+        signal_git_process_group(child_id, libc::SIGTERM);
+        let status = match tokio::time::timeout(Duration::from_millis(150), child.wait()).await {
+            Ok(result) => result,
+            Err(_) => {
+                signal_git_process_group(child_id, libc::SIGKILL);
+                child.wait().await
+            }
+        };
+        signal_git_process_group(child_id, libc::SIGKILL);
+        status
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(child_id) = child.id() {
+            let _ = Command::new("taskkill")
+                .args(["/PID", child_id.to_string().as_str(), "/T", "/F"])
+                .status()
+                .await;
+        }
+        let _ = child.start_kill();
+        child.wait().await
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
+    {
+        let _ = child.start_kill();
+        child.wait().await
+    }
+}
+
+#[cfg(unix)]
+fn signal_git_process_group(child_id: u32, signal: i32) {
+    // SAFETY: git commands call setsid before exec and therefore lead a
+    // dedicated process group. ESRCH is harmless after process exit.
+    unsafe {
+        libc::kill(-(child_id as i32), signal);
+    }
+}
+
+fn git_stream_text(bytes: Vec<u8>, truncated: bool) -> String {
+    let mut text = String::from_utf8_lossy(&bytes).to_string();
+    if truncated {
+        text.push_str("\n... git output truncated at 16 MiB\n");
+    }
+    text
+}
 
 fn parse_git_subcommand<'a>(args: &'a [&'a str]) -> Option<&'a str> {
     let mut i = 0usize;
@@ -294,7 +393,6 @@ pub(crate) async fn run_git_env(
     args: &[&str],
     extra_env: &[(&str, &str)],
 ) -> Result<(i32, String, String), String> {
-    use tokio::io::AsyncReadExt;
     let started_at = Instant::now();
 
     let mut cmd = Command::new("git");
@@ -334,23 +432,22 @@ pub(crate) async fn run_git_env(
     }
 
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let child_id = child.id();
 
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
 
     let stdout_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(s) = stdout.as_mut() {
-            let _ = s.read_to_end(&mut buf).await;
+        match stdout.take() {
+            Some(stream) => read_git_stream(stream).await,
+            None => (Vec::new(), false),
         }
-        buf
     });
     let stderr_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(s) = stderr.as_mut() {
-            let _ = s.read_to_end(&mut buf).await;
+        match stderr.take() {
+            Some(stream) => read_git_stream(stream).await,
+            None => (Vec::new(), false),
         }
-        buf
     });
 
     let timeout = git_timeout();
@@ -359,15 +456,19 @@ pub(crate) async fn run_git_env(
         status = child.wait() => status,
         _ = tokio::time::sleep(timeout) => {
             timed_out = true;
-            let _ = child.kill().await;
-            child.wait().await
+            terminate_git_process_tree(&mut child).await
         }
     };
 
-    let stdout_bytes = stdout_task.await.unwrap_or_default();
-    let stderr_bytes = stderr_task.await.unwrap_or_default();
-    let stdout_text = String::from_utf8_lossy(&stdout_bytes).to_string();
-    let mut stderr_text = String::from_utf8_lossy(&stderr_bytes).to_string();
+    #[cfg(unix)]
+    if let Some(child_id) = child_id {
+        signal_git_process_group(child_id, libc::SIGKILL);
+    }
+
+    let ((stdout_bytes, stdout_truncated), (stderr_bytes, stderr_truncated)) =
+        join_git_streams(stdout_task, stderr_task).await;
+    let stdout_text = git_stream_text(stdout_bytes, stdout_truncated);
+    let mut stderr_text = git_stream_text(stderr_bytes, stderr_truncated);
 
     let mut code = status.ok().and_then(|s| s.code()).unwrap_or(1);
     if timed_out {
@@ -391,7 +492,7 @@ pub(crate) async fn run_git_input(
     extra_env: &[(&str, &str)],
     input: &str,
 ) -> Result<(i32, String, String), String> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
     let started_at = Instant::now();
 
     let mut cmd = Command::new("git");
@@ -430,27 +531,34 @@ pub(crate) async fn run_git_input(
     }
 
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let child_id = child.id();
 
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input.as_bytes()).await;
-    }
+    // Drain both output pipes while stdin is written. Writing first can
+    // deadlock when git emits enough diagnostics to fill stdout/stderr before
+    // it has consumed the complete patch from stdin.
+    let input = input.as_bytes().to_vec();
+    let stdin_task = child.stdin.take().map(|mut stdin| {
+        tokio::spawn(async move {
+            let result = stdin.write_all(&input).await;
+            let _ = stdin.shutdown().await;
+            result
+        })
+    });
 
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
 
     let stdout_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(s) = stdout.as_mut() {
-            let _ = s.read_to_end(&mut buf).await;
+        match stdout.take() {
+            Some(stream) => read_git_stream(stream).await,
+            None => (Vec::new(), false),
         }
-        buf
     });
     let stderr_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(s) = stderr.as_mut() {
-            let _ = s.read_to_end(&mut buf).await;
+        match stderr.take() {
+            Some(stream) => read_git_stream(stream).await,
+            None => (Vec::new(), false),
         }
-        buf
     });
 
     let timeout = git_timeout();
@@ -459,15 +567,29 @@ pub(crate) async fn run_git_input(
         status = child.wait() => status,
         _ = tokio::time::sleep(timeout) => {
             timed_out = true;
-            let _ = child.kill().await;
-            child.wait().await
+            terminate_git_process_tree(&mut child).await
         }
     };
 
-    let stdout_bytes = stdout_task.await.unwrap_or_default();
-    let stderr_bytes = stderr_task.await.unwrap_or_default();
-    let stdout_text = String::from_utf8_lossy(&stdout_bytes).to_string();
-    let mut stderr_text = String::from_utf8_lossy(&stderr_bytes).to_string();
+    #[cfg(unix)]
+    if let Some(child_id) = child_id {
+        signal_git_process_group(child_id, libc::SIGKILL);
+    }
+
+    if let Some(stdin_task) = stdin_task {
+        let stdin_abort = stdin_task.abort_handle();
+        if tokio::time::timeout(Duration::from_secs(2), stdin_task)
+            .await
+            .is_err()
+        {
+            stdin_abort.abort();
+        }
+    }
+
+    let ((stdout_bytes, stdout_truncated), (stderr_bytes, stderr_truncated)) =
+        join_git_streams(stdout_task, stderr_task).await;
+    let stdout_text = git_stream_text(stdout_bytes, stdout_truncated);
+    let mut stderr_text = git_stream_text(stderr_bytes, stderr_truncated);
 
     let mut code = status.ok().and_then(|s| s.code()).unwrap_or(1);
     if timed_out {
@@ -497,4 +619,54 @@ pub(crate) async fn run_git(
     args: &[&str],
 ) -> Result<(i32, String, String), String> {
     run_git_env(directory, args, &[]).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_GIT_STREAM_BYTES, read_git_stream, run_git, run_git_with_input};
+    use tokio::io::AsyncWriteExt as _;
+
+    #[tokio::test]
+    async fn stream_reader_keeps_draining_after_retained_output_limit() {
+        let (reader, mut writer) = tokio::io::duplex(64 * 1024);
+        let writer_task = tokio::spawn(async move {
+            let chunk = vec![b'x'; 64 * 1024];
+            let mut remaining = MAX_GIT_STREAM_BYTES + chunk.len();
+            while remaining > 0 {
+                let write = remaining.min(chunk.len());
+                writer
+                    .write_all(&chunk[..write])
+                    .await
+                    .expect("write git stream fixture");
+                remaining -= write;
+            }
+        });
+
+        let (retained, truncated) = read_git_stream(reader).await;
+        writer_task.await.expect("writer task");
+
+        assert_eq!(retained.len(), MAX_GIT_STREAM_BYTES);
+        assert!(truncated);
+    }
+
+    #[tokio::test]
+    async fn git_patch_stdin_is_written_while_output_pipes_are_drained() {
+        let workspace = tempfile::tempdir().expect("git workspace");
+        let (code, _, stderr) = run_git(workspace.path(), &["init", "--quiet"])
+            .await
+            .expect("git init");
+        assert_eq!(code, 0, "git init: {stderr}");
+        std::fs::write(workspace.path().join("demo.txt"), "one\n").expect("write fixture");
+        let patch = "--- a/demo.txt\n+++ b/demo.txt\n@@ -1 +1 @@\n-one\n+two\n";
+
+        let (code, _, stderr) = run_git_with_input(workspace.path(), &["apply", "-"], patch)
+            .await
+            .expect("git apply");
+
+        assert_eq!(code, 0, "git apply: {stderr}");
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("demo.txt")).expect("read result"),
+            "two\n"
+        );
+    }
 }

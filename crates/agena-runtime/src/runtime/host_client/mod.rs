@@ -999,8 +999,8 @@ impl HostClient for RuntimeHostClient {
             |executor| executor.monitor_registry().cloned(),
             "background process registry is not enabled in this runtime",
         )?;
-        let read = registry
-            .read(MonitorReadParams {
+        let read = tokio::task::spawn_blocking(move || {
+            registry.read(MonitorReadParams {
                 monitor_id: req.id,
                 since_seq: req.since_seq,
                 limit: req.limit,
@@ -1010,7 +1010,10 @@ impl HostClient for RuntimeHostClient {
                     req.wait_ms
                 },
             })
-            .map_err(map_monitor_error)?;
+        })
+        .await
+        .map_err(|error| PluginError::internal(format!("monitor read worker failed: {error}")))?
+        .map_err(map_monitor_error)?;
         Ok(render_monitor_read(read))
     }
 

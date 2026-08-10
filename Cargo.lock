@@ -243,6 +243,7 @@ dependencies = [
  "globset",
  "hex",
  "notify",
+ "process_control",
  "reqwest 0.13.4",
  "schemars",
  "serde",
@@ -302,6 +303,8 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "tokio-util",
+ "tokio_sse_codec",
  "url",
  "uuid",
 ]
@@ -1032,18 +1035,23 @@ dependencies = [
  "base64",
  "blake3",
  "chrono",
+ "content_inspector",
  "diff",
  "futures-core",
  "futures-util",
  "globset",
+ "grep-regex",
+ "grep-searcher",
  "hex",
  "html-escape",
+ "ignore",
  "imagesize 0.15.0",
  "indexmap",
  "libc",
  "mime_guess",
  "parking_lot",
  "path-clean",
+ "process_control",
  "regex",
  "reqwest 0.13.4",
  "schemars",
@@ -1059,7 +1067,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "walkdir",
 ]
 
 [[package]]
@@ -1086,12 +1093,12 @@ version = "0.1.0"
 dependencies = [
  "agena-failure",
  "hex",
+ "ignore",
  "serde",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.19",
  "tracing",
- "walkdir",
  "yaml_serde",
 ]
 
@@ -1136,16 +1143,17 @@ dependencies = [
  "agena-failure",
  "ast-grep-core",
  "ast-grep-language",
+ "ignore",
+ "nucleo-matcher",
  "schemars",
  "serde",
  "serde_json",
- "tantivy",
+ "tempfile",
  "thiserror 2.0.19",
  "tracing",
  "tree-sitter",
  "unicode-segmentation",
- "unicode-width",
- "walkdir",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -1164,7 +1172,7 @@ dependencies = [
  "tokio",
  "tui-markdown",
  "unic-langid",
- "unicode-width",
+ "unicode-width 0.2.2",
  "url",
 ]
 
@@ -1211,7 +1219,7 @@ dependencies = [
  "tracing",
  "tui-markdown",
  "unicode-segmentation",
- "unicode-width",
+ "unicode-width 0.2.2",
  "url",
  "uuid",
  "yaml_serde",
@@ -1252,7 +1260,7 @@ dependencies = [
  "ratatui",
  "textwrap",
  "unicode-segmentation",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -1278,7 +1286,7 @@ dependencies = [
  "rust-latex-parser",
  "term-maths",
  "tokio",
- "unicode-width",
+ "unicode-width 0.2.2",
  "url",
 ]
 
@@ -1310,7 +1318,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "unicode-width",
+ "unicode-width 0.2.2",
  "url",
  "uuid",
 ]
@@ -1328,7 +1336,7 @@ dependencies = [
  "ratatui",
  "regex",
  "serde_json",
- "unicode-width",
+ "unicode-width 0.2.2",
  "url",
  "uuid",
 ]
@@ -1390,7 +1398,7 @@ dependencies = [
  "textwrap",
  "tui-markdown",
  "unicode-segmentation",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -1875,6 +1883,12 @@ name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
+
+[[package]]
+name = "attr_alias"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f648697f71a7eddd152c1ae26151f580c69635bfcb747574886317877ccf1a5a"
 
 [[package]]
 name = "auto_encoder"
@@ -2665,6 +2679,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f7dc094d718f2e1c1559ad110e27eeaae14a5465d3d56dd6dbd793079fbd530"
 dependencies = [
  "memchr",
+ "regex-automata",
  "serde_core",
 ]
 
@@ -3208,6 +3223,15 @@ name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
+
+[[package]]
+name = "content_inspector"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7bda66e858c683005a53a9a60c69a4aca7eeaa45d124526e389f7aec8e62f38"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "convert_case"
@@ -4113,6 +4137,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "encoding_rs_io"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fba3fe847045ecff794b9c138293a80db914678c453ad63fbf0c6a9eb6e00b22"
+dependencies = [
+ "encoding_rs",
+]
+
+[[package]]
 name = "endi"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4749,7 +4782,7 @@ version = "0.2.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfe4fbac503b8d1f88e6676011885f34b7174f46e59956bba534ba83abded4df"
 dependencies = [
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -4870,6 +4903,43 @@ dependencies = [
  "smallvec",
  "spinning_top",
  "web-time",
+]
+
+[[package]]
+name = "grep-matcher"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9417543f4870fc8f1c8e1af870afae2431007626d9e703fce6471c468d33847"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "grep-regex"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce0c256c3ad82bcc07b812c15a45ec1d398122e8e15124f96695234db7112ef"
+dependencies = [
+ "bstr",
+ "grep-matcher",
+ "log",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "grep-searcher"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72348823a0eafc4bc2e9051064f28b5b42cc100b571b3a35d67918d711efcbc6"
+dependencies = [
+ "bstr",
+ "encoding_rs",
+ "encoding_rs_io",
+ "grep-matcher",
+ "log",
+ "memchr",
+ "memmap2",
 ]
 
 [[package]]
@@ -6258,6 +6328,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a86d3146ed3995b5913c414f6664344b9617457320782e64f0bb44afd49d74"
 
 [[package]]
+name = "miette"
+version = "5.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59bb584eaeeab6bd0226ccf3509a69d7936d148cf3d036ad350abe35e8c6856e"
+dependencies = [
+ "miette-derive",
+ "once_cell",
+ "thiserror 1.0.69",
+ "unicode-width 0.1.14",
+]
+
+[[package]]
+name = "miette-derive"
+version = "5.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49e7bc1560b95a3c4a25d03de42fe76ca718ab92d1a22a55b9b4cf67b3ae635c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6421,6 +6514,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42b8cfee0e339a0337359f3c88165702ac6e600dc01c0cc9579a92d62b08477a"
 dependencies = [
  "bitflags 2.13.1",
+]
+
+[[package]]
+name = "nucleo-matcher"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf33f538733d1a5a3494b836ba913207f14d9d4a1d3cd67030c5061bdd2cac85"
+dependencies = [
+ "memchr",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -7466,6 +7569,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "process_control"
+version = "5.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21ed1a985a1edcf511a65a9927151fab108e72206a2ee3c62f8946ab73dfc33d"
+dependencies = [
+ "attr_alias",
+ "libc",
+ "signal-hook",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "prometheus"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7844,7 +7959,7 @@ dependencies = [
  "thiserror 2.0.19",
  "unicode-segmentation",
  "unicode-truncate",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -7922,7 +8037,7 @@ dependencies = [
  "strum 0.28.0",
  "time",
  "unicode-segmentation",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -10310,7 +10425,7 @@ checksum = "26ccccf7b1e429ef47ef4a82726346feefdb67169e6a9d8d97fc6d3707640a05"
 dependencies = [
  "rust-latex-parser",
  "unicode-segmentation",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -10424,7 +10539,7 @@ checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
 dependencies = [
  "smawk",
  "unicode-linebreak",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -10700,6 +10815,19 @@ dependencies = [
  "libc",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "tokio_sse_codec"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1ef88f1ff8829edd1484d977b86426b47e26ee47cc6680da6068977c1e64cd3"
+dependencies = [
+ "bytes",
+ "miette",
+ "thiserror 1.0.69",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -11452,7 +11580,7 @@ checksum = "16b380a1238663e5f8a691f9039c73e1cdae598a30e9855f541d29b08b53e9a5"
 dependencies = [
  "itertools 0.14.0",
  "unicode-segmentation",
- "unicode-width",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -11460,6 +11588,12 @@ name = "unicode-vo"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1d386ff53b415b7fe27b50bb44679e2cc4660272694b7b6f3326d8480823a94"
+
+[[package]]
+name = "unicode-width"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
 name = "unicode-width"

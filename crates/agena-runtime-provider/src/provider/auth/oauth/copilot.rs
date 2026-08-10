@@ -3,7 +3,10 @@ use serde::Deserialize;
 use crate::ProviderError;
 use agena_provider::DeviceCodeStart;
 
-use super::shared::{COPILOT_CLIENT_ID, ensure_http_success, normalize_domain};
+use super::shared::{
+    COPILOT_CLIENT_ID, ensure_http_success, normalize_domain, provider_http_client,
+    response_json_bounded,
+};
 use agena_provider::OAuthTokenResponse;
 
 pub async fn start_copilot_device_code(domain: &str) -> Result<DeviceCodeStart, ProviderError> {
@@ -18,7 +21,7 @@ pub async fn start_copilot_device_code(domain: &str) -> Result<DeviceCodeStart, 
         interval: Option<u64>,
     }
 
-    let response = reqwest::Client::new()
+    let response = provider_http_client()
         .post(url)
         .header(reqwest::header::ACCEPT, "application/json")
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -30,7 +33,7 @@ pub async fn start_copilot_device_code(domain: &str) -> Result<DeviceCodeStart, 
         .await?;
 
     let response = ensure_http_success("github-copilot", None, response).await?;
-    let data: DeviceCodeResponse = response.json().await?;
+    let data: DeviceCodeResponse = response_json_bounded(response).await?;
     Ok(DeviceCodeStart {
         verification_url: data.verification_uri,
         user_code: data.user_code,
@@ -52,7 +55,7 @@ pub async fn poll_copilot_device_code(
         error: Option<String>,
     }
 
-    let response = reqwest::Client::new()
+    let response = provider_http_client()
         .post(url)
         .header(reqwest::header::ACCEPT, "application/json")
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -65,7 +68,7 @@ pub async fn poll_copilot_device_code(
         .await?;
 
     let response = ensure_http_success("github-copilot", None, response).await?;
-    let data: PollResult = response.json().await?;
+    let data: PollResult = response_json_bounded(response).await?;
     if let Some(token) = data.access_token {
         return Ok(Some(OAuthTokenResponse {
             refresh: token.clone(),

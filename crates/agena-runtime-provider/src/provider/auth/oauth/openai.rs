@@ -7,7 +7,8 @@ use agena_provider::{DeviceCodeStart, OAuthAuthorizeStart, ProviderErrorKind};
 use super::shared::{
     OPENAI_CLIENT_ID, OPENAI_ISSUER, ensure_http_success, expires_at_ms_from_seconds,
     extract_openai_account_id, extract_openai_fedramp_account, oauth_authorize_start, oauth_client,
-    oauth_error_code, oauth_error_summary, parse_device_auth_interval,
+    oauth_error_code, oauth_error_summary, parse_device_auth_interval, provider_http_client,
+    response_body_bounded, response_json_bounded,
 };
 use agena_provider::OAuthTokenResponse;
 
@@ -94,7 +95,7 @@ pub async fn start_openai_headless_device_code() -> Result<DeviceCodeStart, Prov
         interval: Option<serde_json::Value>,
     }
 
-    let response = reqwest::Client::new()
+    let response = provider_http_client()
         .post(format!("{OPENAI_ISSUER}/api/accounts/deviceauth/usercode"))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header(reqwest::header::USER_AGENT, crate::codex_user_agent())
@@ -105,7 +106,7 @@ pub async fn start_openai_headless_device_code() -> Result<DeviceCodeStart, Prov
         .await?;
 
     let response = ensure_http_success("openai", None, response).await?;
-    let data: DeviceCodeResponse = response.json().await?;
+    let data: DeviceCodeResponse = response_json_bounded(response).await?;
     Ok(DeviceCodeStart {
         verification_url: format!("{OPENAI_ISSUER}/codex/device"),
         user_code: data.user_code,
@@ -135,7 +136,7 @@ pub async fn poll_openai_headless_device_code(
         expires_in: Option<u64>,
     }
 
-    let poll_response = reqwest::Client::new()
+    let poll_response = provider_http_client()
         .post(format!("{OPENAI_ISSUER}/api/accounts/deviceauth/token"))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header(reqwest::header::USER_AGENT, crate::codex_user_agent())
@@ -153,7 +154,7 @@ pub async fn poll_openai_headless_device_code(
     }
 
     let poll_response = ensure_http_success("openai", None, poll_response).await?;
-    let poll_data: DevicePollResponse = poll_response.json().await?;
+    let poll_data: DevicePollResponse = response_json_bounded(poll_response).await?;
 
     let encoded_form = {
         let mut form = url::form_urlencoded::Serializer::new(String::new());
@@ -168,7 +169,7 @@ pub async fn poll_openai_headless_device_code(
         form.finish()
     };
 
-    let token_response = reqwest::Client::new()
+    let token_response = provider_http_client()
         .post(format!("{OPENAI_ISSUER}/oauth/token"))
         .header(
             reqwest::header::CONTENT_TYPE,
@@ -180,7 +181,7 @@ pub async fn poll_openai_headless_device_code(
         .await?;
 
     let token_response = ensure_http_success("openai", None, token_response).await?;
-    let token_data: TokenResponseBody = token_response.json().await?;
+    let token_data: TokenResponseBody = response_json_bounded(token_response).await?;
     let refresh_token = token_data.refresh_token.ok_or_else(|| {
         ProviderError::Provider("openai device oauth response missing refresh_token".to_owned())
     })?;
@@ -232,7 +233,7 @@ async fn request_openai_oauth_token(
     refresh_fallback: Option<&str>,
     refresh_flow: bool,
 ) -> Result<OAuthTokenResponse, ProviderError> {
-    let response = reqwest::Client::new()
+    let response = provider_http_client()
         .post(format!("{OPENAI_ISSUER}/oauth/token"))
         .header(
             reqwest::header::CONTENT_TYPE,
@@ -247,7 +248,7 @@ async fn request_openai_oauth_token(
         return Err(openai_oauth_token_error(response, error_context, refresh_flow).await);
     }
 
-    let token: OpenAiTokenResponseBody = response.json().await?;
+    let token: OpenAiTokenResponseBody = response_json_bounded(response).await?;
     let refresh = token
         .refresh_token
         .or_else(|| refresh_fallback.map(str::to_owned))
@@ -295,7 +296,10 @@ async fn openai_oauth_token_error(
     refresh_flow: bool,
 ) -> ProviderError {
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    let body = response_body_bounded(response)
+        .await
+        .map(|body| String::from_utf8_lossy(&body).into_owned())
+        .unwrap_or_default();
     let detail = oauth_error_summary(body.as_str());
 
     if refresh_flow

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use axum::{
     Json,
@@ -9,6 +10,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
+
+static REPO_DISCOVERY_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+const MAX_REPO_DISCOVERY_ENTRIES: usize = 100_000;
+const MAX_REPO_DISCOVERY_DURATION: Duration = Duration::from_secs(5);
 
 use super::{
     DirectoryQuery, is_safe_repo_rel_path, map_git_failure, path_slash, rel_path_slash,
@@ -105,6 +110,59 @@ async fn discover_parent_repos(base: &Path) -> Vec<String> {
     out
 }
 
+fn discover_nested_repos(base: &Path) -> (HashSet<PathBuf>, bool) {
+    let max_depth = 8usize;
+    let started_at = Instant::now();
+    let mut roots = HashSet::new();
+    let mut truncated = false;
+    let mut entries = 0_usize;
+    let mut it = WalkDir::new(base)
+        .follow_links(false)
+        .max_depth(max_depth)
+        .into_iter();
+
+    while let Some(next) = it.next() {
+        entries = entries.saturating_add(1);
+        if entries > MAX_REPO_DISCOVERY_ENTRIES
+            || started_at.elapsed() >= MAX_REPO_DISCOVERY_DURATION
+        {
+            truncated = true;
+            break;
+        }
+        let entry = match next {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+
+        let name = entry.file_name().to_string_lossy();
+        if entry.file_type().is_dir() {
+            if matches!(
+                name.as_ref(),
+                "node_modules" | "target" | "dist" | "build" | ".next" | ".agena"
+            ) {
+                it.skip_current_dir();
+                continue;
+            }
+
+            if name == ".git" {
+                if let Some(parent) = entry.path().parent() {
+                    roots.insert(parent.to_path_buf());
+                }
+                it.skip_current_dir();
+                continue;
+            }
+        }
+
+        if entry.file_type().is_file()
+            && name == ".git"
+            && let Some(parent) = entry.path().parent()
+        {
+            roots.insert(parent.to_path_buf());
+        }
+    }
+    (roots, truncated)
+}
+
 pub async fn git_repos(Query(q): Query<GitReposQuery>) -> Response {
     let base = match require_directory_raw(q.directory.as_deref()) {
         Ok(d) => d,
@@ -116,50 +174,32 @@ pub async fn git_repos(Query(q): Query<GitReposQuery>) -> Response {
     let page_size = q.page_size.unwrap_or(30).clamp(1, 200);
     let page_requested = q.page.is_some() || q.page_size.is_some() || !normalized_search.is_empty();
 
-    // Rough parity with VS Code behavior: scan for nested repos, but avoid heavy dirs.
-    let max_depth = 8usize;
-    let mut roots: HashSet<PathBuf> = HashSet::new();
-
-    let mut it = WalkDir::new(&base)
-        .follow_links(false)
-        .max_depth(max_depth)
-        .into_iter();
-
-    while let Some(next) = it.next() {
-        let entry = match next {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        let name = entry.file_name().to_string_lossy();
-        if entry.file_type().is_dir() {
-            // Skip common large folders.
-            if matches!(
-                name.as_ref(),
-                "node_modules" | "target" | "dist" | "build" | ".next"
-            ) {
-                it.skip_current_dir();
-                continue;
-            }
-
-            if name == ".git" {
-                if let Some(parent) = entry.path().parent() {
-                    roots.insert(parent.to_path_buf());
-                }
-                // Never walk into .git internals.
-                it.skip_current_dir();
-                continue;
-            }
+    let permit = match REPO_DISCOVERY_WORKERS.acquire().await {
+        Ok(permit) => permit,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error":"repository discovery is unavailable"})),
+            )
+                .into_response();
         }
-
-        // Worktree style: .git is a file pointing to the real dir.
-        if entry.file_type().is_file()
-            && name == ".git"
-            && let Some(parent) = entry.path().parent()
-        {
-            roots.insert(parent.to_path_buf());
+    };
+    let scan_base = base.clone();
+    let (roots, discovery_truncated) = match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        discover_nested_repos(&scan_base)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error":format!("repository discovery failed: {error}")})),
+            )
+                .into_response();
         }
-    }
+    };
 
     let mut repos: Vec<GitRepoInfo> = roots
         .into_iter()
@@ -226,6 +266,7 @@ pub async fn git_repos(Query(q): Query<GitReposQuery>) -> Response {
         "total": total,
         "totalPages": total_pages,
         "hasMore": page < total_pages,
+        "discoveryTruncated": discovery_truncated,
         "search": search,
     }))
     .into_response()

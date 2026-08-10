@@ -1,20 +1,20 @@
-//! In-tree shell executor.
+//! Tokio-native foreground shell executor.
 //!
-//! `tool::shell` provides a small synchronous command runner with a watchdog
-//! timeout, stdout/stderr capture, and shell-injection environment scrubbing.
-//! It deliberately does *not* implement OS-level sandboxing. Agena gates
-//! filesystem and tool access through `crate::permission` instead.
+//! Process lifecycle, pipe draining, timeout, and cancellation all run on the
+//! Tokio runtime. Filesystem and tool permissions remain runtime-owned; this
+//! module does not attempt to provide an OS sandbox.
 
 use std::collections::HashMap;
-use std::io::{self, Read};
-use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::io;
+use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, LazyLock};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use agena_domain::CommandOutputStream;
 use agena_tool::{ShellError, ShellOutput, ShellRequest};
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::process::Command;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 const OUTPUT_CHUNK_QUEUE_CAPACITY: usize = 128;
@@ -27,24 +27,20 @@ pub(crate) async fn acquire_worker_permit() -> Option<tokio::sync::OwnedSemaphor
     Arc::clone(&SHELL_WORKERS).acquire_owned().await.ok()
 }
 
-/// Run a command synchronously, scrubbing dangerous loader env vars and
-/// enforcing `timeout_ms` via a watchdog thread.
-pub fn execute(
+pub async fn execute(
     request: &ShellRequest,
     cancellation: Option<&CancellationToken>,
 ) -> Result<ShellOutput, ShellError> {
-    execute_with_callback(request, cancellation, None)
+    execute_with_callback(request, cancellation, None).await
 }
 
-/// Run a command while forwarding stdout/stderr chunks to a synchronous
-/// callback. The callback is invoked by the parent watchdog thread, not by
-/// the pipe-draining threads, so callers may safely hand the event to an
-/// async runtime without making pipe reads depend on network/event-loop
-/// latency.
-pub fn execute_with_callback(
+/// Run a command while forwarding bounded stdout/stderr chunks to a callback.
+/// Pipe I/O and process waiting remain asynchronous; the callback must be
+/// non-blocking because it executes on the current Tokio task.
+pub async fn execute_with_callback(
     request: &ShellRequest,
     cancellation: Option<&CancellationToken>,
-    output_callback: Option<&dyn Fn(CommandOutputStream, &[u8])>,
+    output_callback: Option<&(dyn Fn(CommandOutputStream, &[u8]) + Send + Sync)>,
 ) -> Result<ShellOutput, ShellError> {
     validate(request)?;
 
@@ -62,23 +58,19 @@ pub fn execute_with_callback(
         .envs(env.iter())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
 
-    // Put the shell and all of its descendants in a dedicated process group.
-    // Killing only `sh -c` can otherwise leave grandchildren running after
-    // Ctrl+C, which is especially dangerous for mutating commands.
+    // Put the shell and descendants in one process group so timeout and
+    // cancellation terminate the complete command tree on Unix.
     #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
+    command.process_group(0);
 
     let started = Instant::now();
     let mut child = command.spawn().map_err(ShellError::Spawn)?;
-
-    // Drain stdout / stderr off-thread so a child that fills its pipe
-    // buffers cannot deadlock the parent.
-    let (chunk_tx, chunk_rx) = mpsc::sync_channel(OUTPUT_CHUNK_QUEUE_CAPACITY);
+    #[cfg(unix)]
+    let process_group = UnixProcessGroupGuard::new(&child);
+    let (chunk_tx, mut chunk_rx) = mpsc::channel(OUTPUT_CHUNK_QUEUE_CAPACITY);
     let stdout_handle = child
         .stdout
         .take()
@@ -89,33 +81,71 @@ pub fn execute_with_callback(
         .map(|reader| spawn_drain(reader, CommandOutputStream::Stderr, chunk_tx.clone()));
     drop(chunk_tx);
 
-    let timeout = request.timeout_ms.map(Duration::from_millis);
-    let mut output_sequence = 0_u64;
-    let wait_outcome = wait_with_timeout(
-        &mut child,
-        timeout,
-        cancellation,
-        &chunk_rx,
-        output_callback,
-        &mut output_sequence,
-    )?;
+    let timeout = async {
+        match request.timeout_ms {
+            Some(timeout_ms) => tokio::time::sleep(Duration::from_millis(timeout_ms)).await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    let cancelled = async {
+        match cancellation {
+            Some(token) => token.cancelled().await,
+            None => std::future::pending::<()>().await,
+        }
+    };
+    tokio::pin!(timeout);
+    tokio::pin!(cancelled);
 
-    let duration = started.elapsed();
-    let stdout = collect_drain(stdout_handle);
-    let stderr = collect_drain(stderr_handle);
-    drain_chunks(&chunk_rx, output_callback, &mut output_sequence);
+    let mut chunks_open = true;
+    let mut output_sequence = 0_u64;
+    let wait_outcome = loop {
+        tokio::select! {
+            biased;
+            _ = &mut cancelled => {
+                terminate_process_tree(&mut child).await?;
+                break WaitOutcome::Cancelled;
+            }
+            _ = &mut timeout => {
+                let status = terminate_process_tree(&mut child).await?;
+                break WaitOutcome::TimedOut(status);
+            }
+            chunk = chunk_rx.recv(), if chunks_open => {
+                match chunk {
+                    Some(chunk) => emit_chunk(
+                        chunk,
+                        output_callback,
+                        &mut output_sequence,
+                    ),
+                    None => chunks_open = false,
+                }
+            }
+            result = child.wait() => {
+                break WaitOutcome::Exited(result.map_err(ShellError::Wait)?);
+            }
+        }
+    };
+
+    // A shell can exit while a descendant still owns an inherited pipe. End
+    // the dedicated group before joining the drain tasks so foreground
+    // execution cannot hang after the direct child has already exited.
+    #[cfg(unix)]
+    process_group.force_kill();
+    let (stdout, stderr) = collect_drains(stdout_handle, stderr_handle).await;
+    while let Ok(chunk) = chunk_rx.try_recv() {
+        emit_chunk(chunk, output_callback, &mut output_sequence);
+    }
 
     if matches!(wait_outcome, WaitOutcome::Cancelled) {
         return Err(ShellError::Cancelled);
     }
 
-    let status = match wait_outcome {
-        WaitOutcome::Exited(status) | WaitOutcome::TimedOut(status) => status,
+    let duration = started.elapsed();
+    let (status, timed_out) = match wait_outcome {
+        WaitOutcome::Exited(status) => (status, false),
+        WaitOutcome::TimedOut(status) => (status, true),
         WaitOutcome::Cancelled => unreachable!("cancelled outcome returned above"),
     };
-    let timed_out = matches!(wait_outcome, WaitOutcome::TimedOut(_));
     let exit_code = status_to_code(status);
-
     let aggregated_output = match (stdout.is_empty(), stderr.is_empty()) {
         (true, true) => String::new(),
         (false, true) => stdout.clone(),
@@ -159,7 +189,7 @@ fn validate(request: &ShellRequest) -> Result<(), ShellError> {
     Ok(())
 }
 
-/// Strip env vars that can hijack a child shell or dynamic loader.
+/// Strip environment variables that can hijack a child shell or loader.
 fn sanitize_env(env: &HashMap<String, String>) -> HashMap<String, String> {
     const BLOCKED_EXACT: &[&str] = &[
         "BASH_ENV",
@@ -179,7 +209,7 @@ fn sanitize_env(env: &HashMap<String, String>) -> HashMap<String, String> {
                     .iter()
                     .any(|prefix| starts_with_ascii_case_insensitive(key, prefix))
         })
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
 }
 
@@ -189,100 +219,70 @@ fn starts_with_ascii_case_insensitive(value: &str, prefix: &str) -> bool {
         .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
-fn wait_with_timeout(
-    child: &mut std::process::Child,
-    timeout: Option<Duration>,
-    cancellation: Option<&CancellationToken>,
-    chunks: &Receiver<OutputChunk>,
-    output_callback: Option<&dyn Fn(CommandOutputStream, &[u8])>,
-    output_sequence: &mut u64,
-) -> Result<WaitOutcome, ShellError> {
-    let started = Instant::now();
-    let poll_interval = Duration::from_millis(20);
-    loop {
-        drain_chunks(chunks, output_callback, output_sequence);
-        match child.try_wait().map_err(ShellError::Wait)? {
-            Some(status) => return Ok(WaitOutcome::Exited(status)),
-            None => {
-                if cancellation.is_some_and(CancellationToken::is_cancelled) {
-                    terminate_process_tree(child)?;
-                    return Ok(WaitOutcome::Cancelled);
-                }
-                if timeout.is_some_and(|deadline| started.elapsed() >= deadline) {
-                    let status = terminate_process_tree(child)?;
-                    return Ok(WaitOutcome::TimedOut(status));
-                }
-                thread::sleep(poll_interval);
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 enum WaitOutcome {
-    Exited(std::process::ExitStatus),
-    TimedOut(std::process::ExitStatus),
+    Exited(ExitStatus),
+    TimedOut(ExitStatus),
     Cancelled,
 }
 
-fn terminate_process_tree(
-    child: &mut std::process::Child,
-) -> Result<std::process::ExitStatus, ShellError> {
+async fn terminate_process_tree(
+    child: &mut tokio::process::Child,
+) -> Result<ExitStatus, ShellError> {
     #[cfg(unix)]
     {
-        let process_group = -(child.id() as i32);
-        // SAFETY: `kill` is called with the freshly spawned child's process
-        // group id. Failure is harmless here because the child may have exited
-        // between `try_wait` and this signal.
+        let Some(child_id) = child.id() else {
+            return child.wait().await.map_err(ShellError::Wait);
+        };
+        let process_group = -(child_id as i32);
+        // SAFETY: the freshly spawned child is the leader of this dedicated
+        // process group. ESRCH is harmless if it exited before the signal.
         unsafe {
             libc::kill(process_group, libc::SIGTERM);
         }
-        let mut exit_status = None;
-        let grace_started = Instant::now();
-        while grace_started.elapsed() < Duration::from_millis(150) {
-            if exit_status.is_none() {
-                exit_status = child.try_wait().map_err(ShellError::Wait)?;
+        let status = match tokio::time::timeout(Duration::from_millis(150), child.wait()).await {
+            Ok(result) => result.map_err(ShellError::Wait),
+            Err(_) => {
+                // SAFETY: same dedicated process-group reasoning as above.
+                unsafe {
+                    libc::kill(process_group, libc::SIGKILL);
+                }
+                child.wait().await.map_err(ShellError::Wait)
             }
-            thread::sleep(Duration::from_millis(10));
-        }
-        // SAFETY: same process-group reasoning as above. SIGKILL is the
-        // bounded fallback used after the cooperative termination grace.
+        };
+        // The direct shell may honor SIGTERM while a descendant ignores it.
+        // Always force-clean the remaining dedicated process group.
         unsafe {
             libc::kill(process_group, libc::SIGKILL);
         }
-        match exit_status {
-            Some(status) => Ok(status),
-            None => child.wait().map_err(ShellError::Wait),
-        }
+        status
     }
 
     #[cfg(windows)]
     {
-        // Windows does not expose Unix process groups. `taskkill /T` walks
-        // the descendant tree and `/F` provides the same bounded hard-stop
-        // semantics as SIGKILL after Ctrl+C.
-        let pid = child.id().to_string();
+        let Some(child_id) = child.id() else {
+            return child.wait().await.map_err(ShellError::Wait);
+        };
         let _ = Command::new("taskkill")
-            .args(["/PID", pid.as_str(), "/T", "/F"])
-            .status();
-        child.wait().map_err(ShellError::Wait)
+            .args(["/PID", child_id.to_string().as_str(), "/T", "/F"])
+            .status()
+            .await;
+        child.wait().await.map_err(ShellError::Wait)
     }
 
     #[cfg(all(not(unix), not(windows)))]
     {
-        let _ = child.kill();
-        child.wait().map_err(ShellError::Wait)
+        let _ = child.start_kill();
+        child.wait().await.map_err(ShellError::Wait)
     }
 }
 
-fn status_to_code(status: std::process::ExitStatus) -> i32 {
+fn status_to_code(status: ExitStatus) -> i32 {
     status.code().unwrap_or_else(|| {
-        // Killed by signal on Unix; surface a stable nonzero code so callers
-        // see "failed" rather than "success".
         #[cfg(unix)]
         {
             use std::os::unix::process::ExitStatusExt;
-            status.signal().map(|s| 128 + s).unwrap_or(-1)
+            status.signal().map(|signal| 128 + signal).unwrap_or(-1)
         }
         #[cfg(not(unix))]
         {
@@ -299,23 +299,23 @@ struct OutputChunk {
 fn spawn_drain<R>(
     mut reader: R,
     stream: CommandOutputStream,
-    sender: SyncSender<OutputChunk>,
-) -> thread::JoinHandle<io::Result<String>>
+    sender: mpsc::Sender<OutputChunk>,
+) -> tokio::task::JoinHandle<io::Result<String>>
 where
-    R: Read + Send + 'static,
+    R: AsyncRead + Unpin + Send + 'static,
 {
-    thread::spawn(move || {
-        let mut buf = Vec::new();
+    tokio::spawn(async move {
+        let mut captured_output = Vec::new();
         let mut truncated = false;
         let mut chunk = [0_u8; 8 * 1024];
         loop {
-            let read = reader.read(&mut chunk)?;
+            let read = reader.read(&mut chunk).await?;
             if read == 0 {
                 break;
             }
-            let remaining = MAX_CAPTURE_BYTES_PER_STREAM.saturating_sub(buf.len());
+            let remaining = MAX_CAPTURE_BYTES_PER_STREAM.saturating_sub(captured_output.len());
             let captured = remaining.min(read);
-            buf.extend_from_slice(&chunk[..captured]);
+            captured_output.extend_from_slice(&chunk[..captured]);
             truncated |= captured < read;
             let _ = sender.try_send(OutputChunk {
                 stream: stream.clone(),
@@ -323,36 +323,91 @@ where
             });
         }
         if truncated {
-            buf.extend_from_slice(b"\n[output truncated after 8 MiB]\n");
+            captured_output.extend_from_slice(b"\n[output truncated after 8 MiB]\n");
         }
-        Ok(String::from_utf8_lossy(&buf).into_owned())
+        Ok(String::from_utf8_lossy(&captured_output).into_owned())
     })
 }
 
-fn drain_chunks(
-    receiver: &Receiver<OutputChunk>,
-    output_callback: Option<&dyn Fn(CommandOutputStream, &[u8])>,
+fn emit_chunk(
+    chunk: OutputChunk,
+    output_callback: Option<&(dyn Fn(CommandOutputStream, &[u8]) + Send + Sync)>,
     output_sequence: &mut u64,
 ) {
     let Some(output_callback) = output_callback else {
-        while receiver.try_recv().is_ok() {}
         return;
     };
-    while let Ok(chunk) = receiver.try_recv() {
-        *output_sequence = output_sequence.saturating_add(1);
-        output_callback(chunk.stream, chunk.bytes.as_slice());
-    }
+    *output_sequence = output_sequence.saturating_add(1);
+    output_callback(chunk.stream, chunk.bytes.as_slice());
 }
 
-fn collect_drain(handle: Option<thread::JoinHandle<io::Result<String>>>) -> String {
+async fn collect_drain(handle: Option<tokio::task::JoinHandle<io::Result<String>>>) -> String {
     let Some(handle) = handle else {
         return String::new();
     };
-    handle
-        .join()
-        .ok()
-        .and_then(|res| res.ok())
-        .unwrap_or_default()
+    handle.await.ok().and_then(Result::ok).unwrap_or_default()
+}
+
+async fn collect_drains(
+    stdout_handle: Option<tokio::task::JoinHandle<io::Result<String>>>,
+    stderr_handle: Option<tokio::task::JoinHandle<io::Result<String>>>,
+) -> (String, String) {
+    let stdout_abort = stdout_handle
+        .as_ref()
+        .map(tokio::task::JoinHandle::abort_handle);
+    let stderr_abort = stderr_handle
+        .as_ref()
+        .map(tokio::task::JoinHandle::abort_handle);
+    match tokio::time::timeout(Duration::from_secs(2), async move {
+        tokio::join!(collect_drain(stdout_handle), collect_drain(stderr_handle))
+    })
+    .await
+    {
+        Ok(output) => output,
+        Err(_) => {
+            if let Some(abort) = stdout_abort {
+                abort.abort();
+            }
+            if let Some(abort) = stderr_abort {
+                abort.abort();
+            }
+            (
+                "[stdout drain stopped after process termination timeout]".to_string(),
+                "[stderr drain stopped after process termination timeout]".to_string(),
+            )
+        }
+    }
+}
+
+#[cfg(unix)]
+struct UnixProcessGroupGuard {
+    child_id: Option<u32>,
+}
+
+#[cfg(unix)]
+impl UnixProcessGroupGuard {
+    fn new(child: &tokio::process::Child) -> Self {
+        Self {
+            child_id: child.id(),
+        }
+    }
+
+    fn force_kill(&self) {
+        if let Some(child_id) = self.child_id {
+            // SAFETY: foreground commands are started as leaders of dedicated
+            // process groups. ESRCH is harmless after complete process exit.
+            unsafe {
+                libc::kill(-(child_id as i32), libc::SIGKILL);
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for UnixProcessGroupGuard {
+    fn drop(&mut self) {
+        self.force_kill();
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -365,13 +420,13 @@ mod tests {
             || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
 
-    #[test]
-    fn cancellation_stops_a_foreground_process_group_promptly() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_stops_a_foreground_process_group_promptly() {
         let cancellation = CancellationToken::new();
-        let cancel_from_thread = cancellation.clone();
-        let canceller = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
-            cancel_from_thread.cancel();
+        let cancel_from_task = cancellation.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cancel_from_task.cancel();
         });
         let request = ShellRequest {
             command: vec!["sh".to_string(), "-c".to_string(), "sleep 30".to_string()],
@@ -381,9 +436,8 @@ mod tests {
         };
         let started = Instant::now();
 
-        let result = execute(&request, Some(&cancellation));
+        let result = execute(&request, Some(&cancellation)).await;
 
-        canceller.join().expect("canceller thread");
         assert!(matches!(result, Err(ShellError::Cancelled)));
         assert!(
             started.elapsed() < Duration::from_secs(2),
@@ -392,25 +446,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn cancellation_kills_shell_grandchildren_not_just_the_shell() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_kills_shell_grandchildren_not_just_the_shell() {
         let pid_path = std::env::temp_dir().join(format!(
             "agena-shell-descendant-{}-{}.pid",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock after Unix epoch")
-                .as_nanos()
+            uuid::Uuid::new_v4().simple(),
         ));
         let cancellation = CancellationToken::new();
-        let cancel_from_thread = cancellation.clone();
-        let pid_path_for_thread = pid_path.clone();
-        let canceller = thread::spawn(move || {
+        let cancel_from_task = cancellation.clone();
+        let pid_path_for_task = pid_path.clone();
+        tokio::spawn(async move {
             let started = Instant::now();
-            while !pid_path_for_thread.exists() && started.elapsed() < Duration::from_secs(2) {
-                thread::sleep(Duration::from_millis(10));
+            while !pid_path_for_task.exists() && started.elapsed() < Duration::from_secs(2) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            cancel_from_thread.cancel();
+            cancel_from_task.cancel();
         });
         let mut env = std::env::vars().collect::<HashMap<_, _>>();
         env.insert(
@@ -428,26 +479,63 @@ mod tests {
             timeout_ms: None,
         };
 
-        let result = execute(&request, Some(&cancellation));
+        let result = execute(&request, Some(&cancellation)).await;
 
-        canceller.join().expect("canceller thread");
         assert!(matches!(result, Err(ShellError::Cancelled)));
         let pid = std::fs::read_to_string(&pid_path)
             .expect("shell should publish descendant pid before cancellation")
             .trim()
             .parse::<i32>()
             .expect("valid descendant pid");
-        let reaped = Instant::now();
-        while process_exists(pid) && reaped.elapsed() < Duration::from_secs(2) {
-            thread::sleep(Duration::from_millis(10));
-        }
-        if process_exists(pid) {
-            // SAFETY: best-effort cleanup for a failed assertion.
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while process_exists(pid) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            panic!("shell descendant {pid} survived process-group cancellation");
-        }
+        })
+        .await
+        .expect("shell descendant should be terminated");
+        let _ = std::fs::remove_file(pid_path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn exiting_shell_cleans_up_background_descendants_and_open_pipes() {
+        let pid_path = std::env::temp_dir().join(format!(
+            "agena-shell-exit-descendant-{}-{}.pid",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple(),
+        ));
+        let mut env = std::env::vars().collect::<HashMap<_, _>>();
+        env.insert(
+            "AGENA_TEST_PID_FILE".to_string(),
+            pid_path.to_string_lossy().into_owned(),
+        );
+        let request = ShellRequest {
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "sleep 30 & echo $! > \"$AGENA_TEST_PID_FILE\"".to_string(),
+            ],
+            cwd: std::env::current_dir().expect("current directory"),
+            env,
+            timeout_ms: Some(2_000),
+        };
+
+        tokio::time::timeout(Duration::from_secs(2), execute(&request, None))
+            .await
+            .expect("foreground execution must not wait on inherited descendant pipes")
+            .expect("shell execution");
+        let pid = std::fs::read_to_string(&pid_path)
+            .expect("shell should publish descendant pid")
+            .trim()
+            .parse::<i32>()
+            .expect("valid descendant pid");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while process_exists(pid) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("background descendant should be terminated when the shell exits");
         let _ = std::fs::remove_file(pid_path);
     }
 }

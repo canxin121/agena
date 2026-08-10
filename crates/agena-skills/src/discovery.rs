@@ -2,10 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
-use walkdir::WalkDir;
+use ignore::WalkBuilder;
 
 use crate::error::SkillResult;
 use crate::skill::Skill;
+
+const MAX_DISCOVERY_ENTRIES_PER_ROOT: usize = 10_000;
+const MAX_DISCOVERY_DEPTH: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Diagnostic produced while discovering skills.
@@ -126,20 +129,36 @@ fn scan_matching(
         if !root.is_dir() {
             continue;
         }
-        for entry in WalkDir::new(root) {
+        let mut builder = WalkBuilder::new(root);
+        builder
+            .follow_links(false)
+            .max_depth(Some(MAX_DISCOVERY_DEPTH))
+            .hidden(false)
+            .ignore(false)
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
+            .parents(false)
+            .threads(1);
+        for (entry_index, entry) in builder.build().enumerate() {
+            if entry_index >= MAX_DISCOVERY_ENTRIES_PER_ROOT {
+                diagnostics.push(discovery_diagnostic(
+                    root.clone(),
+                    format!(
+                        "skill discovery stopped after {MAX_DISCOVERY_ENTRIES_PER_ROOT} entries"
+                    ),
+                ));
+                break;
+            }
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(error) => {
-                    let path = error
-                        .path()
-                        .map(Path::to_path_buf)
-                        .unwrap_or_else(|| root.clone());
-                    diagnostics.push(discovery_diagnostic(path, error.to_string()));
+                    diagnostics.push(discovery_diagnostic(root.clone(), error.to_string()));
                     continue;
                 }
             };
             let p = entry.path();
-            if !p.is_file() || !matches_file(p) {
+            if !entry.file_type().is_some_and(|kind| kind.is_file()) || !matches_file(p) {
                 continue;
             }
             match load(p) {
@@ -224,5 +243,19 @@ mod tests {
         assert_eq!(report.skills[0].frontmatter.name, "valid");
         assert_eq!(report.diagnostics.len(), 1);
         assert!(report.diagnostics[0].path.ends_with("invalid/SKILL.md"));
+    }
+
+    #[test]
+    fn oversized_sparse_skill_is_rejected_before_full_read() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let oversized = dir.path().join("oversized");
+        std::fs::create_dir_all(&oversized).expect("skill dir");
+        let file = std::fs::File::create(oversized.join("SKILL.md")).expect("skill file");
+        file.set_len(2 * 1024 * 1024).expect("sparse skill");
+
+        let report = scan_with_diagnostics(&[dir.path().to_path_buf()]);
+        assert!(report.skills.is_empty());
+        assert_eq!(report.diagnostics.len(), 1);
+        assert!(report.diagnostics[0].diagnostic.contains("1048576"));
     }
 }

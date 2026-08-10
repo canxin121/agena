@@ -22,6 +22,8 @@ pub use agena_provider::{
 
 pub const ADAPTER_LOG_TARGET: &str = "agena::adapter";
 const ADAPTER_LOG_STRING_LIMIT: usize = 2_048;
+const MAX_PROVIDER_JSON_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_PROVIDER_ERROR_RESPONSE_BYTES: usize = 1024 * 1024;
 
 tokio::task_local! {
     static REQUEST_CANCELLATION: Option<tokio_util::sync::CancellationToken>;
@@ -122,6 +124,32 @@ pub fn serialize_request_body_with_patch(
 
 // ─── HTTP response helpers ────────────────────────────────────────────────────
 
+pub(crate) async fn response_text_bounded(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+    context: &str,
+) -> Result<String, ProviderError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(ProviderError::Provider(format!(
+            "{context} exceeds the {max_bytes}-byte response limit"
+        )));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(ProviderError::Provider(format!(
+                "{context} exceeds the {max_bytes}-byte response limit"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body)
+        .map_err(|_| ProviderError::Provider(format!("{context} is not UTF-8 text")))
+}
+
 pub async fn parse_json_response_logged<T: DeserializeOwned>(
     provider_id: &str,
     adapter_kind: &str,
@@ -132,7 +160,12 @@ pub async fn parse_json_response_logged<T: DeserializeOwned>(
         ensure_response_content_type(provider_id, &response, "application/json")?;
         let status = response.status();
         let headers = response.headers().clone();
-        let body = response.text().await?;
+        let body = response_text_bounded(
+            response,
+            MAX_PROVIDER_JSON_RESPONSE_BYTES,
+            "provider JSON response",
+        )
+        .await?;
         adapter_log_http_response_text(
             provider_id,
             adapter_kind,
@@ -216,10 +249,13 @@ pub async fn http_status_error_from_response_logged(
 ) -> ProviderError {
     let status = response.status();
     let headers = response.headers().clone();
-    let raw_body = response
-        .text()
-        .await
-        .unwrap_or_else(|_| "<empty>".to_owned());
+    let raw_body = response_text_bounded(
+        response,
+        MAX_PROVIDER_ERROR_RESPONSE_BYTES,
+        "provider error response",
+    )
+    .await
+    .unwrap_or_else(|error| format!("<unavailable: {error}>"));
 
     adapter_log_http_response_text(
         provider_id,

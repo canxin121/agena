@@ -1,6 +1,6 @@
 //! Revision-safe Jupyter notebook cell editing.
 
-use std::io::Write;
+use std::io::{Read as _, Write};
 use std::path::{Path, PathBuf};
 
 use agena_macros::ToolInput;
@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub(crate) const NOTEBOOK_PLUGIN_ID: &str = "agena.notebook";
+const MAX_NOTEBOOK_BYTES: u64 = 32 * 1024 * 1024;
 
 pub(crate) struct NotebookPlugin;
 
@@ -103,7 +104,24 @@ impl NotebookPlugin {
                     "notebook.edit_cell requires an .ipynb file",
                 ));
             }
-            let original = std::fs::read(&path).map_err(io_error)?;
+            let file = std::fs::File::open(&path).map_err(io_error)?;
+            let mut original = Vec::with_capacity(
+                file.metadata()
+                    .ok()
+                    .and_then(|metadata| {
+                        usize::try_from(metadata.len().min(MAX_NOTEBOOK_BYTES)).ok()
+                    })
+                    .unwrap_or_default(),
+            );
+            file.take(MAX_NOTEBOOK_BYTES.saturating_add(1))
+                .read_to_end(&mut original)
+                .map_err(io_error)?;
+            if original.len() as u64 > MAX_NOTEBOOK_BYTES {
+                return Err(PluginError::invalid_params(format!(
+                    "notebook.edit_cell supports notebooks up to {} MiB",
+                    MAX_NOTEBOOK_BYTES / 1024 / 1024
+                )));
+            }
             let before_sha256 = sha256(original.as_slice());
             if !before_sha256.eq_ignore_ascii_case(input.expected_sha256.trim()) {
                 return Err(PluginError::invalid_params(format!(

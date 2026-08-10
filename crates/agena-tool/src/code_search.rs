@@ -5,8 +5,10 @@
 //! request validation, filesystem traversal, and stable result values.
 
 use std::{
-    fs,
+    fs::File,
+    io::Read as _,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use ast_grep_core::Pattern;
@@ -14,6 +16,12 @@ use ast_grep_language::{Language as AstGrepLanguage, LanguageExt, SupportLang};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tree_sitter::Parser;
+
+const MAX_DISCOVERY_ENTRIES: usize = 100_000;
+const MAX_STRUCTURAL_FILES: usize = 10_000;
+const MAX_SOURCE_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_STRUCTURAL_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_STRUCTURAL_DURATION: Duration = Duration::from_secs(20);
 
 pub const SUPPORTED_CODE_LANGUAGES: &str = "bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml";
 
@@ -184,6 +192,10 @@ pub struct SyntaxTreeRequest {
 pub struct StructuralSearchResult {
     pub language: String,
     pub scanned_files: usize,
+    pub skipped_files: usize,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncation_reason: Option<String>,
     pub matches: Vec<StructuralCodeMatch>,
 }
 
@@ -245,15 +257,39 @@ pub fn search_ast(
     let pattern = Pattern::try_new(request.pattern.as_str(), language)
         .map_err(|error| CodeSearchError::InvalidParameters(error.to_string()))?;
     let limit = request.limit.unwrap_or(20).clamp(1, 100) as usize;
-    let files = collect_language_files(&root, language);
-    let scanned_files = files.len();
+    let started_at = Instant::now();
+    let discovery = collect_language_files(&root, language, started_at);
+    let mut scanned_files = 0;
+    let mut skipped_files = discovery.skipped_entries;
+    let mut searched_bytes = 0_u64;
+    let mut truncation_reason = discovery.truncation_reason;
     let mut matches = Vec::new();
 
-    for path in files {
-        let source = fs::read_to_string(&path).map_err(|source| CodeSearchError::Read {
-            path: path.display().to_string(),
-            source,
-        })?;
+    for path in discovery.files {
+        if started_at.elapsed() >= MAX_STRUCTURAL_DURATION {
+            truncation_reason = Some(format!(
+                "structural search reached the {} second time limit",
+                MAX_STRUCTURAL_DURATION.as_secs()
+            ));
+            break;
+        }
+        let source = match read_source_bounded(&path) {
+            Ok(source) => source,
+            Err(_) if root.is_dir() => {
+                skipped_files += 1;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if searched_bytes.saturating_add(source.len() as u64) > MAX_STRUCTURAL_TOTAL_BYTES {
+            truncation_reason = Some(format!(
+                "structural search reached the {} MiB content budget",
+                MAX_STRUCTURAL_TOTAL_BYTES / 1024 / 1024
+            ));
+            break;
+        }
+        searched_bytes = searched_bytes.saturating_add(source.len() as u64);
+        scanned_files += 1;
         let ast = language.ast_grep(&source);
         for node in ast.root().find_all(pattern.clone()) {
             let start = node.start_pos();
@@ -278,6 +314,9 @@ pub fn search_ast(
     Ok(StructuralSearchResult {
         language: display_language(language).to_string(),
         scanned_files,
+        skipped_files,
+        truncated: truncation_reason.is_some(),
+        truncation_reason,
         matches,
     })
 }
@@ -288,10 +327,7 @@ pub fn syntax_tree(
 ) -> Result<SyntaxTreeResult, CodeSearchError> {
     let path = resolve_input_path(workspace_root, request.path.as_path());
     let language = resolve_code_language(&path, request.language, "syntax_tree")?;
-    let source = fs::read_to_string(&path).map_err(|source| CodeSearchError::Read {
-        path: path.display().to_string(),
-        source,
-    })?;
+    let source = read_source_bounded(&path)?;
     let mut parser = Parser::new();
     let parser_language: tree_sitter::Language = language.get_ts_language();
     parser
@@ -317,10 +353,15 @@ pub fn syntax_tree(
 }
 
 pub fn format_search_output(result: &StructuralSearchResult) -> String {
+    let boundary_note = result
+        .truncation_reason
+        .as_deref()
+        .map(|reason| format!("\nSearch truncated: {reason}."))
+        .unwrap_or_default();
     if result.matches.is_empty() {
         return format!(
-            "No AST matches found in {} {} file(s).",
-            result.scanned_files, result.language
+            "No AST matches found in {} {} file(s); {} file(s) skipped.{boundary_note}",
+            result.scanned_files, result.language, result.skipped_files
         );
     }
     let details = result
@@ -335,10 +376,11 @@ pub fn format_search_output(result: &StructuralSearchResult) -> String {
         .collect::<Vec<_>>()
         .join("\n\n");
     format!(
-        "Found {} AST match(es) across {} {} file(s).\n\n{details}",
+        "Found {} AST match(es) across {} {} file(s); {} file(s) skipped.{boundary_note}\n\n{details}",
         result.matches.len(),
         result.scanned_files,
-        result.language
+        result.language,
+        result.skipped_files
     )
 }
 
@@ -377,21 +419,122 @@ fn infer_support_lang(path: &Path) -> Option<SupportLang> {
     Some(language)
 }
 
-fn collect_language_files(path: &Path, language: SupportLang) -> Vec<PathBuf> {
+struct FileDiscovery {
+    files: Vec<PathBuf>,
+    skipped_entries: usize,
+    truncation_reason: Option<String>,
+}
+
+fn collect_language_files(
+    path: &Path,
+    language: SupportLang,
+    started_at: Instant,
+) -> FileDiscovery {
     if !path.is_dir() {
-        return vec![path.to_path_buf()];
+        return FileDiscovery {
+            files: vec![path.to_path_buf()],
+            skipped_entries: 0,
+            truncation_reason: None,
+        };
     }
-    let mut files = walkdir::WalkDir::new(path)
-        .into_iter()
-        .filter_map(Result::ok)
-        .map(|entry| entry.into_path())
-        .filter(|candidate| candidate.is_file())
-        .filter(|candidate| {
-            infer_support_lang(candidate).is_some_and(|detected| detected == language)
-        })
-        .collect::<Vec<_>>();
+    let mut builder = ignore::WalkBuilder::new(path);
+    builder
+        .follow_links(false)
+        .standard_filters(true)
+        .threads(1)
+        .filter_entry(|entry| {
+            entry.depth() == 0
+                || !entry.file_type().is_some_and(|kind| kind.is_dir())
+                || !matches!(
+                    entry.file_name().to_str(),
+                    Some(
+                        ".git"
+                            | ".hg"
+                            | ".svn"
+                            | ".agena"
+                            | ".cache"
+                            | "node_modules"
+                            | "target"
+                            | "dist"
+                            | "build"
+                    )
+                )
+        });
+    let mut files = Vec::new();
+    let mut skipped_entries = 0;
+    let mut truncation_reason = None;
+    for (entry_index, entry) in builder.build().enumerate() {
+        if entry_index >= MAX_DISCOVERY_ENTRIES {
+            truncation_reason = Some(format!(
+                "structural discovery reached the {MAX_DISCOVERY_ENTRIES} entry limit"
+            ));
+            break;
+        }
+        if started_at.elapsed() >= MAX_STRUCTURAL_DURATION {
+            truncation_reason = Some(format!(
+                "structural discovery reached the {} second time limit",
+                MAX_STRUCTURAL_DURATION.as_secs()
+            ));
+            break;
+        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                skipped_entries += 1;
+                continue;
+            }
+        };
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        if infer_support_lang(entry.path()).is_some_and(|detected| detected == language) {
+            files.push(entry.into_path());
+            if files.len() >= MAX_STRUCTURAL_FILES {
+                truncation_reason = Some(format!(
+                    "structural discovery reached the {MAX_STRUCTURAL_FILES} file limit"
+                ));
+                break;
+            }
+        }
+    }
     files.sort();
-    files
+    FileDiscovery {
+        files,
+        skipped_entries,
+        truncation_reason,
+    }
+}
+
+fn read_source_bounded(path: &Path) -> Result<String, CodeSearchError> {
+    let file = File::open(path).map_err(|source| CodeSearchError::Read {
+        path: path.display().to_string(),
+        source,
+    })?;
+    let mut bytes = Vec::with_capacity(
+        file.metadata()
+            .ok()
+            .and_then(|metadata| usize::try_from(metadata.len().min(MAX_SOURCE_FILE_BYTES)).ok())
+            .unwrap_or_default(),
+    );
+    file.take(MAX_SOURCE_FILE_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|source| CodeSearchError::Read {
+            path: path.display().to_string(),
+            source,
+        })?;
+    if bytes.len() as u64 > MAX_SOURCE_FILE_BYTES {
+        return Err(CodeSearchError::InvalidParameters(format!(
+            "source file exceeds the {} MiB structural-search limit: {}",
+            MAX_SOURCE_FILE_BYTES / 1024 / 1024,
+            path.display()
+        )));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        CodeSearchError::InvalidParameters(format!(
+            "source file is not UTF-8 text: {}",
+            path.display()
+        ))
+    })
 }
 
 fn display_path(workspace_root: &Path, path: &Path) -> String {
@@ -412,7 +555,7 @@ fn truncate_for_output(text: String, limit: usize) -> String {
     if trimmed.len() <= limit {
         return trimmed.to_string();
     }
-    format!("{}...", &trimmed[..limit])
+    format!("{}...", &trimmed[..trimmed.floor_char_boundary(limit)])
 }
 
 fn syntax_node_view(
@@ -452,21 +595,84 @@ fn syntax_node_view(
 
 #[cfg(test)]
 mod tests {
-    use super::{CodeLanguage, StructuralSearchResult, format_search_output};
+    use super::{
+        CodeLanguage, StructuralSearchRequest, StructuralSearchResult, SyntaxTreeRequest,
+        format_search_output, search_ast, syntax_tree, truncate_for_output,
+    };
 
     #[test]
     fn search_output_is_stable_when_no_match_is_present() {
         let text = format_search_output(&StructuralSearchResult {
             language: "rust".to_string(),
             scanned_files: 3,
+            skipped_files: 0,
+            truncated: false,
+            truncation_reason: None,
             matches: Vec::new(),
         });
-        assert_eq!(text, "No AST matches found in 3 rust file(s).");
+        assert_eq!(
+            text,
+            "No AST matches found in 3 rust file(s); 0 file(s) skipped."
+        );
     }
 
     #[test]
     fn language_wire_aliases_remain_supported() {
         let language: CodeLanguage = serde_json::from_str("\"rs\"").expect("language alias");
         assert_eq!(language, CodeLanguage::Rust);
+    }
+
+    #[test]
+    fn directory_search_uses_ignore_rules_and_skips_generated_trees() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        std::fs::create_dir_all(workspace.path().join("src")).expect("source dir");
+        std::fs::create_dir_all(workspace.path().join("target/debug")).expect("target dir");
+        std::fs::write(
+            workspace.path().join("src/lib.rs"),
+            "fn visible() { println!(\"yes\"); }\n",
+        )
+        .expect("source file");
+        std::fs::write(
+            workspace.path().join("target/debug/generated.rs"),
+            "fn generated() { println!(\"no\"); }\n",
+        )
+        .expect("generated file");
+
+        let result = search_ast(
+            workspace.path(),
+            StructuralSearchRequest {
+                path: workspace.path().to_path_buf(),
+                pattern: "fn $NAME() { $$$ }".to_owned(),
+                language: Some(CodeLanguage::Rust),
+                limit: Some(20),
+            },
+        )
+        .expect("bounded structural search");
+        assert_eq!(result.scanned_files, 1);
+        assert_eq!(result.matches.len(), 1);
+        assert!(result.matches[0].path.ends_with("src/lib.rs"));
+    }
+
+    #[test]
+    fn syntax_tree_rejects_sparse_oversized_sources_before_allocation() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let source = workspace.path().join("oversized.rs");
+        let file = std::fs::File::create(&source).expect("source file");
+        file.set_len(9 * 1024 * 1024).expect("sparse source");
+        let error = syntax_tree(
+            workspace.path(),
+            SyntaxTreeRequest {
+                path: source,
+                language: Some(CodeLanguage::Rust),
+                max_depth: None,
+            },
+        )
+        .expect_err("oversized source must be rejected");
+        assert!(error.to_string().contains("8 MiB"));
+    }
+
+    #[test]
+    fn output_truncation_preserves_utf8_boundaries() {
+        assert_eq!(truncate_for_output("你好世界".to_owned(), 5), "你...");
     }
 }

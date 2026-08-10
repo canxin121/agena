@@ -1,5 +1,34 @@
 use futures_util::StreamExt;
 
+const MAX_MODEL_CATALOG_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+
+async fn response_text_bounded(
+    response: reqwest::Response,
+) -> Result<String, ModelCatalogHttpError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_MODEL_CATALOG_SOURCE_BYTES as u64)
+    {
+        return Err(ModelCatalogHttpError::Source(
+            "model catalog source exceeds the 8 MiB limit".to_owned(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if bytes.len().saturating_add(chunk.len()) > MAX_MODEL_CATALOG_SOURCE_BYTES {
+            return Err(ModelCatalogHttpError::Source(
+                "model catalog source exceeds the 8 MiB limit".to_owned(),
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        ModelCatalogHttpError::Source("model catalog source is not UTF-8 text".to_owned())
+    })
+}
+
 pub(crate) async fn fetch_source_document(
     client: &reqwest::Client,
     source: &ModelCatalogRemoteSource,
@@ -26,7 +55,7 @@ async fn fetch_and_parse_source_document(
     url: &str,
 ) -> Result<ModelCatalogDocument, ModelCatalogHttpError> {
     let response = client.get(url).send().await?.error_for_status()?;
-    let body = response.text().await?;
+    let body = response_text_bounded(response).await?;
     match kind {
         ModelCatalogRemoteSourceKind::ModelsDev => parse_models_dev_document(body.as_str()),
         ModelCatalogRemoteSourceKind::OpenAiCodexModels => {
@@ -641,7 +670,7 @@ async fn fetch_official_html_reference_page_document(
         match client.get(&url).send().await {
             Ok(response) => match response.error_for_status() {
                 Ok(response) => {
-                    let body = response.text().await?;
+                    let body = response_text_bounded(response).await?;
                     return Ok(parse_official_html_reference_page_document(
                         page.title.as_str(),
                         page.slug.as_str(),

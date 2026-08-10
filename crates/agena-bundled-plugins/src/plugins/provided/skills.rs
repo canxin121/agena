@@ -20,7 +20,7 @@ use agena_skills::discovery::{
     DiscoveryDiagnostic, default_command_roots, default_roots, scan_commands_with_diagnostics,
     scan_with_diagnostics,
 };
-use agena_skills::skill::{Skill, SkillFrontmatter};
+use agena_skills::skill::{MAX_SKILL_DOCUMENT_BYTES, Skill, SkillFrontmatter, read_skill_document};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -633,8 +633,6 @@ struct DefinitionCatalogSnapshot {
 /// is coalesced by the operating system.
 const DEFINITION_CATALOG_CACHE_TTL: Duration = Duration::from_millis(250);
 
-const MAX_SKILL_DOCUMENT_BYTES: usize = 1_048_576;
-
 #[derive(Debug)]
 struct SkillWriteResult {
     name: String,
@@ -1040,8 +1038,8 @@ impl SkillsPlugin {
                 "workspace-managed Skill resolves outside the workspace",
             ));
         }
-        let document = std::fs::read_to_string(&canonical_path).map_err(skill_write_error)?;
-        enforce_skill_document_size(document.as_str())?;
+        let document = read_skill_document(&canonical_path)
+            .map_err(|error| PluginError::invalid_params(error.to_string()))?;
         Ok((document, canonical_path))
     }
 
@@ -1693,7 +1691,8 @@ impl SkillsPlugin {
             let summary = Self::tool_description(discovered_tool);
             let body = discovered_tool.skill.body.trim();
             let document = match discovered_tool.skill.source_path.as_ref() {
-                Some(path) => std::fs::read_to_string(path).map_err(skill_write_error)?,
+                Some(path) => read_skill_document(path)
+                    .map_err(|error| PluginError::invalid_params(error.to_string()))?,
                 None => format_skill_document(&discovered_tool.skill),
             };
             enforce_skill_document_size(document.as_str())?;

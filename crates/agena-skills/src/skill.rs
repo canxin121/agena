@@ -1,11 +1,18 @@
 //! Parsed skill model (frontmatter + body).
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{SkillError, SkillResult};
+
+pub const MAX_SKILL_DOCUMENT_BYTES: usize = 1_048_576;
+
+pub fn read_skill_document(path: impl AsRef<Path>) -> SkillResult<String> {
+    read_text_file_bounded(path.as_ref(), MAX_SKILL_DOCUMENT_BYTES)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -47,7 +54,7 @@ impl Skill {
     /// Parse a SKILL.md from disk.
     pub fn from_path(path: impl AsRef<Path>) -> SkillResult<Self> {
         let path = path.as_ref();
-        let raw = std::fs::read_to_string(path)?;
+        let raw = read_skill_document(path)?;
         let mut skill = Self::from_raw(&raw)?;
         skill.source_path = Some(path.to_path_buf());
         Ok(skill)
@@ -56,7 +63,7 @@ impl Skill {
     /// Parse a user command markdown file from disk.
     pub fn from_command_path(path: impl AsRef<Path>) -> SkillResult<Self> {
         let path = path.as_ref();
-        let raw = std::fs::read_to_string(path)?;
+        let raw = read_skill_document(path)?;
         let default_name = path.file_stem().and_then(|name| name.to_str());
         let mut skill = Self::from_raw_with_default_name(&raw, default_name)?;
         skill.source_path = Some(path.to_path_buf());
@@ -150,17 +157,36 @@ impl Skill {
                 relative.display().to_string(),
             ));
         }
-        let metadata = canonical_candidate.metadata()?;
-        if metadata.len() > max_bytes as u64 {
-            return Err(SkillError::ResourceTooLarge {
+        read_text_file_bounded(&canonical_candidate, max_bytes).map_err(|error| match error {
+            SkillError::ResourceTooLarge { limit, .. } => SkillError::ResourceTooLarge {
                 path: relative.display().to_string(),
-                limit: max_bytes,
-            });
-        }
-        let bytes = std::fs::read(&canonical_candidate)?;
-        String::from_utf8(bytes)
-            .map_err(|_| SkillError::ResourceNotText(relative.display().to_string()))
+                limit,
+            },
+            SkillError::ResourceNotText(_) => {
+                SkillError::ResourceNotText(relative.display().to_string())
+            }
+            other => other,
+        })
     }
+}
+
+fn read_text_file_bounded(path: &Path, max_bytes: usize) -> SkillResult<String> {
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::with_capacity(
+        file.metadata()
+            .ok()
+            .and_then(|metadata| usize::try_from(metadata.len().min(max_bytes as u64)).ok())
+            .unwrap_or_default(),
+    );
+    file.take((max_bytes as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        return Err(SkillError::ResourceTooLarge {
+            path: path.display().to_string(),
+            limit: max_bytes,
+        });
+    }
+    String::from_utf8(bytes).map_err(|_| SkillError::ResourceNotText(path.display().to_string()))
 }
 
 #[cfg(test)]

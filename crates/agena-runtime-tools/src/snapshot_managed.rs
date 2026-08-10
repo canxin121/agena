@@ -1,15 +1,18 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::Command,
+    time::Duration,
 };
 
 use agena_tool::SnapshotBackend;
 
 use crate::{
-    SnapshotRegistry, SnapshotSession, snapshot_managed_dir, snapshot_rift_binary,
-    snapshot_rift_database_path,
+    SnapshotRegistry, SnapshotSession, bounded_process::command_output, snapshot_managed_dir,
+    snapshot_rift_binary, snapshot_rift_database_path,
 };
+
+const SNAPSHOT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// One managed snapshot directory, joined with its active-session and backend state.
 #[derive(Debug, Clone)]
@@ -135,12 +138,12 @@ fn scan_git_backend_paths(workspace: &Path) -> HashSet<PathBuf> {
         .collect()
 }
 
-fn git(cwd: &Path, args: &[&str]) -> Result<Output, String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .map_err(|error| format!("git {args:?}: {error}"))?;
+fn git(cwd: &Path, args: &[&str]) -> Result<process_control::Output, String> {
+    let output = command_output(
+        Command::new("git").args(args).current_dir(cwd),
+        SNAPSHOT_INSPECTION_TIMEOUT,
+    )
+    .map_err(|error| format!("git {args:?}: {error}"))?;
     if output.status.success() {
         Ok(output)
     } else {
@@ -151,14 +154,16 @@ fn git(cwd: &Path, args: &[&str]) -> Result<Output, String> {
     }
 }
 
-fn rift(cwd: &Path, db_path: &Path, args: &[&str]) -> Result<Output, String> {
-    let output = Command::new(snapshot_rift_binary())
-        .arg("--database")
-        .arg(db_path)
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .map_err(|error| format!("rift {args:?}: {error}"))?;
+fn rift(cwd: &Path, db_path: &Path, args: &[&str]) -> Result<process_control::Output, String> {
+    let output = command_output(
+        Command::new(snapshot_rift_binary())
+            .arg("--database")
+            .arg(db_path)
+            .args(args)
+            .current_dir(cwd),
+        SNAPSHOT_INSPECTION_TIMEOUT,
+    )
+    .map_err(|error| format!("rift {args:?}: {error}"))?;
     if output.status.success() {
         return Ok(output);
     }

@@ -77,7 +77,23 @@ pub async fn fetch_page_with_spider(
         .with_request_timeout(Some(options.timeout))
         .with_respect_robots_txt(options.respect_robots_txt)
         .with_user_agent(Some(options.user_agent.as_str()));
-    configure_browser(&mut website, &options.browser)?;
+    let browser_connection = if options.browser.enabled {
+        let local_browser = options.browser.local_browser.clone();
+        Some(
+            tokio::task::spawn_blocking(move || local_browser_endpoint(&local_browser))
+                .await
+                .map_err(|error| {
+                    CrawlError::InvalidInput(format!("browser launcher worker failed: {error}"))
+                })??,
+        )
+    } else {
+        None
+    };
+    configure_browser(
+        &mut website,
+        &options.browser,
+        browser_connection.as_deref(),
+    );
     let mut website = website
         .build()
         .map_err(|_| CrawlError::InvalidInput(format!("invalid crawl url '{}'", url)))?;
@@ -142,12 +158,14 @@ fn page_from_spider_page(
 fn configure_browser(
     website: &mut Website,
     options: &BrowserRenderOptions,
-) -> Result<(), CrawlError> {
+    connection_url: Option<&str>,
+) {
     if !options.enabled {
-        return Ok(());
+        return;
     }
-    let connection_url = local_browser_endpoint(&options.local_browser)?;
-    website.with_chrome_connection(Some(connection_url));
+    // The endpoint is launched on a blocking worker before this synchronous
+    // website builder is configured.
+    website.with_chrome_connection(connection_url.map(str::to_owned));
     if options.wait_for_network_idle {
         website
             .with_wait_for_idle_network0(Some(WaitForIdleNetwork::new(Some(options.wait_timeout))));
@@ -161,5 +179,4 @@ fn configure_browser(
     if let Some(delay) = options.delay {
         website.with_wait_for_delay(Some(WaitForDelay::new(Some(delay))));
     }
-    Ok(())
 }

@@ -1,8 +1,10 @@
-use std::{io::ErrorKind, path::Path, process::Command};
+use std::{io::ErrorKind, path::Path, process::Command, time::Duration};
 
 use agena_tool::{SnapshotBackend, SnapshotBackendCapabilities, SnapshotBackendSupport};
 
-use crate::snapshot_rift_binary;
+use crate::{bounded_process::command_output, snapshot_rift_binary};
+
+const SNAPSHOT_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Detect which managed-snapshot backends are usable for a workspace.
 pub fn snapshot_backend_capabilities(workspace: &Path) -> SnapshotBackendCapabilities {
@@ -31,11 +33,12 @@ fn probe_git_backend(workspace: &Path) -> SnapshotBackendSupport {
         };
     }
 
-    let output = match Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(workspace)
-        .output()
-    {
+    let output = match command_output(
+        Command::new("git")
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .current_dir(workspace),
+        SNAPSHOT_PROBE_TIMEOUT,
+    ) {
         Ok(output) => output,
         Err(error) => {
             return SnapshotBackendSupport {
@@ -92,7 +95,7 @@ fn probe_rift_backend() -> SnapshotBackendSupport {
 }
 
 fn probe_command_presence(command: &str, args: &[&str], label: &str) -> Result<(), String> {
-    match Command::new(command).args(args).output() {
+    match command_output(Command::new(command).args(args), SNAPSHOT_PROBE_TIMEOUT) {
         Ok(_) => Ok(()),
         Err(error) if error.kind() == ErrorKind::NotFound => {
             Err(format!("{label} `{command}` was not found on PATH"))

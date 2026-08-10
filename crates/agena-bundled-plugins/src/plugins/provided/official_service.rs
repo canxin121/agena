@@ -20,9 +20,14 @@ use agena_provider::{
     PROVIDER_TOOL_USAGE_METADATA_KEY, estimate_completion_usage_cost_usd,
 };
 use base64::Engine as _;
+use futures_util::StreamExt as _;
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt as _;
 
 const MAX_IMAGE_BYTES: usize = 50 * 1024 * 1024;
+const MAX_IMAGE_BASE64_BYTES: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4 + 4;
+const MAX_PROVIDER_RESPONSE_BYTES: usize = 96 * 1024 * 1024;
+pub(crate) const MAX_PROVIDER_IMAGE_INPUT_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 32 * 1024;
 const MAX_PENDING_CALLS: usize = 128;
 const MAX_SOURCES: usize = 100;
@@ -115,6 +120,132 @@ pub(crate) async fn authorize_network(_host: &Arc<dyn HostClient>, url: &str) ->
     Ok(())
 }
 
+/// Read one provider image without allowing a request containing several
+/// paths to allocate an unbounded amount of memory. The metadata check gives
+/// a fast rejection; the `take` boundary also closes the race where a file
+/// grows after it was statted.
+pub(crate) async fn read_image_input_bounded(
+    path: &Path,
+    total_bytes: &mut u64,
+    provider: &str,
+) -> SdkResult<Vec<u8>> {
+    let metadata = tokio::fs::metadata(path).await.map_err(|error| {
+        PluginError::internal(format!(
+            "cannot stat {provider} image '{}': {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(PluginError::invalid_params(format!(
+            "{provider} image is not a regular file: {}",
+            path.display()
+        )));
+    }
+    if metadata.len() == 0 {
+        return Err(PluginError::invalid_params(format!(
+            "{provider} image is empty: {}",
+            path.display()
+        )));
+    }
+    if metadata.len() > MAX_PROVIDER_IMAGE_INPUT_BYTES
+        || total_bytes.saturating_add(metadata.len()) > MAX_PROVIDER_IMAGE_INPUT_BYTES
+    {
+        return Err(PluginError::invalid_params(format!(
+            "{provider} image inputs exceed the {} MiB request limit",
+            MAX_PROVIDER_IMAGE_INPUT_BYTES / 1024 / 1024
+        )));
+    }
+
+    let file = tokio::fs::File::open(path).await.map_err(|error| {
+        PluginError::internal(format!(
+            "cannot read {provider} image '{}': {error}",
+            path.display()
+        ))
+    })?;
+    let remaining = MAX_PROVIDER_IMAGE_INPUT_BYTES.saturating_sub(*total_bytes);
+    let mut bytes =
+        Vec::with_capacity(usize::try_from(metadata.len().min(remaining)).unwrap_or_default());
+    file.take(remaining.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|error| {
+            PluginError::internal(format!(
+                "cannot read {provider} image '{}': {error}",
+                path.display()
+            ))
+        })?;
+    if bytes.is_empty() {
+        return Err(PluginError::invalid_params(format!(
+            "{provider} image is empty: {}",
+            path.display()
+        )));
+    }
+    if bytes.len() as u64 > remaining {
+        return Err(PluginError::invalid_params(format!(
+            "{provider} image inputs exceed the {} MiB request limit",
+            MAX_PROVIDER_IMAGE_INPUT_BYTES / 1024 / 1024
+        )));
+    }
+    *total_bytes = total_bytes.saturating_add(bytes.len() as u64);
+    Ok(bytes)
+}
+
+pub(crate) async fn read_json_response_bounded(
+    response: reqwest::Response,
+    provider: &str,
+    operation: &str,
+) -> SdkResult<(reqwest::StatusCode, Option<String>, serde_json::Value)> {
+    let status = response.status();
+    let request_id = [
+        "x-request-id",
+        "request-id",
+        "anthropic-request-id",
+        "x-goog-request-id",
+    ]
+    .into_iter()
+    .find_map(|name| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    });
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_PROVIDER_RESPONSE_BYTES as u64)
+    {
+        return Err(PluginError::internal(format!(
+            "{provider} {operation} response exceeds the {} MiB limit",
+            MAX_PROVIDER_RESPONSE_BYTES / 1024 / 1024
+        )));
+    }
+
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| {
+            PluginError::internal(format!(
+                "cannot read {provider} {operation} response: {error}"
+            ))
+        })?;
+        if bytes.len().saturating_add(chunk.len()) > MAX_PROVIDER_RESPONSE_BYTES {
+            return Err(PluginError::internal(format!(
+                "{provider} {operation} response exceeds the {} MiB limit",
+                MAX_PROVIDER_RESPONSE_BYTES / 1024 / 1024
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let value = serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| {
+        let preview = String::from_utf8_lossy(&bytes);
+        PluginError::internal(format!(
+            "{provider} {operation} returned invalid JSON: {error}; body={}",
+            truncate_text(preview.as_ref(), 2048)
+        ))
+    })?;
+    Ok((status, request_id, value))
+}
+
 pub(crate) fn merge_object_options(
     base: serde_json::Value,
     extra: &BTreeMap<String, serde_json::Value>,
@@ -159,33 +290,8 @@ pub(crate) async fn post_json(
     let response = request.send().await.map_err(|error| {
         PluginError::internal(format!("{provider} {operation} request failed: {error}"))
     })?;
-    let status = response.status();
-    let request_id = [
-        "x-request-id",
-        "request-id",
-        "anthropic-request-id",
-        "x-goog-request-id",
-    ]
-    .into_iter()
-    .find_map(|name| {
-        response
-            .headers()
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned)
-    });
-    let bytes = response.bytes().await.map_err(|error| {
-        PluginError::internal(format!(
-            "cannot read {provider} {operation} response: {error}"
-        ))
-    })?;
-    let value = serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| {
-        let preview = String::from_utf8_lossy(&bytes);
-        PluginError::internal(format!(
-            "{provider} {operation} returned invalid JSON: {error}; body={}",
-            truncate_text(preview.as_ref(), 2048)
-        ))
-    })?;
+    let (status, request_id, value) =
+        read_json_response_bounded(response, provider, operation).await?;
     if !status.is_success() {
         let message = value
             .pointer("/error/message")
@@ -1110,6 +1216,9 @@ async fn persist_images(
             .map(|(_, data)| data)
             .unwrap_or(candidate.encoded.as_str())
             .trim();
+        if encoded.len() > MAX_IMAGE_BASE64_BYTES {
+            continue;
+        }
         let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
             continue;
         };
@@ -1282,5 +1391,45 @@ fn extension_for_mime(mime: &str) -> &'static str {
         "image/webp" => "webp",
         "image/gif" => "gif",
         _ => "png",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_PROVIDER_IMAGE_INPUT_BYTES, read_image_input_bounded};
+
+    #[tokio::test]
+    async fn oversized_sparse_image_input_is_rejected_before_full_read() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let path = workspace.path().join("oversized.png");
+        let file = std::fs::File::create(&path).expect("image file");
+        file.set_len(MAX_PROVIDER_IMAGE_INPUT_BYTES + 1)
+            .expect("sparse image");
+        let mut total = 0;
+        let error = read_image_input_bounded(&path, &mut total, "fixture")
+            .await
+            .expect_err("oversized image must be rejected");
+        assert!(error.to_string().contains("50 MiB"));
+        assert_eq!(total, 0);
+    }
+
+    #[tokio::test]
+    async fn multiple_image_inputs_share_one_request_budget() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let first = workspace.path().join("first.png");
+        let second = workspace.path().join("second.png");
+        std::fs::write(&first, b"first").expect("first image");
+        let file = std::fs::File::create(&second).expect("second image");
+        file.set_len(MAX_PROVIDER_IMAGE_INPUT_BYTES)
+            .expect("sparse second image");
+        let mut total = 0;
+        let first_bytes = read_image_input_bounded(&first, &mut total, "fixture")
+            .await
+            .expect("first image");
+        assert_eq!(first_bytes, b"first");
+        let error = read_image_input_bounded(&second, &mut total, "fixture")
+            .await
+            .expect_err("combined request budget must be enforced");
+        assert!(error.to_string().contains("50 MiB"));
     }
 }

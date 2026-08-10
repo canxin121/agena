@@ -16,7 +16,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "io-util", "process", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
-reqwest = { workspace = true, features = ["json", "rustls"] }
+reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true }
 regex = { workspace = true }

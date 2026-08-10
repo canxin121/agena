@@ -144,29 +144,14 @@ pub(super) async fn execute_async(
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS)),
     };
-    let worker_executor = executor.clone();
-    let worker_request = request.clone();
-    let worker_command = final_command.clone();
     let session_id = context.session_id;
     let call_id = context.call_id;
-    let worker_permit = super::shell::acquire_worker_permit()
+    let _worker_permit = super::shell::acquire_worker_permit()
         .await
         .ok_or_else(|| ToolError::plugin("shell worker pool is unavailable".to_string()))?;
-    let execution = tokio::task::spawn_blocking(move || {
-        let _worker_permit = worker_permit;
-        worker_executor.execute_shell_command(
-            &worker_request,
-            worker_command.as_str(),
-            session_id,
-            call_id,
-        )
-    })
-    .await
-    .map_err(|error| {
-        ToolError::plugin(format!(
-            "shell process worker failed before completion: {error}"
-        ))
-    })??;
+    let execution = executor
+        .execute_shell_command(&request, final_command.as_str(), session_id, call_id)
+        .await?;
     executor.ensure_not_cancelled()?;
 
     let hook_input = CommandAfterInput {

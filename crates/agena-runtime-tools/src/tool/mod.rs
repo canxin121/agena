@@ -6,6 +6,7 @@ pub(crate) mod bash;
 pub(crate) mod builtin_tools;
 pub(crate) mod cron;
 pub mod definition;
+mod discovery;
 mod executor;
 pub(crate) mod file_attachment;
 pub(crate) mod glob;

@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use super::official_service::{
     ProviderHttpResponse, ProviderUsageKind, append_prompt_to_items, configured_model, endpoint,
-    env_secret, merge_object_options, post_json, provider_output, resolve_local_path,
-    stable_cache_key,
+    env_secret, merge_object_options, post_json, provider_output, read_image_input_bounded,
+    read_json_response_bounded, resolve_local_path, stable_cache_key,
 };
 
 pub(crate) const CHATGPT_PLUGIN_ID: &str = "agena.chatgpt";
@@ -624,11 +624,10 @@ impl ChatGptToolsPlugin {
                 },
             );
         }
+        let mut image_input_bytes = 0_u64;
         for source in input.images {
             let path = resolve_local_path(self.workspace_root()?, source.as_str())?;
-            let bytes = tokio::fs::read(&path).await.map_err(|error| {
-                PluginError::internal(format!("cannot read image '{}': {error}", path.display()))
-            })?;
+            let bytes = read_image_input_bounded(&path, &mut image_input_bytes, "OpenAI").await?;
             let filename = path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -668,15 +667,8 @@ impl ChatGptToolsPlugin {
             .send()
             .await
             .map_err(|error| PluginError::internal(format!("OpenAI image edit failed: {error}")))?;
-        let status = response.status();
-        let request_id = response
-            .headers()
-            .get("x-request-id")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let value: serde_json::Value = response.json().await.map_err(|error| {
-            PluginError::internal(format!("OpenAI image edit returned invalid JSON: {error}"))
-        })?;
+        let (status, request_id, value) =
+            read_json_response_bounded(response, "OpenAI", "image edit").await?;
         if !status.is_success() {
             return Err(PluginError::internal(format!(
                 "OpenAI image edit failed (HTTP {status}): {value}"

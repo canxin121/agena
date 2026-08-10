@@ -13,12 +13,15 @@ use agena_lsp::lsp_types::{
     Diagnostic, DiagnosticSeverity, GotoDefinitionResponse, Hover, HoverContents, Location,
     MarkedString, Position, Range, Uri,
 };
+use tokio::io::AsyncReadExt as _;
 
 use crate::part::{
     LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
 };
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
+
+const MAX_LSP_DOCUMENT_BYTES: u64 = 16 * 1024 * 1024;
 
 pub(super) async fn execute_definition_async(
     executor: &ToolExecutor,
@@ -290,12 +293,32 @@ async fn sync_document(
     path: &Path,
     uri: &Uri,
 ) -> Result<agena_lsp::DocumentSyncStatus, agena_lsp::LspError> {
-    let text = match tokio::fs::read_to_string(path).await {
-        Ok(t) => t,
+    let file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
         // Unreadable file: let the server keep whatever it had. There is no
         // new document version to wait for before issuing navigation.
         Err(_) => return Ok(agena_lsp::DocumentSyncStatus::Unchanged),
     };
+    let mut bytes = Vec::with_capacity(
+        file.metadata()
+            .await
+            .ok()
+            .and_then(|metadata| usize::try_from(metadata.len().min(MAX_LSP_DOCUMENT_BYTES)).ok())
+            .unwrap_or_default(),
+    );
+    file.take(MAX_LSP_DOCUMENT_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .await?;
+    if bytes.len() as u64 > MAX_LSP_DOCUMENT_BYTES {
+        return Err(agena_lsp::LspError::Protocol(format!(
+            "document exceeds the {} MiB LSP synchronization limit: {}",
+            MAX_LSP_DOCUMENT_BYTES / 1024 / 1024,
+            path.display()
+        )));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| {
+        agena_lsp::LspError::Protocol(format!("document is not UTF-8 text: {}", path.display()))
+    })?;
     let language_id = language_id_for_path(path);
     client
         .sync_document_with_status(uri.clone(), text, &language_id)

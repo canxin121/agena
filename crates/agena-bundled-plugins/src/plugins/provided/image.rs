@@ -7,6 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
@@ -20,11 +21,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::official_service::{read_image_input_bounded, read_json_response_bounded};
+
 pub(crate) const OPENAI_PLUGIN_ID: &str = "agena.openai";
+const MAX_IMAGE_BYTES: usize = 50 * 1024 * 1024;
 
 pub(crate) struct OpenAiToolsPlugin {
     workspace_root: OnceLock<PathBuf>,
     config: OnceLock<OpenAiToolsConfig>,
+    client: OnceLock<reqwest::Client>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -35,6 +40,7 @@ struct OpenAiToolsConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     responses_model: Option<String>,
     image_model: String,
+    timeout_secs: u64,
 }
 
 impl Default for OpenAiToolsConfig {
@@ -44,6 +50,7 @@ impl Default for OpenAiToolsConfig {
             api_key_env: "OPENAI_API_KEY".to_owned(),
             responses_model: None,
             image_model: "gpt-image-1".to_owned(),
+            timeout_secs: 180,
         }
     }
 }
@@ -141,6 +148,7 @@ impl OpenAiToolsPlugin {
         Self {
             workspace_root: OnceLock::new(),
             config: OnceLock::new(),
+            client: OnceLock::new(),
         }
     }
 
@@ -153,6 +161,12 @@ impl OpenAiToolsPlugin {
 
     fn config(&self) -> SdkResult<&OpenAiToolsConfig> {
         self.config
+            .get()
+            .ok_or_else(|| PluginError::internal("OpenAI tools plugin invoked before init"))
+    }
+
+    fn client(&self) -> SdkResult<&reqwest::Client> {
+        self.client
             .get()
             .ok_or_else(|| PluginError::internal("OpenAI tools plugin invoked before init"))
     }
@@ -239,12 +253,17 @@ impl OpenAiToolsPlugin {
                     .unwrap_or("OpenAI image response did not contain data[0].b64_json");
                 PluginError::internal(message)
             })?;
+        const MAX_IMAGE_BASE64_BYTES: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4 + 4;
+        if encoded.len() > MAX_IMAGE_BASE64_BYTES {
+            return Err(PluginError::internal(
+                "OpenAI image exceeds the 50 MiB artifact limit",
+            ));
+        }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded)
             .map_err(|error| {
                 PluginError::internal(format!("invalid OpenAI image data: {error}"))
             })?;
-        const MAX_IMAGE_BYTES: usize = 50 * 1024 * 1024;
         if bytes.len() > MAX_IMAGE_BYTES {
             return Err(PluginError::internal(
                 "OpenAI image exceeds the 50 MiB artifact limit",
@@ -324,11 +343,20 @@ impl OpenAiToolsPlugin {
                 ctx.config,
                 "invalid OpenAI tools plugin config",
             )?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(config.timeout_secs.max(1)))
+            .build()
+            .map_err(|error| {
+                PluginError::internal(format!("cannot create OpenAI HTTP client: {error}"))
+            })?;
         self.workspace_root
             .set(ctx.workspace_root)
             .map_err(|_| PluginError::internal("OpenAI tools plugin initialized more than once"))?;
         self.config
             .set(config)
+            .map_err(|_| PluginError::internal("OpenAI tools plugin initialized more than once"))?;
+        self.client
+            .set(client)
             .map_err(|_| PluginError::internal("OpenAI tools plugin initialized more than once"))?;
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
@@ -346,7 +374,8 @@ impl OpenAiToolsPlugin {
     async fn web_search(&self, input: OpenAiWebSearchInput) -> SdkResult<ToolInvokeOutput> {
         let url = self.endpoint("responses")?;
         let model = self.responses_model(input.model)?;
-        let response = reqwest::Client::new()
+        let response = self
+            .client()?
             .post(url.as_str())
             .bearer_auth(self.api_key()?)
             .json(&serde_json::json!({
@@ -360,10 +389,8 @@ impl OpenAiToolsPlugin {
             .map_err(|error| {
                 PluginError::internal(format!("OpenAI web search request failed: {error}"))
             })?;
-        let status = response.status();
-        let value: serde_json::Value = response.json().await.map_err(|error| {
-            PluginError::internal(format!("OpenAI web search returned invalid JSON: {error}"))
-        })?;
+        let (status, _request_id, value) =
+            read_json_response_bounded(response, "OpenAI", "web search").await?;
         if !status.is_success() {
             let message = value
                 .pointer("/error/message")
@@ -406,7 +433,8 @@ impl OpenAiToolsPlugin {
             "output_format": "png"
         });
         apply_image_options_to_json(&mut body, &input.options)?;
-        let response = reqwest::Client::new()
+        let response = self
+            .client()?
             .post(url.as_str())
             .bearer_auth(self.api_key()?)
             .json(&body)
@@ -415,12 +443,8 @@ impl OpenAiToolsPlugin {
             .map_err(|error| {
                 PluginError::internal(format!("OpenAI image request failed: {error}"))
             })?;
-        let status = response.status();
-        let value: serde_json::Value = response.json().await.map_err(|error| {
-            PluginError::internal(format!(
-                "OpenAI image generation returned invalid JSON: {error}"
-            ))
-        })?;
+        let (status, _request_id, value) =
+            read_json_response_bounded(response, "OpenAI", "image generation").await?;
         if !status.is_success() {
             return Err(openai_api_error("image generation", status, &value));
         }
@@ -448,11 +472,10 @@ impl OpenAiToolsPlugin {
             .text("prompt", input.prompt)
             .text("output_format", "png");
         form = apply_image_options_to_form(form, &input.options)?;
+        let mut image_input_bytes = 0_u64;
         for source in input.images {
             let path = self.resolve_input_path(source.as_str())?;
-            let bytes = tokio::fs::read(&path).await.map_err(|error| {
-                PluginError::internal(format!("cannot read image '{}': {error}", path.display()))
-            })?;
+            let bytes = read_image_input_bounded(&path, &mut image_input_bytes, "OpenAI").await?;
             let filename = path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -465,17 +488,16 @@ impl OpenAiToolsPlugin {
                 .map_err(|error| PluginError::internal(format!("invalid image MIME: {error}")))?;
             form = form.part("image[]", part);
         }
-        let response = reqwest::Client::new()
+        let response = self
+            .client()?
             .post(url.as_str())
             .bearer_auth(self.api_key()?)
             .multipart(form)
             .send()
             .await
             .map_err(|error| PluginError::internal(format!("OpenAI image edit failed: {error}")))?;
-        let status = response.status();
-        let value: serde_json::Value = response.json().await.map_err(|error| {
-            PluginError::internal(format!("OpenAI image edit returned invalid JSON: {error}"))
-        })?;
+        let (status, _request_id, value) =
+            read_json_response_bounded(response, "OpenAI", "image edit").await?;
         if !status.is_success() {
             return Err(openai_api_error("image edit", status, &value));
         }

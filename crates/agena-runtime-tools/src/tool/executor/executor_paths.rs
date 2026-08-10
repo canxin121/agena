@@ -39,7 +39,7 @@ impl ToolExecutor {
         canonicalize_path_for_execution(&workspace_root.join(candidate))
     }
 
-    pub(crate) fn execute_shell_command(
+    pub(crate) async fn execute_shell_command(
         &self,
         request: &ShellRequest,
         command_text: &str,
@@ -47,7 +47,7 @@ impl ToolExecutor {
         call_id: Option<i64>,
     ) -> Result<ShellOutput, ToolError> {
         let Some(sink) = self.command_event_sink.clone() else {
-            return match shell::execute(request, self.cancellation_token()) {
+            return match shell::execute(request, self.cancellation_token()).await {
                 Err(agena_tool::ShellError::Cancelled) => Err(ToolError::Cancelled),
                 result => result.map_err(ToolError::from),
             };
@@ -72,14 +72,14 @@ impl ToolExecutor {
             },
         ));
 
-        let output_sequence = std::cell::Cell::new(0_u64);
+        let output_sequence = std::sync::atomic::AtomicU64::new(0);
         let output_callback = |stream: agena_domain::CommandOutputStream, bytes: &[u8]| {
-            output_sequence.set(output_sequence.get().saturating_add(1));
+            let sequence = output_sequence.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
             (sink)(agena_tool::ToolRuntimeEvent::CommandOutputDelta(
                 agena_domain::CommandOutputDeltaEvent {
                     context: context.clone(),
                     stream,
-                    seq: output_sequence.get(),
+                    seq: sequence,
                     ts_ms: now(),
                     chunk: bytes.to_vec(),
                     preview_text: String::from_utf8_lossy(bytes).into_owned(),
@@ -92,7 +92,8 @@ impl ToolExecutor {
             request,
             self.cancellation_token(),
             Some(&output_callback),
-        );
+        )
+        .await;
         match &result {
             Ok(output) => {
                 (sink)(agena_tool::ToolRuntimeEvent::CommandEnd(

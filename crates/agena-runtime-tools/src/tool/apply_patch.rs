@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Read as _;
 use std::path::Path;
 
 use diff::Result as DiffResult;
@@ -9,6 +10,8 @@ use crate::part::ApplyPatchToolInput;
 
 use super::{ToolError, ToolExecutor};
 use agena_tool::{AppliedFileChange, ApplyPatchExecution, PatchOpKind};
+
+const MAX_PATCH_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 enum PatchOp {
@@ -83,7 +86,7 @@ pub fn execute(
                     )));
                 }
 
-                let original = fs::read_to_string(&absolute)?;
+                let original = read_patch_target(&absolute)?;
                 before_state.push_str(&format!("D:{path}:{original}\n"));
                 after_state.push_str(&format!("D:{path}:<deleted>\n"));
 
@@ -110,7 +113,7 @@ pub fn execute(
                     )));
                 }
 
-                let original = fs::read_to_string(&source)?;
+                let original = read_patch_target(&source)?;
                 let updated = apply_hunks(&path, &original, &hunks)?;
 
                 if let Some(target_path) = move_to {
@@ -472,6 +475,31 @@ fn ensure_parent(path: &Path) -> Result<(), std::io::Error> {
         fs::create_dir_all(parent)?;
     }
     Ok(())
+}
+
+fn read_patch_target(path: &Path) -> Result<String, ToolError> {
+    let file = fs::File::open(path)?;
+    let mut bytes = Vec::with_capacity(
+        file.metadata()
+            .ok()
+            .and_then(|metadata| usize::try_from(metadata.len().min(MAX_PATCH_FILE_BYTES)).ok())
+            .unwrap_or_default(),
+    );
+    file.take(MAX_PATCH_FILE_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_PATCH_FILE_BYTES {
+        return Err(ToolError::invalid_patch(format!(
+            "patch target exceeds the {} MiB limit: {}",
+            MAX_PATCH_FILE_BYTES / 1024 / 1024,
+            path.display()
+        )));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        ToolError::invalid_patch(format!(
+            "patch target is not UTF-8 text: {}",
+            path.display()
+        ))
+    })
 }
 
 fn join_lines(lines: &[&str]) -> String {

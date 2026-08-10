@@ -1,26 +1,18 @@
 use globset::{Glob, GlobMatcher};
-use walkdir::WalkDir;
+use std::time::{Duration, Instant};
 
 use crate::part::GlobToolInput;
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
+    discovery::{effective_include_ignored, walk_builder},
     normalize_path_for_display,
 };
 
 const DEFAULT_MATCHES: usize = 200;
 const MAX_MATCHES: usize = 1_000;
-const DEFAULT_IGNORED_DIRECTORIES: &[&str] = &[
-    ".git",
-    ".hg",
-    ".svn",
-    "node_modules",
-    "target",
-    "dist",
-    "build",
-    ".cache",
-];
-
+const MAX_VISITED_ENTRIES: usize = 100_000;
+const MAX_SCAN_DURATION: Duration = Duration::from_secs(10);
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &GlobToolInput,
@@ -62,21 +54,27 @@ pub(super) fn execute(
             format!("glob limit must be between 1 and {MAX_MATCHES}"),
         ));
     }
-    let include_ignored = input.include_ignored
-        || explicitly_targets_ignored_directory(&base_path, executor.workspace_root());
-    let (matched_paths, truncated) =
+    let include_ignored =
+        effective_include_ignored(input.include_ignored, &base_path, executor.workspace_root());
+    let (matched_paths, stop_reason) =
         collect_matches(&base_path, &matcher, offset, limit, include_ignored)?;
+    let truncated = stop_reason.is_some();
     let mut matches = matched_paths
         .iter()
         .map(|path| executor.display_path(path))
         .collect::<Vec<_>>();
     matches.sort();
 
-    let output_text = if matches.is_empty() {
+    let mut output_text = if matches.is_empty() {
         "No paths matched the glob pattern.".to_string()
     } else {
         matches.join("\n")
     };
+    if let Some(reason) = stop_reason {
+        output_text.push_str("\n...glob scan truncated: ");
+        output_text.push_str(reason);
+        output_text.push_str(". Narrow `path` or `pattern` and retry.");
+    }
     let output = ToolPayloadOutput::Glob {
         count: Some(matches.len() as u32),
         paths: matches.clone(),
@@ -103,6 +101,10 @@ pub(super) fn execute(
         .insert("include_ignored".to_string(), include_ignored.to_string());
     view.metadata
         .insert("truncated".to_string(), truncated.to_string());
+    if let Some(reason) = stop_reason {
+        view.metadata
+            .insert("stop_reason".to_string(), reason.to_string());
+    }
 
     Ok(ToolPayloadExecution::new(output, view))
 }
@@ -113,25 +115,22 @@ fn collect_matches(
     offset: usize,
     limit: usize,
     include_ignored: bool,
-) -> Result<(Vec<std::path::PathBuf>, bool), ToolError> {
+) -> Result<(Vec<std::path::PathBuf>, Option<&'static str>), ToolError> {
+    let started = Instant::now();
     let mut matches = Vec::with_capacity(limit.min(DEFAULT_MATCHES));
     let mut skipped_matches = 0_usize;
 
-    for entry in WalkDir::new(base_path)
-        .follow_links(false)
-        .sort_by_file_name()
-        .into_iter()
-        .filter_entry(|entry| {
-            entry.path() == base_path
-                || include_ignored
-                || !entry.file_type().is_dir()
-                || !entry
-                    .file_name()
-                    .to_str()
-                    .is_some_and(is_default_ignored_directory)
-        })
-        .filter_map(Result::ok)
-    {
+    for (entry_index, entry) in walk_builder(base_path, include_ignored).build().enumerate() {
+        if entry_index >= MAX_VISITED_ENTRIES {
+            return Ok((matches, Some("workspace entry limit reached")));
+        }
+        if started.elapsed() >= MAX_SCAN_DURATION {
+            return Ok((matches, Some("10-second scan deadline reached")));
+        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
         if entry.path() == base_path {
             continue;
         }
@@ -150,32 +149,13 @@ fn collect_matches(
                 continue;
             }
             if matches.len() >= limit {
-                return Ok((matches, true));
+                return Ok((matches, Some("result page limit reached")));
             }
             matches.push(entry.into_path());
         }
     }
 
-    Ok((matches, false))
-}
-
-fn is_default_ignored_directory(name: &str) -> bool {
-    DEFAULT_IGNORED_DIRECTORIES.contains(&name)
-}
-
-fn explicitly_targets_ignored_directory(
-    base_path: &std::path::Path,
-    workspace_root: &std::path::Path,
-) -> bool {
-    base_path
-        .strip_prefix(workspace_root)
-        .unwrap_or(base_path)
-        .components()
-        .filter_map(|component| match component {
-            std::path::Component::Normal(value) => value.to_str(),
-            _ => None,
-        })
-        .any(is_default_ignored_directory)
+    Ok((matches, None))
 }
 
 #[cfg(test)]
@@ -184,7 +164,7 @@ mod tests {
 
     use globset::Glob;
 
-    use super::{collect_matches, explicitly_targets_ignored_directory};
+    use super::collect_matches;
 
     #[test]
     fn glob_pages_deterministically_and_skips_heavy_directories_by_default() {
@@ -204,9 +184,9 @@ mod tests {
         }
         let matcher = Glob::new("**/*.rs").expect("glob").compile_matcher();
 
-        let (first, first_truncated) =
+        let (first, first_stop_reason) =
             collect_matches(&root, &matcher, 0, 2, false).expect("first page");
-        let (second, second_truncated) =
+        let (second, second_stop_reason) =
             collect_matches(&root, &matcher, 2, 2, false).expect("second page");
         assert_eq!(
             first
@@ -218,7 +198,7 @@ mod tests {
                 std::path::Path::new("src/b.rs")
             ]
         );
-        assert!(first_truncated);
+        assert_eq!(first_stop_reason, Some("result page limit reached"));
         assert_eq!(
             second
                 .iter()
@@ -226,20 +206,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![std::path::Path::new("src/c.rs")]
         );
-        assert!(!second_truncated);
+        assert_eq!(second_stop_reason, None);
 
         let (all, _) = collect_matches(&root, &matcher, 0, 10, true).expect("ignored paths");
         assert_eq!(all.len(), 5);
         fs::remove_dir_all(root).expect("remove glob fixture");
-    }
-
-    #[test]
-    fn explicit_ignored_base_path_reenables_traversal() {
-        let workspace = std::path::Path::new("/workspace");
-        assert!(!explicitly_targets_ignored_directory(workspace, workspace));
-        assert!(explicitly_targets_ignored_directory(
-            &workspace.join("node_modules/package"),
-            workspace
-        ));
     }
 }

@@ -1,15 +1,18 @@
 use std::{
     fmt,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::Command,
+    time::Duration,
 };
 
 use agena_tool::{SnapshotBackend, SnapshotBackendCapabilities};
 
 use crate::{
-    SnapshotSession, snapshot_backend_capabilities, snapshot_managed_dir, snapshot_rift_binary,
-    snapshot_rift_database_path,
+    SnapshotSession, bounded_process::command_output, snapshot_backend_capabilities,
+    snapshot_managed_dir, snapshot_rift_binary, snapshot_rift_database_path,
 };
+
+const SNAPSHOT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone)]
 /// Result of creating a snapshot.
@@ -175,7 +178,7 @@ pub fn snapshot_has_local_changes(path: &Path) -> bool {
 pub fn remove_managed_snapshot(session: &SnapshotSession) -> Result<(), SnapshotOperationError> {
     match session.backend {
         SnapshotBackend::Git => {
-            git(
+            let _ = git(
                 &session.original_workspace,
                 &[
                     "worktree",
@@ -193,7 +196,7 @@ pub fn remove_managed_snapshot(session: &SnapshotSession) -> Result<(), Snapshot
         SnapshotBackend::Rift => {
             let db_path = snapshot_rift_database_path(&session.original_workspace);
             let path = session.path.to_string_lossy().to_string();
-            rift(&session.original_workspace, &db_path, &["remove", &path])?;
+            let _ = rift(&session.original_workspace, &db_path, &["remove", &path])?;
             if let Err(error) = rift(&session.original_workspace, &db_path, &["gc"]) {
                 tracing::warn!(target: "agena_runtime::snapshot", workspace = %session.original_workspace.display(), path = %session.path.display(), error = %error, "rift remove succeeded but garbage collection did not complete");
             }
@@ -208,7 +211,7 @@ fn create_with_git(
     slug: &str,
 ) -> Result<SnapshotSession, SnapshotOperationError> {
     let branch = format!("agena/{slug}");
-    git(
+    let _ = git(
         workspace,
         &[
             "worktree",
@@ -242,7 +245,7 @@ fn create_with_rift(
     }
     let workspace_string = workspace.to_string_lossy().to_string();
     let base_string = base.to_string_lossy().to_string();
-    rift(workspace, &db_path, &["init", "--here", &workspace_string])?;
+    let _ = rift(workspace, &db_path, &["init", "--here", &workspace_string])?;
     let output = rift(
         workspace,
         &db_path,
@@ -305,12 +308,12 @@ fn create_backend_error(
     ))
 }
 
-fn git(cwd: &Path, args: &[&str]) -> Result<Output, SnapshotOperationError> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .map_err(|error| operation_error(format!("git {args:?}: {error}")))?;
+fn git(cwd: &Path, args: &[&str]) -> Result<process_control::Output, SnapshotOperationError> {
+    let output = command_output(
+        Command::new("git").args(args).current_dir(cwd),
+        SNAPSHOT_COMMAND_TIMEOUT,
+    )
+    .map_err(|error| operation_error(format!("git {args:?}: {error}")))?;
     if output.status.success() {
         Ok(output)
     } else {
@@ -321,14 +324,20 @@ fn git(cwd: &Path, args: &[&str]) -> Result<Output, SnapshotOperationError> {
     }
 }
 
-fn rift(cwd: &Path, db_path: &Path, args: &[&str]) -> Result<Output, SnapshotOperationError> {
-    let output = Command::new(snapshot_rift_binary())
-        .arg("--database")
-        .arg(db_path)
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .map_err(|error| operation_error(format!("rift {args:?}: {error}")))?;
+fn rift(
+    cwd: &Path,
+    db_path: &Path,
+    args: &[&str],
+) -> Result<process_control::Output, SnapshotOperationError> {
+    let output = command_output(
+        Command::new(snapshot_rift_binary())
+            .arg("--database")
+            .arg(db_path)
+            .args(args)
+            .current_dir(cwd),
+        SNAPSHOT_COMMAND_TIMEOUT,
+    )
+    .map_err(|error| operation_error(format!("rift {args:?}: {error}")))?;
     if output.status.success() {
         return Ok(output);
     }

@@ -1,5 +1,6 @@
 use std::cmp::min;
 use std::fs;
+use std::io::Read;
 
 use crate::part::ReadToolInput;
 use agena_tool::ReadMode;
@@ -12,6 +13,9 @@ use super::{
 const DEFAULT_OFFSET: usize = 1;
 const DEFAULT_LIMIT: usize = 2000;
 const MAX_LINE_CHARS: usize = 2000;
+const AUTO_DETECT_BYTES: usize = 8 * 1024;
+const MAX_TEXT_FILE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_DIRECTORY_ENTRIES: usize = 20_000;
 
 pub(super) fn execute(
     executor: &ToolExecutor,
@@ -43,7 +47,9 @@ pub(super) fn execute(
             ));
         }
 
-        let (preview, truncated, count) = read_directory_listing(&target, offset, limit)?;
+        let (preview, page_truncated, count, scan_truncated) =
+            read_directory_listing(&target, offset, limit)?;
+        let truncated = page_truncated || scan_truncated;
         let output = ToolPayloadOutput::Read {
             preview: Some(preview.clone()),
             truncated,
@@ -51,7 +57,9 @@ pub(super) fn execute(
             attachment: None,
         };
 
-        let summary = if truncated {
+        let summary = if scan_truncated {
+            format!("at least {count} items · directory scan bounded")
+        } else if truncated {
             format!("{count} items · more available")
         } else {
             format!("{count} items")
@@ -66,14 +74,26 @@ pub(super) fn execute(
         view.metadata
             .insert("item_count".to_string(), count.to_string());
         view.metadata
+            .insert("scan_truncated".to_string(), scan_truncated.to_string());
+        view.metadata
             .insert("truncated".to_string(), truncated.to_string());
         return Ok(ToolPayloadExecution::new(output, view));
     }
 
-    let content = fs::read(&target)?;
-    if should_attach(content.as_slice(), &target, input.mode) {
+    if matches!(input.mode, ReadMode::Attachment) {
         return file_attachment::execute_for_read_attachment(executor, input.file_path.as_str());
     }
+    if matches!(input.mode, ReadMode::Auto) {
+        let prefix = read_prefix(&target, AUTO_DETECT_BYTES)?;
+        if file_attachment::should_attach_in_read_auto(&target, &prefix) {
+            return file_attachment::execute_for_read_attachment(
+                executor,
+                input.file_path.as_str(),
+            );
+        }
+    }
+
+    let content = read_text_file_bounded(&target, MAX_TEXT_FILE_BYTES)?;
 
     let text = String::from_utf8(content).map_err(|_| {
         ToolError::invalid_field("mode", agena_failure::FieldIssueKind::Unsupported, format!(
@@ -111,12 +131,30 @@ pub(super) fn execute(
     Ok(ToolPayloadExecution::new(output, view))
 }
 
-fn should_attach(bytes: &[u8], path: &std::path::Path, mode: ReadMode) -> bool {
-    match mode {
-        ReadMode::Text => false,
-        ReadMode::Attachment => true,
-        ReadMode::Auto => file_attachment::should_attach_in_read_auto(path, bytes),
+fn read_prefix(path: &std::path::Path, limit: usize) -> Result<Vec<u8>, ToolError> {
+    let mut bytes = Vec::with_capacity(limit);
+    fs::File::open(path)?
+        .take(limit as u64)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn read_text_file_bounded(path: &std::path::Path, max_bytes: usize) -> Result<Vec<u8>, ToolError> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take((max_bytes as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        return Err(ToolError::invalid_field(
+            "file_path",
+            agena_failure::FieldIssueKind::OutOfRange,
+            format!(
+                "text read is limited to {max_bytes} bytes to keep tool execution bounded: {}",
+                path.display()
+            ),
+        ));
     }
+    Ok(bytes)
 }
 
 fn parse_offset(value: Option<u32>) -> usize {
@@ -137,9 +175,14 @@ fn read_directory_listing(
     dir: &std::path::Path,
     offset: usize,
     limit: usize,
-) -> Result<(String, bool, usize), ToolError> {
+) -> Result<(String, bool, usize, bool), ToolError> {
     let mut entries = Vec::new();
-    for entry in fs::read_dir(dir)? {
+    let mut scan_truncated = false;
+    for (entry_index, entry) in fs::read_dir(dir)?.enumerate() {
+        if entry_index >= MAX_DIRECTORY_ENTRIES {
+            scan_truncated = true;
+            break;
+        }
         let entry = entry?;
         let metadata = entry.metadata()?;
         let mut name = entry.file_name().to_string_lossy().to_string();
@@ -152,7 +195,7 @@ fn read_directory_listing(
     entries.sort();
 
     if entries.is_empty() {
-        return Ok((String::new(), false, 0));
+        return Ok((String::new(), false, 0, scan_truncated));
     }
 
     if offset > entries.len() {
@@ -171,7 +214,7 @@ fn read_directory_listing(
     let end = min(start + limit, entries.len());
     let preview = entries[start..end].join("\n");
     let truncated = end < entries.len();
-    Ok((preview, truncated, entries.len()))
+    Ok((preview, truncated, entries.len(), scan_truncated))
 }
 
 fn render_file_preview(
@@ -228,4 +271,27 @@ fn truncate_line_chars(input: &str) -> String {
         out.push('…');
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::read_text_file_bounded;
+
+    #[test]
+    fn bounded_text_read_rejects_before_loading_the_rest_of_a_large_file() {
+        let path = std::env::temp_dir().join(format!(
+            "agena-read-bound-{}.txt",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let mut file = std::fs::File::create(&path).expect("create read fixture");
+        file.write_all(b"small prefix").expect("write read prefix");
+        file.set_len(1_000_000).expect("extend sparse read fixture");
+
+        let error = read_text_file_bounded(&path, 32).expect_err("oversized text must fail");
+
+        assert!(error.to_string().contains("limited to 32 bytes"));
+        std::fs::remove_file(path).expect("remove read fixture");
+    }
 }

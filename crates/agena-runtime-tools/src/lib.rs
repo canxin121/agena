@@ -10,6 +10,7 @@
 pub use agena_runtime_contracts::ToolSessionContext;
 pub use agena_runtime_contracts::{authorization, identity, part, permission, provider_state};
 
+mod bounded_process;
 mod monitor;
 mod project_paths;
 mod snapshot_capabilities;

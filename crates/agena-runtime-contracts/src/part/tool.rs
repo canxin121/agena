@@ -242,6 +242,10 @@ pub struct GrepToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present)]
     pub include: Option<String>,
+    /// Include hidden and ignored files that are skipped by default according
+    /// to ripgrep-compatible ignore rules.
+    #[serde(default)]
+    pub include_ignored: bool,
 }
 
 /// Input for the delegated `task` subagent command.
@@ -427,6 +431,7 @@ pub struct InteractionNotifyToolInput {
 /// directives with `@@` hunks (context lines start with a space, removed lines
 /// with `-`, added lines with `+`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(max_chars("patch", 16777216))]
 pub struct ApplyPatchToolInput {
     /// Unified patch text to apply to the workspace.
     pub patch: String,

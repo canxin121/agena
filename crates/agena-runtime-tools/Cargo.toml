@@ -20,18 +20,23 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }
+content_inspector = { workspace = true }
 diff = "0.1.13"
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 globset = { workspace = true }
+grep-regex = { workspace = true }
+grep-searcher = { workspace = true }
 hex = { workspace = true }
 html_escape = { workspace = true }
+ignore = { workspace = true }
 imagesize = { workspace = true }
 indexmap = { workspace = true }
 libc = { workspace = true }
 mime_guess = { workspace = true }
 parking_lot = { workspace = true }
 path-clean = { workspace = true }
+process_control = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 serde = { workspace = true }
@@ -43,11 +48,10 @@ smol_str = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
-tokio-util = { workspace = true, features = ["rt"] }
+tokio-util = { workspace = true, features = ["codec", "rt"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 url = { workspace = true }
-walkdir = { workspace = true }
 
 [lints]
 workspace = true

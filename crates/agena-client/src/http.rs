@@ -26,11 +26,44 @@ use agena_api::{
         WorkspaceResource,
     },
 };
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt as _};
 use tokio::{sync::mpsc, task::JoinHandle};
+use tokio_sse_codec::{Frame as SseFrame, SseDecoder};
+use tokio_util::{codec::FramedRead, io::StreamReader};
 
 use crate::error::ClientError;
 use crate::ws::SubscriptionEvent;
+
+const MAX_JSON_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_TEXT_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_ERROR_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_SSE_EVENT_BYTES: usize = 4 * 1024 * 1024;
+
+async fn read_response_text_bounded(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+    context: &str,
+) -> Result<String, ClientError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(ClientError::Protocol(format!(
+            "{context} exceeds the {max_bytes}-byte limit"
+        )));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if bytes.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(ClientError::Protocol(format!(
+                "{context} exceeds the {max_bytes}-byte limit"
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| ClientError::Protocol(format!("{context} is not UTF-8 text")))
+}
 
 /// Handle to an active HTTP notification subscription.
 pub struct NotificationSubscription {
@@ -56,12 +89,6 @@ impl Drop for NotificationSubscription {
     }
 }
 
-#[derive(Debug, Default)]
-struct ParsedSseEvent {
-    event: String,
-    data: String,
-}
-
 /// Stateless REST client. Holds a `reqwest::Client` and the base URL like
 /// `http://localhost:7878`.
 #[derive(Debug, Clone)]
@@ -77,7 +104,9 @@ impl AgenaClient {
             .map_err(|e| ClientError::Transport(format!("invalid base url: {e}")))?;
         Ok(Self {
             base_url,
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()?,
         })
     }
 
@@ -117,7 +146,28 @@ impl AgenaClient {
         response: reqwest::Response,
     ) -> Result<T, ClientError> {
         let status = response.status();
-        let value: serde_json::Value = response.json().await?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_JSON_RESPONSE_BYTES as u64)
+        {
+            return Err(ClientError::Protocol(format!(
+                "JSON response exceeds the {} MiB limit",
+                MAX_JSON_RESPONSE_BYTES / 1024 / 1024
+            )));
+        }
+        let mut bytes = Vec::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if bytes.len().saturating_add(chunk.len()) > MAX_JSON_RESPONSE_BYTES {
+                return Err(ClientError::Protocol(format!(
+                    "JSON response exceeds the {} MiB limit",
+                    MAX_JSON_RESPONSE_BYTES / 1024 / 1024
+                )));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
         if !status.is_success() {
             let api: agena_api::error::ApiError = serde_json::from_value(value)?;
             return Err(ClientError::Api(api));
@@ -169,47 +219,13 @@ impl AgenaClient {
     async fn get_text(&self, path: &str) -> Result<String, ClientError> {
         let response = self.http.get(self.endpoint(path)).send().await?;
         let status = response.status();
-        let text = response.text().await?;
+        let text =
+            read_response_text_bounded(response, MAX_TEXT_RESPONSE_BYTES, "text response").await?;
         if !status.is_success() {
             let api: agena_api::error::ApiError = serde_json::from_str(&text)?;
             return Err(ClientError::Api(api));
         }
         Ok(text)
-    }
-
-    fn normalize_sse_buffer(mut buffer: String) -> String {
-        if buffer.contains('\r') {
-            buffer = buffer.replace("\r\n", "\n").replace('\r', "\n");
-        }
-        buffer
-    }
-
-    fn parse_sse_event_block(block: &str) -> ParsedSseEvent {
-        let mut event = String::from("message");
-        let mut data = Vec::new();
-        for raw_line in block.lines() {
-            if raw_line.is_empty() || raw_line.starts_with(':') {
-                continue;
-            }
-            let (field, value) = match raw_line.split_once(':') {
-                Some((field, value)) => (field, value.trim_start()),
-                None => (raw_line, ""),
-            };
-            match field {
-                "event" => {
-                    if !value.is_empty() {
-                        event.clear();
-                        event.push_str(value);
-                    }
-                }
-                "data" => data.push(value.to_string()),
-                _ => {}
-            }
-        }
-        ParsedSseEvent {
-            event,
-            data: data.join("\n"),
-        }
     }
 
     async fn send_notification_frame(
@@ -358,7 +374,12 @@ impl AgenaClient {
             .await?;
         let status = response.status();
         if !status.is_success() {
-            let body = response.text().await?;
+            let body = read_response_text_bounded(
+                response,
+                MAX_ERROR_RESPONSE_BYTES,
+                "notification stream error response",
+            )
+            .await?;
             if let Ok(api) = serde_json::from_str::<agena_api::error::ApiError>(&body) {
                 return Err(ClientError::Api(api));
             }
@@ -369,57 +390,37 @@ impl AgenaClient {
         }
 
         let (tx, rx) = mpsc::channel(256);
-        let mut stream = response.bytes_stream();
+        let reader = StreamReader::new(response.bytes_stream().map_err(std::io::Error::other));
+        let mut frames = FramedRead::new(
+            reader,
+            SseDecoder::<String>::with_max_size(MAX_SSE_EVENT_BYTES),
+        );
         let task = tokio::spawn(async move {
-            let mut buffer = String::new();
-            while let Some(chunk) = stream.next().await {
-                let chunk = match chunk {
-                    Ok(bytes) => bytes,
-                    Err(err) => {
-                        let _ = tx.send(Err(ClientError::Transport(err.to_string()))).await;
+            while let Some(frame) = frames.next().await {
+                let event = match frame {
+                    Ok(SseFrame::Event(event)) => event,
+                    Ok(SseFrame::Comment(_) | SseFrame::Retry(_)) => continue,
+                    Err(error) => {
+                        let _ = tx
+                            .send(Err(ClientError::Protocol(format!(
+                                "invalid or oversized notification event: {error}"
+                            ))))
+                            .await;
                         return;
                     }
                 };
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
-                buffer = Self::normalize_sse_buffer(buffer);
-
-                while let Some(boundary) = buffer.find("\n\n") {
-                    let block = buffer[..boundary].trim().to_string();
-                    buffer = buffer[boundary + 2..].to_string();
-                    if block.is_empty() {
-                        continue;
-                    }
-                    let parsed = Self::parse_sse_event_block(&block);
-                    if parsed.event != "notification" || parsed.data.trim().is_empty() {
-                        continue;
-                    }
-                    let notification: Notification = match serde_json::from_str(&parsed.data) {
-                        Ok(notification) => notification,
-                        Err(err) => {
-                            let _ = tx.send(Err(ClientError::Decode(err))).await;
-                            return;
-                        }
-                    };
-                    if !Self::send_notification_frame(&tx, notification).await {
+                if event.name != "notification" || event.data.trim().is_empty() {
+                    continue;
+                }
+                let notification = match serde_json::from_str::<Notification>(&event.data) {
+                    Ok(notification) => notification,
+                    Err(error) => {
+                        let _ = tx.send(Err(ClientError::Decode(error))).await;
                         return;
                     }
-                }
-            }
-
-            let trailing = buffer.trim();
-            if trailing.is_empty() {
-                return;
-            }
-            let parsed = Self::parse_sse_event_block(trailing);
-            if parsed.event != "notification" || parsed.data.trim().is_empty() {
-                return;
-            }
-            match serde_json::from_str::<Notification>(&parsed.data) {
-                Ok(notification) => {
-                    let _ = Self::send_notification_frame(&tx, notification).await;
-                }
-                Err(err) => {
-                    let _ = tx.send(Err(ClientError::Decode(err))).await;
+                };
+                if !Self::send_notification_frame(&tx, notification).await {
+                    return;
                 }
             }
         });
@@ -951,8 +952,11 @@ impl AgenaClient {
 #[cfg(test)]
 mod sse_contract_tests {
     use super::AgenaClient;
+    use futures_util::StreamExt as _;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio_sse_codec::{Frame as SseFrame, SseDecoder};
+    use tokio_util::codec::FramedRead;
 
     fn fixture(name: &str) -> String {
         std::fs::read_to_string(
@@ -963,21 +967,38 @@ mod sse_contract_tests {
         .expect("checked-in client fixture must be readable")
     }
 
-    #[test]
-    fn sse_parser_normalizes_crlf_and_multiline_data() {
-        let normalized = AgenaClient::normalize_sse_buffer(
-            "event: notification\r\ndata: {\"seq\":1}\r\ndata: {\"kind\":\"x\"}\r\n\r\n".to_owned(),
-        );
-        let parsed = AgenaClient::parse_sse_event_block(normalized.trim());
-        assert_eq!(parsed.event, "notification");
-        assert_eq!(parsed.data, "{\"seq\":1}\n{\"kind\":\"x\"}");
+    #[tokio::test]
+    async fn bounded_sse_codec_normalizes_crlf_and_multiline_data() {
+        let source =
+            &b"event: notification\r\ndata: {\"seq\":1}\r\ndata: {\"kind\":\"x\"}\r\n\r\n"[..];
+        let mut frames = FramedRead::new(source, SseDecoder::<String>::with_max_size(1024));
+        let frame = frames
+            .next()
+            .await
+            .expect("one SSE frame")
+            .expect("valid SSE frame");
+        let SseFrame::Event(event) = frame else {
+            panic!("expected event frame");
+        };
+        assert_eq!(event.name, "notification");
+        assert_eq!(event.data, "{\"seq\":1}\n{\"kind\":\"x\"}");
     }
 
-    #[test]
-    fn sse_parser_ignores_comments_and_defaults_event_name() {
-        let parsed = AgenaClient::parse_sse_event_block(": keep-alive\ndata: payload");
-        assert_eq!(parsed.event, "message");
-        assert_eq!(parsed.data, "payload");
+    #[tokio::test]
+    async fn bounded_sse_codec_rejects_an_oversized_event() {
+        let source = format!("event: notification\ndata: {}\n\n", "x".repeat(2_048));
+        let mut frames = FramedRead::new(
+            source.as_bytes(),
+            SseDecoder::<String>::with_max_size(1_024),
+        );
+
+        assert!(
+            frames
+                .next()
+                .await
+                .expect("oversized event must produce a decoder result")
+                .is_err()
+        );
     }
 
     #[tokio::test]

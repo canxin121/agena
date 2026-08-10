@@ -15,7 +15,7 @@ use agena_lsp::lsp_types::{
     MarkedString, Position, Range, Uri,
 };
 
-use crate::message::{
+use crate::part::{
     LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
 };
 

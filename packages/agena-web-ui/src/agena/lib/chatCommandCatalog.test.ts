@@ -21,7 +21,6 @@ function catalogFixture() {
     sessions: computed(() => []),
     messages: computed(() => []),
     composerQueue: computed(() => []),
-    timelineEvents: computed(() => []),
     workspaces: computed(() => []),
     sessionImportJsonl: computed(() => ''),
     sessionTreeRows: computed(() => []),
@@ -54,7 +53,6 @@ function catalogFixture() {
     forkCurrentSession: noop,
     importSessionFromJsonl: noop,
     loadRewindCheckpoints: noop,
-    loadSessionTimeline: noop,
     loadSessionTree: noop,
     openCommandPalette: () => {
       paletteOpened = true
@@ -118,8 +116,6 @@ describe('createChatCommandCatalog', () => {
       '/backtrack',
       '/rename',
       '/title',
-      '/timeline',
-      '/events',
       '/model',
       '/export',
       '/save',

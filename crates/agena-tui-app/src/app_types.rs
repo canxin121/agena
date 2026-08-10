@@ -669,7 +669,7 @@ pub(super) enum AppMessage {
     },
     RewindMessagesLoaded {
         session_id: i64,
-        result: UiResult<Vec<agena_domain::TurnSnapshot>>,
+        result: UiResult<Vec<RewindTarget>>,
     },
     ModelCatalogLoaded {
         query: String,
@@ -703,7 +703,7 @@ pub(super) enum AppMessage {
     },
     TimelineLoaded {
         session_id: i64,
-        result: UiResult<Vec<agena_runtime::RuntimeTimelineEvent>>,
+        result: UiResult<Vec<agena_tui_backend::SessionTimelineEntry>>,
     },
     SessionRewound {
         session_id: i64,
@@ -765,9 +765,6 @@ impl UiFailure {
             return Self::from_failure(error.failure.clone());
         }
         if let Some(error) = error.downcast_ref::<agena_runtime::SessionQueryError>() {
-            return Self::from_failure((*error.failure).clone());
-        }
-        if let Some(error) = error.downcast_ref::<agena_runtime::RuntimeEventQueryError>() {
             return Self::from_failure((*error.failure).clone());
         }
         Self::internal(error)

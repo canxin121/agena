@@ -1,6 +1,6 @@
 //! Internal process-management handler for the `shell` tool.
 
-use crate::message::ShellToolInput;
+use crate::part::ShellToolInput;
 use agena_domain::{ProcessEvent, ProcessShell, ProcessStatus, ProcessStream, ProcessSummary};
 
 use super::shell_tools::{
@@ -68,7 +68,7 @@ pub(crate) fn execute(
 fn execute_foreground_run(
     executor: &ToolExecutor,
     shell: ProcessShell,
-    command: &crate::message::ShellCommandInput,
+    command: &crate::part::ShellCommandInput,
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let execution = match shell {
@@ -128,8 +128,8 @@ fn execute_foreground_run(
 fn execute_background_run(
     executor: &ToolExecutor,
     shell: ProcessShell,
-    command: &crate::message::ShellCommandInput,
-    monitor: Option<&crate::message::ShellMonitorInput>,
+    command: &crate::part::ShellCommandInput,
+    monitor: Option<&crate::part::ShellMonitorInput>,
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = process_registry(executor)?;
@@ -156,7 +156,7 @@ fn execute_background_run(
     let (final_command, final_cwd) = finalize_background_command(shell, command, cwd, prepared)?;
     let pattern = |value: Option<&String>| {
         value.map(|value| match monitor.map(|monitor| monitor.pattern_kind) {
-            Some(crate::message::ShellMonitorPatternKind::Literal) => regex::escape(value),
+            Some(crate::part::ShellMonitorPatternKind::Literal) => regex::escape(value),
             _ => value.clone(),
         })
     };
@@ -186,7 +186,7 @@ fn execute_background_run(
 
 fn finalize_background_command(
     shell: ProcessShell,
-    command: &crate::message::ShellCommandInput,
+    command: &crate::part::ShellCommandInput,
     cwd: std::path::PathBuf,
     prepared: Option<PreparedShellCommand>,
 ) -> Result<(String, std::path::PathBuf), ToolError> {
@@ -229,7 +229,7 @@ fn into_tool_error(err: MonitorError) -> ToolError {
     }
 }
 
-fn process_run_title(command: &crate::message::ShellCommandInput) -> String {
+fn process_run_title(command: &crate::part::ShellCommandInput) -> String {
     let subject = if command.description.trim().is_empty() {
         command.command.trim()
     } else {
@@ -241,7 +241,7 @@ fn process_run_title(command: &crate::message::ShellCommandInput) -> String {
 fn render_run(
     started: MonitorStart,
     shell: ProcessShell,
-    command: &crate::message::ShellCommandInput,
+    command: &crate::part::ShellCommandInput,
     monitored: bool,
 ) -> ToolPayloadExecution {
     let summary = started.summary;

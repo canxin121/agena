@@ -13,7 +13,6 @@ type ToolCompositionInputs<'a> = agena_runtime::ToolCompositionInputs<
     Option<Arc<agena_lsp::LspRegistry>>,
     &'a Path,
     Option<Arc<SessionManager>>,
-    Arc<DatabaseConnection>,
 >;
 
 pub(super) fn build_or_reconfigure_session_manager(
@@ -29,6 +28,7 @@ pub(super) fn build_or_reconfigure_session_manager(
         config: build_config,
         mcp_manager,
         monitor_registry,
+        scheduler_database,
     } = inputs;
     let permission_inspector = mcp_manager.map(|manager| {
         Arc::new(McpRiskPermissionInspector { manager })
@@ -56,8 +56,8 @@ pub(super) fn build_or_reconfigure_session_manager(
                 lsp_registry,
                 workspace_root,
                 session_manager: Some(Arc::clone(&manager)),
-                database: Arc::clone(db),
                 monitor_registry: monitor_registry.clone(),
+                scheduler_database: scheduler_database.clone(),
             },
             permission_inspector,
         );
@@ -71,8 +71,8 @@ pub(super) fn build_or_reconfigure_session_manager(
             lsp_registry: lsp_registry.clone(),
             workspace_root,
             session_manager: None,
-            database: Arc::clone(db),
             monitor_registry: monitor_registry.clone(),
+            scheduler_database: scheduler_database.clone(),
         },
         permission_inspector.clone(),
     );
@@ -88,50 +88,13 @@ pub(super) fn build_or_reconfigure_session_manager(
             lsp_registry,
             workspace_root,
             session_manager: Some(Arc::clone(&manager)),
-            database: Arc::clone(db),
             monitor_registry: monitor_registry.clone(),
+            scheduler_database,
         },
         permission_inspector,
     );
     manager.reconfigure(processor, executor, config);
     manager
-}
-
-pub(super) fn build_event_bridge(
-    session_manager: Option<&Arc<SessionManager>>,
-    plugins: &Arc<PluginHost>,
-) -> Option<Arc<agena_runtime::AbortOnDrop>> {
-    session_manager.map(|manager| {
-        Arc::new(crate::event::bridge::spawn_event_bridge(
-            manager.event_bus(),
-            Arc::clone(plugins),
-        ))
-    })
-}
-
-pub(super) async fn resume_session_state(
-    session_manager: Option<&Arc<SessionManager>>,
-    reusing: bool,
-) -> Result<(), crate::AppError> {
-    if reusing {
-        return Ok(());
-    }
-    if let Some(manager) = session_manager {
-        manager
-            .event_publisher()
-            .resume_from_store()
-            .await
-            .map_err(|err| {
-                crate::AppError::Internal(format!("resume event sequence failed: {err}"))
-            })?;
-        // Interrupted-run reconciliation is intentionally NOT run here: it
-        // scans every session's history and would delay startup on large
-        // databases. `SessionManager` reconciles a session lazily when it is
-        // opened (`get_session`), which is the only session the user can
-        // observe; stale execution leases are stolen atomically on demand by
-        // `register`, so deferring reconciliation cannot block a new run.
-    }
-    Ok(())
 }
 
 pub(super) async fn build_model_catalog_services(
@@ -226,8 +189,8 @@ pub(super) fn build_tool_executor(
         lsp_registry,
         workspace_root,
         session_manager,
-        database,
         monitor_registry,
+        scheduler_database,
     } = inputs;
     let principal = build_execution_principal(crate::authorization::PermissionConfig::default());
     let snapshot_registry = crate::tool::snapshot_registry_for_executor();
@@ -245,8 +208,8 @@ pub(super) fn build_tool_executor(
         );
     }
 
-    let scheduler = session_manager
-        .map(|session_manager| build_scheduler(session_manager, database.as_ref().clone()));
+    let scheduler =
+        session_manager.map(|session_manager| build_scheduler(session_manager, scheduler_database));
     let mut executor = ToolExecutor::new(
         workspace_root.to_path_buf(),
         principal,
@@ -287,9 +250,12 @@ pub(super) fn build_execution_principal(
 }
 
 /// Build a process-wide cron scheduler backed by the active SessionManager.
+///
+/// The scheduler persists to its own dedicated database; when no scheduler
+/// database is configured the scheduler degrades to its in-memory store.
 pub(super) fn build_scheduler(
     session_manager: Arc<SessionManager>,
-    database: DatabaseConnection,
+    scheduler_database: Option<Arc<DatabaseConnection>>,
 ) -> Arc<agena_scheduler::Scheduler> {
     fn scheduler_skip(message: &'static str) -> agena_failure::Failure {
         agena_failure::Failure::new(
@@ -445,8 +411,8 @@ pub(super) fn build_scheduler(
                             };
 
                             match session_manager
-                                .submit_user_message(
-                                    agena_runtime::SessionUserMessageRequest::new(
+                                .submit_user_run(
+                                    agena_runtime::SessionUserRunRequest::new(
                                         session_id,
                                         options,
                                         agena_domain::ComposerDocument(vec![
@@ -482,7 +448,7 @@ pub(super) fn build_scheduler(
     }
 
     agena_runtime::compose_scheduler(
-        database,
+        scheduler_database,
         Arc::new(SessionSink {
             session_manager: Arc::downgrade(&session_manager),
         }),

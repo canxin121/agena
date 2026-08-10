@@ -1,92 +1,43 @@
 use super::{
-    AppError, AssistantReasoningField, BTreeMap, CompletionFinishReason, EventKind,
-    ExecutionStatus, FinishReason, HistoryMessageId, Message, MessageProviderState, ToolCallId,
-    ToolInvocation,
+    AppError, AssistantReasoningField, BTreeMap, CompletionFinishReason, FinishReason,
+    PartProviderState, ToolInvocation,
 };
 use agena_provider::CompletionInputProviderState;
-use agena_storage::MessageIdAllocator;
+use agena_storage::store::{Part, PartState};
 
-/// Adapter that returns a single, pre-allocated `MessageId` to satisfy the
-/// `RunBuffer` API. The processor reserves message ids via the global session
-/// allocator before opening the buffer, so the buffer must adopt that id
-/// rather than mint its own.
-pub(crate) struct FixedAssistantId {
-    next: Option<HistoryMessageId>,
-}
-
-impl FixedAssistantId {
-    pub(crate) fn new(message_id: i64) -> Self {
-        Self {
-            next: Some(HistoryMessageId(message_id)),
-        }
-    }
-}
-
-impl MessageIdAllocator for FixedAssistantId {
-    fn next_message_id(&mut self) -> HistoryMessageId {
-        self.next
-            .take()
-            .expect("FixedAssistantId only yields one id per run")
-    }
-}
-
-pub(crate) fn complete_part_status(assistant: &mut Message, part_id: i64) -> Result<(), AppError> {
-    let part = assistant
-        .parts
+pub(crate) fn complete_part_status(parts: &mut [Part], part_id: i64) -> Result<(), AppError> {
+    let part = parts
         .iter_mut()
-        .find(|part| part.id == part_id)
+        .find(|part| part.part_id == part_id)
         .ok_or_else(|| {
             AppError::Internal(format!(
-                "completing missing part on assistant snapshot: {part_id}"
+                "completing missing part on turn accumulator: {part_id}"
             ))
         })?;
-    if part.status == ExecutionStatus::InProgress {
-        part.transition_status(ExecutionStatus::Completed)
-            .map_err(|err| AppError::Internal(err.to_string()))?;
+    if part.state == PartState::InProgress {
+        part.state = PartState::Completed;
     }
     Ok(())
 }
 
-pub(crate) fn cancel_nonterminal_parts(assistant: &mut Message) -> Result<(), AppError> {
-    terminalize_nonterminal_parts(assistant, ExecutionStatus::Cancelled)
+pub(crate) fn cancel_nonterminal_parts(parts: &mut [Part]) -> Result<(), AppError> {
+    terminalize_nonterminal_parts(parts, PartState::Cancelled)
 }
 
-pub(crate) fn fail_nonterminal_parts(assistant: &mut Message) -> Result<(), AppError> {
-    terminalize_nonterminal_parts(assistant, ExecutionStatus::Failed)
+pub(crate) fn fail_nonterminal_parts(parts: &mut [Part]) -> Result<(), AppError> {
+    terminalize_nonterminal_parts(parts, PartState::Failed)
 }
 
 fn terminalize_nonterminal_parts(
-    assistant: &mut Message,
-    terminal_status: ExecutionStatus,
+    parts: &mut [Part],
+    terminal_state: PartState,
 ) -> Result<(), AppError> {
-    for part in &mut assistant.parts {
-        if matches!(
-            part.status,
-            ExecutionStatus::Pending | ExecutionStatus::InProgress
-        ) {
-            part.transition_status(terminal_status)
-                .map_err(|err| AppError::Internal(err.to_string()))?;
+    for part in parts.iter_mut() {
+        if matches!(part.state, PartState::Pending | PartState::InProgress) {
+            part.state = terminal_state;
         }
     }
     Ok(())
-}
-
-pub(crate) fn sync_assistant_completion_event(
-    history_items: &mut [EventKind],
-    assistant: &Message,
-) {
-    for event in history_items {
-        let EventKind::AssistantMessageFinished(payload) = event else {
-            continue;
-        };
-        if payload.message_id.raw() != assistant.id {
-            continue;
-        }
-        payload.parts = assistant.parts.clone();
-        payload.usage = assistant.usage.clone();
-        payload.metadata = assistant.metadata.clone();
-        payload.provider_state = assistant.provider_state.clone();
-    }
 }
 
 pub(crate) fn map_finish_reason(reason: &CompletionFinishReason) -> FinishReason {
@@ -101,7 +52,7 @@ pub(crate) fn map_finish_reason(reason: &CompletionFinishReason) -> FinishReason
 
 pub(crate) fn message_provider_state_from_provider_metadata(
     provider_metadata: &serde_json::Value,
-) -> Option<MessageProviderState> {
+) -> Option<PartProviderState> {
     let assistant_reasoning_field =
         provider_metadata_string_field(provider_metadata, "assistant_reasoning_field")
             .and_then(|value| value.as_str())
@@ -195,10 +146,6 @@ pub(crate) struct PendingToolCall {
     pub(crate) id: Option<String>,
     pub(crate) name: Option<String>,
     pub(crate) arguments_json: String,
-    /// History-side call identifier propagated to `RunBuffer`. Set the first
-    /// time the part is materialized and reused for every subsequent argument
-    /// fragment so chunks land on the right tool.
-    pub(crate) history_call_id: Option<ToolCallId>,
 }
 
 /// Pick a stable pending-call key for one provider stream event.

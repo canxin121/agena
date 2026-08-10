@@ -30,32 +30,6 @@ impl ApplicationService {
             .map_err(session_query_error)
     }
 
-    pub async fn list_session_events_after(
-        &self,
-        events: &dyn agena_runtime::RuntimeEventQueryService,
-        session_id: i64,
-        after_seq: i64,
-        limit: Option<u64>,
-    ) -> ApplicationResult<Vec<agena_runtime::RuntimeEvent>> {
-        self.ensure_session_exists(session_id).await?;
-        let limit = normalize_limit(limit) as usize;
-        let events = events
-            .list_events(
-                &agena_domain::EventFilter {
-                    scope: agena_domain::EventScope::Session { session_id },
-                    kinds: None,
-                    since_seq_global: None,
-                },
-                agena_runtime::RuntimeEventRange {
-                    after_seq_global: after_seq,
-                    limit,
-                },
-            )
-            .await
-            .map_err(runtime_event_query_error)?;
-        Ok(events)
-    }
-
     pub async fn resolve_run_options(
         &self,
         provider_catalog: &dyn ProviderCatalog,
@@ -240,10 +214,7 @@ impl ApplicationService {
             .map_err(session_query_error)?;
 
         let scheduler_jobs = list_scheduled_jobs(execution_control).await;
-        let transcript = session_queries
-            .transcript_snapshot(session_id)
-            .await
-            .map_err(session_query_error)?;
+        let transcript = session_transcript_parts(session_queries, session_id).await?;
         let pending_interactive_requests =
             pending_interactive_requests(session_queries, session_id).await?;
         // Workflow readiness and execution liveness are separate facts. A
@@ -265,7 +236,7 @@ impl ApplicationService {
 
         Ok(SessionExecutionResource {
             session: session_resource,
-            transcript,
+            parts: transcript,
             workflow_state: workflow_state_from_domain(context.workflow_state),
             active_execution,
             latest_event_seq: self
@@ -524,8 +495,18 @@ fn session_query_error(error: agena_runtime::SessionQueryError) -> ApplicationEr
     ApplicationError::from_failure(*error.failure)
 }
 
-fn runtime_event_query_error(error: agena_runtime::RuntimeEventQueryError) -> ApplicationError {
-    ApplicationError::from_failure(*error.failure)
+/// Project a session's v2 part transcript for presentation. Reads the runtime
+/// part projection (`list_projected_runs`) and flattens each run into its
+/// run marker plus content parts (shared `project_session_transcript`).
+async fn session_transcript_parts(
+    session_queries: &dyn agena_runtime::SessionQueryService,
+    session_id: i64,
+) -> ApplicationResult<Vec<agena_api::resource::SessionTranscriptPart>> {
+    let runs = session_queries
+        .list_projected_runs(session_id, true)
+        .await
+        .map_err(session_query_error)?;
+    Ok(crate::session::project_session_transcript(&runs))
 }
 
 fn execution_control_error(error: agena_runtime::SessionExecutionControlError) -> ApplicationError {
@@ -817,7 +798,7 @@ use super::{
     ModelRef, ModelSpeedModeRequestOverride, PendingInteractiveRequestResource,
     ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
     SessionExecutionContextResource, SessionExecutionResource, SessionRunOptionsRequest,
-    SessionUsageResource, non_empty, normalize_limit, sessions::subtask_status_from_domain,
+    SessionUsageResource, non_empty, sessions::subtask_status_from_domain,
 };
 use agena_provider::{ProviderCatalog, ProviderCatalogError};
 

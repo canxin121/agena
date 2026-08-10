@@ -467,17 +467,16 @@ impl AmazonBedrockAdapter {
     }
 
     pub(super) fn anthropic_content_to_blocks(
-        message: &agena_provider::CompletionInputMessage,
+        run: &agena_provider::CompletionInputRun,
     ) -> Vec<BedrockAnthropicTextBlock> {
-        let projected = wire_message::project(message);
-        Self::anthropic_blocks_from_projected_parts(message, projected.as_slice())
+        let projected = wire_message::project(run);
+        Self::anthropic_blocks_from_projected_parts(run, projected.as_slice())
     }
 
     pub(super) fn anthropic_thinking_blocks_from_message(
-        message: &agena_provider::CompletionInputMessage,
+        run: &agena_provider::CompletionInputRun,
     ) -> Vec<BedrockAnthropicTextBlock> {
-        message
-            .provider_state
+        run.provider_state
             .anthropic_thinking_blocks
             .iter()
             .filter_map(|block| {
@@ -489,11 +488,11 @@ impl AmazonBedrockAdapter {
     }
 
     pub(super) fn anthropic_blocks_from_projected_parts(
-        message: &agena_provider::CompletionInputMessage,
+        run: &agena_provider::CompletionInputRun,
         projected: &[wire_message::WirePart],
     ) -> Vec<BedrockAnthropicTextBlock> {
         if projected.is_empty() {
-            let text = message.as_text_lossy();
+            let text = run.as_text_lossy();
             if text.is_empty() {
                 return Vec::new();
             }
@@ -537,16 +536,16 @@ impl AmazonBedrockAdapter {
     }
 
     pub(super) fn anthropic_assistant_messages_from_parts(
-        message: &agena_provider::CompletionInputMessage,
+        run: &agena_provider::CompletionInputRun,
     ) -> Vec<BedrockAnthropicMessage> {
-        let projected = wire_message::project(message);
+        let projected = wire_message::project(run);
         if !projected
             .iter()
             .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
         {
-            let mut content = Self::anthropic_thinking_blocks_from_message(message);
+            let mut content = Self::anthropic_thinking_blocks_from_message(run);
             content.extend(Self::anthropic_blocks_from_projected_parts(
-                message,
+                run,
                 projected.as_slice(),
             ));
             return vec![BedrockAnthropicMessage {
@@ -564,7 +563,7 @@ impl AmazonBedrockAdapter {
                     output_json,
                     ..
                 } if !tool_call_id.trim().is_empty() => {
-                    Self::flush_anthropic_assistant_blocks(message, &mut messages, &mut buffered);
+                    Self::flush_anthropic_assistant_blocks(run, &mut messages, &mut buffered);
                     Self::push_anthropic_request_message(
                         &mut messages,
                         BedrockAnthropicMessage {
@@ -584,15 +583,15 @@ impl AmazonBedrockAdapter {
                 other => buffered.push(other.clone()),
             }
         }
-        Self::flush_anthropic_assistant_blocks(message, &mut messages, &mut buffered);
+        Self::flush_anthropic_assistant_blocks(run, &mut messages, &mut buffered);
 
         messages
     }
 
     pub(super) fn anthropic_tool_messages_from_parts(
-        message: &agena_provider::CompletionInputMessage,
+        run: &agena_provider::CompletionInputRun,
     ) -> Vec<BedrockAnthropicMessage> {
-        let content = wire_message::project(message)
+        let content = wire_message::project(run)
             .into_iter()
             .filter_map(|part| match part {
                 wire_message::WirePart::ToolResult {
@@ -641,21 +640,21 @@ impl AmazonBedrockAdapter {
     }
 
     pub(super) fn flush_anthropic_assistant_blocks(
-        message: &agena_provider::CompletionInputMessage,
+        run: &agena_provider::CompletionInputRun,
         messages: &mut Vec<BedrockAnthropicMessage>,
         buffered: &mut Vec<wire_message::WirePart>,
     ) {
         if buffered.is_empty() {
             return;
         }
-        let content = Self::anthropic_blocks_from_projected_parts(message, buffered.as_slice());
+        let content = Self::anthropic_blocks_from_projected_parts(run, buffered.as_slice());
         buffered.clear();
         if content.is_empty() {
             return;
         }
         let mut content = content;
-        if !messages.iter().any(|message| message.role == "assistant") {
-            let mut thinking = Self::anthropic_thinking_blocks_from_message(message);
+        if !messages.iter().any(|run| run.role == "assistant") {
+            let mut thinking = Self::anthropic_thinking_blocks_from_message(run);
             thinking.append(&mut content);
             content = thinking;
         }
@@ -759,7 +758,7 @@ impl AmazonBedrockAdapter {
             .then(|| Self::anthropic_tools(request.tool_api_functions.as_slice()));
 
         let mut messages = Vec::new();
-        for msg in request.messages {
+        for msg in request.turns {
             match msg.role {
                 Role::System => {
                     let text = msg.as_text_lossy();

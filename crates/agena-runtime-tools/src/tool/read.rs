@@ -1,7 +1,7 @@
 use std::cmp::min;
 use std::fs;
 
-use crate::message::ReadToolInput;
+use crate::part::ReadToolInput;
 use agena_tool::ReadMode;
 
 use super::{

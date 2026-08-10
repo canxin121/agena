@@ -4,7 +4,7 @@ use globset::Glob;
 use regex::Regex;
 use walkdir::WalkDir;
 
-use crate::message::GrepToolInput;
+use crate::part::GrepToolInput;
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,

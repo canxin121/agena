@@ -23,7 +23,7 @@
 //!   search.
 //! - [`provider`] — provider-facing ports and wire types.
 //! - [`plugins`] — bundled plugin composition and registration.
-//! - `authorization`, `message`, `permission`, `identity` — the shared
+//! - `authorization`, `part`, `provider_state`, `permission`, `identity` — the shared
 //!   contracts from [`agena_runtime_contracts`].
 //!
 //! Internal modules (composition, model catalog, background tasks, policy,
@@ -34,9 +34,8 @@ extern crate self as agena_runtime;
 
 pub use agena_runtime_contracts::{authorization, identity};
 mod config;
-pub use agena_runtime_contracts::message;
+pub use agena_runtime_contracts::{part, provider_state};
 pub use agena_runtime_session::AppError;
-pub use agena_runtime_session::event;
 mod model_catalog;
 pub use agena_runtime_contracts::permission;
 pub mod plugins {
@@ -64,6 +63,7 @@ mod composition;
 mod connect;
 mod control_state;
 mod invocation_guard;
+mod live_signal;
 mod lsp_config;
 mod mcp_runtime;
 mod model_catalog_cache;
@@ -187,41 +187,31 @@ pub(crate) use agena_runtime_session::{
 pub(crate) use agena_runtime_session::{AbortOnDrop, spawn_abortable, spawn_detached};
 pub(crate) use agena_runtime_session::{CompletionRequestInputs, build_completion_request};
 pub(crate) use agena_runtime_session::{
-    DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTOR_MESSAGE_CHARS,
+    DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTOR_RUN_CHARS,
     MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,
 };
 pub(crate) use agena_runtime_session::{
     ExecutionControl, ExecutionControlError, ExecutionRegistry,
 };
 pub use agena_runtime_session::{
-    OperationDetail, SessionExecutionContext, SessionPresentation, SessionProjectedMessage,
-    SessionProjectedMessageHeader, SessionProjectedMessagePart, SessionProjectedModelVisibleOutput,
-    SessionProjectedOperationBlock, SessionProjectedOperationPart, SessionProjectedPartDetail,
-    SessionProjectedToolResult, SessionQueryError, SessionQueryService,
+    OperationDetail, SessionExecutionContext, SessionPresentation,
+    SessionProjectedModelVisibleOutput, SessionProjectedOperationBlock,
+    SessionProjectedOperationPart, SessionProjectedPart, SessionProjectedPartDetail,
+    SessionProjectedRun, SessionProjectedRunHeader, SessionProjectedToolResult, SessionQueryError,
+    SessionQueryService,
 };
 pub use agena_runtime_session::{
     RuntimeActiveSnapshot, RuntimeManagedSnapshot, RuntimeSnapshotStatus, SessionExecutionControl,
     SessionExecutionControlError,
 };
 pub use agena_runtime_session::{
-    RuntimeEvent, RuntimeEventQueryError, RuntimeEventQueryService, RuntimeEventRange,
-    RuntimeEventStreamService, RuntimeLiveEventSubscription, RuntimeLiveEventSubscriptionItem,
-    RuntimeReverseEventRange, RuntimeTimelineDetailLine, RuntimeTimelineEvent,
-};
-pub use agena_runtime_session::{
-    RuntimeEventPublishError, RuntimeEventPublishRequest, RuntimeEventPublishService,
-};
-pub(crate) use agena_runtime_session::{
-    RuntimeEventSubscription, RuntimeEventSubscriptionItem, spawn_event_forwarder,
-};
-pub use agena_runtime_session::{
     RuntimeLivePresentationSubscription, RuntimeLivePresentationSubscriptionItem,
-    RuntimePresentationEvent, RuntimePresentationEventKind,
+    RuntimePresentationEvent, RuntimePresentationEventKind, RuntimePresentationEventMeta,
 };
 pub use agena_runtime_session::{
     SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
     SessionForkRequest, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
-    SessionUserMessageRequest,
+    SessionUserRunRequest,
 };
 pub use agena_runtime_session::{
     SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,
@@ -292,6 +282,11 @@ pub(crate) use composition::{
 pub(crate) use connect::connect_or_initialize;
 pub(crate) use control_state::RuntimeControlState;
 pub(crate) use invocation_guard::try_enter_invocation;
+pub(crate) use live_signal::LiveSignalHub;
+pub use live_signal::{
+    RuntimeLiveSignal, RuntimeLiveSignalItem, RuntimeLiveSignalService,
+    RuntimeLiveSignalSubscription,
+};
 pub(crate) use lsp_config::compose_lsp_services;
 pub(crate) use mcp_runtime::{
     MCP_PLUGIN_ID, McpConfig, McpRuntimeConfig, build_configured_mcp_manager,
@@ -382,6 +377,8 @@ pub(crate) use agena_bundled_plugins::tool::{new_web_plugin, web_plugin_id};
 pub(crate) use agena_runtime_session::{UsageStatRecord, summarize_usage_records};
 pub(crate) use tracing_config::{
     RuntimeDatabaseCompositionError, apply_runtime_tracing_filter, connect_runtime_database,
+    connect_scheduler_database, is_in_memory_database, resolve_runtime_database_url,
+    resolve_scheduler_database_url,
 };
 pub use tracing_config::{RuntimeTracingConfiguration, runtime_env_filter};
 pub(crate) use watch::{capture_watch_path_stamps, diff_watch_path_stamps};

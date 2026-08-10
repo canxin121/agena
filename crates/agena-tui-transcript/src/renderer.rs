@@ -1,6 +1,6 @@
 //! Transcript renderer driving the terminal frame.
 
-use agena_api::resource::{MessageRole, MessageStatus, SessionExecutionResource};
+use agena_api::resource::{RunRole, RunStatus, SessionExecutionResource};
 use agena_tui::i18n::I18n;
 use agena_tui_components::trim_empty_line_edges;
 use chrono::{DateTime, Local};
@@ -55,18 +55,18 @@ pub(crate) fn format_occurred_time(occurred_at_ms: i64) -> String {
         .unwrap_or_default()
 }
 
-pub fn style_for_role(role: MessageRole) -> Style {
+pub fn style_for_role(role: RunRole) -> Style {
     match role {
-        agena_api::resource::MessageRole::User => {
+        agena_api::resource::RunRole::User => {
             Style::default().fg(agena_tui_components::theme::success_color())
         }
-        agena_api::resource::MessageRole::Assistant => {
+        agena_api::resource::RunRole::Assistant => {
             Style::default().fg(agena_tui_components::theme::accent_color())
         }
-        agena_api::resource::MessageRole::System => {
+        agena_api::resource::RunRole::System => {
             Style::default().fg(agena_tui_components::theme::special_color())
         }
-        agena_api::resource::MessageRole::Tool => {
+        agena_api::resource::RunRole::Tool => {
             Style::default().fg(agena_tui_components::theme::warning_color())
         }
     }
@@ -109,7 +109,7 @@ pub fn render_entry_detailed(
     } else {
         let mut part_index = 0_usize;
         while part_index < parts.len() {
-            if message.role != Some(MessageRole::User)
+            if message.role != Some(RunRole::User)
                 && let Some(run_end) = collapsed_activity_run_end(parts, part_index)
             {
                 let activities = parts[part_index..run_end]
@@ -277,10 +277,10 @@ pub fn render_entry_detailed(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        I18n, Line, MessageStatus, TRANSCRIPT_EXPORT_WIDTH, TranscriptDetailDefaults,
-        TranscriptEntry, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
-        activity_status_icon, bounded_title_summary, markdown_blocks, refresh_spinner_line,
-        render_entry_detailed, render_entry_export, render_markdown_block, render_tool_execution,
+        I18n, Line, RunStatus, TRANSCRIPT_EXPORT_WIDTH, TranscriptDetailDefaults, TranscriptEntry,
+        TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr, activity_status_icon,
+        bounded_title_summary, markdown_blocks, refresh_spinner_line, render_entry_detailed,
+        render_entry_export, render_markdown_block, render_tool_execution,
         render_transcript_entries_export_markdown, should_suppress_markdown_block, spinner_frame,
         thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
         transcript_spinner_placeholder,
@@ -305,8 +305,8 @@ mod tests {
 
     fn entry(
         id: i64,
-        role: agena_api::resource::MessageRole,
-        state: MessageStatus,
+        role: agena_api::resource::RunRole,
+        state: RunStatus,
         created_at: DateTime<Utc>,
         parts: Vec<TranscriptEntryPart>,
     ) -> TranscriptEntry {
@@ -407,8 +407,8 @@ mod tests {
         )];
         let message = entry(
             7,
-            agena_api::resource::MessageRole::Assistant,
-            MessageStatus::Completed,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
             now,
             parts,
         );
@@ -462,8 +462,8 @@ mod tests {
         let content_id = parts[0].id;
         let message = entry(
             7,
-            agena_api::resource::MessageRole::System,
-            MessageStatus::Failed,
+            agena_api::resource::RunRole::System,
+            RunStatus::Failed,
             now,
             parts,
         );
@@ -572,8 +572,8 @@ mod tests {
         ];
         let message = entry(
             7,
-            agena_api::resource::MessageRole::Assistant,
-            MessageStatus::Completed,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
             now,
             parts,
         );
@@ -687,8 +687,8 @@ mod tests {
         }));
         let message = entry(
             7,
-            agena_api::resource::MessageRole::Assistant,
-            MessageStatus::Completed,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
             now,
             parts,
         );
@@ -773,8 +773,8 @@ mod tests {
             .collect::<Vec<_>>();
         let message = entry(
             7,
-            agena_api::resource::MessageRole::Assistant,
-            MessageStatus::Completed,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
             now,
             parts,
         );
@@ -852,8 +852,8 @@ mod tests {
         parts.extend((2..11).map(operation));
         let message = entry(
             7,
-            agena_api::resource::MessageRole::Assistant,
-            MessageStatus::Completed,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
             now,
             parts,
         );
@@ -941,8 +941,8 @@ mod tests {
         };
         let mut message = entry(
             17,
-            agena_api::resource::MessageRole::Assistant,
-            MessageStatus::InProgress,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::InProgress,
             now,
             (31..37).map(activity).collect(),
         );
@@ -1002,8 +1002,8 @@ mod tests {
         };
         let mut message = entry(
             18,
-            agena_api::resource::MessageRole::Assistant,
-            MessageStatus::InProgress,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::InProgress,
             now,
             (41..46).map(activity).collect(),
         );
@@ -1063,8 +1063,8 @@ mod tests {
         };
         let message = entry(
             19,
-            agena_api::resource::MessageRole::Assistant,
-            MessageStatus::Completed,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
             now,
             (51..59).map(activity).collect(),
         );
@@ -1163,8 +1163,8 @@ mod tests {
         let now = Utc::now();
         let message = entry(
             1,
-            agena_api::resource::MessageRole::Assistant,
-            MessageStatus::InProgress,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::InProgress,
             now,
             Vec::new(),
         );
@@ -1203,10 +1203,10 @@ mod tests {
 
     #[test]
     fn tool_api_calls_show_the_model_action_and_execution_tool() {
-        let input = agena_api::message_part::StructuredObjectResource {
-            fields: vec![agena_api::message_part::StructuredFieldResource {
+        let input = agena_api::part::StructuredObjectResource {
+            fields: vec![agena_api::part::StructuredFieldResource {
                 name: "tool".to_owned(),
-                value: agena_api::message_part::StructuredValueResource::Text {
+                value: agena_api::part::StructuredValueResource::Text {
                     value: "web.search".to_owned(),
                 },
             }],
@@ -1232,11 +1232,11 @@ mod tests {
                 ..Default::default()
             },
             title: "Production ready".to_owned(),
-            model_output: agena_api::message_part::ModelVisibleOutputResource {
+            model_output: agena_api::part::ModelVisibleOutputResource {
                 text: "**Deployment finished**".to_owned(),
                 ..Default::default()
             },
-            result: agena_api::message_part::ToolResultEnvelopeResource {
+            result: agena_api::part::ToolResultEnvelopeResource {
                 metadata: std::collections::BTreeMap::from([(
                     "agena.notification.level".to_owned(),
                     serde_json::Value::String("success".to_owned()),
@@ -1286,7 +1286,7 @@ mod tests {
                 name: "agena.test".to_owned(),
                 ..Default::default()
             },
-            blocks: vec![agena_api::message_part::OperationBlockResource::Text { text: output }],
+            blocks: vec![agena_api::part::OperationBlockResource::Text { text: output }],
             ..Default::default()
         };
         let part = TranscriptFixture::operation_part(
@@ -1324,10 +1324,10 @@ mod tests {
             "+A8AAQUBAScY42YAAAAASUVORK5CYII="
         )
         .to_owned();
-        let attachment = agena_api::resource::MessageAttachment {
-            kind: agena_api::resource::MessageAttachmentKind::Image,
+        let attachment = agena_api::resource::PartAttachment {
+            kind: agena_api::resource::PartAttachmentKind::Image,
             mime: "image/png".to_owned(),
-            source: agena_api::resource::MessageAttachmentSource::Base64 { data: png.clone() },
+            source: agena_api::resource::PartAttachmentSource::Base64 { data: png.clone() },
             filename: Some("pixel.png".to_owned()),
             title: None,
             size_bytes: None,
@@ -1343,18 +1343,16 @@ mod tests {
                 name: "agena.image".to_owned(),
                 ..Default::default()
             },
-            model_output: agena_api::message_part::ModelVisibleOutputResource {
+            model_output: agena_api::part::ModelVisibleOutputResource {
                 text: "created an image".to_owned(),
                 ..Default::default()
             },
-            blocks: vec![
-                agena_api::message_part::OperationBlockResource::EmbeddedResource {
-                    uri: "pixel.png".to_owned(),
-                    mime: "image/png".to_owned(),
-                    text: None,
-                    base64: Some(png),
-                },
-            ],
+            blocks: vec![agena_api::part::OperationBlockResource::EmbeddedResource {
+                uri: "pixel.png".to_owned(),
+                mime: "image/png".to_owned(),
+                text: None,
+                base64: Some(png),
+            }],
             attachments: vec![attachment],
             ..Default::default()
         };
@@ -1386,10 +1384,10 @@ mod tests {
 
     #[test]
     fn tool_image_attachment_without_a_block_keeps_its_attachment_section() {
-        let attachment = agena_api::resource::MessageAttachment {
-            kind: agena_api::resource::MessageAttachmentKind::Image,
+        let attachment = agena_api::resource::PartAttachment {
+            kind: agena_api::resource::PartAttachmentKind::Image,
             mime: "image/png".to_owned(),
-            source: agena_api::resource::MessageAttachmentSource::Url {
+            source: agena_api::resource::PartAttachmentSource::Url {
                 url: "https://example.com/pixel.png".to_owned(),
             },
             filename: Some("pixel.png".to_owned()),
@@ -1407,7 +1405,7 @@ mod tests {
                 name: "agena.image".to_owned(),
                 ..Default::default()
             },
-            model_output: agena_api::message_part::ModelVisibleOutputResource {
+            model_output: agena_api::part::ModelVisibleOutputResource {
                 text: "created an image".to_owned(),
                 ..Default::default()
             },
@@ -1442,20 +1440,20 @@ mod tests {
 
     #[test]
     fn folded_operation_headline_uses_the_composed_operation_title() {
-        let input = agena_api::message_part::StructuredObjectResource {
+        let input = agena_api::part::StructuredObjectResource {
             fields: vec![
-                agena_api::message_part::StructuredFieldResource {
+                agena_api::part::StructuredFieldResource {
                     name: "tool".to_owned(),
-                    value: agena_api::message_part::StructuredValueResource::Text {
+                    value: agena_api::part::StructuredValueResource::Text {
                         value: "fs.apply_patch".to_owned(),
                     },
                 },
-                agena_api::message_part::StructuredFieldResource {
+                agena_api::part::StructuredFieldResource {
                     name: "input".to_owned(),
-                    value: agena_api::message_part::StructuredValueResource::Object {
-                        fields: vec![agena_api::message_part::StructuredFieldResource {
+                    value: agena_api::part::StructuredValueResource::Object {
+                        fields: vec![agena_api::part::StructuredFieldResource {
                             name: "patch".to_owned(),
-                            value: agena_api::message_part::StructuredValueResource::Text {
+                            value: agena_api::part::StructuredValueResource::Text {
                                 value: "*** Begin Patch\n*** Update File: apps/agena-cli/src/app.rs\n@@\n-old\n+new\n*** End Patch".to_owned(),
                             },
                         }],
@@ -1509,33 +1507,33 @@ mod tests {
 
     #[test]
     fn folded_tool_headline_shows_the_composed_operation_title_and_reports_result_count() {
-        let input = agena_api::message_part::StructuredObjectResource {
+        let input = agena_api::part::StructuredObjectResource {
             fields: vec![
-                agena_api::message_part::StructuredFieldResource {
+                agena_api::part::StructuredFieldResource {
                     name: "tool".to_owned(),
-                    value: agena_api::message_part::StructuredValueResource::Text {
+                    value: agena_api::part::StructuredValueResource::Text {
                         value: "fs.grep".to_owned(),
                     },
                 },
-                agena_api::message_part::StructuredFieldResource {
+                agena_api::part::StructuredFieldResource {
                     name: "input".to_owned(),
-                    value: agena_api::message_part::StructuredValueResource::Object {
+                    value: agena_api::part::StructuredValueResource::Object {
                         fields: vec![
-                            agena_api::message_part::StructuredFieldResource {
+                            agena_api::part::StructuredFieldResource {
                                 name: "pattern".to_owned(),
-                                value: agena_api::message_part::StructuredValueResource::Text {
+                                value: agena_api::part::StructuredValueResource::Text {
                                     value: "TODO".to_owned(),
                                 },
                             },
-                            agena_api::message_part::StructuredFieldResource {
+                            agena_api::part::StructuredFieldResource {
                                 name: "path".to_owned(),
-                                value: agena_api::message_part::StructuredValueResource::Text {
+                                value: agena_api::part::StructuredValueResource::Text {
                                     value: "crates".to_owned(),
                                 },
                             },
-                            agena_api::message_part::StructuredFieldResource {
+                            agena_api::part::StructuredFieldResource {
                                 name: "include".to_owned(),
-                                value: agena_api::message_part::StructuredValueResource::Text {
+                                value: agena_api::part::StructuredValueResource::Text {
                                     value: "*.rs".to_owned(),
                                 },
                             },
@@ -1554,13 +1552,11 @@ mod tests {
             // The composed operation title is the headline.
             title: "Grep TODO".to_owned(),
             summary: "36 matches in crates".to_owned(),
-            details: agena_api::message_part::ToolOutputResource {
-                payload: agena_api::message_part::StructuredObjectResource {
-                    fields: vec![agena_api::message_part::StructuredFieldResource {
+            details: agena_api::part::ToolOutputResource {
+                payload: agena_api::part::StructuredObjectResource {
+                    fields: vec![agena_api::part::StructuredFieldResource {
                         name: "matches".to_owned(),
-                        value: agena_api::message_part::StructuredValueResource::Integer {
-                            value: 36,
-                        },
+                        value: agena_api::part::StructuredValueResource::Integer { value: 36 },
                     }],
                 },
                 ..Default::default()
@@ -1576,10 +1572,10 @@ mod tests {
 
     #[test]
     fn folded_tool_keeps_failure_reason_on_the_same_line() {
-        let input = agena_api::message_part::StructuredObjectResource {
-            fields: vec![agena_api::message_part::StructuredFieldResource {
+        let input = agena_api::part::StructuredObjectResource {
+            fields: vec![agena_api::part::StructuredFieldResource {
                 name: "file_path".to_owned(),
-                value: agena_api::message_part::StructuredValueResource::Text {
+                value: agena_api::part::StructuredValueResource::Text {
                     value: "secrets.env".to_owned(),
                 },
             }],
@@ -1593,7 +1589,7 @@ mod tests {
             },
             title: "Read secrets.env".to_owned(),
             summary: "permission denied by workspace policy".to_owned(),
-            error: Some(agena_api::message_part::OperationErrorResource {
+            error: Some(agena_api::part::OperationErrorResource {
                 failure: agena_failure::Failure::new(
                     agena_failure::FailureCode::new("tool.permission_denied"),
                     agena_failure::FailureCategory::PermissionDenied,
@@ -1715,8 +1711,8 @@ mod tests {
         let now = Utc::now();
         let message = entry(
             42,
-            agena_api::resource::MessageRole::Assistant,
-            MessageStatus::Completed,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
             now,
             vec![TranscriptFixture::text_part(
                 1,

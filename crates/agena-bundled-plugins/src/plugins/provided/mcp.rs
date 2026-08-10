@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource};
+use crate::part::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::{
     InitOutcome, NetworkAccessSpec, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch,

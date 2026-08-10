@@ -1,139 +1,1435 @@
-use std::sync::{Arc, Mutex};
+//! The v2 data boundary for the session manager.
+//!
+//! v1 kept a session store that owned the database, projected an event log
+//! into model messages, reserved ids, and ran leases. All of that is gone in
+//! v2 (design 14-15): the sealed [`agena_storage::SessionStore`] facade owns
+//! ids, leases, and transactions; parts are the only chat entity; there is no
+//! event log and no live `EventKind` plumbing.
+//!
+//! This module is the manager's thin adapter over that facade. It:
+//!
+//! - converts a [`SessionView`] (metadata + parts) back into the
+//!   [`Session`] aggregate the execution engine operates on
+//!   (parts are grouped into runs by their `run` marker);
+//! - converts [`TypedContent`] payloads to and from the JSON stored on
+//!   `parts.content`;
+//! - translates every manager write (submit, append, update, run lifecycle,
+//!   interaction, fork, rewind, compaction) into facade calls, remapping
+//!   engine-allocated part ids onto the in-memory aggregate.
+//!
+//! There is deliberately no database handle, no raw SQL, and no event
+//! concept in this file — the facade is the only data surface (design 14.3,
+//! 15.2).
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr};
-use tokio::sync::OnceCell;
 
-use crate::{
-    AppError,
-    db::crud::session,
-    event::{EventKind, EventPublisher, MessagePartCheckpointedEvent},
-    message::Message,
+use agena_domain::{ExecutionAccess, ExecutionSelection, ExecutionStatus, ReasoningPart, Role};
+use agena_plugin_sdk::attachment::{AttachmentPart, AttachmentSource};
+use agena_runtime_contracts::part_content;
+use agena_runtime_contracts::part_content::TypedContent;
+use agena_storage::store::{
+    NewPart, Part, PartDelta, PartRole, PartState, PartVisibility, SessionMeta, SessionStore,
+    SessionView, StoreError, SubmitOutcome, UsageQuery,
 };
-use agena_domain::{PermissionMode, PermissionRuleEvent, PermissionScope};
-use agena_storage::{
-    PermissionRuleRepository, PermissionRuleTransactionWriter, PersistedPermissionRule,
-    SequenceAllocator, SessionSummaryRepository, WorkspaceRepository,
-};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use super::{
-    Session,
-    cache::{SessionCache, SessionCachePolicy},
-    history::SessionHistoryStore,
-};
-use agena_domain::SessionCacheStats;
+use crate::AppError;
+use crate::part::{OperationPart, RequestPart, SkillReferencePart};
+use crate::session::Session;
 
-pub(crate) struct SessionCommit {
-    pub(crate) session: Session,
-    pub(crate) checkpoints: Vec<MessageCheckpoint>,
-    pub(crate) client_events: Vec<EventKind>,
-    pub(crate) persisted_rules: Vec<PersistedPermissionRule>,
-    /// Expected `agena_sessions.version` for the optimistic-lock write. When
-    /// present, the session row is updated only if its version still matches;
-    /// a mismatch yields `AppError::Conflict` instead of silently
-    /// overwriting a concurrent writer's change.
-    pub(crate) expected_version: Option<i64>,
-}
-
-/// Explicit delta for durable model-message projection.
+/// The facade-backed store adapter used by [`crate::SessionManager`].
 ///
-/// A commit names the exact parts whose value or status changed. This prevents
-/// an update to one streamed Operation from checkpointing every older sibling
-/// in the same assistant message.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MessageCheckpoint {
-    pub(crate) message_id: i64,
-    pub(crate) part_ids: Vec<i64>,
+/// `owner_id` is the same process-wide execution identity passed to
+/// [`agena_storage::SessionFacade::new`]; every write routes through the
+/// facade's lease validation so the manager never touches leases itself.
+///
+/// v1 reserved database ids up front and built messages with them. v2 makes
+/// the engine the only id source (design 14.2), so freshly built in-memory
+/// parts carry a negative placeholder until the facade returns the real id.
+/// The adapter remaps placeholders to engine ids on every write and rewrites
+/// the in-memory aggregate so message/part references stay consistent.
+#[derive(Clone)]
+pub(crate) struct StoreAdapter {
+    pub(crate) facade: Arc<dyn SessionStore>,
+    pub(crate) owner_id: String,
+    now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
-impl MessageCheckpoint {
-    pub(crate) fn all(message: &Message) -> Self {
-        Self::parts(message.id, message.parts.iter().map(|part| part.id))
-    }
-
-    pub(crate) fn part(message_id: i64, part_id: i64) -> Self {
+impl StoreAdapter {
+    pub(crate) fn new(
+        facade: Arc<dyn SessionStore>,
+        owner_id: String,
+        now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
+    ) -> Self {
         Self {
-            message_id,
-            part_ids: vec![part_id],
+            facade,
+            owner_id,
+            now_ms,
         }
     }
 
-    pub(crate) fn parts(message_id: i64, part_ids: impl IntoIterator<Item = i64>) -> Self {
-        let mut part_ids = part_ids.into_iter().collect::<Vec<_>>();
-        part_ids.sort_unstable();
-        part_ids.dedup();
-        Self {
-            message_id,
-            part_ids,
-        }
+    pub(crate) fn now_ms(&self) -> i64 {
+        (self.now_ms)()
+    }
+
+    /// Load a session's transcript and metadata and rebuild the in-memory
+    /// aggregate the execution engine operates on.
+    pub(crate) async fn load_session(&self, session_id: i64) -> Result<Session, AppError> {
+        let view = self.facade.load(session_id).await.map_err(store_error)?;
+        session_from_view(view)
+    }
+
+    /// Create a new session row and return the rebuilt aggregate.
+    pub(crate) async fn create_session(
+        &self,
+        workspace_id: i64,
+        parent_id: Option<i64>,
+        relation_kind: agena_domain::SessionRelationKind,
+        cutoff_part_id: Option<i64>,
+        title: String,
+        task_id: Option<String>,
+        config_json: Option<Value>,
+    ) -> Result<Session, AppError> {
+        let meta = self
+            .facade
+            .create_session(agena_storage::store::NewSession {
+                workspace_id,
+                parent_id,
+                relation_kind,
+                cutoff_part_id,
+                title,
+                task_id,
+                config_json,
+                provider_anchors_json: None,
+            })
+            .await
+            .map_err(store_error)?;
+        self.session_from_meta(meta)
+    }
+
+    pub(crate) async fn find_subagent_by_task_id(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+    ) -> Result<Option<i64>, AppError> {
+        Ok(self
+            .facade
+            .find_subagent_by_task_id(parent_session_id, task_id)
+            .await
+            .map_err(store_error)?
+            .map(|meta| meta.id))
+    }
+
+    pub(crate) async fn create_subagent_session(
+        &self,
+        parent_session_id: i64,
+        task_id: String,
+        title: String,
+    ) -> Result<i64, AppError> {
+        self.facade
+            .create_subagent_session(parent_session_id, task_id, title)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn update_subtask_state(
+        &self,
+        mut session: Session,
+        status: Option<String>,
+        started_at_ms: Option<i64>,
+        finished_at_ms: Option<i64>,
+        failure: Option<Value>,
+    ) -> Result<Session, AppError> {
+        let session_id = session.id;
+        let meta = self
+            .facade
+            .update_subtask_state(session_id, status, started_at_ms, finished_at_ms, failure)
+            .await
+            .map_err(store_error)?;
+        session.version = meta.version;
+        session.updated_at = timestamp_millis_to_utc(meta.updated_at_ms)?;
+        session.runtime.subtask = crate::session::SubtaskRuntimeState {
+            status: meta
+                .subtask_status
+                .as_deref()
+                .and_then(agena_domain::SubtaskStatus::parse)
+                .unwrap_or_default(),
+            started_at_ms: meta.subtask_started_at_ms,
+            finished_at_ms: meta.subtask_finished_at_ms,
+            failure: subtask_failure_from_value(meta.subtask_failure.as_ref()),
+        };
+        session.refresh_derived();
+        Ok(session)
+    }
+
+    /// Persist the D5 execution configuration (selection/access defaults,
+    /// permission ceiling, capability denials, workspace root override) to
+    /// `sessions.config_json`. The in-memory aggregate is returned unchanged
+    /// except for the version/updated_at the write bumped. Empty configs are
+    /// written as `NULL` so a session with no overrides stays a blank slate.
+    pub(crate) async fn persist_execution_config(
+        &self,
+        mut session: Session,
+    ) -> Result<Session, AppError> {
+        let config: PersistedExecutionConfig =
+            PersistedExecutionConfig::from(&session.runtime.execution);
+        let value = (!config.is_empty())
+            .then(|| serde_json::to_value(config))
+            .transpose()
+            .map_err(|error| AppError::Internal(format!("serialize execution config: {error}")))?;
+        let meta = self
+            .facade
+            .set_config_json(session.id, value)
+            .await
+            .map_err(store_error)?;
+        session.version = meta.version;
+        session.updated_at = timestamp_millis_to_utc(meta.updated_at_ms)?;
+        Ok(session)
+    }
+
+    pub(crate) async fn rename_session(
+        &self,
+        session_id: i64,
+        title: String,
+    ) -> Result<Session, AppError> {
+        self.facade
+            .rename(session_id, title)
+            .await
+            .map_err(store_error)?;
+        self.load_session(session_id).await
+    }
+
+    /// Submit a user message: creates the `run` marker and its content parts
+    /// in one transaction. The facade returns the full outcome — the run
+    /// marker plus the committed, engine-id'd parts — so callers remap
+    /// placeholders without reloading.
+    pub(crate) async fn submit_user_run(
+        &self,
+        session_id: i64,
+        parts: Vec<NewPart>,
+        idempotency_key: Option<String>,
+    ) -> Result<SubmitOutcome, AppError> {
+        self.facade
+            .submit_user_run(session_id, &self.owner_id, parts, idempotency_key)
+            .await
+            .map_err(store_error)
+    }
+
+    /// Start a non-user run (continue / compaction / subtask) and return the
+    /// new run marker part id.
+    pub(crate) async fn start_run(
+        &self,
+        session_id: i64,
+        run_kind: &str,
+        content: Value,
+    ) -> Result<i64, AppError> {
+        let outcome = self
+            .facade
+            .start_run(session_id, &self.owner_id, run_kind, content, None)
+            .await
+            .map_err(store_error)?;
+        Ok(outcome.run_id)
+    }
+
+    /// Append content parts under an existing run marker. Returns the created
+    /// parts (engine ids) so callers can rebuild in-memory messages.
+    pub(crate) async fn append_parts(
+        &self,
+        session_id: i64,
+        run_id: i64,
+        parts: Vec<NewPart>,
+    ) -> Result<Vec<Part>, AppError> {
+        self.facade
+            .append_parts(session_id, &self.owner_id, run_id, parts)
+            .await
+            .map_err(store_error)
+    }
+
+    /// Apply a streaming delta to one part and return the updated part.
+    pub(crate) async fn update_part(
+        &self,
+        session_id: i64,
+        part_id: i64,
+        delta: PartDelta,
+    ) -> Result<Part, AppError> {
+        self.facade
+            .update_part(session_id, &self.owner_id, part_id, delta)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn complete_run(
+        &self,
+        session_id: i64,
+        run_id: i64,
+        outcome: agena_storage::store::RunOutcome,
+    ) -> Result<(), AppError> {
+        self.facade
+            .complete_run(session_id, &self.owner_id, run_id, outcome)
+            .await
+            .map(|_| ())
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn cancel_run(&self, session_id: i64, run_id: i64) -> Result<(), AppError> {
+        self.facade
+            .cancel_run(session_id, &self.owner_id, run_id)
+            .await
+            .map(|_| ())
+            .map_err(store_error)
+    }
+
+    /// Reconcile a session whose in-flight run lost its lease: mark stale run
+    /// markers failed and their non-terminal children cancelled (17.4).
+    pub(crate) async fn reconcile(&self, session_id: i64) -> Result<(), AppError> {
+        self.facade.reconcile(session_id).await.map_err(store_error)
+    }
+
+    pub(crate) async fn fork(
+        &self,
+        session_id: i64,
+        at_part_id: i64,
+        title: String,
+    ) -> Result<i64, AppError> {
+        self.facade
+            .fork(session_id, at_part_id, title)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn rewind(
+        &self,
+        session_id: i64,
+        at_part_id: i64,
+        title: String,
+    ) -> Result<i64, AppError> {
+        self.facade
+            .rewind(session_id, at_part_id, title)
+            .await
+            .map_err(store_error)
+    }
+
+    /// Start a compaction run; returns the compaction run marker part id. The
+    /// checkpoint `summary` (and optional `window` description) are recorded
+    /// on the marker's content (4.1.1 `CompactionContent`).
+    pub(crate) async fn compact_session(
+        &self,
+        session_id: i64,
+        summary: Option<String>,
+        window: Option<String>,
+    ) -> Result<i64, AppError> {
+        self.facade
+            .compact_session(session_id, &self.owner_id, summary, window)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn export_session_jsonl(&self, session_id: i64) -> Result<String, AppError> {
+        self.facade
+            .export_session_jsonl(session_id)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn import_session_jsonl(
+        &self,
+        workspace_id: i64,
+        bundle: &str,
+    ) -> Result<i64, AppError> {
+        self.facade
+            .import_session_jsonl(workspace_id, bundle)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn usage_stats(
+        &self,
+        workspace_id: i64,
+        query: agena_domain::UsageStatsQuery,
+    ) -> Result<agena_domain::UsageStats, AppError> {
+        let generated_at = Utc::now();
+        // The facade query is scalar/exact (16.3); the domain query carries
+        // multi-value filters that this bridge collapses to the first value.
+        let storage_query = UsageQuery {
+            workspace_id: Some(workspace_id),
+            session_id: query.session_ids.first().copied(),
+            provider_id: query.provider_ids.first().cloned(),
+            model_id: query.model_ids.first().cloned(),
+            after_ms: query.from.map(|value| value.timestamp_millis()),
+            before_ms: query.to.map(|value| value.timestamp_millis()),
+        };
+        let stats = self
+            .facade
+            .usage_stats(storage_query)
+            .await
+            .map_err(store_error)?;
+        Ok(domain_usage_stats_from_storage(stats, &query, generated_at))
+    }
+
+    /// Engine-owned maintenance through the sealed facade (14.2): reap stale
+    /// leases and GC orphan parts. Idempotent, safe from any process.
+    pub(crate) async fn maintenance(
+        &self,
+    ) -> Result<agena_storage::store::MaintenanceOutcome, AppError> {
+        self.facade
+            .maintenance(self.now_ms())
+            .await
+            .map_err(store_error)
+    }
+
+    /// List session rows for the workspace as the shared domain DTO. The
+    /// facade pages by `(updated_at_ms, id)` cursor; the legacy
+    /// `SessionListRequest.offset` paging is emulated by skipping the first
+    /// `offset` rows, and `include_subagents = false` drops subtask rows
+    /// (13.11 keeps the DTO shape; the watermark fields v2 dissolved — source
+    /// cutoff / message id / subtask access — are `None`).
+    pub(crate) async fn list_session_summaries(
+        &self,
+        workspace_id: i64,
+        request: agena_domain::SessionListRequest,
+    ) -> Result<Vec<agena_domain::SessionSummary>, AppError> {
+        let fetch_limit = request
+            .limit
+            .map(|limit| limit as i64 + request.offset as i64);
+        let summaries = self
+            .facade
+            .list_session_summaries(agena_storage::store::SessionListQuery {
+                workspace_id: Some(workspace_id),
+                parent_id: request.parent_id,
+                roots_only: request.roots_only,
+                search: request.search,
+                limit: fetch_limit,
+                before: None,
+            })
+            .await
+            .map_err(store_error)?;
+        summaries
+            .into_iter()
+            .skip(request.offset as usize)
+            .filter(|summary| request.include_subagents || !summary.relation_kind.is_subagent())
+            .map(domain_summary_from_storage)
+            .collect()
+    }
+
+    /// Fetch one session's summary row as the shared domain DTO, or `None`.
+    pub(crate) async fn get_session_summary(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<agena_domain::SessionSummary>, AppError> {
+        self.facade
+            .get_session_summary(session_id)
+            .await
+            .map_err(store_error)?
+            .map(domain_summary_from_storage)
+            .transpose()
+    }
+
+    /// Session counts per workspace (13.5 `workspace_counts`).
+    pub(crate) async fn session_counts_by_workspace(
+        &self,
+        workspace_ids: &[i64],
+    ) -> Result<HashMap<i64, i64>, AppError> {
+        self.facade
+            .session_counts_by_workspace(workspace_ids)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn list_session_tree(
+        &self,
+        root_id: i64,
+    ) -> Result<Vec<agena_storage::store::SessionSummary>, AppError> {
+        self.facade
+            .list_session_tree(root_id)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn session_state(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_storage::store::SessionPresentation, AppError> {
+        self.facade
+            .session_state(session_id)
+            .await
+            .map_err(store_error)
+    }
+
+    fn session_from_meta(&self, meta: SessionMeta) -> Result<Session, AppError> {
+        let view = SessionView {
+            meta,
+            parts: Vec::new(),
+        };
+        session_from_view(view)
     }
 }
 
-#[derive(Debug, Clone)]
-struct PersistedRuleEventMeta {
-    pub(crate) rule: PersistedPermissionRule,
-    pub(crate) rule_id: i64,
-    pub(crate) created: bool,
+/// Process-local, monotonic source of negative placeholder ids.
+fn next_placeholder_id() -> i64 {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    static NEXT: AtomicI64 = AtomicI64::new(-1);
+    NEXT.fetch_sub(1, Ordering::Relaxed)
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct ProcessorPartIdAllocator {
-    pub(crate) ids: Arc<dyn SequenceAllocator>,
-}
+/// Part-id allocator handed to the processor for a model run. The processor
+/// emits parts with placeholder ids while streaming; the adapter remaps them
+/// to engine ids when the parts are appended to the run.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProcessorPartIdAllocator;
 
 impl ProcessorPartIdAllocator {
-    pub(crate) fn new(ids: Arc<dyn SequenceAllocator>) -> Self {
-        Self { ids }
-    }
-
     pub(crate) async fn reserve(&self) -> Result<i64, AppError> {
-        self.ids
-            .next_part_id()
-            .await
-            .map_err(|error| AppError::Internal(error.to_string()))
+        Ok(next_placeholder_id())
     }
 }
 
-pub(crate) struct SessionStore {
-    pub(crate) db: DatabaseConnection,
-    pub(crate) workspace_path: String,
-    pub(crate) workspace_id: OnceCell<i64>,
-    pub(crate) id_seed: OnceCell<()>,
-    pub(crate) cache: Arc<Mutex<SessionCache>>,
-    pub(crate) ids: Arc<dyn SequenceAllocator>,
-    pub(crate) history: SessionHistoryStore,
-    pub(crate) publisher: Arc<EventPublisher>,
-    pub(crate) workspace_repository: Arc<dyn WorkspaceRepository>,
-    pub(crate) permission_rule_repository: Arc<dyn PermissionRuleRepository>,
-    pub(crate) permission_rule_transaction_writer:
-        Arc<dyn PermissionRuleTransactionWriter<DatabaseTransaction>>,
-    pub(crate) session_stats_repository: Arc<dyn agena_storage::SessionStatsRepository>,
-    pub(crate) usage_repository: Arc<dyn agena_storage::UsageRepository>,
-    pub(crate) session_mutation_repository: Arc<dyn agena_storage::SessionMutationRepository>,
-    pub(crate) projection_lookup_repository: Arc<dyn agena_storage::ProjectionLookupRepository>,
-    pub(crate) session_summary_repository: Arc<dyn SessionSummaryRepository>,
-    /// First-open materialization of fork/rewind views is a per-session
-    /// single-writer operation inside one process. The projection locks live
-    /// in `SessionHistoryStore` and are not held while materializing (the
-    /// materializer itself drives projection catch-up), so it needs its own
-    /// fence to keep concurrent first opens from appending the tail twice.
-    materialize_locks: Arc<Mutex<std::collections::HashMap<i64, Arc<tokio::sync::Mutex<()>>>>>,
+fn store_error(error: StoreError) -> AppError {
+    match error {
+        StoreError::NotFound(message) => AppError::Internal(message),
+        StoreError::LeaseNotHeld { session_id } => {
+            AppError::Internal(format!("lease not held for session {session_id}"))
+        }
+        StoreError::LeaseHeldByOther {
+            session_id,
+            owner_id,
+            ..
+        } => AppError::Internal(format!(
+            "session {session_id} lease held by another owner {owner_id}"
+        )),
+        StoreError::InvalidState(message)
+        | StoreError::Constraint(message)
+        | StoreError::Conflict(message)
+        | StoreError::Serialization(message)
+        | StoreError::Io(message)
+        | StoreError::Database(message) => AppError::Internal(message),
+        StoreError::Busy => AppError::Internal("database busy, retry".to_string()),
+    }
 }
 
-mod activity_v2;
-mod core;
-mod event_rewrite;
-mod fork;
-mod helpers;
-mod history;
-mod ids;
-mod types;
-mod workspace;
+/// Rebuild the execution-engine [`Session`] aggregate from a v2
+/// [`SessionView`] (metadata + ordered parts).
+///
+/// The engine operates on the flat parts projection ([`Session::parts`],
+/// design 14-15): this installs the ordered part list and recomputes the
+/// derived state (pending operations, workflow, approx bytes) from it. The
+/// v1 [`Message`] grouping is not materialized on the aggregate; consumers
+/// rebuild logical runs on demand through [`parts_into_runs`] / the
+/// provider projectors.
+pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> {
+    let SessionView { meta, parts } = view;
+    let mut session = Session::new(
+        meta.id,
+        meta.workspace_id,
+        meta.title.clone(),
+        timestamp_millis_to_utc(meta.created_at_ms)?,
+    );
+    session.parent_id = meta.parent_id;
+    session.depth = meta.depth;
+    session.root_id = meta.root_id;
+    session.version = meta.version;
+    session.relation_kind = meta.relation_kind;
+    session.lifecycle_state = meta.lifecycle_state;
+    session.source_cutoff_seq_global = meta.cutoff_part_id;
+    session.task_id = meta.task_id.clone();
+    session.updated_at = timestamp_millis_to_utc(meta.updated_at_ms)?;
+    apply_meta_runtime(&mut session.runtime, &meta);
+    session.install_projected_parts(parts);
+    Ok(session)
+}
 
-pub(crate) use self::activity_v2::*;
-pub(crate) use self::core::LEASE_STALENESS_MS;
-pub(crate) use self::core::insert_session_message_memberships;
-pub(crate) use self::event_rewrite::*;
-pub(crate) use self::fork::split_fork_history;
-pub(crate) use self::helpers::*;
-pub(crate) use self::types::*;
+/// Group a flat ordered parts slice into logical messages: each run marker
+/// part starts a group that collects its content parts (in `(created_at_ms,
+/// part_id)` order); bare content parts (no run) form singleton groups. Runs
+/// are emitted in the order their markers appear in the (already ordered)
+/// parts, with singletons appended after. The provider projectors
+/// (`project_completion_input`, `project_persisted`) consume one group at a
+/// time.
+pub(crate) fn parts_into_runs(parts: &[Part]) -> Vec<Vec<Part>> {
+    let mut run_ids: Vec<i64> = Vec::new();
+    let mut marker_by_run: BTreeMap<i64, &Part> = BTreeMap::new();
+    let mut content_by_run: BTreeMap<i64, Vec<Part>> = BTreeMap::new();
+    let mut singleton: Vec<Part> = Vec::new();
+
+    for part in parts {
+        if part.is_run_marker() {
+            if !marker_by_run.contains_key(&part.part_id) {
+                run_ids.push(part.part_id);
+            }
+            marker_by_run.insert(part.part_id, part);
+        } else if let Some(run_id) = part.run_id {
+            content_by_run.entry(run_id).or_default().push(part.clone());
+        } else {
+            singleton.push(part.clone());
+        }
+    }
+
+    let mut runs = Vec::with_capacity(run_ids.len().saturating_add(singleton.len()));
+    for run_id in run_ids {
+        let marker = marker_by_run
+            .get(&run_id)
+            .copied()
+            .cloned()
+            .expect("run marker registered before content grouping");
+        let mut content = content_by_run.remove(&run_id).unwrap_or_default();
+        content.sort_by_key(|part| (part.created_at_ms, part.part_id));
+        let mut group = Vec::with_capacity(content.len().saturating_add(1));
+        group.push(marker);
+        group.extend(content);
+        runs.push(group);
+    }
+    runs.extend(singleton.into_iter().map(|part| vec![part]));
+    runs
+}
+
+/// The key under which the adapter persists a part's provider `operation_id`
+/// (the tool-call id used to correlate `tool_call` ↔ `tool_result` across a
+/// transcript). The v2 parts schema has no column for it (design 4.1), so it
+/// rides inside the rich `OperationPart.metadata` map — a reserved key the
+/// engine never treats as its own. This is the adapter's private contract and
+/// is invisible to everything that reads `parts.content` as the canonical
+/// payload.
+pub(crate) const OPERATION_ID_METADATA_KEY: &str = "agena.operation_id";
+
+/// Serialize a decoded [`TypedContent`] into the canonical JSON payload stored
+/// on `parts.content` (design 4.1.1). Every typed content shape serializes
+/// itself via its `as_value` projection, so the bytes written here are
+/// identical to what the typed model produces on every other write path.
+pub(crate) fn typed_content_to_value(content: &TypedContent) -> Result<Value, AppError> {
+    let value = match content {
+        TypedContent::Run(part) => part.as_value(),
+        TypedContent::Text(part) => part.as_value(),
+        TypedContent::Think(part) => part.as_value(),
+        TypedContent::ToolCall(part) => part.as_value(),
+        TypedContent::ToolResult(part) => part.as_value(),
+        TypedContent::FileRef(part) => part.as_value(),
+        TypedContent::PasteRef(part) => {
+            serde_json::to_value(part).expect("paste ref content is always JSON serializable")
+        }
+        TypedContent::SkillRef(part) => part.as_value(),
+        TypedContent::Notice(part) => part.as_value(),
+        TypedContent::Hook(part) => part.as_value(),
+        TypedContent::Compaction(part) => {
+            serde_json::to_value(part).expect("compaction content is always JSON serializable")
+        }
+        TypedContent::Error(part) => part.as_value(),
+        TypedContent::Interaction(part) => part.as_value(),
+    };
+    Ok(value)
+}
+
+/// Build a [`NewPart`] from a decoded typed part payload.
+///
+/// `state` defaults to `pending`; content is the canonical JSON of the
+/// [`TypedContent`]. `kind` defaults to the derived part kind when not given.
+pub(crate) fn new_part_from_content(
+    kind: impl Into<String>,
+    role: PartRole,
+    content: &TypedContent,
+    state: PartState,
+) -> Result<NewPart, AppError> {
+    let value = typed_content_to_value(content)?;
+    Ok(NewPart {
+        kind: kind.into(),
+        role,
+        content: value,
+        summary: part_summary(content),
+        visibility: PartVisibility::Both,
+        rendered_markdown: None,
+        parent_part_id: None,
+        state,
+    })
+}
+
+fn part_summary(content: &TypedContent) -> Option<String> {
+    match content {
+        TypedContent::Text(text) => truncate(&text.text),
+        TypedContent::Think(think) => truncate(&reasoning_from_think(think).preferred_text()),
+        TypedContent::ToolCall(tool_call) => {
+            let operation = part_content::operation_from_tool_call(tool_call);
+            operation
+                .error_message()
+                .or_else(|| (!operation.summary.is_empty()).then_some(operation.summary.as_str()))
+                .and_then(truncate)
+        }
+        TypedContent::Error(error) => {
+            truncate(&part_content::user_problem_from_error(error).user.fallback)
+        }
+        TypedContent::SkillRef(reference) => {
+            truncate(&part_content::skill_reference_from_skill_ref(reference).summary())
+        }
+        TypedContent::Interaction(request) => {
+            truncate(&part_content::interaction_from_content(request).summary_text())
+        }
+        TypedContent::Hook(hook) => truncate(&hook.summary),
+        TypedContent::Notice(notice) => truncate(&notice.summary),
+        TypedContent::FileRef(attachment) => {
+            let attachment = part_content::attachment_from_file_ref(attachment);
+            if attachment.attachments.is_empty() {
+                Some("0 attachment(s)".to_string())
+            } else {
+                truncate(&format!("{} attachment(s)", attachment.attachments.len()))
+            }
+        }
+        TypedContent::Run(_) => None,
+        TypedContent::PasteRef(paste) => truncate(&paste.text),
+        TypedContent::ToolResult(result) => truncate(&result.output),
+        TypedContent::Compaction(compaction) => {
+            truncate(compaction.summary.as_deref().unwrap_or_default())
+        }
+    }
+}
+
+fn truncate(value: &str) -> Option<String> {
+    const LIMIT: usize = 240;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    for ch in trimmed.chars().take(LIMIT) {
+        out.push(ch);
+    }
+    if trimmed.chars().nth(LIMIT).is_some() {
+        out.push('…');
+    }
+    Some(out)
+}
+
+/// Decode the canonical JSON payload stored on a part into its typed content
+/// shape, dispatching on the part's `kind` column through the typed content
+/// layer in `agena-runtime-contracts` ([`agena_runtime_contracts::part_content::decode`]).
+/// Rich v1 payloads ride losslessly in the typed struct's `extra` bucket and
+/// are recovered on demand by the `*_from_*` mirrors in this module.
+pub(crate) fn typed_content_from_value(
+    kind: &str,
+    value: &Value,
+) -> Result<TypedContent, AppError> {
+    agena_runtime_contracts::part_content::decode(kind, value)
+        .map_err(|error| AppError::Internal(format!("decode part content from store: {error}")))
+}
+
+/// Project a v1 [`OperationPart`] onto the canonical `tool_call` shape: the
+/// invocation identity as named keys, and the full v1 operation payload
+/// losslessly under `extra["operation"]` (the result envelope, details,
+/// lifecycle and authorization have no canonical home).
+pub(crate) fn tool_call_from_operation(operation: &OperationPart) -> part_content::ToolCallContent {
+    let mut extra = BTreeMap::new();
+    extra.insert(
+        "operation".to_owned(),
+        serde_json::to_value(operation).expect("operation payload is always JSON serializable"),
+    );
+    if let Some(api_call) = &operation.invocation.tool_api_call {
+        extra.insert(
+            "tool_api_call".to_owned(),
+            serde_json::to_value(api_call).expect("tool api call is always JSON serializable"),
+        );
+    }
+    part_content::ToolCallContent {
+        name: operation.invocation.name.clone(),
+        plugin: operation.invocation.plugin_name.clone(),
+        input: Value::from(operation.invocation.input.clone()),
+        extra,
+    }
+}
+
+/// Project a v1 [`AttachmentPart`] onto the canonical `file_ref` shape: the
+/// first item's identity as named keys, the item's extended keys (`kind`,
+/// `source`, media dimensions), and the full attachment list losslessly under
+/// `extra["attachments"]` (covers multi-attachment parts).
+pub(crate) fn file_ref_from_attachment(part: &AttachmentPart) -> part_content::FileRefContent {
+    let mut extra = BTreeMap::new();
+    if !part.attachments.is_empty() {
+        extra.insert(
+            "attachments".to_owned(),
+            serde_json::to_value(&part.attachments)
+                .expect("attachment list is always JSON serializable"),
+        );
+    }
+    if let Some(first) = part.attachments.first() {
+        extra.insert(
+            "kind".to_owned(),
+            Value::String(first.kind.as_ref().to_owned()),
+        );
+        extra.insert(
+            "source".to_owned(),
+            serde_json::to_value(&first.source)
+                .expect("attachment source is always JSON serializable"),
+        );
+        if let Some(title) = &first.title {
+            extra.insert("title".to_owned(), Value::String(title.clone()));
+        }
+        if let Some(size) = first.size_bytes {
+            extra.insert("size_bytes".to_owned(), Value::from(size));
+        }
+        if let Some(width) = first.width {
+            extra.insert("width".to_owned(), Value::from(width));
+        }
+        if let Some(height) = first.height {
+            extra.insert("height".to_owned(), Value::from(height));
+        }
+        if let Some(duration) = first.duration_ms {
+            extra.insert("duration_ms".to_owned(), Value::from(duration));
+        }
+        if let Some(pages) = first.page_count {
+            extra.insert("page_count".to_owned(), Value::from(pages));
+        }
+    }
+    let first = part.attachments.first();
+    part_content::FileRefContent {
+        path: first.and_then(|item| match &item.source {
+            AttachmentSource::LocalPath { path } => Some(path.clone()),
+            _ => None,
+        }),
+        name: first.and_then(|item| item.filename.clone()),
+        mime: first
+            .map(|item| item.mime.clone())
+            .filter(|mime| !mime.is_empty()),
+        sha: first.and_then(|item| item.sha256.clone()),
+        extra,
+    }
+}
+
+/// Project a v1 [`SkillReferencePart`] onto the canonical `skill_ref` shape:
+/// the first skill name as the named key, and the full snapshot losslessly
+/// under `extra["skills"]` (transition period — the engine still writes it).
+pub(crate) fn skill_ref_from_reference(part: &SkillReferencePart) -> part_content::SkillRefContent {
+    let mut extra = BTreeMap::new();
+    if !part.skills.is_empty() {
+        extra.insert(
+            "skills".to_owned(),
+            serde_json::to_value(&part.skills).expect("skill snapshot is always JSON serializable"),
+        );
+    }
+    part_content::SkillRefContent {
+        skill: part.skills.first().map(|skill| skill.name.clone()),
+        args: None,
+        extra,
+    }
+}
+
+/// Project a v1 [`RequestPart`] onto the canonical `interaction` shape: the
+/// display-oriented named keys (`type`/`prompt`/`options`/`response`) plus the
+/// full request and reply losslessly under `extra["request"]`/`extra["reply"]`.
+pub(crate) fn interaction_from_request(part: &RequestPart) -> part_content::InteractionContent {
+    let mut extra = BTreeMap::new();
+    let mut reply_value = None;
+    let RequestPart::UserInput(interactive) = part;
+    extra.insert(
+        "request".to_owned(),
+        serde_json::to_value(&interactive.request)
+            .expect("user input request is always JSON serializable"),
+    );
+    if let Some(reply) = &interactive.reply {
+        let reply_json =
+            serde_json::to_value(reply).expect("user input reply is always JSON serializable");
+        extra.insert("reply".to_owned(), reply_json.clone());
+        reply_value = Some(reply_json);
+    }
+    part_content::InteractionContent {
+        kind: if interactive.request.kind.is_empty() {
+            "ask_user".to_owned()
+        } else {
+            interactive.request.kind.clone()
+        },
+        prompt: (!interactive.request.title.is_empty())
+            .then_some(interactive.request.title.clone()),
+        options: (!interactive.request.questions.is_empty()).then_some(
+            serde_json::to_value(&interactive.request.questions)
+                .expect("questions are always JSON serializable"),
+        ),
+        response: reply_value,
+        extra,
+    }
+}
+
+/// Build the canonical `text` typed content for a plain text payload.
+pub(crate) fn text_content(text: impl Into<String>) -> part_content::TextContent {
+    part_content::TextContent {
+        text: text.into(),
+        synthetic: false,
+        extra: BTreeMap::new(),
+    }
+}
+
+/// The coarse [`agena_domain::PartKind`] of a typed payload: text is
+/// `Text`, every other kind is `Activity`.
+pub(crate) fn typed_part_kind(content: &TypedContent) -> agena_domain::PartKind {
+    match content {
+        TypedContent::Text(_) => agena_domain::PartKind::Text,
+        _ => agena_domain::PartKind::Activity,
+    }
+}
+
+/// The plain text of a `TypedContent::Text` payload, if any (the v1
+/// `text_value`-style extraction over typed content).
+pub(crate) fn typed_text(content: &TypedContent) -> Option<&str> {
+    match content {
+        TypedContent::Text(text) => Some(text.text.as_str()),
+        _ => None,
+    }
+}
+
+// ─── Rich-content recovery (v1 payloads from typed shapes) ────────────────────
+//
+// The v1 payload structs (`OperationPart`, `AttachmentPart`,
+// `SkillReferencePart`, `ReasoningPart`, `RequestPart`, `UserProblem`) survive
+// the T8 migration — they ride losslessly in the typed content's `extra`
+// bucket and are recovered through the public extractor helpers in
+// `agena_runtime_contracts::part_content` (`operation_from_tool_call`,
+// `attachment_from_file_ref`, `skill_reference_from_skill_ref`,
+// `user_problem_from_error`, `interaction_from_content`).
+
+/// Rebuild a v1 [`ReasoningPart`] from the canonical `think` shape.
+pub(crate) fn reasoning_from_think(part: &part_content::ThinkContent) -> ReasoningPart {
+    ReasoningPart {
+        summary: part.summary.clone(),
+        raw_content: part.raw.clone(),
+        encrypted_content: part.encrypted_content.clone(),
+    }
+}
+
+pub(crate) fn role_from_part_role(role: PartRole) -> Role {
+    match role {
+        PartRole::User => Role::User,
+        PartRole::Assistant => Role::Assistant,
+        PartRole::System => Role::System,
+        PartRole::Tool => Role::Tool,
+        PartRole::Runtime => Role::System,
+    }
+}
+
+pub(crate) fn execution_status_from_part_state(state: PartState) -> ExecutionStatus {
+    match state {
+        PartState::Pending => ExecutionStatus::Pending,
+        PartState::InProgress => ExecutionStatus::InProgress,
+        PartState::Completed => ExecutionStatus::Completed,
+        PartState::Failed => ExecutionStatus::Failed,
+        PartState::Cancelled => ExecutionStatus::Cancelled,
+    }
+}
+
+pub(crate) fn part_state_from_execution_status(status: ExecutionStatus) -> PartState {
+    match status {
+        ExecutionStatus::Pending => PartState::Pending,
+        ExecutionStatus::InProgress => PartState::InProgress,
+        ExecutionStatus::Completed => PartState::Completed,
+        // The persisted part state vocabulary is coarse (schema CHECK); the
+        // precise non-execution reason rides in the part content, matching the
+        // transcript's coarse mapping (history.rs `activity_state_from_execution`).
+        ExecutionStatus::PolicyDenied
+        | ExecutionStatus::UserDeclined
+        | ExecutionStatus::CapabilityUnavailable
+        | ExecutionStatus::ToolUnavailable => PartState::Completed,
+        ExecutionStatus::Failed => PartState::Failed,
+        ExecutionStatus::Cancelled => PartState::Cancelled,
+    }
+}
+
+/// Project the facade's normalized usage aggregates (16.3) onto the shared
+/// domain DTO. The facade returns per-provider×model groups; the domain
+/// breakdowns for day/session are derived from the same scalar columns. P5
+/// enriches `by_day` / `by_session` from the per-day/per-session queries
+/// (16.3); totals and provider/model breakdowns are exact here.
+fn domain_usage_stats_from_storage(
+    stats: agena_storage::store::UsageStats,
+    query: &agena_domain::UsageStatsQuery,
+    generated_at: DateTime<Utc>,
+) -> agena_domain::UsageStats {
+    let micros_per_usd = 1_000_000_f64;
+    let runs = stats.total_calls.max(0) as u64;
+    let input_tokens = stats.total_input_tokens.max(0) as u64;
+    let output_tokens = stats.total_output_tokens.max(0) as u64;
+    let total_cost_usd = stats.total_cost_micros.max(0) as f64 / micros_per_usd;
+    let totals = agena_domain::UsageTotals {
+        runs,
+        sessions: 0,
+        input_tokens,
+        output_tokens,
+        reasoning_tokens: 0,
+        cache_write_tokens: 0,
+        cache_write_5m_tokens: 0,
+        cache_write_1h_tokens: 0,
+        cache_read_tokens: 0,
+        tool_use_tokens: 0,
+        other_tokens: 0,
+        total_tokens: input_tokens + output_tokens,
+        cache_input_tokens: 0,
+        cache_hit_rate: 0.0,
+        total_cost_usd,
+        recorded_cost_usd: 0.0,
+        estimated_cost_usd: total_cost_usd,
+        unpriced_runs: 0,
+        billable_units: Vec::new(),
+    };
+    let by_provider = stats.groups.iter().fold(
+        std::collections::BTreeMap::<String, agena_domain::UsageTotals>::new(),
+        |mut map, group| {
+            let provider = map.entry(group.provider_id.clone()).or_default();
+            provider.runs += group.calls.max(0) as u64;
+            provider.input_tokens += group.input_tokens.max(0) as u64;
+            provider.output_tokens += group.output_tokens.max(0) as u64;
+            provider.total_tokens +=
+                (group.input_tokens.max(0) + group.output_tokens.max(0)) as u64;
+            provider.estimated_cost_usd += group.total_cost_micros.max(0) as f64 / micros_per_usd;
+            map
+        },
+    );
+    let by_provider = by_provider
+        .into_iter()
+        .map(
+            |(provider_id, totals)| agena_domain::ProviderUsageBreakdown {
+                provider_id,
+                totals,
+            },
+        )
+        .collect();
+    let by_model = stats
+        .groups
+        .into_iter()
+        .map(|group| {
+            let totals = agena_domain::UsageTotals {
+                runs: group.calls.max(0) as u64,
+                input_tokens: group.input_tokens.max(0) as u64,
+                output_tokens: group.output_tokens.max(0) as u64,
+                total_tokens: (group.input_tokens.max(0) + group.output_tokens.max(0)) as u64,
+                reasoning_tokens: group.reasoning_tokens.max(0) as u64,
+                cache_write_tokens: group.cache_write_tokens.max(0) as u64,
+                cache_read_tokens: group.cache_read_tokens.max(0) as u64,
+                estimated_cost_usd: group.total_cost_micros.max(0) as f64 / micros_per_usd,
+                ..Default::default()
+            };
+            agena_domain::ModelUsageBreakdown {
+                provider_id: group.provider_id,
+                model_id: group.model_id,
+                totals,
+            }
+        })
+        .collect();
+    agena_domain::UsageStats {
+        generated_at,
+        period: query.period,
+        period_label: query.period.label().to_string(),
+        from: query.from.to_owned(),
+        to: query.to.to_owned(),
+        timezone_offset_minutes: query.timezone_offset_minutes,
+        totals,
+        active_days: 0,
+        average_cost_per_run_usd: if runs == 0 {
+            0.0
+        } else {
+            total_cost_usd / runs as f64
+        },
+        average_tokens_per_run: if runs == 0 {
+            0.0
+        } else {
+            (input_tokens + output_tokens) as f64 / runs as f64
+        },
+        average_cost_per_active_day_usd: 0.0,
+        average_tokens_per_active_day: 0.0,
+        peak_cost_date: None,
+        peak_cost_usd: 0.0,
+        peak_tokens_date: None,
+        peak_tokens: 0,
+        by_day: Vec::new(),
+        by_provider,
+        by_model,
+        by_session: Vec::new(),
+    }
+}
+
+/// Decode the subtask failure JSON column. A malformed value degrades to
+/// `None` rather than failing the whole session load.
+fn subtask_failure_from_value(value: Option<&Value>) -> Option<agena_failure::Failure> {
+    value.and_then(|value| serde_json::from_value::<agena_failure::Failure>(value.clone()).ok())
+}
+
+/// Apply session-row metadata (provider anchors, subtask, execution config)
+/// to a freshly built runtime state.
+fn apply_meta_runtime(runtime: &mut crate::session::SessionRuntimeState, meta: &SessionMeta) {
+    if let Some(value) = meta.provider_anchors_json.as_ref()
+        && let Ok(anchors) = serde_json::from_value::<
+            BTreeMap<String, crate::model::ProviderPromptAnchor>,
+        >(value.clone())
+    {
+        runtime.provider_anchors = anchors;
+    }
+    runtime.subtask = crate::session::SubtaskRuntimeState {
+        status: meta
+            .subtask_status
+            .as_deref()
+            .and_then(agena_domain::SubtaskStatus::parse)
+            .unwrap_or_default(),
+        started_at_ms: meta.subtask_started_at_ms,
+        finished_at_ms: meta.subtask_finished_at_ms,
+        failure: subtask_failure_from_value(meta.subtask_failure.as_ref()),
+    };
+    if let Some(value) = meta.config_json.as_ref()
+        && let Ok(config) = serde_json::from_value::<PersistedExecutionConfig>(value.clone())
+    {
+        runtime.execution.selection = config.selection;
+        runtime.execution.access = config.access;
+        runtime.execution.permission_ceiling = config.permission_ceiling;
+        runtime.execution.capability_denied_tool_names = config.capability_denied_tool_names;
+        runtime.execution.effective_workspace_root = config.effective_workspace_root;
+    }
+}
+
+/// The D5 slice of `sessions.config_json`: execution configuration only, never
+/// derived workflow state. `effective_permission` is deliberately excluded —
+/// it is re-derived from the permission policy at run start (refresh_execution_policy).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct PersistedExecutionConfig {
+    #[serde(flatten)]
+    pub selection: ExecutionSelection,
+    #[serde(default, skip_serializing_if = "ExecutionAccess::is_inherit")]
+    pub access: ExecutionAccess,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::authorization::PermissionConfig::is_empty"
+    )]
+    pub permission_ceiling: crate::authorization::PermissionConfig,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub capability_denied_tool_names: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_workspace_root: Option<PathBuf>,
+}
+
+impl PersistedExecutionConfig {
+    pub fn is_empty(&self) -> bool {
+        self.selection.is_empty()
+            && self.access.is_inherit()
+            && self.permission_ceiling.is_empty()
+            && self.capability_denied_tool_names.is_empty()
+            && self.effective_workspace_root.is_none()
+    }
+}
+
+impl From<&crate::session::model::SessionExecutionContext> for PersistedExecutionConfig {
+    fn from(execution: &crate::session::model::SessionExecutionContext) -> Self {
+        Self {
+            selection: execution.selection.clone(),
+            access: execution.access,
+            permission_ceiling: execution.permission_ceiling.clone(),
+            capability_denied_tool_names: execution.capability_denied_tool_names.clone(),
+            effective_workspace_root: execution.effective_workspace_root.clone(),
+        }
+    }
+}
+
+pub(crate) fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>, AppError> {
+    let seconds = timestamp_ms.div_euclid(1000);
+    let nanos = (timestamp_ms.rem_euclid(1000) * 1_000_000) as u32;
+    DateTime::from_timestamp(seconds, nanos)
+        .ok_or_else(|| AppError::Internal(format!("invalid timestamp {timestamp_ms}ms")))
+}
+
+/// Convert a facade summary row into the shared domain DTO. v2 dissolved the
+/// v1 event-watermark columns (`source_cutoff_seq_global`, `source_message_id`)
+/// and per-summary `subtask_access` (13.2); the domain DTO keeps the fields for
+/// wire compatibility and they are always `None` in v2.
+pub(crate) fn domain_summary_from_storage(
+    summary: agena_storage::store::SessionSummary,
+) -> Result<agena_domain::SessionSummary, AppError> {
+    let last_message_at = summary
+        .last_message_at_ms
+        .map(timestamp_millis_to_utc)
+        .transpose()?;
+    Ok(agena_domain::SessionSummary {
+        id: summary.id,
+        parent_id: summary.parent_id,
+        depth: summary.depth,
+        root_id: summary.root_id,
+        workspace_id: summary.workspace_id,
+        title: summary.title,
+        version: summary.version,
+        relation_kind: summary.relation_kind,
+        lifecycle_state: summary.lifecycle_state,
+        source_cutoff_seq_global: None,
+        source_message_id: None,
+        task_id: summary.task_id,
+        subtask_access: None,
+        subtask_status: summary
+            .subtask_status
+            .as_deref()
+            .and_then(agena_domain::SubtaskStatus::parse),
+        created_at: timestamp_millis_to_utc(summary.created_at_ms)?,
+        updated_at: timestamp_millis_to_utc(summary.updated_at_ms)?,
+        message_count: u64::try_from(summary.message_count).map_err(|_| {
+            AppError::Internal(format!(
+                "invalid negative message count for session {}",
+                summary.id
+            ))
+        })?,
+        child_session_count: u64::try_from(summary.child_session_count).map_err(|_| {
+            AppError::Internal(format!(
+                "invalid negative child count for session {}",
+                summary.id
+            ))
+        })?,
+        last_message_at,
+    })
+}
+
+/// A run marker's content payload used by the manager when starting a run.
+///
+/// `kind = "run"` parts carry their run kind in `content.run_kind` (design
+/// 4.1), may carry model identity for prompt assembly, and persist the
+/// canonical conversation identity (design 19.5) so reply wake-up and
+/// reply-command matching survive a reload.
+pub(crate) fn run_marker_content(
+    run_kind: &str,
+    model_provider_id: Option<&str>,
+    model_id: Option<&str>,
+    conversation_turn_id: Option<agena_domain::TurnId>,
+    conversation_reply_id: Option<agena_domain::AssistantReplyId>,
+) -> Value {
+    let mut content = serde_json::json!({ "run_kind": run_kind });
+    if let Some(provider_id) = model_provider_id {
+        content["provider_id"] = Value::String(provider_id.to_owned());
+    }
+    if let Some(model_id) = model_id {
+        content["model_id"] = Value::String(model_id.to_owned());
+    }
+    if let Some(turn_id) = conversation_turn_id {
+        content["turn_id"] = Value::String(turn_id.to_string());
+    }
+    if let Some(reply_id) = conversation_reply_id {
+        content["reply_id"] = Value::String(reply_id.to_string());
+    }
+    content
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena_domain::{
+        SessionLifecycleState, SessionRelationKind, StructuredObject, TimeRange, ToolInvocation,
+    };
+    use agena_storage::store::{PartVisibility, SessionMeta, SessionView};
+
+    fn meta(id: i64) -> SessionMeta {
+        SessionMeta {
+            id,
+            parent_id: None,
+            depth: 0,
+            root_id: id,
+            workspace_id: 1,
+            relation_kind: SessionRelationKind::Root,
+            cutoff_part_id: None,
+            title: "t".to_owned(),
+            version: 1,
+            lifecycle_state: SessionLifecycleState::Ready,
+            creation_failure: None,
+            task_id: None,
+            subtask_status: None,
+            subtask_started_at_ms: None,
+            subtask_finished_at_ms: None,
+            subtask_failure: None,
+            config_json: None,
+            provider_anchors_json: None,
+            created_at_ms: 1000,
+            updated_at_ms: 1000,
+        }
+    }
+
+    fn part(
+        part_id: i64,
+        kind: &str,
+        role: PartRole,
+        state: PartState,
+        run_id: Option<i64>,
+        content: Value,
+        created_at_ms: i64,
+    ) -> Part {
+        Part {
+            part_id,
+            kind: kind.to_owned(),
+            role,
+            state,
+            content,
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id,
+            origin_session_id: 1,
+            revision: 1,
+            started_at_ms: created_at_ms,
+            finished_at_ms: Some(created_at_ms + 1),
+            created_at_ms,
+            updated_at_ms: created_at_ms,
+            provider_state: None,
+        }
+    }
+
+    #[test]
+    fn session_from_view_groups_parts_by_run_marker() {
+        let user_marker = part(
+            10,
+            "run",
+            PartRole::User,
+            PartState::Completed,
+            None,
+            serde_json::json!({"run_kind": "user"}),
+            1000,
+        );
+        let user_text = part(
+            11,
+            "text",
+            PartRole::User,
+            PartState::Completed,
+            Some(10),
+            text_content_value("hello"),
+            1010,
+        );
+        let assistant_marker = part(
+            20,
+            "run",
+            PartRole::Assistant,
+            PartState::Completed,
+            None,
+            serde_json::json!({"run_kind": "execution"}),
+            2000,
+        );
+        let assistant_text = part(
+            21,
+            "text",
+            PartRole::Assistant,
+            PartState::Completed,
+            Some(20),
+            text_content_value("hi"),
+            2010,
+        );
+        let view = SessionView {
+            meta: meta(1),
+            parts: vec![user_marker, user_text, assistant_marker, assistant_text],
+        };
+        let session = session_from_view(view).unwrap();
+        assert_eq!(session.id, 1);
+        let runs = parts_into_runs(session.parts());
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0][0].role, PartRole::User);
+        assert_eq!(runs[0][0].part_id, 10);
+        assert_eq!(runs[0].len(), 2);
+        assert_eq!(
+            typed_text_from_value(&runs[0][1].content).as_deref(),
+            Some("hello"),
+            "part text round-trips through the canonical JSON payload"
+        );
+        assert_eq!(runs[1][0].role, PartRole::Assistant);
+        assert_eq!(
+            typed_text_from_value(&runs[1][1].content).as_deref(),
+            Some("hi")
+        );
+    }
+
+    #[test]
+    fn part_content_round_trips_through_json() {
+        let content = TypedContent::Text(part_content::TextContent {
+            text: "round trip".to_owned(),
+            synthetic: false,
+            extra: BTreeMap::new(),
+        });
+        let value = typed_content_to_value(&content).unwrap();
+        let back = typed_content_from_value("text", &value).unwrap();
+        assert_eq!(back, content);
+        assert_eq!(typed_text_from_value(&value).as_deref(), Some("round trip"));
+    }
+
+    #[test]
+    fn new_part_serializes_content_and_role() {
+        let content = TypedContent::Text(part_content::TextContent {
+            text: "payload".to_owned(),
+            synthetic: false,
+            extra: BTreeMap::new(),
+        });
+        let new_part =
+            new_part_from_content("text", PartRole::User, &content, PartState::Completed).unwrap();
+        assert_eq!(new_part.kind, "text");
+        assert_eq!(new_part.role, PartRole::User);
+        assert_eq!(new_part.state, PartState::Completed);
+        assert_eq!(
+            typed_content_from_value("text", &new_part.content).unwrap(),
+            content
+        );
+    }
+
+    /// Canonical `text` payload helper used by the storage fixtures below.
+    fn text_content_value(text: &str) -> Value {
+        part_content::TextContent {
+            text: text.to_owned(),
+            synthetic: false,
+            extra: BTreeMap::new(),
+        }
+        .as_value()
+    }
+
+    /// Recover the text of a canonical `text` payload (or `None` when the
+    /// payload is not a text part).
+    fn typed_text_from_value(value: &Value) -> Option<String> {
+        match typed_content_from_value("text", value).ok()? {
+            TypedContent::Text(part) => Some(part.text),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn rich_operation_round_trips_losslessly_through_canonical_tool_call() {
+        // A completed tool operation carries a result envelope, details and a
+        // stashed provider operation id; the canonical tool_call payload must
+        // preserve all of it (design 4.1.1 + 19.4 extended keys).
+        let mut operation = OperationPart::pending(
+            7,
+            ToolInvocation::plugin_named(
+                "fs.read",
+                "builtin",
+                StructuredObject::try_from(serde_json::json!({"file_path": "/tmp/x.txt"})).unwrap(),
+            ),
+            "Read file",
+            TimeRange {
+                start_ms: 1000,
+                end_ms: Some(2000),
+            },
+        );
+        operation.metadata.insert(
+            OPERATION_ID_METADATA_KEY.to_owned(),
+            Value::String("op-42".to_owned()),
+        );
+        operation.result.structured = Some(serde_json::json!({"lines": 3}));
+        operation.result.model_preview.text = "3 lines".to_owned();
+        operation.result.state = agena_domain::ToolResultState::Completed;
+        let content = TypedContent::ToolCall(tool_call_from_operation(&operation));
+
+        // Serialize via the typed canonical shape, then rebuild.
+        let value = typed_content_to_value(&content).unwrap();
+
+        // Canonical named keys are present; the rich payload is an extra key.
+        assert_eq!(value["name"], serde_json::json!("fs.read"));
+        assert_eq!(value["plugin"], serde_json::json!("builtin"));
+        assert_eq!(value["input"]["file_path"], serde_json::json!("/tmp/x.txt"));
+        assert!(value.get("operation").is_some());
+
+        let back = typed_content_from_value("tool_call", &value).unwrap();
+        let TypedContent::ToolCall(tool_call) = back else {
+            panic!("tool_call must rebuild as a typed tool call");
+        };
+        let rebuilt = part_content::operation_from_tool_call(&tool_call);
+        assert_eq!(
+            rebuilt, operation,
+            "rich operation must survive the canonical round trip"
+        );
+        assert_eq!(
+            rebuilt
+                .metadata
+                .get(OPERATION_ID_METADATA_KEY)
+                .and_then(Value::as_str),
+            Some("op-42")
+        );
+    }
+}

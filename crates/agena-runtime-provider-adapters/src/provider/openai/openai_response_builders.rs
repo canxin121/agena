@@ -13,13 +13,11 @@ use super::{
     session_text_lossy, utils, validate_responses_input, wire_message,
 };
 use agena_domain::Model;
-use agena_provider::{
-    CompletionInputMessage, ProviderCompactionContext, ResponsesApiRequestMetadata,
-};
+use agena_provider::{CompletionInputRun, ProviderCompactionContext, ResponsesApiRequestMetadata};
 
 impl OpenAiTransport {
     pub(super) fn is_vision_request(request: &CompletionRequest) -> bool {
-        request.messages.iter().any(|message| {
+        request.turns.iter().any(|message| {
             wire_message::project(message).iter().any(|part| {
                 matches!(
                     part,
@@ -31,7 +29,7 @@ impl OpenAiTransport {
     }
 
     pub(super) fn initiator(request: &CompletionRequest) -> &'static str {
-        match request.messages.last().map(|m| m.role) {
+        match request.turns.last().map(|m| m.role) {
             Some(Role::User) => "user",
             _ => "agent",
         }
@@ -218,20 +216,20 @@ impl OpenAiTransport {
             Self::push_responses_text_message(&mut input, "system", system.clone());
         }
 
-        for message in &request.messages {
-            Self::append_responses_items_for_message(&mut input, message);
+        for run in &request.turns {
+            Self::append_responses_items_for_message(&mut input, run);
         }
 
         validate_responses_input(input.as_slice())?;
         Ok(input)
     }
 
-    pub(super) fn realtime_conversation_items_for_messages(
-        messages: &[CompletionInputMessage],
+    pub(super) fn realtime_conversation_items_for_runs(
+        runs: &[CompletionInputRun],
     ) -> Result<Vec<OpenAiRealtimeConversationItem>, ProviderError> {
         let mut input = Vec::new();
-        for message in messages {
-            Self::append_responses_items_for_message(&mut input, message);
+        for run in runs {
+            Self::append_responses_items_for_message(&mut input, run);
         }
         validate_responses_input(input.as_slice())?;
         clear_responses_prompt_cache_hints(input.as_mut_slice());
@@ -397,18 +395,18 @@ impl OpenAiTransport {
 
     pub(super) fn append_responses_items_for_message(
         input: &mut Vec<OpenAiResponsesInputItem>,
-        message: &CompletionInputMessage,
+        run: &CompletionInputRun,
     ) {
-        let projected_parts = wire_message::project(message);
-        match message.role {
+        let projected_parts = wire_message::project(run);
+        match run.role {
             Role::System => Self::push_responses_text_message(
                 input,
                 "system",
-                session_text_lossy(message, projected_parts.as_slice()),
+                session_text_lossy(run, projected_parts.as_slice()),
             ),
             Role::User => {
                 if projected_parts.is_empty() {
-                    Self::push_responses_text_message(input, "user", message.as_text_lossy());
+                    Self::push_responses_text_message(input, "user", run.as_text_lossy());
                 } else {
                     Self::push_responses_message_from_parts(
                         input,
@@ -425,11 +423,10 @@ impl OpenAiTransport {
                     // (chat-style) instead of OpenAI's `encrypted_content`, so
                     // replay either carrier for those models. Other models keep
                     // the encrypted-content-only replay.
-                    let replay_content_reasoning = message.provider_state.assistant_reasoning_field
+                    let replay_content_reasoning = run.provider_state.assistant_reasoning_field
                         == Some(agena_domain::AssistantReasoningField::ReasoningContent);
                     input.extend(
-                        message
-                            .provider_state
+                        run.provider_state
                             .openai_reasoning_items
                             .iter()
                             .filter(|item| {
@@ -455,7 +452,7 @@ impl OpenAiTransport {
                     );
                 }
                 if projected_parts.is_empty() {
-                    Self::push_responses_text_message(input, "assistant", message.as_text_lossy());
+                    Self::push_responses_text_message(input, "assistant", run.as_text_lossy());
                 } else {
                     let mut text_chunks = Vec::new();
                     let mut pending_output: Option<(String, String, Vec<wire_message::WirePart>)> =
@@ -875,50 +872,148 @@ impl OpenAiTransport {
 #[cfg(test)]
 mod tool_api_history_tests {
     use super::{OpenAiTransport, ProviderError, validate_responses_input};
-    use agena_domain::ExecutionStatus;
     use agena_domain::ToolInvocation;
     use agena_domain::ToolOutput;
-    use agena_domain::{Role, StructuredObject, TimeRange};
-    use agena_runtime_contracts::message::{
-        Message, MessagePart, MessageProviderState, OperationPart, PartContent,
-    };
+    use agena_domain::{StructuredObject, TimeRange};
+    use agena_runtime_contracts::part::OperationPart;
+    use agena_runtime_contracts::provider_state::PartProviderState;
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
+    use serde_json::{Map, Value};
+
+    fn part(kind: &str, role: PartRole, state: PartState, content: Value) -> Part {
+        Part {
+            part_id: 1,
+            kind: kind.to_owned(),
+            role,
+            state,
+            content,
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(1),
+            origin_session_id: 1,
+            revision: 1,
+            started_at_ms: 0,
+            finished_at_ms: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            provider_state: None,
+        }
+    }
+
+    fn run_marker(role: PartRole, provider_state: Option<Value>) -> Part {
+        let mut marker = part("run", role, PartState::Completed, Value::Null);
+        marker.run_id = None;
+        marker.provider_state = provider_state;
+        marker
+    }
+
+    /// Canonical `tool_call` content: the invocation identity as named keys
+    /// plus the full v1 operation payload under `operation` (lossless) and
+    /// `tool_api_call`, mirroring the session serializer
+    /// (`tool_call_from_operation`).
+    fn tool_call_content(operation: &OperationPart) -> Value {
+        let mut object = Map::new();
+        object.insert(
+            "name".to_owned(),
+            Value::String(operation.invocation.name.clone()),
+        );
+        if let Some(plugin) = &operation.invocation.plugin_name {
+            object.insert("plugin".to_owned(), Value::String(plugin.clone()));
+        }
+        object.insert(
+            "input".to_owned(),
+            Value::from(operation.invocation.input.clone()),
+        );
+        object.insert(
+            "operation".to_owned(),
+            serde_json::to_value(operation).expect("operation is JSON serializable"),
+        );
+        if let Some(api_call) = &operation.invocation.tool_api_call {
+            object.insert(
+                "tool_api_call".to_owned(),
+                serde_json::to_value(api_call).expect("tool api call is JSON serializable"),
+            );
+        }
+        Value::Object(object)
+    }
+
+    fn completed_operation(
+        call_id: i64,
+        invocation: ToolInvocation,
+        title: &str,
+        summary: &str,
+        output_text: &str,
+        operation_id: Option<&str>,
+    ) -> OperationPart {
+        let mut operation = OperationPart::completed(
+            call_id,
+            invocation,
+            agena_runtime_contracts::part::OperationCompletion::new(
+                title.to_owned(),
+                summary.to_owned(),
+                output_text.to_owned(),
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+            ),
+            TimeRange::default(),
+        );
+        // The session serializer stashes the provider operation id inside the
+        // rich operation metadata; reproduce it so `project_operation_call_id`
+        // recovers it.
+        if let Some(operation_id) = operation_id {
+            operation.metadata.insert(
+                "agena.operation_id".to_owned(),
+                Value::String(operation_id.to_owned()),
+            );
+        }
+        operation
+    }
 
     #[test]
     fn dotted_internal_tool_api_key_never_replays_as_a_provider_function() {
-        let user = Message::prompt_text(Role::User, "rename the session");
+        let user = part(
+            "text",
+            PartRole::User,
+            PartState::Completed,
+            serde_json::json!({ "text": "rename the session" }),
+        );
         let invocation = ToolInvocation::new(
             "agena.tools.help",
             StructuredObject::try_from(serde_json::json!({ "tool": "session.rename" }))
                 .expect("structured help input"),
         );
-        let mut assistant = Message::prompt_parts(
-            Role::Assistant,
-            vec![PartContent::operation(OperationPart::completed(
-                0,
-                invocation,
-                agena_runtime_contracts::message::OperationCompletion::new(
-                    "Tool help",
-                    "Help returned",
-                    "help output".to_owned(),
-                    Vec::new(),
-                    Vec::new(),
-                    ToolOutput::default(),
-                ),
-                TimeRange::default(),
-            ))],
+        let operation = completed_operation(
+            0,
+            invocation,
+            "Tool help",
+            "Help returned",
+            "help output",
+            Some("call_legacy"),
         );
-        assistant.parts[0].operation_id = Some("call_legacy".to_owned());
-        assistant.provider_state = Some(MessageProviderState {
+        let provider_state = serde_json::to_value(PartProviderState {
             openai_reasoning_items: vec![serde_json::json!({
                 "type": "reasoning",
                 "encrypted_content": "encrypted"
             })],
-            ..MessageProviderState::default()
-        });
+            ..PartProviderState::default()
+        })
+        .expect("provider state is JSON serializable");
+        let assistant_parts = vec![
+            run_marker(PartRole::Assistant, Some(provider_state)),
+            part(
+                "tool_call",
+                PartRole::Assistant,
+                PartState::Completed,
+                tool_call_content(&operation),
+            ),
+        ];
 
         let mut input = Vec::new();
-        let user = crate::provider::project_completion_input(&user);
-        let assistant = crate::provider::project_completion_input(&assistant);
+        let user = crate::provider::project_completion_input(&[user]);
+        let assistant = crate::provider::project_completion_input(&assistant_parts);
         OpenAiTransport::append_responses_items_for_message(&mut input, &user);
         OpenAiTransport::append_responses_items_for_message(&mut input, &assistant);
         validate_responses_input(input.as_slice()).expect("provider-safe replay input");
@@ -942,24 +1037,15 @@ mod tool_api_history_tests {
             StructuredObject::try_from(serde_json::json!({ "path": "a.txt" }))
                 .expect("structured input"),
         );
-        let mut assistant = Message::prompt_parts(
-            Role::Assistant,
-            vec![PartContent::operation(OperationPart::completed(
-                0,
-                invocation,
-                agena_runtime_contracts::message::OperationCompletion::new(
-                    "Read",
-                    "Read file",
-                    "contents".to_owned(),
-                    Vec::new(),
-                    Vec::new(),
-                    ToolOutput::default(),
-                ),
-                TimeRange::default(),
-            ))],
+        let operation = completed_operation(
+            0,
+            invocation,
+            "Read",
+            "Read file",
+            "contents",
+            Some("call_read"),
         );
-        assistant.parts[0].operation_id = Some("call_read".to_owned());
-        assistant.provider_state = Some(MessageProviderState {
+        let provider_state = serde_json::to_value(PartProviderState {
             assistant_reasoning_field: Some(
                 agena_domain::AssistantReasoningField::ReasoningContent,
             ),
@@ -968,11 +1054,21 @@ mod tool_api_history_tests {
                 "summary": [{ "type": "summary_text", "text": "think" }],
                 "content": [{ "type": "reasoning_text", "text": "reasoned text" }]
             })],
-            ..MessageProviderState::default()
-        });
+            ..PartProviderState::default()
+        })
+        .expect("provider state is JSON serializable");
+        let assistant_parts = vec![
+            run_marker(PartRole::Assistant, Some(provider_state)),
+            part(
+                "tool_call",
+                PartRole::Assistant,
+                PartState::Completed,
+                tool_call_content(&operation),
+            ),
+        ];
 
         let mut input = Vec::new();
-        let assistant = crate::provider::project_completion_input(&assistant);
+        let assistant = crate::provider::project_completion_input(&assistant_parts);
         OpenAiTransport::append_responses_items_for_message(&mut input, &assistant);
         validate_responses_input(input.as_slice()).expect("provider-safe replay input");
 
@@ -998,23 +1094,8 @@ mod tool_api_history_tests {
             StructuredObject::try_from(serde_json::json!({ "path": "a.txt" }))
                 .expect("structured input"),
         );
-        let mut assistant = Message::prompt_parts(
-            Role::Assistant,
-            vec![PartContent::operation(OperationPart::completed(
-                0,
-                invocation,
-                agena_runtime_contracts::message::OperationCompletion::new(
-                    "Read",
-                    "Read file",
-                    "contents".to_owned(),
-                    Vec::new(),
-                    Vec::new(),
-                    ToolOutput::default(),
-                ),
-                TimeRange::default(),
-            ))],
-        );
-        assistant.provider_state = Some(MessageProviderState {
+        let operation = completed_operation(0, invocation, "Read", "Read file", "contents", None);
+        let provider_state = serde_json::to_value(PartProviderState {
             openai_reasoning_items: vec![serde_json::json!({
                 "type": "reasoning",
                 "summary": [
@@ -1026,11 +1107,21 @@ mod tool_api_history_tests {
                 ],
                 "encrypted_content": "opaque-state"
             })],
-            ..MessageProviderState::default()
-        });
+            ..PartProviderState::default()
+        })
+        .expect("provider state is JSON serializable");
+        let assistant_parts = vec![
+            run_marker(PartRole::Assistant, Some(provider_state)),
+            part(
+                "tool_call",
+                PartRole::Assistant,
+                PartState::Completed,
+                tool_call_content(&operation),
+            ),
+        ];
 
         let mut input = Vec::new();
-        let assistant = crate::provider::project_completion_input(&assistant);
+        let assistant = crate::provider::project_completion_input(&assistant_parts);
         OpenAiTransport::append_responses_items_for_message(&mut input, &assistant);
         validate_responses_input(input.as_slice()).expect("provider-safe replay input");
 
@@ -1101,15 +1192,22 @@ mod tool_api_history_tests {
         use agena_runtime_provider::provider::chat_wire;
 
         // 12001's shape: visible text + reasoning + inline tool results.
-        let mut repair = Message::prompt_parts(
-            Role::Assistant,
-            vec![
-                PartContent::text("只有 codex 存在。让我深入探索 codex 的源码"),
-                PartContent::reasoning_summary(
-                    "I made a mistake - I placed `tools_search` inside `tools_call.arguments.tool`. Let me correct that.",
-                ),
-            ],
-        );
+        let mut repair_parts = vec![
+            part(
+                "text",
+                PartRole::Assistant,
+                PartState::Completed,
+                serde_json::json!({ "text": "只有 codex 存在。让我深入探索 codex 的源码" }),
+            ),
+            part(
+                "think",
+                PartRole::Assistant,
+                PartState::Completed,
+                serde_json::json!({ "summary": [
+                    "I made a mistake - I placed `tools_search` inside `tools_call.arguments.tool`. Let me correct that."
+                ] }),
+            ),
+        ];
         // Inline operation parts replayed as tool results (tools_search id 12, fs.read id 13).
         for (id, name, input) in [
             (12, "tools_search", serde_json::json!({"query": "session"})),
@@ -1123,34 +1221,23 @@ mod tool_api_history_tests {
                 name,
                 StructuredObject::try_from(input).expect("structured input"),
             );
-            repair.parts.push(MessagePart::from_content_with_index(
-                0,
-                0,
-                repair.parts.len() as i32,
-                repair.created_at,
-                ExecutionStatus::Completed,
-                PartContent::operation(OperationPart::completed(
-                    id,
-                    invocation,
-                    agena_runtime_contracts::message::OperationCompletion::new(
-                        name,
-                        name,
-                        "result".to_owned(),
-                        Vec::new(),
-                        Vec::new(),
-                        ToolOutput::default(),
-                    ),
-                    TimeRange::default(),
-                )),
+            let operation = completed_operation(
+                id,
+                invocation,
+                name,
+                name,
+                "result",
+                Some(&format!("call_{name}")),
+            );
+            repair_parts.push(part(
+                "tool_call",
+                PartRole::Assistant,
+                PartState::Completed,
+                tool_call_content(&operation),
             ));
-            repair
-                .parts
-                .last_mut()
-                .expect("operation part")
-                .operation_id = Some(format!("call_{name}"));
         }
         // Content-only reasoning item as persisted in the DB for message 12001.
-        repair.provider_state = Some(MessageProviderState {
+        let repair_state = serde_json::to_value(PartProviderState {
             openai_reasoning_items: vec![serde_json::json!({
                 "type": "reasoning",
                 "summary": [],
@@ -1160,33 +1247,38 @@ mod tool_api_history_tests {
                 }]
             })],
             response_id: Some("6f8566f1-0062-40a4-b3fa-87093636c0d7".to_owned()),
-            ..MessageProviderState::default()
-        });
+            ..PartProviderState::default()
+        })
+        .expect("provider state is JSON serializable");
+        repair_parts.insert(0, run_marker(PartRole::Assistant, Some(repair_state)));
 
         // Replayed transcript: 11994(user) + 11995..11999(assistant) + 12001(repair).
-        let mut messages = vec![crate::provider::project_completion_input(
-            &Message::prompt_text(
-                Role::User,
-                "查看../codex ../claude ../grok ../gemini看看他们是如何实现",
-            ),
-        )];
+        let mut turns = vec![crate::provider::project_completion_input(&[part(
+            "text",
+            PartRole::User,
+            PartState::Completed,
+            serde_json::json!({ "text": "查看../codex ../claude ../grok ../gemini看看他们是如何实现" }),
+        )])];
         for text in [
             "Let me first explore the workspaces",
             "Let me find the correct FS tools first",
             "",
             "",
         ] {
-            messages.push(crate::provider::project_completion_input(
-                &Message::prompt_text(Role::Assistant, text),
-            ));
+            turns.push(crate::provider::project_completion_input(&[part(
+                "text",
+                PartRole::Assistant,
+                PartState::Completed,
+                serde_json::json!({ "text": text }),
+            )]));
         }
-        messages.push(crate::provider::project_completion_input(&repair));
+        turns.push(crate::provider::project_completion_input(&repair_parts));
 
         // The failing request had previous_response_id cleared (Restart).
         let mut request = CompletionRequest {
             model: agena_domain::ModelId::new("deepseek-v4-flash"),
             system: None,
-            messages,
+            turns,
             tool_api_functions: Vec::new(),
             provider_native_tools: Default::default(),
             disable_tools: false,
@@ -1215,7 +1307,7 @@ mod tool_api_history_tests {
         );
 
         let repair = request
-            .messages
+            .turns
             .last()
             .expect("repair message must be present");
         assert_eq!(
@@ -1225,8 +1317,8 @@ mod tool_api_history_tests {
         );
 
         let mut input = Vec::new();
-        for message in &request.messages {
-            OpenAiTransport::append_responses_items_for_message(&mut input, message);
+        for run in &request.turns {
+            OpenAiTransport::append_responses_items_for_message(&mut input, run);
         }
         validate_responses_input(input.as_slice()).expect("provider-safe replay input");
 

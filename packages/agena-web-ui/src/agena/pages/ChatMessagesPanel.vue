@@ -59,6 +59,7 @@ function blockMarkup(block: ChatMessageRenderBlock): string {
       >
         <div class="message-head">
           <div class="message-role">{{ message.role }}</div>
+          <div class="muted mono message-state">{{ message.state }}</div>
           <div class="button-row">
             <button class="button ghost" :disabled="props.loading" @click="props.inspectMessage(message.id)">
               Inspect

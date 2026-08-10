@@ -163,6 +163,7 @@ pub(super) async fn selected_session_id(
             offset: 0,
             limit: Some(1),
             include_subagents: false,
+            ..Default::default()
         })
         .await
         .map_err(|error| AppError::Internal(error.to_string()))?;

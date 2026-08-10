@@ -4,12 +4,12 @@ use super::super::{
 };
 use crate::ui_text;
 use crate::{
-    MessageRequestPartResource, TranscriptActivityContent, TranscriptAssistantReplyLifecycle,
+    RequestPartResource, TranscriptActivityContent, TranscriptAssistantReplyLifecycle,
     TranscriptEntryPart, TranscriptPartContent,
 };
 
 pub(crate) fn render_file_changes(
-    changes: &[agena_api::message_part::FileChangeRecordResource],
+    changes: &[agena_api::part::FileChangeRecordResource],
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,
@@ -37,7 +37,7 @@ pub(crate) fn render_file_changes(
 }
 
 pub(crate) fn render_checklist(
-    items: &[agena_api::message_part::TodoItemResource],
+    items: &[agena_api::part::TodoItemResource],
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,
@@ -70,10 +70,10 @@ pub(crate) fn render_checklist(
 }
 
 fn file_change_resource_list_item_text(
-    change: &agena_api::message_part::FileChangeRecordResource,
+    change: &agena_api::part::FileChangeRecordResource,
     i18n: &I18n,
 ) -> String {
-    use agena_api::message_part::FileChangeKindResource;
+    use agena_api::part::FileChangeKindResource;
     let marker = match change.kind {
         FileChangeKindResource::Added => "A",
         FileChangeKindResource::Updated => "M",
@@ -94,44 +94,41 @@ fn file_change_resource_list_item_text(
     format!("{marker} {path} ({label})")
 }
 
-fn file_change_resource_style(kind: agena_api::message_part::FileChangeKindResource) -> Style {
+fn file_change_resource_style(kind: agena_api::part::FileChangeKindResource) -> Style {
     match kind {
-        agena_api::message_part::FileChangeKindResource::Added => {
+        agena_api::part::FileChangeKindResource::Added => {
             Style::default().fg(agena_tui_components::theme::success_color())
         }
-        agena_api::message_part::FileChangeKindResource::Updated => {
+        agena_api::part::FileChangeKindResource::Updated => {
             Style::default().fg(agena_tui_components::theme::warning_color())
         }
-        agena_api::message_part::FileChangeKindResource::Deleted => {
+        agena_api::part::FileChangeKindResource::Deleted => {
             Style::default().fg(agena_tui_components::theme::danger_color())
         }
-        agena_api::message_part::FileChangeKindResource::Moved => {
+        agena_api::part::FileChangeKindResource::Moved => {
             Style::default().fg(agena_tui_components::theme::accent_color())
         }
     }
 }
 
-fn todo_status_resource_label(
-    i18n: &I18n,
-    status: agena_api::message_part::TodoStatusResource,
-) -> String {
+fn todo_status_resource_label(i18n: &I18n, status: agena_api::part::TodoStatusResource) -> String {
     let key = match status {
-        agena_api::message_part::TodoStatusResource::Pending => "todo-pending",
-        agena_api::message_part::TodoStatusResource::InProgress => "todo-in-progress",
-        agena_api::message_part::TodoStatusResource::Completed => "todo-completed",
-        agena_api::message_part::TodoStatusResource::Cancelled => "todo-cancelled",
+        agena_api::part::TodoStatusResource::Pending => "todo-pending",
+        agena_api::part::TodoStatusResource::InProgress => "todo-in-progress",
+        agena_api::part::TodoStatusResource::Completed => "todo-completed",
+        agena_api::part::TodoStatusResource::Cancelled => "todo-cancelled",
     };
     ui_text::t(i18n, key)
 }
 
 fn todo_priority_resource_label(
     i18n: &I18n,
-    priority: agena_api::message_part::TodoPriorityResource,
+    priority: agena_api::part::TodoPriorityResource,
 ) -> String {
     let key = match priority {
-        agena_api::message_part::TodoPriorityResource::High => "todo-priority-high",
-        agena_api::message_part::TodoPriorityResource::Medium => "todo-priority-medium",
-        agena_api::message_part::TodoPriorityResource::Low => "todo-priority-low",
+        agena_api::part::TodoPriorityResource::High => "todo-priority-high",
+        agena_api::part::TodoPriorityResource::Medium => "todo-priority-medium",
+        agena_api::part::TodoPriorityResource::Low => "todo-priority-low",
     };
     ui_text::t(i18n, key)
 }
@@ -229,7 +226,7 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
             match request.as_ref() {
-                MessageRequestPartResource::UserInput { request, .. } => request
+                RequestPartResource::UserInput { request, .. } => request
                     .questions
                     .first()
                     .map(|question| question.question.clone()),

@@ -1,7 +1,7 @@
 impl ToolExecutor {
     pub fn prepare_shell_command(
         &self,
-        input: &crate::message::ShellCommandInput,
+        input: &crate::part::ShellCommandInput,
         session_id: i64,
         call_id: i64,
     ) -> Result<Option<PreparedShellCommand>, ToolError> {
@@ -23,7 +23,7 @@ impl ToolExecutor {
             return Ok((invocation.clone(), None));
         };
         let payload = payload.map_err(|error| ToolError::invalid_input(error.to_string()))?;
-        let ToolPayloadInput::Shell(crate::message::ShellToolInput::Run {
+        let ToolPayloadInput::Shell(crate::part::ShellToolInput::Run {
             shell: agena_domain::ProcessShell::Bash,
             command: process_input,
             background,
@@ -42,7 +42,7 @@ impl ToolExecutor {
         }
         let mut rewritten = *process_input;
         rewritten.command = prepared_shell.command.clone();
-        let rewritten_invocation = ToolPayloadInput::Shell(crate::message::ShellToolInput::Run {
+        let rewritten_invocation = ToolPayloadInput::Shell(crate::part::ShellToolInput::Run {
             shell: agena_domain::ProcessShell::Bash,
             command: Box::new(rewritten),
             background,

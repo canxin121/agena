@@ -6,8 +6,7 @@ use async_trait::async_trait;
 
 use crate::{
     SessionExecutionReplyRequest, SessionExecutionRequest, SessionForkRequest,
-    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
-    SessionUserMessageRequest,
+    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions, SessionUserRunRequest,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,9 +77,9 @@ pub trait SessionExecutionCommandService: Send + Sync {
         request: crate::SessionCreateRequest,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
 
-    async fn submit_user_message(
+    async fn submit_user_run(
         &self,
-        request: SessionUserMessageRequest,
+        request: SessionUserRunRequest,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
 
     async fn steer_input(
@@ -169,9 +168,9 @@ mod tests {
             Ok(SessionExecutionCommandOutcome::completed(1))
         }
 
-        async fn submit_user_message(
+        async fn submit_user_run(
             &self,
-            request: crate::SessionUserMessageRequest,
+            request: crate::SessionUserRunRequest,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
             Ok(SessionExecutionCommandOutcome::completed(
                 request.run.session_id,

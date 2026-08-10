@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 use crate::LspConfig;
 use serde::Serialize;
 
-use crate::message::{
+use crate::part::{
     LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
 };
 use crate::plugins::provided::router;

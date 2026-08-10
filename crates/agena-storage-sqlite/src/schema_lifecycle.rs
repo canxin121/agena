@@ -7,22 +7,28 @@
 
 /// Current SQLite schema version written to `PRAGMA user_version`.
 ///
-/// Version 2 adds the `agena_content_nodes.title` column for tool Activities,
-/// letting a running title be updated with a tiny column UPDATE instead of a
-/// full payload rewrite. Version 1 introduced the database-backed
-/// `agena_sequences` / `agena_session_sequences` tables, the cross-process
-/// `agena_execution_leases` table, the user-message
-/// `agena_user_message_idempotency` table, and the scheduler `delivery_key` /
-/// `claimed_at_ms` columns. The schema evolves in place (create-if-not-exists);
-/// older databases are rejected rather than migrated.
-/// Version 3 adds the `agena_session_messages` membership table: a fork (or
-/// rewind branch) references the parent's terminal message rows instead of
-/// physically copying them, so `/fork` and `/side` stay cheap and compact.
-/// Version 4 adds `agena_session_lineage.view_materialized_seq_global`: a
-/// fork/rewind branch is a view definition (`parent_id` + cutoff) whose shared
-/// membership and (rare) in-flight tail are materialized lazily on first open,
-/// so the fork command itself stays O(1) and never copies content rows.
-pub const CURRENT_SCHEMA_VERSION: i64 = 4;
+/// Version 7 removes the scheduler tables. This schema owns the nine chat
+/// tables — `agena_parts`, `agena_session_parts`, `agena_sessions`,
+/// `agena_execution_leases`, `agena_sequences`, `agena_workspaces`,
+/// `agena_permission_rules`, `agena_usage`, `agena_idempotency` — plus the
+/// model-catalog infrastructure tables. Parts are the only chat-content
+/// entity; runs are `kind='run'` marker parts; session state is derived from
+/// parts + leases; there is no event log, no projection watermark, and no
+/// runtime-state JSON. v1 databases are NOT migrated: they are discarded
+/// (decision D3), so a database at any version other than 0 or 7 is rejected
+/// outright.
+///
+/// Version history:
+/// - 5: the v2 "everything is a part" schema (design
+///   `docs/database-design-v2.md`).
+/// - 6: `agena_scheduler_jobs` gains `retry_at_ms`, `paused`, `completed`
+///   columns so the scheduler due scan filters in SQL (no full-table JSON
+///   decode every tick).
+/// - 7: scheduler tables move out of this database entirely. The scheduler
+///   now owns a dedicated SQLite database with its own schema and version
+///   (`agena-scheduler::schema`), so this database no longer holds
+///   `agena_scheduler_jobs` / `agena_scheduler_history`.
+pub const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 #[cfg(test)]
 mod tests {

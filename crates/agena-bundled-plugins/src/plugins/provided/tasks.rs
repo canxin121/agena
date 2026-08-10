@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::message::{TaskAccess, TaskToolInput};
+use crate::part::{TaskAccess, TaskToolInput};
 use crate::plugins::provided::workflow::{WorkflowPlugin, WorkflowPluginConfig};
 use agena_macros::ToolInput;
 use agena_plugin_host::sdk::host_api::HostClient;
@@ -993,7 +993,7 @@ fn task_output(
 mod tests {
     use std::sync::Arc;
 
-    use crate::message::{TaskAccess, TaskToolInput};
+    use crate::part::{TaskAccess, TaskToolInput};
     use agena_plugin_host::sdk::Plugin;
 
     use super::{AsyncTaskEntry, AsyncTaskState, TasksPlugin, lock_state};

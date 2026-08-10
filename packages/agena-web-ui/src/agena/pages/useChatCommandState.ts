@@ -33,7 +33,6 @@ export type ChatCommandStateInput = {
   sessions: Ref<SessionResource[]>
   messages: Ref<import('../lib/agenaApi').MessageResource[]>
   composerQueue: Ref<ComposerQueueItem[]>
-  timelineEvents: Ref<import('../lib/agenaApi').DomainEventRecord[]>
   workspaces: Ref<WorkspaceResource[]>
   sessionImportJsonl: Ref<string>
   sessionTreeRows: ComputedRef<Array<{ session: SessionResource; depth: number }>>
@@ -143,7 +142,6 @@ export function useChatCommandState(input: ChatCommandStateInput) {
         sessions: computed(() => input.sessions.value),
         messages: computed(() => input.messages.value),
         composerQueue: computed(() => input.composerQueue.value),
-        timelineEvents: computed(() => input.timelineEvents.value),
         workspaces: computed(() => input.workspaces.value),
         sessionImportJsonl: computed(() => input.sessionImportJsonl.value),
         sessionTreeRows: input.sessionTreeRows,

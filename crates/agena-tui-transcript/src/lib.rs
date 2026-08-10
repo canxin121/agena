@@ -6,16 +6,16 @@
 
 use std::ops::Range;
 
-pub use agena_api::message_part::{
-    FileChangeKindResource, HumanToolResultResource, MessageRequestPartResource,
-    OperationBlockResource, OperationPartResource, PartExecutionStatusResource, TodoStatusResource,
-    ToolInvocationResource,
+pub use agena_api::part::{
+    FileChangeKindResource, HumanToolResultResource, OperationBlockResource, OperationPartResource,
+    PartExecutionStatusResource, RequestPartResource, TodoStatusResource, ToolInvocationResource,
 };
 use ratatui::layout::Rect;
 
 pub mod markdown;
 pub mod math;
 pub mod navigation;
+pub mod parts;
 pub mod render_model;
 pub mod renderer;
 pub mod selection;
@@ -25,10 +25,15 @@ pub mod text;
 pub use markdown::*;
 pub use math::*;
 pub use navigation::*;
+pub use parts::{
+    last_assistant_reply_text, part_state_is_terminal, parts_entries, parts_have_non_terminal_runs,
+    parts_visible_user_inputs,
+};
 pub use render_model::*;
 pub use renderer::{
     render_entry_detailed, render_entry_export, render_markdown_document,
-    render_transcript_snapshot_export_markdown, rewind_message_preview,
+    render_parts_export_markdown, render_transcript_snapshot_export_markdown,
+    rewind_message_preview,
 };
 pub use selection::{normalize_transcript_text_selection, transcript_text_selection_text};
 pub use snapshot::{pending_user_entry, transcript_entries};
@@ -72,12 +77,10 @@ mod test_fixtures {
             TranscriptEntryPart {
                 id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
-                content: TranscriptPartContent::Text(
-                    agena_api::message_part::MessageTextPartResource {
-                        text: text.into(),
-                        synthetic,
-                    },
-                ),
+                content: TranscriptPartContent::Text(agena_api::part::TextPartResource {
+                    text: text.into(),
+                    synthetic,
+                }),
             }
         }
 
@@ -93,7 +96,7 @@ mod test_fixtures {
                 id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
                 content: TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(
-                    agena_api::message_part::MessageReasoningPartResource {
+                    agena_api::part::ReasoningPartResource {
                         summary: reasoning.summary,
                         raw_content: reasoning.raw_content,
                         encrypted_content: reasoning.encrypted_content,
@@ -139,33 +142,25 @@ mod test_fixtures {
 
     const fn fixture_part_status(
         status: ExecutionStatus,
-    ) -> agena_api::message_part::PartExecutionStatusResource {
+    ) -> agena_api::part::PartExecutionStatusResource {
         match status {
-            ExecutionStatus::Pending => {
-                agena_api::message_part::PartExecutionStatusResource::Pending
-            }
-            ExecutionStatus::InProgress => {
-                agena_api::message_part::PartExecutionStatusResource::InProgress
-            }
-            ExecutionStatus::Completed => {
-                agena_api::message_part::PartExecutionStatusResource::Completed
-            }
+            ExecutionStatus::Pending => agena_api::part::PartExecutionStatusResource::Pending,
+            ExecutionStatus::InProgress => agena_api::part::PartExecutionStatusResource::InProgress,
+            ExecutionStatus::Completed => agena_api::part::PartExecutionStatusResource::Completed,
             ExecutionStatus::PolicyDenied => {
-                agena_api::message_part::PartExecutionStatusResource::PolicyDenied
+                agena_api::part::PartExecutionStatusResource::PolicyDenied
             }
             ExecutionStatus::UserDeclined => {
-                agena_api::message_part::PartExecutionStatusResource::UserDeclined
+                agena_api::part::PartExecutionStatusResource::UserDeclined
             }
             ExecutionStatus::CapabilityUnavailable => {
-                agena_api::message_part::PartExecutionStatusResource::CapabilityUnavailable
+                agena_api::part::PartExecutionStatusResource::CapabilityUnavailable
             }
             ExecutionStatus::ToolUnavailable => {
-                agena_api::message_part::PartExecutionStatusResource::ToolUnavailable
+                agena_api::part::PartExecutionStatusResource::ToolUnavailable
             }
-            ExecutionStatus::Failed => agena_api::message_part::PartExecutionStatusResource::Failed,
-            ExecutionStatus::Cancelled => {
-                agena_api::message_part::PartExecutionStatusResource::Cancelled
-            }
+            ExecutionStatus::Failed => agena_api::part::PartExecutionStatusResource::Failed,
+            ExecutionStatus::Cancelled => agena_api::part::PartExecutionStatusResource::Cancelled,
         }
     }
 }

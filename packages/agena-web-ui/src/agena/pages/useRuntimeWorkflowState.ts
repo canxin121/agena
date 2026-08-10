@@ -1,13 +1,7 @@
 import type { ComputedRef, Ref } from 'vue'
 
-import type {
-  DomainEventRecord,
-  PermissionRequest,
-  SessionExecutionResource,
-  SessionResource,
-  WorkspaceResource,
-} from '../lib/agenaApi'
-import type { SessionExecutionFact, TimelineSummaryItem } from './runtimePageModel'
+import type { PermissionRequest, SessionExecutionResource, SessionResource, WorkspaceResource } from '../lib/agenaApi'
+import type { SessionExecutionFact } from './runtimePageModel'
 
 export type RuntimeWorkflowStateInput = {
   approvePermission: (
@@ -25,11 +19,8 @@ export type RuntimeWorkflowStateInput = {
   selectedWorkspaceId: Ref<number | null>
   sessionExecution: Ref<SessionExecutionResource | null>
   sessions: Ref<SessionResource[]>
-  globalEventSummaries: ComputedRef<TimelineSummaryItem[]>
-  timelineSummaries: ComputedRef<TimelineSummaryItem[]>
   workflowLoading: Ref<boolean>
   workspaces: Ref<WorkspaceResource[]>
-  sessionTimeline?: Ref<DomainEventRecord[]>
 }
 
 export function useRuntimeWorkflowState(input: RuntimeWorkflowStateInput) {
@@ -45,8 +36,6 @@ export function useRuntimeWorkflowState(input: RuntimeWorkflowStateInput) {
     selectedWorkspaceId: input.selectedWorkspaceId,
     sessionExecution: input.sessionExecution,
     sessions: input.sessions,
-    globalEventSummaries: input.globalEventSummaries,
-    timelineSummaries: input.timelineSummaries,
     workflowLoading: input.workflowLoading,
     workspaces: input.workspaces,
   }

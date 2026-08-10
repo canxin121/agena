@@ -1,18 +1,15 @@
 use std::{path::PathBuf, sync::Arc};
 
 use agena_provider::ProviderCatalog;
-use agena_storage::{
-    MemoryRepository, PermissionRuleRepository, SessionMutationRepository, SessionStatsRepository,
-    SessionSummaryRepository, WorkspaceRepository,
-};
+use agena_storage::{MemoryRepository, PermissionRuleRepository, WorkspaceRepository};
 
 use crate::{
     ModelCatalogRuntimeService, PluginRuntimeService, RuntimeActivityService,
     RuntimeAuthenticationService, RuntimeConfigSettingsService, RuntimeConfigurationService,
-    RuntimeControlService, RuntimeDraftAuthenticationService, RuntimeEventPublishService,
-    RuntimeEventQueryService, RuntimeEventStreamService, RuntimeStatusService,
-    RuntimeToolExecutionService, SessionExecutionCommandService, SessionExecutionControl,
-    SessionPluginCommandService, SessionQueryService, SessionToolExecutionService,
+    RuntimeControlService, RuntimeDraftAuthenticationService, RuntimeLiveSignalService,
+    RuntimeStatusService, RuntimeToolExecutionService, SessionExecutionCommandService,
+    SessionExecutionControl, SessionPluginCommandService, SessionQueryService,
+    SessionToolExecutionService,
 };
 
 /// Runtime-owned result of assembling the capabilities required by the
@@ -40,9 +37,14 @@ pub struct RuntimeApplicationServices {
     pub status: Arc<dyn RuntimeStatusService>,
     pub tools: Arc<dyn RuntimeToolExecutionService>,
     pub activities: Option<Arc<dyn RuntimeActivityService>>,
-    pub event_queries: Option<Arc<dyn RuntimeEventQueryService>>,
-    pub event_stream: Option<Arc<dyn RuntimeEventStreamService>>,
-    pub event_publisher: Option<Arc<dyn RuntimeEventPublishService>>,
+    /// Ephemeral runtime live signals (background activities, plugin events,
+    /// tool-registry changes). Session data live updates are `SessionChange`
+    /// on the sealed facade, not this stream (14.3).
+    pub live_signals: Option<Arc<dyn RuntimeLiveSignalService>>,
+    /// Sealed session store facade (14.1): the only path application surfaces
+    /// use to read/write session data. Session data live updates are
+    /// `SessionChange` on this facade's notification bus, never an event log.
+    pub session_store: Option<Arc<dyn agena_storage::store::SessionStore>>,
     pub session_queries: Option<Arc<dyn SessionQueryService>>,
     pub execution_control: Option<Arc<dyn SessionExecutionControl>>,
     pub execution_commands: Option<Arc<dyn SessionExecutionCommandService>>,
@@ -58,9 +60,6 @@ pub struct RuntimeApplicationRepositories {
     pub memory: Arc<dyn MemoryRepository>,
     pub workspace: Arc<dyn WorkspaceRepository>,
     pub permission_rules: Arc<dyn PermissionRuleRepository>,
-    pub session_stats: Arc<dyn SessionStatsRepository>,
-    pub session_summary: Arc<dyn SessionSummaryRepository>,
-    pub session_mutation: Arc<dyn SessionMutationRepository>,
 }
 
 /// Typed composition input for the application-facing Runtime port bundle.
@@ -80,9 +79,8 @@ pub(crate) struct RuntimeApplicationServiceCompositionInputs {
     pub(crate) status: Arc<dyn RuntimeStatusService>,
     pub(crate) tools: Arc<dyn RuntimeToolExecutionService>,
     pub(crate) activities: Option<Arc<dyn RuntimeActivityService>>,
-    pub(crate) event_queries: Option<Arc<dyn RuntimeEventQueryService>>,
-    pub(crate) event_stream: Option<Arc<dyn RuntimeEventStreamService>>,
-    pub(crate) event_publisher: Option<Arc<dyn RuntimeEventPublishService>>,
+    pub(crate) live_signals: Option<Arc<dyn RuntimeLiveSignalService>>,
+    pub(crate) session_store: Option<Arc<dyn agena_storage::store::SessionStore>>,
     pub(crate) session_queries: Option<Arc<dyn SessionQueryService>>,
     pub(crate) execution_control: Option<Arc<dyn SessionExecutionControl>>,
     pub(crate) execution_commands: Option<Arc<dyn SessionExecutionCommandService>>,
@@ -107,9 +105,8 @@ pub(crate) fn compose_runtime_application_services(
         status: inputs.status,
         tools: inputs.tools,
         activities: inputs.activities,
-        event_queries: inputs.event_queries,
-        event_stream: inputs.event_stream,
-        event_publisher: inputs.event_publisher,
+        live_signals: inputs.live_signals,
+        session_store: inputs.session_store,
         session_queries: inputs.session_queries,
         execution_control: inputs.execution_control,
         execution_commands: inputs.execution_commands,

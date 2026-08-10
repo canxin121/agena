@@ -3,7 +3,7 @@ use agena_application::Application;
 use super::{
     ActiveSnapshotOutput, AgenaCli, AppError, ApplyArgs, ApplyOutput, AuthCommand, AuthListArgs,
     AuthListOutput, AuthSubcommand, Command, CommitArgs, CommitOutput, ContinueArgs, CostArgs,
-    CostOutput, DebugCommand, DebugMessageOutput, DebugSessionArgs, DebugSessionOutput,
+    CostOutput, DebugCommand, DebugRunOutput, DebugSessionArgs, DebugSessionOutput,
     DebugSubcommand, DiagnosticsArgs, DiagnosticsConfigOutput, DiagnosticsEnvironmentOutput,
     DiagnosticsOutput, ExecArgs, ExecOutput, ForkArgs, GitArgs, GitOutput, ManagedSnapshotOutput,
     MemoryCommand, MemoryListArgs, MemoryListOutput, MemorySubcommand, MemorySummaryOutput,
@@ -12,17 +12,17 @@ use super::{
     PermissionsSubcommand, PermissionsWriteArgs, PrArgs, PrOutput, ResumeArgs, ReviewArgs,
     SessionCreateRequest, SessionExecutionRequest, SessionForkOutput, SessionForkRequest,
     SessionImportOutput, SessionListArgs, SessionListOutput, SessionListView, SessionOutput,
-    SessionPermissionReplyRequest, SessionUserMessageRequest, SessionsCommand, SessionsSubcommand,
+    SessionPermissionReplyRequest, SessionUserRunRequest, SessionsCommand, SessionsSubcommand,
     SnapshotArgs, SnapshotBackendSupportOutput, SnapshotCapabilitiesOutput, SnapshotOutput,
     UsageArgs, WorkflowState, application_from_runtime, auth_summary, collect_git_preflight,
     filter_session_summaries_by_view, format_apply_output, format_debug_session_output, fs,
     git_output, last_assistant_text_from_projection, latest_event_seq, list_all_session_summaries,
     list_permission_rules, memory_type_label, paginate_session_summaries,
     permission_reply_kind_from_arg, permission_rule_output,
-    permission_rule_write_command_from_args, permission_scope_from_arg,
-    projected_message_visible_text, render_serialized, resolve_continue_options,
-    resolve_run_options, review_prompt, selected_session_id, session_detail_from_presentation,
-    session_storage_error, title_from_prompt, usage_stats_query_from_args,
+    permission_rule_write_command_from_args, permission_scope_from_arg, projected_run_visible_text,
+    render_serialized, resolve_continue_options, resolve_run_options, review_prompt,
+    selected_session_id, session_detail_from_presentation, session_storage_error,
+    title_from_prompt, usage_stats_query_from_args,
 };
 
 impl AgenaCli {
@@ -669,19 +669,19 @@ impl AgenaCli {
             .await
             .map_err(|error| AppError::Internal(error.to_string()))?;
         let latest_event_seq = latest_event_seq(queries.as_ref(), session.id).await?;
-        let messages = queries
-            .list_projected_messages(session.id, true)
+        let runs = queries
+            .list_projected_runs(session.id, true)
             .await
             .map_err(|error| AppError::Internal(error.to_string()))?;
         let output = DebugSessionOutput {
             session: session_detail_from_presentation(session, latest_event_seq),
-            messages: messages
+            runs: runs
                 .iter()
-                .map(|message| DebugMessageOutput {
-                    id: message.id,
-                    role: message.role,
-                    state: message.state,
-                    text: projected_message_visible_text(message),
+                .map(|run| DebugRunOutput {
+                    id: run.id,
+                    role: run.role,
+                    state: run.state,
+                    text: projected_run_visible_text(run),
                 })
                 .collect(),
         };
@@ -827,7 +827,7 @@ impl AgenaCli {
             .await
             .map_err(|error| AppError::Internal(error.to_string()))?;
         let outcome = commands
-            .submit_user_message(SessionUserMessageRequest::new(
+            .submit_user_run(SessionUserRunRequest::new(
                 created.session_id,
                 options,
                 agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
@@ -848,7 +848,7 @@ impl AgenaCli {
         let latest_event_seq = latest_event_seq(queries.as_ref(), session.id).await?;
         let text = last_assistant_text_from_projection(
             queries
-                .list_projected_messages(session.id, true)
+                .list_projected_runs(session.id, true)
                 .await
                 .map_err(|error| AppError::Internal(error.to_string()))?,
         )

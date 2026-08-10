@@ -156,7 +156,7 @@ impl GeminiAdapter {
         }
 
         let mut contents = Vec::new();
-        for msg in &request.messages {
+        for msg in &request.turns {
             match msg.role {
                 Role::System => system_chunks.push(msg.as_text_lossy()),
                 Role::Assistant => {
@@ -232,7 +232,7 @@ impl GeminiAdapter {
     }
 
     pub(super) fn request_contains_tool_results(request: &CompletionRequest) -> bool {
-        request.messages.iter().any(|message| {
+        request.turns.iter().any(|message| {
             wire_message::project(message)
                 .iter()
                 .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
@@ -364,19 +364,17 @@ impl GeminiAdapter {
         Ok(request)
     }
 
-    pub(super) fn message_parts(
-        message: &agena_provider::CompletionInputMessage,
-    ) -> Vec<GeminiPart> {
-        let projected_parts = wire_message::project(message);
-        Self::parts_from_projected_parts(message, projected_parts.as_slice())
+    pub(super) fn message_parts(run: &agena_provider::CompletionInputRun) -> Vec<GeminiPart> {
+        let projected_parts = wire_message::project(run);
+        Self::parts_from_projected_parts(run, projected_parts.as_slice())
     }
 
     pub(super) fn parts_from_projected_parts(
-        message: &agena_provider::CompletionInputMessage,
+        run: &agena_provider::CompletionInputRun,
         projected_parts: &[wire_message::WirePart],
     ) -> Vec<GeminiPart> {
         if projected_parts.is_empty() {
-            let text = message.as_text_lossy();
+            let text = run.as_text_lossy();
             return if text.trim().is_empty() {
                 Vec::new()
             } else {
@@ -384,7 +382,7 @@ impl GeminiAdapter {
             };
         }
 
-        let signatures = Some(&message.provider_state.gemini_thought_signatures);
+        let signatures = Some(&run.provider_state.gemini_thought_signatures);
         let has_function_calls = projected_parts
             .iter()
             .any(|part| matches!(part, wire_message::WirePart::ToolCall { .. }));
@@ -454,16 +452,16 @@ impl GeminiAdapter {
     }
 
     pub(super) fn assistant_contents(
-        message: &agena_provider::CompletionInputMessage,
+        run: &agena_provider::CompletionInputRun,
     ) -> Vec<GeminiContent> {
-        let projected = wire_message::project(message);
+        let projected = wire_message::project(run);
         if !projected
             .iter()
             .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
         {
             return vec![GeminiContent {
                 role: Some("model".to_owned()),
-                parts: Self::parts_from_projected_parts(message, projected.as_slice()),
+                parts: Self::parts_from_projected_parts(run, projected.as_slice()),
             }];
         }
 
@@ -477,7 +475,7 @@ impl GeminiAdapter {
                     output_json,
                     ..
                 } => {
-                    Self::flush_model_content(message, &mut contents, &mut buffered);
+                    Self::flush_model_content(run, &mut contents, &mut buffered);
                     contents.push(GeminiContent {
                         role: Some("user".to_owned()),
                         parts: vec![GeminiPart::function_response(
@@ -490,15 +488,13 @@ impl GeminiAdapter {
                 other => buffered.push(other.clone()),
             }
         }
-        Self::flush_model_content(message, &mut contents, &mut buffered);
+        Self::flush_model_content(run, &mut contents, &mut buffered);
 
         contents
     }
 
-    pub(super) fn tool_contents(
-        message: &agena_provider::CompletionInputMessage,
-    ) -> Vec<GeminiContent> {
-        wire_message::project(message)
+    pub(super) fn tool_contents(run: &agena_provider::CompletionInputRun) -> Vec<GeminiContent> {
+        wire_message::project(run)
             .into_iter()
             .filter_map(|part| match part {
                 wire_message::WirePart::ToolResult {
@@ -520,14 +516,14 @@ impl GeminiAdapter {
     }
 
     pub(super) fn flush_model_content(
-        message: &agena_provider::CompletionInputMessage,
+        run: &agena_provider::CompletionInputRun,
         contents: &mut Vec<GeminiContent>,
         buffered: &mut Vec<wire_message::WirePart>,
     ) {
         if buffered.is_empty() {
             return;
         }
-        let parts = Self::parts_from_projected_parts(message, buffered.as_slice());
+        let parts = Self::parts_from_projected_parts(run, buffered.as_slice());
         buffered.clear();
         if parts.is_empty() {
             return;
@@ -867,20 +863,54 @@ impl GeminiAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena_runtime_contracts::message::Message;
-    use agena_runtime_contracts::message::MessageProviderState;
+    use agena_runtime_contracts::provider_state::PartProviderState;
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
+    use serde_json::Value;
     use std::collections::BTreeMap;
+
+    fn part(kind: &str, role: PartRole, state: PartState, content: Value) -> Part {
+        Part {
+            part_id: 1,
+            kind: kind.to_owned(),
+            role,
+            state,
+            content,
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(1),
+            origin_session_id: 1,
+            revision: 1,
+            started_at_ms: 0,
+            finished_at_ms: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            provider_state: None,
+        }
+    }
+
+    fn run_marker(role: PartRole, provider_state: Option<Value>) -> Part {
+        let mut marker = part("run", role, PartState::Completed, Value::Null);
+        marker.run_id = None;
+        marker.provider_state = provider_state;
+        marker
+    }
+
+    fn assistant_run(provider_state: Option<Value>) -> Vec<Part> {
+        vec![run_marker(PartRole::Assistant, provider_state)]
+    }
 
     #[test]
     fn parallel_calls_replay_only_their_exact_thought_signatures() {
-        let mut message = Message::prompt_text(Role::Assistant, "");
-        message.provider_state = Some(MessageProviderState {
+        let provider_state = serde_json::to_value(PartProviderState {
             gemini_thought_signatures: BTreeMap::from([
                 ("first".to_owned(), "first-signature".to_owned()),
                 ("second".to_owned(), "second-signature".to_owned()),
             ]),
-            ..MessageProviderState::default()
-        });
+            ..PartProviderState::default()
+        })
+        .expect("provider state is JSON serializable");
         let projected = vec![
             wire_message::WirePart::ToolCall {
                 id: "first".to_owned(),
@@ -894,7 +924,7 @@ mod tests {
             },
         ];
 
-        let input = crate::provider::project_completion_input(&message);
+        let input = crate::provider::project_completion_input(&assistant_run(Some(provider_state)));
         let parts = GeminiAdapter::parts_from_projected_parts(&input, &projected);
 
         assert_eq!(
@@ -909,7 +939,6 @@ mod tests {
 
     #[test]
     fn missing_parallel_signature_uses_validator_escape_only_on_first_call() {
-        let message = Message::prompt_text(Role::Assistant, "");
         let projected = vec![
             wire_message::WirePart::ToolCall {
                 id: "first".to_owned(),
@@ -923,7 +952,7 @@ mod tests {
             },
         ];
 
-        let input = crate::provider::project_completion_input(&message);
+        let input = crate::provider::project_completion_input(&assistant_run(None));
         let parts = GeminiAdapter::parts_from_projected_parts(&input, &projected);
 
         assert_eq!(
@@ -935,19 +964,19 @@ mod tests {
 
     #[test]
     fn final_non_function_part_replays_its_thought_signature() {
-        let mut message = Message::prompt_text(Role::Assistant, "");
-        message.provider_state = Some(MessageProviderState {
+        let provider_state = serde_json::to_value(PartProviderState {
             gemini_thought_signatures: BTreeMap::from([(
                 GEMINI_FINAL_PART_SIGNATURE_KEY.to_owned(),
                 "final-signature".to_owned(),
             )]),
-            ..MessageProviderState::default()
-        });
+            ..PartProviderState::default()
+        })
+        .expect("provider state is JSON serializable");
         let projected = vec![wire_message::WirePart::Text {
             text: "answer".to_owned(),
         }];
 
-        let input = crate::provider::project_completion_input(&message);
+        let input = crate::provider::project_completion_input(&assistant_run(Some(provider_state)));
         let parts = GeminiAdapter::parts_from_projected_parts(&input, &projected);
 
         assert_eq!(

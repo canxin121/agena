@@ -2,38 +2,39 @@ import { userErrorMessage } from '@/lib/api'
 import type { Ref } from 'vue'
 
 import {
-  getSessionState,
-  listSessionTimeline,
-  streamSessionEvents,
-  type DomainEventRecord,
-  type MessageResource,
-  type SessionEventStreamHandle,
+  fetchSessionExecution,
+  streamSessionChanges,
+  type SessionChange,
+  type SessionChangeStreamHandle,
   type SessionExecutionResource,
+  type SessionPart,
 } from '../lib/agenaApi'
-import { applyLiveCommandEvent, applySessionEvent, type ChatEventState } from './chatPageModel'
-import { transcriptMessages } from './chatRenderModel'
+import { applySessionChange } from './chatPageModel'
 import type { NotificationsHandle } from '../lib/notifications/types'
 
 export type ChatConversationRuntimeInput = {
   notify: NotificationsHandle
   loading: Ref<boolean>
-  liveCommandEvents: Ref<DomainEventRecord[]>
-  messages: Ref<MessageResource[]>
+  parts: Ref<SessionPart[]>
   selectedSessionId: Ref<number | null>
   sessionState: Ref<SessionExecutionResource | null>
-  timelineEvents: Ref<DomainEventRecord[]>
 }
 
 export type ChatConversationRuntimeDeps = {
-  applySessionEvent: typeof applySessionEvent
-  getSessionState: typeof getSessionState
-  listSessionTimeline: typeof listSessionTimeline
-  streamSessionEvents: typeof streamSessionEvents
+  applySessionChange: typeof applySessionChange
+  fetchSessionExecution: typeof fetchSessionExecution
+  streamSessionChanges: typeof streamSessionChanges
 }
 
 export type ChatConversationRuntimeOptions = {
   loadRewindCheckpoints: (sessionId: number) => Promise<void>
   loadSessionTree: (rootId: number) => Promise<void>
+}
+
+function isRunTerminalTransition(change: SessionChange): boolean {
+  if (change.type !== 'PartAdded' && change.type !== 'PartUpdated') return false
+  const state = change.part.state
+  return change.part.kind === 'run' && state !== 'pending' && state !== 'in_progress'
 }
 
 export function useChatConversationRuntime(
@@ -45,11 +46,11 @@ export function useChatConversationRuntime(
   let refreshTimer: ReturnType<typeof setTimeout> | null = null
   let refreshInFlight = false
   let refreshQueued = false
-  let eventStream: SessionEventStreamHandle | null = null
+  let changeStream: SessionChangeStreamHandle | null = null
 
-  function stopEventStream() {
-    eventStream?.close()
-    eventStream = null
+  function stopChangeStream() {
+    changeStream?.close()
+    changeStream = null
   }
 
   function clearScheduledConversationRefresh() {
@@ -73,7 +74,7 @@ export function useChatConversationRuntime(
   }
 
   function syncPolling() {
-    if (eventStream) {
+    if (changeStream) {
       stopPolling()
       return
     }
@@ -99,79 +100,56 @@ export function useChatConversationRuntime(
     }, delayMs)
   }
 
-  function applyChatSessionEvent(event: DomainEventRecord): boolean {
-    if (event.kind === 'command_begin' || event.kind === 'command_output_delta' || event.kind === 'command_end') {
-      if (!input.liveCommandEvents.value.some((item) => item.seq_global === event.seq_global)) {
-        input.liveCommandEvents.value = [...input.liveCommandEvents.value, event].sort(
-          (left, right) => left.seq_global - right.seq_global,
-        )
-      }
-    }
-    const result = deps.applySessionEvent(
+  function applyChatSessionChange(change: SessionChange): boolean {
+    const result = deps.applySessionChange(
       {
-        messages: input.messages.value,
-        timelineEvents: input.timelineEvents.value,
+        parts: input.parts.value,
         sessionState: input.sessionState.value,
         selectedSessionId: input.selectedSessionId.value,
-      } satisfies ChatEventState,
-      event,
+      },
+      change,
     )
-    input.messages.value = result.state.messages
-    input.timelineEvents.value = result.state.timelineEvents
+    input.parts.value = result.state.parts
     input.sessionState.value = result.state.sessionState
     return result.shouldRefresh
   }
 
-  function syncEventStream() {
+  function syncChangeStream() {
     const sessionId = input.selectedSessionId.value
     if (!sessionId) {
-      stopEventStream()
+      stopChangeStream()
       stopPolling()
       return
     }
 
     if (typeof ReadableStream === 'undefined' || typeof TextDecoder === 'undefined') {
-      stopEventStream()
+      stopChangeStream()
       syncPolling()
       return
     }
 
-    if (eventStream) {
+    if (changeStream) {
       return
     }
 
-    eventStream = deps.streamSessionEvents(sessionId, {
-      afterSeq: input.sessionState.value?.latest_event_seq ?? 0,
-      pollIntervalMs: 250,
+    changeStream = deps.streamSessionChanges(sessionId, {
       onOpen: () => {
         stopPolling()
         // Re-read once after every connection. This closes the small window
-        // between the state snapshot and the server-side event subscription,
-        // including descendant requests raised in that interval.
+        // between the state snapshot and the server-side subscription, so
+        // patches issued in that interval are reconciled by the next read.
         scheduleConversationRefresh(0)
       },
-      onDescendantEvent: () => scheduleConversationRefresh(0),
-      onLagged: () => scheduleConversationRefresh(0),
-      onEvent: (event) => {
+      onChange: (change) => {
         if (input.selectedSessionId.value !== sessionId) return
-        const isEphemeralTranscriptEvent =
-          event.kind === 'transcript_part_upserted' ||
-          event.kind === 'command_begin' ||
-          event.kind === 'command_output_delta' ||
-          event.kind === 'command_end'
-        if (input.sessionState.value && !isEphemeralTranscriptEvent) {
-          input.sessionState.value = {
-            ...input.sessionState.value,
-            latest_event_seq: Math.max(input.sessionState.value.latest_event_seq ?? 0, event.seq_global),
-          }
-        }
-        if (applyChatSessionEvent(event)) {
+        const shouldRefresh = applyChatSessionChange(change) || isRunTerminalTransition(change)
+        if (shouldRefresh) {
           scheduleConversationRefresh()
         }
       },
       onError: (error) => {
         if (input.selectedSessionId.value !== sessionId) return
-        console.warn('session event stream failed', error)
+        console.warn('session change stream failed', error)
       },
     })
   }
@@ -191,44 +169,14 @@ export function useChatConversationRuntime(
     refreshInFlight = true
 
     try {
-      // Read the registry-backed execution state first. Once it reports no
-      // active execution, the server has already persisted ExecutionFinished
-      // and synchronously advanced the transcript projection, so the
-      // subsequent message read cannot return an older open assistant.
-      const state = await deps.getSessionState(sessionId)
-      const eventItems = await deps.listSessionTimeline(sessionId, { limit: 100 })
+      const state = await deps.fetchSessionExecution(sessionId)
       if (input.selectedSessionId.value !== sessionId) return
 
-      // Never overwrite an event-reduced state with a response whose event
-      // fence is older. Queueing another read also refreshes messages that may
-      // have raced the same terminal event.
-      const localEventSeq = input.sessionState.value?.latest_event_seq ?? 0
-      const fetchedEventSeq = state.latest_event_seq ?? 0
-      if (localEventSeq > fetchedEventSeq) {
-        refreshQueued = true
-        return
-      }
-      const locallyTerminalAtSameFence =
-        localEventSeq === fetchedEventSeq &&
-        input.sessionState.value !== null &&
-        input.sessionState.value.active_execution === null &&
-        state.active_execution !== null
-      input.sessionState.value = locallyTerminalAtSameFence ? { ...state, active_execution: null } : state
-      input.messages.value = transcriptMessages(state.transcript)
-      if (state.active_execution) {
-        for (const event of input.liveCommandEvents.value) {
-          input.messages.value = applyLiveCommandEvent(input.messages.value, event, sessionId)
-        }
-      } else {
-        // Once the canonical projection is terminal it is the durable source
-        // of truth; discard the ephemeral overlay so a later session refresh
-        // cannot resurrect a finished command.
-        input.liveCommandEvents.value = []
-      }
-      input.timelineEvents.value = eventItems
+      input.sessionState.value = state
+      input.parts.value = state.parts ?? []
       const rootId = state.session.parent_id ? state.session.parent_id : state.session.id
       await Promise.all([options.loadSessionTree(rootId), options.loadRewindCheckpoints(sessionId)])
-      syncEventStream()
+      syncChangeStream()
       syncPolling()
     } catch (err) {
       if (input.selectedSessionId.value !== sessionId) return
@@ -247,7 +195,7 @@ export function useChatConversationRuntime(
   }
 
   function dispose() {
-    stopEventStream()
+    stopChangeStream()
     stopPolling()
     clearScheduledConversationRefresh()
   }
@@ -256,9 +204,9 @@ export function useChatConversationRuntime(
     clearScheduledConversationRefresh,
     dispose,
     refreshConversation,
-    stopEventStream,
+    stopChangeStream,
     stopPolling,
-    syncEventStream,
+    syncChangeStream,
     syncPolling,
   }
 }

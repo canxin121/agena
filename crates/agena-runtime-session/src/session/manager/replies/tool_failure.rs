@@ -1,15 +1,19 @@
 use super::{
-    AppError, Arc, ExecutionStatus, OperationPart, PartContent, PersistedPermissionRule,
-    SessionManager, SessionManagerState, SessionPendingTool, ToolError, completed_lifecycle,
+    AppError, Arc, ExecutionStatus, OperationPart, PersistedPermissionRule, SessionManager,
+    SessionManagerState, SessionPendingTool, ToolError, completed_lifecycle,
     operation_authorization, resolve_pending_tool, terminal_operation_title, text_result_blocks,
     update_resolved_tool_message,
 };
 use crate::session::Session;
+use crate::session::store::{
+    part_state_from_execution_status, tool_call_from_operation, typed_content_to_value,
+};
 use agena_domain::ToolOutput;
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
     RecoveryDirective, RetryDirective, UserPresentation,
 };
+use agena_runtime_contracts::part_content::TypedContent;
 
 fn internal_tool_failure() -> Failure {
     Failure::new(
@@ -390,7 +394,7 @@ impl SessionManager {
             &failure,
         );
 
-        let assistant_message =
+        let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
                 let mut operation = OperationPart::failed(
                     resolved.call_id,
@@ -403,18 +407,14 @@ impl SessionManager {
                 );
                 operation.authorization = authorization.clone();
                 operation.set_title(failure_title.clone());
-                tool_part.set_content(PartContent::operation(operation));
-                tool_part.status = ExecutionStatus::Failed;
+                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+                    tool_call_from_operation(&operation),
+                ))
+                .expect("tool content is always JSON serializable");
+                tool_part.state = part_state_from_execution_status(ExecutionStatus::Failed);
             })?;
 
-        self.persist_tool_completion(
-            session,
-            assistant_message,
-            &resolved,
-            persisted_rules,
-            Vec::new(),
-            state,
-        )
-        .await
+        self.persist_tool_completion(session, &resolved, persisted_rules, state)
+            .await
     }
 }

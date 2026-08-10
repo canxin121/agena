@@ -30,7 +30,7 @@ pub enum Command {
     DeleteSession(DeleteSessionParams),
 
     // ── message / run ──
-    SubmitMessage(SubmitMessageParams),
+    SubmitMessage(SubmitRunParams),
     ContinueRun(ContinueRunParams),
     CompactSession(CompactSessionParams),
     CancelRun(CancelRunParams),
@@ -152,7 +152,7 @@ pub struct DeleteSessionParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Parameters for submitting a user message (composer document) to a session.
-pub struct SubmitMessageParams {
+pub struct SubmitRunParams {
     pub session_id: i64,
     #[serde(default)]
     pub options: RunOptions,

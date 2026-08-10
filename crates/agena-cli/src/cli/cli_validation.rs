@@ -33,16 +33,16 @@ pub(super) fn format_apply_output(execution: &ApplyPatchExecution) -> String {
 
 pub(super) fn format_debug_session_output(output: &DebugSessionOutput) -> String {
     let mut rendered = format!(
-        "session {}: {}\nstatus: {:?}\nmessages: {}",
+        "session {}: {}\nstatus: {:?}\nruns: {}",
         output.session.id,
         output.session.title,
         output.session.status,
-        output.messages.len()
+        output.runs.len()
     );
-    for message in &output.messages {
+    for run in &output.runs {
         rendered.push_str(&format!(
             "\n\n[{} #{} {}]\n{}",
-            message.role, message.id, message.state, message.text
+            run.role, run.id, run.state, run.text
         ));
     }
     rendered

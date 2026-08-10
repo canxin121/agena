@@ -8,7 +8,7 @@ use agena_tool::{
     shell_analysis::interpret_exit_code,
 };
 
-use crate::message::ShellCommandInput;
+use crate::part::ShellCommandInput;
 use agena_domain::{ProcessShell, ProcessStatus};
 use agena_plugin_host::{CommandAfterInput, CommandBeforeInput, CommandBeforeOutcome};
 

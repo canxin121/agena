@@ -75,6 +75,8 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         config_override_expressions: args.overrides.clone(),
         database_url: args.database_url.clone(),
         database_path: args.database_path.clone(),
+        scheduler_database_url: None,
+        scheduler_database_path: None,
         initialize_schema: true,
         tracing_reload_handle: None,
     })

@@ -10,10 +10,9 @@ use std::sync::Arc;
 use agena_domain::ApprovalModelSelection;
 use agena_permission::DenialBudget;
 
-use super::{
-    AppError, ModelRef, Role, Session, SessionManager, SessionManagerState, SessionRunOptions,
-};
+use super::{AppError, ModelRef, Session, SessionManager, SessionManagerState, SessionRunOptions};
 use crate::session::prompt_window;
+use agena_domain::Role;
 
 /// Versioned per-session snapshot of persisted permission rules, grouped by
 /// action key. Loaded once with a single query; invalidated on writes.
@@ -68,11 +67,14 @@ impl SessionManager {
         {
             return Ok(Arc::clone(snapshot));
         }
-        let workspace_id = self.store.current_workspace_id().await?;
+        let workspace_id = self.current_workspace_id().await?;
         let stored = self
-            .store
-            .resolve_permission_rule_snapshot(session_id, Some(workspace_id))
-            .await?;
+            .permission_rules
+            .resolve_snapshot(session_id, Some(workspace_id))
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("resolve permission rule snapshot: {error}"))
+            })?;
         let snapshot = Arc::new(RuleSnapshot {
             rules: group_snapshot_rules(stored.as_slice()),
         });
@@ -267,20 +269,22 @@ impl SessionManager {
             })
             .unwrap_or(agena_permission::AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS);
         let transcript = session.map(|session| {
+            // v2: the transcript is the parts projection (the store is the
+            // single durable source; the active-window part count doubles as
+            // the cache key).
+            let parts = session.active_window_parts();
+            let part_count = parts.len();
             let cached = state
                 .auto_projection
                 .lock()
                 .ok()
                 .and_then(|cache| cache.get(&session_id).cloned());
             match cached {
-                Some((len, text)) if len == session.messages.len() => text,
+                Some((len, text)) if len == part_count => text,
                 _ => {
-                    let text = prompt_window::project_transcript(
-                        &session.messages,
-                        transcript_budget_chars,
-                    );
+                    let text = prompt_window::project_transcript(parts, transcript_budget_chars);
                     if let Ok(mut cache) = state.auto_projection.lock() {
-                        cache.insert(session_id, (session.messages.len(), text.clone()));
+                        cache.insert(session_id, (part_count, text.clone()));
                     }
                     text
                 }
@@ -309,10 +313,10 @@ impl SessionManager {
                 let request = agena_provider::CompletionRequest {
                     model: model_ref.model_id.clone(),
                     system: Some(agena_permission::AUTO_APPROVAL_SYSTEM_PROMPT.to_owned()),
-                    messages: {
-                        let mut messages = Vec::with_capacity(2);
+                    turns: {
+                        let mut turns = Vec::with_capacity(2);
                         if let Some(context) = &context {
-                            messages.push(agena_provider::CompletionInputMessage {
+                            turns.push(agena_provider::CompletionInputRun {
                                 role: Role::User,
                                 parts: vec![agena_provider::CompletionInputPart::Text {
                                     text: context.clone(),
@@ -320,14 +324,14 @@ impl SessionManager {
                                 provider_state: Default::default(),
                             });
                         }
-                        messages.push(agena_provider::CompletionInputMessage {
+                        turns.push(agena_provider::CompletionInputRun {
                             role: Role::User,
                             parts: vec![agena_provider::CompletionInputPart::Text {
                                 text: action_message,
                             }],
                             provider_state: Default::default(),
                         });
-                        messages
+                        turns
                     },
                     tool_api_functions: Vec::new(),
                     provider_native_tools: Default::default(),

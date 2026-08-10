@@ -52,7 +52,7 @@ pub struct SessionCreateRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 /// Request to submit a message to a session.
-pub struct SessionMessageRequest {
+pub struct SessionRunRequest {
     #[serde(flatten)]
     pub run: SessionRunRequestBody,
     #[serde(default)]
@@ -106,11 +106,11 @@ pub struct SessionRewindRequestBody {
 
 #[cfg(test)]
 mod tests {
-    use super::SessionMessageRequest;
+    use super::SessionRunRequest;
 
     #[test]
     fn session_run_request_rejects_removed_agent_selection_fields() {
-        let valid = serde_json::from_value::<SessionMessageRequest>(serde_json::json!({
+        let valid = serde_json::from_value::<SessionRunRequest>(serde_json::json!({
             "temperature": 0.25,
             "document": [],
         }))
@@ -122,7 +122,7 @@ mod tests {
             let mut request = serde_json::Map::new();
             request.insert(field.to_owned(), serde_json::json!("build"));
             let error =
-                serde_json::from_value::<SessionMessageRequest>(serde_json::Value::Object(request))
+                serde_json::from_value::<SessionRunRequest>(serde_json::Value::Object(request))
                     .expect_err("removed agent selection must not be silently accepted");
             assert!(error.to_string().contains("one fixed identity"), "{error}");
         }

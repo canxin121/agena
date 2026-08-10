@@ -68,6 +68,11 @@ impl AgenaCli {
             config_override_expressions: self.overrides.clone(),
             database_url: self.database_url.clone(),
             database_path: self.database_path.clone(),
+            // The scheduler uses its conventional database location
+            // (override via AGENA_SCHEDULER_DATABASE_URL/PATH) unless a
+            // future CLI flag exposes it directly.
+            scheduler_database_url: None,
+            scheduler_database_path: None,
             initialize_schema: true,
             tracing_reload_handle: None,
         })
@@ -161,7 +166,6 @@ impl AgenaCli {
         Ok(AgenaMcpBackend {
             runtime,
             tools: services.tools,
-            event_publisher: services.event_publisher,
             next_call_id: Arc::new(AtomicI64::new(1)),
         })
     }

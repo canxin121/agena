@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use crate::message::{ApplyPatchToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
+use crate::part::{ApplyPatchToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
 use crate::plugins::provided::router;
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;

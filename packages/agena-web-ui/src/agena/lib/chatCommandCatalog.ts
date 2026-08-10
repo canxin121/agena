@@ -1,6 +1,6 @@
 import type { ComputedRef } from 'vue'
 
-import type { DomainEventRecord, SessionExecutionResource, SessionResource, WorkspaceResource } from './agenaApi'
+import type { SessionExecutionResource, SessionResource, WorkspaceResource } from './agenaApi'
 import type { CommandContext, CommandItem, CommandRunResult } from './commandPalette'
 import {
   sectionTabNavigationItems,
@@ -21,7 +21,6 @@ export type ChatCommandCatalogState = {
   sessions: ComputedRef<SessionResource[]>
   messages: ComputedRef<import('./agenaApi').MessageResource[]>
   composerQueue: ComputedRef<ComposerQueueItem[]>
-  timelineEvents: ComputedRef<DomainEventRecord[]>
   workspaces: ComputedRef<WorkspaceResource[]>
   sessionImportJsonl: ComputedRef<string>
   sessionTreeRows: ComputedRef<Array<{ session: SessionResource; depth: number }>>
@@ -72,7 +71,6 @@ export type ChatCommandCatalogActions = {
   loadSessionTree: (rootId: number) => void | Promise<void>
   loadRewindCheckpoints: (sessionId: number) => void | Promise<void>
   refreshConversation: (foreground: boolean) => void | Promise<void>
-  loadSessionTimeline: (limit: number) => void | Promise<void>
   renameCurrentSession: (title?: string) => void | Promise<void>
   selectSession: (sessionId: number) => void | Promise<void>
   popComposerQueue: () => void
@@ -405,30 +403,6 @@ function createParameterizedChatCommands(
       usage: '/rename [title]',
       aliases: ['session title'],
       run: (context) => actions.renameCurrentSession(readCommandArgument(context) || undefined),
-    },
-    {
-      id: 'chat.timeline',
-      title: 'Refresh Session Timeline',
-      description: 'Reload the active conversation and its domain-event timeline.',
-      category: 'Chat Actions',
-      source: 'chat-action',
-      slash: '/timeline',
-      slashAliases: ['/events'],
-      usage: '/timeline [limit]',
-      aliases: ['session events'],
-      run: async (context) => {
-        if (!state.selectedSessionId.value) return
-        const rawLimit = context?.args[0] || '100'
-        const limit = Number(rawLimit)
-        if (!Number.isInteger(limit) || limit <= 0) {
-          actions.setLocalCommandNotice('Usage: /timeline [limit]')
-          return
-        }
-        await actions.loadSessionTimeline(limit)
-        actions.setLocalCommandNotice(
-          `Loaded ${formatUsageCount(state.timelineEvents.value.length)} timeline events for session #${state.selectedSessionId.value}.`,
-        )
-      },
     },
     {
       id: 'chat.model-status',

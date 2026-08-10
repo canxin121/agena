@@ -210,9 +210,14 @@ impl Scheduler {
     async fn claim_due(&self) -> Vec<(ScheduledJob, JobDeliveryAttempt, Option<i64>, String)> {
         let now = Utc::now();
         let mut deliveries = Vec::new();
-        for mut job in self.store.list().await {
+        // The store filters to due candidates in SQL, so the hot loop decodes
+        // only the jobs that might fire this tick.
+        for mut job in self.store.list_due(now.timestamp_millis()).await {
             // Capture the pre-claim next_fire_at as the optimistic token.
             let token = job.next_fire_at.map(|value| value.timestamp_millis());
+            // In-memory re-check guards against any clock drift between the
+            // SQL filter and the state machine (a candidate that is no longer
+            // due is skipped exactly as before).
             if !job.due(now) {
                 continue;
             }
@@ -338,13 +343,19 @@ pub fn build_in_memory(sink: Arc<dyn JobSink>, tick: Duration) -> Arc<Scheduler>
     Scheduler::new(store, sink, tick)
 }
 
-/// Runtime constructor backed by the shared Agena SQLite connection.
+/// Runtime constructor backed by the dedicated scheduler SQLite connection.
+/// When no scheduler database is available the scheduler degrades to the
+/// in-memory store: scheduling still works, but jobs are not durable across
+/// process restarts.
 pub fn build_persistent(
-    database: sea_orm::DatabaseConnection,
+    database: Option<std::sync::Arc<sea_orm::DatabaseConnection>>,
     sink: Arc<dyn JobSink>,
     tick: Duration,
 ) -> Arc<Scheduler> {
-    let store = Arc::new(crate::store::SqliteJobStore::new(database)) as Arc<dyn JobStore>;
+    let store: Arc<dyn JobStore> = match database {
+        Some(database) => Arc::new(crate::store::SqliteJobStore::new(database.as_ref().clone())),
+        None => Arc::new(crate::store::InMemoryJobStore::new()),
+    };
     Scheduler::new(store, sink, tick)
 }
 

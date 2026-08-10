@@ -1,29 +1,36 @@
-use agena_domain::{ExecutionStatus, Role};
-/// Provider-agnostic wire representation of a single chat message.
-///
-/// [`WirePart`] is the normalised, provider-ready view of an internal
-/// [`Message`].  Callers obtain it via [`project`] and then map it to
-/// whatever payload format their provider expects.
-///
-/// The projection step handles all concerns that are shared across every
-/// provider:
-///   - stripping UI-only content (file changes, permission requests, …)
-///   - resolving the tool-call ID from `part.operation_id` with fallback
-///   - carrying operation outputs through one provider-neutral projection path
-///   - emitting an empty output for still-pending / in-progress tool executions
+//! Provider-agnostic wire representation of a single chat message.
+//!
+//! [`WirePart`] is the normalised, provider-ready view of persisted session
+//! parts ([`agena_storage::store::Part`]). Callers obtain it via
+//! [`project_session_parts`] / [`project_completion_input`] and then map it to
+//! whatever payload format their provider expects.
+//!
+//! The projection step handles all concerns that are shared across every
+//! provider:
+//!   - stripping UI-only content (file changes, permission requests, …)
+//!   - resolving the tool-call ID from the operation's stashed provider id
+//!     with fallback to the operation's numeric call id
+//!   - carrying operation outputs through one provider-neutral projection path
+//!   - emitting an empty output for still-pending / in-progress tool executions
+
 use base64::Engine as _;
 use serde::Deserialize;
 
 use crate::ProviderError;
-use agena_domain::{ToolApiFunction, ToolInvocation};
+use agena_domain::{ExecutionStatus, ReasoningPart, Role, ToolApiFunction, ToolInvocation};
 use agena_provider::{
     CompletionInputAttachment, CompletionInputAttachmentKind, CompletionInputAttachmentSource,
-    CompletionInputMessage, CompletionInputPart, CompletionInputProviderState, ModelToolFunction,
+    CompletionInputPart, CompletionInputProviderState, CompletionInputRun, ModelToolFunction,
 };
-use agena_runtime_contracts::message::{
-    AttachmentItem, AttachmentKind, AttachmentSource, Message, OperationPart, PartContent,
-    RuntimeActivity,
+use agena_runtime_contracts::part::{
+    AttachmentItem, AttachmentKind, AttachmentSource, OperationPart,
 };
+use agena_runtime_contracts::part_content::{
+    ThinkContent, TypedContent, attachment_from_file_ref, decode, operation_from_tool_call,
+    skill_reference_from_skill_ref,
+};
+use agena_runtime_contracts::provider_state::PartProviderState;
+use agena_storage::store::{Part, PartRole};
 
 // ─── Runtime-private type ─────────────────────────────────────────────────────
 
@@ -74,121 +81,183 @@ impl WirePart {
 
 // ─── Projection ───────────────────────────────────────────────────────────────
 
-/// Normalise a [`Message`] into a flat list of provider-ready [`WirePart`]s.
-/// Project provider-owned input into the adapter-neutral wire-part view.
-pub fn project(message: &CompletionInputMessage) -> Vec<WirePart> {
-    message
-        .parts
+/// Normalise a [`CompletionInputRun`] into a flat list of provider-ready
+/// [`WirePart`]s. Project provider-owned input into the adapter-neutral
+/// wire-part view.
+pub fn project(run: &CompletionInputRun) -> Vec<WirePart> {
+    run.parts
         .iter()
         .cloned()
         .map(wire_part_from_completion_input)
         .collect()
 }
 
-/// Project a persisted core message at the session/core boundary.
-pub fn project_persisted(message: &Message) -> Vec<WirePart> {
-    let mut parts: Vec<WirePart> = Vec::new();
+/// Decode a storage [`Part`] into the typed [`TypedContent`] the projection
+/// operates on. A part that fails to decode (unknown kind or non-object
+/// payload) projects to nothing — the same "reload 宁缺勿崩" principle the
+/// session reload path applies.
+fn projected_content(part: &Part) -> Option<TypedContent> {
+    decode(&part.kind, &part.content).ok()
+}
 
-    for part in &message.parts {
-        let Some(content) = part.content.as_ref() else {
+/// Resolve the stable provider-visible call id for a stored tool part.
+///
+/// [`agena_storage::store::Part`] has no `operation_id` column; the session
+/// serialization stashes the provider operation id under
+/// `agena.operation_id` inside the rich [`OperationPart`] metadata (see
+/// `agena-runtime-session` `serialize_part_content`). When that stash is
+/// missing we fall back to the operation's numeric call id, matching the v1
+/// projection's `part.operation_id` → `exec.call_id()` fallback.
+fn project_operation_call_id(exec: &OperationPart) -> String {
+    exec.metadata
+        .get("agena.operation_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| exec.call_id().to_string())
+}
+
+// ─── Rich-content recovery (v1 payloads from typed shapes) ────────────────────
+//
+// The v1 payload structs (`OperationPart`, `AttachmentPart`, `SkillReferencePart`,
+// `ReasoningPart`) survive the T8 migration — they ride losslessly in the typed
+// content's `extra` bucket and are recovered through the public extractor
+// helpers in `agena_runtime_contracts::part_content`
+// (`operation_from_tool_call`, `attachment_from_file_ref`,
+// `skill_reference_from_skill_ref`, …).
+
+/// Rebuild the reasoning text the v1 [`ReasoningPart`] prefers from the
+/// canonical `think` shape (summary wins, raw content otherwise).
+fn reasoning_preferred_text(think: &ThinkContent) -> String {
+    ReasoningPart {
+        summary: think.summary.clone(),
+        raw_content: think.raw.clone(),
+        encrypted_content: think.encrypted_content.clone(),
+    }
+    .preferred_text()
+}
+
+/// Project a persisted part slice at the session/core boundary.
+///
+/// Consumes storage [`Part`]s directly (R6-T5); each part is decoded to its
+/// typed [`TypedContent`] and projected exactly as the legacy message
+/// projection did, so the wire output is unchanged. Run markers and
+/// provider-only operations are skipped; the coarse `state` column drives
+/// result emission with the fine-grained denial outcomes recovered from the
+/// rich content.
+pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
+    let mut wire: Vec<WirePart> = Vec::new();
+
+    for part in parts {
+        if part.is_run_marker() {
+            continue;
+        }
+        let Some(content) = projected_content(part) else {
             continue;
         };
+        let role = role_from_part_role(part.role);
 
         match content {
-            PartContent::Text(text) => {
+            TypedContent::Text(text) => {
                 if !text.text.is_empty() {
-                    parts.push(WirePart::Text {
+                    wire.push(WirePart::Text {
                         text: text.text.clone(),
                     });
                 }
             }
-            PartContent::Activity(activity) => match activity {
-                RuntimeActivity::Resource(resource) => {
-                    for item in &resource.attachments {
-                        parts.push(WirePart::Attachment { item: item.clone() });
-                    }
-                }
-                RuntimeActivity::SkillReference(skill_reference) => {
-                    if !skill_reference.skills.is_empty() {
-                        parts.push(WirePart::Text {
-                            text: skill_reference.model_context_text(),
-                        });
-                    }
-                }
-                RuntimeActivity::Operation(exec) => {
-                    if exec.is_provider_only() {
-                        continue;
-                    }
-                    let call_id = part
-                        .operation_id
-                        .clone()
-                        .unwrap_or_else(|| exec.call_id().to_string());
-
-                    let Some((function, arguments_json)) = project_tool_invocation(exec, message)
-                    else {
-                        continue;
-                    };
-                    if matches!(message.role, Role::Tool) {
-                        if matches!(
-                            part.status,
-                            ExecutionStatus::Completed
-                                | ExecutionStatus::PolicyDenied
-                                | ExecutionStatus::UserDeclined
-                                | ExecutionStatus::CapabilityUnavailable
-                                | ExecutionStatus::ToolUnavailable
-                                | ExecutionStatus::Failed
-                                | ExecutionStatus::Cancelled
-                        ) {
-                            parts.push(WirePart::ToolResult {
-                                tool_call_id: call_id,
-                                function,
-                                arguments_json,
-                                status: completion_input_result_status(part.status),
-                                output_json: project_operation_output(part.status, exec),
-                            });
-                        }
-                        continue;
-                    }
-                    parts.push(WirePart::ToolCall {
-                        id: call_id.clone(),
-                        function: function.clone(),
-                        arguments_json: arguments_json.clone(),
+            // The v1 fold degraded Run/PasteRef/ToolResult/Compaction to plain
+            // text, which the Text arm then projected as text when non-empty —
+            // preserve that wire output exactly.
+            TypedContent::PasteRef(paste) => {
+                if !paste.text.is_empty() {
+                    wire.push(WirePart::Text {
+                        text: paste.text.clone(),
                     });
+                }
+            }
+            TypedContent::ToolResult(tool_result) => {
+                if !tool_result.output.is_empty() {
+                    wire.push(WirePart::Text {
+                        text: tool_result.output.clone(),
+                    });
+                }
+            }
+            TypedContent::Compaction(compaction) => {
+                if let Some(summary) = compaction.summary.as_deref().filter(|s| !s.is_empty()) {
+                    wire.push(WirePart::Text {
+                        text: summary.to_owned(),
+                    });
+                }
+            }
+            // Run markers are filtered above; the fold degraded Run to empty
+            // text, so nothing projects here.
+            TypedContent::Run(_) => {}
+            TypedContent::FileRef(file_ref) => {
+                for item in &attachment_from_file_ref(&file_ref).attachments {
+                    wire.push(WirePart::Attachment { item: item.clone() });
+                }
+            }
+            TypedContent::SkillRef(skill_ref) => {
+                let skill_reference = skill_reference_from_skill_ref(&skill_ref);
+                if !skill_reference.skills.is_empty() {
+                    wire.push(WirePart::Text {
+                        text: skill_reference.model_context_text(),
+                    });
+                }
+            }
+            TypedContent::ToolCall(tool_call) => {
+                let exec = operation_from_tool_call(&tool_call);
+                if exec.is_provider_only() {
+                    continue;
+                }
+                let call_id = project_operation_call_id(&exec);
+                let status = operation_status(&exec);
 
-                    if matches!(
-                        part.status,
-                        ExecutionStatus::Completed
-                            | ExecutionStatus::PolicyDenied
-                            | ExecutionStatus::UserDeclined
-                            | ExecutionStatus::CapabilityUnavailable
-                            | ExecutionStatus::ToolUnavailable
-                            | ExecutionStatus::Failed
-                            | ExecutionStatus::Cancelled
-                    ) {
-                        parts.push(WirePart::ToolResult {
+                let Some((function, arguments_json)) = invocation_name_and_args(exec.invocation())
+                else {
+                    continue;
+                };
+                if matches!(role, Role::Tool) {
+                    if is_terminal_result_status(status) {
+                        wire.push(WirePart::ToolResult {
                             tool_call_id: call_id,
                             function,
                             arguments_json,
-                            status: completion_input_result_status(part.status),
-                            output_json: project_operation_output(part.status, exec),
+                            status: completion_input_result_status(status),
+                            output_json: project_operation_output(status, &exec),
                         });
                     }
+                    continue;
                 }
-                RuntimeActivity::Reasoning(reasoning) => {
-                    let text = reasoning.preferred_text();
-                    if !text.is_empty() {
-                        parts.push(WirePart::Reasoning { text });
-                    }
+                wire.push(WirePart::ToolCall {
+                    id: call_id.clone(),
+                    function: function.clone(),
+                    arguments_json: arguments_json.clone(),
+                });
+
+                if is_terminal_result_status(status) {
+                    wire.push(WirePart::ToolResult {
+                        tool_call_id: call_id,
+                        function,
+                        arguments_json,
+                        status: completion_input_result_status(status),
+                        output_json: project_operation_output(status, &exec),
+                    });
                 }
-                RuntimeActivity::Interaction(_)
-                | RuntimeActivity::Error(_)
-                | RuntimeActivity::Hook(_)
-                | RuntimeActivity::Notice(_) => {}
-            },
+            }
+            TypedContent::Think(think) => {
+                let text = reasoning_preferred_text(&think);
+                if !text.is_empty() {
+                    wire.push(WirePart::Reasoning { text });
+                }
+            }
+            TypedContent::Notice(_)
+            | TypedContent::Hook(_)
+            | TypedContent::Interaction(_)
+            | TypedContent::Error(_) => {}
         }
     }
 
-    parts
+    wire
 }
 
 fn wire_part_from_completion_input(part: CompletionInputPart) -> WirePart {
@@ -255,20 +324,28 @@ fn attachment_item_from_completion_input(attachment: CompletionInputAttachment) 
     }
 }
 
-/// Project a persisted conversation message into the provider-owned completion
-/// input contract. Runtime-only interaction and error Activities are excluded;
-/// all provider-visible parts and replay state are retained.
-pub fn project_completion_input(message: &Message) -> CompletionInputMessage {
-    CompletionInputMessage {
-        role: message.role,
-        parts: project_persisted(message)
+/// Project a persisted run group into the provider-owned completion input
+/// contract. `parts` is one run's parts — a run marker plus its content
+/// parts (or a bare content part for singletons). Role and provider replay
+/// state are read from the run marker when present, matching how the session
+/// groups storage parts into logical messages. Runtime-only interaction and
+/// error Activities are excluded; all provider-visible parts and replay state
+/// are retained.
+pub fn project_completion_input(parts: &[Part]) -> CompletionInputRun {
+    let marker = parts.iter().find(|part| part.is_run_marker());
+    let role = marker
+        .map(|part| role_from_part_role(part.role))
+        .or_else(|| parts.first().map(|part| role_from_part_role(part.role)))
+        .unwrap_or(Role::User);
+    CompletionInputRun {
+        role,
+        parts: project_persisted(parts)
             .into_iter()
             .map(completion_input_part_from_wire)
             .collect(),
-        provider_state: message
-            .provider_state
-            .as_ref()
-            .map(completion_input_provider_state)
+        provider_state: marker
+            .and_then(|part| part.provider_state.as_ref())
+            .and_then(completion_input_provider_state)
             .unwrap_or_default(),
     }
 }
@@ -338,9 +415,11 @@ fn completion_input_attachment(item: AttachmentItem) -> CompletionInputAttachmen
 }
 
 fn completion_input_provider_state(
-    state: &agena_runtime_contracts::message::MessageProviderState,
-) -> CompletionInputProviderState {
-    state.clone().into()
+    value: &serde_json::Value,
+) -> Option<CompletionInputProviderState> {
+    serde_json::from_value::<PartProviderState>(value.clone())
+        .ok()
+        .map(Into::into)
 }
 
 /// Enforce the boundary between Tool API functions and execution tools before
@@ -348,7 +427,7 @@ fn completion_input_provider_state(
 /// Tool API function; execution-tool names and internal keys are never
 /// provider function calls.
 pub fn validate_provider_native_tool_input_history(
-    _messages: &[CompletionInputMessage],
+    _runs: &[CompletionInputRun],
 ) -> Result<(), ProviderError> {
     // A `CompletionInputPart::ToolCall`/`ToolResult` already carries the
     // closed `ToolApiFunction` identity. Runtime validates dynamic operation
@@ -357,47 +436,146 @@ pub fn validate_provider_native_tool_input_history(
 }
 
 #[cfg(test)]
-pub fn validate_provider_native_tool_history(messages: &[Message]) -> Result<(), ProviderError> {
-    for (message_index, message) in messages.iter().enumerate() {
-        for (part_index, part) in message.parts.iter().enumerate() {
-            let Some(PartContent::Activity(RuntimeActivity::Operation(operation))) =
-                part.content.as_ref()
-            else {
-                continue;
-            };
-            if operation.is_provider_only() {
-                continue;
-            }
-            model_tool_function_for_invocation(operation.invocation()).map_err(|reason| ProviderError::Internal(format!(
-                "invalid provider tool history at messages[{message_index}].parts[{part_index}]: {reason}"
-            )))?;
+pub fn validate_provider_native_tool_history(parts: &[Part]) -> Result<(), ProviderError> {
+    for (part_index, part) in parts.iter().enumerate() {
+        let Some(content) = projected_content(part) else {
+            continue;
+        };
+        let TypedContent::ToolCall(tool_call) = &content else {
+            continue;
+        };
+        let operation = operation_from_tool_call(tool_call);
+        if operation.is_provider_only() {
+            continue;
         }
+        model_tool_function_for_invocation(operation.invocation()).map_err(|reason| {
+            ProviderError::Internal(format!(
+                "invalid provider tool history at parts[{part_index}]: {reason}"
+            ))
+        })?;
     }
     Ok(())
 }
 
 /// Like [`project`] but returns a single lossy string — used when the provider
 /// only needs plain text (e.g. system messages for non-multimodal endpoints).
-pub fn project_text_lossy(message: &CompletionInputMessage) -> String {
-    let parts = project(message);
+pub fn project_text_lossy(run: &CompletionInputRun) -> String {
+    let parts = project(run);
     if parts.is_empty() {
-        message.as_text_lossy()
+        run.as_text_lossy()
     } else {
         parts_text_lossy(parts.as_slice())
     }
 }
 
 /// Runtime-private lossy projection used while preparing the persisted prompt window.
-pub fn project_persisted_text_lossy(message: &Message) -> String {
-    let parts = project_persisted(message);
-    if parts.is_empty() {
-        message.as_text_lossy()
+pub fn project_persisted_text_lossy(parts: &[Part]) -> String {
+    let projected = project_persisted(parts);
+    if projected.is_empty() {
+        parts_as_text_lossy(parts)
     } else {
-        parts_text_lossy(parts.as_slice())
+        parts_text_lossy(projected.as_slice())
     }
 }
 
 // ─── Part helpers ─────────────────────────────────────────────────────────────
+
+/// Map a storage part role onto the domain role, matching the session
+/// reload path (`role_from_part_role`).
+fn role_from_part_role(role: PartRole) -> Role {
+    match role {
+        PartRole::User => Role::User,
+        PartRole::Assistant => Role::Assistant,
+        PartRole::System => Role::System,
+        PartRole::Tool => Role::Tool,
+        PartRole::Runtime => Role::System,
+    }
+}
+
+/// Recover the fine-grained execution status for a stored tool part. The
+/// coarse `state` column cannot express denial outcomes; the rich operation
+/// content carries them (matching the session reload path
+/// `part_to_message_part`, which also prefers `operation.status()`).
+fn operation_status(exec: &OperationPart) -> ExecutionStatus {
+    exec.status()
+}
+
+/// Whether a tool execution status has settled enough to emit a provider
+/// [`WirePart::ToolResult`] — every status except still-pending/in-progress.
+fn is_terminal_result_status(status: ExecutionStatus) -> bool {
+    matches!(
+        status,
+        ExecutionStatus::Completed
+            | ExecutionStatus::PolicyDenied
+            | ExecutionStatus::UserDeclined
+            | ExecutionStatus::CapabilityUnavailable
+            | ExecutionStatus::ToolUnavailable
+            | ExecutionStatus::Failed
+            | ExecutionStatus::Cancelled
+    )
+}
+
+/// Best-effort textual rendering of a part slice for the empty-projection
+/// fallback, mirroring the legacy `Message::as_text_lossy` semantics over
+/// storage parts (run markers excluded; hook/notice/interaction/error parts
+/// contribute their human-facing summary).
+fn parts_as_text_lossy(parts: &[Part]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for part in parts {
+        if part.is_run_marker() {
+            continue;
+        }
+        let Some(content) = projected_content(part) else {
+            continue;
+        };
+        let text = match content {
+            TypedContent::Text(text) => Some(text.text.clone()),
+            // The v1 fold degraded these kinds to plain text, which the Text
+            // arm then rendered — preserve that output exactly.
+            TypedContent::PasteRef(paste) => Some(paste.text.clone()),
+            TypedContent::ToolResult(tool_result) => Some(tool_result.output.clone()),
+            TypedContent::Compaction(compaction) => {
+                Some(compaction.summary.clone().unwrap_or_default())
+            }
+            TypedContent::Run(_) => None,
+            TypedContent::Think(think) => {
+                let text = reasoning_preferred_text(&think);
+                (!text.is_empty()).then_some(text)
+            }
+            TypedContent::SkillRef(skill_ref) => {
+                Some(skill_reference_from_skill_ref(&skill_ref).model_context_text())
+            }
+            TypedContent::ToolCall(tool_call) => {
+                operation_text_lossy(&operation_from_tool_call(&tool_call))
+            }
+            TypedContent::FileRef(_)
+            | TypedContent::Notice(_)
+            | TypedContent::Hook(_)
+            | TypedContent::Interaction(_)
+            | TypedContent::Error(_) => part.summary.clone(),
+        };
+        if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
+            out.push(text);
+        }
+    }
+    out.join("\n")
+}
+
+/// Best-effort textual rendering of an operation for [`parts_as_text_lossy`],
+/// mirroring the legacy `Message::as_text_lossy` `tool_text_lossy` helper.
+fn operation_text_lossy(operation: &OperationPart) -> Option<String> {
+    let candidates = [
+        operation.output_text(),
+        operation.error_message(),
+        operation.title(),
+        (!operation.summary.trim().is_empty()).then_some(operation.summary.as_str()),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|s| !s.trim().is_empty())
+        .map(str::to_owned)
+}
 
 pub fn parts_text_lossy(parts: &[WirePart]) -> String {
     parts
@@ -565,13 +743,6 @@ pub fn parts_to_openai_content_array(parts: &[WirePart]) -> serde_json::Value {
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
-
-fn project_tool_invocation(
-    exec: &OperationPart,
-    _message: &Message,
-) -> Option<(ModelToolFunction, String)> {
-    invocation_name_and_args(exec.invocation())
-}
 
 fn invocation_name_and_args(invocation: &ToolInvocation) -> Option<(ModelToolFunction, String)> {
     let function = model_tool_function_for_invocation(invocation).ok()?;
@@ -920,18 +1091,78 @@ mod tests {
     use agena_domain::ToolOutput;
     use agena_domain::{ExecutionStatus, ToolApiFunction};
     use agena_domain::{Role, StructuredObject, TimeRange};
-    use agena_runtime_contracts::message::{
-        Message, MessageProviderState, OperationPart, PartContent, SkillReference,
-        SkillReferencePart,
-    };
+    use agena_runtime_contracts::part::{OperationCompletion, OperationPart};
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
+    use serde_json::{Map, Value};
 
-    fn assistant_operation(invocation: ToolInvocation) -> Message {
-        Message::prompt_parts(
-            Role::Assistant,
-            vec![PartContent::operation(OperationPart::completed(
+    fn part(kind: &str, role: PartRole, state: PartState, content: Value) -> Part {
+        Part {
+            part_id: 1,
+            kind: kind.to_owned(),
+            role,
+            state,
+            content,
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(1),
+            origin_session_id: 1,
+            revision: 1,
+            started_at_ms: 0,
+            finished_at_ms: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            provider_state: None,
+        }
+    }
+
+    fn run_marker(role: PartRole, provider_state: Option<Value>) -> Part {
+        let mut marker = part("run", role, PartState::Completed, Value::Null);
+        marker.run_id = None;
+        marker.provider_state = provider_state;
+        marker
+    }
+
+    /// Canonical `tool_call` content for an operation: the invocation identity
+    /// as named keys plus the full v1 operation payload under
+    /// `operation` (lossless) and `tool_api_call`, mirroring the session
+    /// serializer (`tool_call_from_operation`).
+    fn tool_call_content(operation: &OperationPart) -> Value {
+        let mut object = Map::new();
+        object.insert(
+            "name".to_owned(),
+            Value::String(operation.invocation.name.clone()),
+        );
+        if let Some(plugin) = &operation.invocation.plugin_name {
+            object.insert("plugin".to_owned(), Value::String(plugin.clone()));
+        }
+        object.insert(
+            "input".to_owned(),
+            Value::from(operation.invocation.input.clone()),
+        );
+        object.insert(
+            "operation".to_owned(),
+            serde_json::to_value(operation).expect("operation is JSON serializable"),
+        );
+        if let Some(api_call) = &operation.invocation.tool_api_call {
+            object.insert(
+                "tool_api_call".to_owned(),
+                serde_json::to_value(api_call).expect("tool api call is JSON serializable"),
+            );
+        }
+        Value::Object(object)
+    }
+
+    fn assistant_operation(invocation: ToolInvocation) -> Part {
+        part(
+            "tool_call",
+            PartRole::Assistant,
+            PartState::Completed,
+            tool_call_content(&OperationPart::completed(
                 0,
                 invocation,
-                agena_runtime_contracts::message::OperationCompletion::new(
+                OperationCompletion::new(
                     "Provider tool",
                     "Completed",
                     "ok".to_owned(),
@@ -940,22 +1171,27 @@ mod tests {
                     ToolOutput::default(),
                 ),
                 TimeRange::default(),
-            ))],
+            )),
         )
     }
 
     #[test]
     fn completion_input_projection_keeps_role_parts_and_replay_state() {
-        let mut message = Message::prompt_text(Role::Assistant, "hello");
-        message.provider_state = Some(MessageProviderState {
-            response_id: Some("resp_123".to_owned()),
-            gemini_thought_signatures: [("part_1".to_owned(), "signature".to_owned())]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        });
+        let marker = run_marker(
+            PartRole::Assistant,
+            Some(serde_json::json!({
+                "response_id": "resp_123",
+                "gemini_thought_signatures": { "part_1": "signature" }
+            })),
+        );
+        let text = part(
+            "text",
+            PartRole::Assistant,
+            PartState::Completed,
+            serde_json::json!({ "text": "hello" }),
+        );
 
-        let input = project_completion_input(&message);
+        let input = project_completion_input(&[marker, text]);
 
         assert_eq!(input.role, Role::Assistant);
         assert!(matches!(
@@ -990,24 +1226,29 @@ mod tests {
 
     #[test]
     fn selected_skill_reference_enters_provider_history_as_message_scoped_guidance() {
-        let message = Message::prompt_parts(
-            Role::User,
-            vec![
-                PartContent::skill_reference(SkillReferencePart {
-                    skills: vec![SkillReference {
-                        name: "review".to_string(),
-                        description: "Review the current branch".to_string(),
-                        instructions: "Inspect the diff and report concrete findings.".to_string(),
-                        content_hash: "abc123".to_string(),
-                        source: "bundled".to_string(),
-                        aliases: Vec::new(),
-                    }],
-                }),
-                PartContent::text("Review my current change."),
-            ],
+        let skill = part(
+            "skill_ref",
+            PartRole::User,
+            PartState::Completed,
+            serde_json::json!({
+                "skills": [{
+                    "name": "review",
+                    "description": "Review the current branch",
+                    "instructions": "Inspect the diff and report concrete findings.",
+                    "content_hash": "abc123",
+                    "source": "bundled",
+                    "aliases": []
+                }]
+            }),
+        );
+        let text = part(
+            "text",
+            PartRole::User,
+            PartState::Completed,
+            serde_json::json!({ "text": "Review my current change." }),
         );
 
-        let projected = project_persisted(&message);
+        let projected = project_persisted(&[skill, text]);
         assert_eq!(projected.len(), 2);
         let WirePart::Text { text: skill } = &projected[0] else {
             panic!("expected Skill guidance text")
@@ -1023,17 +1264,18 @@ mod tests {
 
     #[test]
     fn text_artifact_identity_projects_actual_text_without_editor_placeholders() {
-        let mut message = Message::prompt_text(Role::User, "x".repeat(1_000));
-        message.parts[0].bind_activity(agena_domain::ActivityId::new());
+        let text = part(
+            "text",
+            PartRole::User,
+            PartState::Completed,
+            serde_json::json!({ "text": "x".repeat(1_000) }),
+        );
 
-        let projected = project_persisted(&message);
+        let projected = project_persisted(&[text]);
         assert!(matches!(
             projected.as_slice(),
             [WirePart::Text { text }] if text.len() == 1_000 && text.chars().all(|ch| ch == 'x')
         ));
-        let json = serde_json::to_string(&message).expect("serialize text artifact message");
-        assert!(!json.contains("placeholder"));
-        assert!(!json.contains("[paste"));
     }
 
     #[test]
@@ -1053,11 +1295,11 @@ mod tests {
         invocation.name = "agena.session.rename".to_owned();
         invocation.input = StructuredObject::try_from(serde_json::json!({ "title": "renamed" }))
             .expect("target input");
-        let message = assistant_operation(invocation);
+        let part = assistant_operation(invocation);
 
-        validate_provider_native_tool_history(std::slice::from_ref(&message))
+        validate_provider_native_tool_history(std::slice::from_ref(&part))
             .expect("valid Tool API history");
-        let projected = project_persisted(&message);
+        let projected = project_persisted(&[part]);
         let WirePart::ToolCall {
             function,
             arguments_json,
@@ -1080,13 +1322,13 @@ mod tests {
 
     #[test]
     fn dotted_legacy_tool_api_handler_is_rejected_during_replay() {
-        let message = assistant_operation(ToolInvocation::new(
+        let part = assistant_operation(ToolInvocation::new(
             "agena.tools.help",
             StructuredObject::try_from(serde_json::json!({ "tool": "session.rename" }))
                 .expect("structured help payload"),
         ));
 
-        let error = validate_provider_native_tool_history(std::slice::from_ref(&message))
+        let error = validate_provider_native_tool_history(std::slice::from_ref(&part))
             .expect_err("dotted names must never become protocol identities");
         assert!(
             error
@@ -1097,12 +1339,12 @@ mod tests {
 
     #[test]
     fn unadvertised_execution_tool_operation_is_rejected_as_provider_history() {
-        let message = assistant_operation(ToolInvocation::new(
+        let part = assistant_operation(ToolInvocation::new(
             "agena.session.rename",
             StructuredObject::default(),
         ));
 
-        let error = validate_provider_native_tool_history(&[message])
+        let error = validate_provider_native_tool_history(&[part])
             .expect_err("execution-tool call must fail");
         assert!(
             error
@@ -1121,10 +1363,9 @@ mod tests {
             function: ToolApiFunction::Help,
             arguments: StructuredObject::default(),
         });
-        let message = assistant_operation(invocation);
+        let part = assistant_operation(invocation);
 
-        let error =
-            validate_provider_native_tool_history(&[message]).expect_err("mismatch must fail");
+        let error = validate_provider_native_tool_history(&[part]).expect_err("mismatch must fail");
         assert!(
             error
                 .to_string()
@@ -1138,22 +1379,27 @@ mod tests {
         // Reasoning wire part (and CompletionInputPart::Reasoning) so providers
         // that require `reasoning_content` replay can reconstruct it, instead
         // of the reasoning being silently dropped on projection.
-        let message = Message::prompt_parts(
-            Role::Assistant,
-            vec![
-                PartContent::reasoning_summary("think step by step"),
-                PartContent::text("visible answer"),
-            ],
+        let think = part(
+            "think",
+            PartRole::Assistant,
+            PartState::Completed,
+            serde_json::json!({ "summary": ["think step by step"] }),
+        );
+        let text = part(
+            "text",
+            PartRole::Assistant,
+            PartState::Completed,
+            serde_json::json!({ "text": "visible answer" }),
         );
 
-        let wire_parts = project_persisted(&message);
+        let wire_parts = project_persisted(&[think.clone(), text.clone()]);
         assert_eq!(wire_parts.len(), 2);
         assert!(matches!(
             &wire_parts[0],
             WirePart::Reasoning { text } if text == "think step by step"
         ));
 
-        let input = project_completion_input(&message);
+        let input = project_completion_input(&[think, text]);
         assert!(matches!(
             &input.parts[0],
             agena_provider::CompletionInputPart::Reasoning { text }

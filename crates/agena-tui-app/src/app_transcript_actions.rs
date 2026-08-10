@@ -13,17 +13,11 @@ impl App {
     }
 
     pub(crate) fn copy_last_assistant_message(&mut self) {
-        let Some(response) = self
-            .transcript
-            .snapshot
-            .turns
-            .last()
-            .map(|turn| &turn.reply)
+        let Some(text) = agena_tui_transcript::last_assistant_reply_text(&self.transcript.parts)
         else {
             self.flash_warning(ui_text::t(&self.i18n, "flash-no-assistant-message"));
             return;
         };
-        let text = response.content.text();
         if text.trim().is_empty() {
             self.flash_warning(ui_text::t(&self.i18n, "flash-no-assistant-message-text"));
             return;
@@ -125,7 +119,7 @@ impl App {
     }
 
     pub(crate) fn transcript_export_text(&self) -> String {
-        let entries = transcript_entries(&self.transcript.snapshot);
+        let entries = agena_tui_transcript::parts_entries(&self.transcript.parts);
         if entries.is_empty() {
             return String::new();
         }
@@ -194,12 +188,12 @@ impl App {
     }
 
     pub(crate) fn transcript_export_markdown(&self) -> String {
-        render_transcript_snapshot_export_markdown(
+        render_parts_export_markdown(
             &self.i18n,
             self.transcript.session_id,
             self.transcript.session_title.as_str(),
             self.transcript.execution.as_ref(),
-            &self.transcript.snapshot,
+            &self.transcript.parts,
         )
     }
 
@@ -335,6 +329,6 @@ use crate::Result;
 use crate::{
     App, Local, NoticeScope, NoticeSeverity, NotificationSurface, Path, PathBuf, TerminalRuntime,
     TranscriptDetailDefaults, UiResult, min, open_path, page_text, render_entry_export,
-    render_transcript_snapshot_export_markdown, transcript_entries, ui_text,
+    render_parts_export_markdown, ui_text,
 };
 use agena_tui::terminal_lifecycle::SuspendReason;

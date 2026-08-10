@@ -23,9 +23,9 @@ use std::{
 
 use agena_domain::{ModelRef, PermissionReplyKind};
 use agena_runtime::{
-    RuntimeBootstrapRequest, RuntimeEventStreamService, RuntimeToolExecutionService,
-    SessionExecutionCommandService, SessionExecutionControl, SessionQueryService,
-    SessionRunOptions, bootstrap_application_services,
+    RuntimeBootstrapRequest, RuntimeToolExecutionService, SessionExecutionCommandService,
+    SessionExecutionControl, SessionQueryService, SessionRunOptions,
+    bootstrap_application_services,
 };
 use anyhow::{Context, ensure};
 use clap::Parser;
@@ -129,9 +129,9 @@ async fn async_main() -> anyhow::Result<()> {
     .context("start isolated dsv4f suite runtime")?;
     let services = runtime.application_services();
     assert_tool_api_surface(services.tools.as_ref())?;
-    let event_stream = services
-        .event_stream
-        .context("runtime does not provide a live event stream")?;
+    let session_store = services
+        .session_store
+        .context("runtime does not provide the session store facade")?;
     let session_queries = services
         .session_queries
         .context("runtime does not provide session queries")?;
@@ -142,7 +142,7 @@ async fn async_main() -> anyhow::Result<()> {
         .execution_commands
         .context("runtime does not provide session commands")?;
     let harness = Harness {
-        event_stream,
+        session_store,
         session_queries,
         execution_control,
         execution_commands,
@@ -285,7 +285,7 @@ impl CaseSelector {
 }
 
 struct Harness {
-    event_stream: Arc<dyn RuntimeEventStreamService>,
+    session_store: Arc<dyn agena_storage::store::SessionStore>,
     session_queries: Arc<dyn SessionQueryService>,
     execution_control: Arc<dyn SessionExecutionControl>,
     execution_commands: Arc<dyn SessionExecutionCommandService>,

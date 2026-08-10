@@ -1230,10 +1230,10 @@ fn push_image_source_line(
 pub fn render_attachment_image(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
-    item: &MessageAttachment,
+    item: &PartAttachment,
     width: u16,
 ) -> bool {
-    if item.kind != MessageAttachmentKind::Image {
+    if item.kind != PartAttachmentKind::Image {
         return false;
     }
     let Some(source) = attachment_image_source(item) else {
@@ -1257,15 +1257,15 @@ pub fn render_attachment_image(
     true
 }
 
-pub(super) fn attachment_image_source(item: &MessageAttachment) -> Option<Cow<'_, str>> {
+pub(super) fn attachment_image_source(item: &PartAttachment) -> Option<Cow<'_, str>> {
     match &item.source {
-        MessageAttachmentSource::Url { url }
-        | MessageAttachmentSource::DataUrl { url }
-        | MessageAttachmentSource::LocalPath { path: url } => Some(Cow::Borrowed(url.as_str())),
-        MessageAttachmentSource::Base64 { data } => bounded_image_data_url(&item.mime, data)
+        PartAttachmentSource::Url { url }
+        | PartAttachmentSource::DataUrl { url }
+        | PartAttachmentSource::LocalPath { path: url } => Some(Cow::Borrowed(url.as_str())),
+        PartAttachmentSource::Base64 { data } => bounded_image_data_url(&item.mime, data)
             .ok()
             .map(Cow::Owned),
-        MessageAttachmentSource::FileId { .. } => None,
+        PartAttachmentSource::FileId { .. } => None,
     }
 }
 

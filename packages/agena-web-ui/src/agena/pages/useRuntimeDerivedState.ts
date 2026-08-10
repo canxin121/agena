@@ -1,7 +1,6 @@
 import { computed, type Ref } from 'vue'
 
 import type {
-  DomainEventRecord,
   MarketplaceInstalledPluginResource,
   MarketplacePluginResource,
   PermissionMode,
@@ -17,7 +16,6 @@ import {
   buildOperatorCards,
   buildRuntimeSnapshotFacts,
   buildSessionCacheFacts,
-  buildTimelineSummary,
   type OperatorCard,
   type SessionExecutionFact,
 } from './runtimePageModel'
@@ -51,9 +49,7 @@ export type RuntimeDerivedStateInput = {
   runtimeSkillQuery: Ref<string>
   section?: RuntimeRouteSection
   selectedPlugin: Ref<PluginInspect | null>
-  globalEvents: Ref<DomainEventRecord[]>
   sessionExecution: Ref<SessionExecutionResource | null>
-  sessionTimeline: Ref<DomainEventRecord[]>
   tabs: SectionTabOption[]
 }
 
@@ -62,8 +58,6 @@ export function useRuntimeDerivedState(input: RuntimeDerivedStateInput) {
   const runtimeSnapshotFacts = computed<SessionExecutionFact[]>(() => buildRuntimeSnapshotFacts(input.runtime.value))
   const sessionCacheFacts = computed<SessionExecutionFact[]>(() => buildSessionCacheFacts(input.runtime.value))
   const executionFacts = computed<SessionExecutionFact[]>(() => buildExecutionFacts(input.sessionExecution.value))
-  const timelineSummaries = computed(() => buildTimelineSummary(input.sessionTimeline.value))
-  const globalEventSummaries = computed(() => buildTimelineSummary(input.globalEvents.value))
   const routeSection = computed<RuntimeRouteSection>(() =>
     resolveRuntimeRouteSection(input.routePath.value, input.section),
   )
@@ -150,7 +144,6 @@ export function useRuntimeDerivedState(input: RuntimeDerivedStateInput) {
     filteredMcpServers,
     filteredPermissionRules,
     filteredSkillCommands,
-    globalEventSummaries,
     installedMarketplacePluginIds,
     operatorCards,
     pageDescription,
@@ -160,7 +153,6 @@ export function useRuntimeDerivedState(input: RuntimeDerivedStateInput) {
     selectedPluginManifest,
     sessionCacheFacts,
     skillCommands,
-    timelineSummaries,
     visibleTabs,
   }
 }

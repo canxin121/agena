@@ -1,10 +1,4 @@
-import type {
-  MessagePart,
-  MessageResource,
-  TranscriptActivity,
-  TranscriptContentNode,
-  TranscriptSnapshot,
-} from '@/agena/lib/agenaApi'
+import type { MessagePart, MessageResource, SessionPart } from '@/agena/lib/agenaApi'
 
 import { formatUsageCount, formatUsageUsd } from './chatUsageModel'
 
@@ -35,167 +29,196 @@ function textArtifactPreview(text: string, maxLength = 240): string {
   return `${text.slice(0, Math.max(1, maxLength - 1))}…`
 }
 
-function activityTitle(activity: TranscriptActivity): string {
-  const payload = activity.payload
-  // Tool operations headline with the composed tool title the runtime produced
-  // ("fs.read · Read README.md", "tools.list · List tools · 2/133"); fall back
-  // to the direct execution-tool name when no title was generated yet.
-  if (payload.activity_type === 'operation') {
-    const operationTitle = readString(payload.title)
-    if (operationTitle) return operationTitle
-    const invocation = asRecord(payload.invocation)
-    const toolName = readString(invocation ? invocation.name : null)
-    if (toolName) return toolName
-  }
-  return (
-    readString(payload.title) ||
-    readString(payload.name) ||
-    readString(payload.skill_name) ||
-    readString(payload.query) ||
-    payload.activity_type
-  )
+/** Canonical part ordering basis (database-design-v2.md 4.2). */
+function compareParts(left: SessionPart, right: SessionPart): number {
+  const byTime = left.created_at_ms - right.created_at_ms
+  if (byTime !== 0) return byTime
+  return left.part_id - right.part_id
 }
 
-function activitySummary(activity: TranscriptActivity): string {
-  const payload = activity.payload
-  const problemUser = asRecord(asRecord(payload.problem)?.user)
-  return readString(payload.summary) || readString(problemUser?.fallback) || ''
+function mapPartStatus(state: SessionPart['state']): MessagePart['status'] {
+  return state
 }
 
-function canonicalPart(
-  node: TranscriptContentNode,
-  messageId: string,
-  partIndex: number,
-  messageStatus: MessageResource['state'],
-  createdAtMs: number,
-): MessagePart {
-  if (node.type === 'text') {
-    return {
-      id: node.segment.id,
-      message_id: messageId,
-      part_index: partIndex,
-      status: messageStatus === 'pending' ? 'in_progress' : messageStatus,
-      kind: 'text',
-      has_detail: true,
-      created_at: new Date(createdAtMs).toISOString(),
-      content: { type: 'text', text: node.segment.text, synthetic: false },
+function partName(part: SessionPart): string | null {
+  const content = part.content || null
+  switch (part.kind) {
+    case 'tool_call':
+      return readString(content?.name) || readString(content?.plugin) || 'tool'
+    case 'tool_result':
+      return readString(content?.name) || 'result'
+    case 'file_ref':
+      return readString(content?.name) || readString(content?.path) || 'attachment'
+    case 'paste_ref':
+      return 'Pasted text'
+    case 'skill_ref':
+      return readString(content?.skill) || 'skill'
+    case 'notice':
+      return readString(content?.kind) || readString(content?.summary) || 'notice'
+    case 'hook':
+      return readString(content?.hook) || 'hook'
+    case 'compaction':
+      return 'Compaction'
+    case 'error':
+      return readString(content?.category) || 'error'
+    case 'interaction':
+      return readString(content?.type) || 'interaction'
+    case 'run': {
+      const runKind = readString(content?.run_kind)
+      if (runKind) return runKind === 'user_send' ? 'Run' : runKind
+      return 'Run'
     }
-  }
-
-  const activity = node.activity
-  const activityType = activity.payload.activity_type
-  const content: Record<string, unknown> = {
-    ...activity.payload,
-    type: activityType === 'interaction' ? 'request' : activityType,
-    actor: activity.actor,
-    state: activity.state,
-    lifecycle: activity.lifecycle,
-    provenance: activity.provenance || {},
-  }
-  if (activityType === 'resource') {
-    content.type = 'attachment'
-    content.attachments = [
-      {
-        kind: activity.payload.kind,
-        title: activity.payload.name,
-        mime: activity.payload.media_type,
-        size_bytes: activity.payload.size_bytes,
-        reference: activity.payload.reference,
-      },
-    ]
-  } else if (activityType === 'operation') {
-    content.model_output = { text: activity.payload.model_output_text || '' }
-    const problem = asRecord(asRecord(activity.payload.error)?.problem)
-    const user = asRecord(problem?.user)
-    if (problem) content.error = { message: readString(user?.fallback) || readString(user?.detail) || 'Tool failed' }
-  } else if (activityType === 'error') {
-    const problem = asRecord(activity.payload.problem)
-    const user = asRecord(problem?.user)
-    content.code = readString(problem?.code) || 'error'
-    content.message = readString(user?.fallback) || readString(user?.detail) || 'The reply failed.'
-  }
-  return {
-    id: activity.id,
-    message_id: messageId,
-    part_index: partIndex,
-    status: activity.state,
-    kind: activityType,
-    name: activityTitle(activity),
-    summary: activitySummary(activity),
-    has_detail: true,
-    operation_id: activityType === 'operation' ? String(activity.payload.call_id || activity.id) : null,
-    created_at: new Date(activity.lifecycle.started_at_ms).toISOString(),
-    content,
-  }
-}
-
-function canonicalMessage(input: {
-  id: string
-  sessionId: number
-  role: 'user' | 'assistant'
-  state: MessageResource['state']
-  createdAtMs: number
-  updatedAtMs: number
-  nodes: TranscriptContentNode[]
-  metadata: Record<string, unknown>
-}): MessageResource {
-  const nodes = [...input.nodes].sort((left, right) => {
-    const leftPosition = left.type === 'text' ? left.segment.position.index : left.activity.position.index
-    const rightPosition = right.type === 'text' ? right.segment.position.index : right.activity.position.index
-    return leftPosition - rightPosition
-  })
-  return {
-    id: input.id,
-    session_id: input.sessionId,
-    role: input.role,
-    state: input.state,
-    created_at: new Date(input.createdAtMs).toISOString(),
-    updated_at: new Date(input.updatedAtMs).toISOString(),
-    metadata: input.metadata,
-    usage: null,
-    part_count: nodes.length,
-    parts: nodes.map((node, index) => canonicalPart(node, input.id, index, input.state, input.createdAtMs)),
+    case 'think':
+      return 'Reasoning'
+    default:
+      return readString(content?.name) || readString(content?.title) || part.kind
   }
 }
 
 /**
- * The Web conversation view is a one-to-one adapter over the canonical
- * Turn/AssistantReply aggregate. It never scans or merges provider model
- * messages.
+ * Adapter from a v2 `SessionPart` (4.1.1 canonical shape) onto the legacy
+ * `MessagePart` render shape so the existing block renderers keep working.
+ * `content` is carried through unchanged — the canonical raw payload the AI
+ * sees — and the renderers dispatch on `part.kind`.
  */
-export function transcriptMessages(transcript: TranscriptSnapshot): MessageResource[] {
-  return [...transcript.turns]
-    .sort((left, right) => left.sequence - right.sequence)
-    .flatMap((turn) => {
-      const userId = `turn:${turn.id}:input`
-      const replyId = `reply:${turn.reply.id}`
-      return [
-        canonicalMessage({
-          id: userId,
-          sessionId: turn.session_id,
-          role: 'user',
-          state: 'completed',
-          createdAtMs: turn.created_at_ms,
-          updatedAtMs: turn.created_at_ms,
-          nodes: turn.input,
-          metadata: { canonical_turn_id: turn.id, turn_sequence: turn.sequence },
-        }),
-        canonicalMessage({
-          id: replyId,
-          sessionId: turn.session_id,
-          role: 'assistant',
-          state: turn.reply.status,
-          createdAtMs: turn.reply.created_at_ms,
-          updatedAtMs: turn.reply.finished_at_ms ?? turn.reply.created_at_ms,
-          nodes: turn.reply.content,
-          metadata: {
-            canonical_turn_id: turn.id,
-            canonical_reply_id: turn.reply.id,
-            turn_sequence: turn.sequence,
-          },
-        }),
-      ]
-    })
+function sessionPartToMessagePart(part: SessionPart, messageId: string, partIndex: number): MessagePart {
+  return {
+    id: part.part_id,
+    message_id: messageId,
+    part_index: partIndex,
+    status: mapPartStatus(part.state),
+    kind: part.kind,
+    name: partName(part),
+    summary: part.summary ?? null,
+    has_detail: true,
+    operation_id: part.kind === 'tool_call' ? String(part.part_id) : null,
+    created_at: new Date(part.created_at_ms).toISOString(),
+    content: part.content || null,
+  }
+}
+
+function canonicalRunMessage(
+  run: SessionPart | null,
+  content: SessionPart[],
+  sessionId: number,
+  key: number,
+): MessageResource {
+  const messageId = run ? `run:${run.part_id}` : `orphan:${key}`
+  const role: MessageResource['role'] =
+    run?.role === 'user' || run?.role === 'assistant' || run?.role === 'system'
+      ? run.role
+      : run
+        ? 'assistant'
+        : 'system'
+  const state: MessageResource['state'] = run ? run.state : 'completed'
+  const createdAtMs = run ? run.created_at_ms : content[0]?.created_at_ms ?? 0
+  const runUsage = run ? asRecord(run.content?.usage) : null
+
+  const sortedContent = [...content].sort(compareParts)
+  const parts: MessagePart[] = []
+  if (run) {
+    parts.push(sessionPartToMessagePart(run, messageId, parts.length))
+  }
+  for (const part of sortedContent) {
+    parts.push(sessionPartToMessagePart(part, messageId, parts.length))
+  }
+
+  const metadata: Record<string, unknown> = {}
+  if (run) {
+    metadata.run_part_id = run.part_id
+    metadata.run_kind = readString(run.content?.run_kind) || run.kind
+    metadata.run_revision = run.revision ?? 1
+  }
+
+  return {
+    id: messageId,
+    session_id: sessionId,
+    role,
+    state,
+    created_at: new Date(createdAtMs).toISOString(),
+    updated_at: new Date(createdAtMs).toISOString(),
+    metadata,
+    usage: runUsage as Record<string, unknown> | null | undefined,
+    part_count: parts.length,
+    parts,
+  }
+}
+
+/**
+ * The v2 Web conversation view: a flat, run-marker-grouped projection of the
+ * session's parts. Each run marker becomes one display message (the run is the
+ * group header — its own first part), with its content parts beneath it ordered
+ * by `(created_at_ms, part_id)`.
+ */
+export function partsToMessages(parts: SessionPart[], sessionId: number): MessageResource[] {
+  const sorted = [...parts].sort(compareParts)
+
+  const contentByRun = new Map<number, SessionPart[]>()
+  const runMarkers: SessionPart[] = []
+  const orphanParts: SessionPart[] = []
+
+  for (const part of sorted) {
+    if (part.kind === 'run') {
+      runMarkers.push(part)
+      continue
+    }
+    if (part.run_id != null) {
+      let bucket = contentByRun.get(part.run_id)
+      if (!bucket) {
+        bucket = []
+        contentByRun.set(part.run_id, bucket)
+      }
+      bucket.push(part)
+    } else {
+      orphanParts.push(part)
+    }
+  }
+
+  const messages: MessageResource[] = []
+  for (const run of runMarkers) {
+    const content = contentByRun.get(run.part_id) ?? []
+    contentByRun.delete(run.part_id)
+    messages.push(canonicalRunMessage(run, content, sessionId, run.part_id))
+  }
+  // Content parts whose run marker is missing locally (streamed in first, or
+  // the marker was removed): still render them under their run id.
+  const unclaimedRunIds = [...contentByRun.keys()].sort((left, right) => left - right)
+  for (const runId of unclaimedRunIds) {
+    messages.push(canonicalRunMessage(null, contentByRun.get(runId) ?? [], sessionId, runId))
+  }
+  if (orphanParts.length) {
+    messages.push(canonicalRunMessage(null, orphanParts, sessionId, 0))
+  }
+  return messages
+}
+
+function readReasoningText(content: Record<string, unknown> | null): string {
+  if (!content) return ''
+  if (Array.isArray(content.summary)) {
+    return content.summary.filter((item): item is string => typeof item === 'string').join('\n')
+  }
+  if (Array.isArray(content.raw)) {
+    return content.raw.filter((item): item is string => typeof item === 'string').join('\n')
+  }
+  return readString(content.summary) || ''
+}
+
+function toolCallInputText(content: Record<string, unknown> | null): string {
+  if (!content) return ''
+  const input = content.input
+  if (input === undefined || input === null) return ''
+  if (typeof input === 'string') return input
+  try {
+    return JSON.stringify(input, null, 2)
+  } catch {
+    return String(input)
+  }
+}
+
+function interactionStatusLabel(part: MessagePart): string {
+  if (part.status === 'pending' || part.status === 'in_progress') return 'Waiting for input'
+  if (part.status === 'completed') return 'Answered'
+  return 'Interaction'
 }
 
 export function partBody(part: MessagePart): string {
@@ -203,6 +226,63 @@ export function partBody(part: MessagePart): string {
   if (!content) return part.summary || ''
 
   const type = typeof content.type === 'string' ? content.type : ''
+
+  if (part.kind === 'think' || type === 'think') {
+    return readReasoningText(content)
+  }
+
+  if (part.kind === 'tool_call' || type === 'tool_call') {
+    return toolCallInputText(content)
+  }
+
+  if (part.kind === 'tool_result' || type === 'tool_result') {
+    const output = readString(content.output)
+    if (output) return output
+    return part.summary || 'Tool result'
+  }
+
+  if (part.kind === 'file_ref' || type === 'file_ref') {
+    return readString(content.path) || readString(content.name) || 'File reference'
+  }
+
+  if (part.kind === 'paste_ref' || type === 'paste_ref') {
+    return readString(content.text) || 'Pasted text'
+  }
+
+  if (part.kind === 'skill_ref' || type === 'skill_ref') {
+    const args = content.args
+    if (args !== undefined && args !== null) {
+      try {
+        return JSON.stringify(args)
+      } catch {
+        return String(args)
+      }
+    }
+    return readString(content.skill) || 'Skill reference'
+  }
+
+  if (part.kind === 'notice' || type === 'notice') {
+    return readString(content.detail) || readString(content.summary) || part.summary || 'Notice'
+  }
+
+  if (part.kind === 'hook' || type === 'hook') {
+    return readString(content.detail) || readString(content.summary) || part.summary || 'Hook activity'
+  }
+
+  if (part.kind === 'compaction' || type === 'compaction') {
+    return readString(content.summary) || part.summary || 'Session compacted'
+  }
+
+  if (part.kind === 'error' || type === 'error') {
+    const category = readString(content.category) || 'error'
+    const message = readString(content.message) || ''
+    return message ? `${category}: ${message}` : category
+  }
+
+  if (part.kind === 'interaction' || type === 'interaction') {
+    return readString(content.prompt) || part.summary || interactionStatusLabel(part)
+  }
+
   if (type === 'text' && typeof content.text === 'string') {
     return content.text
   }
@@ -260,6 +340,152 @@ export function applyPatchDiffSummary(payload: Record<string, unknown>): string 
 
 export function partBlocks(part: MessagePart): RenderBlock[] {
   const content = part.content || null
+
+  if (part.kind === 'run') {
+    const runKind = readString(content?.run_kind) || 'run'
+    const abortReason = readString(content?.abort_reason)
+    const title = runKind === 'user_send' ? 'User run' : runKind === 'continue' ? 'Continued run' : runKind
+    return [
+      {
+        title,
+        body: abortReason ? `abort_reason: ${abortReason}` : `state: ${part.status}`,
+        kind: 'input_activity',
+        activityLabel: 'Run',
+        summary: part.summary || undefined,
+      },
+    ]
+  }
+
+  if (part.kind === 'think' || content?.type === 'think') {
+    const body = partBody(part)
+    return body.trim().length > 0 ? [{ body, kind: 'markdown', title: 'Reasoning' }] : []
+  }
+
+  if (part.kind === 'tool_call' || content?.type === 'tool_call') {
+    const toolName = readString(content?.name) || readString(content?.plugin) || 'tool'
+    const input = toolCallInputText(content)
+    const blocks: RenderBlock[] = [
+      {
+        title: toolName,
+        body: input ? `\`\`\`json\n${input}\n\`\`\`` : 'Tool call',
+        kind: 'markdown',
+        summary: part.status,
+      },
+    ]
+    return blocks
+  }
+
+  if (part.kind === 'tool_result' || content?.type === 'tool_result') {
+    const output = readString(content?.output) || partBody(part)
+    const ok = content?.ok !== false
+    return output.trim().length > 0
+      ? [{ body: output, kind: 'terminal', language: 'text', title: ok ? 'Result' : 'Tool failed' }]
+      : []
+  }
+
+  if (part.kind === 'file_ref' || content?.type === 'file_ref') {
+    const name = readString(content?.name) || readString(content?.path) || 'file'
+    const mime = readString(content?.mime)
+    const sha = readString(content?.sha)
+    const summary = [mime, sha ? sha.slice(0, 12) : null].filter((value): value is string => Boolean(value)).join(' · ')
+    return [
+      {
+        title: name,
+        body: readString(content?.path) || 'File reference',
+        kind: 'input_activity' as const,
+        activityLabel: 'Attachment',
+        summary: summary || undefined,
+      },
+    ]
+  }
+
+  if (part.kind === 'paste_ref' || content?.type === 'paste_ref') {
+    const text = readString(content?.text) || ''
+    return [
+      {
+        title: 'Pasted text',
+        body: text ? textArtifactPreview(text) : 'Pasted text was attached to this message.',
+        kind: 'input_activity' as const,
+        activityLabel: 'Pasted text',
+      },
+    ]
+  }
+
+  if (part.kind === 'skill_ref' || content?.type === 'skill_ref') {
+    const skill = readString(content?.skill) || part.summary?.replace(/^Skill:\s*/i, '') || 'Skill'
+    const args = content?.args
+    const argsText = args === undefined || args === null ? '' : safeStringify(args)
+    return [
+      {
+        title: skill,
+        body: argsText ? argsText : 'User-selected Skill instructions were attached to this message.',
+        kind: 'input_activity' as const,
+        activityLabel: 'Skill',
+      },
+    ]
+  }
+
+  if (part.kind === 'notice' || content?.type === 'notice') {
+    return [
+      {
+        title: readString(content?.kind) || 'Notice',
+        body: readString(content?.detail) || readString(content?.summary) || part.summary || 'Notice',
+        kind: 'input_activity' as const,
+        activityLabel: 'Notice',
+      },
+    ]
+  }
+
+  if (part.kind === 'hook' || content?.type === 'hook') {
+    return [
+      {
+        title: readString(content?.hook) || 'Hook',
+        body: readString(content?.detail) || readString(content?.summary) || part.summary || 'Hook activity',
+        kind: 'input_activity' as const,
+        activityLabel: 'Hook',
+      },
+    ]
+  }
+
+  if (part.kind === 'compaction' || content?.type === 'compaction') {
+    return [
+      {
+        title: 'Compaction',
+        body: readString(content?.summary) || part.summary || 'Session was compacted.',
+        kind: 'input_activity' as const,
+        activityLabel: 'Compaction',
+      },
+    ]
+  }
+
+  if (part.kind === 'error' || content?.type === 'error') {
+    const category = readString(content?.category) || 'error'
+    const message = readString(content?.message) || part.summary || 'The session reported an error.'
+    return [
+      {
+        title: category,
+        body: message,
+        kind: 'input_activity' as const,
+        activityLabel: 'Error',
+      },
+    ]
+  }
+
+  if (part.kind === 'interaction' || content?.type === 'interaction') {
+    const type = readString(content?.type) || 'ask_user'
+    const prompt = readString(content?.prompt) || part.summary || ''
+    const waiting = part.status === 'pending' || part.status === 'in_progress'
+    const blocks: RenderBlock[] = [
+      {
+        title: prompt || type,
+        body: waiting ? 'Waiting for a user response.' : partBody(part) || 'Interaction resolved.',
+        kind: 'input_activity' as const,
+        activityLabel: waiting ? 'Waiting' : interactionStatusLabel(part),
+      },
+    ]
+    return blocks
+  }
+
   if (
     content?.type === 'operation' &&
     (part.status === 'policy_denied' ||
@@ -394,6 +620,14 @@ export function partBlocks(part: MessagePart): RenderBlock[] {
   return body.trim().length > 0 ? [{ body, kind: 'markdown' }] : []
 }
 
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
 function operationRenderBlocks(content: Record<string, unknown> | null): RenderBlock[] {
   if (!content || content.type !== 'operation') return []
   const blocks = Array.isArray(content.blocks) ? content.blocks : []
@@ -499,8 +733,7 @@ export function messageBlocks(message: MessageResource): RenderBlock[] {
     ? [...message.parts].sort((left, right) => left.part_index - right.part_index)
     : []
   if (!parts.length) return []
-  const blocks = parts.flatMap((part) => partBlocks(part))
-  return blocks
+  return parts.flatMap((part) => partBlocks(part))
 }
 
 export function rewindMessageComposerText(message: MessageResource): string {

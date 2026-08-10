@@ -2,11 +2,8 @@ import { userErrorMessage } from '@/lib/api'
 import type { Ref } from 'vue'
 
 import {
-  type DomainEventRecord,
-  getSessionState,
-  listGlobalEvents,
+  fetchSessionExecution,
   listSessions,
-  listSessionTimeline,
   reloadRuntime,
   type SessionExecutionResource,
   type SessionResource,
@@ -20,26 +17,20 @@ export type RuntimeSessionWorkflowActionsInput = {
   selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
   sessionExecution: Ref<SessionExecutionResource | null>
-  globalEvents: Ref<DomainEventRecord[]>
-  sessionTimeline: Ref<DomainEventRecord[]>
   sessions: Ref<SessionResource[]>
   workflowLoading: Ref<boolean>
 }
 
 export type RuntimeSessionWorkflowActionsDeps = {
-  getSessionState: typeof getSessionState
-  listGlobalEvents: typeof listGlobalEvents
+  fetchSessionExecution: typeof fetchSessionExecution
   listSessions: typeof listSessions
-  listSessionTimeline: typeof listSessionTimeline
   pickSessionId: typeof pickSessionId
   reloadRuntime: typeof reloadRuntime
 }
 
 const defaultDeps: RuntimeSessionWorkflowActionsDeps = {
-  getSessionState,
-  listGlobalEvents,
+  fetchSessionExecution,
   listSessions,
-  listSessionTimeline,
   pickSessionId,
   reloadRuntime,
 }
@@ -52,14 +43,9 @@ export function useRuntimeSessionWorkflowActions(
     input.workflowLoading.value = true
     input.actionError.value = ''
     try {
-      const [execution, timeline] = await Promise.all([
-        deps.getSessionState(sessionId),
-        deps.listSessionTimeline(sessionId, { limit: 25 }),
-      ])
+      const execution = await deps.fetchSessionExecution(sessionId)
       if (input.selectedSessionId.value !== sessionId) return
       input.sessionExecution.value = execution
-      input.sessionTimeline.value = timeline
-      input.globalEvents.value = await deps.listGlobalEvents({ limit: 25 })
     } catch (err) {
       input.actionError.value = userErrorMessage(err)
     } finally {
@@ -89,8 +75,6 @@ export function useRuntimeSessionWorkflowActions(
       return
     }
     input.sessionExecution.value = null
-    input.sessionTimeline.value = []
-    input.globalEvents.value = []
   }
 
   async function selectSession(sessionId: number) {

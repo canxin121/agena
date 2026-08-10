@@ -1,8 +1,8 @@
 //! Presentation rows for the session timeline picker.
 //!
-//! The App queries and formats concrete Runtime events. This module owns their
-//! terminal picker projection. Timeline rows are event history, not a second
-//! identity path into the canonical transcript.
+//! The App queries and formats ordered session parts. This module owns their
+//! terminal picker projection; it is a detail view over the same transcript
+//! data, not a second history store.
 
 use std::borrow::Cow;
 
@@ -24,7 +24,7 @@ pub struct TimelineItem {
 
 impl SearchPickerItem for TimelineItem {
     fn search_picker_key(&self) -> Cow<'_, str> {
-        Cow::Owned(format!("event:{}", self.summary))
+        Cow::Owned(format!("part:{}", self.summary))
     }
 
     fn search_picker_label(&self) -> Cow<'_, str> {
@@ -43,7 +43,7 @@ impl SearchPickerItem for TimelineItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Presentation state of the timeline.
 pub struct TimelinePresentation {
-    /// Runtime query scope retained by the App overlay adapter.
+    /// Session query scope retained by the App overlay adapter.
     pub session_id: i64,
 }
 
@@ -57,7 +57,7 @@ pub type TimelineOverlay =
     SearchPicker<TimelineItem, SearchPickerNoCustom, TimelinePresentation, Editor>;
 
 /// Renders the complete Timeline picker from the TUI-owned presentation state.
-/// Runtime event loading remains in the App adapter; the TUI owns the terminal
+/// Session-part loading remains in the App adapter; the TUI owns the terminal
 /// preview/dialog composition.
 pub fn render_overlay(frame: &mut Frame<'_>, area: Rect, dialog: &TimelineOverlay, i18n: &I18n) {
     let spec = SearchPickerDialogSpec::new(
@@ -121,14 +121,14 @@ mod tests {
     use ratatui::text::Text;
 
     #[test]
-    fn rows_use_event_identity_without_message_links() {
+    fn rows_use_part_identity_without_message_links() {
         let item = TimelineItem {
             summary: "message created".to_owned(),
             detail_body: Text::default(),
             search_text: "message created".to_owned(),
         };
 
-        assert_eq!(item.search_picker_key(), "event:message created");
+        assert_eq!(item.search_picker_key(), "part:message created");
     }
 
     #[test]

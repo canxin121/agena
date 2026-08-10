@@ -10,7 +10,6 @@ import ChatRunOptionsPanel from './ChatRunOptionsPanel.vue'
 import ChatSessionTransferPanel from './ChatSessionTransferPanel.vue'
 import ChatSessionTreePanel from './ChatSessionTreePanel.vue'
 import ChatSidebarPanel from './ChatSidebarPanel.vue'
-import ChatTimelinePanel from './ChatTimelinePanel.vue'
 import ChatUsagePanel from './ChatUsagePanel.vue'
 import ChatSkillPickerDialog from './ChatSkillPickerDialog.vue'
 import type { ChatPageContentState } from './chatPageContentModel'
@@ -151,16 +150,6 @@ const selectedSkillIds = computed(() => props.state.skillReferences.value.map((s
         :format-message-time="props.state.formatMessageTime"
         :message-usage-facts="props.state.messageUsageFacts"
         :message-blocks="props.state.messageBlocks"
-      />
-
-      <ChatTimelinePanel
-        :timeline-events="props.state.timelineEvents.value"
-        :format-message-time="props.state.formatMessageTime"
-        :format-event-time="props.state.formatEventTime"
-        :read-payload-message-id="props.state.readPayloadMessageId"
-        :read-payload-part-id="props.state.readPayloadPartId"
-        :inspect-message="props.state.inspectMessage"
-        :scroll-to-message="props.state.scrollToMessage"
       />
 
       <ChatPendingPermissionsPanel

@@ -16,6 +16,8 @@ pub(crate) struct RuntimeProcessState<Loader, Request, Snapshot, Error> {
     pub(crate) load_request: Request,
     pub(crate) workspace_root: PathBuf,
     pub(crate) database: Option<Arc<DatabaseConnection>>,
+    /// Dedicated scheduler database connection retained for snapshot reloads.
+    pub(crate) scheduler_database: Option<Arc<DatabaseConnection>>,
     pub(crate) control_state: RuntimeControlState<Snapshot, Error>,
 }
 
@@ -28,6 +30,7 @@ where
         load_request: Request,
         workspace_root: PathBuf,
         database: Option<Arc<DatabaseConnection>>,
+        scheduler_database: Option<Arc<DatabaseConnection>>,
         control_state: RuntimeControlState<Snapshot, Error>,
     ) -> Self {
         Self {
@@ -35,6 +38,7 @@ where
             load_request,
             workspace_root,
             database,
+            scheduler_database,
             control_state,
         }
     }

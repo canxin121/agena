@@ -130,46 +130,46 @@ impl App {
     pub(crate) fn rewind_turn_navigation_item(
         &self,
         session_id: i64,
-        turn: agena_domain::TurnSnapshot,
+        target: crate::RewindTarget,
     ) -> (
         agena_tui_session::session_navigation::SessionNavigationItem,
         SessionNavigationCommand,
     ) {
-        let message_text = turn.input.text();
+        let message_text = target.message_text.clone();
         let normalized = message_text
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
         let label = if normalized.is_empty() {
-            format!("Turn {}", turn.sequence)
+            format!("Turn {}", target.sequence)
         } else {
             normalized.chars().take(96).collect()
         };
         let detail = format!(
             "turn {} | {}",
-            turn.sequence,
+            target.sequence,
             format_timestamp(
-                chrono::DateTime::<chrono::Utc>::from_timestamp_millis(turn.created_at_ms)
+                chrono::DateTime::<chrono::Utc>::from_timestamp_millis(target.created_at_ms)
                     .unwrap_or_default()
             )
         );
-        let target = format!(
+        let target_text = format!(
             "{} ({})",
             label,
             detail.split(" | ").next().unwrap_or_default()
         );
         (
             agena_tui_session::session_navigation::SessionNavigationItem::new(
-                format!("turn:{}", turn.id),
+                format!("turn:{}", target.turn_id),
                 label.clone(),
                 detail.clone(),
-                format!("{label} {detail} {}", turn.id),
+                format!("{label} {detail} {}", target.turn_id),
             ),
             SessionNavigationCommand::Rewind {
                 session_id,
-                turn_id: turn.id,
+                turn_id: target.turn_id,
                 message_text,
-                target,
+                target: target_text,
             },
         )
     }

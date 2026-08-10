@@ -1,7 +1,7 @@
 use agena_domain::{ModelId, Role};
 
 use crate::{
-    AgenaToolMode, CompletionInputMessage, CompletionInputPart, CompletionInputToolResultStatus,
+    AgenaToolMode, CompletionInputPart, CompletionInputRun, CompletionInputToolResultStatus,
     CompletionRequest, CompletionResponse, ProviderNativeToolsConfig,
 };
 
@@ -63,11 +63,11 @@ pub fn prepare_disabled_tool_request(request: &mut CompletionRequest) {
     request.previous_response_id = None;
     strip_provider_tool_body_fields(request);
 
-    let mut projected_messages = Vec::new();
-    for message in std::mem::take(&mut request.messages) {
-        projected_messages.extend(project_disabled_completion_input_history(message));
+    let mut projected_runs = Vec::new();
+    for run in std::mem::take(&mut request.turns) {
+        projected_runs.extend(project_disabled_completion_input_history(run));
     }
-    request.messages = projected_messages;
+    request.turns = projected_runs;
 }
 
 /// Remove raw body patches that could bypass Agena's fixed five-function tool
@@ -99,13 +99,13 @@ pub fn validate_disabled_tool_response(
 }
 
 pub fn project_disabled_completion_input_history(
-    message: CompletionInputMessage,
-) -> Vec<CompletionInputMessage> {
-    let original_role = message.role;
+    run: CompletionInputRun,
+) -> Vec<CompletionInputRun> {
+    let original_role = run.role;
     let mut projected_parts = Vec::new();
-    let mut result_messages = Vec::new();
+    let mut result_runs = Vec::new();
 
-    for part in message.parts {
+    for part in run.parts {
         match part {
             CompletionInputPart::ToolCall {
                 id,
@@ -128,7 +128,7 @@ pub fn project_disabled_completion_input_history(
                 output_json,
                 ..
             } => {
-                result_messages.push(CompletionInputMessage {
+                result_runs.push(CompletionInputRun {
                     role: Role::User,
                     parts: vec![CompletionInputPart::Text {
                         text: format!(
@@ -144,16 +144,16 @@ pub fn project_disabled_completion_input_history(
         }
     }
 
-    let mut messages = Vec::with_capacity(1 + result_messages.len());
+    let mut runs = Vec::with_capacity(1 + result_runs.len());
     if !projected_parts.is_empty() {
-        messages.push(CompletionInputMessage {
+        runs.push(CompletionInputRun {
             role: original_role,
             parts: projected_parts,
-            provider_state: message.provider_state,
+            provider_state: run.provider_state,
         });
     }
-    messages.extend(result_messages);
-    messages
+    runs.extend(result_runs);
+    runs
 }
 
 fn completion_input_result_status_text(status: CompletionInputToolResultStatus) -> &'static str {

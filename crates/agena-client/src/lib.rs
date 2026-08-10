@@ -1,7 +1,7 @@
 //! # agena-client
 //!
 //! Official Rust SDK for the v2 agena API. Talks REST for one-shot
-//! commands/queries and WebSocket for live event subscriptions over a single
+//! commands/queries and WebSocket for live part-patch subscriptions over a single
 //! multiplexed connection.
 //!
 //! ## Quick start
@@ -15,12 +15,10 @@
 //! let mut sub = client
 //!     .subscribe(SubscribeRequest {
 //!         scope: Scope::Session { session_id: session.id },
-//!         kinds: None,
-//!         since_seq_global: None,
 //!     })
 //!     .await?;
-//! while let Some(event) = sub.recv().await {
-//!     println!("got {}: {:?}", event.kind.tag_str(), event);
+//! while let Some(update) = sub.recv().await {
+//!     println!("got update: {:?}", update);
 //! }
 //! ```
 

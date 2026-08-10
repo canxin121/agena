@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 
-import type { MessagePart, MessageResource, TranscriptSnapshot } from '@/agena/lib/agenaApi'
+import type { MessagePart, MessageResource, SessionPart } from '@/agena/lib/agenaApi'
 
-import { partBlocks, rewindMessageComposerText, transcriptMessages } from './chatRenderModel'
+import { partBlocks, partsToMessages, rewindMessageComposerText } from './chatRenderModel'
 
 function userMessage(parts: MessagePart[]): MessageResource {
   return {
@@ -58,273 +58,207 @@ describe('rewindMessageComposerText', () => {
   })
 })
 
-describe('canonical transcript projection', () => {
-  test('creates exactly one user entry and one assistant entry per canonical turn', () => {
-    const transcript: TranscriptSnapshot = {
-      session_id: 7,
-      seq_session: 9,
-      turns: [
-        {
-          id: '00000000-0000-0000-0000-000000000001',
-          session_id: 7,
-          sequence: 1,
-          created_at_ms: 1_800_000_000_000,
-          input: [
-            {
-              type: 'activity',
-              activity: {
-                id: '00000000-0000-0000-0000-000000000002',
-                owner: { type: 'turn_input', turn_id: '00000000-0000-0000-0000-000000000001' },
-                actor: 'user',
-                state: 'completed',
-                position: { index: 0 },
-                revision_seq: 1,
-                lifecycle: { started_at_ms: 1_800_000_000_000, finished_at_ms: 1_800_000_000_000 },
-                payload: {
-                  activity_type: 'skill_reference',
-                  name: 'batch',
-                  description: 'Run independent tasks.',
-                  instructions: 'Use isolated snapshots.',
-                  content_hash: 'sha256:test',
-                  source: 'test',
-                  aliases: [],
-                },
-              },
-            },
-            {
-              type: 'text',
-              segment: {
-                id: '00000000-0000-0000-0000-000000000003',
-                text: 'Fix the tool barrier.',
-                position: { index: 1 },
-                revision_seq: 2,
-              },
-            },
-          ],
-          reply: {
-            id: '00000000-0000-0000-0000-000000000004',
-            turn_id: '00000000-0000-0000-0000-000000000001',
-            status: 'completed',
-            content: [
-              {
-                type: 'text',
-                segment: {
-                  id: '00000000-0000-0000-0000-000000000005',
-                  text: 'Done.',
-                  position: { index: 0 },
-                  revision_seq: 3,
-                },
-              },
-            ],
-            revision_seq: 4,
-            created_at_ms: 1_800_000_000_001,
-            finished_at_ms: 1_800_000_000_002,
-          },
-        },
-      ],
-    }
+type SessionPartFixture = Partial<Omit<SessionPart, 'part_id' | 'kind' | 'role' | 'content'>> & {
+  part_id: number
+  kind: SessionPart['kind']
+  role: SessionPart['role']
+  content?: Record<string, unknown>
+}
 
-    const messages = transcriptMessages(transcript)
+function sessionPart(partial: SessionPartFixture): SessionPart {
+  return {
+    state: 'completed',
+    content: {},
+    created_at_ms: 1_800_000_000_000,
+    ...partial,
+  }
+}
+
+function runPart(partId: number, runKind = 'user_send', overrides: Partial<SessionPart> = {}): SessionPart {
+  return sessionPart({
+    part_id: partId,
+    kind: 'run',
+    role: 'user',
+    content: { run_kind: runKind },
+    ...overrides,
+  })
+}
+
+describe('v2 parts projection (partsToMessages)', () => {
+  test('groups content parts under their run marker, ordered by created_at_ms then part_id', () => {
+    const parts: SessionPart[] = [
+      sessionPart({ part_id: 103, kind: 'tool_call', role: 'assistant', run_id: 100, content: { name: 'fs.read' }, created_at_ms: 1_800_000_000_003 }),
+      sessionPart({ part_id: 101, kind: 'text', role: 'user', run_id: 100, content: { text: 'Fix it.' }, created_at_ms: 1_800_000_000_001 }),
+      runPart(100),
+      sessionPart({ part_id: 102, kind: 'think', role: 'assistant', run_id: 100, content: { summary: ['Let me look.'] }, created_at_ms: 1_800_000_000_002 }),
+      sessionPart({ part_id: 104, kind: 'tool_result', role: 'tool', run_id: 100, parent_part_id: 103, content: { output: 'ok', ok: true }, created_at_ms: 1_800_000_000_004 }),
+    ]
+
+    const messages = partsToMessages(parts, 7)
+
+    expect(messages.length).toBe(1)
+    expect(messages[0]?.id).toBe('run:100')
+    expect(messages[0]?.role).toBe('user')
+    expect(messages[0]?.metadata.run_part_id).toBe(100)
+    expect(messages[0]?.parts?.map((part) => part.kind)).toEqual([
+      'run',
+      'text',
+      'think',
+      'tool_call',
+      'tool_result',
+    ])
+  })
+
+  test('produces one message per run marker and sorts run groups canonically', () => {
+    const parts: SessionPart[] = [
+      runPart(200, 'continue', { created_at_ms: 1_800_000_000_010 }),
+      sessionPart({ part_id: 201, kind: 'text', role: 'assistant', run_id: 200, content: { text: 'Follow-up.' }, created_at_ms: 1_800_000_000_011 }),
+      sessionPart({ part_id: 101, kind: 'text', role: 'user', run_id: 100, content: { text: 'First.' }, created_at_ms: 1_800_000_000_001 }),
+      runPart(100, 'user_send', { created_at_ms: 1_800_000_000_000 }),
+    ]
+
+    const messages = partsToMessages(parts, 7)
+
+    expect(messages.map((message) => message.id)).toEqual(['run:100', 'run:200'])
+    expect(messages[1]?.metadata.run_kind).toBe('continue')
+  })
+
+  test('still renders content parts whose run marker is missing locally', () => {
+    const parts: SessionPart[] = [
+      sessionPart({ part_id: 301, kind: 'text', role: 'assistant', run_id: 300, content: { text: 'Streamed before marker.' }, created_at_ms: 1_800_000_000_001 }),
+      sessionPart({ part_id: 401, kind: 'notice', role: 'runtime', content: { kind: 'hook', summary: 'done' }, created_at_ms: 1_800_000_000_002 }),
+    ]
+
+    const messages = partsToMessages(parts, 7)
 
     expect(messages.length).toBe(2)
-    expect(messages.map((message) => message.id)).toEqual([
-      'turn:00000000-0000-0000-0000-000000000001:input',
-      'reply:00000000-0000-0000-0000-000000000004',
-    ])
-    expect(messages[0]?.parts?.map((part) => part.kind)).toEqual(['skill_reference', 'text'])
-    expect(messages[0]?.metadata.canonical_turn_id).toBe('00000000-0000-0000-0000-000000000001')
-    expect(messages[1]?.metadata.canonical_reply_id).toBe('00000000-0000-0000-0000-000000000004')
+    expect(messages[0]?.parts?.map((part) => part.kind)).toEqual(['text'])
+    expect(messages[1]?.parts?.map((part) => part.kind)).toEqual(['notice'])
   })
 
-  test('keeps permission state inside its single owning Operation part', () => {
-    const transcript: TranscriptSnapshot = {
-      session_id: 7,
-      seq_session: 3,
-      turns: [
-        {
-          id: '00000000-0000-0000-0000-000000000011',
-          session_id: 7,
-          sequence: 1,
-          input: [],
-          reply: {
-            id: '00000000-0000-0000-0000-000000000012',
-            turn_id: '00000000-0000-0000-0000-000000000011',
-            status: 'in_progress',
-            content: [
-              {
-                type: 'activity',
-                activity: {
-                  id: '00000000-0000-0000-0000-000000000013',
-                  owner: {
-                    type: 'assistant_reply',
-                    reply_id: '00000000-0000-0000-0000-000000000012',
-                  },
-                  actor: 'tool',
-                  state: 'in_progress',
-                  position: { index: 0 },
-                  revision_seq: 2,
-                  lifecycle: { started_at_ms: 1_800_000_000_001 },
-                  payload: {
-                    activity_type: 'operation',
-                    call_id: 'call-fs-write',
-                    invocation: { name: 'fs.write', input: { path: 'config.json' } },
-                    title: 'fs.write',
-                    summary: 'Awaiting user approval',
-                    authorization: {
-                      permissions: [
-                        {
-                          request: {
-                            request_id: 'permission-fs-write',
-                            session_id: 7,
-                            action: { kind: 'tool', tool_name: 'fs.write' },
-                            reason: 'write access requires approval',
-                            created_at: '2026-08-01T00:00:00Z',
-                          },
-                        },
-                      ],
-                    },
-                  },
-                },
-              },
-            ],
-            revision_seq: 2,
-            created_at_ms: 1_800_000_000_001,
-          },
-          created_at_ms: 1_800_000_000_000,
-        },
-      ],
-    }
+  test('maps a terminal run state onto the message and keeps usage from run content', () => {
+    const parts: SessionPart[] = [
+      runPart(500, 'user_send', {
+        state: 'failed',
+        content: { run_kind: 'user_send', abort_reason: 'provider_error', usage: { requests: 1, input_tokens: 10 } },
+      }),
+    ]
 
-    const messages = transcriptMessages(transcript)
-    const operationParts = messages[1]?.parts || []
+    const messages = partsToMessages(parts, 7)
 
-    expect(operationParts.length).toBe(1)
-    expect(operationParts[0]?.kind).toBe('operation')
-    expect(operationParts[0]?.name).toBe('fs.write')
-    expect(operationParts[0]?.summary).toBe('Awaiting user approval')
-    expect(operationParts[0]?.content?.type).toBe('operation')
-    expect(operationParts[0]?.content?.authorization).toEqual({
-      permissions: [
-        {
-          request: {
-            request_id: 'permission-fs-write',
-            session_id: 7,
-            action: { kind: 'tool', tool_name: 'fs.write' },
-            reason: 'write access requires approval',
-            created_at: '2026-08-01T00:00:00Z',
-          },
-        },
-      ],
+    expect(messages[0]?.state).toBe('failed')
+    expect(messages[0]?.usage).toEqual({ requests: 1, input_tokens: 10 })
+    expect(rewindMessageComposerText(messages[0]!)).toBe('')
+  })
+})
+
+describe('v2 part rendering (4.1.1 kinds)', () => {
+  test('renders think parts as a Reasoning markdown block', () => {
+    const blocks = partBlocks({
+      id: 1,
+      message_id: 'run:1',
+      part_index: 0,
+      status: 'completed',
+      kind: 'think',
+      created_at: '2026-07-13T00:00:00Z',
+      content: { summary: ['First thought.', 'Second thought.'] },
     })
-    expect(operationParts.some((part) => part.content?.type === 'request')).toBe(false)
+
+    expect(blocks).toEqual([{ body: 'First thought.\nSecond thought.', kind: 'markdown', title: 'Reasoning' }])
   })
 
-  test('operation parts headline with the composed operation title when present', () => {
-    const transcript: TranscriptSnapshot = {
-      session_id: 7,
-      seq_session: 4,
-      turns: [
-        {
-          id: '00000000-0000-0000-0000-000000000031',
-          session_id: 7,
-          sequence: 1,
-          input: [],
-          reply: {
-            id: '00000000-0000-0000-0000-000000000032',
-            turn_id: '00000000-0000-0000-0000-000000000031',
-            status: 'completed',
-            content: [
-              {
-                type: 'activity',
-                activity: {
-                  id: '00000000-0000-0000-0000-000000000033',
-                  owner: {
-                    type: 'assistant_reply',
-                    reply_id: '00000000-0000-0000-0000-000000000032',
-                  },
-                  actor: 'tool',
-                  state: 'completed',
-                  position: { index: 0 },
-                  revision_seq: 1,
-                  lifecycle: {
-                    started_at_ms: 1_800_000_000_001,
-                    finished_at_ms: 1_800_000_000_002,
-                  },
-                  payload: {
-                    activity_type: 'operation',
-                    call_id: 'call-fs-read',
-                    invocation: { name: 'fs.read', input: { path: 'README.md' } },
-                    title: 'Read README.md',
-                    summary: '42 lines',
-                  },
-                },
-              },
-            ],
-            revision_seq: 1,
-            created_at_ms: 1_800_000_000_001,
-          },
-          created_at_ms: 1_800_000_000_000,
-        },
-      ],
-    }
+  test('renders tool_call and tool_result parts', () => {
+    const callBlocks = partBlocks({
+      id: 2,
+      message_id: 'run:1',
+      part_index: 1,
+      status: 'in_progress',
+      kind: 'tool_call',
+      created_at: '2026-07-13T00:00:00Z',
+      content: { name: 'fs.read', input: { path: 'README.md' } },
+    })
+    expect(callBlocks[0]?.title).toBe('fs.read')
+    expect(callBlocks[0]?.kind).toBe('markdown')
 
-    const messages = transcriptMessages(transcript)
-    const operationPart = messages[1]?.parts?.[0]
-    expect(operationPart?.name).toBe('Read README.md')
+    const resultBlocks = partBlocks({
+      id: 3,
+      message_id: 'run:1',
+      part_index: 2,
+      status: 'completed',
+      kind: 'tool_result',
+      created_at: '2026-07-13T00:00:00Z',
+      content: { output: '# README\n', ok: true },
+    })
+    expect(resultBlocks[0]?.title).toBe('Result')
+    expect(resultBlocks[0]?.body).toBe('# README\n')
   })
 
-  test('operation parts fall back to the invocation name when title is empty', () => {
-    const transcript: TranscriptSnapshot = {
-      session_id: 7,
-      seq_session: 5,
-      turns: [
-        {
-          id: '00000000-0000-0000-0000-000000000041',
-          session_id: 7,
-          sequence: 1,
-          input: [],
-          reply: {
-            id: '00000000-0000-0000-0000-000000000042',
-            turn_id: '00000000-0000-0000-0000-000000000041',
-            status: 'completed',
-            content: [
-              {
-                type: 'activity',
-                activity: {
-                  id: '00000000-0000-0000-0000-000000000043',
-                  owner: {
-                    type: 'assistant_reply',
-                    reply_id: '00000000-0000-0000-0000-000000000042',
-                  },
-                  actor: 'tool',
-                  state: 'completed',
-                  position: { index: 0 },
-                  revision_seq: 1,
-                  lifecycle: {
-                    started_at_ms: 1_800_000_000_001,
-                    finished_at_ms: 1_800_000_000_002,
-                  },
-                  payload: {
-                    activity_type: 'operation',
-                    call_id: 'call-repo-status',
-                    invocation: { name: 'repo.status', input: {} },
-                    title: '',
-                    summary: 'clean',
-                  },
-                },
-              },
-            ],
-            revision_seq: 1,
-            created_at_ms: 1_800_000_000_001,
-          },
-          created_at_ms: 1_800_000_000_000,
-        },
-      ],
-    }
+  test('renders notice, compaction, and error parts as labelled blocks', () => {
+    const notice = partBlocks({
+      id: 4,
+      message_id: 'run:1',
+      part_index: 0,
+      status: 'completed',
+      kind: 'notice',
+      created_at: '2026-07-13T00:00:00Z',
+      content: { kind: 'hook_started', summary: 'Pre-commit hook', detail: 'Running lints…' },
+    })
+    expect(notice[0]?.activityLabel).toBe('Notice')
+    expect(notice[0]?.title).toBe('hook_started')
 
-    const messages = transcriptMessages(transcript)
-    const operationPart = messages[1]?.parts?.[0]
-    expect(operationPart?.name).toBe('repo.status')
+    const compaction = partBlocks({
+      id: 5,
+      message_id: 'run:1',
+      part_index: 0,
+      status: 'completed',
+      kind: 'compaction',
+      created_at: '2026-07-13T00:00:00Z',
+      content: { summary: 'Summarized 120 messages.', window: [1, 120] },
+    })
+    expect(compaction[0]?.activityLabel).toBe('Compaction')
+
+    const error = partBlocks({
+      id: 6,
+      message_id: 'run:1',
+      part_index: 0,
+      status: 'failed',
+      kind: 'error',
+      created_at: '2026-07-13T00:00:00Z',
+      content: { category: 'provider', message: 'Request timed out.', detail: {} },
+    })
+    expect(error[0]?.activityLabel).toBe('Error')
+    expect(error[0]?.title).toBe('provider')
+    expect(error[0]?.body).toBe('Request timed out.')
+  })
+
+  test('renders a pending interaction as a waiting block', () => {
+    const blocks = partBlocks({
+      id: 7,
+      message_id: 'run:1',
+      part_index: 0,
+      status: 'in_progress',
+      kind: 'interaction',
+      created_at: '2026-07-13T00:00:00Z',
+      content: { type: 'ask_user', prompt: 'Proceed with the write?', options: ['yes', 'no'], response: null },
+    })
+
+    expect(blocks[0]?.activityLabel).toBe('Waiting')
+    expect(blocks[0]?.title).toBe('Proceed with the write?')
+  })
+
+  test('renders the run marker as a group header block', () => {
+    const blocks = partBlocks({
+      id: 8,
+      message_id: 'run:1',
+      part_index: 0,
+      status: 'in_progress',
+      kind: 'run',
+      created_at: '2026-07-13T00:00:00Z',
+      content: { run_kind: 'user_send' },
+    })
+
+    expect(blocks[0]?.activityLabel).toBe('Run')
+    expect(blocks[0]?.title).toBe('User run')
   })
 })
 

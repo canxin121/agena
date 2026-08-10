@@ -39,8 +39,8 @@ use agena_api::{
 };
 #[cfg(test)]
 use agena_api::{
-    message_part::MessagePartResource,
-    resource::{MessageResource, MessageStatus},
+    part::PartResource,
+    resource::{RunResource, RunStatus},
 };
 use agena_application::dto::{
     ConfigJsonSources, TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource,
@@ -81,7 +81,7 @@ use tokio::{sync::mpsc::unbounded_channel, time::interval};
 use unicode_width::UnicodeWidthChar;
 
 #[cfg(test)]
-use agena_api::resource::MessageRole;
+use agena_api::resource::RunRole;
 
 use agena_tui_backend::{
     Backend, InspectorRow, LiveEvent, ProviderConfigDraft, ProviderDraftAdapterRule,
@@ -107,7 +107,7 @@ impl TranscriptFixture {
         created_at: DateTime<Utc>,
         status: ExecutionStatus,
         text: impl Into<String>,
-    ) -> MessagePartResource {
+    ) -> PartResource {
         Self::text_part_with_flags(id, message_id, created_at, status, text, false)
     }
 
@@ -118,13 +118,13 @@ impl TranscriptFixture {
         status: ExecutionStatus,
         text: impl Into<String>,
         synthetic: bool,
-    ) -> MessagePartResource {
-        MessagePartResource {
+    ) -> PartResource {
+        PartResource {
             id,
             message_id,
             part_index: 0,
             status: fixture_part_status(status),
-            kind: agena_api::message_part::MessagePartKindResource::Text,
+            kind: agena_api::part::PartKindResource::Text,
             name: None,
             summary: None,
             has_detail: true,
@@ -132,8 +132,8 @@ impl TranscriptFixture {
             segment_id: Some(agena_domain::TextSegmentId::new()),
             operation_id: None,
             created_at,
-            content: Some(agena_api::message_part::MessagePartDetailResource::Text(
-                agena_api::message_part::MessageTextPartResource {
+            content: Some(agena_api::part::PartDetailResource::Text(
+                agena_api::part::TextPartResource {
                     text: text.into(),
                     synthetic,
                 },
@@ -147,13 +147,13 @@ impl TranscriptFixture {
         created_at: DateTime<Utc>,
         status: ExecutionStatus,
         reasoning: agena_domain::ReasoningPart,
-    ) -> MessagePartResource {
-        MessagePartResource {
+    ) -> PartResource {
+        PartResource {
             id,
             message_id,
             part_index: 0,
             status: fixture_part_status(status),
-            kind: agena_api::message_part::MessagePartKindResource::Activity,
+            kind: agena_api::part::PartKindResource::Activity,
             name: None,
             summary: None,
             has_detail: true,
@@ -161,15 +161,13 @@ impl TranscriptFixture {
             segment_id: None,
             operation_id: None,
             created_at,
-            content: Some(
-                agena_api::message_part::MessagePartDetailResource::Reasoning(
-                    agena_api::message_part::MessageReasoningPartResource {
-                        summary: reasoning.summary,
-                        raw_content: reasoning.raw_content,
-                        encrypted_content: reasoning.encrypted_content,
-                    },
-                ),
-            ),
+            content: Some(agena_api::part::PartDetailResource::Reasoning(
+                agena_api::part::ReasoningPartResource {
+                    summary: reasoning.summary,
+                    raw_content: reasoning.raw_content,
+                    encrypted_content: reasoning.encrypted_content,
+                },
+            )),
         }
     }
 }
@@ -177,31 +175,21 @@ impl TranscriptFixture {
 #[cfg(test)]
 const fn fixture_part_status(
     status: ExecutionStatus,
-) -> agena_api::message_part::PartExecutionStatusResource {
+) -> agena_api::part::PartExecutionStatusResource {
     match status {
-        ExecutionStatus::Pending => agena_api::message_part::PartExecutionStatusResource::Pending,
-        ExecutionStatus::InProgress => {
-            agena_api::message_part::PartExecutionStatusResource::InProgress
-        }
-        ExecutionStatus::Completed => {
-            agena_api::message_part::PartExecutionStatusResource::Completed
-        }
-        ExecutionStatus::PolicyDenied => {
-            agena_api::message_part::PartExecutionStatusResource::PolicyDenied
-        }
-        ExecutionStatus::UserDeclined => {
-            agena_api::message_part::PartExecutionStatusResource::UserDeclined
-        }
+        ExecutionStatus::Pending => agena_api::part::PartExecutionStatusResource::Pending,
+        ExecutionStatus::InProgress => agena_api::part::PartExecutionStatusResource::InProgress,
+        ExecutionStatus::Completed => agena_api::part::PartExecutionStatusResource::Completed,
+        ExecutionStatus::PolicyDenied => agena_api::part::PartExecutionStatusResource::PolicyDenied,
+        ExecutionStatus::UserDeclined => agena_api::part::PartExecutionStatusResource::UserDeclined,
         ExecutionStatus::CapabilityUnavailable => {
-            agena_api::message_part::PartExecutionStatusResource::CapabilityUnavailable
+            agena_api::part::PartExecutionStatusResource::CapabilityUnavailable
         }
         ExecutionStatus::ToolUnavailable => {
-            agena_api::message_part::PartExecutionStatusResource::ToolUnavailable
+            agena_api::part::PartExecutionStatusResource::ToolUnavailable
         }
-        ExecutionStatus::Failed => agena_api::message_part::PartExecutionStatusResource::Failed,
-        ExecutionStatus::Cancelled => {
-            agena_api::message_part::PartExecutionStatusResource::Cancelled
-        }
+        ExecutionStatus::Failed => agena_api::part::PartExecutionStatusResource::Failed,
+        ExecutionStatus::Cancelled => agena_api::part::PartExecutionStatusResource::Cancelled,
     }
 }
 use crate::commands::{CommandId, CommandSpec};
@@ -328,7 +316,7 @@ pub(crate) use self::surface_selection::{
 pub(crate) use agena_tui_transcript::renderer as transcript_view;
 pub(crate) use agena_tui_transcript::text as ui_text;
 use agena_tui_transcript::{
-    initial_search_match_index, normalize_transcript_text_selection, transcript_entries,
+    initial_search_match_index, normalize_transcript_text_selection,
     transcript_node_highlight_range, transcript_node_kind_label,
     transcript_selection_scroll_position, transcript_spinner_placeholder,
     transcript_text_selection_text,
@@ -343,7 +331,7 @@ use agena_tui_transcript::{
 
 use self::transcript_view::{
     current_spinner_millis, refresh_spinner_line, render_entry_detailed, render_entry_export,
-    render_transcript_snapshot_export_markdown, spinner_frame,
+    render_parts_export_markdown, spinner_frame,
 };
 pub(crate) use agena_tui_transcript::sanitize_terminal_text;
 

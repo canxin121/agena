@@ -13,6 +13,129 @@ use super::{
 
 mod ui;
 
+/// Shared v2 parts fixtures for app tests. The wire transcript is an ordered
+/// part list (database-design-v2.md §4.1.1); these helpers build the small
+/// `run`/`text`/`error`/`think` shapes the rendering tests exercise. Content
+/// parts carry no `run_id` — `parts_entries` groups by sequence, so the tests
+/// only need the marker/content order.
+#[cfg(test)]
+mod parts_fixtures {
+    use agena_api::part::ErrorPartResource;
+    use agena_api::resource::SessionTranscriptPart;
+
+    pub(super) fn run(part_id: i64, role: &str, state: &str) -> SessionTranscriptPart {
+        SessionTranscriptPart {
+            part_id,
+            kind: "run".to_owned(),
+            role: role.to_owned(),
+            state: state.to_owned(),
+            content: serde_json::json!({ "run_kind": "user_send" }),
+            summary: None,
+            created_at_ms: part_id * 10,
+            parent_part_id: None,
+            run_id: Some(part_id),
+        }
+    }
+
+    pub(super) fn text(part_id: i64, role: &str, text: &str) -> SessionTranscriptPart {
+        SessionTranscriptPart {
+            part_id,
+            kind: "text".to_owned(),
+            role: role.to_owned(),
+            state: "completed".to_owned(),
+            content: serde_json::json!({ "text": text }),
+            summary: None,
+            created_at_ms: part_id * 10,
+            parent_part_id: None,
+            run_id: None,
+        }
+    }
+
+    pub(super) fn error(
+        part_id: i64,
+        role: &str,
+        problem: agena_failure::UserProblem,
+    ) -> SessionTranscriptPart {
+        SessionTranscriptPart {
+            part_id,
+            kind: "error".to_owned(),
+            role: role.to_owned(),
+            state: "failed".to_owned(),
+            content: serde_json::to_value(ErrorPartResource { problem })
+                .expect("error part serializes"),
+            summary: None,
+            created_at_ms: part_id * 10,
+            parent_part_id: None,
+            run_id: None,
+        }
+    }
+
+    pub(super) fn think(part_id: i64, role: &str, summary: Vec<String>) -> SessionTranscriptPart {
+        SessionTranscriptPart {
+            part_id,
+            kind: "think".to_owned(),
+            role: role.to_owned(),
+            state: "completed".to_owned(),
+            content: serde_json::json!({ "summary": summary }),
+            summary: None,
+            created_at_ms: part_id * 10,
+            parent_part_id: None,
+            run_id: None,
+        }
+    }
+
+    pub(super) fn hook(
+        part_id: i64,
+        role: &str,
+        summary: &str,
+        detail: &str,
+    ) -> SessionTranscriptPart {
+        SessionTranscriptPart {
+            part_id,
+            kind: "hook".to_owned(),
+            role: role.to_owned(),
+            state: "completed".to_owned(),
+            content: serde_json::json!({
+                "hook": "background",
+                "summary": summary,
+                "detail": detail,
+            }),
+            summary: None,
+            created_at_ms: part_id * 10,
+            parent_part_id: None,
+            run_id: None,
+        }
+    }
+
+    pub(super) fn paste(part_id: i64, role: &str, text: &str) -> SessionTranscriptPart {
+        SessionTranscriptPart {
+            part_id,
+            kind: "paste_ref".to_owned(),
+            role: role.to_owned(),
+            state: "completed".to_owned(),
+            content: serde_json::json!({ "text": text }),
+            summary: None,
+            created_at_ms: part_id * 10,
+            parent_part_id: None,
+            run_id: None,
+        }
+    }
+
+    pub(super) fn file_ref(part_id: i64, role: &str, path: &str) -> SessionTranscriptPart {
+        SessionTranscriptPart {
+            part_id,
+            kind: "file_ref".to_owned(),
+            role: role.to_owned(),
+            state: "completed".to_owned(),
+            content: serde_json::json!({ "path": path, "name": path }),
+            summary: None,
+            created_at_ms: part_id * 10,
+            parent_part_id: None,
+            run_id: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod interactive_request_visibility_tests {
     use std::collections::BTreeSet;
@@ -230,13 +353,13 @@ mod interactive_request_visibility_tests {
 }
 
 macro_rules! api_message_part {
-    ($id:expr, $message_id:expr, $created_at:expr, $status:expr, PartContent::text($text:expr $(,)?) $(,)?) => {
+    ($id:expr, $message_id:expr, $created_at:expr, $status:expr, FixturePart::text($text:expr $(,)?) $(,)?) => {
         crate::TranscriptFixture::text_part($id, $message_id, $created_at, $status, $text)
     };
-    ($id:expr, $message_id:expr, $created_at:expr, $status:expr, PartContent::Reasoning($reasoning:expr) $(,)?) => {
+    ($id:expr, $message_id:expr, $created_at:expr, $status:expr, FixturePart::Reasoning($reasoning:expr) $(,)?) => {
         crate::TranscriptFixture::reasoning_part($id, $message_id, $created_at, $status, $reasoning)
     };
-    ($id:expr, $message_id:expr, $created_at:expr, $status:expr, PartContent::Text($text_part:expr) $(,)?) => {{
+    ($id:expr, $message_id:expr, $created_at:expr, $status:expr, FixturePart::Text($text_part:expr) $(,)?) => {{
         let text_part = $text_part;
         crate::TranscriptFixture::text_part_with_flags(
             $id,
@@ -252,22 +375,23 @@ macro_rules! api_message_part {
 #[cfg(test)]
 mod transcript_character_cursor_tests {
     use super::super::{
-        ExecutionStatus, MessageResource, MessageRole, MessageStatus, TranscriptFixture,
+        ExecutionStatus, RunResource, RunRole, RunStatus, TranscriptFixture,
         TranscriptMoveDirection, TranscriptState, TranscriptTextPosition, Utc,
     };
+    use super::parts_fixtures;
     use unicode_width::UnicodeWidthStr;
 
-    fn message(id: i64, text: &str) -> MessageResource {
-        message_with_role(id, MessageRole::Assistant, text)
+    fn message(id: i64, text: &str) -> RunResource {
+        message_with_role(id, RunRole::Assistant, text)
     }
 
-    fn message_with_role(id: i64, role: MessageRole, text: &str) -> MessageResource {
+    fn message_with_role(id: i64, role: RunRole, text: &str) -> RunResource {
         let now = Utc::now();
-        MessageResource {
+        RunResource {
             id,
             session_id: 7,
             role,
-            state: MessageStatus::Completed,
+            state: RunStatus::Completed,
             created_at: now,
             updated_at: now,
             metadata: Default::default(),
@@ -280,36 +404,6 @@ mod transcript_character_cursor_tests {
                 ExecutionStatus::Completed,
                 text,
             )]),
-        }
-    }
-
-    fn snapshot_turn(
-        sequence: i64,
-        input: &str,
-        reply: &str,
-        status: agena_domain::AssistantReplyStatus,
-    ) -> agena_domain::TurnSnapshot {
-        let turn_id = agena_domain::TurnId::new();
-        agena_domain::TurnSnapshot {
-            id: turn_id,
-            session_id: 7,
-            sequence,
-            input: agena_domain::ContentDocument::new(vec![agena_domain::ContentNode::text(input)]),
-            reply: agena_domain::AssistantReplySnapshot {
-                id: agena_domain::AssistantReplyId::new(),
-                turn_id,
-                status,
-                content: if reply.is_empty() {
-                    agena_domain::ContentDocument::default()
-                } else {
-                    agena_domain::ContentDocument::new(vec![agena_domain::ContentNode::text(reply)])
-                },
-                revision_seq: 1,
-                created_at_ms: sequence * 10,
-                finished_at_ms: status.is_terminal().then_some(sequence * 10 + 1),
-                failure: None,
-            },
-            created_at_ms: sequence * 10,
         }
     }
 
@@ -712,17 +806,12 @@ mod transcript_character_cursor_tests {
     fn cancelled_reply_activity_is_rendered_after_its_user_turn_as_an_assistant_outcome() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: agena_domain::TranscriptSnapshot {
-                session_id: 7,
-                seq_session: 3,
-                turns: vec![snapshot_turn(
-                    1,
-                    "please answer",
-                    "partial assistant reply",
-                    agena_domain::AssistantReplyStatus::Cancelled,
-                )],
-                session_activities: Vec::new(),
-            },
+            parts: vec![
+                parts_fixtures::run(1, "user", "completed"),
+                parts_fixtures::text(2, "user", "please answer"),
+                parts_fixtures::run(3, "assistant", "cancelled"),
+                parts_fixtures::text(4, "assistant", "partial assistant reply"),
+            ],
             ..TranscriptState::default()
         };
         let lines = transcript
@@ -758,13 +847,14 @@ mod transcript_character_cursor_tests {
             lines[cancelled], "  ▸ – Response cancelled",
             "a response outcome must use the visible Activity headline contract"
         );
+        // The cancelled run marker (part_id 3) projects to an Activity node
+        // keyed by its part id in the v2 parts model (database-design-v2.md
+        // §4.1.1), rendered just after its user turn.
         assert!(transcript.rendered(80).nodes.iter().any(|node| {
             matches!(
                 node.key,
                 agena_tui_transcript::TranscriptNodeKey::Activity {
-                    content_id: agena_tui_transcript::TranscriptContentId::AssistantReplyLifecycle(
-                        _
-                    ),
+                    content_id: agena_tui_transcript::TranscriptContentId::StoredPart(3),
                     ..
                 }
             ) && node.kind == agena_tui_transcript::TranscriptNodeKind::Activity
@@ -775,25 +865,15 @@ mod transcript_character_cursor_tests {
     fn cancelled_reply_activity_never_moves_across_a_later_user_turn() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: agena_domain::TranscriptSnapshot {
-                session_id: 7,
-                seq_session: 4,
-                turns: vec![
-                    snapshot_turn(
-                        1,
-                        "cancel this turn",
-                        "",
-                        agena_domain::AssistantReplyStatus::Cancelled,
-                    ),
-                    snapshot_turn(
-                        2,
-                        "the next turn",
-                        "next answer",
-                        agena_domain::AssistantReplyStatus::Completed,
-                    ),
-                ],
-                session_activities: Vec::new(),
-            },
+            parts: vec![
+                parts_fixtures::run(1, "user", "completed"),
+                parts_fixtures::text(2, "user", "cancel this turn"),
+                parts_fixtures::run(3, "assistant", "cancelled"),
+                parts_fixtures::run(4, "user", "completed"),
+                parts_fixtures::text(5, "user", "the next turn"),
+                parts_fixtures::run(6, "assistant", "completed"),
+                parts_fixtures::text(7, "assistant", "next answer"),
+            ],
             ..TranscriptState::default()
         };
         let lines = transcript
@@ -826,25 +906,14 @@ mod transcript_character_cursor_tests {
     fn delayed_cancellations_stay_with_their_original_user_turns() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: agena_domain::TranscriptSnapshot {
-                session_id: 7,
-                seq_session: 8,
-                turns: vec![
-                    snapshot_turn(
-                        1,
-                        "first turn",
-                        "",
-                        agena_domain::AssistantReplyStatus::Cancelled,
-                    ),
-                    snapshot_turn(
-                        2,
-                        "second turn",
-                        "",
-                        agena_domain::AssistantReplyStatus::Cancelled,
-                    ),
-                ],
-                session_activities: Vec::new(),
-            },
+            parts: vec![
+                parts_fixtures::run(1, "user", "completed"),
+                parts_fixtures::text(2, "user", "first turn"),
+                parts_fixtures::run(3, "assistant", "cancelled"),
+                parts_fixtures::run(4, "user", "completed"),
+                parts_fixtures::text(5, "user", "second turn"),
+                parts_fixtures::run(6, "assistant", "cancelled"),
+            ],
             ..TranscriptState::default()
         };
 
@@ -917,10 +986,10 @@ mod prompt_history_tests {
 #[cfg(test)]
 mod pending_message_tests {
     use super::super::{PendingUserMessage, TranscriptState};
+    use super::parts_fixtures;
     use agena_domain::{
-        ActivityId, ActivityPayload, ActivityProvenance, AssistantReplyId, AssistantReplySnapshot,
-        AssistantReplyStatus, ComposerActivity, ComposerDocument, ComposerNode, ContentDocument,
-        ContentNode, SkillReferenceActivity, TranscriptSnapshot, TurnId, TurnSnapshot,
+        ActivityId, ActivityPayload, ActivityProvenance, ComposerActivity, ComposerDocument,
+        ComposerNode, SkillReferenceActivity,
     };
 
     #[test]
@@ -1019,29 +1088,11 @@ mod pending_message_tests {
         );
         assert_eq!(transcript.rendered(80).lines[0].text, "user");
 
-        let turn_id = TurnId::new();
-        transcript.merge_snapshot(TranscriptSnapshot {
-            session_id: 7,
-            seq_session: 1,
-            turns: vec![TurnSnapshot {
-                id: turn_id,
-                session_id: 7,
-                sequence: 1,
-                input: ContentDocument::new(vec![ContentNode::text("send this now")]),
-                reply: AssistantReplySnapshot {
-                    id: AssistantReplyId::new(),
-                    turn_id,
-                    status: AssistantReplyStatus::InProgress,
-                    content: ContentDocument::default(),
-                    revision_seq: 1,
-                    created_at_ms: 1,
-                    finished_at_ms: None,
-                    failure: None,
-                },
-                created_at_ms: 1,
-            }],
-            session_activities: Vec::new(),
-        });
+        transcript.merge_parts(vec![
+            parts_fixtures::run(1, "user", "completed"),
+            parts_fixtures::text(2, "user", "send this now"),
+            parts_fixtures::run(3, "assistant", "in_progress"),
+        ]);
 
         assert!(transcript.pending_user_messages.is_empty());
         assert_eq!(
@@ -1069,31 +1120,10 @@ mod pending_message_tests {
             confirmed: true,
         });
 
-        let continuation_turn_id = TurnId::new();
-        transcript.merge_snapshot(TranscriptSnapshot {
-            session_id: 7,
-            seq_session: 1,
-            turns: vec![TurnSnapshot {
-                id: continuation_turn_id,
-                session_id: 7,
-                sequence: 1,
-                input: ContentDocument::default(),
-                reply: AssistantReplySnapshot {
-                    id: AssistantReplyId::new(),
-                    turn_id: continuation_turn_id,
-                    status: AssistantReplyStatus::Completed,
-                    content: ContentDocument::new(vec![ContentNode::text(
-                        "continued after permission",
-                    )]),
-                    revision_seq: 1,
-                    created_at_ms: 1,
-                    finished_at_ms: Some(1),
-                    failure: None,
-                },
-                created_at_ms: 1,
-            }],
-            session_activities: Vec::new(),
-        });
+        transcript.merge_parts(vec![
+            parts_fixtures::run(1, "assistant", "completed"),
+            parts_fixtures::text(2, "assistant", "continued after permission"),
+        ]);
 
         assert_eq!(transcript.pending_user_messages.len(), 1);
         let rendered = transcript
@@ -1125,38 +1155,21 @@ mod pending_message_tests {
             confirmed: true,
         });
 
-        let turn_id = TurnId::new();
-        let response_id = AssistantReplyId::new();
-        let snapshot = |seq_session, input| TranscriptSnapshot {
-            session_id: 7,
-            seq_session,
-            turns: vec![TurnSnapshot {
-                id: turn_id,
-                session_id: 7,
-                sequence: 1,
-                input,
-                reply: AssistantReplySnapshot {
-                    id: response_id,
-                    turn_id,
-                    status: AssistantReplyStatus::InProgress,
-                    content: ContentDocument::new(vec![ContentNode::text("assistant reply")]),
-                    revision_seq: 1,
-                    created_at_ms: 1,
-                    finished_at_ms: None,
-                    failure: None,
-                },
-                created_at_ms: 1,
-            }],
-            session_activities: Vec::new(),
-        };
+        let empty_parts = vec![
+            parts_fixtures::run(1, "assistant", "in_progress"),
+            parts_fixtures::text(2, "assistant", "assistant reply"),
+        ];
+        let materialized_parts = vec![
+            parts_fixtures::run(1, "user", "completed"),
+            parts_fixtures::text(2, "user", "materialized once"),
+            parts_fixtures::run(3, "assistant", "in_progress"),
+            parts_fixtures::text(4, "assistant", "assistant reply"),
+        ];
 
-        transcript.merge_snapshot(snapshot(1, ContentDocument::default()));
+        transcript.merge_parts(empty_parts);
         assert_eq!(transcript.pending_user_messages.len(), 1);
 
-        transcript.merge_snapshot(snapshot(
-            2,
-            ContentDocument::new(vec![ContentNode::text("materialized once")]),
-        ));
+        transcript.merge_parts(materialized_parts);
 
         assert!(transcript.pending_user_messages.is_empty());
         let rendered = transcript
@@ -1176,32 +1189,9 @@ mod pending_message_tests {
 
     #[test]
     fn optimistic_user_message_precedes_its_empty_active_reply_envelope() {
-        let turn_id = TurnId::new();
-        let reply_id = AssistantReplyId::new();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: TranscriptSnapshot {
-                session_id: 7,
-                seq_session: 1,
-                turns: vec![TurnSnapshot {
-                    id: turn_id,
-                    session_id: 7,
-                    sequence: 1,
-                    input: ContentDocument::default(),
-                    reply: AssistantReplySnapshot {
-                        id: reply_id,
-                        turn_id,
-                        status: AssistantReplyStatus::InProgress,
-                        content: ContentDocument::default(),
-                        revision_seq: 1,
-                        created_at_ms: 1,
-                        finished_at_ms: None,
-                        failure: None,
-                    },
-                    created_at_ms: 1,
-                }],
-                session_activities: Vec::new(),
-            },
+            parts: vec![parts_fixtures::run(1, "assistant", "in_progress")],
             ..TranscriptState::default()
         };
         transcript.add_pending_user_message(PendingUserMessage {
@@ -1246,7 +1236,7 @@ mod transcript_mouse_scroll_tests {
     }
 
     use super::super::{
-        MessageResource, MessageRole, MessageStatus, PendingUserMessage, TranscriptMoveDirection,
+        PendingUserMessage, RunResource, RunRole, RunStatus, TranscriptMoveDirection,
         TranscriptNodeKey, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
     };
 
@@ -1356,11 +1346,11 @@ mod transcript_mouse_scroll_tests {
     #[test]
     fn scrollbar_relocation_collapses_a_block_and_selects_the_directional_edge() {
         let now = Utc::now();
-        let message = |id: i64, text: String| MessageResource {
+        let message = |id: i64, text: String| RunResource {
             id,
             session_id: 7,
-            role: MessageRole::Assistant,
-            state: MessageStatus::Completed,
+            role: RunRole::Assistant,
+            state: RunStatus::Completed,
             created_at: now,
             updated_at: now,
             metadata: Default::default(),
@@ -1371,7 +1361,7 @@ mod transcript_mouse_scroll_tests {
                 id,
                 now,
                 ExecutionStatus::Completed,
-                PartContent::text(text),
+                FixturePart::text(text),
             )]),
         };
         let long_text = |prefix: &str| {
@@ -1430,11 +1420,11 @@ mod transcript_mouse_scroll_tests {
         let now = Utc::now();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 1,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -1445,7 +1435,7 @@ mod transcript_mouse_scroll_tests {
                     1,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(
+                    FixturePart::text(
                         "first paragraph contains enough words to wrap across several rendered lines while remaining one markdown block\n\nsecond paragraph",
                     ),
                 )]),
@@ -1559,11 +1549,11 @@ mod transcript_mouse_scroll_tests {
         let now = Utc::now();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 1,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -1574,7 +1564,7 @@ mod transcript_mouse_scroll_tests {
                     1,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(
+                    FixturePart::text(
                         "a deliberately long markdown paragraph whose wrapped rows change when the terminal width changes but whose semantic identity must remain stable",
                     ),
                 )]),
@@ -1614,8 +1604,8 @@ mod transcript_paging_tests {
     use agena_domain::{ComposerDocument, ComposerNode, ExecutionStatus, ReasoningPart};
 
     use super::super::{
-        MessageResource, MessageRole, MessageStatus, PendingUserMessage, TranscriptNodeKey,
-        TranscriptState, TranscriptTextPosition, Utc,
+        PendingUserMessage, RunResource, RunRole, RunStatus, TranscriptNodeKey, TranscriptState,
+        TranscriptTextPosition, Utc,
     };
 
     fn pending_document(text: String) -> ComposerDocument {
@@ -1767,7 +1757,7 @@ mod transcript_paging_tests {
             18,
             now,
             ExecutionStatus::Completed,
-            PartContent::Reasoning(ReasoningPart {
+            FixturePart::Reasoning(ReasoningPart {
                 summary: vec![
                     (0..40)
                         .map(|line| format!("deep thought line {line}"))
@@ -1786,11 +1776,11 @@ mod transcript_paging_tests {
         };
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 18,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -1912,14 +1902,11 @@ mod transcript_paging_tests {
 #[cfg(test)]
 mod transcript_activity_copy_tests {
     use super::super::{
-        ExecutionStatus, MessageResource, MessageRole, MessageStatus, TranscriptNodeKey,
-        TranscriptState, TranscriptTextPosition, TranscriptVisualSelectionMode, Utc,
+        ExecutionStatus, RunResource, RunRole, RunStatus, TranscriptNodeKey, TranscriptState,
+        TranscriptTextPosition, TranscriptVisualSelectionMode, Utc,
     };
 
-    fn reasoning_activity(
-        message_id: i64,
-        part_id: i64,
-    ) -> agena_api::message_part::MessagePartResource {
+    fn reasoning_activity(message_id: i64, part_id: i64) -> agena_api::part::PartResource {
         crate::TranscriptFixture::reasoning_part(
             part_id,
             message_id,
@@ -1933,20 +1920,18 @@ mod transcript_activity_copy_tests {
         )
     }
 
-    fn folded_run_parts() -> Vec<agena_api::message_part::MessagePartResource> {
+    fn folded_run_parts() -> Vec<agena_api::part::PartResource> {
         (51..59).map(|part| reasoning_activity(19, part)).collect()
     }
 
-    fn folded_run_transcript(
-        parts: Vec<agena_api::message_part::MessagePartResource>,
-    ) -> TranscriptState {
+    fn folded_run_transcript(parts: Vec<agena_api::part::PartResource>) -> TranscriptState {
         TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 19,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
                 metadata: Default::default(),
@@ -2077,83 +2062,35 @@ mod transcript_activity_copy_tests {
 
 #[cfg(test)]
 mod transcript_expansion_tests {
-    use agena_domain::{
-        ActivityActor, ActivityId, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
-        ActivityProvenance, ActivityState, AssistantReplyId, AssistantReplySnapshot,
-        AssistantReplyStatus, ContentDocument, ContentNode, ContentPosition, ExecutionStatus,
-        OperationActivity, ReasoningPart, StructuredObject, ToolCallId, ToolInvocation,
-        TranscriptSnapshot, TurnId, TurnSnapshot,
-    };
+    use agena_domain::{ExecutionStatus, ReasoningPart};
 
     use super::super::{
-        MessageResource, MessageRole, MessageStatus, TranscriptMoveDirection, TranscriptNodeKey,
+        RunResource, RunRole, RunStatus, TranscriptMoveDirection, TranscriptNodeKey,
         TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
         transcript_text_selection_text,
     };
-    use agena_tui_transcript::TranscriptActivitySection;
+    use super::parts_fixtures;
 
     #[test]
-    fn canonical_tools_list_activity_stays_open_when_new_reply_content_arrives() {
-        let turn_id = TurnId::new();
-        let response_id = AssistantReplyId::new();
-        let activity_id = ActivityId::new();
-        let operation = ActivityNode {
-            id: activity_id,
-            owner: ActivityOwner::AssistantReply {
-                reply_id: response_id,
-            },
-            actor: ActivityActor::Tool,
-            state: ActivityState::Completed,
-            position: ContentPosition { index: 0 },
-            revision_seq: 1,
-            lifecycle: ActivityLifecycle::default(),
-            payload: ActivityPayload::Operation(OperationActivity {
-                call_id: ToolCallId::new("call-tools-list"),
-                invocation: ToolInvocation::new(
-                    "tools_list",
-                    StructuredObject::try_from(serde_json::json!({"limit": 2}))
-                        .expect("structured tools_list input"),
-                ),
-                title: "tools_list".to_owned(),
-                summary: String::new(),
-                // The compact tool payload carries the structured results; the
-                // expanded Activity renders it as the human Result section.
-                data: serde_json::json!({
-                    "tool": "tool_search",
-                    "results": ["fs.read", "repo.status"]
-                }),
-                markdown: String::new(),
-                authorization: Default::default(),
-                error: None,
-            }),
-            provenance: ActivityProvenance::default(),
-        };
+    fn activity_expansion_survives_a_full_parts_refresh() {
+        // A `hook` part projects to a toggleable Activity whose content id is
+        // the part id (design 4.1.1). Expansion state is keyed by that id, so a
+        // full parts re-merge (the v2 refresh path, `merge_parts`) must keep
+        // the user-expanded Activity open while folding untouched siblings.
+        let hook = parts_fixtures::hook(
+            4,
+            "assistant",
+            "Run background scan",
+            "scanned 3 workspaces",
+        );
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: TranscriptSnapshot {
-                session_id: 7,
-                seq_session: 1,
-                turns: vec![TurnSnapshot {
-                    id: turn_id,
-                    session_id: 7,
-                    sequence: 1,
-                    input: ContentDocument::new(vec![ContentNode::text("list tools")]),
-                    reply: AssistantReplySnapshot {
-                        id: response_id,
-                        turn_id,
-                        status: AssistantReplyStatus::Completed,
-                        content: ContentDocument::new(vec![ContentNode::activity(
-                            operation.clone(),
-                        )]),
-                        revision_seq: 1,
-                        created_at_ms: 1,
-                        finished_at_ms: Some(2),
-                        failure: None,
-                    },
-                    created_at_ms: 1,
-                }],
-                session_activities: Vec::new(),
-            },
+            parts: vec![
+                parts_fixtures::run(1, "user", "completed"),
+                parts_fixtures::text(2, "user", "list tools"),
+                parts_fixtures::run(3, "assistant", "completed"),
+                hook.clone(),
+            ],
             detail_expanded_by_default: agena_tui_transcript::TranscriptDetailDefaults {
                 activity_default_expanded: false,
                 kind_defaults: std::collections::BTreeMap::new(),
@@ -2161,13 +2098,8 @@ mod transcript_expansion_tests {
             ..TranscriptState::default()
         };
         let key = TranscriptNodeKey::Activity {
-            entry_id: agena_tui_transcript::TranscriptEntryId::AssistantReply(response_id),
-            content_id: agena_tui_transcript::TranscriptContentId::Activity(activity_id),
-        };
-        let input_key = TranscriptNodeKey::ActivitySection {
-            entry_id: agena_tui_transcript::TranscriptEntryId::AssistantReply(response_id),
-            content_id: agena_tui_transcript::TranscriptContentId::Activity(activity_id),
-            section: TranscriptActivitySection::Input,
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(3),
+            content_id: agena_tui_transcript::TranscriptContentId::StoredPart(hook.part_id),
         };
         let collapsed = transcript
             .rendered(100)
@@ -2175,7 +2107,7 @@ mod transcript_expansion_tests {
             .iter()
             .find(|node| node.key == key)
             .cloned()
-            .expect("collapsed canonical tools_list Activity");
+            .expect("collapsed hook Activity");
         assert!(collapsed.toggleable);
         assert!(!collapsed.expanded);
         assert!(
@@ -2183,7 +2115,7 @@ mod transcript_expansion_tests {
                 .rendered(100)
                 .lines
                 .iter()
-                .all(|line| !line.text.contains("repo.status"))
+                .all(|line| !line.text.contains("scanned 3 workspaces"))
         );
 
         transcript.set_cursor_line(100, 20, collapsed.start_line);
@@ -2196,137 +2128,39 @@ mod transcript_expansion_tests {
             .nodes
             .iter()
             .find(|node| node.key == key)
-            .expect("expanded canonical tools_list Activity");
+            .expect("expanded hook Activity");
         assert!(expanded.expanded);
         assert!(
             transcript
                 .rendered(100)
                 .lines
                 .iter()
-                .any(|line| line.text.contains("repo.status"))
-        );
-        let collapsed_input = transcript
-            .rendered(100)
-            .nodes
-            .iter()
-            .find(|node| node.key == input_key)
-            .cloned()
-            .expect("nested Input section");
-        assert!(collapsed_input.toggleable);
-        assert!(!collapsed_input.expanded);
-        assert!(
-            transcript
-                .rendered(100)
-                .lines
-                .iter()
-                .all(|line| !line.text.contains("\"limit\": 2"))
+                .any(|line| line.text.contains("scanned 3 workspaces"))
         );
 
-        transcript.set_cursor_line(100, 20, collapsed_input.start_line);
-        assert_eq!(
-            transcript.toggle_cursor_node_expansion(100, 20),
-            Some((TranscriptNodeKind::Activity, true))
-        );
-        assert!(
-            transcript
-                .rendered(100)
-                .lines
-                .iter()
-                .any(|line| line.text.contains("\"limit\": 2"))
-        );
-
-        let outer = transcript
-            .rendered(100)
-            .nodes
-            .iter()
-            .find(|node| node.key == key)
-            .cloned()
-            .expect("expanded outer Activity");
-        transcript.set_cursor_line(100, 20, outer.start_line);
-        assert_eq!(
-            transcript.toggle_cursor_node_expansion(100, 20),
-            Some((TranscriptNodeKind::Activity, false))
-        );
-        assert!(
-            transcript
-                .rendered(100)
-                .nodes
-                .iter()
-                .all(|node| node.key != input_key)
-        );
-        let outer = transcript
-            .rendered(100)
-            .nodes
-            .iter()
-            .find(|node| node.key == key)
-            .cloned()
-            .expect("collapsed outer Activity");
-        transcript.set_cursor_line(100, 20, outer.start_line);
-        assert_eq!(
-            transcript.toggle_cursor_node_expansion(100, 20),
-            Some((TranscriptNodeKind::Activity, true))
-        );
-        assert!(
-            transcript
-                .rendered(100)
-                .nodes
-                .iter()
-                .find(|node| node.key == input_key)
-                .is_some_and(|node| node.expanded),
-            "nested Input state must survive closing and reopening its Activity"
-        );
-        let entry_key = TranscriptNodeKey::Entry {
-            entry_id: agena_tui_transcript::TranscriptEntryId::AssistantReply(response_id),
-        };
-        let entry = transcript
-            .rendered(100)
-            .nodes
-            .iter()
-            .find(|node| node.key == entry_key)
-            .expect("assistant reply container");
-        assert_eq!(
-            entry.copy_text.matches("\"limit\": 2").count(),
-            1,
-            "nested section copy text must not duplicate the parent Activity projection"
-        );
-
-        let mut incoming = transcript.snapshot.clone();
-        incoming.seq_session = 2;
-        incoming.turns[0].reply.status = AssistantReplyStatus::InProgress;
-        incoming.turns[0].reply.revision_seq = 2;
-        incoming.turns[0].reply.finished_at_ms = None;
-        for index in 1..=6 {
-            let mut appended = operation.clone();
-            appended.id = ActivityId::new();
-            appended.position = ContentPosition { index };
-            appended.revision_seq = 2;
-            if let ActivityPayload::Operation(operation) = &mut appended.payload {
-                operation.call_id = ToolCallId::new(format!("call-appended-{index}"));
-                operation.title = format!("appended activity {index}");
-            }
-            incoming.turns[0]
-                .reply
-                .content
-                .push(ContentNode::activity(appended));
-        }
-        transcript.merge_snapshot(incoming);
+        // A full parts refresh appends sibling hooks; the user-expanded
+        // Activity must stay open and untouched siblings fold into a summary.
+        transcript.merge_parts(vec![
+            parts_fixtures::run(1, "user", "completed"),
+            parts_fixtures::text(2, "user", "list tools"),
+            parts_fixtures::run(3, "assistant", "completed"),
+            hook.clone(),
+            parts_fixtures::hook(5, "assistant", "Run index", "indexed 1 file"),
+            parts_fixtures::hook(6, "assistant", "Run lint", "linted 2 files"),
+            parts_fixtures::hook(7, "assistant", "Run test", "ran 3 tests"),
+            parts_fixtures::hook(8, "assistant", "Run build", "built 4 targets"),
+            parts_fixtures::hook(9, "assistant", "Run deploy", "deployed 5 units"),
+            parts_fixtures::hook(10, "assistant", "Run verify", "verified 6 steps"),
+            parts_fixtures::hook(11, "assistant", "Run audit", "audited 7 modules"),
+        ]);
 
         let expanded_after_new_content = transcript
             .rendered(100)
             .nodes
             .iter()
             .find(|node| node.key == key)
-            .expect("expanded Activity remains rendered after new AI content");
+            .expect("expanded Activity remains rendered after a full parts refresh");
         assert!(expanded_after_new_content.expanded);
-        assert!(
-            transcript
-                .rendered(100)
-                .nodes
-                .iter()
-                .find(|node| node.key == input_key)
-                .is_some_and(|node| node.expanded),
-            "nested Input expansion must survive streamed Activity revisions"
-        );
         assert!(
             transcript.rendered(100).nodes.iter().any(|node| {
                 matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }) && !node.expanded
@@ -2345,7 +2179,7 @@ mod transcript_expansion_tests {
             message_id,
             now,
             ExecutionStatus::Completed,
-            PartContent::Reasoning(ReasoningPart {
+            FixturePart::Reasoning(ReasoningPart {
                 summary: vec!["first line\nsecond line\nthird line".to_string()],
                 raw_content: Vec::new(),
                 encrypted_content: None,
@@ -2359,11 +2193,11 @@ mod transcript_expansion_tests {
         };
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: message_id,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -2421,7 +2255,7 @@ mod transcript_expansion_tests {
             message_id,
             now,
             ExecutionStatus::Completed,
-            PartContent::Reasoning(ReasoningPart {
+            FixturePart::Reasoning(ReasoningPart {
                 summary: vec![body.clone()],
                 raw_content: Vec::new(),
                 encrypted_content: None,
@@ -2435,11 +2269,11 @@ mod transcript_expansion_tests {
         };
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: message_id,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -2490,14 +2324,14 @@ mod transcript_expansion_tests {
             17,
             now,
             ExecutionStatus::Completed,
-            PartContent::text("one\n\ntwo\n\nthree\n\nfour\n\nfive"),
+            FixturePart::text("one\n\ntwo\n\nthree\n\nfour\n\nfive"),
         );
         let activity = api_message_part!(
             24,
             18,
             now,
             ExecutionStatus::Completed,
-            PartContent::Reasoning(ReasoningPart {
+            FixturePart::Reasoning(ReasoningPart {
                 summary: vec!["first line\nsecond line\nthird line".to_string()],
                 raw_content: Vec::new(),
                 encrypted_content: None,
@@ -2512,11 +2346,11 @@ mod transcript_expansion_tests {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             messages: vec![
-                MessageResource {
+                RunResource {
                     id: 17,
                     session_id: 7,
-                    role: MessageRole::User,
-                    state: MessageStatus::Completed,
+                    role: RunRole::User,
+                    state: RunStatus::Completed,
                     created_at: now,
                     updated_at: now,
                     metadata: Default::default(),
@@ -2524,11 +2358,11 @@ mod transcript_expansion_tests {
                     part_count: 1,
                     parts: Some(vec![preceding_part]),
                 },
-                MessageResource {
+                RunResource {
                     id: 18,
                     session_id: 7,
-                    role: MessageRole::Assistant,
-                    state: MessageStatus::Completed,
+                    role: RunRole::Assistant,
+                    state: RunStatus::Completed,
                     created_at: now,
                     updated_at: now,
                     metadata: Default::default(),
@@ -2574,11 +2408,11 @@ mod transcript_expansion_tests {
     #[test]
     fn vertical_navigation_stops_on_messages_and_blocks_before_entering_text() {
         let now = Utc::now();
-        let message = |id: i64, role: MessageRole, text: &str| MessageResource {
+        let message = |id: i64, role: RunRole, text: &str| RunResource {
             id,
             session_id: 7,
             role,
-            state: MessageStatus::Completed,
+            state: RunStatus::Completed,
             created_at: now,
             updated_at: now,
             metadata: Default::default(),
@@ -2589,19 +2423,19 @@ mod transcript_expansion_tests {
                 id,
                 now,
                 ExecutionStatus::Completed,
-                PartContent::text(text),
+                FixturePart::text(text),
             )]),
         };
         let mut transcript = TranscriptState {
             session_id: Some(7),
             messages: vec![
-                message(9, MessageRole::User, "before"),
+                message(9, RunRole::User, "before"),
                 message(
                     10,
-                    MessageRole::Assistant,
+                    RunRole::Assistant,
                     "a wrapped answer with several rendered rows that can be navigated independently",
                 ),
-                message(11, MessageRole::User, "after"),
+                message(11, RunRole::User, "after"),
             ],
             ..TranscriptState::default()
         };
@@ -2692,11 +2526,11 @@ mod transcript_expansion_tests {
         let now = Utc::now();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 10,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -2707,7 +2541,7 @@ mod transcript_expansion_tests {
                     10,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(
+                    FixturePart::text(
                         "before\n\n```rust\nlet first = \"abcdefghijklmnopqrstuvwxyz\";\nlet second = 2;\n```\n\nafter",
                     ),
                 )]),
@@ -2832,11 +2666,11 @@ mod transcript_expansion_tests {
         let now = Utc::now();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 10,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -2847,7 +2681,7 @@ mod transcript_expansion_tests {
                     10,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(
+                    FixturePart::text(
                         "before\n\n| name | value |\n| --- | ---: |\n| answer | 42 |\n\nafter",
                     ),
                 )]),
@@ -2946,11 +2780,11 @@ mod transcript_expansion_tests {
     #[test]
     fn single_formulas_remain_atomic_while_inline_formula_canvases_form_one_semantic_line() {
         let now = Utc::now();
-        let message = |id, text: &str| MessageResource {
+        let message = |id, text: &str| RunResource {
             id,
             session_id: 7,
-            role: MessageRole::Assistant,
-            state: MessageStatus::Completed,
+            role: RunRole::Assistant,
+            state: RunStatus::Completed,
             created_at: now,
             updated_at: now,
             metadata: Default::default(),
@@ -2961,7 +2795,7 @@ mod transcript_expansion_tests {
                 id,
                 now,
                 ExecutionStatus::Completed,
-                PartContent::text(text),
+                FixturePart::text(text),
             )]),
         };
         let mut transcript = TranscriptState {
@@ -3059,11 +2893,11 @@ mod transcript_expansion_tests {
         );
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 12,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -3074,7 +2908,7 @@ mod transcript_expansion_tests {
                     12,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(aligned),
+                    FixturePart::text(aligned),
                 )]),
             }],
             ..TranscriptState::default()
@@ -3139,11 +2973,11 @@ mod transcript_expansion_tests {
         );
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 13,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -3154,7 +2988,7 @@ mod transcript_expansion_tests {
                     13,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(source),
+                    FixturePart::text(source),
                 )]),
             }],
             ..TranscriptState::default()
@@ -3217,11 +3051,11 @@ mod transcript_expansion_tests {
         let context = agena_tui_media::test_support::test_math_render_context(config);
         let mut native_transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 14,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -3232,7 +3066,7 @@ mod transcript_expansion_tests {
                     14,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(source),
+                    FixturePart::text(source),
                 )]),
             }],
             ..TranscriptState::default()
@@ -3267,11 +3101,11 @@ mod transcript_expansion_tests {
 
         let mut formula_only = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 15,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -3282,7 +3116,7 @@ mod transcript_expansion_tests {
                     15,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(concat!(
+                    FixturePart::text(concat!(
                         "$$\n",
                         "\\begin{aligned}\n",
                         "\\lim_{x \\to 0} \\frac{e^x - 1 - x}{x^2}\n",
@@ -3402,22 +3236,22 @@ mod transcript_expansion_tests {
 
 #[cfg(test)]
 mod live_transcript_tests {
+    use agena_api::resource::SessionTranscriptPart;
     use agena_domain::{
-        ActivityActor, ActivityId, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
-        ActivityProvenance, ActivityState, AssistantReplyId, AssistantReplySnapshot,
-        AssistantReplyStatus, ComposerActivity, ComposerDocument, ComposerNode, ContentDocument,
-        ContentNode, ContentPosition, EventMeta, ReasoningActivity, ReasoningPart,
-        ResourceActivity, ResourceKind, ResourceReference, TextArtifactActivity, TextSegmentId,
-        TranscriptPatch, TranscriptSnapshot, TurnId, TurnSnapshot,
+        ActivityId, ActivityOwner, ActivityState, AssistantReplyId, ComposerDocument, ComposerNode,
+        ContentNode, TextSegmentId, TranscriptPatch,
     };
-    use agena_runtime::{RuntimePresentationEvent, RuntimePresentationEventKind};
+    use agena_runtime::{
+        RuntimePresentationEvent, RuntimePresentationEventKind, RuntimePresentationEventMeta,
+    };
     use uuid::Uuid;
 
     use super::super::{PendingUserMessage, TranscriptState, Utc};
+    use super::parts_fixtures;
 
     fn event(kind: RuntimePresentationEventKind, seq: i64) -> RuntimePresentationEvent {
         RuntimePresentationEvent {
-            meta: EventMeta {
+            meta: RuntimePresentationEventMeta {
                 id: Uuid::new_v4(),
                 seq_global: seq,
                 seq_session: Some(seq),
@@ -3454,47 +3288,52 @@ mod live_transcript_tests {
         )
     }
 
-    fn turn(sequence: i64) -> TurnSnapshot {
-        let turn_id = TurnId::new();
-        TurnSnapshot {
-            id: turn_id,
-            session_id: 7,
-            sequence,
-            input: ContentDocument::new(vec![ContentNode::text("question")]),
-            reply: AssistantReplySnapshot {
-                id: AssistantReplyId::new(),
-                turn_id,
-                status: AssistantReplyStatus::InProgress,
-                content: ContentDocument::default(),
-                revision_seq: 0,
-                created_at_ms: sequence,
-                finished_at_ms: None,
-                failure: None,
-            },
-            created_at_ms: sequence,
-        }
+    /// A completed assistant run carrying a tall multi-line body, used to
+    /// exercise viewport follow/recovery across full parts refreshes. Each
+    /// line is its own markdown paragraph so the v2 renderer keeps them as
+    /// separate focusable rows instead of folding them into soft breaks.
+    fn tall_assistant(prefix: &str, run_id: i64, text_id: i64) -> Vec<SessionTranscriptPart> {
+        let body = (0..40)
+            .map(|line| format!("{prefix} line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        vec![
+            parts_fixtures::run(run_id, "assistant", "completed"),
+            parts_fixtures::text(text_id, "assistant", &body),
+        ]
     }
 
     #[test]
-    fn live_text_patch_is_rendered_without_waiting_for_a_refresh() {
-        let turn = turn(1);
-        let response_id = turn.reply.id;
+    fn transcript_patch_triggers_a_parts_reload() {
+        let response_id = AssistantReplyId::new();
         let segment_id = TextSegmentId::new();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: TranscriptSnapshot {
-                session_id: 7,
-                turns: vec![turn],
-                ..Default::default()
-            },
+            parts: vec![
+                parts_fixtures::run(1, "user", "completed"),
+                parts_fixtures::text(2, "user", "question"),
+                parts_fixtures::run(3, "assistant", "in_progress"),
+            ],
             ..TranscriptState::default()
         };
 
-        assert!(!transcript.apply_presentation_event(
-            &text_patch(response_id, segment_id, "I'm Grok", 2),
-            80,
-            20,
-        ));
+        // v2 has no incremental transcript patch surface: a live patch only
+        // signals that the terminal must reload the full part list, and the
+        // reloaded projection carries the streamed text.
+        assert!(
+            transcript.apply_presentation_event(
+                &text_patch(response_id, segment_id, "I'm Grok", 2),
+                80,
+                20,
+            ),
+            "a transcript patch must request a full parts reload"
+        );
+        transcript.merge_parts(vec![
+            parts_fixtures::run(1, "user", "completed"),
+            parts_fixtures::text(2, "user", "question"),
+            parts_fixtures::run(3, "assistant", "completed"),
+            parts_fixtures::text(4, "assistant", "I'm Grok"),
+        ]);
 
         let rendered = transcript
             .rendered(80)
@@ -3511,33 +3350,35 @@ mod live_transcript_tests {
 
     #[test]
     fn live_only_events_do_not_advance_the_durable_watermark() {
-        let turn = turn(1);
-        let response_id = turn.reply.id;
+        let response_id = AssistantReplyId::new();
         let segment_id = TextSegmentId::new();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: TranscriptSnapshot {
-                session_id: 7,
-                turns: vec![turn],
-                ..Default::default()
-            },
+            parts: vec![
+                parts_fixtures::run(1, "user", "completed"),
+                parts_fixtures::text(2, "user", "question"),
+                parts_fixtures::run(3, "assistant", "in_progress"),
+            ],
             ..TranscriptState::default()
         };
 
-        // A durable transcript patch advances the watermark.
-        assert!(!transcript.apply_presentation_event(
+        // A refresh-triggering transcript patch does not carry the durable
+        // sequence: the terminal reloads the full part list and the next
+        // execution updates the watermark. Counting it here would make every
+        // later refresh look stale.
+        assert!(transcript.apply_presentation_event(
             &text_patch(response_id, segment_id, "hello", 2),
             80,
             20,
         ));
-        assert_eq!(transcript.last_event_seq, Some(2));
+        assert_eq!(transcript.last_event_seq, None);
 
         // A live-only ActivityV2 event at a HIGHER seq must not advance it:
         // the server's durable `latest_event_seq` never includes live-only
         // events, so counting one would make every later refresh look stale
         // and drop the terminal execution + completed reply.
         let live = RuntimePresentationEvent {
-            meta: EventMeta {
+            meta: RuntimePresentationEventMeta {
                 id: Uuid::new_v4(),
                 seq_global: 50,
                 seq_session: Some(50),
@@ -3559,39 +3400,42 @@ mod live_transcript_tests {
         };
         assert!(!transcript.apply_presentation_event(&live, 80, 20));
         assert_eq!(
-            transcript.last_event_seq,
-            Some(2),
+            transcript.last_event_seq, None,
             "live-only events must not advance the durable watermark"
         );
     }
 
     #[test]
-    fn repeated_live_upserts_replace_one_stable_segment() {
-        let turn = turn(1);
-        let response_id = turn.reply.id;
-        let segment_id = TextSegmentId::new();
+    fn repeated_parts_refreshes_replace_one_stable_segment() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: TranscriptSnapshot {
-                session_id: 7,
-                turns: vec![turn],
-                ..Default::default()
-            },
+            parts: vec![
+                parts_fixtures::run(1, "user", "completed"),
+                parts_fixtures::text(2, "user", "question"),
+                parts_fixtures::run(3, "assistant", "in_progress"),
+                parts_fixtures::text(4, "assistant", "first"),
+            ],
             ..TranscriptState::default()
         };
 
-        transcript.apply_presentation_event(
-            &text_patch(response_id, segment_id, "first", 2),
-            80,
-            20,
-        );
-        transcript.apply_presentation_event(
-            &text_patch(response_id, segment_id, "first second", 3),
-            80,
-            20,
+        // A full parts refresh replaces the streamed segment wholesale; the
+        // projection must end up with exactly one assistant text segment.
+        transcript.merge_parts(vec![
+            parts_fixtures::run(1, "user", "completed"),
+            parts_fixtures::text(2, "user", "question"),
+            parts_fixtures::run(3, "assistant", "completed"),
+            parts_fixtures::text(4, "assistant", "first second"),
+        ]);
+        assert_eq!(
+            transcript
+                .parts
+                .iter()
+                .filter(|part| part.role == "assistant" && part.kind == "text")
+                .count(),
+            1,
+            "a refresh must replace the assistant text segment"
         );
 
-        assert_eq!(transcript.snapshot.turns[0].reply.content.nodes().len(), 1);
         let rendered = transcript
             .rendered(80)
             .lines
@@ -3604,17 +3448,13 @@ mod live_transcript_tests {
     }
 
     #[test]
-    fn live_user_input_materialization_replaces_the_optimistic_entry() {
-        let mut turn = turn(1);
-        turn.input = ContentDocument::default();
-        let turn_id = turn.id;
+    fn user_input_materialization_replaces_the_optimistic_entry() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: TranscriptSnapshot {
-                session_id: 7,
-                turns: vec![turn],
-                ..Default::default()
-            },
+            parts: vec![
+                parts_fixtures::run(1, "assistant", "completed"),
+                parts_fixtures::text(2, "assistant", "a reply"),
+            ],
             ..TranscriptState::default()
         };
         transcript.add_pending_user_message(PendingUserMessage {
@@ -3624,22 +3464,16 @@ mod live_transcript_tests {
             }]),
             confirmed: true,
         });
+        assert_eq!(transcript.pending_user_messages.len(), 1);
 
-        assert!(!transcript.apply_presentation_event(
-            &event(
-                RuntimePresentationEventKind::TranscriptPatch(Box::new(
-                    TranscriptPatch::ContentUpserted {
-                        seq_session: 2,
-                        owner: ActivityOwner::TurnInput { turn_id },
-                        node: ContentNode::text("one live message"),
-                    },
-                )),
-                2,
-            ),
-            80,
-            20,
-        ));
-
+        // The durable projection now carries the user run with its text; the
+        // optimistic entry is reconciled away.
+        transcript.merge_parts(vec![
+            parts_fixtures::run(1, "user", "completed"),
+            parts_fixtures::text(2, "user", "one live message"),
+            parts_fixtures::run(3, "assistant", "completed"),
+            parts_fixtures::text(4, "assistant", "a reply"),
+        ]);
         assert!(transcript.pending_user_messages.is_empty());
         let rendered = transcript
             .rendered(80)
@@ -3659,23 +3493,17 @@ mod live_transcript_tests {
     fn refresh_merge_keeps_follow_tail_pinned_to_the_bottom() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: TranscriptSnapshot {
-                session_id: 7,
-                turns: vec![tall_turn(1, "first")],
-                ..Default::default()
-            },
+            parts: tall_assistant("first", 1, 2),
             ..TranscriptState::default()
         };
         transcript.scroll_to_bottom(80, 20);
         let bottom_before = transcript.viewport.top;
         assert!(transcript.viewport.follow_tail);
 
-        // A periodic refresh merges the full snapshot without a live patch.
-        transcript.merge_snapshot(TranscriptSnapshot {
-            session_id: 7,
-            turns: vec![tall_turn(1, "first"), tall_turn(2, "reply")],
-            ..Default::default()
-        });
+        // A periodic refresh merges the full part list without a live patch.
+        let mut refreshed = tall_assistant("first", 1, 2);
+        refreshed.extend(tall_assistant("reply", 3, 4));
+        transcript.merge_parts(refreshed);
 
         // The next render runs clamp_scroll before ensure_visual_focus.
         transcript.clamp_scroll(80, 20);
@@ -3705,11 +3533,7 @@ mod live_transcript_tests {
     fn refresh_merge_does_not_hijack_a_scrolled_up_viewport() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: TranscriptSnapshot {
-                session_id: 7,
-                turns: vec![tall_turn(1, "first")],
-                ..Default::default()
-            },
+            parts: tall_assistant("first", 1, 2),
             ..TranscriptState::default()
         };
         transcript.scroll_to_bottom(80, 20);
@@ -3720,11 +3544,9 @@ mod live_transcript_tests {
         assert!(!transcript.viewport.follow_tail);
         let reading_top = transcript.viewport.top;
 
-        transcript.merge_snapshot(TranscriptSnapshot {
-            session_id: 7,
-            turns: vec![tall_turn(1, "first"), tall_turn(2, "reply")],
-            ..Default::default()
-        });
+        let mut refreshed = tall_assistant("first", 1, 2);
+        refreshed.extend(tall_assistant("reply", 3, 4));
+        transcript.merge_parts(refreshed);
         transcript.clamp_scroll(80, 20);
         transcript.ensure_visual_focus(80, 20);
 
@@ -3737,20 +3559,8 @@ mod live_transcript_tests {
             "new content must not drag a scrolled-up viewport"
         );
     }
-
-    fn tall_turn(sequence: i64, prefix: &str) -> TurnSnapshot {
-        let mut turn = turn(sequence);
-        turn.reply.content = ContentDocument::new(vec![ContentNode::text(
-            (0..40)
-                .map(|line| format!("{prefix} line {line}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        )]);
-        turn
-    }
     #[test]
     fn failed_reply_failure_survives_a_recovering_continue() {
-        let mut failed = turn(1);
         let problem = agena_failure::UserProblem::from(agena_failure::Failure::new(
             agena_failure::FailureCode::new("internal.test"),
             agena_failure::FailureCategory::Internal,
@@ -3763,34 +3573,41 @@ mod live_transcript_tests {
                 "The provider response ended unexpectedly.",
             ),
         ));
-        failed.reply.status = AssistantReplyStatus::Failed;
-        failed.reply.failure = Some(problem.clone());
-        failed.reply.revision_seq = 1;
         // A failed attempt usually leaves partial content behind; the failure
         // must still be visible after the reply recovers.
-        failed.reply.content = ContentDocument::new(vec![ContentNode::text(
-            "partial assistant output before the failure",
-        )]);
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: TranscriptSnapshot {
-                session_id: 7,
-                turns: vec![failed],
-                ..Default::default()
-            },
+            parts: vec![
+                parts_fixtures::run(1, "assistant", "failed"),
+                parts_fixtures::error(2, "assistant", problem.clone()),
+                parts_fixtures::text(
+                    3,
+                    "assistant",
+                    "partial assistant output before the failure",
+                ),
+            ],
             ..TranscriptState::default()
         };
 
-        // The failed terminal snapshot arrives and records the failure.
-        transcript.merge_snapshot(transcript.snapshot.clone());
+        // The failed terminal projection arrives and records the failure.
+        transcript.merge_parts(transcript.parts.clone());
         assert_eq!(transcript.reply_failures.len(), 1);
 
-        // /continue recovers: the reply completes and clears failure_json.
-        let mut recovered = transcript.snapshot.clone();
-        recovered.turns[0].reply.status = AssistantReplyStatus::Completed;
-        recovered.turns[0].reply.failure = None;
-        recovered.turns[0].reply.revision_seq = 2;
-        transcript.merge_snapshot(recovered);
+        // /continue recovers: the run completes and drops the error part, but
+        // the remembered failure stays injected into the assistant entry.
+        transcript.merge_parts(vec![
+            parts_fixtures::run(1, "assistant", "completed"),
+            parts_fixtures::text(
+                3,
+                "assistant",
+                "partial assistant output before the failure",
+            ),
+            parts_fixtures::text(4, "assistant", "recovered output"),
+        ]);
+        assert!(
+            !transcript.parts.iter().any(|part| part.kind == "error"),
+            "the recovering projection must drop the durable error part"
+        );
 
         let rendered = transcript
             .rendered(80)
@@ -3798,76 +3615,73 @@ mod live_transcript_tests {
             .iter()
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
-            .join(
-                "
-",
-            );
-        assert!(
-            rendered.contains("Response failed"),
-            "failure headline should survive continue: {rendered:?}"
-        );
+            .join("\n");
         assert!(
             rendered.contains("The provider response ended unexpectedly."),
             "failure summary should survive continue: {rendered:?}"
         );
+        assert!(
+            transcript.rendered(80).nodes.iter().any(|node| {
+                matches!(
+                    node.key,
+                    agena_tui_transcript::TranscriptNodeKey::Activity {
+                        content_id: agena_tui_transcript::TranscriptContentId::StoredPart(_),
+                        ..
+                    }
+                )
+            }),
+            "the remembered failure must stay rendered as an error activity"
+        );
     }
     #[test]
-    fn failed_reply_recorded_from_a_live_assistant_reply_patch() {
-        let mut turn = turn(1);
-        turn.reply.content = ContentDocument::new(vec![ContentNode::text(
-            "partial assistant output before the failure",
-        )]);
+    fn failed_reply_failure_is_recorded_from_the_parts_projection() {
+        let problem = agena_failure::UserProblem::from(agena_failure::Failure::new(
+            agena_failure::FailureCode::new("internal.test"),
+            agena_failure::FailureCategory::Internal,
+            agena_failure::FailureResponsibility::System,
+            agena_failure::RetryDirective::ImmediateOnce,
+            agena_failure::RecoveryDirective::Retry,
+            agena_failure::FailureImpact::OperationFailed,
+            agena_failure::UserPresentation::new(
+                "internal-test",
+                "The provider stream was interrupted.",
+            ),
+        ));
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: TranscriptSnapshot {
-                session_id: 7,
-                turns: vec![turn],
-                ..Default::default()
-            },
+            parts: vec![
+                parts_fixtures::run(1, "assistant", "failed"),
+                parts_fixtures::text(
+                    2,
+                    "assistant",
+                    "partial assistant output before the failure",
+                ),
+                parts_fixtures::error(3, "assistant", problem.clone()),
+            ],
             ..TranscriptState::default()
         };
 
-        let mut failed_reply = transcript.snapshot.turns[0].reply.clone();
-        failed_reply.status = AssistantReplyStatus::Failed;
-        failed_reply.revision_seq = 1;
-        failed_reply.failure = Some(agena_failure::UserProblem::from(
-            agena_failure::Failure::new(
-                agena_failure::FailureCode::new("internal.test"),
-                agena_failure::FailureCategory::Internal,
-                agena_failure::FailureResponsibility::System,
-                agena_failure::RetryDirective::ImmediateOnce,
-                agena_failure::RecoveryDirective::Retry,
-                agena_failure::FailureImpact::OperationFailed,
-                agena_failure::UserPresentation::new(
-                    "internal-test",
-                    "The provider stream was interrupted.",
-                ),
-            ),
-        ));
-
-        // A live AssistantReplyUpdated patch (which does not materialize a
-        // user input) must still record the failure.
-        assert!(!transcript.apply_presentation_event(
-            &event(
-                RuntimePresentationEventKind::TranscriptPatch(Box::new(
-                    TranscriptPatch::AssistantReplyUpdated {
-                        seq_session: 2,
-                        reply: failed_reply,
-                    },
-                )),
-                2,
-            ),
-            80,
-            20,
-        ));
+        // The failed projection records the failure without any live patch:
+        // the terminal reloads the full part list and `record_reply_failures`
+        // keys the error part under its run marker.
+        transcript.merge_parts(transcript.parts.clone());
         assert_eq!(transcript.reply_failures.len(), 1);
 
-        // /continue recovers the reply.
-        let mut recovered = transcript.snapshot.clone();
-        recovered.turns[0].reply.status = AssistantReplyStatus::Completed;
-        recovered.turns[0].reply.failure = None;
-        recovered.turns[0].reply.revision_seq = 3;
-        transcript.merge_snapshot(recovered);
+        // /continue recovers the reply; the error part is gone from the parts
+        // projection but the remembered failure keeps the summary visible.
+        transcript.merge_parts(vec![
+            parts_fixtures::run(1, "assistant", "completed"),
+            parts_fixtures::text(
+                2,
+                "assistant",
+                "partial assistant output before the failure",
+            ),
+            parts_fixtures::text(4, "assistant", "recovered output"),
+        ]);
+        assert!(
+            !transcript.parts.iter().any(|part| part.kind == "error"),
+            "the recovering projection must drop the durable error part"
+        );
 
         let rendered = transcript
             .rendered(80)
@@ -3875,77 +3689,30 @@ mod live_transcript_tests {
             .iter()
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
-            .join(
-                "
-",
-            );
+            .join("\n");
         assert!(
             rendered.contains("The provider stream was interrupted."),
-            "failure summary should survive continue when recorded from a live patch: {rendered:?}"
+            "failure summary should survive continue when recorded from the projection: {rendered:?}"
         );
     }
 
     #[test]
-    fn live_reasoning_patch_renders_the_full_trail_expanded() {
-        let turn = turn(1);
-        let response_id = turn.reply.id;
-        let activity_id = ActivityId::new();
-        // A long, multi-line reasoning body streamed live via a content patch
-        // (the exact shape the runtime publishes for ThinkingDelta). It must
-        // render through the dedicated full-trail variant: expanded by default
-        // and never truncated to the first line.
+    fn reasoning_part_renders_the_full_trail_expanded() {
+        // A long, multi-line reasoning body (the exact shape the runtime
+        // persists as a `think` part). It must render through the dedicated
+        // full-trail variant: expanded by default and never truncated to the
+        // first line.
         let body = (0..40)
             .map(|line| format!("live thought line {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let node = ContentNode::activity(ActivityNode {
-            id: activity_id,
-            owner: ActivityOwner::AssistantReply {
-                reply_id: response_id,
-            },
-            actor: ActivityActor::Assistant,
-            state: ActivityState::InProgress,
-            position: ContentPosition { index: 0 },
-            revision_seq: 2,
-            lifecycle: ActivityLifecycle {
-                started_at_ms: 2,
-                finished_at_ms: None,
-            },
-            payload: ActivityPayload::Reasoning(ReasoningActivity {
-                content: ReasoningPart {
-                    summary: vec![body.clone()],
-                    raw_content: Vec::new(),
-                    encrypted_content: None,
-                },
-            }),
-            provenance: ActivityProvenance::default(),
-        });
+            .collect::<Vec<_>>();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: TranscriptSnapshot {
-                session_id: 7,
-                turns: vec![turn],
-                ..Default::default()
-            },
+            parts: vec![
+                parts_fixtures::run(1, "assistant", "completed"),
+                parts_fixtures::think(2, "assistant", body.clone()),
+            ],
             ..TranscriptState::default()
         };
-
-        assert!(!transcript.apply_presentation_event(
-            &event(
-                RuntimePresentationEventKind::TranscriptPatch(Box::new(
-                    TranscriptPatch::ContentUpserted {
-                        seq_session: 2,
-                        owner: ActivityOwner::AssistantReply {
-                            reply_id: response_id,
-                        },
-                        node,
-                    },
-                )),
-                2,
-            ),
-            120,
-            20,
-        ));
 
         let rendered = transcript.rendered(120);
         let text = rendered
@@ -3975,61 +3742,20 @@ mod live_transcript_tests {
     }
 
     #[test]
-    fn pasted_text_and_attachment_activities_render_above_the_user_document() {
-        let mut turn = turn(1);
-        turn.input = ContentDocument::default();
-        let turn_id = turn.id;
-        let artifact_id = ActivityId::new();
-        let file_id = ActivityId::new();
+    fn pasted_text_and_file_attachment_parts_render_in_the_user_document() {
         let pasted = "x".repeat(1_000);
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            snapshot: TranscriptSnapshot {
-                session_id: 7,
-                turns: vec![turn],
-                ..Default::default()
-            },
+            parts: vec![
+                parts_fixtures::run(1, "user", "completed"),
+                parts_fixtures::paste(2, "user", &pasted),
+                parts_fixtures::file_ref(3, "user", "notes.txt"),
+                parts_fixtures::text(4, "user", "review this paste"),
+                parts_fixtures::run(5, "assistant", "completed"),
+                parts_fixtures::text(6, "assistant", "ok"),
+            ],
             ..TranscriptState::default()
         };
-        transcript.add_pending_user_message(PendingUserMessage {
-            id: 47,
-            document: ComposerDocument(vec![
-                ComposerNode::Text {
-                    text: "review this paste".to_owned(),
-                },
-                ComposerNode::Activity {
-                    activity: Box::new(ComposerActivity {
-                        id: artifact_id,
-                        payload: ActivityPayload::TextArtifact(TextArtifactActivity {
-                            text: pasted.clone(),
-                            language: None,
-                            label: Some("paste 1000 chars".to_owned()),
-                        }),
-                        provenance: ActivityProvenance::default(),
-                    }),
-                },
-                ComposerNode::Activity {
-                    activity: Box::new(ComposerActivity {
-                        id: file_id,
-                        payload: ActivityPayload::Resource(ResourceActivity {
-                            kind: ResourceKind::File,
-                            reference: ResourceReference::WorkspacePath {
-                                path: "notes.txt".to_owned(),
-                            },
-                            name: "notes.txt".to_owned(),
-                            media_type: Some("text/plain".to_owned()),
-                            size_bytes: Some(12),
-                            width: None,
-                            height: None,
-                            duration_ms: None,
-                            page_count: None,
-                        }),
-                        provenance: ActivityProvenance::default(),
-                    }),
-                },
-            ]),
-            confirmed: false,
-        });
 
         let lines = transcript
             .rendered(100)
@@ -4038,121 +3764,32 @@ mod live_transcript_tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>();
         let joined = lines.join("\n");
-        let artifact_headline = lines
-            .iter()
-            .position(|line| line.contains("paste 1000 chars"))
-            .expect("text artifact activity headline must render");
-        let document_line = lines
-            .iter()
-            .position(|line| line.contains("review this paste"))
-            .expect("user document must render");
+        // The pasted text renders as a synthetic body segment of the user
+        // document; a long contiguous run must survive line wrapping.
+        let pasted_head = "x".repeat(64);
         assert!(
-            artifact_headline < document_line,
-            "activities must render above the user text: {joined}"
+            joined.contains(&pasted_head),
+            "the pasted body must render: {joined}"
+        );
+        assert!(
+            joined.contains("review this paste"),
+            "the user document text must render: {joined}"
         );
         assert!(
             lines.iter().any(|line| line.contains("notes.txt")),
-            "attachment activity must render: {joined}"
+            "file attachment must render: {joined}"
         );
-        assert!(
-            !joined.contains(&pasted),
-            "the raw pasted text must not leak into the body: {joined}"
-        );
-
-        // Materialize the durable turn input through live patches; the
-        // optimistic entry must be replaced by the stored projection that
-        // keeps the same activity-above-text layout.
-        let activity = |id, position, payload| ActivityNode {
-            id,
-            owner: ActivityOwner::TurnInput { turn_id },
-            actor: ActivityActor::User,
-            state: ActivityState::Completed,
-            position: ContentPosition { index: position },
-            revision_seq: 1,
-            lifecycle: ActivityLifecycle::default(),
-            payload,
-            provenance: ActivityProvenance::default(),
-        };
-        let mut upsert = |seq, node| {
-            assert!(!transcript.apply_presentation_event(
-                &event(
-                    RuntimePresentationEventKind::TranscriptPatch(Box::new(
-                        TranscriptPatch::ContentUpserted {
-                            seq_session: seq,
-                            owner: ActivityOwner::TurnInput { turn_id },
-                            node,
-                        },
-                    )),
-                    seq,
-                ),
-                100,
-                20,
-            ));
-        };
-        upsert(
-            2,
-            ContentNode::text_at(TextSegmentId::new(), "review this paste", 0, 2),
-        );
-        upsert(
-            3,
-            ContentNode::activity(activity(
-                artifact_id,
-                1,
-                ActivityPayload::TextArtifact(TextArtifactActivity {
-                    text: pasted.clone(),
-                    language: None,
-                    label: Some("paste 1000 chars".to_owned()),
-                }),
-            )),
-        );
-        upsert(
-            4,
-            ContentNode::activity(activity(
-                file_id,
-                2,
-                ActivityPayload::Resource(ResourceActivity {
-                    kind: ResourceKind::File,
-                    reference: ResourceReference::WorkspacePath {
-                        path: "notes.txt".to_owned(),
-                    },
-                    name: "notes.txt".to_owned(),
-                    media_type: Some("text/plain".to_owned()),
-                    size_bytes: Some(12),
-                    width: None,
-                    height: None,
-                    duration_ms: None,
-                    page_count: None,
-                }),
-            )),
-        );
-
-        assert!(transcript.pending_user_messages.is_empty());
-        let materialized = transcript
-            .rendered(100)
-            .lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>();
-        let joined = materialized.join("\n");
-        let artifact_headline = materialized
-            .iter()
-            .position(|line| line.contains("paste 1000 chars"))
-            .expect("materialized text artifact activity headline");
-        let document_line = materialized
+        let document_line = lines
             .iter()
             .position(|line| line.contains("review this paste"))
-            .expect("materialized user document");
+            .expect("user document");
+        let attachment_line = lines
+            .iter()
+            .position(|line| line.contains("notes.txt"))
+            .expect("attachment");
         assert!(
-            artifact_headline < document_line,
-            "materialized activities must render above the user text: {joined}"
-        );
-        assert!(
-            materialized.iter().any(|line| line.contains("notes.txt")),
-            "materialized attachment activity must render: {joined}"
-        );
-        assert!(
-            !joined.contains(&pasted),
-            "materialized body must not leak the raw pasted text: {joined}"
+            attachment_line < document_line,
+            "the attachment part must render above the user text: {joined}"
         );
     }
 }

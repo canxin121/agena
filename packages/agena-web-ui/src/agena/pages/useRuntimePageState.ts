@@ -29,7 +29,6 @@ export function useRuntimePageState(input: {
     deviceAuthStartState,
     drafts,
     editingPermissionRuleId,
-    globalEvents,
     interactiveRequestInFlight,
     loading,
     lspQuery,
@@ -70,7 +69,6 @@ export function useRuntimePageState(input: {
     selectedWorkspaceId,
     sessionExecution,
     sessions,
-    sessionTimeline,
     workflowLoading,
     workspaces,
   } = useRuntimePageStore()
@@ -104,9 +102,7 @@ export function useRuntimePageState(input: {
     runtimeSkillQuery,
     section: input.section,
     selectedPlugin,
-    globalEvents,
     sessionExecution,
-    sessionTimeline,
     tabs: runtimeTabs,
   })
   const {
@@ -118,7 +114,6 @@ export function useRuntimePageState(input: {
     filteredMcpServers,
     filteredPermissionRules,
     filteredSkillCommands,
-    globalEventSummaries,
     installedMarketplacePluginIds,
     operatorCards,
     pageDescription,
@@ -128,7 +123,6 @@ export function useRuntimePageState(input: {
     selectedPluginManifest,
     sessionCacheFacts,
     skillCommands,
-    timelineSummaries,
     visibleTabs,
   } = derived
   const {
@@ -154,7 +148,6 @@ export function useRuntimePageState(input: {
     deviceAuthStartState,
     drafts,
     editingPermissionRuleId,
-    globalEvents,
     interactiveRequestInFlight,
     loading,
     lspQuery,
@@ -200,7 +193,6 @@ export function useRuntimePageState(input: {
     selectedWorkspaceId,
     sessionExecution,
     sessions,
-    sessionTimeline,
     workflowLoading,
     workspaces,
   })
@@ -297,7 +289,6 @@ export function useRuntimePageState(input: {
     openWorkspacePath,
     filteredMarketplacePlugins,
     filteredPermissionRules,
-    globalEventSummaries,
     load: loadPageState,
     canTogglePluginConfig,
     loadPluginDetails,
@@ -357,9 +348,7 @@ export function useRuntimePageState(input: {
     sessionCacheFacts,
     sessionExecution,
     sessions,
-    sessionTimeline,
     skillCommands,
-    timelineSummaries,
     triggerReload,
     uninstallMarketplacePluginAction,
     upgradeMarketplacePluginAction,

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ExecutionAccess, SessionLifecycleState, SessionRelationKind, SubtaskStatus};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Pagination and filter request for listing sessions.
 pub struct SessionListRequest {
     #[serde(default)]
@@ -12,6 +12,15 @@ pub struct SessionListRequest {
     pub limit: Option<u64>,
     #[serde(default)]
     pub include_subagents: bool,
+    /// Restrict to direct children of this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<i64>,
+    /// Restrict to root sessions (`parent_id IS NULL`).
+    #[serde(default)]
+    pub roots_only: bool,
+    /// Case-insensitive title substring filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

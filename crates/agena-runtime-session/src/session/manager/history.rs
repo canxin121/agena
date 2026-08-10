@@ -1,786 +1,26 @@
 use super::{ExecutionControlError, execution_control_to_app_error};
 use crate::{
     AppError,
-    message::{Message, MessagePart, PartContent},
-    session::{Session, SessionManager},
+    session::{
+        Session, SessionManager,
+        store::{
+            OPERATION_ID_METADATA_KEY, execution_status_from_part_state, parts_into_runs,
+            role_from_part_role, timestamp_millis_to_utc, typed_content_from_value,
+            typed_content_to_value,
+        },
+    },
 };
-use agena_domain::{ExecutionStatus, KindMatcher, Role, SessionSummary};
+use agena_domain::{ExecutionStatus, Role, SessionSummary};
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
-use sea_orm::{ConnectionTrait, Statement};
-
-fn uuid_value<T>(value: String, wrap: impl FnOnce(uuid::Uuid) -> T) -> Result<T, AppError> {
-    uuid::Uuid::parse_str(&value)
-        .map(wrap)
-        .map_err(|error| AppError::Internal(format!("invalid transcript UUID {value}: {error}")))
-}
-
-/// Batch-load transcript documents for many owners with a query count that
-/// is independent of the number of owners (two queries per chunk of 400
-/// owners). `owners` lists `(owner_kind, owner_id)` pairs; the result map is
-/// keyed identically and contains every requested key, empty documents
-/// included.
-async fn transcript_documents_batch(
-    db: &sea_orm::DatabaseConnection,
-    owners: &[(String, String)],
-) -> Result<std::collections::HashMap<(String, String), agena_domain::ContentDocument>, AppError> {
-    const MAX_OWNERS_PER_QUERY: usize = 400;
-
-    let mut documents = owners
-        .iter()
-        .cloned()
-        .map(|owner| (owner, agena_domain::ContentDocument::default()))
-        .collect::<std::collections::HashMap<_, _>>();
-
-    for chunk in owners.chunks(MAX_OWNERS_PER_QUERY) {
-        let tuples = chunk
-            .iter()
-            .map(|_| "(?, ?)")
-            .collect::<Vec<_>>()
-            .join(", ");
-        let values = chunk
-            .iter()
-            .flat_map(|(kind, id)| [kind.clone().into(), id.clone().into()])
-            .collect::<Vec<sea_orm::Value>>();
-
-        let node_rows = db
-            .query_all(Statement::from_sql_and_values(
-                db.get_database_backend(),
-                format!(
-                    "SELECT owner_kind, owner_id, node_id, node_type, actor, title, payload_json, text, \
-                            state, position, revision_seq, started_at_ms, finished_at_ms \
-                     FROM agena_content_nodes \
-                     WHERE (owner_kind, owner_id) IN (VALUES {tuples}) \
-                     ORDER BY position, node_id"
-                ),
-                values,
-            ))
-            .await?;
-        let mut positioned_nodes = std::collections::HashMap::<_, Vec<_>>::new();
-        for row in node_rows {
-            let owner_key = (
-                row.try_get::<String>("", "owner_kind")?,
-                row.try_get::<String>("", "owner_id")?,
-            );
-            let node_id: String = row.try_get("", "node_id")?;
-            let position: i64 = row.try_get("", "position")?;
-            let node_type: String = row.try_get("", "node_type")?;
-            let node = match node_type.as_str() {
-                "text" => {
-                    let position = u32::try_from(position).map_err(|_| {
-                        AppError::Internal(format!("invalid transcript text position {position}"))
-                    })?;
-                    agena_domain::ContentNode::text_at_time(
-                        uuid_value(node_id.clone(), agena_domain::TextSegmentId)?,
-                        row.try_get::<String>("", "text")?,
-                        position,
-                        row.try_get("", "revision_seq")?,
-                        row.try_get::<Option<i64>>("", "started_at_ms")?
-                            .unwrap_or(0),
-                    )
-                }
-                "activity" => {
-                    let owner = activity_owner_from_parts(&owner_key.0, &owner_key.1)?;
-                    agena_domain::ContentNode::activity(parse_activity_row(&row, owner)?)
-                }
-                other => {
-                    return Err(AppError::Internal(format!(
-                        "invalid transcript node type {other}"
-                    )));
-                }
-            };
-            positioned_nodes.entry(owner_key).or_default().push((
-                u32::try_from(position).unwrap_or(u32::MAX),
-                node_id,
-                node,
-            ));
-        }
-
-        for (owner_key, mut nodes) in positioned_nodes {
-            nodes.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-            documents.insert(
-                owner_key,
-                agena_domain::ContentDocument::new(
-                    nodes.into_iter().map(|(_, _, node)| node).collect(),
-                ),
-            );
-        }
-    }
-    Ok(documents)
-}
-
-fn activity_owner_from_parts(
-    owner_kind: &str,
-    owner_id: &str,
-) -> Result<agena_domain::ActivityOwner, AppError> {
-    match owner_kind {
-        "turn_input" => Ok(agena_domain::ActivityOwner::TurnInput {
-            turn_id: uuid_value(owner_id.to_owned(), agena_domain::TurnId)?,
-        }),
-        "assistant_reply" => Ok(agena_domain::ActivityOwner::AssistantReply {
-            reply_id: uuid_value(owner_id.to_owned(), agena_domain::AssistantReplyId)?,
-        }),
-        "activity" => Ok(agena_domain::ActivityOwner::Activity {
-            parent_activity_id: uuid_value(owner_id.to_owned(), agena_domain::ActivityId)?,
-        }),
-        "session" => Ok(agena_domain::ActivityOwner::Session {
-            session_id: owner_id.parse().map_err(|error| {
-                AppError::Internal(format!(
-                    "invalid transcript session owner id {owner_id}: {error}"
-                ))
-            })?,
-        }),
-        other => Err(AppError::Internal(format!(
-            "invalid transcript owner kind {other}"
-        ))),
-    }
-}
-
-fn parse_activity_row(
-    row: &sea_orm::QueryResult,
-    owner: agena_domain::ActivityOwner,
-) -> Result<agena_domain::ActivityNode, AppError> {
-    let activity_id: String = row.try_get("", "node_id")?;
-    let actor: String = row.try_get("", "actor")?;
-    let state: String = row.try_get("", "state")?;
-    let position: i64 = row.try_get("", "position")?;
-    let mut payload: agena_domain::ActivityPayload =
-        serde_json::from_value(row.try_get("", "payload_json")?)?;
-    // The durable record stores only the compact tool data. Derive the
-    // human-facing detail Markdown here, at snapshot load, so terminals get
-    // rich output without the detail ever being persisted or transferred
-    // while the Activity stays collapsed.
-    if let agena_domain::ActivityPayload::Operation(operation) = &mut payload {
-        // The title column holds the freshest running title (updated with a
-        // tiny column write during streaming); prefer it over the payload.
-        let stored_title: Option<String> = row.try_get("", "title").unwrap_or(None);
-        if let Some(stored_title) = stored_title.filter(|title| !title.is_empty()) {
-            operation.title = stored_title;
-        }
-        if !operation.data.is_null() && operation.markdown.is_empty() {
-            let tool_name = operation.invocation.name.clone();
-            let command = operation
-                .invocation
-                .input
-                .get("command")
-                .and_then(|value| value.as_text())
-                .map(str::to_owned);
-            operation.markdown = crate::session::manager::helpers::derive_operation_markdown(
-                &tool_name,
-                &operation.data,
-                command.as_deref(),
-            );
-        }
-    }
-    Ok(agena_domain::ActivityNode {
-        id: uuid_value(activity_id, agena_domain::ActivityId)?,
-        owner,
-        actor: match actor.as_str() {
-            "user" => agena_domain::ActivityActor::User,
-            "assistant" => agena_domain::ActivityActor::Assistant,
-            "runtime" => agena_domain::ActivityActor::Runtime,
-            "tool" => agena_domain::ActivityActor::Tool,
-            "plugin" => agena_domain::ActivityActor::Plugin,
-            other => {
-                return Err(AppError::Internal(format!(
-                    "invalid transcript activity actor {other}"
-                )));
-            }
-        },
-        payload,
-        state: match state.as_str() {
-            "pending" => agena_domain::ActivityState::Pending,
-            "in_progress" => agena_domain::ActivityState::InProgress,
-            "completed" => agena_domain::ActivityState::Completed,
-            "failed" => agena_domain::ActivityState::Failed,
-            "cancelled" => agena_domain::ActivityState::Cancelled,
-            other => {
-                return Err(AppError::Internal(format!(
-                    "invalid transcript activity state {other}"
-                )));
-            }
-        },
-        position: agena_domain::ContentPosition {
-            index: u32::try_from(position).map_err(|_| {
-                AppError::Internal(format!("invalid transcript activity position {position}"))
-            })?,
-        },
-        revision_seq: row.try_get("", "revision_seq")?,
-        lifecycle: agena_domain::ActivityLifecycle {
-            started_at_ms: row.try_get("", "started_at_ms")?,
-            finished_at_ms: row.try_get("", "finished_at_ms")?,
-        },
-        provenance: Default::default(),
-    })
-}
-
-#[async_trait::async_trait]
-impl agena_runtime::RuntimeEventQueryService for SessionManager {
-    async fn list_events(
-        &self,
-        filter: &agena_domain::EventFilter,
-        range: agena_runtime::RuntimeEventRange,
-    ) -> Result<Vec<agena_runtime::RuntimeEvent>, agena_runtime::RuntimeEventQueryError> {
-        self.publisher
-            .store()
-            .range(
-                filter,
-                agena_storage::StoreRange {
-                    after_seq_global: range.after_seq_global,
-                    limit: range.limit,
-                },
-            )
-            .await
-            .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?
-            .iter()
-            .map(project_runtime_event)
-            .collect()
-    }
-
-    async fn list_events_before(
-        &self,
-        filter: &agena_domain::EventFilter,
-        range: agena_runtime::RuntimeReverseEventRange,
-    ) -> Result<Vec<agena_runtime::RuntimeEvent>, agena_runtime::RuntimeEventQueryError> {
-        self.publisher
-            .store()
-            .range_before(
-                filter,
-                agena_storage::ReverseStoreRange {
-                    before_seq_global: range.before_seq_global,
-                    limit: range.limit,
-                },
-            )
-            .await
-            .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?
-            .iter()
-            .map(project_runtime_event)
-            .collect()
-    }
-
-    async fn list_timeline_events_before(
-        &self,
-        filter: &agena_domain::EventFilter,
-        range: agena_runtime::RuntimeReverseEventRange,
-    ) -> Result<Vec<agena_runtime::RuntimeTimelineEvent>, agena_runtime::RuntimeEventQueryError>
-    {
-        // Forked/rewind sessions share their parent's terminal history by
-        // reference (`agena_session_messages`) instead of owning a physical
-        // copy, so the child's own event scope only contains the delta.
-        // Merge the parent's events up to the fork cutoff with the child's
-        // events so the timeline still shows the whole conversation. Paging
-        // into the shared prefix (before_seq_global <= cutoff) is served by
-        // the plain query below, which already only reads the child's scope.
-        if let agena_domain::EventScope::Session { session_id } = &filter.scope
-            && let Some((parent_session_id, cutoff_seq)) = self
-                .store
-                .history
-                .fork_source_cutoff(*session_id)
-                .await
-                .map_err(|error| {
-                    agena_runtime::RuntimeEventQueryError::internal(error.to_string())
-                })?
-        {
-            let parent_in_range = range
-                .before_seq_global
-                .is_none_or(|before| before > cutoff_seq);
-            if parent_in_range {
-                let mut merged = self
-                    .store
-                    .history
-                    .list_session_events_before(parent_session_id, cutoff_seq, Some(range.limit))
-                    .await
-                    .map_err(|error| {
-                        agena_runtime::RuntimeEventQueryError::internal(error.to_string())
-                    })?;
-                merged.retain(|event| {
-                    filter
-                        .kinds
-                        .as_ref()
-                        .is_none_or(|kinds| kinds.contains(&event.kind.tag()))
-                        && filter
-                            .since_seq_global
-                            .is_none_or(|since| event.meta.seq_global > since)
-                });
-                merged.reverse(); // oldest-first -> newest-first
-                let mut own_events = self
-                    .publisher
-                    .store()
-                    .range_before(
-                        filter,
-                        agena_storage::ReverseStoreRange {
-                            before_seq_global: range.before_seq_global,
-                            limit: range.limit,
-                        },
-                    )
-                    .await
-                    .map_err(|error| {
-                        agena_runtime::RuntimeEventQueryError::internal(error.to_string())
-                    })?;
-                merged.append(&mut own_events);
-                merged.sort_by_key(|b| std::cmp::Reverse(b.meta.seq_global));
-                merged.truncate(range.limit);
-                return merged.iter().map(project_runtime_timeline_event).collect();
-            }
-        }
-        self.publisher
-            .store()
-            .range_before(
-                filter,
-                agena_storage::ReverseStoreRange {
-                    before_seq_global: range.before_seq_global,
-                    limit: range.limit,
-                },
-            )
-            .await
-            .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?
-            .iter()
-            .map(project_runtime_timeline_event)
-            .collect()
-    }
-}
-
-fn project_runtime_timeline_event(
-    event: &crate::event::DomainEvent,
-) -> Result<agena_runtime::RuntimeTimelineEvent, agena_runtime::RuntimeEventQueryError> {
-    use crate::event::EventKind;
-
-    let type_key = match &event.kind {
-        EventKind::ExecutionStarted(_) => "timeline-type-execution-started",
-        EventKind::ExecutionFinished(event) => match &event.outcome {
-            agena_domain::ExecutionOutcome::Completed => "timeline-type-execution-completed",
-            agena_domain::ExecutionOutcome::Cancelled => "timeline-type-execution-cancelled",
-            agena_domain::ExecutionOutcome::Failed { .. } => "timeline-type-execution-failed",
-        },
-        EventKind::CompactionCompleted(_) => "timeline-type-compaction-completed",
-        EventKind::SubtaskStatusChanged(_) => "timeline-type-subtask-status-changed",
-        EventKind::StreamError(_) => "timeline-type-stream-error",
-        EventKind::ProviderRetry(_) => "timeline-type-provider-retry",
-        EventKind::ProviderRetryResolved(_) => "timeline-type-provider-retry-resolved",
-        EventKind::MessagePartCheckpointed(_) => "timeline-type-message-part-checkpointed",
-        EventKind::TranscriptPartUpserted(_) => "timeline-type-transcript-part-upserted",
-        EventKind::CommandBegin(_) => "timeline-type-command-begin",
-        EventKind::CommandOutputDelta(_) => "timeline-type-command-output-delta",
-        EventKind::CommandEnd(_) => "timeline-type-command-end",
-        EventKind::PermissionRequested(_) => "timeline-type-permission-requested",
-        EventKind::PermissionReplied(_) => "timeline-type-permission-replied",
-        EventKind::UserInputRequested(_) => "timeline-type-user-input-requested",
-        EventKind::PermissionRuleCreated(_) => "timeline-type-permission-rule-created",
-        EventKind::PermissionRuleUpdated(_) => "timeline-type-permission-rule-updated",
-        EventKind::PermissionRuleRevoked(_) => "timeline-type-permission-rule-revoked",
-        EventKind::ToolPolicyDenied(_) => "timeline-type-tool-policy-denied",
-        EventKind::ToolUserDeclined(_) => "timeline-type-tool-user-declined",
-        EventKind::RunStarted(_) => "timeline-type-run-started",
-        EventKind::RunCompleted(_) => "timeline-type-run-completed",
-        EventKind::RunAborted(_) => "timeline-type-run-aborted",
-        EventKind::UserMessageAppended(_) => "timeline-type-user-message-appended",
-        EventKind::AssistantMessageFinished(_) => "timeline-type-assistant-message-completed",
-        EventKind::ToolCallIssued(_) => "timeline-type-tool-call-issued",
-        EventKind::ToolCallCompleted(_) => "timeline-type-tool-call-completed",
-        EventKind::BackgroundActivityChanged(_) => "timeline-type-background-activity-changed",
-        EventKind::PluginEvent(_) | EventKind::PluginToolRegistryChanged(_) => {
-            "timeline-type-plugin-event"
-        }
-        EventKind::ActivityV2(_) => "timeline-type-activity-v2",
-    };
-    let detail = serde_json::to_string_pretty(&event.kind)
-        .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?;
-    let kind = event.kind.tag_str().to_owned();
-    let summary = kind.replace('_', " ");
-    Ok(agena_runtime::RuntimeTimelineEvent {
-        meta: event.meta.clone(),
-        kind: kind.clone(),
-        type_key: type_key.to_owned(),
-        summary: summary.clone(),
-        detail_lines: vec![agena_runtime::RuntimeTimelineDetailLine {
-            label: "payload".to_owned(),
-            value: detail.clone(),
-        }],
-        search_text: format!("{kind} {summary} {detail}").to_ascii_lowercase(),
-    })
-}
-
-fn project_runtime_event(
-    event: &crate::event::DomainEvent,
-) -> Result<agena_runtime::RuntimeEvent, agena_runtime::RuntimeEventQueryError> {
-    let value = serde_json::to_value(event)
-        .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?;
-    let mut object = value.as_object().cloned().ok_or_else(|| {
-        agena_runtime::RuntimeEventQueryError::internal("event must serialize as an object")
-    })?;
-    let kind = object
-        .remove("kind")
-        .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .ok_or_else(|| agena_runtime::RuntimeEventQueryError::internal("event is missing kind"))?;
-    let payload = object.remove("payload").unwrap_or(serde_json::Value::Null);
-    let meta = serde_json::from_value(serde_json::Value::Object(object))
-        .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?;
-    Ok(agena_runtime::RuntimeEvent {
-        meta,
-        kind,
-        payload,
-        invalidates_ancestor_projection: event.kind.invalidates_ancestor_projection(),
-    })
-}
-
-fn project_runtime_presentation_event(
-    event: &crate::event::DomainEvent,
-) -> Result<Option<agena_runtime::RuntimePresentationEvent>, agena_runtime::SessionQueryError> {
-    use crate::event::EventKind;
-
-    let seq_session = event.meta.seq_session.unwrap_or(event.meta.seq_global);
-    let kind = match &event.kind {
-        EventKind::MessagePartCheckpointed(update) => {
-            if let (Some(turn_id), Some(reply_id)) = (update.turn_id, update.reply_id) {
-                transcript_part_patch(
-                    seq_session,
-                    update.message_role,
-                    turn_id,
-                    reply_id,
-                    &update.part,
-                )
-                .map(|patch| {
-                    agena_runtime::RuntimePresentationEventKind::TranscriptPatch(Box::new(patch))
-                })
-            } else {
-                // Tool-owned parts are checkpointed from the session store,
-                // which does not attach the owning turn/reply ids to the
-                // event. Without an owner the patch cannot be materialized,
-                // so fall back to a refresh: the terminal UI must observe
-                // tool output deltas, status changes, and title updates as
-                // they are persisted instead of waiting for a later event
-                // or a restart.
-                Some(agena_runtime::RuntimePresentationEventKind::Refresh {
-                    force_refresh: false,
-                })
-            }
-        }
-        EventKind::TranscriptPartUpserted(update) => transcript_part_patch(
-            seq_session,
-            update.message_role,
-            update.turn_id,
-            update.reply_id,
-            &update.part,
-        )
-        .map(|patch| agena_runtime::RuntimePresentationEventKind::TranscriptPatch(Box::new(patch))),
-        EventKind::UserMessageAppended(_) | EventKind::AssistantMessageFinished(_) => {
-            Some(agena_runtime::RuntimePresentationEventKind::Refresh {
-                force_refresh: false,
-            })
-        }
-        EventKind::ExecutionStarted(_)
-        | EventKind::ToolCallCompleted(_)
-        | EventKind::RunCompleted(_)
-        | EventKind::RunAborted(_)
-        | EventKind::CompactionCompleted(_)
-        | EventKind::ExecutionFinished(_) => {
-            Some(agena_runtime::RuntimePresentationEventKind::Refresh {
-                force_refresh: false,
-            })
-        }
-        EventKind::PermissionRequested(_)
-        | EventKind::PermissionReplied(_)
-        | EventKind::UserInputRequested(_) => {
-            Some(agena_runtime::RuntimePresentationEventKind::Refresh {
-                force_refresh: true,
-            })
-        }
-        EventKind::ActivityV2(activity) => Some(
-            agena_runtime::RuntimePresentationEventKind::ActivityV2(activity.clone()),
-        ),
-        EventKind::CommandOutputDelta(_) => {
-            // Live streaming detail is carried by EventKind::ActivityV2
-            // (DetailDelta) so TUI and Web render the same ViewBlock stream;
-            // the legacy OperationDetailDelta projection is removed.
-            None
-        }
-        EventKind::ProviderRetry(update) => {
-            // A retryable provider failure observed mid-stream. Project a
-            // live retry-progress node for the reply immediately (in memory
-            // only, never persisted). The node shares the stable error id with
-            // the durable Error activity written by a final failure, so a
-            // later refresh replaces it instead of duplicating it; on success
-            // the resolved event removes it entirely.
-            let reply_id = update.reply_id;
-            let node_id = agena_domain::ActivityId::for_reply_error(reply_id);
-            let title = format!(
-                "Provider request error · retrying ({}/{})",
-                update.attempt, update.max_retries
-            );
-            let node = agena_domain::ContentNode::activity(agena_domain::ActivityNode {
-                id: node_id,
-                owner: agena_domain::ActivityOwner::AssistantReply { reply_id },
-                actor: agena_domain::ActivityActor::Runtime,
-                payload: agena_domain::ActivityPayload::Notice(agena_domain::NoticeActivity {
-                    kind: "provider_retry".to_owned(),
-                    summary: title,
-                    detail: Some(update.message.clone()),
-                    occurred_at_ms: Some(update.ts_ms),
-                    title: None,
-                }),
-                state: agena_domain::ActivityState::InProgress,
-                position: agena_domain::ContentPosition { index: 0 },
-                revision_seq: seq_session,
-                lifecycle: agena_domain::ActivityLifecycle {
-                    started_at_ms: update.ts_ms,
-                    finished_at_ms: None,
-                },
-                provenance: Default::default(),
-            });
-            Some(
-                agena_runtime::RuntimePresentationEventKind::TranscriptPatch(Box::new(
-                    agena_domain::TranscriptPatch::ContentUpserted {
-                        seq_session,
-                        owner: agena_domain::ActivityOwner::AssistantReply { reply_id },
-                        node,
-                    },
-                )),
-            )
-        }
-        EventKind::ProviderRetryResolved(update) if update.succeeded => {
-            // The retry sequence ended with a successful reply. The live node
-            // was never persisted, so removing it here (and on the follow-up
-            // refresh) is what keeps a recovered reply free of the error.
-            Some(
-                agena_runtime::RuntimePresentationEventKind::TranscriptPatch(Box::new(
-                    agena_domain::TranscriptPatch::ContentRemoved {
-                        seq_session,
-                        owner: agena_domain::ActivityOwner::AssistantReply {
-                            reply_id: update.reply_id,
-                        },
-                        node_id: agena_domain::ActivityId::for_reply_error(update.reply_id),
-                    },
-                )),
-            )
-        }
-        EventKind::ProviderRetryResolved(_) => None,
-        EventKind::BackgroundActivityChanged(event) => Some(
-            agena_runtime::RuntimePresentationEventKind::ActivityChanged {
-                activity: Box::new(event.activity.clone()),
-                reason: event.reason,
-            },
-        ),
-        _ => None,
-    };
-    Ok(kind.map(|kind| agena_runtime::RuntimePresentationEvent {
-        meta: event.meta.clone(),
-        invalidates_ancestor_projection: event.kind.invalidates_ancestor_projection(),
-        // Live-only kinds consume a global sequence number but are never
-        // written to the durable log; consumers reconcile their local
-        // high-water mark against the durable watermark, so the flag must
-        // mirror `EventKind::is_persistent` exactly.
-        durable: event.kind.is_persistent(),
-        kind,
-    }))
-}
-
-fn transcript_part_patch(
-    seq_session: i64,
-    role: Role,
-    turn_id: agena_domain::TurnId,
-    reply_id: agena_domain::AssistantReplyId,
-    part: &MessagePart,
-) -> Option<agena_domain::TranscriptPatch> {
-    let (owner, actor) = match role {
-        Role::User => (
-            agena_domain::ActivityOwner::TurnInput { turn_id },
-            agena_domain::ActivityActor::User,
-        ),
-        Role::Assistant => (
-            agena_domain::ActivityOwner::AssistantReply { reply_id },
-            agena_domain::ActivityActor::Assistant,
-        ),
-        Role::Tool => (
-            agena_domain::ActivityOwner::AssistantReply { reply_id },
-            agena_domain::ActivityActor::Tool,
-        ),
-        Role::System => (
-            agena_domain::ActivityOwner::AssistantReply { reply_id },
-            agena_domain::ActivityActor::Runtime,
-        ),
-    };
-    let position = u32::try_from(part.part_index).unwrap_or_default();
-    let node = if let Some(activity_id) = part.activity_id {
-        let mut payload = crate::session::history::activity_payload(part, role)?;
-        // Live transcript patches carry the derived detail Markdown so the
-        // terminal renders the human view immediately. The durable projection
-        // (activity_payload → content_nodes) deliberately leaves it empty.
-        if let agena_domain::ActivityPayload::Operation(operation) = &mut payload
-            && operation.markdown.is_empty()
-            && !operation.data.is_null()
-        {
-            let command = operation
-                .invocation
-                .input
-                .get("command")
-                .and_then(|value| value.as_text())
-                .map(str::to_owned);
-            operation.markdown = crate::session::manager::helpers::derive_operation_markdown(
-                &operation.invocation.name,
-                &operation.data,
-                command.as_deref(),
-            );
-        }
-        let state = match part.status {
-            ExecutionStatus::Pending => agena_domain::ActivityState::Pending,
-            ExecutionStatus::InProgress => agena_domain::ActivityState::InProgress,
-            ExecutionStatus::Completed => agena_domain::ActivityState::Completed,
-            // ActivityState is intentionally coarse; the transcript part and
-            // tool-result envelope preserve the precise non-execution reason.
-            ExecutionStatus::PolicyDenied
-            | ExecutionStatus::UserDeclined
-            | ExecutionStatus::CapabilityUnavailable
-            | ExecutionStatus::ToolUnavailable => agena_domain::ActivityState::Completed,
-            ExecutionStatus::Failed => agena_domain::ActivityState::Failed,
-            ExecutionStatus::Cancelled => agena_domain::ActivityState::Cancelled,
-        };
-        let finished_at_ms = state
-            .is_terminal()
-            .then_some(part.created_at.timestamp_millis());
-        agena_domain::ContentNode::activity(agena_domain::ActivityNode {
-            id: activity_id,
-            owner,
-            actor,
-            payload,
-            state,
-            position: agena_domain::ContentPosition { index: position },
-            revision_seq: seq_session,
-            lifecycle: agena_domain::ActivityLifecycle {
-                started_at_ms: part.created_at.timestamp_millis(),
-                finished_at_ms,
-            },
-            provenance: Default::default(),
-        })
-    } else {
-        let segment_id = part.segment_id?;
-        let PartContent::Text(text) = part.content.as_ref()? else {
-            return None;
-        };
-        agena_domain::ContentNode::text_at(segment_id, text.text.clone(), position, seq_session)
-    };
-    Some(agena_domain::TranscriptPatch::ContentUpserted {
-        seq_session,
-        owner,
-        node,
-    })
-}
-
-struct RuntimeLiveEventSubscriptionAdapter {
-    inner: crate::event::Subscription<crate::event::EventKind>,
-}
-
-struct RuntimeLivePresentationSubscriptionAdapter {
-    inner: crate::event::Subscription<crate::event::EventKind>,
-}
-
-#[async_trait::async_trait]
-impl agena_runtime::RuntimeLiveEventSubscription for RuntimeLiveEventSubscriptionAdapter {
-    async fn recv(&mut self) -> Option<agena_runtime::RuntimeLiveEventSubscriptionItem> {
-        use crate::event::bus::SubscriptionItem;
-        match self.inner.recv().await {
-            Some(SubscriptionItem::Event(event)) => project_runtime_event(event.as_ref())
-                .map(agena_runtime::RuntimeLiveEventSubscriptionItem::Event)
-                .ok(),
-            Some(SubscriptionItem::Lagged(skipped)) => Some(
-                agena_runtime::RuntimeLiveEventSubscriptionItem::Lagged(skipped),
-            ),
-            None => None,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl agena_runtime::RuntimeLivePresentationSubscription
-    for RuntimeLivePresentationSubscriptionAdapter
-{
-    async fn recv(&mut self) -> Option<agena_runtime::RuntimeLivePresentationSubscriptionItem> {
-        use crate::event::bus::SubscriptionItem;
-        loop {
-            match self.inner.recv().await {
-                Some(SubscriptionItem::Event(event)) => {
-                    match project_runtime_presentation_event(event.as_ref()) {
-                        Ok(Some(event)) => {
-                            return Some(
-                                agena_runtime::RuntimeLivePresentationSubscriptionItem::Event(
-                                    Box::new(event),
-                                ),
-                            );
-                        }
-                        Ok(None) => continue,
-                        Err(_) => return None,
-                    }
-                }
-                Some(SubscriptionItem::Lagged(skipped)) => {
-                    return Some(
-                        agena_runtime::RuntimeLivePresentationSubscriptionItem::Lagged(skipped),
-                    );
-                }
-                None => return None,
-            }
-        }
-    }
-}
-
-impl agena_runtime::RuntimeEventStreamService for SessionManager {
-    fn subscribe_events(
-        &self,
-        filter: agena_domain::EventFilter,
-    ) -> Box<dyn agena_runtime::RuntimeLiveEventSubscription> {
-        Box::new(RuntimeLiveEventSubscriptionAdapter {
-            inner: self.bus.subscribe(filter),
-        })
-    }
-
-    fn subscribe_presentation_events(
-        &self,
-        filter: agena_domain::EventFilter,
-    ) -> Option<Box<dyn agena_runtime::RuntimeLivePresentationSubscription>> {
-        Some(Box::new(RuntimeLivePresentationSubscriptionAdapter {
-            inner: self.bus.subscribe(filter),
-        }))
-    }
-}
-
-#[async_trait::async_trait]
-impl agena_runtime::RuntimeEventPublishService for SessionManager {
-    async fn publish_event(
-        &self,
-        request: agena_runtime::RuntimeEventPublishRequest,
-    ) -> Result<(), agena_runtime::RuntimeEventPublishError> {
-        let kind = match request {
-            agena_runtime::RuntimeEventPublishRequest::PermissionRuleCreated(event) => {
-                crate::event::EventKind::PermissionRuleCreated(event)
-            }
-            agena_runtime::RuntimeEventPublishRequest::PermissionRuleUpdated(event) => {
-                crate::event::EventKind::PermissionRuleUpdated(event)
-            }
-            agena_runtime::RuntimeEventPublishRequest::PermissionRuleRevoked(event) => {
-                crate::event::EventKind::PermissionRuleRevoked(event)
-            }
-            agena_runtime::RuntimeEventPublishRequest::PluginEvent {
-                plugin_id,
-                kind_label,
-                payload,
-            } => crate::event::EventKind::PluginEvent(crate::event::PluginEventPayload {
-                plugin_id,
-                kind_label,
-                payload,
-            }),
-        };
-        self.publisher
-            .publish(crate::event::PublishContext::default(), kind)
-            .await
-            .map(|_| ())
-            .map_err(|error| agena_runtime::RuntimeEventPublishError::internal(error.to_string()))
-    }
-}
+use agena_runtime_contracts::part_content::{
+    TypedContent, attachment_from_file_ref, interaction_from_content, operation_from_tool_call,
+    skill_reference_from_skill_ref, user_problem_from_error,
+};
+use agena_storage::store::{Part, PartRole};
 
 impl SessionManager {
     pub async fn fork_session(&self, request: SessionForkRequest) -> Result<Session, AppError> {
-        let state = self.execution_state();
-        let source = self
-            .store
-            .load_session(request.session_id, state.cache_policy())
-            .await?;
+        let source = self.store.load_session(request.session_id).await?;
         if let Some(expected) = request.expected_version
             && source.version != expected
         {
@@ -790,12 +30,26 @@ impl SessionManager {
                 current: source.version,
             });
         }
+        // The public request names a message (its run-marker part id), while
+        // storage forks at an inclusive part boundary. Resolve a marker to the
+        // message's final member part so the fork includes the entire message,
+        // not only its marker. A literal part id that is not a message marker
+        // remains a valid precise cutoff for internal callers.
+        let at_part_id = match request.at_message_id {
+            Some(part_id) => last_part_id_for_run_marker(source.parts(), part_id),
+            None => last_part_id_for_last_run(source.parts()),
+        }
+        .ok_or_else(|| {
+            AppError::Internal(format!(
+                "cannot fork session {}: it has no message to use as the cutoff",
+                request.session_id
+            ))
+        })?;
         let title = request
             .title
             .unwrap_or_else(|| format!("Fork of {}", source.title));
-        self.store
-            .fork_session(source, request.at_message_id, title, state.cache_policy())
-            .await
+        let child_id = self.store.fork(source.id, at_part_id, title).await?;
+        self.store.load_session(child_id).await
     }
 
     /// External entry: cancel the active execution for `session_id` and every
@@ -806,21 +60,16 @@ impl SessionManager {
     /// deciding to cancel and this call reaching the manager, so the absence
     /// of a control is a successful no-op rather than an error.
     pub async fn cancel_active_execution(&self, session_id: i64) -> Result<(), AppError> {
-        let state = self.execution_state();
         // Signal the requested execution before any database traversal. This
         // keeps Ctrl+C latency independent of session-tree size and storage
         // contention; descendant discovery continues after the active model
         // stream or tool has already received cancellation.
         let root_result = self.execution_registry.cancel_current(session_id).await;
         self.cancel_host_interactive_waiters(session_id).await;
-        let cancellation_order = match self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await
-        {
+        let cancellation_order = match self.store.load_session(session_id).await {
             Ok(session) => {
                 let tree = self.store.list_session_tree(session.root_id).await?;
-                descendant_cancellation_order(session_id, tree.as_slice())
+                descendant_cancellation_order(session_id, session_tree_domain(tree)?.as_slice())
             }
             Err(_) => vec![session_id],
         };
@@ -862,16 +111,12 @@ impl SessionManager {
         }
         self.cancel_host_interactive_waiters(session_id).await;
 
-        let state = self.execution_state();
-        if let Ok(session) = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await
-        {
+        if let Ok(session) = self.store.load_session(session_id).await {
             let tree = self.store.list_session_tree(session.root_id).await?;
-            for target_id in descendant_cancellation_order(session_id, tree.as_slice())
-                .into_iter()
-                .filter(|target_id| *target_id != session_id)
+            for target_id in
+                descendant_cancellation_order(session_id, session_tree_domain(tree)?.as_slice())
+                    .into_iter()
+                    .filter(|target_id| *target_id != session_id)
             {
                 let _ = self.execution_registry.cancel_current(target_id).await;
                 self.cancel_host_interactive_waiters(target_id).await;
@@ -886,7 +131,7 @@ impl SessionManager {
     pub async fn steer_input(
         &self,
         session_id: i64,
-        parts: Vec<PartContent>,
+        parts: Vec<TypedContent>,
     ) -> Result<(), AppError> {
         self.execution_registry
             .steer(session_id, parts)
@@ -895,11 +140,7 @@ impl SessionManager {
     }
 
     pub async fn rewind_session(&self, request: SessionRewindRequest) -> Result<Session, AppError> {
-        let state = self.execution_state();
-        let source = self
-            .store
-            .load_session(request.session_id, state.cache_policy())
-            .await?;
+        let source = self.store.load_session(request.session_id).await?;
         if let Some(expected) = request.expected_version
             && source.version != expected
         {
@@ -909,63 +150,30 @@ impl SessionManager {
                 current: source.version,
             });
         }
-        let message_id = self
-            .model_user_message_id_for_turn(request.session_id, request.turn_id)
-            .await?;
-        if !is_completed_user_rewind_target(
-            source
-                .messages
-                .iter()
-                .find(|message| message.id == message_id)
-                .ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "canonical turn {} has no projected user message in session {}",
-                        request.turn_id, source.id
-                    ))
-                })?,
-        ) {
+        let message_id = user_message_id_for_turn(&source, request.turn_id)?;
+        let user_marker = source
+            .parts()
+            .iter()
+            .find(|part| part.is_run_marker() && part.part_id == message_id)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "canonical turn {} has no projected user message in session {}",
+                    request.turn_id, source.id
+                ))
+            })?;
+        if !is_completed_user_rewind_target(user_marker) {
             return Err(AppError::Internal(format!(
                 "rewind target must be a completed canonical user turn: {}",
                 request.turn_id
             )));
         }
         let title = format!("Rewind of {}", source.title);
-        self.store
-            .fork_session_before_message(source, message_id, title, state.cache_policy())
-            .await
+        let child_id = self.store.rewind(source.id, message_id, title).await?;
+        self.store.load_session(child_id).await
     }
 
-    async fn model_user_message_id_for_turn(
-        &self,
-        session_id: i64,
-        turn_id: agena_domain::TurnId,
-    ) -> Result<i64, AppError> {
-        let row = self
-            .store
-            .db
-            .query_one(Statement::from_sql_and_values(
-                self.store.db.get_database_backend(),
-                "SELECT m.message_id \
-                 FROM agena_turns t \
-                 JOIN agena_assistant_replies r ON r.turn_id = t.turn_id \
-                 JOIN agena_reply_executions e ON e.reply_id = r.reply_id AND e.source = 'user' \
-                 JOIN agena_model_messages m ON m.execution_id = e.execution_id \
-                 WHERE t.session_id = ? AND t.turn_id = ? AND m.role = 1 \
-                 ORDER BY m.created_at_ms, m.message_id",
-                [session_id.into(), turn_id.to_string().into()],
-            ))
-            .await?
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "canonical turn not found in session {session_id}: {turn_id}"
-                ))
-            })?;
-        Ok(row.try_get("", "message_id")?)
-    }
-
-    /// Serialise `session_id` as a JSONL bundle. The first line is the
-    /// session header (id, parent, depth, runtime); subsequent lines are
-    /// persistent event payloads in `seq_global` order.
+    /// Serialise `session_id` as a JSONL bundle (session header line followed
+    /// by the session's ordered parts).
     pub async fn export_session_jsonl(&self, session_id: i64) -> Result<String, AppError> {
         self.store.export_session_jsonl(session_id).await
     }
@@ -973,161 +181,665 @@ impl SessionManager {
     /// Replay a JSONL bundle produced by [`Self::export_session_jsonl`] into
     /// this manager's workspace as a fresh session.
     pub async fn import_session_jsonl(&self, bundle: &str) -> Result<Session, AppError> {
-        let state = self.execution_state();
-        self.store
-            .import_session_jsonl(bundle, state.cache_policy())
-            .await
+        let workspace_id = self.current_workspace_id().await?;
+        let session_id = self
+            .store
+            .import_session_jsonl(workspace_id, bundle)
+            .await?;
+        self.store.load_session(session_id).await
     }
 
     /// Return every session that shares the same `root_id`, ordered by
     /// `(depth, id)`. Useful for tree visualisation and bulk export.
     pub async fn list_session_tree(&self, root_id: i64) -> Result<Vec<SessionSummary>, AppError> {
-        self.store.list_session_tree(root_id).await
+        let summaries = self.store.list_session_tree(root_id).await?;
+        summaries
+            .into_iter()
+            .map(crate::session::store::domain_summary_from_storage)
+            .collect()
     }
 
+    /// Snapshot the session transcript in canonical turn order.
+    ///
+    /// v2 has no separate event log or content-node projection: the canonical
+    /// transcript is derived from the session aggregate rebuilt from parts.
+    /// A turn is one completed (or in-flight) user message followed by every
+    /// run-marker message that carries the turn's conversation id; the
+    /// assistant content document is composed from the run's parts.
     pub async fn transcript_snapshot(
         &self,
         session_id: i64,
     ) -> Result<agena_domain::TranscriptSnapshot, AppError> {
-        let rows = self
-            .store
-            .db
-            .query_all(Statement::from_sql_and_values(
-                self.store.db.get_database_backend(),
-                "SELECT t.turn_id, t.turn_seq, t.created_at_ms AS turn_created_at_ms, \
-                        r.reply_id, r.status, r.revision_seq, \
-                        r.created_at_ms AS reply_created_at_ms, r.finished_at_ms, \
-                        r.failure_json \
-                 FROM agena_turns t \
-                 JOIN agena_assistant_replies r ON r.turn_id = t.turn_id \
-                 WHERE t.session_id = ? ORDER BY t.turn_seq, r.created_at_ms",
-                [session_id.into()],
-            ))
-            .await?;
-        let owners = rows
-            .iter()
-            .flat_map(|row| {
-                let turn_id = row.try_get::<String>("", "turn_id").unwrap_or_default();
-                let reply_id = row.try_get::<String>("", "reply_id").unwrap_or_default();
-                [
-                    ("turn_input".to_owned(), turn_id),
-                    ("assistant_reply".to_owned(), reply_id),
-                ]
-            })
-            .collect::<Vec<_>>();
-        let documents = transcript_documents_batch(&self.store.db, &owners).await?;
-        let mut turns = Vec::with_capacity(rows.len());
-        for row in rows {
-            let turn_id = uuid_value(row.try_get("", "turn_id")?, agena_domain::TurnId)?;
-            let reply_id =
-                uuid_value(row.try_get("", "reply_id")?, agena_domain::AssistantReplyId)?;
-            let status_text: String = row.try_get("", "status")?;
-            let status = match status_text.as_str() {
-                "pending" => agena_domain::AssistantReplyStatus::Pending,
-                "in_progress" => agena_domain::AssistantReplyStatus::InProgress,
-                "completed" => agena_domain::AssistantReplyStatus::Completed,
-                "failed" => agena_domain::AssistantReplyStatus::Failed,
-                "cancelled" => agena_domain::AssistantReplyStatus::Cancelled,
-                value => {
-                    return Err(AppError::Internal(format!(
-                        "invalid assistant reply status {value}"
-                    )));
-                }
-            };
-            let input = documents
-                .get(&("turn_input".to_owned(), turn_id.to_string()))
-                .cloned()
-                .unwrap_or_default();
-            let reply_content = documents
-                .get(&("assistant_reply".to_owned(), reply_id.to_string()))
-                .cloned()
-                .unwrap_or_default();
-            turns.push(agena_domain::TurnSnapshot {
-                id: turn_id,
-                session_id,
-                sequence: row.try_get("", "turn_seq")?,
-                input,
-                reply: agena_domain::AssistantReplySnapshot {
-                    id: reply_id,
-                    turn_id,
-                    status,
-                    content: reply_content,
-                    revision_seq: row.try_get("", "revision_seq")?,
-                    created_at_ms: row.try_get("", "reply_created_at_ms")?,
-                    finished_at_ms: row.try_get("", "finished_at_ms")?,
-                    failure: row
-                        .try_get::<Option<serde_json::Value>>("", "failure_json")?
-                        .map(serde_json::from_value)
-                        .transpose()
-                        .map_err(|error| {
-                            AppError::Internal(format!(
-                                "invalid assistant reply failure projection: {error}"
-                            ))
-                        })?,
-                },
-                created_at_ms: row.try_get("", "turn_created_at_ms")?,
-            });
-        }
-        let seq_session = self
-            .store
-            .db
-            .query_one(Statement::from_sql_and_values(
-                self.store.db.get_database_backend(),
-                "SELECT COALESCE(MAX(seq_session), 0) AS seq_session FROM agena_events WHERE session_id = ?",
-                [session_id.into()],
-            ))
-            .await?
-            .map(|row| row.try_get("", "seq_session"))
-            .transpose()?
-            .unwrap_or_default();
-        let session_activities = self
-            .store
-            .db
-            .query_all(Statement::from_sql_and_values(
-                self.store.db.get_database_backend(),
-                                "SELECT node_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms \
-                 FROM agena_content_nodes WHERE owner_kind = 'session' AND owner_id = ? \
-                 ORDER BY position, node_id",
-                [session_id.to_string().into()],
-            ))
-            .await?
-            .into_iter()
-            .map(|row| {
-                parse_activity_row(
-                    &row,
-                    agena_domain::ActivityOwner::Session { session_id },
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(agena_domain::TranscriptSnapshot {
-            session_id,
-            seq_session,
-            turns,
-            session_activities,
-        })
+        let session = self.store.load_session(session_id).await?;
+        transcript_snapshot_from_session(&session)
     }
+}
+
+/// Inclusive storage cutoff for a projected message named by its run-marker
+/// part id. The marker is the message id; content parts follow it in canonical
+/// `(created_at_ms, part_id)` order, so the final member with `run_id ==
+/// marker_part_id` is the end of the message's shared prefix. A part id that
+/// is not a run marker (a literal cutoff) passes through unchanged.
+fn last_part_id_for_run_marker(parts: &[Part], marker_part_id: i64) -> Option<i64> {
+    if !parts
+        .iter()
+        .any(|part| part.is_run_marker() && part.part_id == marker_part_id)
+    {
+        return Some(marker_part_id);
+    }
+    parts
+        .iter()
+        .rev()
+        .find(|part| part.run_id == Some(marker_part_id))
+        .map(|part| part.part_id)
+        .or(Some(marker_part_id))
+}
+
+/// Inclusive storage cutoff for a session's final message: the id of the last
+/// content part of the final run, or the marker id when that run is empty.
+/// Sessions with no run markers fall back to the final part id (foreign data
+/// may hold bare content parts).
+fn last_part_id_for_last_run(parts: &[Part]) -> Option<i64> {
+    match parts.iter().rev().find(|part| part.is_run_marker()) {
+        Some(marker) => parts
+            .iter()
+            .rev()
+            .find(|part| part.run_id == Some(marker.part_id))
+            .map(|part| part.part_id)
+            .or(Some(marker.part_id)),
+        None => parts.last().map(|part| part.part_id),
+    }
+}
+
+/// Resolve the canonical user message that owns `turn_id`.
+///
+/// Assistant run markers persist the conversation UUID pair on their content
+/// (`turn_id`/`reply_id`), so the run that carries the turn id is the
+/// assistant reply. The user input of the same canonical turn is the nearest
+/// user-role run marker before that reply; user-run markers themselves do not
+/// persist the UUID pair (they are written as `{"run_kind":"user_send"}`).
+fn user_message_id_for_turn(
+    session: &Session,
+    turn_id: agena_domain::TurnId,
+) -> Result<i64, AppError> {
+    let parts = session.parts();
+    let reply_index = parts
+        .iter()
+        .position(|part| {
+            part.is_run_marker()
+                && part
+                    .content
+                    .get("turn_id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                    .map(agena_domain::TurnId)
+                    == Some(turn_id)
+        })
+        .ok_or_else(|| {
+            AppError::Internal(format!(
+                "canonical turn not found in session {}: {turn_id}",
+                session.id
+            ))
+        })?;
+    parts[..reply_index]
+        .iter()
+        .rev()
+        .find(|part| part.is_run_marker() && part.role == PartRole::User)
+        .map(|part| part.part_id)
+        .ok_or_else(|| {
+            AppError::Internal(format!(
+                "canonical turn {} has no user message in session {}",
+                turn_id, session.id
+            ))
+        })
+}
+
+/// Derive the full [`agena_domain::TranscriptSnapshot`] from the session
+/// aggregate. A canonical turn is one user message (its created time anchors
+/// the turn) followed by the assistant messages of the same canonical
+/// conversation; one user turn can yield several assistant markers when the
+/// reply is continued across multiple model runs.
+fn transcript_snapshot_from_session(
+    session: &Session,
+) -> Result<agena_domain::TranscriptSnapshot, AppError> {
+    let seq_session = session.version;
+    let mut turns = Vec::new();
+    let mut sequence = 0i64;
+    let runs = parts_into_runs(session.parts());
+    for (index, run) in runs.iter().enumerate() {
+        let marker = run.first().expect("run group has a marker");
+        if marker.role != PartRole::User {
+            continue;
+        }
+        let user_document = content_document_from_run(session, run)?;
+        let reply = assistant_reply_snapshot(session, index)?;
+        let created_at_ms = marker.created_at_ms;
+        let turn_id = reply_turn_id(marker, &reply);
+        turns.push(agena_domain::TurnSnapshot {
+            id: turn_id,
+            session_id: session.id,
+            sequence,
+            input: user_document,
+            reply,
+            created_at_ms,
+        });
+        sequence += 1;
+    }
+    Ok(agena_domain::TranscriptSnapshot {
+        session_id: session.id,
+        seq_session,
+        turns,
+        // v2 has no session-scoped content nodes; the session aggregate
+        // carries all activity content within its turn documents.
+        session_activities: Vec::new(),
+    })
+}
+
+/// The canonical turn id of a turn: the user marker's own persisted turn id
+/// when present, otherwise the reply's turn id (recovered from the assistant
+/// run marker).
+fn reply_turn_id(
+    user_marker: &Part,
+    reply: &agena_domain::AssistantReplySnapshot,
+) -> agena_domain::TurnId {
+    user_marker
+        .content
+        .get("turn_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .map(agena_domain::TurnId)
+        .unwrap_or(reply.turn_id)
+}
+
+/// Compose the assistant reply snapshot for the canonical turn beginning at
+/// run `user_index`. The turn's assistant content is the concatenation of every
+/// non-user run that follows the user run (a canonical reply can span several
+/// continuation runs), in run order.
+fn assistant_reply_snapshot(
+    session: &Session,
+    user_index: usize,
+) -> Result<agena_domain::AssistantReplySnapshot, AppError> {
+    let runs = parts_into_runs(session.parts());
+    let user_marker = runs[user_index].first().expect("run group has a marker");
+    let turn_id = user_marker
+        .content
+        .get("turn_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .map(agena_domain::TurnId)
+        .unwrap_or_else(|| {
+            // Reloaded user markers do not persist the UUID pair; recover the
+            // canonical turn id from the first following non-user run marker.
+            runs[user_index + 1..]
+                .iter()
+                .find(|run| run.first().map(|marker| marker.role) != Some(PartRole::User))
+                .and_then(|run| run.first())
+                .and_then(|marker| {
+                    marker
+                        .content
+                        .get("turn_id")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                })
+                .map(agena_domain::TurnId)
+                .unwrap_or_else(agena_domain::TurnId::new)
+        });
+    let turn_span = canonical_turn_span(session, user_index);
+    let (reply_id, status, transcript_nodes, created_at_ms, finished_at_ms, failure) =
+        assistant_reply_fields(session, &turn_span)?;
+    Ok(agena_domain::AssistantReplySnapshot {
+        id: reply_id,
+        turn_id,
+        status,
+        content: agena_domain::ContentDocument::new(transcript_nodes),
+        revision_seq: session.version,
+        created_at_ms,
+        finished_at_ms,
+        failure,
+    })
+}
+
+/// Return the run-index span `[start, end)` that belongs to the canonical
+/// turn beginning at run `user_index`: the user run and every following
+/// non-user run until the next user run. Reloaded user markers do not persist
+/// the conversation UUID pair, so adjacency is the reliable grouping.
+fn canonical_turn_span(session: &Session, user_index: usize) -> std::ops::Range<usize> {
+    let runs = parts_into_runs(session.parts());
+    let mut end = user_index + 1;
+    while end < runs.len() && runs[end].first().map(|marker| marker.role) != Some(PartRole::User) {
+        end += 1;
+    }
+    user_index..end
+}
+
+/// Compute the reply identity fields by scanning the runs of one canonical
+/// turn.
+fn assistant_reply_fields(
+    session: &Session,
+    turn_span: &std::ops::Range<usize>,
+) -> Result<
+    (
+        agena_domain::AssistantReplyId,
+        agena_domain::AssistantReplyStatus,
+        Vec<agena_domain::ContentNode>,
+        i64,
+        Option<i64>,
+        Option<agena_failure::UserProblem>,
+    ),
+    AppError,
+> {
+    let mut reply_id: Option<agena_domain::AssistantReplyId> = None;
+    let mut status = agena_domain::AssistantReplyStatus::Pending;
+    let mut nodes = Vec::new();
+    let mut created_at_ms = i64::MAX;
+    let mut finished_at_ms: Option<i64> = None;
+    let mut failure: Option<agena_failure::UserProblem> = None;
+    let runs = parts_into_runs(session.parts());
+    for run in &runs[turn_span.clone()] {
+        let marker = run.first().expect("run group has a marker");
+        if marker.role == PartRole::User {
+            continue;
+        }
+        reply_id = reply_id.or(marker
+            .content
+            .get("reply_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| uuid::Uuid::parse_str(value).ok())
+            .map(agena_domain::AssistantReplyId));
+        let role = role_from_part_role(marker.role);
+        for (index, part) in run.iter().enumerate().skip(1) {
+            let decoded = decode_part(part, index as i32)?;
+            if let Some(node) =
+                transcript_node_from_part(session.version, &decoded, role, reply_id)?
+            {
+                nodes.push(node);
+            }
+            status = more_terminal_status(status, assistant_status_from_execution(decoded.status));
+            created_at_ms = created_at_ms.min(decoded.created_at.timestamp_millis());
+            if decoded.status.is_terminal() {
+                finished_at_ms = Some(
+                    finished_at_ms
+                        .unwrap_or(decoded.created_at.timestamp_millis())
+                        .max(decoded.created_at.timestamp_millis()),
+                );
+            }
+            if let Some(problem) = part_failure(&decoded) {
+                failure = Some(problem);
+            }
+        }
+    }
+    let reply_id = reply_id.unwrap_or_default();
+    let created_at_ms = if created_at_ms == i64::MAX {
+        0
+    } else {
+        created_at_ms
+    };
+    Ok((
+        reply_id,
+        status,
+        nodes,
+        created_at_ms,
+        finished_at_ms,
+        failure,
+    ))
+}
+
+/// Fold two reply statuses, promoting toward the most terminal state.
+fn more_terminal_status(
+    current: agena_domain::AssistantReplyStatus,
+    next: agena_domain::AssistantReplyStatus,
+) -> agena_domain::AssistantReplyStatus {
+    use agena_domain::AssistantReplyStatus as Status;
+    match (current, next) {
+        (Status::Failed, _) | (_, Status::Failed) => Status::Failed,
+        (Status::Cancelled, _) | (_, Status::Cancelled) => Status::Cancelled,
+        (Status::Completed, _) | (_, Status::Completed) => Status::Completed,
+        (Status::InProgress, _) | (_, Status::InProgress) => Status::InProgress,
+        _ => Status::Pending,
+    }
+}
+
+/// The failure of a canonical turn, when any part reports one.
+fn part_failure(part: &DecodedPart) -> Option<agena_failure::UserProblem> {
+    match part.content.as_ref()? {
+        TypedContent::ToolCall(tool_call) => operation_from_tool_call(tool_call)
+            .error
+            .as_ref()
+            .map(|error| (&error.failure).into()),
+        TypedContent::Error(error) => Some(user_problem_from_error(error)),
+        _ => None,
+    }
+}
+
+/// Compose the user input [`agena_domain::ContentDocument`] for one canonical
+/// turn. The user run's content parts render as text/activity nodes; when the
+/// run carries no content parts (the persisted user marker holds only its run
+/// metadata), the document is empty.
+fn content_document_from_run(
+    session: &Session,
+    run: &[Part],
+) -> Result<agena_domain::ContentDocument, AppError> {
+    let marker = run.first().expect("run group has a marker");
+    let role = role_from_part_role(marker.role);
+    let mut nodes = Vec::new();
+    for (index, part) in run.iter().enumerate().skip(1) {
+        let decoded = decode_part(part, index as i32)?;
+        if let Some(node) = transcript_node_from_part(session.version, &decoded, role, None)? {
+            nodes.push(node);
+        }
+    }
+    Ok(agena_domain::ContentDocument::new(nodes))
+}
+
+/// Project one decoded content part into a transcript [`agena_domain::ContentNode`].
+///
+/// Mirrors the live patch mapping: text parts become text segments, activity
+/// parts become activity nodes carrying the durable payload with the
+/// human-facing operation detail derived on load.
+fn transcript_node_from_part(
+    revision_seq: i64,
+    part: &DecodedPart,
+    role: Role,
+    reply_id: Option<agena_domain::AssistantReplyId>,
+) -> Result<Option<agena_domain::ContentNode>, AppError> {
+    let position = u32::try_from(part.part_index).unwrap_or_default();
+    if let Some(activity_id) = part.activity_id {
+        let Some(payload) = activity_payload_from_part(part, role)? else {
+            return Ok(None);
+        };
+        let state = activity_state_from_execution(part.status);
+        let finished_at_ms = state
+            .is_terminal()
+            .then_some(part.created_at.timestamp_millis());
+        Ok(Some(agena_domain::ContentNode::activity(
+            agena_domain::ActivityNode {
+                id: activity_id,
+                owner: agena_domain::ActivityOwner::AssistantReply {
+                    reply_id: reply_id.unwrap_or_default(),
+                },
+                actor: activity_actor_from_role(role),
+                payload,
+                state,
+                position: agena_domain::ContentPosition { index: position },
+                revision_seq,
+                lifecycle: agena_domain::ActivityLifecycle {
+                    started_at_ms: part.created_at.timestamp_millis(),
+                    finished_at_ms,
+                },
+                provenance: Default::default(),
+            },
+        )))
+    } else if let Some(segment_id) = part.segment_id {
+        let Some(content) = part.content.as_ref() else {
+            return Ok(None);
+        };
+        let TypedContent::Text(text) = content else {
+            return Ok(None);
+        };
+        Ok(Some(agena_domain::ContentNode::text_at(
+            segment_id,
+            text.text.clone(),
+            position,
+            revision_seq,
+        )))
+    } else {
+        Ok(None)
+    }
+}
+
+/// The coarse transcript activity state for a part execution status.
+fn activity_state_from_execution(status: ExecutionStatus) -> agena_domain::ActivityState {
+    match status {
+        ExecutionStatus::Pending => agena_domain::ActivityState::Pending,
+        ExecutionStatus::InProgress => agena_domain::ActivityState::InProgress,
+        ExecutionStatus::Completed => agena_domain::ActivityState::Completed,
+        // ActivityState is intentionally coarse; the transcript part and
+        // tool-result envelope preserve the precise non-execution reason.
+        ExecutionStatus::PolicyDenied
+        | ExecutionStatus::UserDeclined
+        | ExecutionStatus::CapabilityUnavailable
+        | ExecutionStatus::ToolUnavailable => agena_domain::ActivityState::Completed,
+        ExecutionStatus::Failed => agena_domain::ActivityState::Failed,
+        ExecutionStatus::Cancelled => agena_domain::ActivityState::Cancelled,
+    }
+}
+
+/// The coarse reply status for a part execution status (terminal wins).
+fn assistant_status_from_execution(status: ExecutionStatus) -> agena_domain::AssistantReplyStatus {
+    match status {
+        ExecutionStatus::Pending => agena_domain::AssistantReplyStatus::Pending,
+        ExecutionStatus::InProgress => agena_domain::AssistantReplyStatus::InProgress,
+        ExecutionStatus::Completed
+        | ExecutionStatus::PolicyDenied
+        | ExecutionStatus::UserDeclined
+        | ExecutionStatus::CapabilityUnavailable
+        | ExecutionStatus::ToolUnavailable => agena_domain::AssistantReplyStatus::Completed,
+        ExecutionStatus::Failed => agena_domain::AssistantReplyStatus::Failed,
+        ExecutionStatus::Cancelled => agena_domain::AssistantReplyStatus::Cancelled,
+    }
+}
+
+/// The transcript actor for a message role.
+fn activity_actor_from_role(role: Role) -> agena_domain::ActivityActor {
+    match role {
+        Role::User => agena_domain::ActivityActor::User,
+        Role::Assistant => agena_domain::ActivityActor::Assistant,
+        Role::Tool => agena_domain::ActivityActor::Tool,
+        Role::System => agena_domain::ActivityActor::Runtime,
+    }
+}
+
+/// Map a message part's content into the transcript [`agena_domain::ActivityPayload`].
+///
+/// v2 persists parts in their rich typed form (there is no separate
+/// content-node projection), so the durable payload is recovered directly from
+/// the part. Operation parts carry their compact tool data; the human-facing
+/// detail Markdown is derived here, at snapshot load, and never persisted.
+fn activity_payload_from_part(
+    part: &DecodedPart,
+    role: Role,
+) -> Result<Option<agena_domain::ActivityPayload>, AppError> {
+    use agena_domain::{
+        ActivityPayload, ErrorActivity, InteractionActivity, NoticeActivity, OperationActivity,
+        OperationActivityError, ReasoningActivity, ResourceActivity, ResourceKind,
+        ResourceReference, SkillReferenceActivity, TextArtifactActivity, TextSegmentActivity,
+        ToolCallId,
+    };
+    let content = part.content.as_ref();
+    let Some(payload) = (match content {
+        // Assistant text parts that carry an ActivityId are interstitial body
+        // segments (produced between tool calls); they render as their own
+        // collapsible block. User text activities stay TextArtifact.
+        Some(TypedContent::Text(text)) => match role {
+            Role::Assistant => Some(ActivityPayload::TextSegment(TextSegmentActivity {
+                text: text.text.clone(),
+            })),
+            _ => Some(ActivityPayload::TextArtifact(TextArtifactActivity {
+                text: text.text.clone(),
+                language: None,
+                label: part.summary.clone(),
+            })),
+        },
+        Some(TypedContent::Think(think)) => Some(ActivityPayload::Reasoning(ReasoningActivity {
+            content: crate::session::store::reasoning_from_think(think),
+        })),
+        Some(TypedContent::ToolCall(tool_call)) => {
+            let operation = operation_from_tool_call(tool_call);
+            // The compact `ToolResult` payload is the only durable tool data.
+            // The human-facing detail Markdown is derived from it at render
+            // time and is never persisted.
+            let data = operation
+                .details
+                .to_json_payload()
+                .unwrap_or(serde_json::Value::Null);
+            Some(ActivityPayload::Operation(OperationActivity {
+                call_id: ToolCallId::new(
+                    part.operation_id
+                        .clone()
+                        .unwrap_or_else(|| operation.call_id.to_string()),
+                ),
+                invocation: operation.invocation.clone(),
+                title: operation.title.clone(),
+                summary: operation.summary.clone(),
+                data,
+                // The derived projection carries no detail Markdown; it is
+                // derived at snapshot load / lazy detail fetch time.
+                markdown: String::new(),
+                authorization: operation.authorization.clone(),
+                error: operation
+                    .error
+                    .as_ref()
+                    .map(|error| OperationActivityError {
+                        problem: (&error.failure).into(),
+                    }),
+            }))
+        }
+        Some(TypedContent::FileRef(file_ref)) => {
+            let attachment = attachment_from_file_ref(file_ref);
+            let Some(item) = attachment.attachments.first() else {
+                return Ok(None);
+            };
+            let kind = match item.kind {
+                crate::part::AttachmentKind::Image => ResourceKind::Image,
+                crate::part::AttachmentKind::Audio => ResourceKind::Audio,
+                crate::part::AttachmentKind::Video => ResourceKind::Video,
+                crate::part::AttachmentKind::Pdf => ResourceKind::Pdf,
+                crate::part::AttachmentKind::File if item.mime == "inode/directory" => {
+                    ResourceKind::Directory
+                }
+                crate::part::AttachmentKind::File => ResourceKind::File,
+            };
+            let reference = match &item.source {
+                crate::part::AttachmentSource::Url { url } => {
+                    Some(ResourceReference::Url { url: url.clone() })
+                }
+                crate::part::AttachmentSource::FileId { file_id } => {
+                    Some(ResourceReference::ProviderFile {
+                        provider_id: "provider".to_owned(),
+                        file_id: file_id.clone(),
+                    })
+                }
+                crate::part::AttachmentSource::LocalPath { path } => {
+                    Some(ResourceReference::WorkspacePath { path: path.clone() })
+                }
+                crate::part::AttachmentSource::DataUrl { .. }
+                | crate::part::AttachmentSource::Base64 { .. } => None,
+            };
+            let Some(reference) = reference else {
+                return Ok(None);
+            };
+            Some(ActivityPayload::Resource(ResourceActivity {
+                kind,
+                reference,
+                name: item.summary_label(),
+                media_type: (!item.mime.is_empty()).then(|| item.mime.clone()),
+                size_bytes: item.size_bytes,
+                width: item.width,
+                height: item.height,
+                duration_ms: item.duration_ms,
+                page_count: item.page_count,
+            }))
+        }
+        Some(TypedContent::SkillRef(skill_ref)) => {
+            let skills = skill_reference_from_skill_ref(skill_ref);
+            let Some(skill) = skills.skills.first() else {
+                return Ok(None);
+            };
+            Some(ActivityPayload::SkillReference(SkillReferenceActivity {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                instructions: skill.instructions.clone(),
+                content_hash: skill.content_hash.clone(),
+                source: skill.source.clone(),
+                aliases: skill.aliases.clone(),
+            }))
+        }
+        Some(TypedContent::Interaction(interaction)) => Some(ActivityPayload::Interaction(
+            match interaction_from_content(interaction) {
+                crate::part::RequestPart::UserInput(value) => InteractionActivity::UserInput {
+                    request: value.request.clone(),
+                    reply: value.reply.clone(),
+                },
+            },
+        )),
+        Some(TypedContent::Error(error)) => Some(ActivityPayload::Error(ErrorActivity {
+            problem: user_problem_from_error(error),
+        })),
+        Some(TypedContent::Hook(hook)) => Some(ActivityPayload::Notice(NoticeActivity {
+            kind: "hook".to_owned(),
+            summary: hook.summary.clone(),
+            detail: hook.detail.clone(),
+            occurred_at_ms: None,
+            title: None,
+        })),
+        Some(TypedContent::Notice(notice)) => Some(ActivityPayload::Notice(NoticeActivity {
+            kind: notice.kind.clone(),
+            summary: notice.summary.clone(),
+            detail: notice.detail.clone(),
+            occurred_at_ms: None,
+            title: notice.title.clone(),
+        })),
+        Some(
+            TypedContent::Run(_)
+            | TypedContent::ToolResult(_)
+            | TypedContent::PasteRef(_)
+            | TypedContent::Compaction(_),
+        ) => None,
+        None => None,
+    }) else {
+        return Ok(None);
+    };
+    Ok(Some(payload))
+}
+
+/// Recover every interactive request currently awaiting a reply in `session`,
+/// from the parts projection (v2 equivalent of the removed
+/// `Session::pending_interactive_requests`): unanswered permissions recorded on
+/// in-flight `tool_call` parts, plus unanswered user-input `interaction` parts.
+/// Requests are de-duplicated by `(kind, request_id)` as the v1 projection did.
+fn pending_interactive_requests_from_session(
+    session: &Session,
+) -> Vec<agena_domain::PendingInteractiveRequest> {
+    let mut seen = std::collections::HashSet::new();
+    let mut requests = Vec::new();
+    // Pending permissions live on the in-flight tool-call part's operation
+    // authorization record (`operation.authorization.awaiting()`).
+    for part in session.parts() {
+        if part.kind != "tool_call" || !part.state.is_in_flight() {
+            continue;
+        }
+        let Some(operation) = super::replies::operation_from_part(part) else {
+            continue;
+        };
+        for permission in operation.authorization.awaiting() {
+            let request = agena_domain::PendingInteractiveRequest::from(permission.request.clone());
+            if seen.insert(format!("{:?}:{}", request.kind(), request.request_id())) {
+                requests.push(request);
+            }
+        }
+    }
+    // Pending user-input requests are in-flight `interaction` parts (kind
+    // `!= "permission"`); the full request payload rides under content
+    // `request`.
+    for part in session.pending_interactions() {
+        if part.content.get("kind").and_then(serde_json::Value::as_str) == Some("permission") {
+            continue;
+        }
+        let Some(request) = part.content.get("request").and_then(|value| {
+            serde_json::from_value::<agena_domain::UserInputRequest>(value.clone()).ok()
+        }) else {
+            continue;
+        };
+        let request = agena_domain::PendingInteractiveRequest::from(request);
+        if seen.insert(format!("{:?}:{}", request.kind(), request.request_id())) {
+            requests.push(request);
+        }
+    }
+    requests
 }
 
 #[async_trait::async_trait]
 impl agena_runtime::SessionQueryService for SessionManager {
-    async fn find_session_id_for_message(
-        &self,
-        message_id: i64,
-    ) -> Result<Option<i64>, agena_runtime::SessionQueryError> {
-        SessionManager::find_session_id_for_message(self, message_id)
-            .await
-            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
-    }
-
-    async fn find_session_id_for_part(
-        &self,
-        part_id: i64,
-    ) -> Result<Option<i64>, agena_runtime::SessionQueryError> {
-        SessionManager::find_session_id_for_part(self, part_id)
-            .await
-            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
-    }
-
     async fn list_session_summaries(
         &self,
         request: agena_domain::SessionListRequest,
@@ -1145,6 +857,11 @@ impl agena_runtime::SessionQueryService for SessionManager {
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         let workflow_state = session.workflow_state();
+        let message_count = session
+            .parts()
+            .iter()
+            .filter(|part| part.is_run_marker())
+            .count();
         Ok(agena_runtime::SessionPresentation {
             id: session.id,
             parent_id: session.parent_id,
@@ -1153,7 +870,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
             version: session.version,
             created_at: session.created_at,
             updated_at: session.updated_at,
-            message_count: session.messages.len(),
+            message_count,
             workflow_state,
         })
     }
@@ -1233,70 +950,17 @@ impl agena_runtime::SessionQueryService for SessionManager {
         }))
     }
 
-    async fn list_projected_message_headers(
-        &self,
-        session_id: i64,
-    ) -> Result<Vec<agena_runtime::SessionProjectedMessageHeader>, agena_runtime::SessionQueryError>
-    {
-        SessionManager::list_projected_message_headers(self, session_id)
-            .await
-            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?
-            .into_iter()
-            .map(|header| {
-                Ok(agena_runtime::SessionProjectedMessageHeader {
-                    id: header.id,
-                    role: header.role,
-                    state: header.state,
-                    created_at: header.created_at,
-                    metadata: serde_json::to_value(header.metadata).map_err(|error| {
-                        agena_runtime::SessionQueryError::internal(error.to_string())
-                    })?,
-                    usage: header
-                        .usage
-                        .map(serde_json::to_value)
-                        .transpose()
-                        .map_err(|error| {
-                            agena_runtime::SessionQueryError::internal(error.to_string())
-                        })?,
-                    part_count: header.part_count,
-                })
-            })
-            .collect()
-    }
-
-    async fn list_projected_messages(
+    async fn list_projected_runs(
         &self,
         session_id: i64,
         include_content: bool,
-    ) -> Result<Vec<agena_runtime::SessionProjectedMessage>, agena_runtime::SessionQueryError> {
-        SessionManager::list_projected_messages(self, session_id, include_content)
+    ) -> Result<Vec<agena_runtime::SessionProjectedRun>, agena_runtime::SessionQueryError> {
+        // Parts-native: `SessionManager::list_projected_runs` already
+        // builds the stable `SessionProjectedRun` values directly from the
+        // session's parts; only the error type needs adapting here.
+        SessionManager::list_projected_runs(self, session_id, include_content)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?
-            .into_iter()
-            .map(|message| {
-                Ok(agena_runtime::SessionProjectedMessage {
-                    id: message.id,
-                    role: message.role,
-                    state: message.state,
-                    created_at: message.created_at,
-                    metadata: serde_json::to_value(message.metadata).map_err(|error| {
-                        agena_runtime::SessionQueryError::internal(error.to_string())
-                    })?,
-                    usage: message
-                        .usage
-                        .map(serde_json::to_value)
-                        .transpose()
-                        .map_err(|error| {
-                            agena_runtime::SessionQueryError::internal(error.to_string())
-                        })?,
-                    parts: message
-                        .parts
-                        .into_iter()
-                        .map(project_message_part)
-                        .collect::<Result<Vec<_>, agena_runtime::SessionQueryError>>()?,
-                })
-            })
-            .collect()
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
 
     async fn list_session_tree(
@@ -1321,10 +985,13 @@ impl agena_runtime::SessionQueryService for SessionManager {
         &self,
         session_id: i64,
     ) -> Result<Option<i64>, agena_runtime::SessionQueryError> {
-        let events = SessionManager::list_session_events(self, session_id)
+        // v2 has no event log: the session's optimistic-lock version is the
+        // monotonic per-session change sequence that consumers treat as the
+        // durable high-water mark.
+        let session = SessionManager::get_session(self, session_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
-        Ok(events.iter().map(|event| event.meta.seq_global).max())
+        Ok(Some(session.version))
     }
 
     async fn session_usage(
@@ -1345,7 +1012,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
         let session = SessionManager::get_session(self, session_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
-        Ok(crate::session::cost::summarize(&session.messages))
+        Ok(crate::session::cost::summarize(session.parts()))
     }
 
     async fn usage_stats(
@@ -1409,8 +1076,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
                 let session_id = pending_session.id;
                 let parent_session_id = pending_session.parent_id;
                 let task_id = pending_session.task_id.clone();
-                pending_session
-                    .pending_interactive_requests()
+                pending_interactive_requests_from_session(&pending_session)
                     .into_iter()
                     .map(
                         move |request| agena_domain::PendingInteractiveRequestContext {
@@ -1495,92 +1161,242 @@ impl agena_runtime::SessionQueryService for SessionManager {
     }
 }
 
-/// Projects one private Runtime message part into the stable transcript value.
+/// Project a session's parts into the stable transcript values, one per run.
 ///
-/// Live event consumers use this adapter before crossing into API/TUI
-/// presentation mappings; they never need an Application → Runtime-internal
-/// dependency.
-fn project_message_part(
-    part: MessagePart,
-) -> Result<agena_runtime::SessionProjectedMessagePart, agena_runtime::SessionQueryError> {
-    Ok(agena_runtime::SessionProjectedMessagePart {
-        id: part.id,
-        message_id: part.message_id,
-        part_index: part.part_index,
-        status: part.status,
-        kind: part.kind,
-        name: part.name,
-        summary: part.summary,
-        has_detail: part.has_detail,
-        activity_id: part.activity_id,
-        segment_id: part.segment_id,
-        operation_id: part.operation_id,
-        created_at: part.created_at,
-        detail: part.content.as_ref().map(project_part_detail),
-        content: part
-            .content
-            .map(serde_json::to_value)
-            .transpose()
-            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?,
+/// Each run marker becomes a `SessionProjectedRun` whose parts are the
+/// run's content parts, decoded from the canonical store payload. This is the
+/// parts-native replacement for the removed v1 message bridge,
+/// preserving the exact wire shape `agena-application` / `agena-cli` consume.
+pub(crate) fn projected_runs_from_parts(
+    parts: &[Part],
+) -> Result<Vec<crate::session_query_service::SessionProjectedRun>, AppError> {
+    parts_into_runs(parts)
+        .into_iter()
+        .map(|run| {
+            let marker = run.first().expect("run group has a marker");
+            let mut projected_parts = Vec::with_capacity(run.len().saturating_sub(1));
+            for (index, part) in run.iter().enumerate().skip(1) {
+                projected_parts.push(project_storage_part(part, marker.part_id, index as i32)?);
+            }
+            Ok(crate::session_query_service::SessionProjectedRun {
+                id: marker.part_id,
+                role: role_from_part_role(marker.role),
+                state: execution_status_from_part_state(marker.state),
+                created_at: timestamp_millis_to_utc(marker.created_at_ms)?,
+                // The run marker's content is the durable header payload; the
+                // v1 bridge surfaced a derived `MessageMetadata` projection of
+                // the same fields, and consumers pass it through as the run
+                // part's content.
+                metadata: marker.content.clone(),
+                usage: None,
+                parts: projected_parts,
+            })
+        })
+        .collect()
+}
+
+/// A decoded content part: the parts-native projection of one storage [`Part`]
+/// into the fields the transcript and query surfaces need, mirroring the v1
+/// `MessagePart` reconstruction without materializing v1 messages.
+struct DecodedPart {
+    id: i64,
+    part_index: i32,
+    status: ExecutionStatus,
+    kind: agena_domain::PartKind,
+    name: Option<String>,
+    summary: Option<String>,
+    has_detail: bool,
+    activity_id: Option<agena_domain::ActivityId>,
+    segment_id: Option<agena_domain::TextSegmentId>,
+    operation_id: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    content: Option<TypedContent>,
+}
+
+/// Decode one persisted content part (its `kind` column plus canonical JSON
+/// payload) into the [`DecodedPart`] view. Mirrors the removed
+/// `store::part_to_message_part` exactly so the transcript and projected-message
+/// surfaces keep the same shape without the v1 message bridge.
+fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
+    let content = typed_content_from_value(&part.kind, &part.content)?;
+    // The coarse state column carries the lifecycle; the fine-grained status
+    // (including denial outcomes) is reconstructed from the rich content.
+    let status = match &content {
+        TypedContent::ToolCall(tool_call) => operation_from_tool_call(tool_call).status(),
+        TypedContent::Interaction(interaction) => match interaction_from_content(interaction) {
+            crate::part::RequestPart::UserInput(request) => request.status(),
+        },
+        _ => execution_status_from_part_state(part.state),
+    };
+    // Recover the provider operation id stashed by the tool-call serialization
+    // so pending-tool correlation and prompt assembly survive a reload.
+    let operation_id = match &content {
+        TypedContent::ToolCall(tool_call) => operation_from_tool_call(tool_call)
+            .metadata
+            .get(OPERATION_ID_METADATA_KEY)
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        _ => None,
+    };
+    let activity_kind = matches!(
+        &content,
+        TypedContent::Think(_)
+            | TypedContent::ToolCall(_)
+            | TypedContent::FileRef(_)
+            | TypedContent::SkillRef(_)
+            | TypedContent::Notice(_)
+            | TypedContent::Hook(_)
+            | TypedContent::Error(_)
+            | TypedContent::Interaction(_)
+    );
+    Ok(DecodedPart {
+        id: part.part_id,
+        part_index,
+        status,
+        kind: crate::session::store::typed_part_kind(&content),
+        name: part_name_from_content(&content),
+        summary: part.summary.clone(),
+        has_detail: part.content.is_object(),
+        activity_id: activity_kind.then(agena_domain::ActivityId::new),
+        segment_id: matches!(&content, TypedContent::Text(_))
+            .then(agena_domain::TextSegmentId::new),
+        operation_id,
+        created_at: timestamp_millis_to_utc(part.created_at_ms)?,
+        content: Some(content),
     })
 }
 
-fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjectedPartDetail {
+/// The `MessagePart::name` derivation from decoded content: text/reasoning
+/// are plain labels, operations use their header title (falling back to the
+/// invocation name), and failures use their problem code.
+fn part_name_from_content(content: &TypedContent) -> Option<String> {
     match content {
-        PartContent::Text(value) => agena_runtime::SessionProjectedPartDetail::Text {
+        TypedContent::Text(_) => Some("text".to_string()),
+        TypedContent::Think(_) => Some("reasoning".to_string()),
+        TypedContent::ToolCall(tool_call) => {
+            let operation = operation_from_tool_call(tool_call);
+            let title = operation.title.trim();
+            Some(if title.is_empty() {
+                operation.invocation.name.clone()
+            } else {
+                title.to_owned()
+            })
+        }
+        TypedContent::SkillRef(_) => Some("skill_reference".to_string()),
+        TypedContent::Error(error) => Some(user_problem_from_error(error).code.to_string()),
+        TypedContent::FileRef(_) => Some("resource".to_string()),
+        TypedContent::Interaction(interaction) => match interaction_from_content(interaction) {
+            crate::part::RequestPart::UserInput(_) => Some("user_input".to_string()),
+        },
+        TypedContent::Hook(hook) => Some(format!("hook:{}", hook.hook)),
+        TypedContent::Notice(_) => Some("notice".to_string()),
+        TypedContent::Run(_)
+        | TypedContent::PasteRef(_)
+        | TypedContent::ToolResult(_)
+        | TypedContent::Compaction(_) => None,
+    }
+}
+
+/// Project one persisted content part into the stable transcript part value,
+/// preserving the wire shape the v1 bridge produced for `MessagePart`.
+fn project_storage_part(
+    part: &Part,
+    run_id: i64,
+    part_index: i32,
+) -> Result<agena_runtime::SessionProjectedPart, AppError> {
+    let decoded = decode_part(part, part_index)?;
+    Ok(agena_runtime::SessionProjectedPart {
+        id: decoded.id,
+        run_id,
+        part_index: decoded.part_index,
+        status: decoded.status,
+        kind: decoded.kind,
+        name: decoded.name,
+        summary: decoded.summary,
+        has_detail: decoded.has_detail,
+        activity_id: decoded.activity_id,
+        segment_id: decoded.segment_id,
+        operation_id: decoded.operation_id,
+        created_at: decoded.created_at,
+        detail: decoded.content.as_ref().map(project_part_detail),
+        content: decoded
+            .content
+            .as_ref()
+            .map(|content| {
+                typed_content_to_value(content)
+                    .map_err(|error| AppError::Internal(format!("serialize part content: {error}")))
+            })
+            .transpose()?,
+    })
+}
+
+fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjectedPartDetail {
+    match content {
+        TypedContent::Text(value) => agena_runtime::SessionProjectedPartDetail::Text {
             text: value.text.clone(),
             synthetic: value.synthetic,
         },
-        PartContent::Activity(crate::message::RuntimeActivity::Reasoning(value)) => {
-            agena_runtime::SessionProjectedPartDetail::Reasoning {
-                summary: value.summary.clone(),
-                raw_content: value.raw_content.clone(),
-                encrypted_content: value.encrypted_content.clone(),
-            }
-        }
-        PartContent::Activity(crate::message::RuntimeActivity::Error(value)) => {
-            agena_runtime::SessionProjectedPartDetail::Error {
-                problem: value.problem.clone(),
-            }
-        }
-        PartContent::Activity(crate::message::RuntimeActivity::Resource(value)) => {
-            agena_runtime::SessionProjectedPartDetail::Attachment(value.clone())
-        }
-        PartContent::Activity(crate::message::RuntimeActivity::SkillReference(value)) => {
-            agena_runtime::SessionProjectedPartDetail::SkillReference(value.clone())
-        }
-        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
-            crate::message::RequestPart::UserInput(value),
-        )) => agena_runtime::SessionProjectedPartDetail::UserInputRequest {
-            request: value.request.clone(),
-            reply: value.reply.clone(),
+        TypedContent::Think(value) => agena_runtime::SessionProjectedPartDetail::Reasoning {
+            summary: value.summary.clone(),
+            raw_content: value.raw.clone(),
+            encrypted_content: value.encrypted_content.clone(),
         },
-        PartContent::Activity(crate::message::RuntimeActivity::Operation(value)) => {
-            agena_runtime::SessionProjectedPartDetail::Operation(Box::new(project_operation_part(
-                value,
-            )))
+        TypedContent::Error(value) => agena_runtime::SessionProjectedPartDetail::Error {
+            problem: user_problem_from_error(value),
+        },
+        TypedContent::FileRef(value) => {
+            agena_runtime::SessionProjectedPartDetail::Attachment(attachment_from_file_ref(value))
         }
-        PartContent::Activity(crate::message::RuntimeActivity::Hook(value)) => {
-            agena_runtime::SessionProjectedPartDetail::Hook(Box::new(
-                agena_runtime::SessionProjectedHookPart {
-                    hook: value.hook.clone(),
-                    plugin_id: value.plugin_id.clone(),
-                    summary: value.summary.clone(),
-                    detail: value.detail.clone(),
-                },
-            ))
-        }
-        PartContent::Activity(crate::message::RuntimeActivity::Notice(value)) => {
-            agena_runtime::SessionProjectedPartDetail::Notice {
+        TypedContent::SkillRef(value) => agena_runtime::SessionProjectedPartDetail::SkillReference(
+            skill_reference_from_skill_ref(value),
+        ),
+        TypedContent::Interaction(value) => match interaction_from_content(value) {
+            crate::part::RequestPart::UserInput(request) => {
+                agena_runtime::SessionProjectedPartDetail::UserInputRequest {
+                    request: request.request.clone(),
+                    reply: request.reply.clone(),
+                }
+            }
+        },
+        TypedContent::ToolCall(value) => agena_runtime::SessionProjectedPartDetail::Operation(
+            Box::new(project_operation_part(&operation_from_tool_call(value))),
+        ),
+        TypedContent::Hook(value) => agena_runtime::SessionProjectedPartDetail::Hook(Box::new(
+            agena_runtime::SessionProjectedHookPart {
+                hook: value.hook.clone(),
+                plugin_id: value.plugin_id.clone(),
                 summary: value.summary.clone(),
                 detail: value.detail.clone(),
-            }
-        }
+            },
+        )),
+        TypedContent::Notice(value) => agena_runtime::SessionProjectedPartDetail::Notice {
+            summary: value.summary.clone(),
+            detail: value.detail.clone(),
+        },
+        // These kinds have no v1 rich projection; degrade to a text detail
+        // exactly as the v1 typed fold did (Run → empty, PasteRef/ToolResult/
+        // Compaction → their text).
+        TypedContent::Run(_) => agena_runtime::SessionProjectedPartDetail::Text {
+            text: String::new(),
+            synthetic: false,
+        },
+        TypedContent::PasteRef(value) => agena_runtime::SessionProjectedPartDetail::Text {
+            text: value.text.clone(),
+            synthetic: false,
+        },
+        TypedContent::ToolResult(value) => agena_runtime::SessionProjectedPartDetail::Text {
+            text: value.output.clone(),
+            synthetic: false,
+        },
+        TypedContent::Compaction(value) => agena_runtime::SessionProjectedPartDetail::Text {
+            text: value.summary.clone().unwrap_or_default(),
+            synthetic: false,
+        },
     }
 }
 
 fn project_operation_part(
-    value: &crate::message::OperationPart,
+    value: &crate::part::OperationPart,
 ) -> agena_runtime::SessionProjectedOperationPart {
     let details = value.details.clone();
     agena_runtime::SessionProjectedOperationPart {
@@ -1625,7 +1441,7 @@ fn project_operation_part(
 }
 
 fn project_model_visible_output(
-    value: &crate::message::ModelVisibleOutput,
+    value: &crate::part::ModelVisibleOutput,
 ) -> agena_runtime::SessionProjectedModelVisibleOutput {
     agena_runtime::SessionProjectedModelVisibleOutput {
         text: value.text.clone(),
@@ -1716,6 +1532,15 @@ fn project_operation_block(
     }
 }
 
+/// Convert a storage session tree into the shared domain DTO.
+fn session_tree_domain(
+    tree: Vec<agena_storage::store::SessionSummary>,
+) -> Result<Vec<SessionSummary>, AppError> {
+    tree.into_iter()
+        .map(crate::session::store::domain_summary_from_storage)
+        .collect()
+}
+
 fn descendant_cancellation_order(session_id: i64, tree: &[SessionSummary]) -> Vec<i64> {
     let mut included = std::collections::HashSet::from([session_id]);
     loop {
@@ -1754,19 +1579,43 @@ fn cancel_active_execution_result(
     }
 }
 
-fn is_completed_user_rewind_target(message: &Message) -> bool {
-    message.role == Role::User && message.state == ExecutionStatus::Completed
+fn is_completed_user_rewind_target(part: &Part) -> bool {
+    part.role == PartRole::User
+        && execution_status_from_part_state(part.state) == ExecutionStatus::Completed
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ExecutionControlError, Message, Role, cancel_active_execution_result,
-        descendant_cancellation_order, is_completed_user_rewind_target,
-        project_runtime_presentation_event,
+        ExecutionControlError, cancel_active_execution_result, descendant_cancellation_order,
+        is_completed_user_rewind_target,
     };
     use agena_domain::SessionSummary;
-    use agena_domain::{ExecutionStatus, SubtaskStatus};
+    use agena_domain::SubtaskStatus;
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
+
+    fn marker(part_id: i64, role: PartRole, state: PartState) -> Part {
+        let now = chrono::Utc::now().timestamp_millis();
+        Part {
+            part_id,
+            kind: "run".to_owned(),
+            role,
+            state,
+            content: serde_json::json!({}),
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: None,
+            origin_session_id: 1,
+            revision: 0,
+            started_at_ms: now,
+            finished_at_ms: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+            provider_state: None,
+        }
+    }
 
     #[test]
     fn cancelling_a_completed_run_is_a_successful_no_op() {
@@ -1778,153 +1627,10 @@ mod tests {
     }
 
     #[test]
-    fn execution_start_immediately_invalidates_the_transcript_projection() {
-        let session_id = 42;
-        let event = crate::event::DomainEvent {
-            meta: agena_domain::EventMeta {
-                id: uuid::Uuid::new_v4(),
-                seq_global: 1,
-                seq_session: Some(1),
-                session_id: Some(session_id),
-                workspace_id: Some(1),
-                created_at: chrono::Utc::now(),
-                causation_id: None,
-                correlation_id: None,
-                envelope_schema: agena_domain::EVENT_ENVELOPE_SCHEMA_VERSION,
-            },
-            kind: crate::event::EventKind::ExecutionStarted(agena_domain::ExecutionStartedEvent {
-                session_id,
-                execution_id: agena_domain::ExecutionId::new(),
-                turn_id: agena_domain::TurnId::new(),
-                reply_id: agena_domain::AssistantReplyId::new(),
-                source: agena_domain::ExecutionSource::Compaction,
-                ts_ms: 1,
-            }),
-        };
-
-        let projected = project_runtime_presentation_event(&event)
-            .expect("presentation projection")
-            .expect("execution start must be visible");
-        assert!(matches!(
-            projected.kind,
-            agena_runtime::RuntimePresentationEventKind::Refresh {
-                force_refresh: false
-            }
-        ));
-    }
-
-    #[test]
-    fn user_input_request_forces_a_presentation_refresh() {
-        // Regression guard: a durable UserInputRequested event must project to
-        // a force refresh so every UI re-reads the execution snapshot and pops
-        // the pending approval/question modal. The part checkpoint alone only
-        // projects to a TranscriptPatch, which terminals apply without
-        // refreshing the execution (and therefore without seeing the request).
-        let session_id = 42;
-        let event = crate::event::DomainEvent {
-            meta: agena_domain::EventMeta {
-                id: uuid::Uuid::new_v4(),
-                seq_global: 1,
-                seq_session: Some(1),
-                session_id: Some(session_id),
-                workspace_id: Some(1),
-                created_at: chrono::Utc::now(),
-                causation_id: None,
-                correlation_id: None,
-                envelope_schema: agena_domain::EVENT_ENVELOPE_SCHEMA_VERSION,
-            },
-            kind: crate::event::EventKind::UserInputRequested(
-                agena_domain::UserInputRequestedEvent {
-                    session_id,
-                    operation_id: "op-1".to_string(),
-                    call_id: 7,
-                    request_id: "req-1".to_string(),
-                    ts_ms: 1,
-                },
-            ),
-        };
-
-        let projected = project_runtime_presentation_event(&event)
-            .expect("presentation projection")
-            .expect("user input request must be visible");
-        assert!(matches!(
-            projected.kind,
-            agena_runtime::RuntimePresentationEventKind::Refresh {
-                force_refresh: true
-            }
-        ));
-    }
-
-    #[test]
-    fn presentation_events_carry_the_durable_flag_of_the_source_kind() {
-        // The TUI reconciles its local high-water mark against the server's
-        // durable `latest_event_seq`. Live-only kinds (ActivityV2, streamed
-        // text upserts) consume a global sequence number but are never
-        // persisted, so the projection must mark them non-durable or the TUI
-        // watermark races ahead of the durable log and drops the terminal
-        // execution.
-        let event = crate::event::DomainEvent {
-            meta: agena_domain::EventMeta {
-                id: uuid::Uuid::new_v4(),
-                seq_global: 1,
-                seq_session: Some(1),
-                session_id: Some(42),
-                workspace_id: Some(1),
-                created_at: chrono::Utc::now(),
-                causation_id: None,
-                correlation_id: None,
-                envelope_schema: agena_domain::EVENT_ENVELOPE_SCHEMA_VERSION,
-            },
-            kind: crate::event::EventKind::ExecutionStarted(agena_domain::ExecutionStartedEvent {
-                session_id: 42,
-                execution_id: agena_domain::ExecutionId::new(),
-                turn_id: agena_domain::TurnId::new(),
-                reply_id: agena_domain::AssistantReplyId::new(),
-                source: agena_domain::ExecutionSource::User,
-                ts_ms: 1,
-            }),
-        };
-        let durable = project_runtime_presentation_event(&event)
-            .expect("projection")
-            .expect("execution start projects");
-        assert!(durable.durable, "ExecutionStarted is durable");
-
-        let live = crate::event::DomainEvent {
-            meta: agena_domain::EventMeta {
-                id: uuid::Uuid::new_v4(),
-                seq_global: 2,
-                seq_session: Some(2),
-                session_id: Some(42),
-                workspace_id: Some(1),
-                created_at: chrono::Utc::now(),
-                causation_id: None,
-                correlation_id: None,
-                envelope_schema: agena_domain::EVENT_ENVELOPE_SCHEMA_VERSION,
-            },
-            kind: crate::event::EventKind::ActivityV2(Box::new(
-                crate::activity::ActivityLiveEvent::StateChanged {
-                    activity_id: agena_domain::ActivityId::new(),
-                    state: agena_domain::ActivityState::Completed,
-                },
-            )),
-        };
-        let live_projected = project_runtime_presentation_event(&live)
-            .expect("projection")
-            .expect("activity v2 projects");
-        assert!(
-            !live_projected.durable,
-            "ActivityV2 is live-only and must be marked non-durable"
-        );
-    }
-
-    #[test]
     fn rewind_accepts_only_completed_user_messages() {
-        let mut user = Message::prompt_text(Role::User, "undo this");
-        user.state = ExecutionStatus::Completed;
-        let mut assistant = Message::prompt_text(Role::Assistant, "response");
-        assistant.state = ExecutionStatus::Completed;
-        let mut pending_user = Message::prompt_text(Role::User, "pending");
-        pending_user.state = ExecutionStatus::Pending;
+        let user = marker(1, PartRole::User, PartState::Completed);
+        let assistant = marker(2, PartRole::Assistant, PartState::Completed);
+        let pending_user = marker(3, PartRole::User, PartState::Pending);
 
         assert!(is_completed_user_rewind_target(&user));
         assert!(!is_completed_user_rewind_target(&assistant));

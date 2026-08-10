@@ -29,4 +29,4 @@ pub use docs_reference::bundled_tools_markdown_reference;
 
 pub use agena_runtime_config as config;
 pub use agena_runtime_config::{LSP_PLUGIN_ID, LspConfig, MCP_PLUGIN_ID};
-pub use agena_runtime_contracts::{authorization, message, permission};
+pub use agena_runtime_contracts::{authorization, part, permission, provider_state};

@@ -10,10 +10,11 @@ use std::sync::Arc;
 use agena_domain::{
     BackgroundActivity, BackgroundActivityKind, BackgroundActivityLogLine,
     BackgroundActivityLogRead, BackgroundActivityStatus, ProcessStatus, ProcessSummary,
-    SubtaskStatusChangedEvent,
+    SubtaskStatus,
 };
 use agena_plugin_sdk::activity::ActivitySourceAdapter;
 use agena_runtime_session::SessionManager;
+use agena_storage::store::SessionMeta;
 
 use super::registry::ActivityRegistry;
 use crate::{
@@ -171,44 +172,84 @@ fn runtime_task_activity(task: &RuntimeBackgroundTask) -> BackgroundActivity {
     }
 }
 
-/// Project a delegated-task status event into the unified registry.
-pub(crate) fn upsert_task_activity(registry: &ActivityRegistry, event: &SubtaskStatusChangedEvent) {
-    let status = match event.status {
-        agena_domain::SubtaskStatus::Created => BackgroundActivityStatus::Pending,
-        agena_domain::SubtaskStatus::Running => BackgroundActivityStatus::Running,
-        agena_domain::SubtaskStatus::Completed => BackgroundActivityStatus::Succeeded,
-        agena_domain::SubtaskStatus::Failed => BackgroundActivityStatus::Failed,
-        agena_domain::SubtaskStatus::Cancelled | agena_domain::SubtaskStatus::Interrupted => {
+fn subtask_status_to_background(status: SubtaskStatus) -> BackgroundActivityStatus {
+    match status {
+        SubtaskStatus::Created => BackgroundActivityStatus::Pending,
+        SubtaskStatus::Running => BackgroundActivityStatus::Running,
+        SubtaskStatus::Completed => BackgroundActivityStatus::Succeeded,
+        SubtaskStatus::Failed => BackgroundActivityStatus::Failed,
+        SubtaskStatus::Cancelled | SubtaskStatus::Interrupted => {
             BackgroundActivityStatus::Cancelled
         }
-        agena_domain::SubtaskStatus::TimedOut => BackgroundActivityStatus::Failed,
-    };
-    let started_at = event.started_at_ms.unwrap_or(event.ts_ms);
-    registry.upsert(BackgroundActivity {
-        id: format!("task_{}", event.task_id),
+        SubtaskStatus::TimedOut => BackgroundActivityStatus::Failed,
+    }
+}
+
+fn subtask_activity(
+    task_id: &str,
+    session_id: i64,
+    parent_session_id: Option<i64>,
+    status: BackgroundActivityStatus,
+    started_at_ms: i64,
+    finished_at_ms: Option<i64>,
+    message: Option<String>,
+    failure: Option<agena_failure::UserProblem>,
+) -> BackgroundActivity {
+    BackgroundActivity {
+        id: format!("task_{task_id}"),
         kind: BackgroundActivityKind::Task,
         status,
-        title: format!("Delegated task · {}", event.task_id),
+        title: format!("Delegated task · {task_id}"),
         description: String::new(),
         command: None,
         workdir: None,
-        session_id: Some(event.session_id),
-        parent_session_id: Some(event.parent_session_id),
-        created_at_ms: started_at,
-        started_at_ms: started_at,
-        finished_at_ms: event.finished_at_ms,
+        session_id: Some(session_id),
+        parent_session_id,
+        created_at_ms: started_at_ms,
+        started_at_ms,
+        finished_at_ms,
         exit_code: None,
-        message: event
-            .failure
-            .as_ref()
-            .map(|failure| failure.user.fallback.clone()),
-        failure: event.failure.clone(),
+        message,
+        failure,
         last_seq: 0,
         has_more: false,
         dropped_lines: 0,
         cancellable: status.is_active(),
         dismissible: status.is_terminal(),
-    });
+    }
+}
+
+/// Project a session's persisted subtask state ([`SessionMeta`] columns) into
+/// the unified registry. v2 keeps subtask state in the `sessions` row; the
+/// facade's [`SessionChange::SessionMetaUpdated`] notifications drive this.
+pub(crate) fn upsert_task_activity_from_meta(registry: &ActivityRegistry, meta: &SessionMeta) {
+    let Some(task_id) = meta.task_id.as_deref() else {
+        return;
+    };
+    let Some(raw_status) = meta.subtask_status.as_deref() else {
+        return;
+    };
+    let Some(status) = SubtaskStatus::parse(raw_status) else {
+        return;
+    };
+    let started_at = meta.subtask_started_at_ms.unwrap_or(meta.updated_at_ms);
+    registry.upsert(subtask_activity(
+        task_id,
+        meta.id,
+        meta.parent_id,
+        subtask_status_to_background(status),
+        started_at,
+        meta.subtask_finished_at_ms,
+        meta.subtask_failure
+            .as_ref()
+            .and_then(|value| {
+                serde_json::from_value::<agena_failure::UserProblem>(value.clone()).ok()
+            })
+            .map(|failure| failure.user.fallback.clone()),
+        meta.subtask_failure.as_ref().and_then(|value| {
+            serde_json::from_value::<agena_failure::UserProblem>(value.clone()).ok()
+        }),
+    ));
 }
 
 /// Shell log reader: translates [`crate::MonitorRead`] into the unified

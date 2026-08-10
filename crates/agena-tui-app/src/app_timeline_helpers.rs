@@ -6,58 +6,45 @@ pub(crate) fn format_timestamp(timestamp: DateTime<Utc>) -> String {
         .to_string()
 }
 
-/// Build the terminal item from Runtime's presentation projection. The UI
-/// localizes stable labels but never deserializes a generic event payload back
-/// into Runtime's concrete event envelope.
+/// Build the terminal item from one ordered v2 session part.
 pub(crate) fn build_timeline_item(
     i18n: &I18n,
-    record: &agena_runtime::RuntimeTimelineEvent,
+    record: &agena_tui_backend::SessionTimelineEntry,
 ) -> TimelineItem {
-    let event_type = ui_text::t(i18n, record.type_key.as_str());
-    let summary = if record.summary.trim().is_empty() {
-        format!("#{}  {}", record.meta.seq_global, event_type)
-    } else {
-        format!(
-            "#{}  {}  {}",
-            record.meta.seq_global, event_type, record.summary
-        )
-    };
+    let label = record
+        .summary
+        .as_deref()
+        .filter(|summary| !summary.trim().is_empty())
+        .unwrap_or(record.kind.as_str());
+    let summary = format!(
+        "#{}  {}/{}  {}  {}",
+        record.part_id, record.role, record.kind, record.state, label
+    );
+    let created_at = DateTime::<Utc>::from_timestamp_millis(record.created_at_ms)
+        .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
     let mut detail_lines = vec![
-        timeline_detail_labeled_line(
-            i18n,
-            "timeline-label-seq",
-            record.meta.seq_global.to_string(),
-        ),
-        timeline_detail_labeled_line(
-            i18n,
-            "timeline-label-created",
-            format_timestamp(record.meta.created_at),
-        ),
-        timeline_detail_labeled_line(i18n, "timeline-label-type", event_type),
-        timeline_detail_labeled_line(i18n, "timeline-label-event-id", record.meta.id.to_string()),
+        app_detail_labeled_line("Part ID", record.part_id.to_string()),
+        timeline_detail_labeled_line(i18n, "timeline-label-created", format_timestamp(created_at)),
+        app_detail_labeled_line("Kind", record.kind.clone()),
+        app_detail_labeled_line("Role", record.role.clone()),
+        app_detail_labeled_line("State", record.state.clone()),
+        app_detail_labeled_line("Revision", record.revision.to_string()),
     ];
-    if let Some(causation_id) = record.meta.causation_id {
-        detail_lines.push(timeline_detail_labeled_line(
-            i18n,
-            "timeline-label-causation-id",
-            causation_id.to_string(),
-        ));
+    if let Some(run_id) = record.run_id {
+        detail_lines.push(app_detail_labeled_line("Run", run_id.to_string()));
     }
-    if let Some(correlation_id) = record.meta.correlation_id {
-        detail_lines.push(timeline_detail_labeled_line(
-            i18n,
-            "timeline-label-correlation-id",
-            correlation_id.to_string(),
+    if let Some(parent_part_id) = record.parent_part_id {
+        detail_lines.push(app_detail_labeled_line(
+            "Parent part",
+            parent_part_id.to_string(),
         ));
     }
     detail_lines.push(app_detail_plain_line(String::new()));
-    for line in &record.detail_lines {
-        detail_lines.push(timeline_detail_labeled_line(
-            i18n,
-            line.label.as_str(),
-            line.value.clone(),
-        ));
-    }
+    let body = record
+        .rendered_markdown
+        .clone()
+        .unwrap_or_else(|| serde_json::to_string_pretty(&record.content).unwrap_or_default());
+    detail_lines.push(app_detail_plain_line(body.clone()));
     let detail_document =
         build_detail_document(detail_lines.as_slice(), &DetailTextSpec::label_width(16));
     TimelineItem {
@@ -65,9 +52,9 @@ pub(crate) fn build_timeline_item(
         detail_body: detail_document.text,
         search_text: format!(
             "{} {} {}",
-            record.search_text,
+            body.to_ascii_lowercase(),
             detail_document.plain.to_ascii_lowercase(),
-            record.kind.to_ascii_lowercase(),
+            record.kind.to_ascii_lowercase()
         ),
     }
 }

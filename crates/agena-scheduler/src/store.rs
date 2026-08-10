@@ -4,15 +4,15 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait};
 use uuid::Uuid;
 
 use crate::job::{ScheduledJob, SchedulerHistoryEntry};
 
 /// The global audit ledger is deliberately bounded independently from the
 /// 50-record working history embedded in every retained job.  This protects
-/// the shared SQLite database from unbounded scheduler growth while retaining
-/// a useful cross-job, post-deletion diagnostic/export window.
+/// the dedicated scheduler database from unbounded scheduler growth while
+/// retaining a useful cross-job, post-deletion diagnostic/export window.
 pub const MAX_RETAINED_HISTORY_ENTRIES: usize = 1_000;
 
 #[async_trait::async_trait]
@@ -22,6 +22,12 @@ pub trait JobStore: Send + Sync {
     async fn remove(&self, id: Uuid) -> bool;
     async fn list(&self) -> Vec<ScheduledJob>;
     async fn get(&self, id: Uuid) -> Option<ScheduledJob>;
+    /// Return only jobs that are due at `now_ms`, filtering in the store (SQL)
+    /// instead of decoding every job JSON. Mirrors `ScheduledJob::due`:
+    /// paused/completed and currently-claimed (`delivery_key IS NOT NULL`)
+    /// jobs are excluded; a job is due via `retry_at_ms` when set, else via
+    /// `next_fire_at_ms`.
+    async fn list_due(&self, now_ms: i64) -> Vec<ScheduledJob>;
     /// Optimistically replace `id`'s row only if it still holds
     /// `expected_next_fire_at_ms` (in milliseconds, as read by the caller).
     /// Returns `false` when the row was changed concurrently, so a caller can
@@ -66,8 +72,8 @@ pub struct InMemoryJobStore {
     history: Arc<RwLock<VecDeque<SchedulerHistoryEntry>>>,
 }
 
-/// Durable scheduler store backed by the shared Agena SQLite database. The
-/// schema is created by `agena-storage-sqlite::initialize_schema`.
+/// Durable scheduler store backed by the dedicated scheduler SQLite database.
+/// The schema is created by `crate::schema::initialize_schema`.
 #[derive(Clone)]
 pub struct SqliteJobStore {
     db: DatabaseConnection,
@@ -78,18 +84,41 @@ impl SqliteJobStore {
         Self { db }
     }
 
+    /// The derived hot-state columns for `job`, kept in sync with `job_json`
+    /// so the scheduler can filter due jobs in SQL without decoding JSON.
+    fn job_columns(job: &ScheduledJob) -> (Option<i64>, Option<i64>, i64, i64) {
+        (
+            job.next_fire_at.map(|value| value.timestamp_millis()),
+            job.retry_at.map(|value| value.timestamp_millis()),
+            i64::from(job.paused),
+            i64::from(job.completed),
+        )
+    }
+
     async fn upsert(&self, job: &ScheduledJob) -> Result<(), sea_orm::DbErr> {
         let json = serde_json::to_string(job)
             .map_err(|error| sea_orm::DbErr::Custom(format!("serialize scheduled job: {error}")))?;
-        let next_fire_at_ms = job.next_fire_at.map(|value| value.timestamp_millis());
+        let (next_fire_at_ms, retry_at_ms, paused, completed) = Self::job_columns(job);
+        // `delivery_key` / `claimed_at_ms` are deliberately left untouched on
+        // conflict: `put` is only used for brand-new jobs, and an in-flight
+        // claim belongs to whoever set it.
         self.db
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
-                "INSERT INTO agena_scheduler_jobs (id, job_json, next_fire_at_ms, updated_at_ms) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET job_json = excluded.job_json, next_fire_at_ms = excluded.next_fire_at_ms, updated_at_ms = excluded.updated_at_ms",
+                "INSERT INTO agena_scheduler_jobs \
+                 (id, job_json, next_fire_at_ms, retry_at_ms, paused, completed, updated_at_ms) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(id) DO UPDATE SET \
+                   job_json = excluded.job_json, next_fire_at_ms = excluded.next_fire_at_ms, \
+                   retry_at_ms = excluded.retry_at_ms, paused = excluded.paused, \
+                   completed = excluded.completed, updated_at_ms = excluded.updated_at_ms",
                 [
                     job.id.to_string().into(),
                     json.into(),
                     next_fire_at_ms.into(),
+                    retry_at_ms.into(),
+                    paused.into(),
+                    completed.into(),
                     chrono::Utc::now().timestamp_millis().into(),
                 ],
             ))
@@ -134,6 +163,15 @@ impl JobStore for InMemoryJobStore {
     }
     async fn get(&self, id: Uuid) -> Option<ScheduledJob> {
         self.inner.read().get(&id).cloned()
+    }
+    async fn list_due(&self, now_ms: i64) -> Vec<ScheduledJob> {
+        let now = chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now);
+        self.inner
+            .read()
+            .values()
+            .filter(|job| job.due(now))
+            .cloned()
+            .collect()
     }
     async fn replace(
         &self,
@@ -239,6 +277,31 @@ impl JobStore for SqliteJobStore {
         }
     }
 
+    async fn list_due(&self, now_ms: i64) -> Vec<ScheduledJob> {
+        // Mirrors `ScheduledJob::due(now)`: paused/completed jobs and jobs
+        // currently claimed (`delivery_key IS NOT NULL`) are never due; a job
+        // is due via `retry_at_ms` when set, otherwise via `next_fire_at_ms`.
+        match self
+            .db
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "SELECT job_json FROM agena_scheduler_jobs \
+                 WHERE delivery_key IS NULL AND paused = 0 AND completed = 0 \
+                   AND (retry_at_ms IS NOT NULL AND retry_at_ms <= ? \
+                        OR retry_at_ms IS NULL AND next_fire_at_ms IS NOT NULL AND next_fire_at_ms <= ?) \
+                 ORDER BY COALESCE(retry_at_ms, next_fire_at_ms) ASC, id",
+                [now_ms.into(), now_ms.into()],
+            ))
+            .await
+        {
+            Ok(rows) => rows.iter().filter_map(Self::decode).collect(),
+            Err(error) => {
+                tracing::error!(target: "agena_scheduler::store", %error, "failed to list due scheduled jobs");
+                Vec::new()
+            }
+        }
+    }
+
     async fn get(&self, id: Uuid) -> Option<ScheduledJob> {
         match self
             .db
@@ -270,17 +333,21 @@ impl JobStore for SqliteJobStore {
                 return false;
             }
         };
-        let next_fire_at_ms = job.next_fire_at.map(|value| value.timestamp_millis());
+        let (next_fire_at_ms, retry_at_ms, paused, completed) = Self::job_columns(&job);
         let result = self
             .db
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "UPDATE agena_scheduler_jobs \
-                 SET job_json = ?, next_fire_at_ms = ?, updated_at_ms = ? \
+                 SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, \
+                     completed = ?, updated_at_ms = ? \
                  WHERE id = ? AND next_fire_at_ms IS ?",
                 [
                     json.into(),
                     next_fire_at_ms.into(),
+                    retry_at_ms.into(),
+                    paused.into(),
+                    completed.into(),
                     chrono::Utc::now().timestamp_millis().into(),
                     id.to_string().into(),
                     expected_next_fire_at_ms.into(),
@@ -311,15 +378,22 @@ impl JobStore for SqliteJobStore {
                 return false;
             }
         };
+        // Claiming clears `next_fire_at_ms` (the fire is in flight); only the
+        // other hot-state columns are carried forward from the job.
+        let (_, retry_at_ms, paused, completed) = Self::job_columns(&job);
         let result = self
             .db
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "UPDATE agena_scheduler_jobs \
-                 SET job_json = ?, next_fire_at_ms = NULL, delivery_key = ?, claimed_at_ms = ?, updated_at_ms = ? \
+                 SET job_json = ?, next_fire_at_ms = NULL, retry_at_ms = ?, paused = ?, \
+                     completed = ?, delivery_key = ?, claimed_at_ms = ?, updated_at_ms = ? \
                  WHERE id = ? AND delivery_key IS NULL AND next_fire_at_ms IS ?",
                 [
                     json.into(),
+                    retry_at_ms.into(),
+                    paused.into(),
+                    completed.into(),
                     delivery_key.into(),
                     claimed_at_ms.into(),
                     chrono::Utc::now().timestamp_millis().into(),
@@ -351,16 +425,24 @@ impl JobStore for SqliteJobStore {
                 return false;
             }
         };
+        // The caller passes the authoritative post-finalization `next_fire_at`
+        // (it may differ from the job's transient state); derive only the
+        // other hot-state columns from the job itself.
+        let (_, retry_at_ms, paused, completed) = Self::job_columns(&job);
         let result = self
             .db
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "UPDATE agena_scheduler_jobs \
-                 SET job_json = ?, next_fire_at_ms = ?, delivery_key = NULL, claimed_at_ms = NULL, updated_at_ms = ? \
+                 SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, \
+                     completed = ?, delivery_key = NULL, claimed_at_ms = NULL, updated_at_ms = ? \
                  WHERE id = ? AND delivery_key = ?",
                 [
                     json.into(),
                     next_fire_at_ms.into(),
+                    retry_at_ms.into(),
+                    paused.into(),
+                    completed.into(),
                     chrono::Utc::now().timestamp_millis().into(),
                     id.to_string().into(),
                     delivery_key.into(),
@@ -385,28 +467,43 @@ impl JobStore for SqliteJobStore {
             }
         };
         let finished_at_ms = entry.record.finished_at.timestamp_millis();
-        if let Err(error) = self
-            .db
+        // Insert and prune in one transaction so the bounded ledger cannot be
+        // left over its cap by a crash between the two statements.
+        let txn = match self.db.begin().await {
+            Ok(txn) => txn,
+            Err(error) => {
+                tracing::error!(target: "agena_scheduler::store", job_id = %entry.job_id, %error, "failed to begin scheduler history write");
+                return;
+            }
+        };
+        let insert = txn
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "INSERT INTO agena_scheduler_history (job_id, run_json, finished_at_ms) VALUES (?, ?, ?)",
                 [entry.job_id.to_string().into(), json.into(), finished_at_ms.into()],
             ))
-            .await
-        {
-            tracing::error!(target: "agena_scheduler::store", job_id = %entry.job_id, %error, "failed to persist scheduler history entry");
-            return;
-        }
-        if let Err(error) = self
-            .db
+            .await;
+        let prune = txn
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
-                "DELETE FROM agena_scheduler_history WHERE id NOT IN (SELECT id FROM agena_scheduler_history ORDER BY finished_at_ms DESC, id DESC LIMIT ?)",
-                [((MAX_RETAINED_HISTORY_ENTRIES as i64).into())],
+                "DELETE FROM agena_scheduler_history \
+                 WHERE id IN (SELECT id FROM agena_scheduler_history \
+                              ORDER BY finished_at_ms ASC, id ASC LIMIT \
+                                (SELECT MAX(0, COUNT(*) - ?) FROM agena_scheduler_history))",
+                [(MAX_RETAINED_HISTORY_ENTRIES as i64).into()],
             ))
-            .await
-        {
-            tracing::error!(target: "agena_scheduler::store", %error, "failed to prune scheduler history ledger");
+            .await;
+        match (insert, prune, txn.commit().await) {
+            (Err(error), ..) => {
+                tracing::error!(target: "agena_scheduler::store", job_id = %entry.job_id, %error, "failed to persist scheduler history entry");
+            }
+            (_, Err(error), _) => {
+                tracing::error!(target: "agena_scheduler::store", %error, "failed to prune scheduler history ledger");
+            }
+            (_, _, Err(error)) => {
+                tracing::error!(target: "agena_scheduler::store", %error, "failed to commit scheduler history write");
+            }
+            _ => {}
         }
     }
 
@@ -466,27 +563,24 @@ fn history_from_iter<'a>(
 #[cfg(test)]
 mod tests {
     use chrono::{Duration, Utc};
-    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+    use sea_orm::Database;
 
     use super::*;
+    use crate::schema::initialize_schema;
 
-    #[tokio::test]
-    async fn sqlite_store_survives_store_reconstruction() {
+    async fn scheduler_database() -> DatabaseConnection {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("connect sqlite");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, updated_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler table");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, run_json JSON NOT NULL, finished_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler history table");
+        initialize_schema(&db)
+            .await
+            .expect("initialize scheduler schema");
+        db
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_survives_store_reconstruction() {
+        let db = scheduler_database().await;
 
         let first = SqliteJobStore::new(db.clone());
         let job = ScheduledJob::new_once(Utc::now() + Duration::minutes(5), "verify");
@@ -514,21 +608,7 @@ mod tests {
 
     #[tokio::test]
     async fn scheduler_wide_history_survives_job_deletion_and_store_reconstruction() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("connect sqlite");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, updated_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler table");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, run_json JSON NOT NULL, finished_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler history table");
+        let db = scheduler_database().await;
 
         let store = SqliteJobStore::new(db.clone());
         let job = ScheduledJob::new_once(Utc::now() + Duration::minutes(5), "audit me");
@@ -598,15 +678,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_claim_is_exclusive_across_connections() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("connect sqlite");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, updated_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler table with delivery key");
+        let db = scheduler_database().await;
 
         let store_a = SqliteJobStore::new(db.clone());
         let store_b = SqliteJobStore::new(db);
@@ -627,15 +699,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_finish_clears_delivery_and_requeues() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("connect sqlite");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, updated_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler table with delivery key");
+        let db = scheduler_database().await;
 
         let store = SqliteJobStore::new(db);
         let mut job = ScheduledJob::new_once(Utc::now() + Duration::minutes(5), "finish");
@@ -660,5 +724,58 @@ mod tests {
         assert!(store.finish(id, "delivery-1".to_owned(), job, next).await);
         let reloaded = store.get(id).await.expect("reload");
         assert!(reloaded.pending_delivery.is_none());
+    }
+
+    #[tokio::test]
+    async fn sqlite_list_due_filters_in_sql_mirroring_due() {
+        let db = scheduler_database().await;
+
+        let store = SqliteJobStore::new(db);
+        let now = Utc::now();
+        let now_ms = now.timestamp_millis();
+
+        // Paused job — never due even when its fire time is in the past.
+        let mut paused = ScheduledJob::new_once(now - Duration::seconds(1), "paused");
+        paused.pause();
+        // Completed (terminal) job — never due.
+        let mut completed = ScheduledJob::new_once(now - Duration::seconds(1), "completed");
+        let _ = completed.advance(now);
+        // Future job — not due.
+        let future = ScheduledJob::new_once(now + Duration::days(1), "future");
+        // Retry pending with retry_at in the past — due via retry_at_ms.
+        let mut retry = ScheduledJob::new_once(now + Duration::days(1), "retry");
+        retry.retry_at = Some(now - Duration::seconds(1));
+        retry.pending_delivery = Some(crate::JobDeliveryAttempt {
+            delivery_key: "retry-key".to_string(),
+            scheduled_for: now,
+            attempt: 2,
+            claimed_at: now,
+        });
+
+        for job in [&paused, &completed, &future, &retry] {
+            store.put(job.clone()).await;
+        }
+
+        // A due job that another process has claimed (delivery_key set) must be
+        // excluded; a fresh unclaimed due job must be included.
+        let due = ScheduledJob::new_once(now - Duration::seconds(1), "due");
+        let due_token = due.next_fire_at.map(|value| value.timestamp_millis());
+        store.put(due.clone()).await;
+        assert!(
+            store
+                .claim(due.id, due_token, due.clone(), "claimed".to_owned(), now_ms)
+                .await
+        );
+        let due2 = ScheduledJob::new_once(now - Duration::seconds(1), "due2");
+        store.put(due2.clone()).await;
+
+        let mut found: Vec<String> = store
+            .list_due(now_ms)
+            .await
+            .into_iter()
+            .map(|job| job.prompt)
+            .collect();
+        found.sort();
+        assert_eq!(found, vec!["due2".to_string(), "retry".to_string()]);
     }
 }

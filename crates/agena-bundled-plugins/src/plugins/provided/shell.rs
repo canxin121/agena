@@ -1,6 +1,6 @@
 //! `agena.shell` plugin: run shell commands and manage background processes.
 
-use crate::message::{ShellCommandInput, ShellMonitorInput, ShellToolInput};
+use crate::part::{ShellCommandInput, ShellMonitorInput, ShellToolInput};
 use crate::plugins::provided::router;
 use agena_domain::ProcessShell;
 use agena_macros::ToolInput;

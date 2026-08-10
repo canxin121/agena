@@ -9,7 +9,7 @@ use super::{
     TranscriptTextPosition, TranscriptViewport,
 };
 #[cfg(test)]
-use agena_api::resource::MessageResource;
+use agena_api::resource::RunResource;
 pub(crate) use agena_tui_session::session_search::{SessionSearchItem, SessionSearchOverlay};
 
 /// App-owned concrete effect map for the TUI-owned generic selection picker.
@@ -132,6 +132,49 @@ pub(crate) enum SessionNavigationCommand {
     },
 }
 
+/// A user-run boundary offered as a rewind target, derived from the v2 parts
+/// projection (one `run` marker with role `user`, plus its text parts).
+///
+/// The backend rewind contract (agena-api B1) still takes
+/// `agena_domain::TurnId`; the v2 part list carries only `part_id`. The TUI
+/// synthesizes a deterministic `TurnId` from the run marker's `part_id` (the
+/// v2 turn identity, database-design-v2.md §4.1.1) so navigation keys stay
+/// stable across refreshes. Bridging that id to the runtime's rewind target is
+/// the A3 migration's contract.
+#[derive(Debug, Clone)]
+pub(crate) struct RewindTarget {
+    pub(crate) turn_id: agena_domain::TurnId,
+    pub(crate) sequence: i64,
+    pub(crate) message_text: String,
+    pub(crate) created_at_ms: i64,
+}
+
+impl RewindTarget {
+    pub(crate) fn from_run(
+        marker: &agena_api::resource::SessionTranscriptPart,
+        sequence: i64,
+        text: &str,
+    ) -> Self {
+        Self {
+            turn_id: turn_id_for_run(marker.part_id),
+            sequence,
+            message_text: text.trim().to_owned(),
+            created_at_ms: marker.created_at_ms,
+        }
+    }
+}
+
+/// Deterministic `TurnId` for a run marker. The v2 part list carries only the
+/// run marker's `part_id` (the v2 turn identity); the backend rewind contract
+/// still takes a `TurnId`, so one is synthesized from the part id to keep
+/// navigation keys stable across refreshes. See [`RewindTarget`].
+fn turn_id_for_run(part_id: i64) -> agena_domain::TurnId {
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(b"agena-rw");
+    bytes[8..].copy_from_slice(&part_id.to_be_bytes());
+    agena_domain::TurnId(uuid::Uuid::from_bytes(bytes))
+}
+
 pub(crate) use agena_tui::model_chooser::{
     SessionModelChoiceItem, SessionModelChooserOverlay, SessionModelChooserPurpose,
     SessionModelIdentity,
@@ -200,12 +243,16 @@ pub(crate) struct TranscriptState {
     pub(crate) session_id: Option<i64>,
     pub(crate) session_title: String,
     #[cfg(test)]
-    pub(crate) messages: Vec<MessageResource>,
-    pub(crate) snapshot: agena_domain::TranscriptSnapshot,
-    /// Last failure observed per assistant reply. A continuation run clears
-    /// the runtime failure projection when the reply recovers, but the chat
-    /// keeps the last failure so the error Activity remains visible.
-    pub(crate) reply_failures: BTreeMap<agena_domain::AssistantReplyId, agena_failure::UserProblem>,
+    pub(crate) messages: Vec<RunResource>,
+    /// The session's v2 part transcript (ordered parts, including `run`
+    /// markers), mirroring `SessionExecutionResource.parts`. Replaces the v1
+    /// `TranscriptSnapshot` aggregate.
+    pub(crate) parts: Vec<agena_api::resource::SessionTranscriptPart>,
+    /// Last failure observed per run marker. A continuation run clears the
+    /// runtime failure projection when the reply recovers, but the chat keeps
+    /// the last failure so the error Activity remains visible. Keyed by the
+    /// run marker's `part_id`.
+    pub(crate) reply_failures: BTreeMap<i64, agena_failure::UserProblem>,
     pub(crate) pending_user_messages: Vec<PendingUserMessage>,
     pub(crate) refreshing: bool,
     pub(crate) state_loading: bool,

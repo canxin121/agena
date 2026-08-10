@@ -525,7 +525,7 @@ impl OpenAiTransport {
         let provider_id = ProviderId::new(provider_name.as_str());
         let model_name = ModelId::new(model);
         let conversation_items =
-            Self::realtime_conversation_items_for_messages(request.messages.as_slice())?;
+            Self::realtime_conversation_items_for_runs(request.turns.as_slice())?;
         let tool_plan = self.responses_tool_plan(request)?;
         let response_tools =
             (!tool_plan.tools.is_empty()).then_some(serde_json::Value::Array(tool_plan.tools));

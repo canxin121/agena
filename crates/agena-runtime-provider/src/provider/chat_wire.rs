@@ -1,7 +1,7 @@
 use agena_domain::*;
 use agena_domain::{AssistantReasoningField, Role};
 use agena_provider::{
-    CompletionFinishReason, CompletionInputMessage, CompletionInputPart, CompletionToolCall,
+    CompletionFinishReason, CompletionInputPart, CompletionInputRun, CompletionToolCall,
 };
 /// Shared wire types and message-conversion helpers for OpenAI-compatible
 /// Chat Completions API endpoints.
@@ -68,8 +68,41 @@ mod tests {
         apply_raw_assistant_reasoning_state, chat_usage_to_completion, merge_reasoning_details,
         parse_completion_response, reasoning_effort,
     };
-    use agena_domain::{Role, ThinkingRequest};
-    use agena_runtime_contracts::message::{Message, MessageProviderState, PartContent};
+    use agena_domain::ThinkingRequest;
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
+    use serde_json::{Value, json};
+
+    /// A minimal persisted assistant content part (R6-T5: projections consume
+    /// storage `Part` slices, so fixtures are built as parts, not v1 messages).
+    fn part(kind: &str, content: Value) -> Part {
+        Part {
+            part_id: 1,
+            kind: kind.to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content,
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(1),
+            origin_session_id: 1,
+            revision: 1,
+            started_at_ms: 0,
+            finished_at_ms: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            provider_state: None,
+        }
+    }
+
+    /// A run marker carrying the assistant's provider replay state.
+    fn run_marker(provider_state: Value) -> Part {
+        let mut marker = part("run", json!({ "run_kind": "assistant" }));
+        marker.run_id = None;
+        marker.provider_state = Some(provider_state);
+        marker
+    }
 
     fn request(parallel_tool_calls: Option<bool>) -> ChatCompletionRequest {
         ChatCompletionRequest {
@@ -394,21 +427,15 @@ mod tests {
             "text": "thinking",
             "signature": "provider-signature"
         }]);
-        let mut source = Message::prompt_parts(
-            Role::Assistant,
-            vec![
-                PartContent::reasoning_summary("thinking"),
-                PartContent::text("answer"),
-            ],
-        );
-        source.provider_state = Some(MessageProviderState {
-            openai_chat_reasoning_details: Some(raw_details.clone()),
-            copilot_reasoning_opaque: Some("opaque-state".to_owned()),
-            ..MessageProviderState::default()
-        });
+        let marker = run_marker(json!({
+            "openai_chat_reasoning_details": raw_details,
+            "copilot_reasoning_opaque": "opaque-state"
+        }));
+        let think = part("think", json!({ "summary": ["thinking"] }));
+        let text = part("text", json!({ "text": "answer" }));
         let mut target = ChatMessage::assistant(Some("answer".into()), None);
 
-        let source = crate::provider::project_completion_input(&source);
+        let source = crate::provider::project_completion_input(&[marker, think, text]);
         apply_raw_assistant_reasoning_state(&source, &mut target, "thinking");
 
         assert_eq!(target.reasoning_details, Some(raw_details));
@@ -422,26 +449,16 @@ mod tests {
         // `assistant_reasoning_text` was always empty and a `reasoning_content`
         // model received `"reasoning_content": ""`. Now the reasoning survives
         // projection into `CompletionInputPart::Reasoning` and is replayed.
-        let mut source = Message::prompt_parts(
-            Role::Assistant,
-            vec![
-                PartContent::reasoning_summary("think step by step"),
-                PartContent::text("visible answer"),
-            ],
-        );
-        source.provider_state = Some(MessageProviderState {
-            assistant_reasoning_field: Some(
-                agena_domain::AssistantReasoningField::ReasoningContent,
-            ),
-            ..MessageProviderState::default()
-        });
-        let source = crate::provider::project_completion_input(&source);
+        let marker = run_marker(json!({ "assistant_reasoning_field": "reasoning_content" }));
+        let think = part("think", json!({ "summary": ["think step by step"] }));
+        let text = part("text", json!({ "text": "visible answer" }));
+        let source = crate::provider::project_completion_input(&[marker, think, text]);
 
         let messages = super::request_to_chat_messages_with_assistant_reasoning_field(
             &agena_provider::CompletionRequest {
                 model: agena_domain::ModelId::new("test-model"),
                 system: None,
-                messages: vec![source.clone()],
+                turns: vec![source.clone()],
                 tool_api_functions: Vec::new(),
                 provider_native_tools: Default::default(),
                 disable_tools: false,
@@ -658,20 +675,20 @@ pub fn request_to_chat_messages_with_assistant_reasoning_field(
         messages.push(ChatMessage::system(system.clone()));
     }
 
-    for message in &request.messages {
-        let parts = wire_message::project(message);
-        match message.role {
+    for run in &request.turns {
+        let parts = wire_message::project(run);
+        match run.role {
             Role::System => messages.push(ChatMessage::system(session_text_lossy(
-                message,
+                run,
                 parts.as_slice(),
             ))),
             Role::User => messages.push(ChatMessage::user(message_content_value(
-                message,
+                run,
                 parts.as_slice(),
             ))),
             Role::Assistant => {
                 messages.extend(assistant_messages_from_parts(
-                    message,
+                    run,
                     &parts,
                     assistant_reasoning_field,
                 ));
@@ -692,14 +709,14 @@ pub fn backfill_assistant_reasoning_field_on_request(
         return;
     };
 
-    for message in &mut request.messages {
-        if !matches!(message.role, Role::Assistant) {
+    for run in &mut request.turns {
+        if !matches!(run.role, Role::Assistant) {
             continue;
         }
-        if assistant_reasoning_field_from_message_metadata(message).is_some() {
+        if assistant_reasoning_field_from_message_metadata(run).is_some() {
             continue;
         }
-        if !assistant_reasoning_interleaved && assistant_reasoning_text(message).trim().is_empty() {
+        if !assistant_reasoning_interleaved && assistant_reasoning_text(run).trim().is_empty() {
             continue;
         }
         let assistant_reasoning_field = match field {
@@ -707,44 +724,38 @@ pub fn backfill_assistant_reasoning_field_on_request(
             "reasoning_details" => AssistantReasoningField::ReasoningDetails,
             _ => continue,
         };
-        message.provider_state.assistant_reasoning_field = Some(assistant_reasoning_field);
+        run.provider_state.assistant_reasoning_field = Some(assistant_reasoning_field);
     }
 }
 
-fn session_text_lossy(
-    message: &CompletionInputMessage,
-    parts: &[wire_message::WirePart],
-) -> String {
+fn session_text_lossy(run: &CompletionInputRun, parts: &[wire_message::WirePart]) -> String {
     if parts.is_empty() {
-        message.as_text_lossy()
+        run.as_text_lossy()
     } else {
         wire_message::parts_text_lossy(parts)
     }
 }
 
-fn message_content_value(
-    message: &CompletionInputMessage,
-    parts: &[wire_message::WirePart],
-) -> Value {
+fn message_content_value(run: &CompletionInputRun, parts: &[wire_message::WirePart]) -> Value {
     if parts.is_empty() {
-        return Value::String(message.as_text_lossy());
+        return Value::String(run.as_text_lossy());
     }
     wire_message::parts_to_openai_content_array(parts)
 }
 
 fn assistant_messages_from_parts(
-    message: &CompletionInputMessage,
+    run: &CompletionInputRun,
     parts: &[wire_message::WirePart],
     assistant_reasoning_field: Option<&str>,
 ) -> Vec<ChatMessage> {
     let assistant_reasoning_field =
-        assistant_reasoning_field_from_message_metadata(message).or(assistant_reasoning_field);
-    let assistant_reasoning_text = assistant_reasoning_text(message);
+        assistant_reasoning_field_from_message_metadata(run).or(assistant_reasoning_field);
+    let assistant_reasoning_text = assistant_reasoning_text(run);
     let has_tool_result = parts
         .iter()
         .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }));
     if !has_tool_result {
-        let (content, tool_calls) = assistant_content_and_tool_calls(message, parts);
+        let (content, tool_calls) = assistant_content_and_tool_calls(run, parts);
         let mut chat_message =
             ChatMessage::assistant(content, (!tool_calls.is_empty()).then_some(tool_calls));
         apply_assistant_reasoning_field(
@@ -752,7 +763,7 @@ fn assistant_messages_from_parts(
             assistant_reasoning_field,
             assistant_reasoning_text.as_str(),
         );
-        apply_raw_assistant_reasoning_state(message, &mut chat_message, &assistant_reasoning_text);
+        apply_raw_assistant_reasoning_state(run, &mut chat_message, &assistant_reasoning_text);
         return vec![chat_message];
     }
 
@@ -766,8 +777,7 @@ fn assistant_messages_from_parts(
                 ..
             } if !tool_call_id.trim().is_empty() => {
                 if !buffered.is_empty() {
-                    let (content, tool_calls) =
-                        assistant_content_and_tool_calls(message, &buffered);
+                    let (content, tool_calls) = assistant_content_and_tool_calls(run, &buffered);
                     let mut chat_message = ChatMessage::assistant(
                         content,
                         (!tool_calls.is_empty()).then_some(tool_calls),
@@ -778,7 +788,7 @@ fn assistant_messages_from_parts(
                         assistant_reasoning_text.as_str(),
                     );
                     apply_raw_assistant_reasoning_state(
-                        message,
+                        run,
                         &mut chat_message,
                         &assistant_reasoning_text,
                     );
@@ -800,7 +810,7 @@ fn assistant_messages_from_parts(
     }
 
     if !buffered.is_empty() {
-        let (content, tool_calls) = assistant_content_and_tool_calls(message, &buffered);
+        let (content, tool_calls) = assistant_content_and_tool_calls(run, &buffered);
         let mut chat_message =
             ChatMessage::assistant(content, (!tool_calls.is_empty()).then_some(tool_calls));
         apply_assistant_reasoning_field(
@@ -808,7 +818,7 @@ fn assistant_messages_from_parts(
             assistant_reasoning_field,
             assistant_reasoning_text.as_str(),
         );
-        apply_raw_assistant_reasoning_state(message, &mut chat_message, &assistant_reasoning_text);
+        apply_raw_assistant_reasoning_state(run, &mut chat_message, &assistant_reasoning_text);
         messages.push(chat_message);
     }
 
@@ -832,9 +842,8 @@ fn tool_messages_from_parts(parts: &[wire_message::WirePart]) -> Vec<ChatMessage
         .collect()
 }
 
-fn assistant_reasoning_text(message: &CompletionInputMessage) -> String {
-    message
-        .parts
+fn assistant_reasoning_text(run: &CompletionInputRun) -> String {
+    run.parts
         .iter()
         .filter_map(|part| match part {
             CompletionInputPart::Reasoning { text } if !text.is_empty() => Some(text.as_str()),
@@ -844,9 +853,9 @@ fn assistant_reasoning_text(message: &CompletionInputMessage) -> String {
 }
 
 fn assistant_reasoning_field_from_message_metadata(
-    message: &CompletionInputMessage,
+    run: &CompletionInputRun,
 ) -> Option<&'static str> {
-    match message.provider_state.assistant_reasoning_field {
+    match run.provider_state.assistant_reasoning_field {
         Some(AssistantReasoningField::ReasoningContent) => Some("reasoning_content"),
         Some(AssistantReasoningField::ReasoningDetails) => Some("reasoning_details"),
         None => None,
@@ -885,7 +894,7 @@ fn apply_assistant_reasoning_field(
 }
 
 fn apply_raw_assistant_reasoning_state(
-    source: &CompletionInputMessage,
+    source: &CompletionInputRun,
     target: &mut ChatMessage,
     reasoning_text: &str,
 ) {
@@ -904,11 +913,11 @@ fn apply_raw_assistant_reasoning_state(
 }
 
 fn assistant_content_and_tool_calls(
-    message: &CompletionInputMessage,
+    run: &CompletionInputRun,
     parts: &[wire_message::WirePart],
 ) -> (Option<Value>, Vec<ChatToolCallRequest>) {
     if parts.is_empty() {
-        return (Some(Value::String(message.as_text_lossy())), Vec::new());
+        return (Some(Value::String(run.as_text_lossy())), Vec::new());
     }
 
     let mut text_chunks = Vec::new();

@@ -79,7 +79,7 @@ export type ChatSessionActionsInput = {
   sessionImportJsonl: Ref<string>
   sessionState: Ref<SessionExecutionResource | null>
   sessions: Ref<SessionResource[]>
-  syncEventStream: () => void
+  syncChangeStream: () => void
   prompt: (message: string, defaultValue?: string) => string | null
   userInputDrafts: Record<string, Record<string, string>>
   workspacePath: Ref<string>
@@ -349,7 +349,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       const goal = await deps.setSessionGoal({ sessionId, objective: trimmedObjective })
       patchCurrentGoal(goal)
       input.notify.notice(`Set ${formatGoalNotice(goal)}`)
-      input.syncEventStream()
+      input.syncChangeStream()
       await input.refreshConversation(false)
     } catch (err) {
       input.notify.error(userErrorMessage(err))
@@ -368,7 +368,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       const goal = await deps.completeSessionGoal(sessionId)
       patchCurrentGoal(goal)
       input.notify.notice(`Completed ${formatGoalNotice(goal)}`)
-      input.syncEventStream()
+      input.syncChangeStream()
       await input.refreshConversation(false)
     } catch (err) {
       input.notify.error(userErrorMessage(err))
@@ -387,7 +387,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await deps.clearSessionGoal(sessionId)
       patchCurrentGoal(null)
       input.notify.notice(`Cleared goal for session #${sessionId}.`)
-      input.syncEventStream()
+      input.syncChangeStream()
       await input.refreshConversation(false)
     } catch (err) {
       input.notify.error(userErrorMessage(err))
@@ -543,7 +543,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         input.skillReferences.value = []
         input.textArtifacts.value = []
       }
-      input.syncEventStream()
+      input.syncChangeStream()
       await input.refreshConversation(false)
       return true
     } catch (err) {
@@ -659,7 +659,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         sessionId,
         ...selectedRunOptions(),
       })
-      input.syncEventStream()
+      input.syncChangeStream()
       await input.refreshConversation(false)
     } catch (err) {
       input.notify.error(userErrorMessage(err))
@@ -681,7 +681,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         ...selectedRunOptions(),
       })
       input.notify.notice(`Compaction started for session #${sessionId}.`)
-      input.syncEventStream()
+      input.syncChangeStream()
       await input.refreshConversation(false)
     } catch (err) {
       input.notify.error(userErrorMessage(err))
@@ -724,7 +724,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         kind,
         scope,
       })
-      input.syncEventStream()
+      input.syncChangeStream()
       await input.refreshConversation(false)
     } catch (err) {
       input.notify.error(userErrorMessage(err))
@@ -758,7 +758,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         requestId,
         answers,
       })
-      input.syncEventStream()
+      input.syncChangeStream()
       await input.refreshConversation(false)
     } catch (err) {
       input.notify.error(userErrorMessage(err))
@@ -779,7 +779,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         requestId,
         reason: 'Cancelled from Agena',
       })
-      input.syncEventStream()
+      input.syncChangeStream()
       await input.refreshConversation(false)
     } catch (err) {
       input.notify.error(userErrorMessage(err))
@@ -792,14 +792,14 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     const sessionId = input.selectedSessionId.value
     if (!sessionId) return
     const rewoundMessage = input.messages.value.find((message) => message.id === messageId)
-    const turnId = rewoundMessage?.metadata.canonical_turn_id
-    if (!rewoundMessage || rewoundMessage.role !== 'user' || typeof turnId !== 'string') {
-      input.notify.error('Only canonical user turns can be rewound.')
+    const runPartId = rewoundMessage?.metadata.run_part_id
+    if (!rewoundMessage || rewoundMessage.role !== 'user' || typeof runPartId !== 'number') {
+      input.notify.error('Only canonical user runs can be rewound.')
       return
     }
     if (
       !input.confirm(
-        `Rewind session #${sessionId} to this user turn? The retracted turn will replace the current composer draft.`,
+        `Rewind session #${sessionId} to this user run? The retracted run will replace the current composer draft.`,
       )
     ) {
       return
@@ -811,14 +811,14 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       const messageText = rewindMessageComposerText(rewoundMessage)
       input.sessionState.value = await deps.rewindSession({
         sessionId,
-        turnId,
+        turnId: String(runPartId),
       })
       await input.refreshConversation(true)
       input.composer.value = messageText
       input.attachments.value = []
       input.skillReferences.value = []
       input.textArtifacts.value = []
-      input.notify.notice(`Restored canonical turn ${turnId} to the composer.`)
+      input.notify.notice(`Restored run #${runPartId} to the composer.`)
     } catch (err) {
       input.notify.error(userErrorMessage(err))
     } finally {

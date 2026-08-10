@@ -135,10 +135,85 @@ pub(crate) async fn connect_runtime_database(
     .await
 }
 
+/// Resolve the chat database URL exactly as `connect_runtime_database` does,
+/// so callers can decide whether the scheduler database should be file-backed.
+pub(crate) fn resolve_runtime_database_url(
+    database_url: Option<String>,
+    database_path: Option<std::path::PathBuf>,
+) -> Result<String, StorageConfigError> {
+    StorageConfig {
+        database_url,
+        database_path,
+    }
+    .resolve_url()
+}
+
+/// Conventional scheduler database location (`~/.agena/scheduler.db`), a
+/// sibling of the chat database's conventional path.
+fn scheduler_default_path() -> std::path::PathBuf {
+    let mut base = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    base.push("agena");
+    base.push("scheduler.db");
+    base
+}
+
+/// Resolve the scheduler database URL from (in priority order): an explicit
+/// URL or path, `AGENA_SCHEDULER_DATABASE_URL`/`AGENA_SCHEDULER_DATABASE_PATH`,
+/// or the conventional scheduler default path.
+pub(crate) fn resolve_scheduler_database_url(
+    database_url: Option<String>,
+    database_path: Option<std::path::PathBuf>,
+) -> Result<String, StorageConfigError> {
+    if let Some(url) = database_url.or_else(|| std::env::var("AGENA_SCHEDULER_DATABASE_URL").ok()) {
+        return Ok(url);
+    }
+    let path = database_path
+        .or_else(|| {
+            std::env::var("AGENA_SCHEDULER_DATABASE_PATH")
+                .ok()
+                .map(std::path::PathBuf::from)
+        })
+        .unwrap_or_else(scheduler_default_path);
+    Ok(format!("sqlite://{}?mode=rwc", path.display()))
+}
+
+/// Connect and initialize the dedicated scheduler SQLite database.
+///
+/// Mirrors `connect_runtime_database` but targets the scheduler schema and the
+/// scheduler database location, so the scheduler no longer shares the chat
+/// database. An injected connection is reused; initialization is idempotent.
+pub(crate) async fn connect_scheduler_database(
+    existing: Option<Arc<DatabaseConnection>>,
+    database_url: Option<String>,
+    database_path: Option<std::path::PathBuf>,
+    tracing: &RuntimeTracingConfiguration,
+) -> Result<Option<Arc<DatabaseConnection>>, RuntimeDatabaseCompositionError> {
+    connect_or_initialize(
+        existing,
+        true,
+        || async move {
+            let url = resolve_scheduler_database_url(database_url, database_path)?;
+            StorageConfig::ensure_parent(url.as_str())?;
+            connect_database(url.as_str(), tracing)
+                .await
+                .map_err(RuntimeDatabaseCompositionError::from)
+        },
+        |database| async move {
+            agena_scheduler::schema::initialize_schema(database.as_ref())
+                .await
+                .map_err(RuntimeDatabaseCompositionError::from)
+        },
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RuntimeTracingConfiguration, connect_runtime_database, runtime_env_filter};
-    use crate::DatabaseCompositionInputs;
+    use crate::{DatabaseCompositionInputs, connect_scheduler_database};
 
     #[test]
     fn default_filter_includes_database_and_adapter_directives() {
@@ -163,5 +238,57 @@ mod tests {
         .expect("compose in-memory runtime database");
 
         assert!(database.is_some());
+    }
+
+    #[tokio::test]
+    async fn scheduler_database_composition_initializes_its_own_schema() {
+        use sea_orm::{ConnectionTrait, Statement};
+        use std::path::PathBuf;
+
+        let dir =
+            std::env::temp_dir().join(format!("agena-scheduler-db-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let db_path = dir.join("scheduler.db");
+        let _ = std::fs::remove_file(&db_path);
+
+        let database = connect_scheduler_database(
+            None,
+            None,
+            Some(PathBuf::from(&db_path)),
+            &RuntimeTracingConfiguration::default(),
+        )
+        .await
+        .expect("compose scheduler database")
+        .expect("scheduler database present");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        for table in ["agena_scheduler_jobs", "agena_scheduler_history"] {
+            let count: i64 = database
+                .query_one(Statement::from_string(
+                    sea_orm::DatabaseBackend::Sqlite,
+                    format!(
+                        "SELECT COUNT(*) AS count FROM sqlite_master \
+                         WHERE type = 'table' AND name = '{table}'"
+                    ),
+                ))
+                .await
+                .expect("query table")
+                .expect("table row")
+                .try_get("", "count")
+                .expect("count value");
+            assert_eq!(count, 1, "scheduler table {table} must exist");
+        }
+        // The scheduler version space is independent from the chat schema.
+        let version: i64 = database
+            .query_one(Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                "PRAGMA user_version".to_owned(),
+            ))
+            .await
+            .expect("query user_version")
+            .expect("user_version row")
+            .try_get("", "user_version")
+            .expect("user_version value");
+        assert_eq!(version, agena_scheduler::schema::CURRENT_SCHEMA_VERSION);
     }
 }

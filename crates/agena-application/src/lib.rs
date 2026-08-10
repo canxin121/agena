@@ -15,14 +15,14 @@
 //! - [`dispatch`] — command/query dispatch used by the API server and TUI
 //!   backend.
 //! - [`dto`] — data-transfer objects for frontend resources.
-//! - [`service`], [`session`], [`provider_queries`], [`event_projection`] —
-//!   use-case services and projections.
+//! - [`service`], [`session`], [`provider_queries`] — use-case services and
+//!   projections. v2 dropped the global runtime event projection (D11):
+//!   chat history is per-session ordered parts, never a global event log.
 
 mod application;
 pub mod dispatch;
 pub mod dto;
 mod error;
-pub mod event_projection;
 pub mod pagination;
 pub mod provider_queries;
 pub mod service;

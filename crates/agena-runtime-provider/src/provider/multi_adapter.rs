@@ -759,12 +759,11 @@ mod tests {
     };
 
     use super::*;
-    use agena_domain::Role;
     use agena_plugin_host::{PluginKey, registry::RegisteredTool, sdk::ToolDefinition};
     use agena_provider::ProviderNativeToolRoute;
     use agena_provider::{CompletionFinishReason, CompletionToolCall};
-    use agena_runtime_contracts::message::Message;
     use agena_runtime_tools::tool::ToolApiBinding;
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
 
     struct ProviderNativePromptAdapter {
         model: ModelId,
@@ -985,9 +984,25 @@ mod tests {
         CompletionRequest {
             model: ModelId::new("model"),
             system: Some("base system".to_owned()),
-            messages: vec![crate::provider::project_completion_input(
-                &Message::prompt_text(Role::User, "use a tool"),
-            )],
+            turns: vec![crate::provider::project_completion_input(&[Part {
+                part_id: 1,
+                kind: "text".to_owned(),
+                role: PartRole::User,
+                state: PartState::Completed,
+                content: serde_json::json!({ "text": "use a tool" }),
+                summary: None,
+                visibility: PartVisibility::Both,
+                rendered_markdown: None,
+                parent_part_id: None,
+                run_id: Some(1),
+                origin_session_id: 1,
+                revision: 1,
+                started_at_ms: 0,
+                finished_at_ms: None,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+                provider_state: None,
+            }])],
             tool_api_functions: vec![tool_api_list_binding().definition()],
             provider_native_tools: Default::default(),
             disable_tools: false,

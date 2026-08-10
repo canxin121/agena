@@ -3,22 +3,16 @@
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-use crate::{EventKindTag, Scope};
+use crate::Scope;
 
 /// Client-chosen subscription id. Unique per connection. The server echoes
 /// this in every notification and the unsubscribe frame.
 pub type SubscriptionId = SmolStr;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Request to subscribe to runtime events.
+/// Request to subscribe to best-effort live changes.
 pub struct SubscribeRequest {
-    /// Required scope (Global / Workspace / Session).
+    /// Required scope (Global / Workspace / Session). Persisted catch-up is a
+    /// separate ordered-parts read; live notifications are never replayed.
     pub scope: Scope,
-    /// Optional whitelist of event kinds. `None` means "all kinds".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kinds: Option<std::collections::HashSet<EventKindTag>>,
-    /// Resume from a specific `seq_global`. Server replays from the persisted
-    /// store first, then switches to live broadcast.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub since_seq_global: Option<i64>,
 }

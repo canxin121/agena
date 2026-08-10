@@ -1,56 +1,101 @@
 use super::{
-    AppError, Arc, EventKind, ExecutionStatus, MessageCheckpoint, MessageMetadata, MessageSource,
-    ModelRef, PartContent, PathBuf, PersistedPermissionRule, ResolvedPendingTool, Role,
-    SessionCommit, SessionManager, SessionManagerState, SessionRunOptions, ToolError,
-    ToolInvocationExecution, build_message, custom_payload_value, managed_project_state_permission,
-    mode_request_override_for_adapter, mpsc, payload_tool_name_for_invocation,
+    AppError, Arc, ModelRef, PathBuf, PersistedPermissionRule, ResolvedPendingTool, SessionManager,
+    SessionManagerState, SessionRunOptions, ToolError, ToolInvocationExecution,
+    custom_payload_value, managed_project_state_permission, mode_request_override_for_adapter,
+    mpsc, payload_tool_name_for_invocation,
 };
 use crate::session::Session;
+use crate::session::store::new_part_from_content;
 use agena_domain::ToolInvocation;
+use agena_runtime_contracts::part_content::TypedContent;
+use agena_storage::store::{PartDelta, PartRole, PartState};
 
 impl SessionManager {
     pub(in crate::session::manager) async fn persist_session_changes(
         &self,
         session: Session,
-        checkpoints: Vec<MessageCheckpoint>,
-        client_events: Vec<EventKind>,
+        changed_part_ids: Vec<i64>,
         persisted_rule: Option<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         self.persist_session_changes_with_rules(
             session,
-            checkpoints,
-            client_events,
+            changed_part_ids,
             persisted_rule.into_iter().collect(),
             state,
         )
         .await
     }
 
+    /// Flush in-memory part mutations to their durable rows and merge the
+    /// authoritative engine rows back into the projection. v2 has no message
+    /// checkpoints: each changed part id becomes one `update_part` facade call
+    /// carrying the part's current content/state/summary. Run terminalization
+    /// (complete_run/cancel_run) is owned by the turn/tool paths, never here.
     pub(in crate::session::manager) async fn persist_session_changes_with_rules(
         &self,
-        session: Session,
-        checkpoints: Vec<MessageCheckpoint>,
-        client_events: Vec<EventKind>,
+        mut session: Session,
+        changed_part_ids: Vec<i64>,
         persisted_rules: Vec<PersistedPermissionRule>,
-        state: Arc<SessionManagerState>,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        // Rules may target any scope (session, workspace, or global), and a
-        // persisted batch may also delete rules. Invalidate every cached
-        // snapshot so no session keeps applying stale rules.
+        // Rules may target any scope (session, workspace, or global). Persist
+        // them through the kept permission-rule repository (design 19.1) and
+        // invalidate every cached snapshot so no session keeps applying stale
+        // rules. The session data itself flows through the sealed facade.
         self.invalidate_rule_snapshots();
-        let expected_version = Some(session.version);
-        Box::pin(self.store.persist(
-            SessionCommit {
-                session,
-                checkpoints,
-                client_events,
-                persisted_rules,
-                expected_version,
-            },
-            state.cache_policy(),
-        ))
-        .await
+        for rule in &persisted_rules {
+            self.permission_rules
+                .upsert(rule)
+                .await
+                .map_err(|error| AppError::Internal(format!("persist permission rule: {error}")))?;
+        }
+        if changed_part_ids.is_empty() {
+            return Ok(session);
+        }
+        let session_id = session.id;
+        let mut updated_parts = Vec::with_capacity(changed_part_ids.len());
+        for part_id in changed_part_ids {
+            let part = session
+                .parts()
+                .iter()
+                .find(|part| part.part_id == part_id)
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "part {part_id} missing from the session {session_id} projection while persisting"
+                    ))
+                })?;
+            let updated = self
+                .store
+                .update_part(
+                    session_id,
+                    part_id,
+                    PartDelta {
+                        state: Some(part.state),
+                        content: Some(part.content.clone()),
+                        content_text_delta: None,
+                        summary: part.summary.clone(),
+                        rendered_markdown: part.rendered_markdown.clone(),
+                        provider_state: part.provider_state.clone(),
+                        finished_at_ms: part.finished_at_ms,
+                    },
+                )
+                .await?;
+            updated_parts.push(updated);
+        }
+        let mut parts = session.parts().to_vec();
+        for updated in updated_parts {
+            if let Some(existing) = parts
+                .iter_mut()
+                .find(|part| part.part_id == updated.part_id)
+            {
+                *existing = updated;
+            } else {
+                parts.push(updated);
+            }
+        }
+        session.install_projected_parts(parts);
+        Ok(session)
     }
 
     pub(in crate::session::manager) fn apply_run_selection_to_session(
@@ -474,14 +519,14 @@ impl SessionManager {
     }
 
     /// Drain every pending steer message (non-blocking) and append each as
-    /// a User message before the next model run. A user steer becomes the
-    /// next input the model sees.
+    /// a User run (marker + content parts) before the next model run. A user
+    /// steer becomes the next input the model sees.
     pub(in crate::session::manager) async fn drain_steer_input(
         &self,
         mut session: Session,
-        steer_rx: &mut mpsc::UnboundedReceiver<Vec<PartContent>>,
-        options: &SessionRunOptions,
-        state: Arc<SessionManagerState>,
+        steer_rx: &mut mpsc::UnboundedReceiver<Vec<TypedContent>>,
+        _options: &SessionRunOptions,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         loop {
             let parts = match steer_rx.try_recv() {
@@ -490,32 +535,22 @@ impl SessionManager {
                     return Ok(session);
                 }
             };
-            let ids = self.store.reserve_message_ids(parts.len()).await?;
-            let steer_turn_id = ids.message_id;
-            let user_message = build_message(
-                ids,
-                Role::User,
-                ExecutionStatus::Completed,
-                parts,
-                MessageMetadata {
-                    source: MessageSource::User,
-                    idempotency_key: None,
-                    model_turn_id: Some(steer_turn_id),
-                    parent_message_id: session.last_conversation_message().map(|m| m.id),
-                    generated_by_call_id: None,
-                    externally_initiated_tool: false,
-                    model_provider_id: options.model.provider_id.to_string(),
-                    model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
-                    model_id: options.model.model_id.to_string(),
-                    model_thinking_mode: options.thinking_mode.clone(),
-                    model_speed_mode: options.speed_mode.clone(),
-                },
-            )?;
-            session.messages.push(user_message.clone());
-            let checkpoint = MessageCheckpoint::all(&user_message);
-            session = self
-                .persist_session_changes(session, vec![checkpoint], Vec::new(), None, state.clone())
+            let new_parts = parts
+                .iter()
+                .map(|content| {
+                    new_part_from_content("text", PartRole::User, content, PartState::Completed)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let outcome = self
+                .store
+                .submit_user_run(session.id, new_parts, None)
                 .await?;
+            if !outcome.created {
+                continue;
+            }
+            let mut projected = session.parts().to_vec();
+            projected.extend(outcome.parts);
+            session.install_projected_parts(projected);
         }
     }
 

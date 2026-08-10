@@ -5,9 +5,9 @@ use crate::error::AgenaProcessError;
 use agena_api_server::jsonrpc::protocol::{
     CancelRunParams, CancelRunResult, CreateSessionParams, CreateSessionResult,
     ListSessionsParams as AppListSessionsParams, ListSessionsResult as AppListSessionsResult,
-    MessageItem, PermissionDecision as AppPermissionDecision, PermissionRememberScope,
-    PermissionReplyParams, PermissionReplyResult, ReadMessagesParams, ReadMessagesResult,
-    SessionListItem, SubmitMessageParams, SubmitMessageResult,
+    PermissionDecision as AppPermissionDecision, PermissionRememberScope, PermissionReplyParams,
+    PermissionReplyResult, ReadPartsParams, ReadPartsResult, SessionListItem, SubmitRunParams,
+    SubmitRunResult,
 };
 use agena_api_server::jsonrpc::{self, AppServerError};
 use agena_cli::{AgenaCli, RpcServerRequest, RpcServerTransport};
@@ -17,7 +17,7 @@ use agena_runtime::bootstrap_application_services;
 use agena_runtime::{
     RuntimeApplicationServices, SessionCreateRequest, SessionExecutionCommandService,
     SessionExecutionControl, SessionPermissionReplyRequest, SessionQueryService, SessionRunOptions,
-    SessionUserMessageRequest,
+    SessionUserRunRequest,
 };
 use async_trait::async_trait;
 use clap::Parser;
@@ -80,6 +80,10 @@ async fn session_runtime_with_workspace(
         config_override_expressions: request.config_override_expressions.clone(),
         database_url: request.database_url.clone(),
         database_path: request.database_path.clone(),
+        // Scheduler database follows its conventional location (override via
+        // AGENA_SCHEDULER_DATABASE_URL/PATH).
+        scheduler_database_url: None,
+        scheduler_database_path: None,
         initialize_schema: true,
         tracing_reload_handle: None,
     })
@@ -120,8 +124,8 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
 
     async fn submit_message(
         &self,
-        params: SubmitMessageParams,
-    ) -> Result<SubmitMessageResult, AppServerError> {
+        params: SubmitRunParams,
+    ) -> Result<SubmitRunResult, AppServerError> {
         let commands = app_session_commands(&self.services)?;
         let options = resolve_run_options(
             self.services.provider_catalog.as_ref(),
@@ -131,7 +135,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         )
         .map_err(app_backend_error)?;
         let outcome = commands
-            .submit_user_message(SessionUserMessageRequest::new(
+            .submit_user_run(SessionUserRunRequest::new(
                 params.session_id,
                 options,
                 agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
@@ -146,13 +150,23 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             .await
             .map_err(app_backend_error)?;
         let messages = queries
-            .list_projected_messages(outcome.session_id, true)
+            .list_projected_runs(outcome.session_id, true)
             .await
             .map_err(app_backend_error)?;
-        Ok(SubmitMessageResult {
+        // The v2 run result: the newest run's marker plus its content parts.
+        // The just-submitted run is the last projected message (its id is the
+        // run marker part id).
+        let run_id = messages.last().map(|message| message.id);
+        let parts = match messages.last() {
+            Some(message) => agena_application::session::project_session_transcript(
+                std::slice::from_ref(message),
+            ),
+            None => Vec::new(),
+        };
+        Ok(SubmitRunResult {
             session_id: presentation.id,
-            status: format!("{:?}", presentation.workflow_state).to_ascii_lowercase(),
-            text: last_assistant_text_from_projection(messages),
+            run_id,
+            parts,
         })
     }
 
@@ -203,6 +217,9 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
                 offset: params.offset,
                 limit: params.limit,
                 include_subagents: false,
+                parent_id: None,
+                roots_only: false,
+                search: None,
             })
             .await
             .map_err(app_backend_error)?;
@@ -221,23 +238,14 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
 
     async fn read_messages(
         &self,
-        params: ReadMessagesParams,
-    ) -> Result<ReadMessagesResult, AppServerError> {
+        params: ReadPartsParams,
+    ) -> Result<ReadPartsResult, AppServerError> {
         let messages = app_session_queries(&self.services)?
-            .list_projected_messages(params.session_id, true)
+            .list_projected_runs(params.session_id, true)
             .await
             .map_err(app_backend_error)?;
-        Ok(ReadMessagesResult {
-            messages: messages
-                .into_iter()
-                .map(|message| MessageItem {
-                    message_id: message.id,
-                    role: message.role.to_string(),
-                    status: message.state.to_string(),
-                    text: projected_message_visible_text(&message),
-                    created_at: message.created_at,
-                })
-                .collect(),
+        Ok(ReadPartsResult {
+            parts: agena_application::session::project_session_transcript(&messages),
         })
     }
 
@@ -341,32 +349,6 @@ fn default_model(
         .default_model()
         .map_err(|error| AgenaProcessError::Configuration(error.to_string()))?
         .ok_or_else(|| AgenaProcessError::Configuration("no providers configured".to_owned()))
-}
-
-fn last_assistant_text_from_projection(
-    messages: Vec<agena_runtime::SessionProjectedMessage>,
-) -> Option<String> {
-    messages
-        .iter()
-        .rev()
-        .find(|message| message.role == agena_domain::Role::Assistant)
-        .map(projected_message_visible_text)
-        .filter(|text| !text.trim().is_empty())
-}
-
-fn projected_message_visible_text(message: &agena_runtime::SessionProjectedMessage) -> String {
-    message
-        .parts
-        .iter()
-        .filter_map(|part| match part.detail.as_ref() {
-            Some(agena_runtime::SessionProjectedPartDetail::Text { text, .. }) => {
-                Some(text.clone())
-            }
-            _ => part.summary.clone(),
-        })
-        .filter(|text| !text.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn session_storage_error() -> AgenaProcessError {

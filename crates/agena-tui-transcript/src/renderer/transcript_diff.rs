@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ApplyPatchDisplay {
-    pub(super) changes: Vec<agena_api::message_part::FileChangeRecordResource>,
+    pub(super) changes: Vec<agena_api::part::FileChangeRecordResource>,
     pub(super) diff: String,
 }
 
@@ -14,9 +14,9 @@ pub(crate) struct DiffStats {
 }
 
 pub(crate) fn apply_patch_details(
-    details: &agena_api::message_part::ToolOutputResource,
+    details: &agena_api::part::ToolOutputResource,
 ) -> Option<ApplyPatchDisplay> {
-    let changes: Vec<agena_api::message_part::FileChangeRecordResource> = details
+    let changes: Vec<agena_api::part::FileChangeRecordResource> = details
         .payload
         .get("changes")
         .cloned()
@@ -25,7 +25,7 @@ pub(crate) fn apply_patch_details(
     let diff = details
         .payload
         .get("diff")
-        .and_then(agena_api::message_part::StructuredValueResource::as_text)
+        .and_then(agena_api::part::StructuredValueResource::as_text)
         .map(str::trim)
         .unwrap_or_default()
         .to_string();
@@ -39,7 +39,7 @@ pub(crate) fn apply_patch_details(
 
 pub(crate) fn diff_stats(
     diff: &str,
-    changes: Option<&[agena_api::message_part::FileChangeRecordResource]>,
+    changes: Option<&[agena_api::part::FileChangeRecordResource]>,
 ) -> DiffStats {
     let mut file_count = diff
         .lines()
@@ -62,7 +62,7 @@ pub(crate) fn diff_stats(
         file_count = file_count.max(changes.len());
         changes
             .iter()
-            .filter(|change| change.kind == agena_api::message_part::FileChangeKindResource::Moved)
+            .filter(|change| change.kind == agena_api::part::FileChangeKindResource::Moved)
             .count()
     } else {
         0
@@ -77,9 +77,9 @@ pub(crate) fn diff_stats(
 }
 
 pub(crate) fn file_change_display_path(
-    change: &agena_api::message_part::FileChangeRecordResource,
+    change: &agena_api::part::FileChangeRecordResource,
 ) -> String {
-    if change.kind == agena_api::message_part::FileChangeKindResource::Moved {
+    if change.kind == agena_api::part::FileChangeKindResource::Moved {
         change
             .from_path
             .as_ref()
@@ -90,19 +90,17 @@ pub(crate) fn file_change_display_path(
     }
 }
 
-pub(crate) fn file_change_marker(
-    kind: agena_api::message_part::FileChangeKindResource,
-) -> &'static str {
+pub(crate) fn file_change_marker(kind: agena_api::part::FileChangeKindResource) -> &'static str {
     match kind {
-        agena_api::message_part::FileChangeKindResource::Added => "A",
-        agena_api::message_part::FileChangeKindResource::Updated => "M",
-        agena_api::message_part::FileChangeKindResource::Deleted => "D",
-        agena_api::message_part::FileChangeKindResource::Moved => "R",
+        agena_api::part::FileChangeKindResource::Added => "A",
+        agena_api::part::FileChangeKindResource::Updated => "M",
+        agena_api::part::FileChangeKindResource::Deleted => "D",
+        agena_api::part::FileChangeKindResource::Moved => "R",
     }
 }
 
 pub(crate) fn file_change_list_item_text(
-    change: &agena_api::message_part::FileChangeRecordResource,
+    change: &agena_api::part::FileChangeRecordResource,
     i18n: &I18n,
 ) -> String {
     format!(
@@ -110,14 +108,12 @@ pub(crate) fn file_change_list_item_text(
         file_change_marker(change.kind),
         file_change_display_path(change),
         match change.kind {
-            agena_api::message_part::FileChangeKindResource::Added =>
-                ui_text::t(i18n, "file-change-added"),
-            agena_api::message_part::FileChangeKindResource::Updated =>
+            agena_api::part::FileChangeKindResource::Added => ui_text::t(i18n, "file-change-added"),
+            agena_api::part::FileChangeKindResource::Updated =>
                 ui_text::t(i18n, "file-change-updated"),
-            agena_api::message_part::FileChangeKindResource::Deleted =>
+            agena_api::part::FileChangeKindResource::Deleted =>
                 ui_text::t(i18n, "file-change-deleted"),
-            agena_api::message_part::FileChangeKindResource::Moved =>
-                ui_text::t(i18n, "file-change-moved"),
+            agena_api::part::FileChangeKindResource::Moved => ui_text::t(i18n, "file-change-moved"),
         }
     )
 }

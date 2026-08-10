@@ -1,48 +1,39 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
+    path::PathBuf,
     sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock},
     time::Duration,
 };
 
 use arc_swap::ArcSwap;
 use chrono::Utc;
-use sea_orm::{ConnectionTrait, Statement};
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use crate::AppError;
-use crate::event::EventKind;
-use crate::message::{
-    AttachmentItem, InteractiveRequestPart, Message, MessageMetadata, MessagePart, OperationPart,
-    PartContent, RequestPart,
-};
+use crate::part::{AttachmentItem, AttachmentKind, AttachmentSource, OperationPart};
 use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
+use agena_domain::ExecutionStatus;
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
 use agena_domain::UserInputReply;
 use agena_domain::{
-    DecisionTraceStep, ExecutionFinishedEvent, ExecutionOutcome, ExecutionSource,
-    ExecutionStartedEvent, FinishReason, PermissionAction, PermissionMode, PermissionRepliedEvent,
-    PermissionReplyKind, PermissionScope, Role, RunAbortReason, TimeRange, UserInputReplyKind,
+    DecisionTraceStep, ExecutionOutcome, ExecutionSource, PermissionAction, PermissionMode,
+    PermissionReplyKind, PermissionScope, RunAbortReason, TimeRange, UserInputReplyKind,
 };
-use agena_domain::{ExecutionStatus, MessageSource};
 pub(crate) use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
+use agena_runtime_contracts::part_content::{TextContent, TypedContent};
 use agena_storage::PersistedPermissionRule;
 use agena_tool::PreparedShellCommand;
-use std::path::PathBuf;
 
-use super::cache::SessionCachePolicy;
-use super::history::{
-    MessageId as HistoryMessageId, RunAborted, RunCompleted, RunId as HistoryRunId, RunStarted,
-    ToolCallCompleted, ToolCallId as HistoryToolCallId, TranscriptContent, UserMessageAppended,
-};
 use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPendingTool};
 use super::processor::{SessionRunRequest, SessionRunTermination};
 use super::prompt_window::PromptRequestOptions;
-use super::store::{MessageCheckpoint, ReservedMessageIds, SessionCommit, SessionStore};
+use super::store::StoreAdapter;
 use super::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
 use crate::session::{Session, SessionProcessor};
 use agena_domain::{SessionListRequest, SessionSummary, UsageStats, UsageStatsQuery};
+use agena_storage::store::PartRole;
 
 use agena_runtime::RuntimeSessionManagerConfig;
 
@@ -54,7 +45,7 @@ use agena_runtime::{
 fn completion_request(
     options: &SessionRunOptions,
     system: Option<String>,
-    messages: Vec<Message>,
+    turns: Vec<agena_provider::CompletionInputRun>,
     tool_api_functions: Vec<crate::tool::ToolApiBinding>,
     prompt_cache_key: Option<String>,
     previous_response_id: Option<String>,
@@ -63,10 +54,7 @@ fn completion_request(
     agena_runtime::build_completion_request(agena_runtime::CompletionRequestInputs {
         model: options.model.model_id.clone(),
         system,
-        messages: messages
-            .iter()
-            .map(crate::provider::project_completion_input)
-            .collect(),
+        turns,
         tool_api_functions: tool_api_functions
             .into_iter()
             .map(|binding| binding.definition())
@@ -85,14 +73,14 @@ fn completion_request(
 pub(super) use agena_runtime::merge_system_prompts;
 
 #[derive(Debug, Clone)]
-struct SessionUserMessageRequest {
+struct SessionUserRunRequest {
     run: SessionExecutionRequest,
     parts: Vec<UserInputPart>,
     idempotency_key: Option<String>,
 }
 
-impl SessionUserMessageRequest {
-    fn new(session_id: i64, options: SessionRunOptions, parts: Vec<PartContent>) -> Self {
+impl SessionUserRunRequest {
+    fn new(session_id: i64, options: SessionRunOptions, parts: Vec<TypedContent>) -> Self {
         Self {
             run: SessionExecutionRequest::new(session_id, options),
             parts: parts
@@ -112,16 +100,12 @@ impl SessionUserMessageRequest {
 
 #[derive(Debug, Clone)]
 struct UserInputPart {
-    activity_id: Option<agena_domain::ActivityId>,
-    content: PartContent,
+    content: TypedContent,
 }
 
 impl UserInputPart {
-    fn text_or_runtime(content: PartContent) -> Self {
-        Self {
-            activity_id: None,
-            content,
-        }
+    fn text_or_runtime(content: TypedContent) -> Self {
+        Self { content }
     }
 }
 
@@ -214,9 +198,6 @@ struct ResolvedPendingTool {
     prepared_shell_command: Option<PreparedShellCommand>,
     lifecycle: TimeRange,
     session_runtime: crate::session::SessionRuntimeState,
-    /// The tool Activity's UUID, resolved once from the session so blocking
-    /// shell sinks can route real-time output to the correct Activity.
-    activity_id: Option<agena_domain::ActivityId>,
 }
 
 struct PendingHostUserInput {
@@ -276,7 +257,7 @@ struct StableRunContext {
     active_model_turn_id: Option<i64>,
     state: Arc<SessionManagerState>,
     control: Arc<ExecutionControl>,
-    steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
+    steer_rx: mpsc::UnboundedReceiver<Vec<TypedContent>>,
     usage_budget: Option<SubtaskUsageBudget>,
 }
 
@@ -390,6 +371,7 @@ mod runs;
 mod session_prompt;
 mod sessions;
 mod stats;
+#[cfg(test)]
 mod tests;
 
 use self::helpers::*;
@@ -438,17 +420,22 @@ impl SessionManagerState {
             auto_projection,
         }
     }
-
-    fn cache_policy(&self) -> SessionCachePolicy {
-        self.config.cache_policy()
-    }
 }
 
 /// Manager of sessions: creation, runs, replies, and lifecycle.
 pub struct SessionManager {
-    store: Arc<SessionStore>,
-    publisher: Arc<crate::event::EventPublisher>,
-    bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>>,
+    /// The v2 sealed data facade (14.1). All chat data — creation, runs,
+    /// parts, state, exports — flows through this adapter; the manager never
+    /// touches raw storage or leases (15.6).
+    store: Arc<StoreAdapter>,
+    /// Kept infrastructure (design 19.1): permission-rule persistence ports.
+    permission_rules: Arc<dyn agena_storage::PermissionRuleRepository>,
+    permission_rule_writer:
+        Arc<dyn agena_storage::PermissionRuleTransactionWriter<sea_orm::DatabaseTransaction>>,
+    /// Workspace identity resolution (kept infra, 19.1). Resolved lazily from
+    /// the tool executor's workspace root so the manager stays backend-neutral.
+    workspace_repository: Arc<dyn agena_storage::WorkspaceRepository>,
+    workspace_id: tokio::sync::OnceCell<i64>,
     execution: ArcSwap<SessionManagerState>,
     execution_registry: Arc<ExecutionRegistry>,
     reply_session_locks: Arc<Mutex<HashMap<i64, Arc<Mutex<()>>>>>,
@@ -567,21 +554,21 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
         ))
     }
 
-    async fn submit_user_message(
+    async fn submit_user_run(
         &self,
-        request: agena_runtime::SessionUserMessageRequest,
+        request: agena_runtime::SessionUserRunRequest,
     ) -> Result<
         agena_runtime::SessionExecutionCommandOutcome,
         agena_runtime::SessionExecutionCommandError,
     > {
-        let agena_runtime::SessionUserMessageRequest {
+        let agena_runtime::SessionUserRunRequest {
             run,
             document,
             idempotency_key,
         } = request;
         let parts = part_contents_from_composer_document(document)
             .map_err(session_execution_command_error)?;
-        let mut request = SessionUserMessageRequest {
+        let mut request = SessionUserRunRequest {
             run,
             parts,
             idempotency_key: None,
@@ -768,80 +755,82 @@ fn part_contents_from_composer_document(
         .into_iter()
         .map(|node| match node {
             ComposerNode::Text { text } => Ok(UserInputPart {
-                activity_id: None,
-                content: PartContent::text(text),
+                content: TypedContent::Text(TextContent {
+                    text,
+                    synthetic: false,
+                    extra: Default::default(),
+                }),
             }),
             ComposerNode::Activity { activity } => match activity.payload {
                 ActivityPayload::Resource(resource) => {
                     let kind = match resource.kind {
-                        ResourceKind::Image => crate::message::AttachmentKind::Image,
-                        ResourceKind::Audio => crate::message::AttachmentKind::Audio,
-                        ResourceKind::Video => crate::message::AttachmentKind::Video,
-                        ResourceKind::Pdf => crate::message::AttachmentKind::Pdf,
+                        ResourceKind::Image => AttachmentKind::Image,
+                        ResourceKind::Audio => AttachmentKind::Audio,
+                        ResourceKind::Video => AttachmentKind::Video,
+                        ResourceKind::Pdf => AttachmentKind::Pdf,
                         ResourceKind::File
                         | ResourceKind::Directory
                         | ResourceKind::Url
-                        | ResourceKind::Artifact => crate::message::AttachmentKind::File,
+                        | ResourceKind::Artifact => AttachmentKind::File,
                     };
                     let source = match resource.reference {
                         ResourceReference::Artifact { uri, .. } => {
-                            crate::message::AttachmentSource::FileId { file_id: uri }
+                            AttachmentSource::FileId { file_id: uri }
                         }
                         ResourceReference::WorkspacePath { path } => {
-                            crate::message::AttachmentSource::LocalPath { path }
+                            AttachmentSource::LocalPath { path }
                         }
-                        ResourceReference::Url { url } => {
-                            crate::message::AttachmentSource::Url { url }
-                        }
+                        ResourceReference::Url { url } => AttachmentSource::Url { url },
                         ResourceReference::ProviderFile { file_id, .. } => {
-                            crate::message::AttachmentSource::FileId { file_id }
+                            AttachmentSource::FileId { file_id }
                         }
                     };
                     Ok(UserInputPart {
-                        activity_id: Some(activity.id),
-                        content: PartContent::attachments(vec![AttachmentItem {
-                        kind,
-                        mime: resource.media_type.unwrap_or_else(|| {
-                            if resource.kind == ResourceKind::Directory {
-                                "inode/directory".to_owned()
-                            } else {
-                                String::new()
-                            }
-                        }),
-                        source,
-                        filename: Some(resource.name),
-                        title: None,
-                        size_bytes: resource.size_bytes,
-                        sha256: None,
-                        width: resource.width,
-                        height: resource.height,
-                        duration_ms: resource.duration_ms,
-                        page_count: resource.page_count,
-                        }]),
+                        content: TypedContent::FileRef(super::store::file_ref_from_attachment(
+                            &crate::part::AttachmentPart {
+                                attachments: vec![AttachmentItem {
+                                kind,
+                                mime: resource.media_type.unwrap_or_else(|| {
+                                    if resource.kind == ResourceKind::Directory {
+                                        "inode/directory".to_owned()
+                                    } else {
+                                        String::new()
+                                    }
+                                }),
+                                source,
+                                filename: Some(resource.name),
+                                title: None,
+                                size_bytes: resource.size_bytes,
+                                sha256: None,
+                                width: resource.width,
+                                height: resource.height,
+                                duration_ms: resource.duration_ms,
+                                page_count: resource.page_count,
+                                }],
+                            },
+                        )),
                     })
                 }
-                ActivityPayload::SkillReference(skill) => {
-                    Ok(UserInputPart {
-                        activity_id: Some(activity.id),
-                        content: PartContent::Activity(
-                            crate::message::RuntimeActivity::SkillReference(
-                                crate::message::SkillReferencePart {
-                                    skills: vec![crate::message::SkillReference {
-                            name: skill.name,
-                            description: skill.description,
-                            instructions: skill.instructions,
-                            content_hash: skill.content_hash,
-                            source: skill.source,
-                            aliases: skill.aliases,
-                                    }],
-                                },
-                            ),
-                        ),
-                    })
-                }
+                ActivityPayload::SkillReference(skill) => Ok(UserInputPart {
+                    content: TypedContent::SkillRef(super::store::skill_ref_from_reference(
+                        &crate::part::SkillReferencePart {
+                            skills: vec![crate::part::SkillReference {
+                                name: skill.name,
+                                description: skill.description,
+                                instructions: skill.instructions,
+                                content_hash: skill.content_hash,
+                                source: skill.source,
+                                aliases: skill.aliases,
+                            }],
+                        },
+                    )),
+                }),
                 ActivityPayload::TextArtifact(artifact) => Ok(UserInputPart {
-                    activity_id: Some(activity.id),
-                    content: PartContent::text(artifact.text),
+                    content: TypedContent::Text(TextContent {
+                        text: artifact.text,
+                        synthetic: false,
+                        extra: Default::default(),
+                    }),
                 }),
                 _ => Err(AppError::Config(
                     "turn input accepts only resource, skill_reference, and text_artifact activities"
@@ -888,118 +877,117 @@ impl SessionManager {
             ));
         }
 
-        let row = self
-            .store
-            .db
-            .query_one(Statement::from_sql_and_values(
-                self.store.db.get_database_backend(),
-                "SELECT t.turn_id, r.reply_id \
-                 FROM agena_turns t \
-                 JOIN agena_assistant_replies r ON r.turn_id = t.turn_id \
-                 WHERE t.session_id = ? \
-                 ORDER BY t.turn_seq DESC LIMIT 1",
-                [session_id.into()],
-            ))
-            .await?
+        // The canonical conversation identity is derived from the persisted
+        // assistant run markers (design 19.5): the newest assistant marker
+        // that carries the UUID pair it registered with.
+        let session = self.store.load_session(session_id).await?;
+        let identity = session
+            .parts()
+            .iter()
+            .rev()
+            .find_map(|marker| {
+                if marker.kind != "run" || marker.role != PartRole::Assistant {
+                    return None;
+                }
+                match (
+                    marker
+                        .content
+                        .get("turn_id")
+                        .and_then(serde_json::Value::as_str),
+                    marker
+                        .content
+                        .get("reply_id")
+                        .and_then(serde_json::Value::as_str),
+                ) {
+                    (Some(turn_id), Some(reply_id)) => {
+                        let turn_id = uuid::Uuid::parse_str(turn_id).ok()?;
+                        let reply_id = uuid::Uuid::parse_str(reply_id).ok()?;
+                        Some(ConversationIdentity {
+                            turn_id: agena_domain::TurnId(turn_id),
+                            reply_id: agena_domain::AssistantReplyId(reply_id),
+                        })
+                    }
+                    _ => None,
+                }
+            })
             .ok_or_else(|| {
                 AppError::Config(format!(
-                    "{source:?} requires an existing user turn in session {session_id}"
+                    "{source:?} requires an existing assistant reply in session {session_id}"
                 ))
             })?;
-        let turn_id: String = row.try_get("", "turn_id")?;
-        let reply_id: String = row.try_get("", "reply_id")?;
-        let turn_id = uuid::Uuid::parse_str(turn_id.as_str())
-            .map(agena_domain::TurnId)
-            .map_err(|error| AppError::Internal(format!("invalid canonical turn id: {error}")))?;
-        let reply_id = uuid::Uuid::parse_str(reply_id.as_str())
-            .map(agena_domain::AssistantReplyId)
-            .map_err(|error| AppError::Internal(format!("invalid assistant reply id: {error}")))?;
-        Ok(ConversationIdentity { turn_id, reply_id })
+        Ok(identity)
     }
 
-    /// Resolve the canonical reply directly from the durable model message
-    /// that owns an interaction.
+    /// Resolve the canonical reply directly from the durable run marker that
+    /// owns an interaction.
     ///
-    /// Interaction Activities are a downstream presentation projection and
-    /// can legitimately trail their model-message checkpoint while sibling
-    /// tools are still completing. Reply commands must therefore never use
-    /// `agena_content_nodes.owner_id` or the request part projection as their
-    /// synchronization boundary. A request is appended to an already-owned
-    /// assistant message, so message ownership is sufficient and stable.
+    /// A request is appended to an already-owned assistant message, and that
+    /// message's marker carries the canonical UUID pair (design 19.5). The
+    /// identity is therefore resolved from the loaded session — no raw
+    /// event/turn/reply tables exist in v2.
     async fn conversation_identity_for_message(
         &self,
         session_id: i64,
         message_id: i64,
     ) -> Result<ConversationIdentity, AppError> {
-        let row = self
-            .store
-            .db
-            .query_one(Statement::from_sql_and_values(
-                self.store.db.get_database_backend(),
-                "SELECT r.turn_id, r.reply_id \
-                 FROM agena_model_messages m \
-                 JOIN agena_reply_executions e ON e.execution_id = m.execution_id \
-                 JOIN agena_assistant_replies r ON r.reply_id = e.reply_id \
-                 JOIN agena_turns t ON t.turn_id = r.turn_id \
-                 WHERE m.message_id = ? AND m.session_id = ? AND t.session_id = ?",
-                [
-                    message_id.into(),
-                    session_id.into(),
-                    session_id.into(),
-                ],
-            ))
-            .await?
+        let session = self.store.load_session(session_id).await?;
+        let marker = session
+            .parts()
+            .iter()
+            .find(|part| part.part_id == message_id && part.kind == "run")
             .ok_or_else(|| {
                 AppError::Internal(format!(
                     "message {message_id} in session {session_id} has no canonical assistant reply identity"
                 ))
             })?;
-        let turn_id: String = row.try_get("", "turn_id")?;
-        let reply_id: String = row.try_get("", "reply_id")?;
-        let turn_id = uuid::Uuid::parse_str(turn_id.as_str())
+        let turn_id = marker
+            .content
+            .get("turn_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| uuid::Uuid::parse_str(value).ok())
             .map(agena_domain::TurnId)
-            .map_err(|error| AppError::Internal(format!("invalid canonical turn id: {error}")))?;
-        let reply_id = uuid::Uuid::parse_str(reply_id.as_str())
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "message {message_id} in session {session_id} has no canonical turn identity"
+                ))
+            })?;
+        let reply_id = marker
+            .content
+            .get("reply_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| uuid::Uuid::parse_str(value).ok())
             .map(agena_domain::AssistantReplyId)
-            .map_err(|error| AppError::Internal(format!("invalid assistant reply id: {error}")))?;
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "message {message_id} in session {session_id} has no canonical reply identity"
+                ))
+            })?;
         Ok(ConversationIdentity { turn_id, reply_id })
     }
 
     async fn begin_execution(
         &self,
-        session_id: i64,
-        control: &ExecutionControl,
-        source: ExecutionSource,
+        _session_id: i64,
+        _control: &ExecutionControl,
+        _source: ExecutionSource,
     ) -> Result<(), AppError> {
-        let event = EventKind::ExecutionStarted(ExecutionStartedEvent {
-            session_id,
-            execution_id: control.execution_id(),
-            turn_id: control.turn_id(),
-            reply_id: control.reply_id(),
-            source,
-            ts_ms: Utc::now().timestamp_millis(),
-        });
-        self.store
-            .append_lifecycle_events(session_id, vec![event])
-            .await
+        // The v2 run marker IS the started state: there is no lifecycle event
+        // log to append to. The marker is created on the first persist of the
+        // run; this boundary exists only to keep the registration lifecycle
+        // symmetric with `finish_execution`.
+        Ok(())
     }
 
     async fn finish_execution(
         &self,
-        session_id: i64,
+        _session_id: i64,
         control: &ExecutionControl,
         outcome: ExecutionOutcome,
     ) -> Result<(), AppError> {
-        let event = EventKind::ExecutionFinished(ExecutionFinishedEvent {
-            session_id,
-            execution_id: control.execution_id(),
-            reply_id: control.reply_id(),
-            outcome: outcome.clone(),
-            ts_ms: Utc::now().timestamp_millis(),
-        });
-        self.store
-            .append_lifecycle_events(session_id, vec![event])
-            .await?;
+        // The run marker's terminal state is written by the run's own persist
+        // (complete_run / cancel_run); nothing else needs a durable lifecycle
+        // event. The in-memory control lifecycle still transitions so
+        // cancellation coordination and registry cleanup stay correct.
         control
             .finish(outcome)
             .await
@@ -1050,7 +1038,7 @@ impl SessionManager {
         F: FnOnce(
                 SessionManager,
                 Arc<ExecutionControl>,
-                mpsc::UnboundedReceiver<Vec<PartContent>>,
+                mpsc::UnboundedReceiver<Vec<TypedContent>>,
             ) -> Fut
             + Send
             + 'static,
@@ -1095,7 +1083,7 @@ impl SessionManager {
         F: FnOnce(
                 SessionManager,
                 Arc<ExecutionControl>,
-                mpsc::UnboundedReceiver<Vec<PartContent>>,
+                mpsc::UnboundedReceiver<Vec<TypedContent>>,
             ) -> Fut
             + Send
             + 'static,
@@ -1159,7 +1147,7 @@ impl SessionManager {
         session_id: i64,
         task_name: &'static str,
         control: Arc<ExecutionControl>,
-        steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
+        steer_rx: mpsc::UnboundedReceiver<Vec<TypedContent>>,
         operation: F,
     ) -> Result<T, AppError>
     where
@@ -1167,7 +1155,7 @@ impl SessionManager {
         F: FnOnce(
                 SessionManager,
                 Arc<ExecutionControl>,
-                mpsc::UnboundedReceiver<Vec<PartContent>>,
+                mpsc::UnboundedReceiver<Vec<TypedContent>>,
             ) -> Fut
             + Send
             + 'static,
@@ -1190,25 +1178,16 @@ impl SessionManager {
         control.clear_operation_abort().await;
         agena_runtime::session_finished();
 
-        let unmatched_run_reason = result
-            .as_ref()
-            .err()
-            .map(run_abort_reason)
-            .unwrap_or(RunAbortReason::Internal);
-        // Terminalize the execution first: `finish_execution` publishes the
-        // authoritative `ExecutionFinished` event and projects the reply
-        // outcome. Reconcile afterwards so the synthesis pass (`RunAborted`
-        // for any still-hanging run) observes those already-persisted events
-        // and cannot race the execution's own cleanup writes with duplicate
-        // per-session sequence numbers after a process restart.
+        // Terminalize the execution first: the run's own persist wrote the
+        // marker's terminal state (complete_run / cancel_run). Reconcile
+        // afterwards so any residual in-flight marker that survived cleanup
+        // (for example a run whose persist was interrupted by a crash) is
+        // aborted by the facade as `process_restart` (17.4 step 2c).
         let outcome = Self::execution_outcome(control.as_ref(), &result);
         let terminal_result = self
             .finish_execution(session_id, control.as_ref(), outcome)
             .await;
-        let reconciliation_result = self
-            .store
-            .reconcile_unmatched_runs(session_id, unmatched_run_reason)
-            .await;
+        let reconciliation_result = self.store.reconcile(session_id).await;
         self.execution_registry
             .unregister_if_matches(session_id, &control)
             .await;
@@ -1220,8 +1199,10 @@ impl SessionManager {
     fn background_handle(&self) -> Self {
         Self {
             store: Arc::clone(&self.store),
-            publisher: Arc::clone(&self.publisher),
-            bus: Arc::clone(&self.bus),
+            permission_rules: Arc::clone(&self.permission_rules),
+            permission_rule_writer: Arc::clone(&self.permission_rule_writer),
+            workspace_repository: Arc::clone(&self.workspace_repository),
+            workspace_id: tokio::sync::OnceCell::new(),
             execution: ArcSwap::from(self.execution.load_full()),
             execution_registry: Arc::clone(&self.execution_registry),
             reply_session_locks: Arc::clone(&self.reply_session_locks),
@@ -1238,77 +1219,48 @@ impl SessionManager {
         config: RuntimeSessionManagerConfig,
     ) -> Self {
         let db_arc = Arc::new(db.clone());
-        // The publisher (not the store) consults `EventKind::is_persistent`
-        // to decide which events land in SQLite, so the store stays a single
-        // generic type.
-        let store_inner: Arc<dyn agena_storage::EventStore<crate::event::EventKind>> = Arc::new(
-            agena_storage_sqlite::SeaEventStore::<crate::event::EventKind>::new(Arc::clone(
-                &db_arc,
-            )),
-        );
-        let bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>> =
-            Arc::new(crate::event::InProcessEventBus::<crate::event::EventKind>::new(4096));
-        // One database-backed allocator serves both the publisher (event
-        // sequences) and the session store (projected message/part ids), so
-        // every monotonic id is allocated atomically in the shared database
-        // across all processes.
-        let seq: Arc<dyn agena_storage::SequenceAllocator> = Arc::new(
-            agena_storage_sqlite::SqliteSequenceAllocator::new(Arc::clone(&db_arc)),
-        );
-        let publisher = Arc::new(crate::event::publisher::EventPublisher::new(
-            Arc::clone(&seq),
-            Arc::clone(&store_inner),
-            Arc::clone(&bus),
+        let engine = agena_storage_sqlite::SqliteEngine::new(Arc::clone(&db_arc));
+        // One facade owns the lease and notification lifecycle for this
+        // process; the manager talks to it exclusively through `StoreAdapter`
+        // (14.2, 15.6). `owner_id` is the process identity stamped on every
+        // facade write.
+        let owner_id = uuid::Uuid::new_v4().to_string();
+        let facade: Arc<dyn agena_storage::store::SessionStore> =
+            Arc::new(agena_storage::store::SessionFacade::<
+                agena_storage_sqlite::SqliteEngine,
+            >::new(
+                engine,
+                owner_id.clone(),
+                config.cache_policy().max_sessions,
+            ));
+        let store = Arc::new(StoreAdapter::new(
+            facade,
+            owner_id,
+            Arc::new(|| Utc::now().timestamp_millis()),
         ));
         let permission_rules = Arc::new(agena_storage_sqlite::SeaPermissionRuleRepository::new(
             Arc::clone(&db_arc),
         ));
         let permission_rule_repository: Arc<dyn agena_storage::PermissionRuleRepository> =
             permission_rules.clone();
-        let permission_rule_transaction_writer: Arc<
+        let permission_rule_writer: Arc<
             dyn agena_storage::PermissionRuleTransactionWriter<sea_orm::DatabaseTransaction>,
         > = Arc::new(agena_storage_sqlite::SeaPermissionRuleTransactionWriter);
-        let store = Arc::new(SessionStore::new(
-            db,
-            tool_executor.workspace_root(),
-            Arc::clone(&publisher),
-            seq,
-            Arc::new(agena_storage_sqlite::SeaWorkspaceRepository::new(
-                Arc::clone(&db_arc),
-            )),
-            permission_rule_repository,
-            permission_rule_transaction_writer,
-            Arc::new(agena_storage_sqlite::SeaSessionStatsRepository::new(
-                Arc::clone(&db_arc),
-            )),
-            Arc::new(agena_storage_sqlite::SeaUsageRepository::new(Arc::clone(
-                &db_arc,
-            ))),
-            Arc::new(agena_storage_sqlite::SeaSessionSummaryRepository::new(
-                Arc::clone(&db_arc),
-            )),
-            Arc::new(agena_storage_sqlite::SeaProjectionLookupRepository::new(
-                Arc::clone(&db_arc),
-            )),
-            Arc::new(agena_storage_sqlite::SeaModelMessageRepository::new(
-                Arc::clone(&db_arc),
-            )),
-            Arc::new(agena_storage_sqlite::SeaModelMessageTransactionWriter),
-            Arc::new(agena_storage_sqlite::SeaSessionSummaryRepository::new(
-                Arc::clone(&db_arc),
-            )),
-        ));
+        // Workspace identity stays database-backed infra (design 19.1): the
+        // facade's `NewSession.workspace_id` is derived from the tool
+        // executor's workspace root, as in v1.
+        let workspace_repository: Arc<dyn agena_storage::WorkspaceRepository> = Arc::new(
+            agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::clone(&db_arc)),
+        );
         let state = SessionManagerState::new(processor, tool_executor, config);
-        let owner_id = uuid::Uuid::new_v4().to_string();
         Self {
             store,
-            publisher,
-            bus,
+            permission_rules: permission_rule_repository,
+            permission_rule_writer,
+            workspace_repository,
+            workspace_id: tokio::sync::OnceCell::new(),
             execution: ArcSwap::from_pointee(state),
-            execution_registry: Arc::new(ExecutionRegistry::with_lease(
-                Arc::clone(&db_arc),
-                owner_id.clone(),
-            )),
+            execution_registry: Arc::new(ExecutionRegistry::new()),
             reply_session_locks: Arc::new(Mutex::new(HashMap::new())),
             reconciled_sessions: Arc::new(Mutex::new(HashSet::new())),
             host_user_input_waiters: Arc::new(Mutex::new(HashMap::new())),
@@ -1316,10 +1268,27 @@ impl SessionManager {
         }
     }
 
-    /// Returns the unified event publisher used by Runtime composition and
-    /// service adapters to emit `EventKind`.
-    pub fn event_publisher(&self) -> Arc<crate::event::EventPublisher> {
-        Arc::clone(&self.publisher)
+    /// The workspace id owning this process's sessions, resolved once from the
+    /// tool executor's workspace root. v2 keeps workspace identity as
+    /// database-backed infra (19.1) because the facade requires it on every
+    /// session create.
+    pub(crate) async fn current_workspace_id(&self) -> Result<i64, AppError> {
+        if let Some(workspace_id) = self.workspace_id.get() {
+            return Ok(*workspace_id);
+        }
+        let workspace_root = self
+            .execution_state()
+            .tool_executor
+            .workspace_root()
+            .display()
+            .to_string();
+        let workspace_id = self
+            .workspace_repository
+            .ensure_id(&workspace_root)
+            .await
+            .map_err(|error| AppError::Internal(format!("resolve workspace id: {error}")))?;
+        let _ = self.workspace_id.set(workspace_id);
+        Ok(workspace_id)
     }
 
     async fn reply_session_lock(&self, session_id: i64) -> Arc<Mutex<()>> {
@@ -1331,13 +1300,15 @@ impl SessionManager {
         )
     }
 
-    /// Returns the in-process bus subscribers can attach to.
-    pub fn event_bus(&self) -> Arc<dyn crate::event::EventBus<crate::event::EventKind>> {
-        Arc::clone(&self.bus)
-    }
-
     pub fn tool_executor(&self) -> ToolExecutor {
         self.execution_state().tool_executor.clone()
+    }
+
+    /// The sealed v2 data facade (14.1). Live presentation consumers
+    /// subscribe to [`SessionChange`](agena_storage::store::SessionChange)
+    /// here instead of any event stream (14.3).
+    pub fn session_store(&self) -> Arc<dyn agena_storage::store::SessionStore> {
+        self.store.facade.clone()
     }
 
     /// Execute for a sessionless administrative surface. Administrative and
@@ -1361,21 +1332,19 @@ impl SessionManager {
         &self,
         session_id: i64,
         call_id: i64,
-        request: crate::message::AskUserToolInput,
+        request: crate::part::AskUserToolInput,
     ) -> Result<agena_plugin_host::sdk::host_api::AskUserResponse, AppError> {
         let state = self.execution_state();
-        let session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
-        let pending_tool = session.pending_tool_by_call_id(call_id).ok_or_else(|| {
+        let session = self.store.load_session(session_id).await?;
+        let pending_tool = pending_tool_by_call_id(&session, call_id).ok_or_else(|| {
             AppError::Internal(format!(
                 "pending tool not found for host user input: session={session_id}, call={call_id}"
             ))
         })?;
         let resolved_pending = resolve_pending_tool(&session, &pending_tool)?;
         let sequence_index = self.next_host_user_input_sequence(session_id, call_id);
-        if let Some(existing) = session.user_input_request_for_operation(
+        if let Some(existing) = replies::user_input_request_for_operation(
+            &session,
             resolved_pending.operation_id.as_str(),
             sequence_index,
         ) {
@@ -1451,7 +1420,7 @@ impl SessionManager {
         // A host callback may execute the same pending operation that was
         // originally created by the model. Reuse that operation's correlation
         // ids so shell output remains attached to the visible Activity.
-        let outer_pending_tool = session.pending_tool_by_call_id(call_id);
+        let outer_pending_tool = pending_tool_by_call_id(&session, call_id);
         let command_event_sink = outer_pending_tool
             .as_ref()
             .and_then(|pending| resolve_pending_tool(&session, pending).ok())
@@ -1609,11 +1578,11 @@ impl SessionManager {
                     biased;
                     result = &mut response_rx => return receive(result),
                     _ = poll.tick() => {
-                        let state = self.execution_state();
+                        let _state = self.execution_state();
                         let session = self.store
-                            .load_session(session_id, state.cache_policy())
+                            .load_session(session_id)
                             .await?;
-                        if session.has_replied_user_input_request(request_id) {
+                        if replies::has_replied_user_input_request(&session, request_id) {
                             // A concurrent process persisted the reply. The
                             // answer content is durable in the event stream;
                             // returning a default response lets the caller
@@ -1639,7 +1608,7 @@ impl SessionManager {
             result = &mut response_rx => receive(result),
             _ = tokio::time::sleep(remaining) => {
                 let state = self.execution_state();
-                let session = self.store.load_session(session_id, state.cache_policy()).await?;
+                let session = self.store.load_session(session_id).await?;
                 let options = self.run_options_from_session(&session, state)?;
                 self.reply_user_input(SessionExecutionReplyRequest::new(
                     session_id,
@@ -1703,12 +1672,16 @@ impl SessionManager {
             )));
     }
 
-    pub fn prune_cache(&self) {
-        let state = self.execution_state();
-        self.store.prune_cache(state.cache_policy());
-    }
+    /// The v2 facade's [`MemoryLayer`](agena_storage::store::MemoryLayer) is
+    /// LRU-bounded by `max_sessions` and self-evicts on insert (15.3), so
+    /// there is nothing for the manager to prune. Kept for API compatibility
+    /// with the runtime's maintenance loop.
+    pub fn prune_cache(&self) {}
 
+    /// Cache statistics are hidden inside the sealed facade (14.1): the
+    /// manager only configured `max_sessions`. Report the stable default so
+    /// the runtime surface stays unchanged.
     pub fn cache_stats(&self) -> agena_domain::SessionCacheStats {
-        self.store.cache_stats()
+        agena_domain::SessionCacheStats::default()
     }
 }

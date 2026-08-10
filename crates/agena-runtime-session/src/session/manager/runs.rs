@@ -1,19 +1,66 @@
 use super::{
-    AppError, Arc, EventKind, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
-    ExecutionStatus, FinishReason, HistoryMessageId, HistoryRunId, MessageCheckpoint,
-    MessageMetadata, MessageSource, PartContent, Role, RunCompleted, RunStarted,
+    AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
     SessionExecutionRequest, SessionManager, SessionSubtaskRequest, SessionSubtaskResponse,
-    SessionUserMessageRequest, StableRunContext, TranscriptContent, UserInputPart,
-    UserMessageAppended, build_message, mpsc,
+    SessionUserRunRequest, StableRunContext, UserInputPart, mpsc,
 };
 use crate::session::Session;
-use agena_domain::SubtaskStatusChangedEvent;
+use crate::session::store::{
+    new_part_from_content, skill_ref_from_reference, text_content, typed_content_from_value,
+    typed_text,
+};
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
     RetryDirective, UserPresentation,
 };
-use agena_runtime_contracts::message::{SkillReference, SkillReferencePart};
+use agena_runtime_contracts::part::{SkillReference, SkillReferencePart};
+use agena_runtime_contracts::part_content::{
+    TypedContent, operation_from_tool_call, skill_reference_from_skill_ref,
+};
+use agena_storage::store::{Part, PartRole, PartState};
 use std::path::Path;
+
+/// The lossy visible text of one run group, mirroring the v1
+/// `Message::visible_text_lossy` over the run's decoded content parts: text
+/// and skill-reference parts render their content, operation parts their
+/// best-effort output, and the remaining part kinds fall back to their
+/// summary.
+pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
+    run.iter()
+        .skip(1)
+        .filter_map(
+            |part| match typed_content_from_value(&part.kind, &part.content) {
+                Ok(TypedContent::Text(text)) => Some(text.text.clone()),
+                Ok(TypedContent::SkillRef(skill)) => {
+                    Some(skill_reference_from_skill_ref(&skill).summary())
+                }
+                Ok(TypedContent::ToolCall(tool)) => {
+                    tool_visible_text_lossy(&operation_from_tool_call(&tool))
+                }
+                Ok(TypedContent::Think(_)) => None,
+                _ => part.summary.clone(),
+            },
+        )
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Best-effort textual rendering of an operation part, mirroring the v1
+/// `Message::tool_text_lossy` (private in contracts): first non-empty of
+/// output text, error message, title, or summary.
+fn tool_visible_text_lossy(tool: &agena_runtime_contracts::part::OperationPart) -> Option<String> {
+    let candidates = [
+        tool.output_text(),
+        tool.error_message(),
+        tool.title(),
+        (!tool.summary.trim().is_empty()).then_some(tool.summary.as_str()),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|text| !text.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
 
 /// Resolve requested Skill names/aliases into immutable Skill references
 /// for a delegated subtask. The catalog is rebuilt on demand from bundled
@@ -74,18 +121,16 @@ impl SessionManager {
                 "subtask task_id must not be empty".to_string(),
             ));
         }
-        self.store
-            .find_subagent_by_task_id(
-                parent_session_id,
-                task_id,
-                self.execution_state().cache_policy(),
-            )
+        let child_id = self
+            .store
+            .find_subagent_by_task_id(parent_session_id, task_id)
             .await?
             .ok_or_else(|| {
                 AppError::Config(format!(
                     "subtask '{task_id}' does not exist under session {parent_session_id}"
                 ))
-            })
+            })?;
+        self.store.load_session(child_id).await
     }
 
     pub async fn cancel_subtask(
@@ -114,7 +159,7 @@ impl SessionManager {
         let child = self
             .require_subtask_session(parent_session_id, task_id)
             .await?;
-        self.steer_input(child.id, vec![PartContent::text(message)])
+        self.steer_input(child.id, vec![TypedContent::Text(text_content(message))])
             .await?;
         Ok(child.id)
     }
@@ -130,17 +175,22 @@ impl SessionManager {
             .require_subtask_session(parent_session_id, task_id)
             .await?;
         let limit = limit.clamp(1, 500) as usize;
-        let mut messages = child
-            .messages
-            .iter()
-            .filter(|message| message.id > after_cursor)
-            .filter_map(|message| {
-                let text = message.visible_text_lossy();
+        let mut messages = crate::session::store::parts_into_runs(child.parts())
+            .into_iter()
+            .filter_map(|run| {
+                let marker_id = run.first().map(|marker| marker.part_id);
+                marker_id
+                    .filter(|marker_id| *marker_id > after_cursor)
+                    .map(|_| run)
+            })
+            .filter_map(|run| {
+                let marker = run.first().expect("run group has a marker");
+                let text = run_visible_text_lossy(&run);
                 (!text.trim().is_empty()).then_some(crate::SessionSubtaskOutputChunk {
-                    cursor: message.id,
-                    role: message.role,
+                    cursor: marker.part_id,
+                    role: crate::session::store::role_from_part_role(marker.role),
                     text,
-                    created_at_ms: message.created_at.timestamp_millis(),
+                    created_at_ms: marker.created_at_ms,
                 })
             })
             .collect::<Vec<_>>();
@@ -161,7 +211,7 @@ impl SessionManager {
     #[tracing::instrument(skip(self, request), fields(session_id = request.run.session_id))]
     pub(in crate::session::manager) async fn start_user_message_parts(
         &self,
-        request: SessionUserMessageRequest,
+        request: SessionUserRunRequest,
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
         let session_id = request.run.session_id;
         self.start_registered(
@@ -171,18 +221,18 @@ impl SessionManager {
             "user execution",
             move |manager, control, steer_rx| async move {
                 manager
-                    .submit_user_message_inner(request, control, steer_rx, None)
+                    .submit_user_run_inner(request, control, steer_rx, None)
                     .await
             },
         )
         .await
     }
 
-    async fn submit_user_message_inner(
+    async fn submit_user_run_inner(
         &self,
-        mut request: SessionUserMessageRequest,
+        mut request: SessionUserRunRequest,
         control: Arc<ExecutionControl>,
-        steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
+        steer_rx: mpsc::UnboundedReceiver<Vec<TypedContent>>,
         usage_budget: Option<super::SubtaskUsageBudget>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
@@ -192,7 +242,7 @@ impl SessionManager {
         let prompt_text = request
             .parts
             .iter()
-            .filter_map(|p| p.content.text_value())
+            .filter_map(|p| typed_text(&p.content))
             .collect::<Vec<_>>()
             .join("\n");
         if !prompt_text.is_empty() {
@@ -210,16 +260,15 @@ impl SessionManager {
                     // Replace text parts with the (potentially rewritten) prompt.
                     let mut replaced = false;
                     for part in &mut request.parts {
-                        if part.content.text_value().is_some() {
-                            part.content = PartContent::text(updated.prompt.clone());
+                        if typed_text(&part.content).is_some() {
+                            part.content = TypedContent::Text(text_content(updated.prompt.clone()));
                             replaced = true;
                             break;
                         }
                     }
                     if !replaced {
                         request.parts.push(UserInputPart {
-                            activity_id: None,
-                            content: PartContent::text(updated.prompt),
+                            content: TypedContent::Text(text_content(updated.prompt)),
                         });
                     }
                 }
@@ -235,83 +284,28 @@ impl SessionManager {
             }
         }
 
-        let mut session = self
-            .store
-            .load_session(request.run.session_id, state.cache_policy())
-            .await?;
+        let mut session = self.store.load_session(request.run.session_id).await?;
         self.refresh_execution_policy(&mut session, &state);
         let options = self.apply_execution_context_to_run_options(&session, request.run.options)?;
         self.apply_run_selection_to_session(&mut session, &options);
-        let ids = self.store.reserve_message_ids(request.parts.len()).await?;
-        let user_model_turn_id = ids.message_id;
         let input_parts = request.parts;
-        let activity_ids = input_parts
+        // The user's message is persisted as a `user_send` run: one run
+        // marker plus one `text` content part per submitted payload (the same
+        // shape `drain_steer_input` writes). v2 parts carry no activity
+        // identity, so the v1 `bind_activity` step is dropped here.
+        let user_parts = input_parts
             .iter()
-            .map(|part| part.activity_id)
-            .collect::<Vec<_>>();
-        let mut user_message = build_message(
-            ids,
-            Role::User,
-            ExecutionStatus::Completed,
-            input_parts.into_iter().map(|part| part.content).collect(),
-            MessageMetadata {
-                source: MessageSource::User,
-                idempotency_key: request.idempotency_key.clone(),
-                model_turn_id: Some(user_model_turn_id),
-                parent_message_id: session
-                    .last_conversation_message()
-                    .map(|message| message.id),
-                generated_by_call_id: None,
-                externally_initiated_tool: false,
-                model_provider_id: options.model.provider_id.to_string(),
-                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
-                model_id: options.model.model_id.to_string(),
-                model_thinking_mode: options.thinking_mode.clone(),
-                model_speed_mode: options.speed_mode.clone(),
-            },
-        )?;
-        for (part, activity_id) in user_message.parts.iter_mut().zip(activity_ids) {
-            if let Some(activity_id) = activity_id {
-                part.bind_activity(activity_id);
-            }
-        }
-        session.messages.push(user_message.clone());
-        let checkpoint = MessageCheckpoint::all(&user_message);
-        session = self
-            .persist_session_changes(session, vec![checkpoint], Vec::new(), None, state.clone())
-            .await?;
-
-        // Append-only history: persist the user-authored message as its own
-        // closed run batch so it remains addressable in fork/rewind flows.
-        let user_run_id = HistoryRunId::new();
-        let user_history_items = vec![
-            EventKind::RunStarted(RunStarted {
-                execution_id: control.execution_id(),
-                run_id: user_run_id,
-                source: ExecutionSource::User,
-                model_id: options.model.model_id.as_ref().into(),
-                provider_id: options.model.provider_id.as_ref().into(),
-                request_digest: None,
-            }),
-            EventKind::UserMessageAppended(UserMessageAppended {
-                execution_id: control.execution_id(),
-                message_id: HistoryMessageId(user_message.id),
-                run_id: user_run_id,
-                created_at: user_message.created_at,
-                content: TranscriptContent::from_message_lossy(&user_message),
-                parts: user_message.parts.clone(),
-                metadata: user_message.metadata.clone(),
-                provider_state: user_message.provider_state.clone(),
-            }),
-            EventKind::RunCompleted(RunCompleted {
-                run_id: user_run_id,
-                finish_reason: FinishReason::Stop,
-            }),
-        ];
-        session = self
+            .map(|part| {
+                new_part_from_content("text", PartRole::User, &part.content, PartState::Completed)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let outcome = self
             .store
-            .append_history_items(session, user_history_items, state.cache_policy())
+            .submit_user_run(session.id, user_parts, request.idempotency_key.clone())
             .await?;
+        let mut projected = session.parts().to_vec();
+        projected.extend(outcome.parts);
+        session.install_projected_parts(projected);
 
         // Record the user.prompt.submit hook runs observed during this
         // submission (plus any unattributed runs claimed by this session)
@@ -333,7 +327,7 @@ impl SessionManager {
                 &options,
                 StableRunContext {
                     base_run_source: ExecutionSource::User,
-                    active_model_turn_id: Some(user_message.id),
+                    active_model_turn_id: Some(outcome.run_id),
                     state,
                     control,
                     steer_rx,
@@ -369,11 +363,7 @@ impl SessionManager {
                     .plugin_manager()
                     .drain_hook_runs(session_id);
                 if !hook_runs.is_empty() {
-                    match self
-                        .store
-                        .load_session(session_id, state.cache_policy())
-                        .await
-                    {
+                    match self.store.load_session(session_id).await {
                         Ok(reloaded) => {
                             if let Err(record_err) = self
                                 .record_hook_runs(reloaded, hook_runs, state.clone())
@@ -406,7 +396,7 @@ impl SessionManager {
     /// inherit a task's accounting boundary.
     pub(in crate::session::manager) async fn submit_subtask_user_message(
         &self,
-        request: SessionUserMessageRequest,
+        request: SessionUserRunRequest,
         usage_budget: Option<super::SubtaskUsageBudget>,
     ) -> Result<Session, AppError> {
         let session_id = request.run.session_id;
@@ -417,7 +407,7 @@ impl SessionManager {
             "subtask execution",
             move |manager, control, steer_rx| async move {
                 manager
-                    .submit_user_message_inner(request, control, steer_rx, usage_budget)
+                    .submit_user_run_inner(request, control, steer_rx, usage_budget)
                     .await
             },
         )
@@ -466,18 +456,15 @@ impl SessionManager {
         &self,
         request: SessionExecutionRequest,
         control: Arc<ExecutionControl>,
-        steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
+        steer_rx: mpsc::UnboundedReceiver<Vec<TypedContent>>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
-        let mut session = self
-            .store
-            .load_session(request.session_id, state.cache_policy())
-            .await?;
+        let mut session = self.store.load_session(request.session_id).await?;
         self.refresh_execution_policy(&mut session, &state);
         let options = self.apply_execution_context_to_run_options(&session, request.options)?;
         if self.apply_run_selection_to_session(&mut session, &options) {
             session = self
-                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+                .persist_session_changes(session, Vec::new(), None, state.clone())
                 .await?;
         }
         self.run_until_stable(
@@ -540,10 +527,7 @@ impl SessionManager {
                 "subtask max_cost_microusd must be greater than zero".to_string(),
             ));
         }
-        let parent = self
-            .store
-            .load_session(request.parent_session_id, state.cache_policy())
-            .await?;
+        let parent = self.store.load_session(request.parent_session_id).await?;
         if parent.is_subagent() {
             return Err(AppError::Config(
                 "delegated subtasks cannot create nested subtasks".to_string(),
@@ -573,25 +557,22 @@ impl SessionManager {
         let preparation_guard = preparation_lock.lock().await;
         let existing = self
             .store
-            .find_subagent_by_task_id(parent.id, task_id.as_str(), state.cache_policy())
+            .find_subagent_by_task_id(parent.id, task_id.as_str())
             .await?;
         let resumed = existing.is_some();
         let mut child = match existing {
-            Some(existing) => {
-                if self.execution_registry.is_active(existing.id).await {
-                    return Err(AppError::ExecutionAlreadyActive(existing.id));
+            Some(existing_id) => {
+                if self.execution_registry.is_active(existing_id).await {
+                    return Err(AppError::ExecutionAlreadyActive(existing_id));
                 }
-                existing
+                self.store.load_session(existing_id).await?
             }
             None => {
-                self.store
-                    .create_subagent_session(
-                        description.to_string(),
-                        parent.id,
-                        task_id.clone(),
-                        state.cache_policy(),
-                    )
-                    .await?
+                let child_id = self
+                    .store
+                    .create_subagent_session(parent.id, task_id.clone(), description.to_string())
+                    .await?;
+                self.store.load_session(child_id).await?
             }
         };
 
@@ -620,7 +601,12 @@ impl SessionManager {
                 .unwrap_or_else(|| state.tool_executor.workspace_root().to_path_buf()),
         );
         let started_at_ms = chrono::Utc::now().timestamp_millis();
-        let baseline_message_id = child.messages.iter().map(|message| message.id).max();
+        let baseline_message_id = child
+            .parts()
+            .iter()
+            .filter(|part| part.is_run_marker())
+            .map(|part| part.part_id)
+            .max();
         let baseline_usage = child.aggregate_usage();
         let usage_budget = super::SubtaskUsageBudget::new(
             baseline_usage.clone(),
@@ -636,36 +622,14 @@ impl SessionManager {
             .store
             .update_subtask_state(
                 child,
-                crate::session::SubtaskRuntimeState {
-                    status: agena_domain::SubtaskStatus::Running,
-                    started_at_ms: Some(started_at_ms),
-                    finished_at_ms: None,
-                    failure: None,
-                },
-                state.cache_policy(),
+                Some(agena_domain::SubtaskStatus::Running.as_ref().to_string()),
+                Some(started_at_ms),
+                None,
+                None,
             )
             .await?;
+        child = self.store.persist_execution_config(child).await?;
         let child_id = child.id;
-        let child_access = child.runtime.execution.access;
-        self.persist_session_changes(
-            child,
-            Vec::new(),
-            vec![EventKind::SubtaskStatusChanged(SubtaskStatusChangedEvent {
-                session_id: child_id,
-                parent_session_id: parent.id,
-                task_id: task_id.clone(),
-                access: child_access,
-                status: agena_domain::SubtaskStatus::Running,
-                resumed,
-                started_at_ms: Some(started_at_ms),
-                finished_at_ms: None,
-                failure: None,
-                ts_ms: started_at_ms,
-            })],
-            None,
-            state.clone(),
-        )
-        .await?;
         drop(preparation_guard);
 
         let manager = self.background_handle();
@@ -673,15 +637,17 @@ impl SessionManager {
         let prompt = delegated_prompt.to_string();
         let skill_references = subtask_skill_references;
         let mut run = tokio::task::spawn(async move {
-            let mut parts = vec![PartContent::text(prompt)];
+            let mut parts = vec![TypedContent::Text(text_content(prompt))];
             if let Some(skill_references) = skill_references {
-                parts.push(PartContent::skill_reference(SkillReferencePart {
-                    skills: skill_references,
-                }));
+                parts.push(TypedContent::SkillRef(skill_ref_from_reference(
+                    &SkillReferencePart {
+                        skills: skill_references,
+                    },
+                )));
             }
             manager
                 .submit_subtask_user_message(
-                    SessionUserMessageRequest::new(child_id, run_options, parts),
+                    SessionUserRunRequest::new(child_id, run_options, parts),
                     usage_budget,
                 )
                 .await
@@ -755,10 +721,7 @@ impl SessionManager {
                 };
                 let budget_exceeded = matches!(&error, AppError::SubtaskBudgetExceeded(_));
                 let failure = (!matches!(&error, AppError::Cancelled)).then(|| error.failure());
-                let session = self
-                    .store
-                    .load_session(child_id, state.cache_policy())
-                    .await?;
+                let session = self.store.load_session(child_id).await?;
                 (status, failure, budget_exceeded, session)
             }
         };
@@ -767,38 +730,20 @@ impl SessionManager {
         session.runtime.subtask.finished_at_ms = Some(finished_at_ms);
         session.runtime.subtask.failure = failure.clone();
         let subtask_started_at_ms = session.runtime.subtask.started_at_ms;
-        let subtask_access = session.runtime.execution.access;
         session = self
             .store
             .update_subtask_state(
                 session,
-                crate::session::SubtaskRuntimeState {
-                    status,
-                    started_at_ms: subtask_started_at_ms,
-                    finished_at_ms: Some(finished_at_ms),
-                    failure: failure.clone(),
-                },
-                state.cache_policy(),
-            )
-            .await?;
-        session = self
-            .persist_session_changes(
-                session,
-                Vec::new(),
-                vec![EventKind::SubtaskStatusChanged(SubtaskStatusChangedEvent {
-                    session_id: child_id,
-                    parent_session_id: parent.id,
-                    task_id: task_id.clone(),
-                    access: subtask_access,
-                    status,
-                    resumed,
-                    started_at_ms: subtask_started_at_ms,
-                    finished_at_ms: Some(finished_at_ms),
-                    failure: failure.as_ref().map(Into::into),
-                    ts_ms: finished_at_ms,
-                })],
-                None,
-                state,
+                Some(status.as_ref().to_string()),
+                subtask_started_at_ms,
+                Some(finished_at_ms),
+                failure
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(|error| {
+                        AppError::Internal(format!("serialize subtask failure: {error}"))
+                    })?,
             )
             .await?;
         let usage = session.aggregate_usage().saturating_sub(&baseline_usage);
@@ -808,7 +753,22 @@ impl SessionManager {
             parent_session_id: parent.id,
             status,
             resumed,
-            final_text: session.last_assistant_text_after(baseline_message_id),
+            // Assistant text produced after the subtask's baseline: the
+            // aggregate holds only parts created since the baseline marker, so
+            // the last assistant text is the child's freshest reply.
+            final_text: session
+                .parts()
+                .iter()
+                .rev()
+                .filter(|part| part.part_id > baseline_message_id.unwrap_or(0))
+                .find_map(|part| {
+                    part.content
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .or_else(|| part.summary.clone())
+                })
+                .filter(|text| !text.trim().is_empty()),
             failure,
             usage,
             model_provider_id: Some(options.model.provider_id.to_string()),
@@ -839,7 +799,7 @@ pub(in crate::session::manager) fn non_recursive_subtask_capability_denials()
 #[cfg(test)]
 mod tests {
     use super::{non_recursive_subtask_capability_denials, resolve_subtask_skill_references};
-    use agena_runtime_contracts::message::SkillReference;
+    use agena_runtime_contracts::part::SkillReference;
 
     #[test]
     fn delegated_instances_cannot_recursively_run_tasks() {

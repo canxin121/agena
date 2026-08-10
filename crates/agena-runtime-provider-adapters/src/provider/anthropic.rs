@@ -20,7 +20,7 @@ use crate::{
 };
 use agena_provider::CompletionStreamEvent;
 use agena_provider::{AuthData, CompletionRequest};
-use agena_runtime_contracts::message::{AttachmentItem, AttachmentKind};
+use agena_runtime_contracts::part::{AttachmentItem, AttachmentKind};
 
 const PROVIDER_ID: &str = "anthropic";
 const ANTHROPIC_VERSION: &str = "2023-06-01";

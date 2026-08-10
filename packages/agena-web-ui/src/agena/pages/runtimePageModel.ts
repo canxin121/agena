@@ -1,6 +1,5 @@
 import type {
   AuthProvider,
-  DomainEventRecord,
   PluginLogEntry,
   PluginStatus,
   ProviderModel,
@@ -22,18 +21,6 @@ export type SessionExecutionFact = {
   label: string
   value: string
   mono?: boolean
-}
-
-export type TimelineSummaryItem = {
-  key: string
-  kind: string
-  summary: string
-  timestamp: string
-  sessionId: string
-}
-
-function readEventTimestamp(event: DomainEventRecord): string {
-  return event.created_at
 }
 
 export function buildOperatorCards(runtime: RuntimeStatus | null): OperatorCard[] {
@@ -150,32 +137,6 @@ export function buildExecutionFacts(execution: SessionExecutionResource | null):
     { label: 'Pending Permissions', value: String(pendingPermissionRequests(execution).length) },
     { label: 'Pending User Input', value: String(pendingUserInputRequests(execution).length) },
   ]
-}
-
-export function buildTimelineSummary(events: DomainEventRecord[]): TimelineSummaryItem[] {
-  return events.map((event) => ({
-    key: `${event.seq_global}`,
-    kind: event.kind,
-    summary: summarizeTimelineEvent(event),
-    timestamp: readEventTimestamp(event),
-    sessionId: event.session_id == null ? 'global' : `session ${event.session_id}`,
-  }))
-}
-
-function summarizeTimelineEvent(event: DomainEventRecord): string {
-  const payload = event.payload || {}
-  const candidate = [
-    readString(payload.summary),
-    readString(payload.message),
-    readString(payload.reason),
-    readString(payload.status),
-    readString(payload.command),
-  ].find((value) => value)
-  return candidate || event.kind
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim().length > 0 ? value : null
 }
 
 export function pickNextPluginId(currentPluginId: string, plugins: PluginStatus[]): string {

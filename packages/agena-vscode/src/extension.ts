@@ -31,14 +31,14 @@ class AgenaClient {
     if (this.child) {
       return;
     }
-    this.child = cp.spawn(command, ['app-server', '--transport', 'stdio'], { cwd });
+    this.child = cp.spawn(command, ['rpc-server', '--transport', 'stdio'], { cwd });
     const reader = readline.createInterface({ input: this.child.stdout });
     reader.on('line', line => this.handleLine(line));
     this.child.stderr.on('data', chunk => console.debug(`agena: ${chunk}`));
     this.child.on('exit', () => {
       this.child = undefined;
       for (const pending of this.pending.values()) {
-        pending.reject(new Error('Agena app-server exited'));
+        pending.reject(new Error('Agena rpc-server exited'));
       }
       this.pending.clear();
     });
@@ -50,13 +50,40 @@ class AgenaClient {
   }
 
   async submitTurn(sessionId: number, prompt: string): Promise<string> {
-    const result = await this.request('message/submit', { session_id: sessionId, prompt }) as { text?: string };
-    return result.text ?? '';
+    // v2 protocol: message/submit returns the accepted run (run_id + v2 parts)
+    // instead of a v1 `text` field. Read the run marker state and the parts,
+    // and derive the visible assistant text out of the assistant `text` parts.
+    const result = await this.request('message/submit', {
+      session_id: sessionId,
+      prompt,
+    }) as {
+      run_id?: number;
+      parts?: Array<{
+        kind: string;
+        role: string;
+        state: string;
+        content?: unknown;
+        summary?: string;
+      }>;
+    };
+    const parts = result.parts ?? [];
+    const textParts = parts.filter(
+      part => part.kind === 'text' && part.role === 'assistant' && part.state !== 'failed',
+    );
+    const fallback = parts.filter(part => part.kind === 'text');
+    const text = (textParts.length > 0 ? textParts : fallback)
+      .map(part => {
+        const content = part.content as { text?: string } | null;
+        return (content?.text ?? part.summary ?? '').trim();
+      })
+      .filter(Boolean)
+      .join('\n');
+    return text;
   }
 
   private request(method: string, params: unknown): Promise<unknown> {
     if (!this.child) {
-      return Promise.reject(new Error('Agena app-server is not running'));
+      return Promise.reject(new Error('Agena rpc-server is not running'));
     }
     const id = this.nextId++;
     const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params });
@@ -78,7 +105,7 @@ class AgenaClient {
     try {
       message = JSON.parse(line) as typeof message;
     } catch (diagnostic) {
-      console.error('Agena app-server returned an invalid JSON-RPC message', diagnostic);
+      console.error('Agena rpc-server returned an invalid JSON-RPC message', diagnostic);
       return;
     }
     if (typeof message.id !== 'number') {
@@ -120,7 +147,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const command = vscode.workspace.getConfiguration('agena').get<string>('command') ?? 'agena';
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     client.start(command, cwd);
-    vscode.window.showInformationMessage('Agena app-server started');
+    vscode.window.showInformationMessage('Agena rpc-server started');
   }));
   context.subscriptions.push(vscode.commands.registerCommand('agena.prompt', async () => {
     const prompt = await vscode.window.showInputBox({ prompt: 'Prompt Agena' });

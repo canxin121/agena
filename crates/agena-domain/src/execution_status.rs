@@ -71,6 +71,23 @@ impl ExecutionStatus {
             )
         )
     }
+
+    /// Whether no further lifecycle transition is expected. Denial outcomes
+    /// (policy/user/capability/tool) are terminal for the operation part even
+    /// though the coarse persisted state collapses them to a failed/cancelled
+    /// run state.
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed
+                | Self::PolicyDenied
+                | Self::UserDeclined
+                | Self::CapabilityUnavailable
+                | Self::ToolUnavailable
+                | Self::Failed
+                | Self::Cancelled
+        )
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

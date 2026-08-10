@@ -15,8 +15,6 @@ use agena_api::{
     subscribe::SubscriptionId,
     ws::{ClientMessage, ServerMessage},
 };
-use agena_domain::EventFilter;
-use agena_runtime::{RuntimeEventStreamService, RuntimeLiveEventSubscriptionItem};
 use axum::{
     extract::{State, WebSocketUpgrade, ws::Message, ws::WebSocket},
     response::Response,
@@ -26,7 +24,8 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::{
     error::ServerError,
-    state::{AppState, event_filter_from_subscribe},
+    live::{self, LiveItem},
+    state::AppState,
 };
 use agena_application::dispatch;
 
@@ -150,8 +149,8 @@ async fn handle_client_message(
             }
         },
         ClientMessage::Subscribe { id, request } => {
-            let stream_service = match state.event_stream_service() {
-                Ok(b) => b,
+            let subscription = match live::subscribe(&state) {
+                Ok(subscription) => subscription,
                 Err(err) => {
                     let _ = tx
                         .send(ServerMessage::Error {
@@ -162,8 +161,19 @@ async fn handle_client_message(
                     return;
                 }
             };
-            let filter = event_filter_from_subscribe(request);
-            spawn_subscription(id, filter, stream_service, tx, registry).await;
+            let store = match state.session_store() {
+                Ok(store) => store,
+                Err(err) => {
+                    let _ = tx
+                        .send(ServerMessage::Error {
+                            id: Some(id),
+                            error: err.into_api(),
+                        })
+                        .await;
+                    return;
+                }
+            };
+            spawn_subscription(id, request.scope, subscription, store, tx, registry).await;
         }
         ClientMessage::Unsubscribe { id } => {
             let mut guard = registry.lock().await;
@@ -181,24 +191,29 @@ async fn handle_client_message(
 
 async fn spawn_subscription(
     id: SubscriptionId,
-    filter: EventFilter,
-    stream_service: Arc<dyn RuntimeEventStreamService>,
+    scope: agena_api::Scope,
+    mut subscription: live::LiveSubscription,
+    store: Arc<dyn agena_storage::store::SessionStore>,
     tx: mpsc::Sender<ServerMessage>,
     registry: Arc<Mutex<SubscriptionRegistry>>,
 ) {
-    let mut subscription = stream_service.subscribe_events(filter);
     let id_for_task = id.clone();
     let tx_clone = tx.clone();
     let handle = tokio::spawn(async move {
         while let Some(item) = subscription.recv().await {
+            if !live::matches_scope(&item, &scope, store.as_ref()).await {
+                continue;
+            }
             let notification = match item {
-                RuntimeLiveEventSubscriptionItem::Event(event) => Notification::Event {
+                LiveItem::SessionChanged(change) => Notification::SessionChanged {
                     subscription: id_for_task.clone(),
-                    event: Box::new(
-                        agena_application::event_projection::event_resource_from_runtime(&event),
-                    ),
+                    change: Box::new(change),
                 },
-                RuntimeLiveEventSubscriptionItem::Lagged(skipped) => Notification::Lagged {
+                LiveItem::RuntimeSignal(signal) => Notification::RuntimeSignal {
+                    subscription: id_for_task.clone(),
+                    signal: Box::new(signal),
+                },
+                LiveItem::Lagged(skipped) => Notification::Lagged {
                     subscription: id_for_task.clone(),
                     skipped,
                 },

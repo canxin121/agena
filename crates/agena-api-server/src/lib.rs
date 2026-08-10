@@ -18,14 +18,14 @@
 //! - [`ws`]: `/api/v1/ws` upgrade handler implementing the
 //!   [`agena_api::ws::ClientMessage`] / [`agena_api::ws::ServerMessage`]
 //!   protocol with multiplexed subscriptions.
-//! - [`sse`]: `/api/v1/events/stream` push-only event stream.
+//! - [`sse`]: `/api/v1/changes/stream` push-only part-patch/signal stream.
 //! - [`ipc`]: optional Unix socket binder reusing the same WS protocol.
 //!
 //! ## Design notes
 //!
 //! - The transports never poll the database. They consume Runtime's stable
-//!   live-event stream service. Resume from the persisted store happens on
-//!   initial subscribe / on `Lagged` recovery via `EventStore::range`.
+//!   live-change surfaces. Catch-up is an explicit current parts snapshot;
+//!   live notifications themselves are never persisted or replayed.
 //! - Commands and queries route through `dispatch::*` so that the WS handler
 //!   and REST handler share identical semantics where practical, while the
 //!   REST surface keeps returning the plain JSON resources the Studio web UI
@@ -36,6 +36,7 @@ pub mod error;
 pub mod ipc;
 #[cfg(feature = "jsonrpc")]
 pub mod jsonrpc;
+mod live;
 #[cfg(feature = "http")]
 pub mod rest;
 #[cfg(feature = "sse")]
@@ -267,12 +268,12 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::put(rest::replace_session_permission),
             )
             .route(
-                "/api/v1/sessions/{session_id}/events",
-                get(rest::list_session_events),
+                "/api/v1/sessions/{session_id}/parts",
+                get(rest::list_session_parts),
             )
             .route(
-                "/api/v1/sessions/{session_id}/events/stream",
-                get(rest::stream_session_events),
+                "/api/v1/sessions/{session_id}/changes/stream",
+                get(rest::stream_session_changes),
             )
             .route(
                 "/api/v1/sessions/{session_id}/messages",
@@ -354,7 +355,6 @@ pub fn router(state: AppState) -> Router {
                 "/api/v1/activities/{activity_id}/dismiss",
                 post(rest::dismiss_activity),
             )
-            .route("/api/v1/events", get(rest::list_events))
             .route("/api/v1/notifications", get(rest::list_notifications))
             .route(
                 "/api/v1/notifications/{notification_id}/dismiss",
@@ -376,7 +376,7 @@ pub fn router(state: AppState) -> Router {
 
     #[cfg(feature = "sse")]
     let router = router
-        .route("/api/v1/events/stream", get(sse::handler))
+        .route("/api/v1/changes/stream", get(sse::handler))
         .route(
             "/api/v1/notifications/stream",
             get(sse::notifications_stream),
@@ -395,7 +395,7 @@ pub fn transport_router(state: AppState) -> Router {
 
     #[cfg(feature = "sse")]
     let router = router
-        .route("/api/v1/events/stream", get(sse::handler))
+        .route("/api/v1/changes/stream", get(sse::handler))
         .route(
             "/api/v1/notifications/stream",
             get(sse::notifications_stream),
@@ -408,9 +408,7 @@ pub fn transport_router(state: AppState) -> Router {
 mod router_contract_tests {
     use agena_application::Application;
     use agena_notification::NotificationService;
-    use agena_runtime::{
-        RuntimeBootstrapRequest, RuntimeEventPublishRequest, bootstrap_application_services,
-    };
+    use agena_runtime::{RuntimeBootstrapRequest, bootstrap_application_services};
     use axum::body::to_bytes;
     use futures_util::{SinkExt, StreamExt};
     use http::Request;
@@ -647,10 +645,14 @@ mod router_contract_tests {
         })
         .await
         .expect("build test runtime");
-        let event_publisher = runtime
-            .application_services()
-            .event_publisher
-            .expect("access stable websocket event publisher");
+        let services = runtime.application_services();
+        let session_store = services
+            .session_store
+            .expect("access websocket session store facade");
+        let workspace_repository = services
+            .repositories
+            .expect("access websocket repositories")
+            .workspace;
         let state = AppState::from_application(application_for_test(&runtime));
         let app = router(state);
         let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -820,8 +822,6 @@ mod router_contract_tests {
                     id: "global-subscription".into(),
                     request: agena_api::subscribe::SubscribeRequest {
                         scope: agena_api::Scope::Global,
-                        kinds: None,
-                        since_seq_global: None,
                     },
                 })
                 .expect("encode websocket subscribe request")
@@ -845,15 +845,23 @@ mod router_contract_tests {
                 if id == "global-subscription"
         ));
 
-        event_publisher
-            .publish_event(RuntimeEventPublishRequest::PluginEvent {
-                plugin_id: agena_plugin_host::PluginKey::new("contract", "fixture")
-                    .expect("build fixture plugin key"),
-                kind_label: "contract_event".to_owned(),
-                payload: serde_json::json!({"value": 42}),
+        let live_workspace_id = workspace_repository
+            .ensure_id(workspace_path.to_string_lossy().as_ref())
+            .await
+            .expect("create workspace for live patch");
+        let live_session = session_store
+            .create_session(agena_storage::store::NewSession {
+                workspace_id: live_workspace_id,
+                parent_id: None,
+                relation_kind: agena_domain::SessionRelationKind::Root,
+                cutoff_part_id: None,
+                title: "websocket live patch".to_owned(),
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
             })
             .await
-            .expect("publish websocket notification fixture event");
+            .expect("create session patch fixture");
         let notification = socket
             .next()
             .await
@@ -867,11 +875,13 @@ mod router_contract_tests {
         assert!(matches!(
             notification,
             agena_api::ws::ServerMessage::Notification(
-                agena_api::notifications::Notification::Event { subscription, event }
+                agena_api::notifications::Notification::SessionChanged { subscription, change }
             ) if subscription == "global-subscription"
-                && event.kind == "plugin_event"
-                && event.payload["kind_label"] == "contract_event"
-                && event.payload["payload"]["value"] == 42
+                && matches!(*change, agena_api::live::SessionChangeResource::SessionMetaUpdated {
+                    session_id,
+                    ref title,
+                    ..
+                } if session_id == live_session.id && title == "websocket live patch")
         ));
 
         socket

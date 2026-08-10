@@ -41,6 +41,23 @@ pub struct PaginatedResponse<T> {
     pub page: PageInfo,
 }
 
+/// Converts an application page to the `agena_api::pagination::PaginatedResponse`
+/// wire shape used by the WS/IPC protocol. The per-item conversion is a plain
+/// field projection; callers pass the item mapping explicitly.
+pub fn api_page_from_application<T, U>(
+    value: PaginatedResponse<T>,
+    mut map_item: impl FnMut(T) -> U,
+) -> agena_api::pagination::PaginatedResponse<U> {
+    agena_api::pagination::PaginatedResponse {
+        items: value.items.into_iter().map(&mut map_item).collect(),
+        page: agena_api::pagination::PageInfo {
+            next_cursor: value.page.next_cursor,
+            has_more: value.page.has_more,
+            returned: value.page.returned as u64,
+        },
+    }
+}
+
 pub fn encode_cursor<T>(value: &T) -> Result<String, ApplicationError>
 where
     T: Serialize,

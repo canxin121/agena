@@ -20,15 +20,7 @@ pub(crate) fn complete_part_status(parts: &mut [Part], part_id: i64) -> Result<(
     Ok(())
 }
 
-pub(crate) fn cancel_nonterminal_parts(parts: &mut [Part]) -> Result<(), AppError> {
-    terminalize_nonterminal_parts(parts, PartState::Cancelled)
-}
-
-pub(crate) fn fail_nonterminal_parts(parts: &mut [Part]) -> Result<(), AppError> {
-    terminalize_nonterminal_parts(parts, PartState::Failed)
-}
-
-fn terminalize_nonterminal_parts(
+pub(crate) fn terminalize_nonterminal_parts(
     parts: &mut [Part],
     terminal_state: PartState,
 ) -> Result<(), AppError> {

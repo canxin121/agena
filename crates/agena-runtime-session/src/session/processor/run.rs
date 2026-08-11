@@ -1,9 +1,9 @@
 use super::{
     AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, FinishReason, PathBuf,
     PendingProviderNativeToolCall, PendingToolCall, REASONING_PLACEHOLDER, SessionProcessor,
-    SessionRunRequest, SessionRunResult, SessionRunTermination, cancel_nonterminal_parts,
-    complete_part_status, fail_nonterminal_parts, map_finish_reason,
-    message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
+    SessionRunRequest, SessionRunResult, SessionRunTermination, complete_part_status,
+    map_finish_reason, message_provider_state_from_provider_metadata,
+    pending_tool_call_stream_key, terminalize_nonterminal_parts,
 };
 use crate::provider::ProviderRegistry;
 use agena_provider::{ProviderNativeToolArtifact, ProviderNativeToolOutputBlock};
@@ -458,9 +458,9 @@ impl SessionProcessor {
 
         if provider_err.is_some() {
             if cancelled {
-                cancel_nonterminal_parts(&mut parts)?;
+                terminalize_nonterminal_parts(&mut parts, PartState::Cancelled)?;
             } else {
-                fail_nonterminal_parts(&mut parts)?;
+                terminalize_nonterminal_parts(&mut parts, PartState::Failed)?;
             }
         } else {
             if let Some(part_id) = active_text_part.take() {

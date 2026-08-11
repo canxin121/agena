@@ -23,7 +23,8 @@ use crate::tool::ToolExecutor;
 use agena_domain::UserInputRequest;
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
-    PermissionDecision, PermissionRequest, PermissionScope, PolicySourceKind, RunAbortReason,
+    PermissionDecision, PermissionRequest, PermissionScope, PolicySourceKind,
+    PromptCompactionTrigger, RunAbortReason,
 };
 use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
 use agena_storage::store::{Part, PartRole, PartState};
@@ -668,9 +669,10 @@ impl SessionManager {
                     reserved_tokens = session_usage.reserved_tokens.unwrap_or_default(),
                     "automatic session compaction triggered before model run"
                 );
-                session = Box::pin(self.auto_compact_session(
+                session = Box::pin(self.automatic_compact_session(
                     session,
                     &current_options,
+                    PromptCompactionTrigger::Auto,
                     state.clone(),
                     control.clone(),
                 ))
@@ -815,9 +817,10 @@ impl SessionManager {
                         reactive_compaction_attempted = true;
                         let reloaded = self.store.load_session(session_id).await?;
                         let generation = reloaded.runtime.prompt_window.generation;
-                        let compacted = Box::pin(self.reactive_compact_session(
+                        let compacted = Box::pin(self.automatic_compact_session(
                             reloaded,
                             &current_options,
+                            PromptCompactionTrigger::Reactive,
                             state.clone(),
                             control.clone(),
                         ))
@@ -2146,7 +2149,15 @@ impl SessionManager {
                 .await
             }
             Err(ToolError::UserInputRequired(input)) => {
-                Box::pin(self.apply_user_input_request(session, pending_tool, *input, state)).await
+                let request_id = resolve_pending_tool(&session, pending_tool)?.operation_id;
+                Box::pin(self.apply_user_input_request_with_id(
+                    session,
+                    pending_tool,
+                    *input,
+                    request_id,
+                    state,
+                ))
+                .await
             }
             Err(error) => self.route_tool_error(session, pending_tool, error, state).await,
         }
@@ -2498,18 +2509,6 @@ impl SessionManager {
             state.clone(),
         )
         .await
-    }
-
-    pub(in crate::session::manager) async fn apply_user_input_request(
-        &self,
-        session: Session,
-        pending_tool: &SessionPendingTool,
-        input: crate::part::AskUserToolInput,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        let request_id = resolve_pending_tool(&session, pending_tool)?.operation_id;
-        self.apply_user_input_request_with_id(session, pending_tool, input, request_id, state)
-            .await
     }
 
     pub(in crate::session::manager) async fn apply_user_input_request_with_id(

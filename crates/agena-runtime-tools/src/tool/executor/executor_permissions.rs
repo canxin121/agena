@@ -354,16 +354,6 @@ impl ToolExecutor {
         self.push_path_checks(checks, sdk_path_kind_to_access_kind(kind), &target);
     }
 
-    pub fn requested_path_permission_check(
-        &self,
-        path: &str,
-        kind: SdkPathKind,
-    ) -> ToolPermissionCheck {
-        let mut checks = Vec::with_capacity(1);
-        self.push_requested_path_checks(&mut checks, path, kind);
-        checks.remove(0)
-    }
-
     pub(crate) fn push_filesystem_effect_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,

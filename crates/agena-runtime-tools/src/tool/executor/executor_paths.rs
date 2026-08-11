@@ -214,12 +214,6 @@ impl ToolExecutor {
         });
         Ok(())
     }
-
-    pub fn network_permission_check(&self, target: &str) -> Result<ToolPermissionCheck, ToolError> {
-        let mut checks = Vec::with_capacity(1);
-        self.push_network_check(&mut checks, target)?;
-        Ok(checks.remove(0))
-    }
 }
 use super::{
     AccessKind, NetworkTarget, Path, PathBuf, ShellOutput, ShellRequest, ToolError, ToolExecutor,

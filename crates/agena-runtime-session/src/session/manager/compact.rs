@@ -109,41 +109,7 @@ impl SessionManager {
         }
     }
 
-    pub(super) async fn auto_compact_session(
-        &self,
-        session: Session,
-        options: &SessionRunOptions,
-        state: Arc<SessionManagerState>,
-        control: Arc<ExecutionControl>,
-    ) -> Result<Session, AppError> {
-        self.automatic_compact_session(
-            session,
-            options,
-            PromptCompactionTrigger::Auto,
-            state,
-            control,
-        )
-        .await
-    }
-
-    pub(super) async fn reactive_compact_session(
-        &self,
-        session: Session,
-        options: &SessionRunOptions,
-        state: Arc<SessionManagerState>,
-        control: Arc<ExecutionControl>,
-    ) -> Result<Session, AppError> {
-        self.automatic_compact_session(
-            session,
-            options,
-            PromptCompactionTrigger::Reactive,
-            state,
-            control,
-        )
-        .await
-    }
-
-    async fn automatic_compact_session(
+    pub(super) async fn automatic_compact_session(
         &self,
         session: Session,
         options: &SessionRunOptions,

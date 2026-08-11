@@ -1311,7 +1311,7 @@ impl SessionManager {
     ) -> Result<agena_runtime::SessionToolExecutionOutcome, AppError> {
         let executor = self.tool_executor();
         let execution = executor
-            .execute_invocation_detailed(&invocation, -1, call_id)
+            .execute_invocation_detailed_with_prepared_shell(&invocation, -1, call_id, None)
             .await
             .map_err(tool_error_to_app_error)?;
         Ok(agena_runtime::SessionToolExecutionOutcome::Completed(

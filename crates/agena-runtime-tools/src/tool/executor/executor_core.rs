@@ -350,10 +350,6 @@ impl ToolExecutor {
             .is_none_or(|allowed| allowed.contains(entry.canonical_name().as_str()))
     }
 
-    pub fn detailed_tools(&self) -> Vec<RegisteredTool> {
-        self.available_registered_tools()
-    }
-
     pub async fn detailed_tools_async(&self) -> Vec<RegisteredTool> {
         self.available_registered_tools_async().await
     }
@@ -361,13 +357,6 @@ impl ToolExecutor {
     /// Return every ordinary execution tool visible to this session. There is
     /// no direct/deferred/hidden exposure tier; only the five Tool API handlers
     /// are excluded because they are protocol functions rather than targets.
-    pub fn detailed_execution_tools(&self) -> Vec<crate::tool::ExecutionTool> {
-        self.detailed_tools()
-            .into_iter()
-            .filter_map(crate::tool::ExecutionTool::from_registered_tool)
-            .collect()
-    }
-
     pub async fn detailed_execution_tools_async(&self) -> Vec<crate::tool::ExecutionTool> {
         self.detailed_tools_async()
             .await
@@ -376,23 +365,15 @@ impl ToolExecutor {
             .collect()
     }
 
-    pub fn available_tools(&self) -> Vec<RegisteredTool> {
-        self.available_registered_tools()
-    }
-
-    pub async fn available_tools_async(&self) -> Vec<RegisteredTool> {
-        self.available_registered_tools_async().await
-    }
-
     pub fn available_execution_tools(&self) -> Vec<crate::tool::ExecutionTool> {
-        self.available_tools()
+        self.available_registered_tools()
             .into_iter()
             .filter_map(crate::tool::ExecutionTool::from_registered_tool)
             .collect()
     }
 
     pub async fn available_execution_tools_async(&self) -> Vec<crate::tool::ExecutionTool> {
-        self.available_tools_async()
+        self.available_registered_tools_async()
             .await
             .into_iter()
             .filter_map(crate::tool::ExecutionTool::from_registered_tool)
@@ -403,7 +384,7 @@ impl ToolExecutor {
     /// function/tool protocol are the five stable agena.tools gateway handlers.
     pub fn available_tool_api_bindings(&self) -> Vec<ToolApiBinding> {
         let mut tools = self
-            .available_tools()
+            .available_registered_tools()
             .into_iter()
             .filter_map(ToolApiBinding::from_registered_tool)
             .collect::<Vec<_>>();

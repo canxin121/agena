@@ -15,10 +15,13 @@ impl App {
             area,
             &state.presentation,
             state.rows.as_slice(),
-            state.loading,
-            state.error.as_deref(),
-            state.log_tail.as_ref(),
-            now_ms,
+            agena_tui::activities::ActivitiesPanelContext {
+                loading: state.loading || state.mutation_loading,
+                error: state.error.as_deref(),
+                log_tail: state.log_tail.as_ref(),
+                log_error: state.log_error.as_deref(),
+                now_ms,
+            },
         );
     }
 }

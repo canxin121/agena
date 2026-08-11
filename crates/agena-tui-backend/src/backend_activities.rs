@@ -29,7 +29,9 @@ impl Backend {
             .get_activity(activity_id)
             .map_err(|error| anyhow!("{error}"))
             .context("failed to get background activity")?;
-        Ok(agena_api::resource::BackgroundActivityResource::from(&activity))
+        Ok(agena_api::resource::BackgroundActivityResource::from(
+            &activity,
+        ))
     }
 
     pub async fn activity_logs(
@@ -55,7 +57,9 @@ impl Backend {
             .await
             .map_err(|error| anyhow!("{error}"))
             .context("failed to stop background activity")?;
-        Ok(agena_api::resource::BackgroundActivityResource::from(&activity))
+        Ok(agena_api::resource::BackgroundActivityResource::from(
+            &activity,
+        ))
     }
 
     pub async fn dismiss_activity(&self, activity_id: &str) -> Result<()> {

@@ -317,6 +317,7 @@ impl App {
         self.refresh_status_line_if_due(now);
         self.poll_provider_studio_auth_if_due(now);
         self.refresh_background_activity_summary_if_due(now);
+        self.refresh_activities_panel_if_due(now);
         self.heal_plan_display_refresh();
         if let Some(error) = self.pending_draft_store_error.take() {
             self.report_draft_store_error(error);

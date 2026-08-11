@@ -15,27 +15,33 @@ impl App {
             } => self.handle_activity_log_loaded(activity_id, request_id, result),
             AppMessage::ActivitiesStopped {
                 activity_id,
+                request_id,
                 result,
             } => {
                 if let Err(error) = &result {
                     self.flash_error(error.clone());
                 }
-                self.handle_activities_stopped(activity_id, result.is_ok_and(|ok| ok));
+                self.handle_activities_stopped(activity_id, request_id, result.is_ok_and(|ok| ok));
             }
             AppMessage::ActivitiesDismissed {
                 activity_id,
+                request_id,
                 result,
             } => {
                 if let Err(error) = &result {
                     self.flash_error(error.clone());
                 }
-                self.handle_activities_dismissed(activity_id, result.is_ok_and(|ok| ok));
+                self.handle_activities_dismissed(
+                    activity_id,
+                    request_id,
+                    result.is_ok_and(|ok| ok),
+                );
             }
-            AppMessage::ActivitiesCleared { result } => {
+            AppMessage::ActivitiesCleared { request_id, result } => {
                 if let Err(error) = &result {
                     self.flash_error(error.clone());
                 }
-                self.handle_activities_cleared(result.is_ok_and(|ok| ok));
+                self.handle_activities_cleared(request_id, result.is_ok_and(|ok| ok));
             }
             AppMessage::PlanViewerLoaded { request_id, result } => {
                 self.handle_plan_viewer_loaded(request_id, result)

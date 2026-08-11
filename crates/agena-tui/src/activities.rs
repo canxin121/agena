@@ -135,6 +135,17 @@ pub fn visible_rows<'a>(
         .collect()
 }
 
+/// Resolve selection through the filtered display projection. The selected
+/// index is never an index into the unfiltered backing vector.
+pub fn selected_row<'a>(
+    rows: &'a [ActivitiesRow],
+    presentation: &ActivitiesPresentation,
+) -> Option<&'a ActivitiesRow> {
+    visible_rows(rows, presentation)
+        .get(presentation.selected)
+        .copied()
+}
+
 /// Line offset of each visible row in the rendered list, mirroring the
 /// renderer's section-header layout exactly. Used to keep the selected row
 /// visible while scrolling and to page by whole screens.
@@ -221,13 +232,15 @@ impl ActivitiesPresentation {
         self.scroll = 0;
     }
 
-    /// Cycle the status filter across running, pending, failed, succeeded, none.
+    /// Cycle across every lifecycle state exposed by the activity API.
     pub fn cycle_status_filter(&mut self) {
         self.status_filter = match self.status_filter.as_deref() {
             None => Some("running".to_owned()),
             Some("running") => Some("pending".to_owned()),
             Some("pending") => Some("failed".to_owned()),
             Some("failed") => Some("succeeded".to_owned()),
+            Some("succeeded") => Some("cancelled".to_owned()),
+            Some("cancelled") => Some("stopped".to_owned()),
             _ => None,
         };
         self.selected = 0;
@@ -305,32 +318,65 @@ fn special_color() -> ratatui::style::Color {
     agena_tui_components::theme::special_color()
 }
 
+/// Responsive list/detail geometry shared by rendering and keyboard paging.
+/// The list owns the full surface while detail is closed; narrow terminals
+/// stack detail vertically so neither pane becomes an unreadable sliver.
+pub fn activities_pane_areas(area: Rect, detail: bool) -> (Rect, Option<Rect>) {
+    if !detail {
+        return (area, None);
+    }
+    let direction = if area.width >= 100 {
+        Direction::Horizontal
+    } else {
+        Direction::Vertical
+    };
+    let panes = Layout::default()
+        .direction(direction)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(area);
+    (panes[0], Some(panes[1]))
+}
+
+/// Ephemeral runtime values used while drawing the panel. Keeping these
+/// separate from [`ActivitiesPresentation`] avoids mixing application-owned
+/// request state into the pure navigation model.
+#[derive(Debug, Clone, Copy)]
+pub struct ActivitiesPanelContext<'a> {
+    pub loading: bool,
+    pub error: Option<&'a str>,
+    pub log_tail: Option<&'a ActivitiesLogTail>,
+    pub log_error: Option<&'a str>,
+    pub now_ms: i64,
+}
+
 /// Render the complete activities panel into `area`.
 pub fn render_activities_panel(
     frame: &mut Frame,
     area: Rect,
     presentation: &ActivitiesPresentation,
     rows: &[ActivitiesRow],
-    loading: bool,
-    error: Option<&str>,
-    log_tail: Option<&ActivitiesLogTail>,
-    now_ms: i64,
+    context: ActivitiesPanelContext<'_>,
 ) {
-    let horizontal = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
-        .split(area);
+    let (list_area, detail_area) = activities_pane_areas(area, presentation.detail);
 
-    let list_area = horizontal[0];
-    let detail_area = if presentation.detail {
-        horizontal[1]
-    } else {
-        Rect::default()
-    };
-
-    render_list_pane(frame, list_area, presentation, rows, loading, error, now_ms);
-    if presentation.detail {
-        render_detail_pane(frame, detail_area, presentation, rows, log_tail);
+    render_list_pane(
+        frame,
+        list_area,
+        presentation,
+        rows,
+        context.loading,
+        context.error,
+        context.now_ms,
+    );
+    if let Some(detail_area) = detail_area {
+        render_detail_pane(
+            frame,
+            detail_area,
+            presentation,
+            rows,
+            context.log_tail,
+            context.log_error,
+        );
     }
 }
 
@@ -355,9 +401,16 @@ fn render_list_pane(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(muted_style())
-        .title(Line::from(Span::styled(title, Style::default().add_modifier(Modifier::BOLD))))
-        .title_bottom(Line::from(format!(
-            " {active_count} active · {finished_count} finished | ↑↓ select  PgUp/PgDn page  ↵ detail  s stop  d dismiss  x clear  r refresh  q close "
+        .title(Line::from(Span::styled(
+            title,
+            Style::default().add_modifier(Modifier::BOLD),
+        )))
+        .title_bottom(Line::from(action_bar(
+            presentation,
+            &visible,
+            active_count,
+            finished_count,
+            area.width,
         )));
 
     let inner = block.inner(area);
@@ -414,10 +467,44 @@ fn render_list_pane(
         .take(inner.height as usize)
         .cloned()
         .collect();
-    frame.render_widget(
-        Paragraph::new(visible_lines).wrap(Wrap { trim: false }),
-        inner,
-    );
+    // Rows intentionally stay single-line. Wrapping would make selection and
+    // paging disagree with rendered row heights on narrow terminals.
+    frame.render_widget(Paragraph::new(visible_lines), inner);
+}
+
+fn action_bar(
+    presentation: &ActivitiesPresentation,
+    visible: &[&ActivitiesRow],
+    active_count: usize,
+    finished_count: usize,
+    width: u16,
+) -> String {
+    // Keep close/selection at the front so tiny terminals clip optional
+    // controls rather than the only reliable way out of the overlay.
+    let mut actions = vec![
+        "Esc close".to_owned(),
+        "↑↓ move".to_owned(),
+        "↵ detail".to_owned(),
+    ];
+    if let Some(row) = visible.get(presentation.selected) {
+        if row.is_active() && row.cancellable {
+            actions.push("s stop".to_owned());
+        }
+        if row.dismissible {
+            actions.push("d dismiss".to_owned());
+        }
+    }
+    if finished_count > 0 {
+        actions.push("x clear".to_owned());
+    }
+    if width >= 90 {
+        actions.push("f/k/t filters".to_owned());
+    }
+    actions.push("r refresh".to_owned());
+    format!(
+        " {active_count} active · {finished_count} finished | {} ",
+        actions.join("  ")
+    )
 }
 
 fn render_row_line(row: &ActivitiesRow, selected: bool, now_ms: i64) -> Line<'static> {
@@ -464,6 +551,7 @@ fn render_detail_pane(
     presentation: &ActivitiesPresentation,
     rows: &[ActivitiesRow],
     log_tail: Option<&ActivitiesLogTail>,
+    log_error: Option<&str>,
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -475,8 +563,7 @@ fn render_detail_pane(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let visible = visible_rows(rows, presentation);
-    let Some(selected) = visible.get(presentation.selected) else {
+    let Some(selected) = selected_row(rows, presentation) else {
         frame.render_widget(
             Paragraph::new(vec![Line::from(Span::styled(
                 " No selection.",
@@ -519,32 +606,45 @@ fn render_detail_pane(
     }
     lines.push(Line::from(""));
 
+    if let Some(error) = log_error {
+        lines.push(Line::from(Span::styled(
+            format!(" ✗ {error}"),
+            Style::default().fg(danger_color()),
+        )));
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        return;
+    }
+
     match log_tail {
         Some(tail) if !tail.lines.is_empty() => {
             lines.push(Line::from(Span::styled(
-                " — output — ",
+                format!(" — output · seq {} — ", tail.last_seq),
                 Style::default()
                     .fg(warning_color())
                     .add_modifier(Modifier::BOLD),
             )));
-            let skipped = tail.dropped_lines;
-            for line in tail
-                .lines
-                .iter()
-                .rev()
-                .take(inner.height.saturating_sub(6) as usize)
-            {
+            let marker_lines = usize::from(tail.has_more || tail.dropped_lines > 0);
+            let available = (inner.height as usize)
+                .saturating_sub(lines.len())
+                .saturating_sub(marker_lines);
+            let start = tail.lines.len().saturating_sub(available);
+            for line in tail.lines.iter().skip(start) {
                 lines.push(Line::from(Span::styled(line.clone(), Style::default())));
             }
-            if tail.has_more {
+            if tail.has_more || tail.dropped_lines > 0 {
                 lines.push(Line::from(Span::styled(
-                    format!(" … {skipped} older lines dropped"),
+                    format!(" … {} older lines not shown", tail.dropped_lines),
                     muted_style(),
                 )));
             }
         }
         Some(_) => {
-            lines.push(Line::from(Span::styled(" No output yet.", muted_style())));
+            let message = if selected.is_active() {
+                " Waiting for output…"
+            } else {
+                " No output recorded."
+            };
+            lines.push(Line::from(Span::styled(message, muted_style())));
         }
         None => {
             lines.push(Line::from(Span::styled(
@@ -576,7 +676,12 @@ fn filter_suffix(presentation: &ActivitiesPresentation) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActivitiesPresentation, ActivitiesRow, row_line_offsets};
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+    use super::{
+        ActivitiesLogTail, ActivitiesPanelContext, ActivitiesPresentation, ActivitiesRow,
+        activities_pane_areas, render_activities_panel, row_line_offsets, selected_row,
+    };
 
     fn row(kind: &str, status: &str) -> ActivitiesRow {
         ActivitiesRow {
@@ -635,5 +740,125 @@ mod tests {
         };
         p2.reveal_selected(&[], 10);
         assert_eq!((p2.selected, p2.scroll), (0, 0));
+    }
+
+    #[test]
+    fn selected_row_resolves_through_filters() {
+        let rows = [
+            row("shell", "running"),
+            row("browser", "running"),
+            row("task", "failed"),
+        ];
+        let presentation = ActivitiesPresentation {
+            selected: 0,
+            kind_filter: Some("browser".to_owned()),
+            ..ActivitiesPresentation::default()
+        };
+        assert_eq!(
+            selected_row(&rows, &presentation).map(|row| row.id.as_str()),
+            Some("id-browser-running")
+        );
+    }
+
+    #[test]
+    fn status_filter_cycles_cancelled_and_stopped() {
+        let mut presentation = ActivitiesPresentation::default();
+        let mut statuses = Vec::new();
+        for _ in 0..7 {
+            presentation.cycle_status_filter();
+            statuses.push(presentation.status_filter.clone());
+        }
+        assert_eq!(
+            statuses,
+            vec![
+                Some("running".to_owned()),
+                Some("pending".to_owned()),
+                Some("failed".to_owned()),
+                Some("succeeded".to_owned()),
+                Some("cancelled".to_owned()),
+                Some("stopped".to_owned()),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn detail_layout_is_full_width_closed_and_responsive_when_open() {
+        let area = Rect::new(0, 0, 120, 40);
+        assert_eq!(activities_pane_areas(area, false), (area, None));
+
+        let (wide_list, wide_detail) = activities_pane_areas(area, true);
+        let wide_detail = wide_detail.expect("wide detail pane");
+        assert_eq!(wide_list.y, wide_detail.y);
+        assert!(wide_list.x < wide_detail.x);
+
+        let (narrow_list, narrow_detail) = activities_pane_areas(Rect::new(0, 0, 80, 40), true);
+        let narrow_detail = narrow_detail.expect("narrow detail pane");
+        assert_eq!(narrow_list.x, narrow_detail.x);
+        assert!(narrow_list.y < narrow_detail.y);
+    }
+
+    fn render_to_rows(
+        width: u16,
+        height: u16,
+        presentation: &ActivitiesPresentation,
+        rows: &[ActivitiesRow],
+        log_tail: Option<&ActivitiesLogTail>,
+    ) -> Vec<String> {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| {
+                render_activities_panel(
+                    frame,
+                    frame.area(),
+                    presentation,
+                    rows,
+                    ActivitiesPanelContext {
+                        loading: false,
+                        error: None,
+                        log_tail,
+                        log_error: None,
+                        now_ms: 10_000,
+                    },
+                );
+            })
+            .expect("render activities");
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn narrow_footer_exposes_the_real_close_key() {
+        let rows = [row("shell", "running")];
+        let rendered =
+            render_to_rows(80, 20, &ActivitiesPresentation::default(), &rows, None).join("\n");
+        assert!(rendered.contains("Esc close"), "{rendered}");
+        assert!(!rendered.contains("q close"), "{rendered}");
+    }
+
+    #[test]
+    fn detail_log_tail_keeps_chronological_order() {
+        let rows = [row("shell", "running")];
+        let presentation = ActivitiesPresentation {
+            detail: true,
+            ..ActivitiesPresentation::default()
+        };
+        let tail = ActivitiesLogTail {
+            lines: vec!["first output".to_owned(), "second output".to_owned()],
+            last_seq: 2,
+            has_more: false,
+            dropped_lines: 0,
+        };
+        let rendered = render_to_rows(120, 30, &presentation, &rows, Some(&tail)).join("\n");
+        let first = rendered.find("first output").expect("first log line");
+        let second = rendered.find("second output").expect("second log line");
+        assert!(first < second, "{rendered}");
     }
 }

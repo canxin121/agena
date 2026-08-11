@@ -34,7 +34,24 @@ The dedicated panel currently supports:
 
 The session 25 hang was a session-state livelock. The session 26 hang was an unbounded broad `fs.grep`. Neither was caused by this panel's renderer. However, the panel's lack of live refresh and incomplete activity coverage made both incidents harder to diagnose because it could not show a trustworthy “what is actually running now” view.
 
-## Recommended redesign order
+## Implemented remediation
+
+The dedicated panel was corrected after this audit:
+
+- request IDs are now written directly to the temporarily detached route state, fixing reload and log responses that were always discarded as stale during key handling;
+- selection is resolved through the filtered projection for detail, stop, and dismiss actions;
+- list and log polling have separate in-flight gates, cadences, request IDs, and ten-second deadlines;
+- stop/dismiss/clear mutations have their own gate and monotonic request ID, so a list response or a response from a previously closed panel cannot unlock or mutate a newer operation;
+- the footer summary reserves its poll window before spawning, preventing one request per 50 ms UI tick while the first request is pending;
+- active logs use a stable sequence cursor, append chronologically, retain at most 500 lines, and distinguish waiting, no output, truncation, and read errors;
+- the list uses the full width while detail is closed, splits horizontally on wide terminals, and stacks vertically on narrow terminals;
+- rows are constrained to one rendered line so keyboard selection and scroll offsets cannot drift;
+- the command bar exposes the actual `Esc` close binding first, shows only legal row actions, and keeps active filters in the title;
+- cancelled and stopped are now part of the status-filter cycle.
+
+Renderer, responsive-layout, filtered-selection, log-order, and bounded-log-merge behavior are covered by targeted tests. Foreground session/tool execution is still not projected into this registry; that is a model-coverage enhancement rather than a panel liveness defect.
+
+## Original redesign order
 
 1. Fix filtered-index identity and action targeting before visual changes.
 2. Add event-driven refresh and stable log cursors; show last-output time and explicit “waiting / no new output” state.

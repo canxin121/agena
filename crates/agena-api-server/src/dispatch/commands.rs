@@ -1,4 +1,3 @@
-use crate::dispatch::{ApplicationResultExt, IntoWire};
 use agena_application::ApplicationSessionServices;
 use agena_application::dto::{SessionCreateRequest, SessionHierarchyRequest, SessionUpdateRequest};
 use agena_application::session::{
@@ -35,9 +34,8 @@ pub async fn dispatch_command(
             let workspace = state
                 .service()
                 .create_workspace(WorkspacePathRequest { path })
-                .await
-                .application()?;
-            Ok(CommandResult::Workspace(workspace.into_wire()))
+                .await?;
+            Ok(CommandResult::Workspace(workspace))
         }
         Command::UpdateWorkspace(UpdateWorkspaceParams {
             workspace_id, path, ..
@@ -45,16 +43,14 @@ pub async fn dispatch_command(
             let workspace = state
                 .service()
                 .replace_workspace(workspace_id, WorkspacePathRequest { path })
-                .await
-                .application()?;
-            Ok(CommandResult::Workspace(workspace.into_wire()))
+                .await?;
+            Ok(CommandResult::Workspace(workspace))
         }
         Command::DeleteWorkspace(DeleteWorkspaceParams { workspace_id }) => {
             state
                 .service()
                 .delete_workspace(workspace_id)
-                .await
-                .application()?;
+                .await?;
             Ok(CommandResult::WorkspaceDeleted { id: workspace_id })
         }
         Command::ResolveWorkspace(ResolveWorkspaceParams {
@@ -67,9 +63,8 @@ pub async fn dispatch_command(
                     workspace: WorkspacePathRequest { path },
                     create_if_missing,
                 })
-                .await
-                .application()?;
-            Ok(CommandResult::Workspace(workspace.into_wire()))
+                .await?;
+            Ok(CommandResult::Workspace(workspace))
         }
         Command::CreateSession(CreateSessionParams {
             workspace_id,
@@ -82,8 +77,7 @@ pub async fn dispatch_command(
                     workspace_id,
                     session: SessionHierarchyRequest { title, parent_id },
                 })
-                .await
-                .application()?;
+                .await?;
             Ok(CommandResult::Session(session))
         }
         Command::SubmitMessage(SubmitRunParams {
@@ -249,14 +243,12 @@ pub async fn dispatch_command(
                 state
                     .service()
                     .assert_session_version(session_id, expected_version)
-                    .await
-                    .application()?;
+                    .await?;
             }
             let session = state
                 .service()
                 .replace_session(session_id, SessionUpdateRequest { title })
-                .await
-                .application()?;
+                .await?;
             Ok(CommandResult::Session(session))
         }
         Command::UpdateSessionSelection(UpdateSessionSelectionParams {
@@ -279,14 +271,12 @@ pub async fn dispatch_command(
                 state
                     .service()
                     .assert_session_version(session_id, expected_version)
-                    .await
-                    .application()?;
+                    .await?;
             }
             state
                 .service()
                 .delete_session(session_id)
-                .await
-                .application()?;
+                .await?;
             Ok(CommandResult::SessionDeleted { id: session_id })
         }
         Command::UpsertPermissionRule(UpsertPermissionRuleParams {
@@ -321,9 +311,8 @@ pub async fn dispatch_command(
                     session_id,
                     mode,
                 })
-                .await
-                .application()?;
-            Ok(CommandResult::PermissionRule(rule.into_wire()))
+                .await?;
+            Ok(CommandResult::PermissionRule(rule))
         }
         Command::ReplacePermissionRule(ReplacePermissionRuleParams { rule_id, rule }) => {
             let rule = state
@@ -346,24 +335,21 @@ pub async fn dispatch_command(
                         mode: rule.mode,
                     },
                 )
-                .await
-                .application()?;
-            Ok(CommandResult::PermissionRule(rule.into_wire()))
+                .await?;
+            Ok(CommandResult::PermissionRule(rule))
         }
         Command::RevokePermissionRule(RevokePermissionRuleParams { rule_id, reason }) => {
             let rule = state
                 .service()
                 .revoke_permission_rule(rule_id, reason)
-                .await
-                .application()?;
-            Ok(CommandResult::PermissionRule(rule.into_wire()))
+                .await?;
+            Ok(CommandResult::PermissionRule(rule))
         }
         Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
             state
                 .service()
                 .delete_permission_rule(rule_id)
-                .await
-                .application()?;
+                .await?;
             Ok(CommandResult::PermissionRuleDeleted { id: rule_id })
         }
         Command::StopActivity(StopActivityParams { activity_id }) => {

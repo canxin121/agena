@@ -55,7 +55,7 @@ async fn resolve_installation_id_in(base_dir: &Path) -> io::Result<String> {
                 }
             }
             Ok(installation_id)
-        })
+        })?
     })
     .await
     .map_err(|error| io::Error::other(format!("installation-id worker failed: {error}")))?

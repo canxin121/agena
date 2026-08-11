@@ -86,7 +86,7 @@ pub(crate) async fn run_status_line_command(
     focus: String,
 ) -> Option<String> {
     const STATUS_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
-    const STATUS_COMMAND_OUTPUT_LIMIT: u64 = 64 * 1024;
+    const STATUS_COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
 
     let mut cmd = if cfg!(windows) {
         let mut cmd = Command::new("cmd");
@@ -97,8 +97,7 @@ pub(crate) async fn run_status_line_command(
         cmd.args(["-lc", command.as_str()]);
         cmd
     };
-    cmd.kill_on_drop(true)
-        .stdin(Stdio::null())
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     cmd.env("AGENA_TUI_FOCUS", focus);
@@ -106,12 +105,28 @@ pub(crate) async fn run_status_line_command(
         cmd.env("AGENA_SESSION_ID", session_id);
     }
     tokio::time::timeout(STATUS_COMMAND_TIMEOUT, async move {
-        let mut child = cmd.spawn().ok()?;
-        let stdout = child.stdout.take()?;
-        let mut output = Vec::new();
-        let mut limited = stdout.take(STATUS_COMMAND_OUTPUT_LIMIT);
-        let (read, status) = tokio::join!(limited.read_to_end(&mut output), child.wait());
-        read.ok()?;
+        let mut child = agena_process::spawn(cmd).ok()?;
+        let mut stdout = child.stdout().take()?;
+        let read_output = async move {
+            let mut output = Vec::new();
+            let mut exceeded = false;
+            let mut chunk = [0_u8; 8 * 1024];
+            loop {
+                let read = stdout.read(&mut chunk).await.ok()?;
+                if read == 0 {
+                    break;
+                }
+                let remaining = STATUS_COMMAND_OUTPUT_LIMIT.saturating_sub(output.len());
+                output.extend_from_slice(&chunk[..read.min(remaining)]);
+                exceeded |= read > remaining;
+            }
+            Some((output, exceeded))
+        };
+        let (read, status) = tokio::join!(read_output, child.wait());
+        let (output, exceeded) = read?;
+        if exceeded {
+            return None;
+        }
         if !status.ok()?.success() {
             return None;
         }

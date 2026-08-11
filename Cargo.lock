@@ -197,6 +197,7 @@ dependencies = [
  "agena-failure",
  "agena-notification",
  "agena-plugin-host",
+ "agena-process",
  "agena-provider",
  "agena-runtime",
  "agena-runtime-contracts",
@@ -306,6 +307,7 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "tokio-util",
  "tokio_sse_codec",
+ "tracing",
  "url",
  "uuid",
 ]
@@ -382,6 +384,7 @@ dependencies = [
 name = "agena-git-http"
 version = "0.1.0"
 dependencies = [
+ "agena-process",
  "async-stream",
  "axum",
  "base64",
@@ -414,14 +417,19 @@ dependencies = [
 name = "agena-lsp"
 version = "0.1.0"
 dependencies = [
+ "agena-process",
+ "agena-stdio-codec",
  "arc-swap",
  "async-trait",
+ "bytes",
  "dashmap",
+ "futures-util",
  "lsp-types",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-util",
  "tracing",
  "url",
 ]
@@ -462,6 +470,7 @@ version = "0.1.0"
 dependencies = [
  "agena-failure",
  "agena-keyring-store",
+ "agena-process",
  "async-trait",
  "http 1.4.2",
  "oauth2",
@@ -545,12 +554,16 @@ dependencies = [
  "abi_stable",
  "agena-failure",
  "agena-plugin-sdk",
+ "agena-process",
+ "agena-stdio-codec",
  "async-trait",
  "blake3",
+ "bytes",
  "dashmap",
  "ed25519-dalek",
  "futures-util",
  "hex",
+ "jsonschema",
  "regex",
  "reqwest 0.13.4",
  "serde",
@@ -593,10 +606,13 @@ dependencies = [
  "agena-domain",
  "agena-failure",
  "agena-macros",
+ "agena-stdio-codec",
  "agena-tool",
  "async-trait",
  "axum",
  "bitflags 2.13.1",
+ "bytes",
+ "futures-util",
  "indexmap",
  "proc-macro-error2",
  "ratatui-image",
@@ -609,9 +625,19 @@ dependencies = [
  "serde_path_to_error",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-util",
  "trybuild",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "agena-process"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "process-wrap",
+ "tokio",
 ]
 
 [[package]]
@@ -726,11 +752,11 @@ dependencies = [
  "arc-swap",
  "async-stream",
  "async-trait",
+ "axum",
  "base64",
  "blake3",
  "chrono",
  "derive_more",
- "diff",
  "futures-core",
  "futures-util",
  "globset",
@@ -739,6 +765,7 @@ dependencies = [
  "http 1.4.2",
  "imagesize 0.15.0",
  "indexmap",
+ "infer",
  "libc",
  "log",
  "merge",
@@ -750,6 +777,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.4",
  "schemars",
+ "scraper",
  "sea-orm",
  "serde",
  "serde_json",
@@ -1030,6 +1058,7 @@ dependencies = [
  "agena-lsp",
  "agena-plugin-host",
  "agena-plugin-sdk",
+ "agena-process",
  "agena-provider",
  "agena-runtime-contracts",
  "agena-scheduler",
@@ -1039,7 +1068,7 @@ dependencies = [
  "blake3",
  "chrono",
  "content_inspector",
- "diff",
+ "fs4",
  "futures-core",
  "futures-util",
  "globset",
@@ -1050,6 +1079,7 @@ dependencies = [
  "ignore",
  "imagesize 0.15.0",
  "indexmap",
+ "infer",
  "libc",
  "mime_guess",
  "parking_lot",
@@ -1062,6 +1092,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "shlex",
+ "similar",
  "smol_str",
  "strum 0.28.0",
  "tempfile",
@@ -1104,6 +1135,16 @@ dependencies = [
  "thiserror 2.0.19",
  "tracing",
  "yaml_serde",
+]
+
+[[package]]
+name = "agena-stdio-codec"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "httparse",
+ "thiserror 2.0.19",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1192,6 +1233,7 @@ dependencies = [
  "agena-notification",
  "agena-plugin-host",
  "agena-plugin-sdk",
+ "agena-process",
  "agena-provider",
  "agena-runtime",
  "agena-tui",
@@ -2884,6 +2926,17 @@ name = "census"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f4c707c6a209cbe82d10abd08e1ea8995e9ea937d2550646e02798948992be0"
+
+[[package]]
+name = "cfb"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a347dcabdae9c31b0825fd6a8bed285ec9c2acb89c47827126d52fa4f59cece3"
+dependencies = [
+ "fnv",
+ "uuid",
+ "web-time",
+]
 
 [[package]]
 name = "cfg-if"
@@ -5572,6 +5625,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "79cf5c93f93228cf8efb3ba362535fb11199ac548a09ce117c9b1adc3030d706"
 dependencies = [
  "rustversion",
+]
+
+[[package]]
+name = "infer"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4200d433cbd5178df7797c9c2e75b348b728e39631cf14520d1e2fc424201f4"
+dependencies = [
+ "cfb",
 ]
 
 [[package]]
@@ -9343,6 +9405,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c9628dcb1d2bb7446ad04e2c6c765d9eff363b9b8a88033303dabbcc9dd60c02"
 dependencies = [
  "siphasher 0.3.11",
+]
+
+[[package]]
+name = "similar"
+version = "3.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85ee016af5d736b69fc89e19254540fa4b5f5492853fb5503920f084011c78b6"
+dependencies = [
+ "bstr",
 ]
 
 [[package]]

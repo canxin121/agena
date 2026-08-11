@@ -610,10 +610,8 @@ pub(crate) async fn git_config_get(
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::null());
-    cmd.kill_on_drop(true);
-    let out = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output())
+    let out = agena_process::output(cmd, std::time::Duration::from_secs(10), 1024 * 1024)
         .await
-        .ok()?
         .ok()?;
     if !out.status.success() {
         return None;

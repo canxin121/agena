@@ -294,6 +294,7 @@ impl FsPlugin {
                     Vec::new(),
                 ))
             })
+            .map_err(fs_error)?
         })
         .await
     }
@@ -384,6 +385,7 @@ impl FsPlugin {
                     Vec::new(),
                 ))
             })
+            .map_err(fs_error)?
         })
         .await
     }

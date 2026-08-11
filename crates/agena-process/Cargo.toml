@@ -1,0 +1,15 @@
+[package]
+name = "agena-process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Cross-platform Tokio subprocess lifecycle policy for Agena"
+
+[dependencies]
+libc = { workspace = true }
+process-wrap = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "process", "rt", "time"] }
+
+[lints]
+workspace = true

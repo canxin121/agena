@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::{CrawlError, canonicalize_url};
 
 const DEFAULT_SEARCH_TIMEOUT: Duration = Duration::from_secs(20);
+const MAX_SEARCH_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const BING_BASE: &str = "https://cn.bing.com/search";
 const DDG_HTML_URL: &str = "https://html.duckduckgo.com/html/";
 const BAIDU_BASE: &str = "https://www.baidu.com/s";
@@ -178,6 +179,28 @@ fn browser_headers(user_agent: &str) -> HeaderMap {
     headers
 }
 
+async fn response_text_bounded(mut response: reqwest::Response) -> Result<String, CrawlError> {
+    response = response.error_for_status()?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_SEARCH_RESPONSE_BYTES as u64)
+    {
+        return Err(CrawlError::ResponseTooLarge {
+            maximum_bytes: MAX_SEARCH_RESPONSE_BYTES,
+        });
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if bytes.len().saturating_add(chunk.len()) > MAX_SEARCH_RESPONSE_BYTES {
+            return Err(CrawlError::ResponseTooLarge {
+                maximum_bytes: MAX_SEARCH_RESPONSE_BYTES,
+            });
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 async fn search_bing(
     query: &str,
     limit: usize,
@@ -199,13 +222,7 @@ async fn search_bing(
         headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
         headers.insert(UPGRADE_INSECURE_REQUESTS, HeaderValue::from_static("1"));
 
-        let html = client
-            .get(url)
-            .headers(headers)
-            .send()
-            .await?
-            .text()
-            .await?;
+        let html = response_text_bounded(client.get(url).headers(headers).send().await?).await?;
         let page_results = parse_bing_results(html.as_str(), limit - all.len());
         if page_results.is_empty() {
             break;
@@ -231,14 +248,15 @@ async fn search_duckduckgo(
         HeaderValue::from_static("application/x-www-form-urlencoded"),
     );
 
-    let html = client
-        .post(DDG_HTML_URL)
-        .headers(headers.clone())
-        .body(format!("q={}&kl=cn-zh", urlencoding::encode(query)))
-        .send()
-        .await?
-        .text()
-        .await?;
+    let html = response_text_bounded(
+        client
+            .post(DDG_HTML_URL)
+            .headers(headers.clone())
+            .body(format!("q={}&kl=cn-zh", urlencoding::encode(query)))
+            .send()
+            .await?,
+    )
+    .await?;
     all.extend(parse_duckduckgo_results(html.as_str(), limit));
 
     let mut offset = 30usize;
@@ -249,13 +267,8 @@ async fn search_duckduckgo(
             urlencoding::encode(query),
             offset
         );
-        let html = client
-            .get(url)
-            .headers(headers.clone())
-            .send()
-            .await?
-            .text()
-            .await?;
+        let html =
+            response_text_bounded(client.get(url).headers(headers.clone()).send().await?).await?;
         let page_results = parse_duckduckgo_results(html.as_str(), limit - all.len());
         if page_results.is_empty() {
             break;
@@ -287,13 +300,7 @@ async fn search_baidu(
         let mut headers = browser_headers(options.user_agent.as_str());
         headers.insert(REFERER, HeaderValue::from_static("https://www.baidu.com/"));
 
-        let html = client
-            .get(url)
-            .headers(headers)
-            .send()
-            .await?
-            .text()
-            .await?;
+        let html = response_text_bounded(client.get(url).headers(headers).send().await?).await?;
         let page_results = parse_baidu_results(html.as_str(), limit - all.len());
         if page_results.is_empty() {
             break;

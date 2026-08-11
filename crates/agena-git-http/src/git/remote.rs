@@ -495,13 +495,11 @@ async fn ssh_agent_probe() -> (bool, bool, Option<String>) {
     // `ssh-add -L` prints public keys; it should not require interaction.
     let mut cmd = Command::new("ssh-add");
     cmd.args(["-L"])
-        .kill_on_drop(true)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let out = tokio::time::timeout(Duration::from_secs(2), cmd.output()).await;
-    let Ok(Ok(output)) = out else {
+    let Ok(output) = agena_process::output(cmd, Duration::from_secs(2), 1024 * 1024).await else {
         return (
             true,
             false,

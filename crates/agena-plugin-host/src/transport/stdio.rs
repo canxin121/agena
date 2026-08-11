@@ -10,11 +10,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
+use agena_process::ManagedChild;
+use agena_stdio_codec::ContentLengthCodec;
 use async_trait::async_trait;
+use bytes::Bytes;
 use dashmap::DashMap;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use futures_util::{SinkExt as _, StreamExt as _};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
+use tokio_util::codec::{FramedRead, FramedWrite};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{RestartMode, RestartPolicy};
@@ -88,12 +93,12 @@ struct Inner {
 
 struct ChildHandles {
     generation: u64,
-    child: Child,
+    child: ManagedChild,
     writer: mpsc::Sender<WriteRequest>,
 }
 
 struct WriteRequest {
-    body: Vec<u8>,
+    body: Bytes,
     completion: oneshot::Sender<Result<(), String>>,
 }
 
@@ -281,15 +286,14 @@ impl Inner {
         cmd.args(&self.spawn_spec.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .stderr(Stdio::piped());
         for (k, v) in &self.spawn_spec.env {
             cmd.env(k, v);
         }
         if let Some(cwd) = &self.spawn_spec.cwd {
             cmd.current_dir(cwd);
         }
-        let mut child = match cmd.spawn() {
+        let mut child = match agena_process::spawn(cmd) {
             Ok(child) => child,
             Err(err) => {
                 let message = err.to_string();
@@ -307,14 +311,14 @@ impl Inner {
         };
         let pid = child.id();
         let stdin = child
-            .stdin
+            .stdin()
             .take()
             .ok_or_else(|| TransportError::Io("no stdin".into()))?;
         let stdout = child
-            .stdout
+            .stdout()
             .take()
             .ok_or_else(|| TransportError::Io("no stdout".into()))?;
-        let stderr = child.stderr.take();
+        let stderr = child.stderr().take();
         let generation = self.child_generation.fetch_add(1, Ordering::SeqCst) + 1;
 
         // One task owns stdin for the lifetime of this child. A bounded
@@ -323,7 +327,7 @@ impl Inner {
         let (writer, mut write_requests) = mpsc::channel::<WriteRequest>(64);
         let writer_shutdown = self.shutdown.clone();
         tokio::spawn(async move {
-            let mut stdin = stdin;
+            let mut stdin = FramedWrite::new(stdin, ContentLengthCodec::new(MAX_FRAME_BYTES));
             loop {
                 let request = tokio::select! {
                     biased;
@@ -331,7 +335,6 @@ impl Inner {
                     request = write_requests.recv() => request,
                 };
                 let Some(request) = request else { return };
-                let header = format!("Content-Length: {}\r\n\r\n", request.body.len());
                 let write = async {
                     tokio::select! {
                         biased;
@@ -341,11 +344,9 @@ impl Inner {
                                 "plugin transport closed",
                             ))
                         }
-                        result = async {
-                            stdin.write_all(header.as_bytes()).await?;
-                            stdin.write_all(request.body.as_slice()).await?;
-                            stdin.flush().await
-                        } => result,
+                        result = stdin.send(request.body) => {
+                            result.map_err(std::io::Error::other)
+                        },
                     }
                 };
                 let result = tokio::time::timeout(WRITE_TIMEOUT, write)
@@ -373,22 +374,29 @@ impl Inner {
         {
             let this = Arc::clone(&self);
             tokio::spawn(async move {
-                let mut reader = BufReader::new(stdout);
+                let mut reader = FramedRead::new(stdout, ContentLengthCodec::new(MAX_FRAME_BYTES));
                 loop {
                     let frame = tokio::select! {
                         biased;
                         _ = this.shutdown.cancelled() => break,
-                        frame = read_frame(&mut reader) => frame,
+                        frame = reader.next() => frame,
                     };
                     match frame {
-                        Ok(Some(frame)) => {
-                            this.handle_inbound(frame).await;
-                        }
-                        Ok(None) => break,
-                        Err(e) => {
+                        Some(Ok(body)) => match serde_json::from_slice::<Frame>(body.as_ref()) {
+                            Ok(frame) => this.handle_inbound(frame).await,
+                            Err(error) => {
+                                tracing::warn!(
+                                    target: "agena_plugin_host::stdio",
+                                    "stdio JSON-RPC decode error: {error}"
+                                );
+                                break;
+                            }
+                        },
+                        None => break,
+                        Some(Err(error)) => {
                             tracing::warn!(
                                 target: "agena_plugin_host::stdio",
-                                "stdio read error: {e}"
+                                "stdio framing error: {error}"
                             );
                             break;
                         }
@@ -546,7 +554,8 @@ impl Inner {
                     let _callback_slot = callback_slot;
                     let id = req.id.clone();
                     let callback = async {
-                        if let Some(handler) = inner.host_handler.lock().await.clone() {
+                        let handler = { inner.host_handler.lock().await.clone() };
+                        if let Some(handler) = handler {
                             handler(req.method, req.params.unwrap_or(serde_json::Value::Null)).await
                         } else {
                             Err(PluginError::from_kind(
@@ -615,7 +624,7 @@ impl Inner {
         let write = async {
             writer
                 .send(WriteRequest {
-                    body: body.to_vec(),
+                    body: Bytes::copy_from_slice(body),
                     completion,
                 })
                 .await
@@ -708,7 +717,8 @@ impl Inner {
                 }
             }
             _ => {
-                if let Some(handler) = self.host_handler.lock().await.clone() {
+                let handler = { self.host_handler.lock().await.clone() };
+                if let Some(handler) = handler {
                     let method = notif.method;
                     let params = notif.params.unwrap_or(serde_json::Value::Null);
                     tokio::select! {
@@ -895,40 +905,6 @@ fn exp_backoff(min: Duration, max: Duration, attempt: u32) -> Duration {
     scaled.min(max)
 }
 
-async fn read_frame<R: AsyncBufReadExt + Unpin>(
-    reader: &mut R,
-) -> Result<Option<Frame>, TransportError> {
-    let mut content_length: Option<usize> = None;
-    loop {
-        let mut line = String::new();
-        let n = reader.read_line(&mut line).await?;
-        if n == 0 {
-            return Ok(None);
-        }
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed.is_empty() {
-            break;
-        }
-        if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
-            content_length = Some(
-                rest.trim()
-                    .parse()
-                    .map_err(|_| TransportError::Rpc("bad Content-Length".into()))?,
-            );
-        }
-    }
-    let len = content_length.ok_or_else(|| TransportError::Rpc("missing Content-Length".into()))?;
-    if len > MAX_FRAME_BYTES {
-        return Err(TransportError::Rpc(format!(
-            "plugin frame exceeds the {MAX_FRAME_BYTES}-byte limit"
-        )));
-    }
-    let mut buf = vec![0u8; len];
-    reader.read_exact(&mut buf).await?;
-    let frame: Frame = serde_json::from_slice(&buf)?;
-    Ok(Some(frame))
-}
-
 #[async_trait]
 impl PluginTransport for StdioTransport {
     async fn dispatch(
@@ -1033,11 +1009,12 @@ impl PluginTransport for StdioTransport {
         // child. Wait for that transaction, then take exactly the published
         // generation. A spawn sleeping in restart backoff observes `closed`
         // after waking and exits without resurrecting the transport.
-        let _spawn_guard = self.inner.spawn_lock.lock().await;
         self.inner
             .fail_active_streams(PluginError::internal("plugin transport closed"))
             .await;
-        if let Some(mut h) = self.inner.handles.lock().await.take() {
+        let _spawn_guard = self.inner.spawn_lock.lock().await;
+        let handles = { self.inner.handles.lock().await.take() };
+        if let Some(mut h) = handles {
             let _ = h.child.start_kill();
         }
         self.inner.record_status(|sink, plugin_id| {

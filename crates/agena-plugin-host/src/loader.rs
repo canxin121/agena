@@ -1,7 +1,6 @@
 //! Loader for one configured plugin.
 
-use regex::Regex;
-use serde_json::{Map as JsonMap, Value as JsonValue};
+use serde_json::Value as JsonValue;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -584,585 +583,131 @@ fn validate_manifest_config(
     })
 }
 
-/// Validate a JSON value against the schema subset supported by Agena plugin
-/// manifests and generated tool contracts.
+/// Validate a JSON value with the standards-compliant JSON Schema engine used
+/// by Agena plugin manifests and generated tool contracts.
 ///
 /// This is intentionally the same validator used for plugin configuration so
 /// Tool API callers can reject definitely invalid execution-tool input before
 /// the tool handler runs. Agena extension aliases (`x-agena-aliases`) are
 /// accepted wherever their canonical property is accepted.
 pub fn validate_json_schema_value(schema: &JsonValue, value: &JsonValue) -> Result<(), String> {
-    validate_schema_value("$", schema, schema, value)
-}
-
-fn validate_schema_value(
-    path: &str,
-    root: &JsonValue,
-    schema: &JsonValue,
-    value: &JsonValue,
-) -> Result<(), String> {
-    let schema = resolve_schema(root, schema);
-    match schema {
-        JsonValue::Bool(true) => return Ok(()),
-        JsonValue::Bool(false) => {
-            return Err(format!("{path}: schema rejects this value"));
-        }
-        JsonValue::Object(_) => {}
-        _ => return Ok(()),
-    }
-
-    let schema_obj = schema.as_object().expect("object already checked");
-
-    if let Some(all_of) = schema_obj.get("allOf").and_then(JsonValue::as_array) {
-        for branch in all_of {
-            validate_schema_value(path, root, branch, value)?;
-        }
-    }
-
-    if let Some(any_of) = schema_obj.get("anyOf").and_then(JsonValue::as_array) {
-        let matching = any_of
-            .iter()
-            .find(|branch| schema_matches(root, branch, value))
-            .ok_or_else(|| format!("{path}: value must match at least one allowed shape"))?;
-        validate_schema_value(path, root, matching, value)?;
-    }
-
-    if let Some(one_of) = schema_obj.get("oneOf").and_then(JsonValue::as_array) {
-        let matching = one_of
-            .iter()
-            .filter(|branch| schema_matches(root, branch, value))
-            .collect::<Vec<_>>();
-        if matching.len() != 1 {
-            return Err(format!(
-                "{path}: value must match exactly one allowed shape"
-            ));
-        }
-        validate_schema_value(path, root, matching[0], value)?;
-    }
-
-    if let Some(expected) = schema_obj.get("const")
-        && expected != value
-    {
-        return Err(format!("{path}: value must equal {expected}"));
-    }
-
-    if let Some(variants) = schema_obj.get("enum").and_then(|v| v.as_array())
-        && !variants.iter().any(|candidate| candidate == value)
-    {
-        return Err(format!(
-            "{path}: value is not one of the allowed enum variants"
-        ));
-    }
-
-    if let Some(expected_type) = schema_obj.get("type") {
-        validate_schema_type(path, expected_type, value)?;
-    }
-
-    if let Some(if_schema) = schema_obj.get("if") {
-        let target = if schema_matches(root, if_schema, value) {
-            schema_obj.get("then")
-        } else {
-            schema_obj.get("else")
-        };
-        if let Some(target_schema) = target {
-            validate_schema_value(path, root, target_schema, value)?;
-        }
-    }
-
-    if let Some(required) = schema_obj.get("required").and_then(|v| v.as_array()) {
-        let object = value
-            .as_object()
-            .ok_or_else(|| format!("{path}: required fields require an object value"))?;
-        for field in required {
-            let Some(field) = field.as_str() else {
-                continue;
-            };
-            if !object.contains_key(field)
-                && !schema_property_aliases(schema_obj, field)
-                    .any(|alias| object.contains_key(alias))
-            {
-                return Err(format!("{path}: missing required property '{field}'"));
-            }
-        }
-    }
-
-    if let Some(object) = value.as_object() {
-        validate_object_schema(path, root, schema, schema_obj, object)?;
-    }
-
-    if let Some(items) = value.as_array() {
-        validate_array_schema(path, root, schema, schema_obj, items)?;
-    }
-
-    if let Some(text) = value.as_str() {
-        validate_string_schema(path, schema_obj, text)?;
-    }
-
-    if let Some(number) = value.as_f64() {
-        validate_number_schema(path, schema_obj, number)?;
-    }
-
-    Ok(())
-}
-
-fn validate_object_schema(
-    path: &str,
-    root: &JsonValue,
-    schema: &JsonValue,
-    schema_object: &JsonMap<String, JsonValue>,
-    value: &JsonMap<String, JsonValue>,
-) -> Result<(), String> {
-    if let Some(patterns) = schema_object
-        .get("patternProperties")
-        .and_then(JsonValue::as_object)
-    {
-        for pattern in patterns.keys() {
-            validate_regex_pattern(pattern).map_err(|error| {
-                format!("{path}: invalid patternProperties regex `{pattern}`: {error}")
-            })?;
-        }
-    }
-    if let Some(min_properties) = schema_object
-        .get("minProperties")
-        .and_then(JsonValue::as_u64)
-        && value.len() < min_properties as usize
-    {
-        return Err(format!(
-            "{path}: object must contain at least {min_properties} field(s)"
-        ));
-    }
-    if let Some(max_properties) = schema_object
-        .get("maxProperties")
-        .and_then(JsonValue::as_u64)
-        && value.len() > max_properties as usize
-    {
-        return Err(format!(
-            "{path}: object must contain at most {max_properties} field(s)"
-        ));
-    }
-    if let Some(property_names_schema) = schema_object.get("propertyNames") {
-        for key in value.keys() {
-            validate_schema_value(
-                format!("{path}.{key}").as_str(),
-                root,
-                property_names_schema,
-                &JsonValue::String(key.clone()),
-            )?;
-        }
-    }
-    for (key, child_value) in value {
-        let child_path = format!("{path}.{key}");
-        if let Some(child_schema) = object_property_schema(root, schema, key) {
-            validate_schema_value(&child_path, root, &child_schema, child_value)?;
-        } else if schema_object.get("additionalProperties") == Some(&JsonValue::Bool(false)) {
-            return Err(format!("{path}: unexpected property '{key}'"));
-        } else if let Some(additional) = schema_object.get("additionalProperties")
-            && !matches!(additional, JsonValue::Bool(true))
-        {
-            validate_schema_value(&child_path, root, additional, child_value)?;
-        }
-    }
-    if let Some(dependencies) = schema_object
-        .get("dependentRequired")
-        .and_then(JsonValue::as_object)
-    {
-        for (trigger, required_fields) in dependencies {
-            if !value.contains_key(trigger) {
-                continue;
-            }
-            for required in required_fields
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(JsonValue::as_str)
-            {
-                if !value.contains_key(required) {
-                    return Err(format!(
-                        "{path}: missing required property '{required}' because '{trigger}' is set"
-                    ));
-                }
-            }
-        }
-    }
-    if let Some(dependencies) = schema_object
-        .get("dependentSchemas")
-        .and_then(JsonValue::as_object)
-    {
-        for (trigger, dependency_schema) in dependencies {
-            if value.contains_key(trigger) {
-                validate_schema_value(
-                    path,
-                    root,
-                    dependency_schema,
-                    &JsonValue::Object(value.clone()),
-                )?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_array_schema(
-    path: &str,
-    root: &JsonValue,
-    schema: &JsonValue,
-    schema_object: &JsonMap<String, JsonValue>,
-    value: &[JsonValue],
-) -> Result<(), String> {
-    if let Some(min_items) = schema_object.get("minItems").and_then(JsonValue::as_u64)
-        && value.len() < min_items as usize
-    {
-        return Err(format!(
-            "{path}: array must contain at least {min_items} item(s)"
-        ));
-    }
-    if let Some(max_items) = schema_object.get("maxItems").and_then(JsonValue::as_u64)
-        && value.len() > max_items as usize
-    {
-        return Err(format!(
-            "{path}: array must contain at most {max_items} item(s)"
-        ));
-    }
-    if schema_object
-        .get("uniqueItems")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false)
-    {
-        let mut seen = std::collections::BTreeSet::new();
-        for item in value {
-            if !seen.insert(item.to_string()) {
-                return Err(format!("{path}: array contains duplicate items"));
-            }
-        }
-    }
-    if let Some(contains_schema) = schema_object.get("contains") {
-        let matches = value
-            .iter()
-            .filter(|item| schema_matches(root, contains_schema, item))
-            .count();
-        let min_contains = schema_object
-            .get("minContains")
-            .and_then(JsonValue::as_u64)
-            .unwrap_or(1);
-        let max_contains = schema_object.get("maxContains").and_then(JsonValue::as_u64);
-        if matches < min_contains as usize {
-            return Err(format!(
-                "{path}: array must contain at least {min_contains} matching item(s)"
-            ));
-        }
-        if let Some(max_contains) = max_contains
-            && matches > max_contains as usize
-        {
-            return Err(format!(
-                "{path}: array must contain at most {max_contains} matching item(s)"
-            ));
-        }
-    }
-    for (index, item) in value.iter().enumerate() {
-        if let Some(item_schema) = array_item_schema(root, schema, index) {
-            validate_schema_value(
-                format!("{path}[{index}]").as_str(),
-                root,
-                &item_schema,
-                item,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_string_schema(
-    path: &str,
-    schema_object: &JsonMap<String, JsonValue>,
-    text: &str,
-) -> Result<(), String> {
-    if let Some(min_length) = schema_object.get("minLength").and_then(JsonValue::as_u64)
-        && text.chars().count() < min_length as usize
-    {
-        return Err(format!(
-            "{path}: string is shorter than minLength {min_length}"
-        ));
-    }
-    if let Some(max_length) = schema_object.get("maxLength").and_then(JsonValue::as_u64)
-        && text.chars().count() > max_length as usize
-    {
-        return Err(format!(
-            "{path}: string is longer than maxLength {max_length}"
-        ));
-    }
-    if let Some(format) = schema_object.get("format").and_then(JsonValue::as_str)
-        && !format_is_valid(format, text)
-    {
-        return Err(format!("{path}: string must match format {format}"));
-    }
-    if let Some(pattern) = schema_object.get("pattern").and_then(JsonValue::as_str) {
-        match pattern_matches(pattern, text) {
-            Ok(true) => {}
-            Ok(false) => return Err(format!("{path}: string must match pattern {pattern}")),
-            Err(error) => {
-                return Err(format!(
-                    "{path}: invalid regex pattern `{pattern}`: {error}"
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_number_schema(
-    path: &str,
-    schema_object: &JsonMap<String, JsonValue>,
-    number: f64,
-) -> Result<(), String> {
-    if let Some(minimum) = schema_object.get("minimum").and_then(JsonValue::as_f64)
-        && number < minimum
-    {
-        return Err(format!("{path}: value must be >= {minimum}"));
-    }
-    if let Some(maximum) = schema_object.get("maximum").and_then(JsonValue::as_f64)
-        && number > maximum
-    {
-        return Err(format!("{path}: value must be <= {maximum}"));
-    }
-    if let Some(minimum) = schema_object
-        .get("exclusiveMinimum")
-        .and_then(JsonValue::as_f64)
-        && number <= minimum
-    {
-        return Err(format!("{path}: value must be > {minimum}"));
-    }
-    if let Some(maximum) = schema_object
-        .get("exclusiveMaximum")
-        .and_then(JsonValue::as_f64)
-        && number >= maximum
-    {
-        return Err(format!("{path}: value must be < {maximum}"));
-    }
-    if let Some(multiple_of) = schema_object.get("multipleOf").and_then(JsonValue::as_f64)
-        && multiple_of > 0.0
-    {
-        let quotient = number / multiple_of;
-        if (quotient - quotient.round()).abs() > f64::EPSILON {
-            return Err(format!("{path}: value must be a multiple of {multiple_of}"));
-        }
-    }
-    Ok(())
-}
-
-fn schema_matches(root: &JsonValue, schema: &JsonValue, value: &JsonValue) -> bool {
-    validate_schema_value("$match", root, schema, value).is_ok()
-}
-
-fn resolve_schema<'a>(root: &'a JsonValue, schema: &'a JsonValue) -> &'a JsonValue {
-    let Some(reference) = schema.get("$ref").and_then(JsonValue::as_str) else {
-        return schema;
+    let mut normalized_schema = schema.clone();
+    expand_agena_property_aliases(&mut normalized_schema);
+    let validator = jsonschema::options()
+        .should_validate_formats(true)
+        .build(&normalized_schema)
+        .map_err(|error| format!("invalid JSON Schema: {error}"))?;
+    let Some(error) = validator.iter_errors(value).next() else {
+        return Ok(());
     };
-    if !reference.starts_with("#/") {
-        return schema;
-    }
-    let mut cursor = root;
-    for segment in reference.trim_start_matches("#/").split('/') {
-        let segment = segment.replace("~1", "/").replace("~0", "~");
-        let Some(next) = cursor.get(segment.as_str()) else {
-            return schema;
-        };
-        cursor = next;
-    }
-    cursor
+    let instance_path = error.instance_path().to_string();
+    let path = if instance_path.is_empty() {
+        "$".to_owned()
+    } else {
+        format!("${instance_path}")
+    };
+    Err(format!("{path}: {error}"))
 }
 
-fn combine_schema_constraints(mut schemas: Vec<JsonValue>) -> Option<JsonValue> {
-    match schemas.len() {
-        0 => None,
-        1 => schemas.pop(),
-        _ => {
-            let mut object = JsonMap::new();
-            object.insert("allOf".to_owned(), JsonValue::Array(schemas));
-            Some(JsonValue::Object(object))
-        }
-    }
-}
-
-fn object_property_schema(root: &JsonValue, schema: &JsonValue, key: &str) -> Option<JsonValue> {
-    let schema = resolve_schema(root, schema);
-    let mut matches = Vec::new();
-    let mut matched_named_or_pattern = false;
-
-    if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) {
-        if let Some(child) = properties.get(key) {
-            matches.push(child.clone());
-            matched_named_or_pattern = true;
-        } else if let Some(child) = properties.values().find(|child| {
-            child
-                .get("x-agena-aliases")
-                .and_then(JsonValue::as_array)
-                .is_some_and(|aliases| aliases.iter().any(|alias| alias.as_str() == Some(key)))
-        }) {
-            matches.push(child.clone());
-            matched_named_or_pattern = true;
-        }
-    }
-    if let Some(patterns) = schema
-        .get("patternProperties")
-        .and_then(JsonValue::as_object)
-    {
-        for (pattern, child) in patterns {
-            if pattern_key_matches(pattern, key) {
-                matches.push(child.clone());
-                matched_named_or_pattern = true;
+/// Convert Agena's property-alias annotation into ordinary JSON Schema before
+/// compiling it with the standards-compliant validator. Alias properties keep
+/// the canonical property's complete schema, and a required canonical field is
+/// rewritten as an `anyOf` requirement covering its declared aliases.
+fn expand_agena_property_aliases(schema: &mut JsonValue) {
+    let JsonValue::Object(object) = schema else {
+        if let JsonValue::Array(items) = schema {
+            for item in items {
+                expand_agena_property_aliases(item);
             }
         }
-    }
-    if !matched_named_or_pattern {
-        match schema.get("additionalProperties") {
-            Some(JsonValue::Object(object)) => matches.push(JsonValue::Object(object.clone())),
-            Some(other) if !matches!(other, JsonValue::Bool(true) | JsonValue::Bool(false)) => {
-                matches.push(other.clone());
-            }
-            _ => {}
-        }
-    }
-    combine_schema_constraints(matches)
-}
+        return;
+    };
 
-fn schema_property_aliases<'a>(
-    schema_object: &'a JsonMap<String, JsonValue>,
-    property: &str,
-) -> impl Iterator<Item = &'a str> {
-    schema_object
+    for child in object.values_mut() {
+        expand_agena_property_aliases(child);
+    }
+
+    let aliases = object
         .get("properties")
         .and_then(JsonValue::as_object)
-        .and_then(|properties| properties.get(property))
-        .and_then(|property_schema| property_schema.get("x-agena-aliases"))
+        .map(|properties| {
+            properties
+                .iter()
+                .filter_map(|(canonical, property_schema)| {
+                    let aliases = property_schema
+                        .get("x-agena-aliases")
+                        .and_then(JsonValue::as_array)?
+                        .iter()
+                        .filter_map(JsonValue::as_str)
+                        .filter(|alias| !alias.is_empty() && *alias != canonical)
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>();
+                    (!aliases.is_empty())
+                        .then(|| (canonical.clone(), aliases, property_schema.clone()))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if aliases.is_empty() {
+        return;
+    }
+
+    if let Some(properties) = object
+        .get_mut("properties")
+        .and_then(JsonValue::as_object_mut)
+    {
+        for (_, aliases, property_schema) in &aliases {
+            for alias in aliases {
+                properties
+                    .entry(alias.clone())
+                    .or_insert_with(|| property_schema.clone());
+            }
+        }
+    }
+
+    let required = object
+        .get("required")
         .and_then(JsonValue::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(JsonValue::as_str)
-}
-
-fn array_item_schema(root: &JsonValue, schema: &JsonValue, index: usize) -> Option<JsonValue> {
-    let schema = resolve_schema(root, schema);
-    if let Some(prefix) = schema.get("prefixItems").and_then(JsonValue::as_array)
-        && let Some(item) = prefix.get(index)
-    {
-        return Some(item.clone());
+        .cloned()
+        .unwrap_or_default();
+    if required.is_empty() {
+        return;
     }
-    schema.get("items").cloned()
-}
 
-fn validate_schema_type(path: &str, expected: &JsonValue, value: &JsonValue) -> Result<(), String> {
-    let matches = match expected {
-        JsonValue::String(kind) => value_matches_type(kind, value),
-        JsonValue::Array(kinds) => kinds
+    let mut retained = Vec::with_capacity(required.len());
+    let mut alias_requirements = Vec::new();
+    for required_property in required {
+        let Some(canonical) = required_property.as_str() else {
+            retained.push(required_property);
+            continue;
+        };
+        let Some((_, property_aliases, _)) = aliases
             .iter()
-            .filter_map(|kind| kind.as_str())
-            .any(|kind| value_matches_type(kind, value)),
-        _ => true,
-    };
-    if matches {
-        Ok(())
+            .find(|(property, _, _)| property == canonical)
+        else {
+            retained.push(required_property);
+            continue;
+        };
+        let variants = std::iter::once(canonical)
+            .chain(property_aliases.iter().map(String::as_str))
+            .map(|property| serde_json::json!({ "required": [property] }))
+            .collect::<Vec<_>>();
+        alias_requirements.push(serde_json::json!({ "anyOf": variants }));
+    }
+
+    if retained.is_empty() {
+        object.remove("required");
     } else {
-        Err(format!("{path}: value does not match declared schema type"))
+        object.insert("required".to_owned(), JsonValue::Array(retained));
     }
-}
-
-fn value_matches_type(kind: &str, value: &JsonValue) -> bool {
-    match kind {
-        "object" => value.is_object(),
-        "array" => value.is_array(),
-        "string" => value.is_string(),
-        "boolean" => value.is_boolean(),
-        "null" => value.is_null(),
-        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
-        "number" => value.is_number(),
-        _ => true,
+    if !alias_requirements.is_empty() {
+        let all_of = object
+            .entry("allOf")
+            .or_insert_with(|| JsonValue::Array(Vec::new()));
+        if let JsonValue::Array(all_of) = all_of {
+            all_of.extend(alias_requirements);
+        }
     }
-}
-
-fn hostname_format_is_valid(text: &str) -> bool {
-    let text = text.trim_end_matches('.');
-    if text.is_empty()
-        || text.len() > 253
-        || text.contains('/')
-        || text.chars().any(char::is_whitespace)
-    {
-        return false;
-    }
-    text.split('.').all(|label| {
-        !label.is_empty()
-            && label.len() <= 63
-            && !label.starts_with('-')
-            && !label.ends_with('-')
-            && label
-                .chars()
-                .all(|char| char.is_ascii_alphanumeric() || char == '-')
-    })
-}
-
-fn email_format_is_valid(text: &str) -> bool {
-    let Some((local, domain)) = text.split_once('@') else {
-        return false;
-    };
-    if local.is_empty()
-        || domain.is_empty()
-        || text.chars().any(char::is_whitespace)
-        || text.matches('@').count() != 1
-        || local.starts_with('.')
-        || local.ends_with('.')
-        || local.contains("..")
-    {
-        return false;
-    }
-    let local_valid = local.chars().all(|char| {
-        char.is_ascii_alphanumeric()
-            || matches!(
-                char,
-                '!' | '#'
-                    | '$'
-                    | '%'
-                    | '&'
-                    | '\''
-                    | '*'
-                    | '+'
-                    | '-'
-                    | '/'
-                    | '='
-                    | '?'
-                    | '^'
-                    | '_'
-                    | '`'
-                    | '{'
-                    | '|'
-                    | '}'
-                    | '~'
-                    | '.'
-            )
-    });
-    local_valid && (hostname_format_is_valid(domain) || domain.eq_ignore_ascii_case("localhost"))
-}
-
-fn format_is_valid(format: &str, text: &str) -> bool {
-    match format {
-        "uri" | "url" => url::Url::parse(text).is_ok(),
-        "email" => email_format_is_valid(text),
-        "hostname" => hostname_format_is_valid(text),
-        "ipv4" => text.parse::<std::net::Ipv4Addr>().is_ok(),
-        "ipv6" => text.parse::<std::net::Ipv6Addr>().is_ok(),
-        "uuid" => uuid::Uuid::parse_str(text).is_ok(),
-        _ => true,
-    }
-}
-
-fn validate_regex_pattern(pattern: &str) -> Result<(), regex::Error> {
-    Regex::new(pattern).map(|_| ())
-}
-
-fn pattern_matches(pattern: &str, text: &str) -> Result<bool, regex::Error> {
-    Regex::new(pattern).map(|regex| regex.is_match(text))
-}
-
-fn pattern_key_matches(pattern: &str, key: &str) -> bool {
-    pattern_matches(pattern, key).unwrap_or(false)
 }
 
 pub async fn shutdown_transport(transport: Arc<dyn PluginTransport>) -> Result<(), TransportError> {
@@ -1451,9 +996,9 @@ mod manifest_tests {
             .expect("declared alias should satisfy required and property validation");
         let error = validate_json_schema_value(&schema, &serde_json::json!({"path": ""}))
             .expect_err("an alias must retain the canonical property's constraints");
-        assert!(error.contains("minLength 1"));
+        assert!(error.contains("shorter than 1 character"));
         let error = validate_json_schema_value(&schema, &serde_json::json!({}))
             .expect_err("missing canonical property and aliases must fail");
-        assert!(error.contains("missing required property 'file_path'"));
+        assert!(error.contains("not valid under any"));
     }
 }

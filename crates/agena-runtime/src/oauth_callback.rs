@@ -1,11 +1,17 @@
 //! Local browser OAuth callback listener shared by process entrypoints.
 
 use agena_provider::OAuthCallback;
-use std::{
-    io::{Read, Write},
-    net::TcpListener,
-    time::{Duration, Instant},
+use axum::{
+    Router,
+    extract::State,
+    http::{StatusCode, Uri},
+    response::{Html, IntoResponse, Response},
+    routing::any,
 };
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, thiserror::Error)]
 /// Error handling a runtime OAuth callback.
@@ -84,86 +90,111 @@ pub fn wait_for_oauth_callback(
     expected_state: &str,
     timeout: Duration,
 ) -> Result<OAuthCallback, RuntimeOAuthCallbackError> {
-    let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|error| {
-        RuntimeOAuthCallbackError::Configuration(format!(
-            "failed to bind oauth callback port {port}: {error}"
-        ))
-    })?;
-    listener.set_nonblocking(true).map_err(|error| {
-        RuntimeOAuthCallbackError::Configuration(format!(
-            "failed to set oauth callback nonblocking: {error}"
-        ))
-    })?;
-    let started = Instant::now();
-    while started.elapsed() < timeout {
-        match listener.accept() {
-            Ok((mut stream, _)) => {
-                // A local peer can connect and then send nothing. Bound socket
-                // I/O so the callback worker cannot be held forever by a
-                // half-open connection.
-                let io_timeout = timeout
-                    .saturating_sub(started.elapsed())
-                    .min(Duration::from_secs(2))
-                    .max(Duration::from_millis(1));
-                stream.set_read_timeout(Some(io_timeout))?;
-                stream.set_write_timeout(Some(io_timeout))?;
-                let mut bytes = [0; 4096];
-                let count = stream.read(&mut bytes)?;
-                let request = String::from_utf8_lossy(&bytes[..count]);
-                let path = request
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap_or("/")
-                    .to_owned();
-                let url = format!("http://localhost:{port}{path}");
-                match parse_oauth_callback_url(url.as_str(), Some(expected_state)) {
-                    Ok(callback) => {
-                        write_http_html(&mut stream, 200, oauth_html_success())?;
-                        return Ok(callback);
-                    }
-                    Err(error) => {
-                        write_http_html(
-                            &mut stream,
-                            400,
-                            oauth_html_error(error.to_string().as_str()).as_str(),
-                        )?;
-                        return Err(error);
-                    }
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(100))
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Err(RuntimeOAuthCallbackError::Provider(
-        "oauth callback timeout".to_owned(),
-    ))
+    let expected_state = expected_state.to_owned();
+    std::thread::Builder::new()
+        .name("agena-oauth-callback".to_owned())
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(RuntimeOAuthCallbackError::Io)?
+                .block_on(wait_for_oauth_callback_async(
+                    port,
+                    expected_state.as_str(),
+                    timeout,
+                ))
+        })
+        .map_err(RuntimeOAuthCallbackError::Io)?
+        .join()
+        .map_err(|_| {
+            RuntimeOAuthCallbackError::Io(std::io::Error::other("oauth callback worker panicked"))
+        })?
 }
 
-fn write_http_html(
-    stream: &mut impl Write,
-    status: u16,
-    html: &str,
-) -> Result<(), RuntimeOAuthCallbackError> {
-    let status_line = if status == 200 {
-        "HTTP/1.1 200 OK"
-    } else {
-        "HTTP/1.1 400 Bad Request"
+/// Wait for one loopback OAuth redirect using Tokio and Axum's bounded HTTP
+/// parser. This is the preferred API for async entrypoints.
+pub async fn wait_for_oauth_callback_async(
+    port: u16,
+    expected_state: &str,
+    timeout: Duration,
+) -> Result<OAuthCallback, RuntimeOAuthCallbackError> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .map_err(|error| {
+            RuntimeOAuthCallbackError::Configuration(format!(
+                "failed to bind oauth callback port {port}: {error}"
+            ))
+        })?;
+    let (result_tx, result_rx) = oneshot::channel();
+    let state = OAuthCallbackState {
+        port,
+        expected_state: Arc::from(expected_state),
+        result: Arc::new(Mutex::new(Some(result_tx))),
     };
-    let body = html.as_bytes();
-    let response = format!(
-        "{status_line}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    stream.write_all(response.as_bytes())?;
-    stream.write_all(body)?;
-    stream.flush()?;
-    Ok(())
+    let app = Router::new()
+        .fallback(any(oauth_callback_handler))
+        .with_state(state);
+    let shutdown = CancellationToken::new();
+    let server_shutdown = shutdown.clone();
+    let mut server = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(server_shutdown.cancelled_owned())
+            .await
+    });
+
+    let result = match tokio::time::timeout(timeout, result_rx).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err(RuntimeOAuthCallbackError::Io(std::io::Error::other(
+            "oauth callback server stopped before returning a result",
+        ))),
+        Err(_) => Err(RuntimeOAuthCallbackError::Provider(
+            "oauth callback timeout".to_owned(),
+        )),
+    };
+    shutdown.cancel();
+    match tokio::time::timeout(Duration::from_secs(1), &mut server).await {
+        Ok(Ok(Ok(()))) | Err(_) => {}
+        Ok(Ok(Err(error))) => return Err(RuntimeOAuthCallbackError::Io(error)),
+        Ok(Err(error)) => {
+            return Err(RuntimeOAuthCallbackError::Io(std::io::Error::other(
+                format!("oauth callback server task failed: {error}"),
+            )));
+        }
+    }
+    if !server.is_finished() {
+        server.abort();
+        let _ = server.await;
+    }
+    result
+}
+
+#[derive(Clone)]
+struct OAuthCallbackState {
+    port: u16,
+    expected_state: Arc<str>,
+    result: Arc<Mutex<Option<oneshot::Sender<Result<OAuthCallback, RuntimeOAuthCallbackError>>>>>,
+}
+
+async fn oauth_callback_handler(State(state): State<OAuthCallbackState>, uri: Uri) -> Response {
+    let url = format!("http://localhost:{}{}", state.port, uri);
+    let result = parse_oauth_callback_url(url.as_str(), Some(state.expected_state.as_ref()));
+    let response = match &result {
+        Ok(_) => (StatusCode::OK, Html(oauth_html_success().to_owned())).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Html(oauth_html_error(error.to_string().as_str())),
+        )
+            .into_response(),
+    };
+    if let Some(sender) = state
+        .result
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+    {
+        let _ = sender.send(result);
+    }
+    response
 }
 
 fn oauth_html_success() -> &'static str {
@@ -173,7 +204,7 @@ fn oauth_html_success() -> &'static str {
 fn oauth_html_error(error: &str) -> String {
     format!(
         "<!doctype html><html><body><h1>Authorization Failed</h1><p>{}</p></body></html>",
-        escape_html(error)
+        html_escape::encode_text(error)
     )
 }
 
@@ -207,24 +238,13 @@ fn oauth_callback_error_message(
     message
 }
 
-fn escape_html(input: &str) -> String {
-    let mut escaped = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '\"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&#39;"),
-            _ => escaped.push(ch),
-        }
-    }
-    escaped
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeOAuthCallbackError, escape_html, parse_oauth_callback_url};
+    use super::{
+        RuntimeOAuthCallbackError, parse_oauth_callback_url, wait_for_oauth_callback_async,
+    };
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn parses_authorization_code_and_state() {
@@ -282,8 +302,40 @@ mod tests {
     #[test]
     fn escapes_error_html() {
         assert_eq!(
-            escape_html("<script>alert('x') & \"y\"</script>"),
-            "&lt;script&gt;alert(&#39;x&#39;) &amp; &quot;y&quot;&lt;/script&gt;"
+            html_escape::encode_text("<script>alert('x') & \"y\"</script>"),
+            "&lt;script&gt;alert('x') &amp; \"y\"&lt;/script&gt;"
         );
+    }
+
+    #[tokio::test]
+    async fn async_server_accepts_a_loopback_callback_and_stops() {
+        let reservation = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("reserve loopback port");
+        let port = reservation.local_addr().expect("local address").port();
+        drop(reservation);
+
+        let callback_task = tokio::spawn(async move {
+            wait_for_oauth_callback_async(port, "expected", Duration::from_secs(2)).await
+        });
+        let mut stream = loop {
+            match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                Ok(stream) => break stream,
+                Err(_) => tokio::time::sleep(Duration::from_millis(5)).await,
+            }
+        };
+        stream
+            .write_all(
+                b"GET /callback?code=authorization-code&state=expected HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .expect("send callback request");
+
+        let callback = callback_task
+            .await
+            .expect("callback task")
+            .expect("valid callback");
+        assert_eq!(callback.code, "authorization-code");
+        assert_eq!(callback.state, "expected");
     }
 }

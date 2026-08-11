@@ -1298,7 +1298,7 @@ async fn connect_stdio(
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
-    let transport = TokioChildProcess::new(cmd)?;
+    let transport = TokioChildProcess::new(agena_process::wrap_command(cmd))?;
     Ok(client_handler.serve(transport).await?)
 }
 

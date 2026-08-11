@@ -57,54 +57,6 @@ async fn join_git_streams(
     }
 }
 
-async fn terminate_git_process_tree(
-    child: &mut tokio::process::Child,
-) -> std::io::Result<std::process::ExitStatus> {
-    #[cfg(unix)]
-    {
-        let Some(child_id) = child.id() else {
-            return child.wait().await;
-        };
-        signal_git_process_group(child_id, libc::SIGTERM);
-        let status = match tokio::time::timeout(Duration::from_millis(150), child.wait()).await {
-            Ok(result) => result,
-            Err(_) => {
-                signal_git_process_group(child_id, libc::SIGKILL);
-                child.wait().await
-            }
-        };
-        signal_git_process_group(child_id, libc::SIGKILL);
-        status
-    }
-
-    #[cfg(windows)]
-    {
-        if let Some(child_id) = child.id() {
-            let _ = Command::new("taskkill")
-                .args(["/PID", child_id.to_string().as_str(), "/T", "/F"])
-                .status()
-                .await;
-        }
-        let _ = child.start_kill();
-        child.wait().await
-    }
-
-    #[cfg(all(not(unix), not(windows)))]
-    {
-        let _ = child.start_kill();
-        child.wait().await
-    }
-}
-
-#[cfg(unix)]
-fn signal_git_process_group(child_id: u32, signal: i32) {
-    // SAFETY: git commands call setsid before exec and therefore lead a
-    // dedicated process group. ESRCH is harmless after process exit.
-    unsafe {
-        libc::kill(-(child_id as i32), signal);
-    }
-}
-
 fn git_stream_text(bytes: Vec<u8>, truncated: bool) -> String {
     let mut text = String::from_utf8_lossy(&bytes).to_string();
     if truncated {
@@ -410,32 +362,14 @@ pub(crate) async fn run_git_env(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    cmd.kill_on_drop(true);
-
-    #[cfg(unix)]
-    {
-        use std::io;
-
-        unsafe {
-            cmd.pre_exec(|| {
-                // Detach from the parent's controlling terminal so /dev/tty is unavailable.
-                let rc = libc::setsid();
-                if rc == -1 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
 
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let child_id = child.id();
+    let mut child = agena_process::spawn(cmd).map_err(|e| e.to_string())?;
 
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
+    let mut stdout = child.stdout().take();
+    let mut stderr = child.stderr().take();
 
     let stdout_task = tokio::spawn(async move {
         match stdout.take() {
@@ -456,14 +390,11 @@ pub(crate) async fn run_git_env(
         status = child.wait() => status,
         _ = tokio::time::sleep(timeout) => {
             timed_out = true;
-            terminate_git_process_tree(&mut child).await
+            child.terminate(Duration::from_millis(150)).await
         }
     };
 
-    #[cfg(unix)]
-    if let Some(child_id) = child_id {
-        signal_git_process_group(child_id, libc::SIGKILL);
-    }
+    let _ = child.start_kill();
 
     let ((stdout_bytes, stdout_truncated), (stderr_bytes, stderr_truncated)) =
         join_git_streams(stdout_task, stderr_task).await;
@@ -510,34 +441,17 @@ pub(crate) async fn run_git_input(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    cmd.kill_on_drop(true);
-
-    #[cfg(unix)]
-    {
-        use std::io;
-
-        unsafe {
-            cmd.pre_exec(|| {
-                let rc = libc::setsid();
-                if rc == -1 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
 
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let child_id = child.id();
+    let mut child = agena_process::spawn(cmd).map_err(|e| e.to_string())?;
 
     // Drain both output pipes while stdin is written. Writing first can
     // deadlock when git emits enough diagnostics to fill stdout/stderr before
     // it has consumed the complete patch from stdin.
     let input = input.as_bytes().to_vec();
-    let stdin_task = child.stdin.take().map(|mut stdin| {
+    let stdin_task = child.stdin().take().map(|mut stdin| {
         tokio::spawn(async move {
             let result = stdin.write_all(&input).await;
             let _ = stdin.shutdown().await;
@@ -545,8 +459,8 @@ pub(crate) async fn run_git_input(
         })
     });
 
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
+    let mut stdout = child.stdout().take();
+    let mut stderr = child.stderr().take();
 
     let stdout_task = tokio::spawn(async move {
         match stdout.take() {
@@ -567,14 +481,11 @@ pub(crate) async fn run_git_input(
         status = child.wait() => status,
         _ = tokio::time::sleep(timeout) => {
             timed_out = true;
-            terminate_git_process_tree(&mut child).await
+            child.terminate(Duration::from_millis(150)).await
         }
     };
 
-    #[cfg(unix)]
-    if let Some(child_id) = child_id {
-        signal_git_process_group(child_id, libc::SIGKILL);
-    }
+    let _ = child.start_kill();
 
     if let Some(stdin_task) = stdin_task {
         let stdin_abort = stdin_task.abort_handle();

@@ -8,7 +8,8 @@
 //! {"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}
 //! ```
 //!
-//! We expose [`encode_frame`] / [`decode_frames`] so transports stay tiny.
+//! Byte framing lives in `agena-stdio-codec`; this module owns only LSP's
+//! typed JSON-RPC messages.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -84,69 +85,4 @@ impl InboundMessage {
             Ok(Self::Notification(serde_json::from_value(value)?))
         }
     }
-}
-
-/// Encode a JSON value with the LSP `Content-Length` header.
-pub fn encode_frame(payload: &Value) -> Vec<u8> {
-    let body = serde_json::to_vec(payload).expect("Value::serialize is infallible");
-    let mut out = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
-    out.extend_from_slice(&body);
-    out
-}
-
-/// Stateful frame parser. Feed bytes via [`feed`] and pull complete
-/// JSON-RPC payloads via [`take`]. Handles partial reads.
-#[derive(Debug, Default)]
-pub struct FrameParser {
-    buf: Vec<u8>,
-}
-
-impl FrameParser {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn feed(&mut self, chunk: &[u8]) {
-        self.buf.extend_from_slice(chunk);
-    }
-
-    /// Try to extract the next complete frame. Returns `Ok(None)` when
-    /// more bytes are needed, `Err` on a malformed header.
-    pub fn take(&mut self) -> Result<Option<Value>, String> {
-        let Some(sep) = find_subseq(&self.buf, b"\r\n\r\n") else {
-            return Ok(None);
-        };
-        let header =
-            std::str::from_utf8(&self.buf[..sep]).map_err(|e| format!("non-utf8 header: {e}"))?;
-        let mut content_length: Option<usize> = None;
-        for line in header.split("\r\n") {
-            let mut split = line.splitn(2, ':');
-            let key = split.next().unwrap_or("").trim();
-            let value = split.next().unwrap_or("").trim();
-            if key.eq_ignore_ascii_case("Content-Length") {
-                content_length = Some(
-                    value
-                        .parse()
-                        .map_err(|e| format!("invalid Content-Length: {e}"))?,
-                );
-            }
-        }
-        let Some(len) = content_length else {
-            return Err("frame missing Content-Length header".to_string());
-        };
-        let body_start = sep + 4;
-        let body_end = body_start + len;
-        if self.buf.len() < body_end {
-            return Ok(None);
-        }
-        let body = self.buf[body_start..body_end].to_vec();
-        self.buf.drain(..body_end);
-        let value: Value =
-            serde_json::from_slice(&body).map_err(|e| format!("invalid json body: {e}"))?;
-        Ok(Some(value))
-    }
-}
-
-fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
 }

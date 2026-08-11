@@ -13,13 +13,18 @@ use tokio::process::Command;
 use super::{DirectoryQuery, map_git_failure, require_directory, run_git};
 
 const GPG_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const GPG_COMMAND_MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 
-async fn gpg_output(command: &mut Command) -> Result<std::process::Output, String> {
-    command.kill_on_drop(true);
-    tokio::time::timeout(GPG_COMMAND_TIMEOUT, command.output())
+async fn gpg_output(command: Command) -> Result<std::process::Output, String> {
+    agena_process::output(command, GPG_COMMAND_TIMEOUT, GPG_COMMAND_MAX_OUTPUT_BYTES)
         .await
-        .map_err(|_| "GPG command timed out".to_string())?
-        .map_err(|error| error.to_string())
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::TimedOut {
+                "GPG command timed out".to_owned()
+            } else {
+                error.to_string()
+            }
+        })
 }
 
 fn hex_encode_utf8(s: &str) -> String {
@@ -40,7 +45,7 @@ async fn gpg_list_secret_keys_with_grip() -> Result<Vec<GpgSecretKeyInfo>, Strin
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = gpg_output(&mut command).await?;
+    let output = gpg_output(command).await?;
 
     let code = output.status.code().unwrap_or(1);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -123,7 +128,7 @@ async fn gpg_preset_passphrase(keygrip: &str, passphrase: &str) -> Result<(), St
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = gpg_output(&mut command).await?;
+    let output = gpg_output(command).await?;
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -175,7 +180,7 @@ async fn gpg_agent_enable_allow_preset_passphrase() -> Result<bool, String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let out = gpg_output(&mut command).await?;
+    let out = gpg_output(command).await?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(if err.is_empty() {

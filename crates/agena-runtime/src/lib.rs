@@ -315,6 +315,7 @@ pub(crate) use model_catalog_source::{
 };
 pub use oauth_callback::{
     RuntimeOAuthCallbackError, parse_oauth_callback_url, wait_for_oauth_callback,
+    wait_for_oauth_callback_async,
 };
 pub use output_format::{OutputFormat, OutputFormatParseError};
 pub(crate) use periodic::{run_periodic, wait_for_tick_or_shutdown};

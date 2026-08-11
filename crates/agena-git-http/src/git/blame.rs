@@ -5,12 +5,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use super::{
-    DirectoryQuery, abs_path, is_safe_repo_rel_path, map_git_failure, require_directory, run_git,
-};
+use super::{DirectoryQuery, is_safe_repo_rel_path, require_directory, spawn_libgit2};
 
 #[derive(Debug, Deserialize)]
 /// Query for git blame.
@@ -41,160 +38,6 @@ const NOT_COMMITTED_HASH: &str = "0000000000000000000000000000000000000000";
 const NOT_COMMITTED_AUTHOR: &str = "Not Committed Yet";
 const NOT_COMMITTED_SUMMARY: &str = "Uncommitted changes";
 
-fn is_hash(s: &str) -> bool {
-    if s.len() != 40 {
-        return false;
-    }
-    s.chars().all(|c| c.is_ascii_hexdigit())
-}
-
-#[derive(Debug, Clone)]
-struct BlameMeta {
-    author: String,
-    author_email: String,
-    author_time: i64,
-    summary: String,
-}
-
-fn parse_blame_header(line: &str) -> Option<(String, usize, usize)> {
-    let mut parts = line.split_whitespace();
-    let hash = parts.next()?;
-    if !is_hash(hash) {
-        return None;
-    }
-
-    parts.next()?;
-    let final_line = parts
-        .next()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0);
-    let group_count = parts
-        .next()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(1)
-        .max(1);
-
-    Some((hash.to_string(), final_line, group_count))
-}
-
-fn has_meta(meta: &BlameMeta) -> bool {
-    !meta.author.is_empty()
-        || !meta.author_email.is_empty()
-        || meta.author_time != 0
-        || !meta.summary.is_empty()
-}
-
-fn parse_blame_porcelain(output: &str) -> Vec<GitBlameLine> {
-    let mut lines = Vec::new();
-    let mut meta_by_hash: HashMap<String, BlameMeta> = HashMap::new();
-
-    let mut current_hash = String::new();
-    let mut current_author = String::new();
-    let mut current_author_email = String::new();
-    let mut current_author_time = 0_i64;
-    let mut current_summary = String::new();
-
-    let mut remaining: usize = 0;
-    let mut next_line: usize = 0;
-
-    for line in output.lines() {
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        if trimmed.starts_with('\t') {
-            if remaining == 0 || current_hash.is_empty() {
-                continue;
-            }
-
-            let meta = if !current_author.is_empty()
-                || !current_author_email.is_empty()
-                || current_author_time != 0
-                || !current_summary.is_empty()
-            {
-                BlameMeta {
-                    author: current_author.clone(),
-                    author_email: current_author_email.clone(),
-                    author_time: current_author_time,
-                    summary: current_summary.clone(),
-                }
-            } else {
-                BlameMeta {
-                    author: String::new(),
-                    author_email: String::new(),
-                    author_time: 0,
-                    summary: String::new(),
-                }
-            };
-
-            lines.push(GitBlameLine {
-                line: next_line,
-                hash: current_hash.clone(),
-                author: meta.author.clone(),
-                author_email: meta.author_email.clone(),
-                author_time: meta.author_time,
-                summary: meta.summary.clone(),
-            });
-            if has_meta(&meta) {
-                meta_by_hash.insert(current_hash.clone(), meta);
-            }
-
-            next_line = next_line.saturating_add(1);
-            remaining = remaining.saturating_sub(1);
-            continue;
-        }
-
-        if let Some((hash, final_line, group_count)) = parse_blame_header(trimmed) {
-            current_hash = hash;
-            next_line = final_line;
-            remaining = group_count;
-            if let Some(meta) = meta_by_hash.get(&current_hash) {
-                current_author = meta.author.clone();
-                current_author_email = meta.author_email.clone();
-                current_author_time = meta.author_time;
-                current_summary = meta.summary.clone();
-            } else {
-                current_author.clear();
-                current_author_email.clear();
-                current_author_time = 0;
-                current_summary.clear();
-            }
-            continue;
-        }
-
-        if let Some(rest) = trimmed.strip_prefix("author ") {
-            current_author = rest.to_string();
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("author-mail ") {
-            current_author_email = rest
-                .trim()
-                .trim_start_matches('<')
-                .trim_end_matches('>')
-                .to_string();
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("author-time ") {
-            current_author_time = rest.trim().parse::<i64>().unwrap_or(0);
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("summary ") {
-            current_summary = rest.to_string();
-            continue;
-        }
-    }
-
-    lines.retain(|line| line.line > 0);
-    lines
-}
-
-fn should_fallback_to_uncommitted_blame(stdout: &str, stderr: &str) -> bool {
-    let combined = format!("{}\n{}", stdout, stderr).to_ascii_lowercase();
-    combined.contains("no such path")
-        && (combined.contains(" in head") || combined.contains(" in commit"))
-}
-
 fn build_uncommitted_blame_lines_from_content(content: &str) -> Vec<GitBlameLine> {
     let line_count = content.lines().count();
     (1..=line_count)
@@ -209,16 +52,80 @@ fn build_uncommitted_blame_lines_from_content(content: &str) -> Vec<GitBlameLine
         .collect()
 }
 
-fn build_uncommitted_blame_lines(path: &Path) -> Option<Vec<GitBlameLine>> {
-    let bytes = std::fs::read(path).ok()?;
-    let content = std::str::from_utf8(&bytes).ok()?;
-    Some(build_uncommitted_blame_lines_from_content(content))
-}
+fn load_blame(directory: PathBuf, absolute_path: PathBuf) -> Result<Vec<GitBlameLine>, String> {
+    let repository = git2::Repository::discover(&directory).map_err(|error| error.to_string())?;
+    let workdir = repository
+        .workdir()
+        .ok_or_else(|| "git blame requires a non-bare worktree".to_owned())?;
+    let canonical_workdir = workdir.canonicalize().map_err(|error| error.to_string())?;
+    let canonical_path = absolute_path
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let relative_path = canonical_path
+        .strip_prefix(&canonical_workdir)
+        .map_err(|_| "path resolves outside the repository worktree".to_owned())?;
+    let bytes = std::fs::read(&canonical_path).map_err(|error| error.to_string())?;
+    let content =
+        std::str::from_utf8(&bytes).map_err(|_| "git blame target is not UTF-8 text".to_owned())?;
 
-fn file_dir(path: &Path) -> PathBuf {
-    path.parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| path.to_path_buf())
+    if repository.is_empty().map_err(|error| error.to_string())? {
+        return Ok(build_uncommitted_blame_lines_from_content(content));
+    }
+
+    let committed = match repository.blame_file(relative_path, None) {
+        Ok(blame) => blame,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {
+            return Ok(build_uncommitted_blame_lines_from_content(content));
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let blame = committed
+        .blame_buffer(&bytes)
+        .map_err(|error| error.to_string())?;
+    let mut lines = Vec::new();
+    for hunk in blame.iter() {
+        let oid = hunk.final_commit_id();
+        let (author, author_email, author_time, summary) = if oid.is_zero() {
+            (
+                NOT_COMMITTED_AUTHOR.to_owned(),
+                String::new(),
+                0,
+                NOT_COMMITTED_SUMMARY.to_owned(),
+            )
+        } else {
+            let signature = hunk.final_signature();
+            (
+                signature
+                    .as_ref()
+                    .map(|value| String::from_utf8_lossy(value.name_bytes()).into_owned())
+                    .unwrap_or_default(),
+                signature
+                    .as_ref()
+                    .map(|value| String::from_utf8_lossy(value.email_bytes()).into_owned())
+                    .unwrap_or_default(),
+                signature.map(|value| value.when().seconds()).unwrap_or(0),
+                hunk.summary().ok().flatten().unwrap_or_default().to_owned(),
+            )
+        };
+        for line in
+            hunk.final_start_line()..hunk.final_start_line().saturating_add(hunk.lines_in_hunk())
+        {
+            lines.push(GitBlameLine {
+                line,
+                hash: if oid.is_zero() {
+                    NOT_COMMITTED_HASH.to_owned()
+                } else {
+                    oid.to_string()
+                },
+                author: author.clone(),
+                author_email: author_email.clone(),
+                author_time,
+                summary: summary.clone(),
+            });
+        }
+    }
+    lines.sort_by_key(|line| line.line);
+    Ok(lines)
 }
 
 pub async fn git_blame(Query(q): Query<GitBlameQuery>) -> Response {
@@ -259,56 +166,80 @@ pub async fn git_blame(Query(q): Query<GitBlameQuery>) -> Response {
             .into_response();
     }
 
-    let cwd = file_dir(&abs);
-    let (c0, o0, e0) = run_git(&cwd, &["rev-parse", "--show-toplevel"])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if c0 != 0 {
-        if let Some(resp) = map_git_failure(c0, &o0, &e0) {
-            return resp;
-        }
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": e0.trim(), "code": "not_git_repo"})),
-        )
-            .into_response();
-    }
-
-    let repo_root = abs_path(o0.trim());
-    if !abs.starts_with(&repo_root) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Path outside repo", "code": "invalid_path"})),
-        )
-            .into_response();
-    }
-
-    let rel = abs.strip_prefix(&repo_root).unwrap_or(&abs);
-    let rel = rel
-        .to_string_lossy()
-        .trim_start_matches('/')
-        .replace('\\', "/");
-
-    let (code, out, err) = run_git(&repo_root, &["blame", "--line-porcelain", "--", &rel])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if should_fallback_to_uncommitted_blame(&out, &err)
-            && let Some(lines) = build_uncommitted_blame_lines(&abs)
-        {
-            return Json(GitBlameResponse { lines }).into_response();
-        }
-
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
+    match spawn_libgit2(move || load_blame(dir, abs)).await {
+        Ok(Ok(lines)) => Json(GitBlameResponse { lines }).into_response(),
+        Ok(Err(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_blame_failed"})),
+            Json(serde_json::json!({"error": error, "code": "git_blame_failed"})),
         )
-            .into_response();
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("git blame worker failed: {error}"),
+                "code": "git_blame_worker_failed"
+            })),
+        )
+            .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use git2::{IndexAddOption, Signature};
+    use std::path::Path;
+
+    #[test]
+    fn blame_marks_worktree_changes_as_uncommitted() {
+        let workspace = tempfile::tempdir().expect("create temporary repository");
+        let repository = git2::Repository::init(workspace.path()).expect("initialize repository");
+        let file_path = workspace.path().join("notes.txt");
+        std::fs::write(&file_path, "first\nsecond\n").expect("write committed file");
+
+        let mut index = repository.index().expect("open index");
+        index
+            .add_all([Path::new("notes.txt")], IndexAddOption::DEFAULT, None)
+            .expect("add file to index");
+        index.write().expect("write index");
+        let tree_id = index.write_tree().expect("write tree");
+        let tree = repository.find_tree(tree_id).expect("find tree");
+        let signature =
+            Signature::now("Agena Test", "agena@example.invalid").expect("create commit signature");
+        let commit_id = repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "initial content",
+                &tree,
+                &[],
+            )
+            .expect("commit file");
+        drop(tree);
+        drop(repository);
+
+        std::fs::write(&file_path, "first\nchanged\nnew\n").expect("modify worktree file");
+        let lines = load_blame(workspace.path().to_path_buf(), file_path).expect("load blame");
+
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].hash, commit_id.to_string());
+        assert_eq!(lines[0].author, "Agena Test");
+        assert_eq!(lines[1].hash, NOT_COMMITTED_HASH);
+        assert_eq!(lines[1].summary, NOT_COMMITTED_SUMMARY);
+        assert_eq!(lines[2].hash, NOT_COMMITTED_HASH);
     }
 
-    let lines = parse_blame_porcelain(&out);
-    Json(GitBlameResponse { lines }).into_response()
+    #[test]
+    fn blame_supports_new_untracked_files() {
+        let workspace = tempfile::tempdir().expect("create temporary repository");
+        git2::Repository::init(workspace.path()).expect("initialize repository");
+        let file_path = workspace.path().join("new.txt");
+        std::fs::write(&file_path, "one\ntwo\n").expect("write untracked file");
+
+        let lines = load_blame(workspace.path().to_path_buf(), file_path).expect("load blame");
+
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|line| line.hash == NOT_COMMITTED_HASH));
+    }
 }

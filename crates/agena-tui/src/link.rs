@@ -11,6 +11,7 @@ const SHORT_LINK_TRIGGER_WIDTH: usize = 56;
 const SHORT_LINK_TIMEOUT: Duration = Duration::from_millis(2500);
 const SHORT_LINK_CONNECT_TIMEOUT: Duration = Duration::from_millis(1200);
 const SHORT_LINK_USER_AGENT: &str = "agena-tui-auth-shortener";
+const SHORT_LINK_MAX_RESPONSE_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 enum ShortLinkBackend {
@@ -98,7 +99,7 @@ async fn shorten_simple(client: &Client, endpoint: &str, url: &str) -> Result<St
         .send()
         .await?
         .error_for_status()?;
-    let short_url = response.text().await?.trim().to_owned();
+    let short_url = read_short_link_response(response).await?;
     if short_url.is_empty() {
         return Err(anyhow!("shortener returned empty response"));
     }
@@ -112,7 +113,7 @@ async fn shorten_tinyurl(client: &Client, url: &str) -> Result<String> {
         .send()
         .await?
         .error_for_status()?;
-    let short_url = response.text().await?.trim().to_owned();
+    let short_url = read_short_link_response(response).await?;
     if short_url.is_empty() {
         return Err(anyhow!("tinyurl returned empty response"));
     }
@@ -126,11 +127,29 @@ async fn shorten_clckru(client: &Client, url: &str) -> Result<String> {
         .send()
         .await?
         .error_for_status()?;
-    let short_url = response.text().await?.trim().to_owned();
+    let short_url = read_short_link_response(response).await?;
     if short_url.is_empty() {
         return Err(anyhow!("clck.ru returned empty response"));
     }
     Ok(short_url)
+}
+
+async fn read_short_link_response(mut response: reqwest::Response) -> Result<String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > SHORT_LINK_MAX_RESPONSE_BYTES as u64)
+    {
+        return Err(anyhow!("shortener response exceeds 8 KiB"));
+    }
+
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if bytes.len().saturating_add(chunk.len()) > SHORT_LINK_MAX_RESPONSE_BYTES {
+            return Err(anyhow!("shortener response exceeds 8 KiB"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(std::str::from_utf8(&bytes)?.trim().to_owned())
 }
 
 #[cfg(test)]

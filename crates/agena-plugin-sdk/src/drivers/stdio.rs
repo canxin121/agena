@@ -15,9 +15,12 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use agena_stdio_codec::ContentLengthCodec;
+use bytes::Bytes;
+use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::JoinSet;
+use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::drivers::dispatch::PluginDispatcher;
 use crate::error::{PluginError, PluginErrorKind};
@@ -62,7 +65,7 @@ const STDIO_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
     let dispatcher = Arc::new(PluginDispatcher::new(plugin));
 
-    let (tx, rx) = mpsc::channel::<Vec<u8>>(STDIO_WRITER_QUEUE_CAPACITY);
+    let (tx, rx) = mpsc::channel::<Bytes>(STDIO_WRITER_QUEUE_CAPACITY);
     let pending: Arc<StdMutex<HashMap<RequestId, oneshot::Sender<Response>>>> =
         Arc::new(StdMutex::new(HashMap::new()));
     let next_id = Arc::new(AtomicI64::new(1));
@@ -76,17 +79,15 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
 
     // Writer task: owns stdout, drains channel.
     let mut writer = tokio::spawn(async move {
-        let mut stdout = tokio::io::stdout();
+        let mut stdout = FramedWrite::new(
+            tokio::io::stdout(),
+            ContentLengthCodec::new(STDIO_MAX_FRAME_BYTES),
+        );
         let mut rx = rx;
         while let Some(payload) = rx.recv().await {
-            let header = format!("Content-Length: {}\r\n\r\n", payload.len());
-            if stdout.write_all(header.as_bytes()).await.is_err() {
+            if stdout.send(payload).await.is_err() {
                 break;
             }
-            if stdout.write_all(&payload).await.is_err() {
-                break;
-            }
-            let _ = stdout.flush().await;
         }
     });
 
@@ -98,39 +99,18 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
     let mut dispatch_tasks = JoinSet::new();
 
     // Reader loop: owns stdin, demuxes frames.
-    let mut reader = BufReader::new(tokio::io::stdin());
+    let mut reader = FramedRead::new(
+        tokio::io::stdin(),
+        ContentLengthCodec::new(STDIO_MAX_FRAME_BYTES),
+    );
     let read_result = async {
         loop {
             while dispatch_tasks.try_join_next().is_some() {}
 
-            // Read header lines until blank line; capture Content-Length.
-            let mut content_length: Option<usize> = None;
-            loop {
-                let mut line = String::new();
-                let n = reader.read_line(&mut line).await?;
-                if n == 0 {
-                    return Ok(());
-                }
-                let trimmed = line.trim_end_matches(['\r', '\n']);
-                if trimmed.is_empty() {
-                    break;
-                }
-                if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
-                    content_length = rest.trim().parse().ok();
-                }
-            }
-            let len = match content_length {
-                Some(v) => v,
-                None => continue,
+            let Some(body) = reader.next().await else {
+                return Ok(());
             };
-            if len > STDIO_MAX_FRAME_BYTES {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("stdio frame exceeds the {STDIO_MAX_FRAME_BYTES}-byte limit"),
-                ));
-            }
-            let mut body = vec![0u8; len];
-            reader.read_exact(&mut body).await?;
+            let body = body.map_err(std::io::Error::other)?;
 
             let frame: Frame = match serde_json::from_slice(&body) {
                 Ok(f) => f,
@@ -316,15 +296,15 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
     read_result
 }
 
-async fn send_response(tx: &mpsc::Sender<Vec<u8>>, response: Response) -> bool {
+async fn send_response(tx: &mpsc::Sender<Bytes>, response: Response) -> bool {
     if let Ok(body) = serde_json::to_vec(&response) {
-        return tx.send(body).await.is_ok();
+        return tx.send(body.into()).await.is_ok();
     }
     false
 }
 
 async fn send_notification<T: serde::Serialize>(
-    tx: &mpsc::Sender<Vec<u8>>,
+    tx: &mpsc::Sender<Bytes>,
     method_name: &str,
     params: &T,
 ) -> bool {
@@ -338,7 +318,7 @@ async fn send_notification<T: serde::Serialize>(
         params: Some(params),
     };
     if let Ok(body) = serde_json::to_vec(&notification) {
-        return tx.send(body).await.is_ok();
+        return tx.send(body.into()).await.is_ok();
     }
     false
 }
@@ -358,7 +338,7 @@ macro_rules! export_stdio {
 // ---------- StdioHostClient: plugin -> host callbacks over the same pipe ----------
 
 struct StdioHostClient {
-    tx: mpsc::Sender<Vec<u8>>,
+    tx: mpsc::Sender<Bytes>,
     pending: Arc<StdMutex<HashMap<RequestId, oneshot::Sender<Response>>>>,
     next_id: Arc<AtomicI64>,
 }
@@ -388,7 +368,7 @@ impl StdioHostClient {
             pending: Arc::clone(&self.pending),
             request_id: req_id,
         };
-        self.tx.send(body).await.map_err(|_| {
+        self.tx.send(body.into()).await.map_err(|_| {
             PluginError::from_kind(PluginErrorKind::Disconnected, "host writer closed")
         })?;
         let resp = slot_rx.await.map_err(|_| {
@@ -413,7 +393,7 @@ impl StdioHostClient {
             params: Some(params),
         };
         if let Ok(body) = serde_json::to_vec(&n) {
-            self.tx.send(body).await.map_err(|_| {
+            self.tx.send(body.into()).await.map_err(|_| {
                 PluginError::from_kind(PluginErrorKind::Disconnected, "host writer closed")
             })?;
         }

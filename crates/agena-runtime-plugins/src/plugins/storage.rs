@@ -356,7 +356,7 @@ impl PluginStorage for FilePluginStorage {
             let json = serde_json::to_string_pretty(&map)
                 .map_err(|error| PluginStorageError::Data(error.to_string()))?;
             write_secure_file_unlocked(&path, json.as_bytes())
-        })
+        })?
     }
 
     fn delete(
@@ -384,7 +384,7 @@ impl PluginStorage for FilePluginStorage {
                 write_secure_file_unlocked(&path, json.as_bytes())?;
             }
             Ok(())
-        })
+        })?
     }
 
     fn list(
@@ -518,7 +518,7 @@ impl PluginKeyringSecretStore {
             let json = serde_json::to_string_pretty(&map)
                 .map_err(|error| PluginStorageError::Data(error.to_string()))?;
             write_secure_file_unlocked(&path, json.as_bytes())
-        })
+        })?
     }
 
     fn record_name(&self, plugin_id: &PluginKey, name: &str) -> Result<(), PluginStorageError> {
@@ -531,7 +531,7 @@ impl PluginKeyringSecretStore {
                 write_secure_file_unlocked(&path, json.as_bytes())?;
             }
             Ok(())
-        })
+        })?
     }
 
     fn forget_name(&self, plugin_id: &PluginKey, name: &str) -> Result<(), PluginStorageError> {
@@ -548,7 +548,7 @@ impl PluginKeyringSecretStore {
                 }
             }
             Ok(())
-        })
+        })?
     }
 
     fn map_secret_err(&self, err: SecretStoreError) -> PluginStorageError {

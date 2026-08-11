@@ -108,9 +108,18 @@ impl WsClient {
                         } => (subscription, SubscriptionEvent::Lagged(skipped)),
                         Notification::SubscriptionClosed { .. } => continue,
                     };
-                    let guard = subs_for_reader.lock().await;
-                    if let Some(tx) = guard.inner.get(&id) {
-                        let _ = tx.send(item).await;
+                    let subscriber = {
+                        let guard = subs_for_reader.lock().await;
+                        guard.inner.get(&id).cloned()
+                    };
+                    if let Some(subscriber) = subscriber
+                        && let Err(error) = subscriber.try_send(item)
+                    {
+                        tracing::warn!(
+                            subscription = %id,
+                            error = %error,
+                            "dropping a subscription event because its consumer is closed or full"
+                        );
                     }
                 }
             }

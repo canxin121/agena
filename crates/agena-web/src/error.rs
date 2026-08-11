@@ -27,6 +27,8 @@ pub enum CrawlError {
     RedbCommit(#[from] redb::CommitError),
     #[error("{0}")]
     InvalidInput(String),
+    #[error("web response exceeds the {maximum_bytes}-byte limit")]
+    ResponseTooLarge { maximum_bytes: usize },
     #[error("{0} not found")]
     NotFound(String),
 }

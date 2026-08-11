@@ -49,6 +49,8 @@ members = [
     "crates/agena-marketplace-server",
     "crates/agena-notification",
     "crates/agena-permission",
+    "crates/agena-process",
+    "crates/agena-stdio-codec",
     "crates/agena-plugin-host",
     "crates/agena-plugin-marketplace",
     "crates/agena-macros",
@@ -112,6 +114,8 @@ agena-mcp-server = { path = "crates/agena-mcp-server" }
 agena-memory-index = { path = "crates/agena-memory-index" }
 agena-notification = { path = "crates/agena-notification" }
 agena-permission = { path = "crates/agena-permission" }
+agena-process = { path = "crates/agena-process" }
+agena-stdio-codec = { path = "crates/agena-stdio-codec" }
 agena-plugin-host = { path = "crates/agena-plugin-host" }
 agena-plugin-marketplace = { path = "crates/agena-plugin-marketplace" }
 agena-plugin-sdk = { path = "crates/agena-plugin-sdk" }
@@ -147,6 +151,7 @@ secrecy = { version = "0.10.3", features = ["serde"] }
 abi_stable = "0.11.3"
 arc-swap = "1.9.2"
 base64 = "0.22.1"
+bytes = "1.12.1"
 dashmap = "6.2.1"
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["pkcs8", "pem", "rand_core"] }
 hex = "0.4.3"
@@ -186,6 +191,7 @@ tar = "0.4.46"
 axum = { version = "0.8.9" }
 hyper = "1.10.1"
 http = "1.4.2"
+httparse = "1.10.1"
 http-body = "1.0.1"
 http-body-util = "0.1.3"
 tower = { version = "0.5.3" }
@@ -228,6 +234,7 @@ html_escape = { package = "html-escape", version = "0.2.14" }
 ignore = "0.4.28"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
 imagesize = "0.15.0"
+jsonschema = { version = "0.47.0", default-features = false }
 indexmap = { version = "2.14.0", features = ["serde"] }
 keyring = "4.1.4"
 lru = "0.18.1"
@@ -240,6 +247,7 @@ mockito = "1.7.2"
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 path-clean = "1.0.1"
 process_control = "5.2.0"
+process-wrap = { version = "9.1.0", features = ["tokio1"] }
 ratatui = "0.30.2"
 ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
 resvg = { version = "=0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
@@ -253,6 +261,9 @@ rust-latex-parser = "=0.1.0"
 term-maths = "=1.0.0"
 redb = "4.1.0"
 regex = "1.13.0"
+fs4 = "0.13.1"
+infer = "0.22.0"
+similar = "3.1.2"
 portable-pty = "0.9.0"
 schemars = "1.2.1"
 semver = "1.0.28"

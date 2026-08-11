@@ -635,7 +635,7 @@ fn parse_official_html_reference_index_document(
         return Ok(Vec::new());
     };
 
-    let props: OfficialHtmlSsrProps = serde_json::from_str(json)?;
+    let props: OfficialHtmlSsrProps = serde_json::from_str(json.as_str())?;
     let mut pages = Vec::new();
     for reference in props.sidebars.refs {
         collect_official_html_reference_pages(&reference.pages, &mut pages);
@@ -855,59 +855,38 @@ fn parse_token_quantity(raw: &str) -> Option<u32> {
 }
 
 fn official_html_plain_text(body: &str) -> String {
-    let meta_content = official_html_meta_content_re()
-        .captures_iter(body)
-        .filter_map(|capture| capture.name("content"))
-        .map(|content| content.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let without_scripts = official_html_script_re().replace_all(body, " ");
-    let without_styles = official_html_style_re().replace_all(without_scripts.as_ref(), " ");
-    let without_tags = official_html_tag_re().replace_all(without_styles.as_ref(), " ");
-    let combined = format!("{meta_content} {}", without_tags.as_ref());
-    let decoded = html_escape::decode_html_entities(combined.as_str());
+    let document = scraper::Html::parse_document(body);
+    let meta_selector = scraper::Selector::parse("meta[content]").expect("static meta selector");
+    let mut text = document
+        .select(&meta_selector)
+        .filter_map(|element| element.value().attr("content"))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    text.extend(document.tree.nodes().filter_map(|node| {
+        let value = node.value().as_text()?;
+        let hidden = node.ancestors().any(|ancestor| {
+            ancestor
+                .value()
+                .as_element()
+                .is_some_and(|element| matches!(element.name.local.as_ref(), "script" | "style"))
+        });
+        (!hidden).then(|| value.to_string())
+    }));
+    let combined = text.join(" ");
     official_html_whitespace_re()
-        .replace_all(decoded.as_ref(), " ")
+        .replace_all(combined.as_str(), " ")
         .trim()
         .to_owned()
 }
 
-fn extract_official_html_ssr_props_json(body: &str) -> Option<&str> {
-    official_html_ssr_props_re()
-        .captures(body)
-        .and_then(|capture| capture.name("json"))
-        .map(|json| json.as_str())
-}
-
-fn official_html_ssr_props_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r#"(?s)<script id="ssr-props" type="application/json">(?P<json>.*?)</script>"#)
-            .expect("valid ssr props regex")
-    })
-}
-
-fn official_html_script_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?is)<script\b.*?</script>").expect("valid script regex"))
-}
-
-fn official_html_meta_content_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r#"(?is)<meta\b[^>]*\bcontent="(?P<content>[^"]*)"[^>]*>"#)
-            .expect("valid meta content regex")
-    })
-}
-
-fn official_html_style_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?is)<style\b.*?</style>").expect("valid style regex"))
-}
-
-fn official_html_tag_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?is)<[^>]+>").expect("valid tag regex"))
+fn extract_official_html_ssr_props_json(body: &str) -> Option<String> {
+    let document = scraper::Html::parse_document(body);
+    let selector = scraper::Selector::parse("script#ssr-props[type='application/json']")
+        .expect("static SSR props selector");
+    document
+        .select(&selector)
+        .next()
+        .map(|element| element.text().collect::<String>())
 }
 
 fn official_html_whitespace_re() -> &'static Regex {
@@ -964,6 +943,7 @@ fn official_html_supports_context_size_re() -> &'static Regex {
         .expect("valid supports context regex")
     })
 }
+
 use super::{
     BTreeMap, CatalogDefinitionSourcePriority, CatalogModelDefinition, HuggingFaceHubModel,
     ModelCatalogDocument, ModelCatalogHttpError, ModelCatalogRemoteSource,
@@ -982,3 +962,39 @@ use super::{
 };
 use agena_provider::ModelCapabilityFeature;
 use agena_provider::ModelCapabilityPatch;
+
+#[cfg(test)]
+mod parser_tests {
+    use super::{extract_official_html_ssr_props_json, official_html_plain_text};
+
+    #[test]
+    fn html_text_uses_dom_nodes_and_ignores_script_and_style_content() {
+        let text = official_html_plain_text(
+            r#"
+                <html>
+                  <head>
+                    <meta name="description" content="Context window 128K tokens">
+                    <style>.fake { content: "Context window 999M"; }</style>
+                    <script>window.fake = "Context window 888M";</script>
+                  </head>
+                  <body><p>Input context length (ISL): 64K &amp; supported</p></body>
+                </html>
+            "#,
+        );
+
+        assert!(text.contains("Context window 128K tokens"));
+        assert!(text.contains("Input context length (ISL): 64K & supported"));
+        assert!(!text.contains("999M"));
+        assert!(!text.contains("888M"));
+    }
+
+    #[test]
+    fn ssr_props_are_selected_by_dom_attributes_in_any_order() {
+        let json = extract_official_html_ssr_props_json(
+            r#"<script nonce="abc" type="application/json" data-page="models" id="ssr-props">{"reference":{"pages":[]}}</script>"#,
+        )
+        .expect("SSR props script");
+
+        assert_eq!(json, r#"{"reference":{"pages":[]}}"#);
+    }
+}

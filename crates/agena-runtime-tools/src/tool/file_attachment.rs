@@ -237,7 +237,10 @@ fn detect_dimensions(bytes: &[u8]) -> (Option<u32>, Option<u32>) {
     }
 }
 
-fn detect_mime(path: &Path, _bytes: &[u8]) -> String {
+fn detect_mime(path: &Path, bytes: &[u8]) -> String {
+    if let Some(kind) = infer::get(bytes) {
+        return kind.mime_type().to_owned();
+    }
     let guess = MimeGuess::from_path(path);
     guess
         .first_raw()
@@ -247,4 +250,20 @@ fn detect_mime(path: &Path, _bytes: &[u8]) -> String {
 
 fn looks_like_utf8_text(bytes: &[u8]) -> bool {
     content_inspector::inspect(bytes).is_text() && std::str::from_utf8(bytes).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::detect_mime;
+
+    #[test]
+    fn byte_signature_wins_over_a_misleading_extension() {
+        assert_eq!(
+            detect_mime(
+                std::path::Path::new("misleading.txt"),
+                b"\x89PNG\r\n\x1a\nrest"
+            ),
+            "image/png"
+        );
+    }
 }

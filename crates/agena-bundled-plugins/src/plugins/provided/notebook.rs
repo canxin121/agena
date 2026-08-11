@@ -233,6 +233,7 @@ impl NotebookPlugin {
                     Vec::new(),
                 ))
             })
+            .map_err(io_error)?
         })
         .await
         .map_err(|error| PluginError::internal(format!("notebook worker failed: {error}")))?

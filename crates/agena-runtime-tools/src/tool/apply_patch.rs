@@ -3,8 +3,8 @@ use std::fs::{self, Permissions};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use diff::Result as DiffResult;
 use sha2::{Digest, Sha256};
+use similar::{ChangeTag, TextDiff};
 use uuid::Uuid;
 
 use crate::part::ApplyPatchToolInput;
@@ -103,7 +103,7 @@ pub fn execute(
         })
         .collect::<Vec<_>>();
 
-    crate::with_file_mutation_locks(lock_paths.as_slice(), || execute_locked(executor, ops))
+    crate::with_file_mutation_locks(lock_paths.as_slice(), || execute_locked(executor, ops))?
 }
 
 fn execute_locked(
@@ -724,11 +724,12 @@ fn render_update_diff(path: &str, move_to: Option<&str>, hunks: &[Hunk]) -> Stri
 
     for hunk in hunks {
         lines.push("@@".to_string());
-        for line in diff::lines(&hunk.old, &hunk.new) {
-            match line {
-                DiffResult::Left(value) => lines.push(format!("-{value}")),
-                DiffResult::Both(value, _) => lines.push(format!(" {value}")),
-                DiffResult::Right(value) => lines.push(format!("+{value}")),
+        for change in TextDiff::from_lines(&hunk.old, &hunk.new).iter_all_changes() {
+            let value = change.value().trim_end_matches(['\r', '\n']);
+            match change.tag() {
+                ChangeTag::Delete => lines.push(format!("-{value}")),
+                ChangeTag::Equal => lines.push(format!(" {value}")),
+                ChangeTag::Insert => lines.push(format!("+{value}")),
             }
         }
     }

@@ -39,9 +39,9 @@ agena-memory-index = { workspace = true }
 agena-skills = { workspace = true }
 async-trait = { workspace = true }
 async-stream = { workspace = true }
+axum = { workspace = true }
 blake3 = { workspace = true }
 derive_more = { workspace = true, features = ["display", "from", "into"] }
-diff = "0.1.13"
 futures-util = { workspace = true }
 futures-core = { workspace = true }
 globset = { workspace = true }
@@ -50,6 +50,7 @@ hex = { workspace = true }
 html_escape = { workspace = true }
 http = { workspace = true }
 imagesize = { workspace = true }
+infer = { workspace = true }
 indexmap = { workspace = true }
 libc = { workspace = true }
 log = { workspace = true }
@@ -65,6 +66,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 schemars = { workspace = true }
+scraper = { workspace = true }
 sea-orm = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }

@@ -40,6 +40,7 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 use uuid::Uuid;
 
 use agena_domain::{ProcessEvent, ProcessStatus, ProcessStream, ProcessSummary};
+use agena_process::ManagedChild;
 
 const DEFAULT_BUFFER_LINES: usize = 1_000;
 const MAX_BUFFER_LINES: usize = 10_000;
@@ -489,29 +490,22 @@ async fn run_monitor(
     }
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
-    cmd.kill_on_drop(true);
     if capture_stderr {
         cmd.stderr(Stdio::piped());
     } else {
         cmd.stderr(Stdio::null());
     }
 
-    #[cfg(unix)]
-    cmd.process_group(0);
-
-    let mut child = match cmd.spawn() {
+    let mut child = match agena_process::spawn(cmd) {
         Ok(child) => child,
         Err(err) => {
             mark_failed(&state, format!("failed to spawn: {err}"));
             return;
         }
     };
-    #[cfg(unix)]
-    let process_group = UnixProcessGroupGuard::new(&child);
-
-    let stdout = child.stdout.take();
+    let stdout = child.stdout().take();
     let stderr = if capture_stderr {
-        child.stderr.take()
+        child.stderr().take()
     } else {
         None
     };
@@ -628,8 +622,9 @@ async fn run_monitor(
         }
     };
 
-    #[cfg(unix)]
-    process_group.force_kill();
+    // A shell may exit while a descendant still owns inherited pipes.
+    // `process-wrap` targets the complete process group or Job Object.
+    let _ = child.start_kill();
     join_stream_tasks(stdout_task, stderr_task).await;
 
     {
@@ -655,32 +650,8 @@ async fn run_monitor(
     }
 }
 
-async fn kill_child(child: &mut tokio::process::Child) {
-    #[cfg(unix)]
-    {
-        if let Some(child_id) = child.id() {
-            signal_process_group(child_id, libc::SIGTERM);
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            signal_process_group(child_id, libc::SIGKILL);
-        }
-        let _ = child.start_kill();
-    }
-
-    #[cfg(windows)]
-    {
-        if let Some(child_id) = child.id() {
-            let _ = Command::new("taskkill")
-                .args(["/PID", child_id.to_string().as_str(), "/T", "/F"])
-                .status()
-                .await;
-        }
-        let _ = child.start_kill();
-    }
-
-    #[cfg(all(not(unix), not(windows)))]
-    {
-        let _ = child.start_kill();
-    }
+async fn kill_child(child: &mut ManagedChild) {
+    let _ = child.terminate(Duration::from_millis(150)).await;
 }
 
 async fn join_stream_tasks(
@@ -715,42 +686,6 @@ async fn join_stream_tasks(
             target: "agena_runtime::monitor",
             "background process pipes did not close after termination; reader tasks were aborted"
         );
-    }
-}
-
-#[cfg(unix)]
-fn signal_process_group(child_id: u32, signal: i32) {
-    // SAFETY: monitored commands are started as leaders of dedicated process
-    // groups. ESRCH is harmless when the group has already exited.
-    unsafe {
-        libc::kill(-(child_id as i32), signal);
-    }
-}
-
-#[cfg(unix)]
-struct UnixProcessGroupGuard {
-    child_id: Option<u32>,
-}
-
-#[cfg(unix)]
-impl UnixProcessGroupGuard {
-    fn new(child: &tokio::process::Child) -> Self {
-        Self {
-            child_id: child.id(),
-        }
-    }
-
-    fn force_kill(&self) {
-        if let Some(child_id) = self.child_id {
-            signal_process_group(child_id, libc::SIGKILL);
-        }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for UnixProcessGroupGuard {
-    fn drop(&mut self) {
-        self.force_kill();
     }
 }
 

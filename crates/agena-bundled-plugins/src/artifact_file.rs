@@ -53,7 +53,7 @@ async fn persist(
             } else {
                 agena_runtime_tools::atomic_create_file(&path, &bytes, None)
             }
-        })
+        })?
     })
     .await
     .map_err(|error| PluginError::internal(format!("{purpose} worker failed: {error}")))?

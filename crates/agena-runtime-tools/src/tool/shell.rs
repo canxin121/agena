@@ -11,6 +11,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use agena_domain::CommandOutputStream;
+use agena_process::ManagedChild;
 use agena_tool::{ShellError, ShellOutput, ShellRequest};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
@@ -58,25 +59,17 @@ pub async fn execute_with_callback(
         .envs(env.iter())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-
-    // Put the shell and descendants in one process group so timeout and
-    // cancellation terminate the complete command tree on Unix.
-    #[cfg(unix)]
-    command.process_group(0);
+        .stderr(Stdio::piped());
 
     let started = Instant::now();
-    let mut child = command.spawn().map_err(ShellError::Spawn)?;
-    #[cfg(unix)]
-    let process_group = UnixProcessGroupGuard::new(&child);
+    let mut child = agena_process::spawn(command).map_err(ShellError::Spawn)?;
     let (chunk_tx, mut chunk_rx) = mpsc::channel(OUTPUT_CHUNK_QUEUE_CAPACITY);
     let stdout_handle = child
-        .stdout
+        .stdout()
         .take()
         .map(|reader| spawn_drain(reader, CommandOutputStream::Stdout, chunk_tx.clone()));
     let stderr_handle = child
-        .stderr
+        .stderr()
         .take()
         .map(|reader| spawn_drain(reader, CommandOutputStream::Stderr, chunk_tx.clone()));
     drop(chunk_tx);
@@ -125,11 +118,9 @@ pub async fn execute_with_callback(
         }
     };
 
-    // A shell can exit while a descendant still owns an inherited pipe. End
-    // the dedicated group before joining the drain tasks so foreground
-    // execution cannot hang after the direct child has already exited.
-    #[cfg(unix)]
-    process_group.force_kill();
+    // The direct command may exit while a detached descendant still owns an
+    // inherited pipe. `process-wrap` targets the complete group/job here.
+    let _ = child.start_kill();
     let (stdout, stderr) = collect_drains(stdout_handle, stderr_handle).await;
     while let Ok(chunk) = chunk_rx.try_recv() {
         emit_chunk(chunk, output_callback, &mut output_sequence);
@@ -226,55 +217,11 @@ enum WaitOutcome {
     Cancelled,
 }
 
-async fn terminate_process_tree(
-    child: &mut tokio::process::Child,
-) -> Result<ExitStatus, ShellError> {
-    #[cfg(unix)]
-    {
-        let Some(child_id) = child.id() else {
-            return child.wait().await.map_err(ShellError::Wait);
-        };
-        let process_group = -(child_id as i32);
-        // SAFETY: the freshly spawned child is the leader of this dedicated
-        // process group. ESRCH is harmless if it exited before the signal.
-        unsafe {
-            libc::kill(process_group, libc::SIGTERM);
-        }
-        let status = match tokio::time::timeout(Duration::from_millis(150), child.wait()).await {
-            Ok(result) => result.map_err(ShellError::Wait),
-            Err(_) => {
-                // SAFETY: same dedicated process-group reasoning as above.
-                unsafe {
-                    libc::kill(process_group, libc::SIGKILL);
-                }
-                child.wait().await.map_err(ShellError::Wait)
-            }
-        };
-        // The direct shell may honor SIGTERM while a descendant ignores it.
-        // Always force-clean the remaining dedicated process group.
-        unsafe {
-            libc::kill(process_group, libc::SIGKILL);
-        }
-        status
-    }
-
-    #[cfg(windows)]
-    {
-        let Some(child_id) = child.id() else {
-            return child.wait().await.map_err(ShellError::Wait);
-        };
-        let _ = Command::new("taskkill")
-            .args(["/PID", child_id.to_string().as_str(), "/T", "/F"])
-            .status()
-            .await;
-        child.wait().await.map_err(ShellError::Wait)
-    }
-
-    #[cfg(all(not(unix), not(windows)))]
-    {
-        let _ = child.start_kill();
-        child.wait().await.map_err(ShellError::Wait)
-    }
+async fn terminate_process_tree(child: &mut ManagedChild) -> Result<ExitStatus, ShellError> {
+    child
+        .terminate(Duration::from_millis(150))
+        .await
+        .map_err(ShellError::Wait)
 }
 
 fn status_to_code(status: ExitStatus) -> i32 {
@@ -376,37 +323,6 @@ async fn collect_drains(
                 "[stderr drain stopped after process termination timeout]".to_string(),
             )
         }
-    }
-}
-
-#[cfg(unix)]
-struct UnixProcessGroupGuard {
-    child_id: Option<u32>,
-}
-
-#[cfg(unix)]
-impl UnixProcessGroupGuard {
-    fn new(child: &tokio::process::Child) -> Self {
-        Self {
-            child_id: child.id(),
-        }
-    }
-
-    fn force_kill(&self) {
-        if let Some(child_id) = self.child_id {
-            // SAFETY: foreground commands are started as leaders of dedicated
-            // process groups. ESRCH is harmless after complete process exit.
-            unsafe {
-                libc::kill(-(child_id as i32), libc::SIGKILL);
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for UnixProcessGroupGuard {
-    fn drop(&mut self) {
-        self.force_kill();
     }
 }
 

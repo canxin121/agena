@@ -222,8 +222,7 @@ impl ApplicationService {
         if !git_success(&workspace_root, ["rev-parse", "--is-inside-work-tree"]).await {
             let mut command = Command::new("git");
             command.args(["init"]).current_dir(&workspace_root);
-            let output =
-                run_command_output(&mut command, MUTATING_COMMAND_TIMEOUT, "git init").await?;
+            let output = run_command_output(command, MUTATING_COMMAND_TIMEOUT, "git init").await?;
             if !output.status.success() {
                 return Err(ApplicationError::internal(format!(
                     "git init failed: {}",
@@ -303,7 +302,7 @@ impl ApplicationService {
             }
         }
         command.current_dir(&workspace_root);
-        let output = run_command_output(&mut command, MUTATING_COMMAND_TIMEOUT, "git add").await?;
+        let output = run_command_output(command, MUTATING_COMMAND_TIMEOUT, "git add").await?;
         if !output.status.success() {
             return Err(ApplicationError::bad_request_with_diagnostic(
                 "Git could not stage the selected files.",
@@ -340,8 +339,7 @@ impl ApplicationService {
         command
             .args(["commit", "-m", message])
             .current_dir(&workspace_root);
-        let output =
-            run_command_output(&mut command, MUTATING_COMMAND_TIMEOUT, "git commit").await?;
+        let output = run_command_output(command, MUTATING_COMMAND_TIMEOUT, "git commit").await?;
         if !output.status.success() {
             return Err(ApplicationError::bad_request_with_diagnostic(
                 "Git could not create the commit.",
@@ -404,8 +402,7 @@ impl ApplicationService {
             command.args(["--base", base]);
         }
         command.current_dir(&workspace_root);
-        let output =
-            run_command_output(&mut command, MUTATING_COMMAND_TIMEOUT, "gh pr create").await?;
+        let output = run_command_output(command, MUTATING_COMMAND_TIMEOUT, "gh pr create").await?;
         if !output.status.success() {
             return Err(ApplicationError::bad_request_with_diagnostic(
                 "GitHub could not create the pull request.",
@@ -481,7 +478,7 @@ mod tests {
         let mut command = Command::new("sh");
         command.args(["-c", "exec sleep 30"]);
         let error = run_command_output_with_limit(
-            &mut command,
+            command,
             Duration::from_millis(20),
             "silent test command",
             1024,
@@ -496,20 +493,16 @@ mod tests {
     async fn subprocess_output_is_bounded() {
         let mut command = Command::new("sh");
         command.args(["-c", "printf 12345"]);
-        let error = run_command_output_with_limit(
-            &mut command,
-            Duration::from_secs(1),
-            "noisy test command",
-            4,
-        )
-        .await
-        .expect_err("oversized output must fail");
+        let error =
+            run_command_output_with_limit(command, Duration::from_secs(1), "noisy test command", 4)
+                .await
+                .expect_err("oversized output must fail");
         assert!(error.to_string().contains("output limit"));
     }
 }
 
 async fn run_command_output(
-    command: &mut Command,
+    command: Command,
     timeout: Duration,
     description: &str,
 ) -> ApplicationResult<std::process::Output> {
@@ -540,25 +533,24 @@ where
 }
 
 async fn run_command_output_with_limit(
-    command: &mut Command,
+    mut command: Command,
     timeout: Duration,
     description: &str,
     output_limit: usize,
 ) -> ApplicationResult<std::process::Output> {
     command
-        .kill_on_drop(true)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GH_PROMPT_DISABLED", "1");
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = agena_process::spawn(command).map_err(|error| {
         ApplicationError::internal(format!("failed to execute {description}: {error}"))
     })?;
-    let stdout = child.stdout.take().ok_or_else(|| {
+    let stdout = child.stdout().take().ok_or_else(|| {
         ApplicationError::internal(format!("failed to capture {description} stdout"))
     })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
+    let stderr = child.stderr().take().ok_or_else(|| {
         ApplicationError::internal(format!("failed to capture {description} stderr"))
     })?;
     tokio::time::timeout(timeout, async move {
@@ -600,7 +592,7 @@ async fn run_command_output_with_limit(
 async fn command_available(command_name: &str) -> bool {
     let mut command = Command::new(command_name);
     command.arg("--version");
-    run_command_output(&mut command, COMMAND_PROBE_TIMEOUT, command_name)
+    run_command_output(command, COMMAND_PROBE_TIMEOUT, command_name)
         .await
         .is_ok_and(|output| output.status.success())
 }
@@ -609,7 +601,7 @@ async fn git_success<const N: usize>(workspace_root: &Path, args: [&str; N]) -> 
     let description = format!("git {args:?}");
     let mut command = Command::new("git");
     command.args(args).current_dir(workspace_root);
-    run_command_output(&mut command, GIT_COMMAND_TIMEOUT, description.as_str())
+    run_command_output(command, GIT_COMMAND_TIMEOUT, description.as_str())
         .await
         .is_ok_and(|output| output.status.success())
 }
@@ -632,8 +624,7 @@ async fn git_output_with_status<const N: usize>(
     let description = format!("git {args:?}");
     let mut command = Command::new("git");
     command.args(args).current_dir(workspace_root);
-    let output =
-        run_command_output(&mut command, GIT_COMMAND_TIMEOUT, description.as_str()).await?;
+    let output = run_command_output(command, GIT_COMMAND_TIMEOUT, description.as_str()).await?;
     let code = output.status.code().unwrap_or_default();
     if !ok_statuses.contains(&code) {
         return Err(ApplicationError::internal(format!(

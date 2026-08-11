@@ -9,9 +9,12 @@ description = "Agena plugin SDK: write plugins as async traits, ship them as in-
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 agena-macros = { workspace = true }
+agena-stdio-codec = { workspace = true, optional = true }
 agena-tool = { workspace = true }
 async-trait = { workspace = true }
 bitflags = { workspace = true }
+bytes = { workspace = true, optional = true }
+futures-util = { workspace = true, features = ["sink"], optional = true }
 indexmap = { workspace = true }
 regex = { workspace = true }
 schemars = { workspace = true }
@@ -20,6 +23,7 @@ serde_json = { workspace = true }
 serde_path_to_error = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync"] }
+tokio-util = { workspace = true, features = ["codec"], optional = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
@@ -30,7 +34,7 @@ reqwest = { workspace = true, features = ["json", "rustls"], optional = true }
 [features]
 default = []
 cdylib = ["dep:abi_stable", "tokio/rt-multi-thread", "tokio/macros"]
-stdio = ["tokio/rt-multi-thread", "tokio/macros", "tokio/io-util", "tokio/io-std"]
+stdio = ["dep:agena-stdio-codec", "dep:bytes", "dep:futures-util", "dep:tokio-util", "tokio/rt-multi-thread", "tokio/macros", "tokio/io-util", "tokio/io-std"]
 http = ["tokio/rt-multi-thread", "tokio/macros", "dep:axum", "dep:reqwest"]
 
 [dev-dependencies]

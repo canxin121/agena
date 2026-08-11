@@ -836,16 +836,12 @@ impl AgenaCli {
 
         println!("Open this MCP OAuth authorization URL in a browser:\n{authorization_url}");
         println!("Waiting for the loopback callback at {redirect_uri} …");
-        let port = args.port;
-        let callback = tokio::task::spawn_blocking(move || {
-            agena_runtime::wait_for_oauth_callback(
-                port,
-                expected_state.as_str(),
-                StdDuration::from_secs(300),
-            )
-        })
+        let callback = agena_runtime::wait_for_oauth_callback_async(
+            args.port,
+            expected_state.as_str(),
+            StdDuration::from_secs(300),
+        )
         .await
-        .map_err(|error| AppError::Config(format!("MCP OAuth callback task failed: {error}")))?
         .map_err(|error| AppError::Config(error.to_string()))?;
         session
             .complete(

@@ -1067,6 +1067,7 @@ impl SkillsPlugin {
                 operation: "created",
             })
         })
+        .map_err(skill_write_error)?
     }
 
     fn update_managed_skill(
@@ -1102,6 +1103,7 @@ impl SkillsPlugin {
                 operation: "updated",
             })
         })
+        .map_err(skill_write_error)?
     }
 
     fn delete_managed_skill(&self, requested_name: &str) -> SdkResult<SkillWriteResult> {
@@ -1126,6 +1128,7 @@ impl SkillsPlugin {
                 operation: "deleted",
             })
         })
+        .map_err(skill_write_error)?
     }
 
     fn discovered_catalog(&self) -> SdkResult<DiscoveredCatalog> {

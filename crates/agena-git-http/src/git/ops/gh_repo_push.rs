@@ -15,6 +15,7 @@ use super::super::remote::git_current_branch;
 use super::super::{DirectoryQuery, map_git_failure, require_locked_directory, run_git};
 
 const GH_TIMEOUT: Duration = Duration::from_secs(45);
+const GH_MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 /// Body of a create-GitHub-repo-and-push request.
@@ -63,15 +64,16 @@ enum GhRunError {
 async fn run_gh(directory: &Path, args: &[&str]) -> Result<(i32, String, String), GhRunError> {
     let mut cmd = Command::new("gh");
     cmd.args(args)
-        .kill_on_drop(true)
         .current_dir(directory)
         .env("GH_PROMPT_DISABLED", "1")
         .env("GIT_TERMINAL_PROMPT", "0");
 
-    let out = match tokio::time::timeout(GH_TIMEOUT, cmd.output()).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(err)) => return Err(GhRunError::Spawn(err)),
-        Err(_) => return Err(GhRunError::Timeout),
+    let out = match agena_process::output(cmd, GH_TIMEOUT, GH_MAX_OUTPUT_BYTES).await {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+            return Err(GhRunError::Timeout);
+        }
+        Err(error) => return Err(GhRunError::Spawn(error)),
     };
 
     Ok((

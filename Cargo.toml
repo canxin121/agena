@@ -6,7 +6,6 @@ members = [
     "crates/agena-tui",
     "crates/agena-tui-media",
     "crates/agena-tui-platform",
-    "crates/agena-tui-backend",
     "crates/agena-tui-app",
     "crates/agena-tui-transcript",
     "crates/agena-tui-plugin-workbench",
@@ -122,7 +121,6 @@ agena-tui-components = { path = "crates/agena-tui-components" }
 agena-tui = { path = "crates/agena-tui" }
 agena-tui-media = { path = "crates/agena-tui-media" }
 agena-tui-platform = { path = "crates/agena-tui-platform" }
-agena-tui-backend = { path = "crates/agena-tui-backend" }
 agena-tui-app = { path = "crates/agena-tui-app" }
 agena-tui-transcript = { path = "crates/agena-tui-transcript" }
 agena-tui-plugin-workbench = { path = "crates/agena-tui-plugin-workbench" }

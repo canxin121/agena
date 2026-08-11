@@ -34,12 +34,7 @@ pub(super) fn build_or_reconfigure_session_manager(
         Arc::new(McpRiskPermissionInspector { manager })
             as Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>
     });
-    let processor = SessionProcessor::new(
-        providers,
-        ContextGovernor::new(ContextPolicy::default()),
-        Arc::clone(&plugins),
-        workspace_root,
-    );
+    let processor = SessionProcessor::new(Arc::clone(&plugins), workspace_root);
     let config = agena_runtime::RuntimeSessionManagerConfig {
         default_selection: build_config.default_selection.clone(),
         permission: build_config.permission.clone(),
@@ -61,7 +56,13 @@ pub(super) fn build_or_reconfigure_session_manager(
             },
             permission_inspector,
         );
-        manager.reconfigure(processor, executor, config);
+        manager.reconfigure(
+            Arc::clone(&providers),
+            ContextGovernor::new(ContextPolicy::default()),
+            processor,
+            executor,
+            config,
+        );
         return manager;
     }
 
@@ -78,6 +79,8 @@ pub(super) fn build_or_reconfigure_session_manager(
     );
     let manager = Arc::new(SessionManager::new(
         db.as_ref().clone(),
+        Arc::clone(&providers),
+        ContextGovernor::new(ContextPolicy::default()),
         processor.clone(),
         bootstrap_executor,
         config.clone(),
@@ -93,7 +96,13 @@ pub(super) fn build_or_reconfigure_session_manager(
         },
         permission_inspector,
     );
-    manager.reconfigure(processor, executor, config);
+    manager.reconfigure(
+        Arc::clone(&providers),
+        ContextGovernor::new(ContextPolicy::default()),
+        processor,
+        executor,
+        config,
+    );
     manager
 }
 

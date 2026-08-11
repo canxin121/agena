@@ -884,11 +884,7 @@ pub(crate) fn interaction_from_request(part: &RequestPart) -> part_content::Inte
         reply_value = Some(reply_json);
     }
     part_content::InteractionContent {
-        kind: if interactive.request.kind.is_empty() {
-            "ask_user".to_owned()
-        } else {
-            interactive.request.kind.clone()
-        },
+        kind: interactive.request.kind.clone(),
         prompt: (!interactive.request.title.is_empty())
             .then_some(interactive.request.title.clone()),
         options: (!interactive.request.questions.is_empty()).then_some(

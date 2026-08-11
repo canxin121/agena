@@ -141,9 +141,13 @@ pub fn presentation(
     if let Some(interaction) = pending_interactions.first() {
         presentation.pending_interaction = Some(InteractionRef {
             part_id: interaction.part_id,
+            // The canonical `interaction` shape names the kind `type`; the
+            // legacy flat shape uses `kind`. Read both so display kind is
+            // stable across stored shapes.
             kind: interaction
                 .content
-                .get("kind")
+                .get("type")
+                .or_else(|| interaction.content.get("kind"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("ask_user")
                 .to_owned(),

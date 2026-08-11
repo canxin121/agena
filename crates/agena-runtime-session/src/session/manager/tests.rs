@@ -7,7 +7,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use agena_domain::{
-    AssistantReasoningField, AssistantReplyId, ModelId, ModelRef, ProviderId, Role, TurnId,
+    AssistantReasoningField, AssistantReplyId, ModelId, ModelRef, ProviderId, Role,
+    StructuredObject, TimeRange, ToolInvocation, TurnId,
 };
 use agena_plugin_host::{
     ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
@@ -30,7 +31,7 @@ use crate::provider::{ModelRuntime, ProviderError};
 use crate::session::manager::runs::run_visible_text_lossy;
 use crate::session::store::{
     ProcessorPartIdAllocator, interaction_from_request, new_part_from_content, parts_into_runs,
-    run_marker_content, text_content, typed_content_to_value,
+    run_marker_content, text_content, tool_call_from_operation, typed_content_to_value,
 };
 use crate::{
     ContextGovernor, RuntimeSessionManagerConfig,
@@ -510,7 +511,7 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
                         request_id: "ask-1".to_owned(),
                         session_id: Some(session.id),
                         title: "Choose a path".to_owned(),
-                        kind: "ask_user".to_owned(),
+                        kind: "ask_user".to_owned().into(),
                         auto_resolution_ms: None,
                         presented_at: None,
                         questions: Vec::new(),
@@ -1784,4 +1785,198 @@ async fn provider_startup_failure_persists_expandable_error_part() {
             .contains("fixture upstream rejected request"),
         "persisted detail should carry the scrubbed provider cause: {problem:?}"
     );
+}
+
+/// A host `ask_user` (e.g. workflow plan approval) that suspends an already
+/// executing tool must not downgrade the tool part from `InProgress` back to
+/// `Pending`: the part lifecycle is forward-only (17.2) and the store rejects
+/// `in_progress -> pending` (regression: plan.set blew up with "invalid part
+/// transition in_progress -> pending" and dumped the review dialog payload).
+#[tokio::test]
+async fn host_user_input_does_not_downgrade_an_in_progress_tool_part() {
+    let (manager, _database) = test_manager_with_database().await;
+    let session = create(&manager, "host ask_user on in-progress tool").await;
+
+    // A tool_call part that has already started executing (state = InProgress),
+    // as produced by `resolve_pending_tool` just before streaming execution.
+    let operation = agena_runtime_contracts::part::OperationPart::pending(
+        1,
+        ToolInvocation::new("session.rename", StructuredObject::default()),
+        "Rename session",
+        TimeRange {
+            start_ms: 1,
+            end_ms: None,
+        },
+    );
+    let tool_part = new_part_from_content(
+        "tool_call",
+        PartRole::Assistant,
+        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        PartState::InProgress,
+    )
+    .expect("build tool part");
+    let store = manager.session_store();
+    let outcome = store
+        .submit_user_run(
+            session.id,
+            manager.store.owner_id.as_str(),
+            vec![tool_part],
+            None,
+        )
+        .await
+        .expect("submit run with in-progress tool part");
+    let tool_part_id = outcome.parts[1].part_id;
+    // Reload so the session projection carries the submitted run and the tool
+    // part can be resolved by id, exactly as `request_host_user_input` does.
+    let session = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("reload submitted run");
+    let pending_tool = session
+        .pending_tool_by_part_id(tool_part_id)
+        .expect("in-progress tool part resolves as a pending tool");
+
+    // The plugin asks the user a question (plan approval) while the tool is
+    // mid-execution. This is the exact mutation `request_host_user_input`
+    // applies before suspending on the reply; the interaction part is created
+    // and the tool part must survive the suspension without an invalid
+    // `in_progress -> pending` downgrade.
+    let request = crate::part::AskUserToolInput {
+        title: "Approve New Plan".to_owned(),
+        kind: "review".to_owned(),
+        auto_resolution_ms: None,
+        questions: Vec::new(),
+    };
+    manager
+        .apply_user_input_request_with_id(
+            session.clone(),
+            &pending_tool,
+            request,
+            "host-input:1:1:0".to_owned(),
+            manager.execution_state(),
+        )
+        .await
+        .expect("requesting host user input must not reject the in-progress tool part");
+
+    let persisted = store.load(session.id).await.expect("reload parts");
+    let tool = persisted
+        .parts
+        .iter()
+        .find(|part| part.part_id == tool_part_id)
+        .expect("tool part still present");
+    assert_eq!(
+        tool.state,
+        PartState::InProgress,
+        "an executing tool suspended on host input must stay InProgress, not be downgraded to Pending"
+    );
+    assert!(
+        persisted
+            .parts
+            .iter()
+            .any(|part| part.kind == "interaction" && part.state.is_in_flight()),
+        "the host ask_user request is recorded as a pending interaction part"
+    );
+}
+
+/// The canonical `interaction` part created by a host ask_user (plan approval)
+/// must be resolvable by the reply machinery: it carries the flat
+/// `request_id`/`tool_part_id`/`operation_id` correlation keys alongside the
+/// canonical `request` object, so replying to it does not error with "pending
+/// user input request not found" (regression: plan approval dialog selection
+/// failed because the reply lookup only read the flat v1 keys).
+#[tokio::test]
+async fn host_ask_user_interaction_part_is_reply_resolvable() {
+    let (manager, _database) = test_manager_with_database().await;
+    let session = create(&manager, "host ask_user reply resolution").await;
+
+    let operation = agena_runtime_contracts::part::OperationPart::pending(
+        1,
+        ToolInvocation::new("plan.set", StructuredObject::default()),
+        "Create plan",
+        TimeRange { start_ms: 1, end_ms: None },
+    );
+    let tool_part = new_part_from_content(
+        "tool_call",
+        PartRole::Assistant,
+        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        PartState::InProgress,
+    )
+    .expect("build tool part");
+    let store = manager.session_store();
+    let outcome = store
+        .submit_user_run(session.id, manager.store.owner_id.as_str(), vec![tool_part], None)
+        .await
+        .expect("submit run with in-progress tool part");
+    let tool_part_id = outcome.parts[1].part_id;
+    let session = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("reload submitted run");
+    let pending_tool = session
+        .pending_tool_by_part_id(tool_part_id)
+        .expect("in-progress tool part resolves as a pending tool");
+
+    let request = crate::part::AskUserToolInput {
+        title: "Approve New Plan".to_owned(),
+        kind: "review".to_owned(),
+        auto_resolution_ms: None,
+        questions: Vec::new(),
+    };
+    manager
+        .apply_user_input_request_with_id(
+            session.clone(),
+            &pending_tool,
+            request,
+            "host-input:1:1:0".to_owned(),
+            manager.execution_state(),
+        )
+        .await
+        .expect("request host user input");
+
+    let persisted = store.load(session.id).await.expect("reload parts");
+    let interaction = persisted
+        .parts
+        .iter()
+        .find(|part| part.kind == "interaction")
+        .expect("interaction part exists");
+    let interaction_part_id = interaction.part_id;
+    // The canonical writer must also emit the flat keys the reply machinery
+    // correlates on, otherwise the TUI's reply dispatch reports "pending user
+    // input request not found" and no dialog option can be selected.
+    assert_eq!(
+        interaction.content.get("request_id").and_then(serde_json::Value::as_str),
+        Some("host-input:1:1:0"),
+        "flat request_id mirrors the canonical request id"
+    );
+    assert_eq!(
+        interaction
+            .content
+            .get("tool_part_id")
+            .and_then(serde_json::Value::as_i64),
+        Some(tool_part_id),
+        "tool_part_id correlates the interaction to its suspended tool part"
+    );
+    assert!(
+        interaction.content.get("operation_id").is_some(),
+        "operation_id is recorded for operation correlation"
+    );
+
+    let session = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("reload submitted run as a session");
+    let pending = super::replies::find_pending_user_input_by_request_id(
+        &session,
+        "host-input:1:1:0",
+    )
+    .expect("reply lookup resolves the canonical interaction part");
+    assert_eq!(pending.tool.part.part_id, tool_part_id);
+    assert_eq!(pending.request.part_id, interaction_part_id);
+    let resolved_request = super::replies::pending_user_input_request(&session, &pending)
+        .expect("request payload is recoverable");
+    assert_eq!(resolved_request.title, "Approve New Plan");
+    assert_eq!(resolved_request.kind, agena_domain::UserInputKind::Review);
 }

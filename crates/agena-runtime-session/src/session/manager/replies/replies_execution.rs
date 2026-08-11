@@ -20,13 +20,13 @@ use crate::session::store::{
     tool_call_from_operation, typed_content_from_value, typed_content_to_value,
 };
 use crate::tool::ToolExecutor;
-use agena_domain::UserInputRequest;
+use agena_domain::{UserInputKind, UserInputRequest};
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
     PermissionDecision, PermissionRequest, PermissionScope, PolicySourceKind,
     PromptCompactionTrigger, RunAbortReason,
 };
-use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
+use agena_runtime_contracts::part_content::{InteractionContent, TypedContent, operation_from_tool_call};
 use agena_storage::store::{Part, PartRole, PartState};
 use tracing::Instrument;
 
@@ -2500,7 +2500,16 @@ impl SessionManager {
                 tool_call_from_operation(&operation),
             ))
             .expect("operation content is always JSON serializable");
-            tool_part.state = PartState::Pending;
+            // The part lifecycle is forward-only (17.2): a tool that has
+            // already started executing is InProgress and must stay that way
+            // while it waits on the host — the store rejects `in_progress ->
+            // pending`. The awaiting state is carried by the operation summary
+            // (and any interaction part), not by the tool part's lifecycle
+            // state, so a not-yet-started Pending tool is left Pending and an
+            // executing InProgress tool is not downgraded.
+            if !matches!(tool_part.state, PartState::InProgress) {
+                tool_part.state = PartState::Pending;
+            }
         })?;
         self.persist_session_changes(
             session,
@@ -2524,7 +2533,7 @@ impl SessionManager {
             request_id,
             session_id: Some(session.id),
             title: input.title,
-            kind: input.kind,
+            kind: UserInputKind::from(input.kind),
             auto_resolution_ms: super::super::helpers::effective_user_input_timeout_ms(
                 input.auto_resolution_ms,
             ),
@@ -2545,7 +2554,12 @@ impl SessionManager {
                 )),
             ))
             .expect("operation content is always JSON serializable");
-            tool_part.state = PartState::Pending;
+            // Same forward-only lifecycle rule as permission requests: an
+            // executing tool (InProgress) that suspends on a host ask_user
+            // stays InProgress — the store rejects `in_progress -> pending`.
+            if !matches!(tool_part.state, PartState::InProgress) {
+                tool_part.state = PartState::Pending;
+            }
             tool_part.summary = Some(match request.questions.len() {
                 0 => "Ask user".to_string(),
                 1 => "Waiting for answer".to_string(),
@@ -2556,12 +2570,31 @@ impl SessionManager {
         // Present the request as an `interaction` part under the owning run
         // marker (v2): update an already-pending request for the same id in
         // place, otherwise append a fresh part through the facade. The part
-        // content is the canonical `interaction` shape, which carries the
-        // request id under `content["request"]["request_id"]`.
-        let interaction_content = interaction_from_request(&RequestPart::UserInput(
+        // content is the canonical `interaction` shape (`type`/`prompt`/
+        // `options`/`request`). The reply machinery (`find_pending_user_
+        // input_by_request_id`, `matching_request_part_refs`) correlates on
+        // the flat `request_id`/`tool_part_id`/`operation_id` keys, so mirror
+        // them at the top level alongside the canonical keys; the nested
+        // request id stays authoritative for the TUI and re-request dedup.
+        let mut interaction = interaction_from_request(&RequestPart::UserInput(
             InteractiveRequestPart::pending(request.clone()),
-        ))
-        .as_value();
+        ));
+        interaction.extra.insert(
+            "request_id".to_owned(),
+            serde_json::to_value(request.request_id.as_str())
+                .expect("request id is always JSON serializable"),
+        );
+        interaction.extra.insert(
+            "tool_part_id".to_owned(),
+            serde_json::to_value(resolved.pending.part.part_id)
+                .expect("part id is always JSON serializable"),
+        );
+        interaction.extra.insert(
+            "operation_id".to_owned(),
+            serde_json::to_value(resolved.operation_id.as_str())
+                .expect("operation id is always JSON serializable"),
+        );
+        let interaction_content = interaction.as_value();
         let existing_request_part = session
             .parts()
             .iter()
@@ -2569,11 +2602,10 @@ impl SessionManager {
             .find(|(_, part)| {
                 part.kind == "interaction"
                     && part.state.is_in_flight()
-                    && part
-                        .content
-                        .get("request")
-                        .and_then(|value| value.get("request_id"))
-                        .and_then(serde_json::Value::as_str)
+                    && InteractionContent::try_from(&part.content)
+                        .ok()
+                        .and_then(|interaction| interaction.request_id())
+                        .as_deref()
                         == Some(request.request_id.as_str())
             })
             .map(|(part_index, part)| (part_index, part.part_id));
@@ -2590,17 +2622,24 @@ impl SessionManager {
                 ))
             })?;
             part.content = interaction_content;
-            part.state = PartState::Pending;
+            // Same forward-only lifecycle rule as the tool downgrade above: a
+            // re-request must not downgrade an already-in-flight (InProgress)
+            // interaction part — the store rejects `in_progress -> pending`.
+            if !matches!(part.state, PartState::InProgress) {
+                part.state = PartState::Pending;
+            }
             changed_part_ids.push(part_id);
         } else {
             let run_marker_id = assistant_message_id(&session, &resolved.pending.part)?;
+            // A live awaiting-user part is by definition in flight: born
+            // InProgress so the reply can complete via the legal
+            // `in_progress -> completed` edge (the store forbids
+            // `pending -> completed`).
             let new_part = new_part_from_content(
                 "interaction",
                 PartRole::Assistant,
-                &TypedContent::Interaction(interaction_from_request(&RequestPart::UserInput(
-                    InteractiveRequestPart::pending(request.clone()),
-                ))),
-                PartState::Pending,
+                &TypedContent::Interaction(interaction),
+                PartState::InProgress,
             )?;
             let created = self
                 .store

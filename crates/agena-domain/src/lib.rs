@@ -224,7 +224,7 @@ pub use usage_stats::{
     ModelUsageBreakdown, ProviderUsageBreakdown, SessionUsageBreakdown, UsageBillableUnitTotal,
     UsageDailyBreakdown, UsageStats, UsageTotals,
 };
-pub use user_input::{PendingInteractiveRequestKind, UserInputReplyKind};
+pub use user_input::{PendingInteractiveRequestKind, UserInputKind, UserInputReplyKind};
 pub use user_input_events::UserInputRequestedEvent;
 mod availability_outcome;
 pub use availability_outcome::{

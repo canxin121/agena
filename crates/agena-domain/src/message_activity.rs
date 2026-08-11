@@ -134,8 +134,8 @@ pub struct UserInputRequest {
     pub session_id: Option<i64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub kind: String,
+    #[serde(default)]
+    pub kind: crate::UserInputKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_resolution_ms: Option<u64>,
     /// Durable presentation acknowledgement: set when a client has shown this

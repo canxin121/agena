@@ -439,13 +439,22 @@ impl TryFrom<&Value> for ErrorContent {
 }
 
 /// `interaction` — user processing point. `kind` (renamed to `type` on the
-/// wire) is one of `ask_user` / `plan_review` / `permission`. Extended keys
-/// carry the full v1 [`RequestPart::UserInput`] payload: `request` and `reply`
-/// as complete [`UserInputRequest`]/[`UserInputReply`] objects.
+/// wire; `kind` accepted as a legacy v1-flat alias) discriminates the display
+/// style (`ask_user` / `review` / custom). Extended keys carry the full v1
+/// [`RequestPart::UserInput`] payload: `request` and `reply` as complete
+/// [`UserInputRequest`]/[`UserInputReply`] objects, plus the correlation keys
+/// `request_id` / `tool_part_id` / `operation_id` mirrored by the writer.
+///
+/// The [`#[serde(flatten)]`] `extra` bucket means both the canonical shape
+/// (`type`/`prompt`/`options`/`request`/…) and the legacy v1-flat shape
+/// (`kind`/`request_id`/`prompt`/`tool_part_id`/`request`/`response`) decode
+/// into the SAME struct — the v1 keys land in `extra` / the aliased `kind`.
+/// The typed accessors below read either shape, so consumers never touch raw
+/// JSON keys.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct InteractionContent {
-    #[serde(rename = "type", default)]
-    pub kind: String,
+    #[serde(rename = "type", alias = "kind", default)]
+    pub kind: agena_domain::UserInputKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -463,6 +472,52 @@ impl InteractionContent {
 
     pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("interaction content is always JSON serializable")
+    }
+
+    /// The lossless typed request from `extra["request"]`, if present. Both
+    /// shapes store the full [`UserInputRequest`] under the top-level `request`
+    /// key (canonical flattens it out of `extra`), so this decodes both.
+    pub fn request(&self) -> Option<UserInputRequest> {
+        self.extra
+            .get("request")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+    }
+
+    /// The typed reply, if answered: `extra["reply"]` (canonical) or the
+    /// top-level `response` key (v1-flat).
+    pub fn reply(&self) -> Option<UserInputReply> {
+        self.extra
+            .get("reply")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .or_else(|| {
+                self.response
+                    .as_ref()
+                    .and_then(|value| serde_json::from_value(value.clone()).ok())
+            })
+    }
+
+    /// The correlation id: `extra["request_id"]` (both shapes) with a fallback
+    /// to the nested request's id for legacy rows that only carry it there.
+    pub fn request_id(&self) -> Option<String> {
+        self.extra
+            .get("request_id")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .or_else(|| self.request().map(|request| request.request_id))
+    }
+
+    /// The owning tool part id, when the request is bound to a tool.
+    pub fn tool_part_id(&self) -> Option<i64> {
+        self.extra
+            .get("tool_part_id")
+            .and_then(serde_json::Value::as_i64)
+    }
+
+    /// The owning operation id, when the request is bound to a tool operation.
+    pub fn operation_id(&self) -> Option<&str> {
+        self.extra
+            .get("operation_id")
+            .and_then(serde_json::Value::as_str)
     }
 }
 
@@ -700,7 +755,7 @@ pub fn interaction_from_content(part: &InteractionContent) -> RequestPart {
         .get("request")
         .and_then(|value| serde_json::from_value::<UserInputRequest>(value.clone()).ok())
         .unwrap_or_else(|| UserInputRequest {
-            request_id: format!("restored-{}", part.kind),
+            request_id: format!("restored-{}", part.kind.as_str()),
             session_id: None,
             title: part.prompt.clone().unwrap_or_default(),
             kind: part.kind.clone(),
@@ -885,7 +940,7 @@ mod tests {
     #[test]
     fn interaction_round_trips_ask_user_with_full_request_reply() {
         let content = InteractionContent {
-            kind: "ask_user".to_owned(),
+            kind: "ask_user".into(),
             prompt: Some("Pick an option".to_owned()),
             options: Some(json!([{"question": "Which?", "options": [{"label": "A"}]}])),
             response: Some(json!({"request_id": "r1", "kind": "submit", "answers": {"q1": ["A"]}})),
@@ -911,7 +966,7 @@ mod tests {
         assert_eq!(value["type"], json!("ask_user"));
         assert_eq!(value["prompt"], json!("Pick an option"));
         let back = InteractionContent::try_from(&value).unwrap();
-        assert_eq!(back.kind, "ask_user");
+        assert_eq!(back.kind, "ask_user".into());
         assert_eq!(back.prompt.as_deref(), Some("Pick an option"));
         assert_eq!(back.extra["request"]["session_id"], json!(7));
         assert_eq!(back.extra["reply"]["kind"], json!("submit"));

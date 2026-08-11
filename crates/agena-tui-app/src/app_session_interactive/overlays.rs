@@ -84,7 +84,10 @@ impl App {
         request: &UserInputRequest,
     ) -> Option<&UserInputQuestion> {
         let question = request.questions.first()?;
-        if request.kind.trim() != "review" || request.questions.len() != 1 || question.multiple {
+        if !matches!(request.kind, agena_domain::UserInputKind::Review)
+            || request.questions.len() != 1
+            || question.multiple
+        {
             return None;
         }
         (!question.options.is_empty()).then_some(question)
@@ -588,7 +591,7 @@ fn user_input_request_from_wire(value: agena_api::resource::UserInputRequest) ->
         request_id: value.request_id,
         session_id: value.session_id,
         title: value.title,
-        kind: value.kind,
+        kind: value.kind.into(),
         auto_resolution_ms: value.auto_resolution_ms,
         presented_at: value.presented_at,
         questions: value

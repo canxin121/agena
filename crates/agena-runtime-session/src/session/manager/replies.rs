@@ -9,7 +9,7 @@ use crate::session::model::{
 use crate::session::store::{OPERATION_ID_METADATA_KEY, typed_content_from_value};
 use agena_domain::UserInputReply;
 use agena_provider::ResponsesApiRequestMetadata;
-use agena_runtime_contracts::part_content::operation_from_tool_call;
+use agena_runtime_contracts::part_content::{operation_from_tool_call, InteractionContent};
 use agena_storage::store::{Part, PartRole, PartState};
 use agena_tool::ToolPermissionCheck;
 
@@ -272,54 +272,18 @@ fn is_authorization_phase_title(title: &str) -> bool {
         || title.starts_with("permission request")
 }
 
-/// Canonical `interaction` part content for an interactive request (permission
-/// or user input). The `kind` key is what the core projection and the storage
-/// presentation read (state.rs reads `content["kind"]`); the full request
-/// payload rides under `request`, the tool correlation under `tool_part_id`,
-/// and the reply (once recorded) under `response`.
-pub(super) fn interaction_content(
-    kind: &str,
-    request_id: &str,
-    prompt: Option<&str>,
-    tool_part_id: i64,
-    request: &serde_json::Value,
-) -> serde_json::Value {
-    let mut content = serde_json::Map::new();
-    content.insert(
-        "kind".to_owned(),
-        serde_json::Value::String(kind.to_owned()),
-    );
-    content.insert(
-        "request_id".to_owned(),
-        serde_json::Value::String(request_id.to_owned()),
-    );
-    if let Some(prompt) = prompt {
-        content.insert(
-            "prompt".to_owned(),
-            serde_json::Value::String(prompt.to_owned()),
-        );
+/// Decode an `interaction` part's content into its typed [`InteractionContent`]
+/// view. Both the canonical shape (`type`/`prompt`/`options`/`request`/…) and
+/// the legacy v1-flat shape (`kind`/`request_id`/`tool_part_id`/`request`/
+/// `response`) collapse into this one struct — the flat keys land in the
+/// `#[serde(flatten)]` `extra` bucket or the aliased `kind` field — so every
+/// correlation/lifecycle read below goes through its typed accessors instead
+/// of raw JSON keys.
+fn interaction_from_part(part: &Part) -> Option<InteractionContent> {
+    if part.kind != "interaction" {
+        return None;
     }
-    content.insert(
-        "tool_part_id".to_owned(),
-        serde_json::Value::Number(serde_json::Number::from(tool_part_id)),
-    );
-    content.insert("request".to_owned(), request.clone());
-    serde_json::Value::Object(content)
-}
-
-/// The tool part id a pending interaction is correlated to, recorded under
-/// `tool_part_id` when the interaction part was created.
-pub(super) fn interaction_tool_part_id(part: &Part) -> Option<i64> {
-    part.content
-        .get("tool_part_id")
-        .and_then(serde_json::Value::as_i64)
-}
-
-/// The owning operation id recorded on an interaction part.
-pub(super) fn interaction_operation_id(part: &Part) -> Option<&str> {
-    part.content
-        .get("operation_id")
-        .and_then(serde_json::Value::as_str)
+    InteractionContent::try_from(&part.content).ok()
 }
 
 fn interactive_request_kind_label(
@@ -342,30 +306,22 @@ fn matching_request_part_refs(
         .iter()
         .enumerate()
         .filter_map(|(part_index, part)| {
-            if part.kind != "interaction" {
+            let Some(interaction) = interaction_from_part(part) else {
                 return None;
-            }
+            };
             if pending_only && !part.state.is_in_flight() {
                 return None;
             }
+            // Interaction parts are strictly user input (permissions live on
+            // the tool_call operation's authorization, never here).
             let kind_matches = match request_kind {
-                agena_domain::PendingInteractiveRequestKind::Permission => {
-                    part.content.get("kind").and_then(serde_json::Value::as_str)
-                        == Some("permission")
-                }
-                agena_domain::PendingInteractiveRequestKind::UserInput => {
-                    part.content.get("kind").and_then(serde_json::Value::as_str)
-                        != Some("permission")
-                }
+                agena_domain::PendingInteractiveRequestKind::Permission => false,
+                agena_domain::PendingInteractiveRequestKind::UserInput => true,
             };
             if !kind_matches {
                 return None;
             }
-            let matches_request = part
-                .content
-                .get("request_id")
-                .and_then(serde_json::Value::as_str)
-                == Some(request_id);
+            let matches_request = interaction.request_id().as_deref() == Some(request_id);
             matches_request.then_some(SessionPartRef {
                 part_index,
                 part_id: part.part_id,
@@ -388,10 +344,11 @@ pub(super) fn cancel_unanswered_request_parts_for_operation(
         .iter()
         .enumerate()
         .filter_map(|(part_index, part)| {
-            if part.kind != "interaction" || !part.state.is_in_flight() {
+            if !part.state.is_in_flight() {
                 return None;
             }
-            (interaction_operation_id(part) == Some(operation_id)).then_some(SessionPartRef {
+            let interaction = interaction_from_part(part)?;
+            (interaction.operation_id() == Some(operation_id)).then_some(SessionPartRef {
                 part_index,
                 part_id: part.part_id,
             })
@@ -541,9 +498,9 @@ pub(super) fn find_tool_part_by_id(session: &Session, part_id: i64) -> Option<(u
 }
 
 /// Find the pending user-input request whose request id matches: an in-flight
-/// `interaction` part (kind `!= "permission"`) carrying `request_id`. The
-/// request ref is the interaction part; the tool ref resolves through the
-/// `tool_part_id` recorded when the request was created.
+/// `interaction` part carrying `request_id`. The request ref is the
+/// interaction part; the tool ref resolves through the `tool_part_id` recorded
+/// when the request was created.
 pub(super) fn find_pending_user_input_by_request_id(
     session: &Session,
     request_id: &str,
@@ -553,25 +510,19 @@ pub(super) fn find_pending_user_input_by_request_id(
         .iter()
         .enumerate()
         .find_map(|(part_index, part)| {
-            if part.kind != "interaction" || !part.state.is_in_flight() {
+            if !part.state.is_in_flight() {
                 return None;
             }
-            if part.content.get("kind").and_then(serde_json::Value::as_str) == Some("permission") {
-                return None;
-            }
-            if part
-                .content
-                .get("request_id")
-                .and_then(serde_json::Value::as_str)
-                != Some(request_id)
-            {
+            let interaction = interaction_from_part(part)?;
+            if interaction.request_id().as_deref() != Some(request_id) {
                 return None;
             }
             let request = SessionPartRef {
                 part_index,
                 part_id: part.part_id,
             };
-            let (tool_index, tool_part) = interaction_tool_part_id(part)
+            let (tool_index, tool_part) = interaction
+                .tool_part_id()
                 .and_then(|part_id| find_tool_part_by_id(session, part_id))?;
             Some(SessionPendingInteractiveRequest {
                 request,
@@ -587,13 +538,10 @@ pub(super) fn find_pending_user_input_by_request_id(
 
 pub(super) fn has_replied_user_input_request(session: &Session, request_id: &str) -> bool {
     session.parts().iter().any(|part| {
-        part.kind == "interaction"
-            && part
-                .content
-                .get("request_id")
-                .and_then(serde_json::Value::as_str)
-                == Some(request_id)
-            && part.content.get("response").is_some()
+        let Some(interaction) = interaction_from_part(part) else {
+            return false;
+        };
+        interaction.request_id().as_deref() == Some(request_id) && interaction.reply().is_some()
     })
 }
 
@@ -602,7 +550,7 @@ pub(super) fn pending_user_input_request(
     pending: &SessionPendingInteractiveRequest,
 ) -> Option<agena_domain::UserInputRequest> {
     let part = session.part(&pending.request)?;
-    serde_json::from_value(part.content.get("request")?.clone()).ok()
+    interaction_from_part(part)?.request()
 }
 
 /// Whether the operation owning `operation_id` reached a terminal state. Used
@@ -675,17 +623,16 @@ pub(super) fn user_input_request_for_operation(
     session
         .parts()
         .iter()
-        .filter(|part| {
-            part.kind == "interaction" && interaction_operation_id(part) == Some(operation_id)
-        })
         .filter_map(|part| {
-            let request: agena_domain::UserInputRequest =
-                serde_json::from_value(part.content.get("request")?.clone()).ok()?;
-            let reply: Option<agena_domain::UserInputReply> = part
-                .content
-                .get("response")
-                .and_then(|value| serde_json::from_value(value.clone()).ok());
-            Some(crate::part::InteractiveRequestPart { request, reply })
+            let interaction = interaction_from_part(part)?;
+            if interaction.operation_id() != Some(operation_id) {
+                return None;
+            }
+            let request = interaction.request()?;
+            Some(crate::part::InteractiveRequestPart {
+                request,
+                reply: interaction.reply(),
+            })
         })
         .nth(sequence_index)
 }
@@ -1346,7 +1293,7 @@ impl SessionManager {
                     }) else {
                         continue;
                     };
-                    if part.state == PartState::Pending && request.presented_at.is_none() {
+                    if part.state.is_in_flight() && request.presented_at.is_none() {
                         request.presented_at = Some(Utc::now());
                         part.content["request"] = serde_json::to_value(&request)
                             .expect("user input request is JSON serializable");
@@ -1421,17 +1368,39 @@ impl SessionManager {
                     "user input",
                     pending_user_input_request,
                 )?;
-                let mut replied_content = interaction_content(
-                    "ask_user",
-                    request_id.as_str(),
-                    (!user_input_request.title.is_empty())
-                        .then_some(user_input_request.title.as_str()),
-                    pending.tool.part.part_id,
-                    &serde_json::to_value(&user_input_request)
-                        .expect("UserInputRequest is always JSON serializable"),
+                // The replied part uses the single canonical `interaction`
+                // shape (same writer as request creation), with the
+                // `request_id`/`tool_part_id`/`operation_id` correlation keys
+                // mirrored at the top level so every reader still resolves it.
+                let operation_id = session
+                    .part(&pending.request)
+                    .and_then(interaction_from_part)
+                    .and_then(|interaction| interaction.operation_id().map(ToOwned::to_owned))
+                    .unwrap_or_default();
+                let mut replied = crate::session::store::interaction_from_request(
+                    &crate::part::RequestPart::UserInput(
+                        crate::part::InteractiveRequestPart::replied(
+                            user_input_request.clone(),
+                            request.reply.clone(),
+                        ),
+                    ),
                 );
-                replied_content["response"] = serde_json::to_value(&request.reply)
-                    .expect("UserInputReply is always JSON serializable");
+                replied.extra.insert(
+                    "request_id".to_owned(),
+                    serde_json::to_value(request_id.as_str())
+                        .expect("request id is always JSON serializable"),
+                );
+                replied.extra.insert(
+                    "tool_part_id".to_owned(),
+                    serde_json::to_value(pending.tool.part.part_id)
+                        .expect("part id is always JSON serializable"),
+                );
+                replied.extra.insert(
+                    "operation_id".to_owned(),
+                    serde_json::to_value(operation_id.as_str())
+                        .expect("operation id is always JSON serializable"),
+                );
+                let replied_content = replied.as_value();
                 self.complete_reply_request_parts(
                     &mut session,
                     request_id.as_str(),
@@ -1477,7 +1446,7 @@ impl SessionManager {
                             let execution = crate::tool::ask_user::execution_from_timeout(
                                 &crate::part::AskUserToolInput {
                                     title: user_input_request.title.clone(),
-                                    kind: user_input_request.kind.clone(),
+                                    kind: user_input_request.kind.as_str().to_owned(),
                                     auto_resolution_ms: user_input_request.auto_resolution_ms,
                                     questions: user_input_request.questions.clone(),
                                 },

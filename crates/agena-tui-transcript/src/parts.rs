@@ -22,7 +22,7 @@ use agena_api::{
     },
     resource::{
         PartAttachment, PartAttachmentKind, PartAttachmentSource, PartSkillReference, RunRole,
-        RunStatus, SessionTranscriptPart,
+        RunStatus, SessionTranscriptPart, UserInputQuestion, UserInputReply, UserInputRequest,
     },
 };
 use serde_json::Value;
@@ -330,14 +330,30 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
             }),
         },
         "interaction" => {
+            // v1 requests arrive in the `RequestPartResource` shape (tagged
+            // `request_type`). The v2 canonical `interaction` shape instead
+            // carries `type`/`prompt`/`options` plus the lossless `request`
+            // and `reply` objects under `extra`. Decode both so the row
+            // renders as a friendly awaiting-user-input part rather than
+            // dumping its raw JSON as body text.
             match serde_json::from_value::<RequestPartResource>(part.content.clone()) {
                 Ok(request) => TranscriptPartContent::Activity(TranscriptActivityContent::Request(
                     Box::new(request),
                 )),
-                Err(_) => TranscriptPartContent::Text(TextPartResource {
-                    text: fallback_json_text(content),
-                    synthetic: false,
-                }),
+                Err(_) => match interaction_request_resource(content) {
+                    Some(request) => {
+                        TranscriptPartContent::Activity(TranscriptActivityContent::Request(
+                            Box::new(RequestPartResource::UserInput {
+                                request,
+                                reply: interaction_reply_resource(content),
+                            }),
+                        ))
+                    }
+                    None => TranscriptPartContent::Text(TextPartResource {
+                        text: fallback_json_text(content),
+                        synthetic: false,
+                    }),
+                },
             }
         }
         _ => TranscriptPartContent::Text(TextPartResource {
@@ -438,6 +454,56 @@ fn structured_value(value: &Value) -> StructuredValueResource {
                 .collect(),
         },
     }
+}
+
+/// Recover a [`UserInputRequest`] from the v2 canonical `interaction` content:
+/// prefer the lossless `extra["request"]` object, otherwise reconstruct from
+/// the display keys (`type`/`prompt`/`options`). Returns `None` only when the
+/// content carries neither a usable request nor enough display fields.
+fn interaction_request_resource(content: &Value) -> Option<UserInputRequest> {
+    if let Some(request) = content
+        .get("request")
+        .and_then(|value| serde_json::from_value::<UserInputRequest>(value.clone()).ok())
+    {
+        return Some(request);
+    }
+    let kind = string_field(content, "type").unwrap_or_default();
+    let questions = content
+        .get("options")
+        .and_then(|value| serde_json::from_value::<Vec<UserInputQuestion>>(value.clone()).ok())
+        .unwrap_or_default();
+    if kind.is_empty() && questions.is_empty() {
+        return None;
+    }
+    let request_id = content
+        .get("request")
+        .and_then(|request| request.get("request_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    Some(UserInputRequest {
+        request_id: if request_id.is_empty() {
+            format!("interaction-{}", kind)
+        } else {
+            request_id
+        },
+        session_id: None,
+        title: string_field(content, "prompt").unwrap_or_default(),
+        kind,
+        auto_resolution_ms: None,
+        presented_at: None,
+        questions,
+        created_at: chrono::Utc::now(),
+    })
+}
+
+/// Recover an optional [`UserInputReply`] from the v2 canonical `interaction`
+/// content (`extra["reply"]`, falling back to the display `response` key).
+fn interaction_reply_resource(content: &Value) -> Option<UserInputReply> {
+    content
+        .get("reply")
+        .or_else(|| content.get("response"))
+        .and_then(|value| serde_json::from_value::<UserInputReply>(value.clone()).ok())
 }
 
 /// A readable fallback for parts whose kind we do not render specially: use a
@@ -1040,5 +1106,96 @@ mod tests {
         assert_eq!(last_assistant_reply_text(&parts), None);
         let bare = vec![run(3, "assistant", "completed")];
         assert_eq!(last_assistant_reply_text(&bare), None);
+    }
+
+    #[test]
+    fn canonical_interaction_part_renders_as_a_request_not_raw_json() {
+        // The v2 canonical `interaction` shape (`type`/`prompt`/`options` plus
+        // the lossless `request` object) must project to a Request activity,
+        // not fall back to dumping its JSON as transcript body text.
+        // (Regression: workflow plan review dumped `{options, prompt, request,
+        // type}` verbatim because only the v1 `request_type` shape was tried.)
+        let part = content_part(
+            2,
+            "interaction",
+            "assistant",
+            serde_json::json!({
+                "type": "review",
+                "prompt": "Approve New Plan",
+                "options": [
+                    {
+                        "header": "Decision",
+                        "question": "Choose whether this plan should move to active.",
+                        "options": [{ "label": "Approve", "description": "Move it to active." }],
+                        "multiple": false,
+                        "allow_custom": true
+                    }
+                ],
+                "request": {
+                    "request_id": "host-input:1:2:0",
+                    "session_id": 1,
+                    "title": "Approve New Plan",
+                    "kind": "review",
+                    "auto_resolution_ms": 600000,
+                    "questions": [
+                        {
+                            "header": "Decision",
+                            "question": "Choose whether this plan should move to active.",
+                            "options": [{ "label": "Approve", "description": "Move it to active." }],
+                            "multiple": false,
+                            "allow_custom": true
+                        }
+                    ],
+                    "created_at": "2026-08-11T00:00:00Z"
+                }
+            }),
+        );
+        let content = entry_part(&part).content;
+        let TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) = content
+        else {
+            panic!("v2 interaction part must project to a Request activity, got raw text/JSON");
+        };
+        let RequestPartResource::UserInput { request, reply } = request.as_ref();
+        assert_eq!(request.request_id, "host-input:1:2:0");
+        assert_eq!(request.title, "Approve New Plan");
+        assert_eq!(request.kind, "review");
+        assert_eq!(request.questions.len(), 1);
+        assert_eq!(request.questions[0].question, "Choose whether this plan should move to active.");
+        assert!(reply.is_none());
+    }
+
+    #[test]
+    fn canonical_interaction_replying_reconstructs_the_reply() {
+        let part = content_part(
+            2,
+            "interaction",
+            "assistant",
+            serde_json::json!({
+                "type": "review",
+                "prompt": "Approve New Plan",
+                "request": {
+                    "request_id": "host-input:1:2:0",
+                    "session_id": 1,
+                    "title": "Approve New Plan",
+                    "kind": "review",
+                    "questions": [],
+                    "created_at": "2026-08-11T00:00:00Z"
+                },
+                "reply": {
+                    "request_id": "host-input:1:2:0",
+                    "kind": "submit",
+                    "answers": { "decision": ["approve"] }
+                }
+            }),
+        );
+        let content = entry_part(&part).content;
+        let TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) = content
+        else {
+            panic!("replied v2 interaction part must project to a Request activity");
+        };
+        let RequestPartResource::UserInput { request, reply } = request.as_ref();
+        assert_eq!(request.kind, "review");
+        let reply = reply.as_ref().expect("reply is recovered from the reply object");
+        assert_eq!(reply.answers["decision"], ["approve"]);
     }
 }

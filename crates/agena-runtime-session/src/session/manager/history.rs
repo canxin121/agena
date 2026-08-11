@@ -818,16 +818,16 @@ fn pending_interactive_requests_from_session(
             }
         }
     }
-    // Pending user-input requests are in-flight `interaction` parts (kind
-    // `!= "permission"`); the full request payload rides under content
-    // `request`.
+    // Pending user-input requests are in-flight `interaction` parts; the full
+    // typed request payload rides under the canonical content (either shape
+    // decodes into `InteractionContent`, which carries it losslessly).
     for part in session.pending_interactions() {
-        if part.content.get("kind").and_then(serde_json::Value::as_str) == Some("permission") {
-            continue;
-        }
-        let Some(request) = part.content.get("request").and_then(|value| {
-            serde_json::from_value::<agena_domain::UserInputRequest>(value.clone()).ok()
-        }) else {
+        let Some(request) = agena_runtime_contracts::part_content::InteractionContent::try_from(
+            &part.content,
+        )
+        .ok()
+        .and_then(|interaction| interaction.request())
+        else {
             continue;
         };
         let request = agena_domain::PendingInteractiveRequest::from(request);

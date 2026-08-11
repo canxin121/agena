@@ -10,8 +10,12 @@ impl App {
         // forced open again after a restart or on another client; it stays
         // reachable through the awaiting-input hint.
         self.present_pending_interactive_request(session_id, request.request_id.clone());
+        let review_content_width =
+            agena_tui::user_input::user_input_review_content_width(self.layout.overlay_area);
         self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
-            session_id, request,
+            session_id,
+            request,
+            review_content_width,
         )));
     }
 
@@ -40,9 +44,10 @@ impl App {
     pub(crate) fn build_user_input_overlay(
         session_id: i64,
         request: UserInputRequest,
+        review_content_width: u16,
     ) -> UserInputOverlay {
         let review_decision = Self::user_input_review_question(&request).is_some();
-        let presentation = agena_tui::user_input::UserInputPresentation::new(
+        let mut presentation = agena_tui::user_input::UserInputPresentation::new(
             agena_tui::user_input::UserInputOverlayPresentation {
                 request_id: request.request_id.clone(),
                 title: request.title.clone(),
@@ -73,6 +78,28 @@ impl App {
                 )
                 .collect(),
         );
+        if review_decision {
+            // Pre-render the plan body with the exact chat/transcript Markdown
+            // pipeline so the approval window looks like assistant prose and
+            // shares the line-based cursor model with the main interface.
+            let rendered = agena_tui_media::with_text_math_rendering(|| {
+                agena_tui_transcript::render_markdown_document(
+                    request.body_markdown.as_str(),
+                    review_content_width,
+                )
+            });
+            let plan_lines = rendered
+                .into_iter()
+                .map(|line| {
+                    line.rich_line.unwrap_or_else(|| {
+                        ratatui::text::Line::from(ratatui::text::Span::styled(
+                            line.text, line.style,
+                        ))
+                    })
+                })
+                .collect::<Vec<_>>();
+            presentation.set_review_plan(plan_lines, review_content_width);
+        }
         UserInputOverlay {
             session_id,
             request,
@@ -235,8 +262,13 @@ impl App {
                 self.seen_user_input_request_ids
                     .insert(request.request_id.clone());
                 self.present_pending_interactive_request(session_id, request.request_id.clone());
+                let review_content_width = agena_tui::user_input::user_input_review_content_width(
+                    self.layout.overlay_area,
+                );
                 self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
-                    session_id, *request,
+                    session_id,
+                    *request,
+                    review_content_width,
                 )));
                 self.queue_user_input_notification();
             }
@@ -718,3 +750,66 @@ use crate::{
     ui_text,
 };
 use agena_tui_session::{session_search::SessionSearchPresentation, session_view::SessionViewMode};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena_domain::{UserInputKind, UserInputOption as DomainOption, UserInputQuestion as DomainQuestion};
+
+    fn review_request(body: &str) -> UserInputRequest {
+        agena_domain::UserInputRequest {
+            request_id: "host-input:1:2:0".to_owned(),
+            session_id: Some(1),
+            title: "Approve New Plan".to_owned(),
+            body_markdown: body.to_owned(),
+            kind: UserInputKind::Review,
+            auto_resolution_ms: None,
+            presented_at: None,
+            questions: vec![DomainQuestion {
+                header: "Decision".to_owned(),
+                question: "Choose whether this plan should move to active.".to_owned(),
+                options: vec![
+                    DomainOption {
+                        label: "Approve".to_owned(),
+                        description: String::new(),
+                    },
+                    DomainOption {
+                        label: "Request changes".to_owned(),
+                        description: String::new(),
+                    },
+                ],
+                multiple: false,
+                allow_custom: true,
+            }],
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn review_overlay_pre_renders_the_plan_body_into_the_document() {
+        let request = review_request("## Proposed Plan\n\n1. Step one\n2. Step two");
+        let overlay = App::build_user_input_overlay(1, request, 80);
+        assert!(
+            overlay.presentation.is_review_decision(),
+            "a single-option review request is a review decision"
+        );
+        // The plan markdown renders to more than the single placeholder row,
+        // so the decision block starts below the plan content.
+        assert!(
+            overlay.presentation.review().plan_rows() > 1,
+            "plan body must pre-render into plan rows, got {}",
+            overlay.presentation.review().plan_rows()
+        );
+        assert_eq!(overlay.presentation.review().cursor_line(), 0);
+    }
+
+    #[test]
+    fn non_review_overlay_keeps_the_placeholder_document() {
+        let mut request = review_request("");
+        request.kind = UserInputKind::AskUser;
+        request.body_markdown.clear();
+        let overlay = App::build_user_input_overlay(1, request, 80);
+        assert!(!overlay.presentation.is_review_decision());
+        assert_eq!(overlay.presentation.review().plan_rows(), 1);
+    }
+}

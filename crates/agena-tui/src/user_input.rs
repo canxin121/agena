@@ -101,6 +101,12 @@ impl UserInputReviewPresentation {
         self.scroll
     }
 
+    /// Number of pre-rendered plan rows (at least one placeholder so the
+    /// document always has content to scroll before the decision block).
+    pub fn plan_rows(&self) -> usize {
+        self.plan_lines.len().max(1)
+    }
+
     pub fn custom_input(&self) -> &Editor {
         &self.custom_input
     }

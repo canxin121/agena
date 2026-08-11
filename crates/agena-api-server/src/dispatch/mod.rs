@@ -15,7 +15,6 @@ use agena_api::{
         RewindSessionParams, StopActivityParams, SubmitRunParams, UpdateSessionParams,
         UpdateSessionSelectionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
-    pagination::{PageInfo, PaginatedResponse},
     queries::{
         ActivityLogsParams, GetActivityParams, GetOperationDetailParams, GetPermissionRuleParams,
         GetSessionParams, GetWorkspaceParams, ListPermissionRulesParams,
@@ -23,90 +22,32 @@ use agena_api::{
         ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, Query,
         QueryResult,
     },
-    resource::{ModelCatalogResponse, OperationDetailResource},
+    resource::OperationDetailResource,
 };
 use agena_application::{
-    Application, ApplicationError, model_catalog_source_kind_from_domain,
+    Application, ApplicationError,
     dto::{
-        CursorPaginationQuery, ModelCatalogResponse as ApplicationModelCatalogResponse,
-        PermissionRuleWriteRequest, SearchPaginationQuery, SessionListQuery, WorkspaceListQuery,
-        WorkspacePathRequest, WorkspaceResolveRequest,
+        CursorPaginationQuery, PermissionRuleWriteRequest, SearchPaginationQuery, SessionListQuery,
+        WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest,
     },
     pagination::PaginatedResponse as ApplicationPaginatedResponse,
 };
 
-trait ApplicationResultExt<T> {
-    fn application(self) -> Result<T, ApplicationError>;
-}
-
-impl<T> ApplicationResultExt<T> for Result<T, ApplicationError> {
-    fn application(self) -> Result<T, ApplicationError> {
-        self
-    }
-}
-
-trait IntoWire<T> {
-    fn into_wire(self) -> T;
-}
-
-impl<T> IntoWire<T> for T {
-    fn into_wire(self) -> T {
-        self
-    }
-}
-
-impl IntoWire<ModelCatalogResponse> for ApplicationModelCatalogResponse {
-    fn into_wire(self) -> ModelCatalogResponse {
-        let value = self;
-        ModelCatalogResponse {
-            refreshing: value.refreshing,
-            last_refresh_at: value.last_refresh_at,
-            last_successful_source: value
-                .last_successful_source
-                .map(model_catalog_source_kind_from_domain),
-            last_failure: value.last_failure,
-            model_count: value.model_count,
-        }
-    }
-}
-
-fn page_from_application<T, U>(value: ApplicationPaginatedResponse<T>) -> PaginatedResponse<U>
-where
-    T: IntoWire<U>,
-{
-    PaginatedResponse {
-        items: value.items.into_iter().map(IntoWire::into_wire).collect(),
-        page: PageInfo {
-            next_cursor: value.page.next_cursor,
-            has_more: value.page.has_more,
-            returned: value.page.returned as u64,
-        },
-    }
-}
-
-async fn http_page_result<T, U>(
+async fn http_page_result<T>(
     future: impl Future<Output = Result<ApplicationPaginatedResponse<T>, ApplicationError>>,
-) -> Result<PaginatedResponse<U>, ApplicationError>
-where
-    T: IntoWire<U>,
-{
-    Ok(page_from_application(future.await.application()?))
+) -> Result<agena_api::pagination::PaginatedResponse<T>, ApplicationError> {
+    future.await.map(|page| {
+        agena_application::pagination::api_page_from_application(page, |item| item)
+    })
 }
 
-async fn http_optional_result<T, U>(
+async fn http_optional_result<T>(
     future: impl Future<Output = Result<Option<T>, ApplicationError>>,
     not_found: impl FnOnce() -> String,
-) -> Result<U, ApplicationError>
-where
-    T: IntoWire<U>,
-{
-    future
-        .await
-        .application()?
-        .map(IntoWire::into_wire)
-        .ok_or_else(|| {
-            ApplicationError::not_found_with_diagnostic("The resource was not found.", not_found())
-        })
+) -> Result<T, ApplicationError> {
+    future.await?.ok_or_else(|| {
+        ApplicationError::not_found_with_diagnostic("The resource was not found.", not_found())
+    })
 }
 
 mod commands;

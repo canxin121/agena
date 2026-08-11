@@ -586,6 +586,7 @@ pub(crate) fn pending_interactive_request_from_domain(
                     title: request.title,
                     body_markdown: request.body_markdown,
                     kind: request.kind.as_str().to_owned(),
+                    source: request.source,
                     auto_resolution_ms: request.auto_resolution_ms,
                     presented_at: request.presented_at,
                     questions: request
@@ -817,6 +818,7 @@ mod pending_interactive_projection_tests {
                 title: "Continue?".to_owned(),
                 body_markdown: String::new(),
                 kind: "single".to_owned().into(),
+                source: agena_domain::UserInputSource::Host,
                 auto_resolution_ms: Some(60_000),
                 presented_at,
                 questions: Vec::new(),
@@ -833,6 +835,7 @@ mod pending_interactive_projection_tests {
             panic!("expected the user-input wire variant");
         };
         assert_eq!(request.request_id, "host-input:1:98:0");
+        assert_eq!(request.source, agena_domain::UserInputSource::Host);
         assert_eq!(request.presented_at, Some(marked_at));
     }
 

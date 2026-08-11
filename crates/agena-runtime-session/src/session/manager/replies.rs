@@ -264,6 +264,20 @@ fn terminal_operation_title(invocation: &ToolInvocation) -> String {
     invocation.name.clone()
 }
 
+/// Whether a tool-supplied execution title is an authorization-phase phrase
+/// ("Awaiting permission", "Awaiting approval", "Permission request", ...)
+/// that must never become an operation's terminal completion title (which
+/// falls back to the tool name instead).
+///
+/// This is intentionally a title-text heuristic, not a typed signal: the
+/// title under test is `execution.view.title` — the self-reported title of a
+/// *third-party* tool that completed. There is no typed marker on the
+/// operation part that classifies the *content* of a foreign tool's title;
+/// `OperationAuthorization` only records pending-permission state, which is
+/// orthogonal to what a tool chose to print as its title. The phrases guarded
+/// here are the same ones the runtime itself writes into pending-operation
+/// summaries ("Awaiting approval · <reason>"), so a tool that echoes its
+/// pending state back is filtered out.
 fn is_authorization_phase_title(title: &str) -> bool {
     let title = title.trim().to_ascii_lowercase();
     title.starts_with("awaiting permission")
@@ -1347,9 +1361,9 @@ impl SessionManager {
                 // shape (same writer as request creation), with the
                 // `request_id`/`tool_part_id`/`operation_id` correlation keys
                 // mirrored at the top level so every reader still resolves it.
-                let operation_id = session
-                    .part(&pending.request)
-                    .and_then(interaction_from_part)
+                let interaction = session.part(&pending.request).and_then(interaction_from_part);
+                let operation_id = interaction
+                    .as_ref()
                     .and_then(|interaction| interaction.operation_id().map(ToOwned::to_owned))
                     .unwrap_or_default();
                 let mut replied = crate::session::store::interaction_from_request(
@@ -1382,7 +1396,17 @@ impl SessionManager {
                     replied_content,
                 )?;
 
-                let host_response = if request_id.starts_with("host-input:") {
+                // Origin is typed (not the request-id prefix): a request is a
+                // host `ask_user` exactly when its stored `source` is `Host`.
+                // Legacy rows without a stored source fall back to the typed
+                // inference inside `InteractionContent::source()` (host parts
+                // always wrote `request_id = host-input:...` ≠ `operation_id`).
+                let host_response = if interaction
+                    .as_ref()
+                    .map(InteractionContent::source)
+                    .unwrap_or_default()
+                    == agena_domain::UserInputSource::Host
+                {
                     let response = host_user_input_response(&user_input_request, &request.reply)?;
                     session = self
                         .persist_session_changes(

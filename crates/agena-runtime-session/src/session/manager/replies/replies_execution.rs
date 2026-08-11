@@ -20,7 +20,7 @@ use crate::session::store::{
     tool_call_from_operation, typed_content_from_value, typed_content_to_value,
 };
 use crate::tool::ToolExecutor;
-use agena_domain::{UserInputKind, UserInputRequest};
+use agena_domain::{UserInputKind, UserInputRequest, UserInputSource};
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
     PermissionDecision, PermissionRequest, PermissionScope, PolicySourceKind,
@@ -2155,6 +2155,7 @@ impl SessionManager {
                     pending_tool,
                     *input,
                     request_id,
+                    UserInputSource::Plugin,
                     state,
                 ))
                 .await
@@ -2526,6 +2527,7 @@ impl SessionManager {
         pending_tool: &SessionPendingTool,
         input: crate::part::AskUserToolInput,
         request_id: String,
+        source: UserInputSource,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
@@ -2535,6 +2537,7 @@ impl SessionManager {
             title: input.title,
             body_markdown: input.body_markdown,
             kind: UserInputKind::from(input.kind),
+            source,
             auto_resolution_ms: super::super::helpers::effective_user_input_timeout_ms(
                 input.auto_resolution_ms,
             ),

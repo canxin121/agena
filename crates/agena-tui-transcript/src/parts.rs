@@ -497,6 +497,7 @@ fn interaction_request_resource(interaction: &InteractionContent) -> Option<User
             .map(|request| request.body_markdown)
             .unwrap_or_default(),
         kind: kind.to_owned(),
+        source: interaction.source(),
         auto_resolution_ms: None,
         presented_at: None,
         questions,
@@ -520,6 +521,7 @@ fn user_input_request_resource(request: agena_domain::UserInputRequest) -> UserI
         title: request.title,
         body_markdown: request.body_markdown,
         kind: request.kind.as_str().to_owned(),
+        source: request.source,
         auto_resolution_ms: request.auto_resolution_ms,
         presented_at: request.presented_at,
         questions: request

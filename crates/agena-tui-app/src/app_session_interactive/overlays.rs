@@ -625,6 +625,7 @@ fn user_input_request_from_wire(value: agena_api::resource::UserInputRequest) ->
         title: value.title,
         body_markdown: value.body_markdown,
         kind: value.kind.into(),
+        source: value.source,
         auto_resolution_ms: value.auto_resolution_ms,
         presented_at: value.presented_at,
         questions: value
@@ -763,6 +764,7 @@ mod tests {
             title: "Approve New Plan".to_owned(),
             body_markdown: body.to_owned(),
             kind: UserInputKind::Review,
+            source: agena_domain::UserInputSource::Host,
             auto_resolution_ms: None,
             presented_at: None,
             questions: vec![DomainQuestion {

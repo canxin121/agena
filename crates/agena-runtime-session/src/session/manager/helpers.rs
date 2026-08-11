@@ -314,6 +314,14 @@ pub(super) fn ask_user_title(request: &UserInputRequest) -> String {
     }
 }
 
+/// Build the opaque correlation id for a host `ask_user` request.
+///
+/// The `host-input:{session}:{call}:{seq}` string is user-visible (it
+/// round-trips through reply payloads and present URLs) and baked into stored
+/// rows and e2e fixtures, so its format is stable. It is now an OPAQUE id only:
+/// it carries no semantic weight — origin (host `ask_user` vs plugin
+/// `interaction.ask`) is the typed [`agena_domain::UserInputSource`] carried on
+/// the request, never a prefix check on this id.
 pub(super) fn host_user_input_request_id(
     session_id: i64,
     call_id: i64,

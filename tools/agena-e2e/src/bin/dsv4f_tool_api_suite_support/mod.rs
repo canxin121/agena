@@ -332,8 +332,9 @@ impl Harness {
                 match (pending_reply, pending) {
                     (PendingReply::Input, PendingInteractiveRequest::UserInput { request }) => {
                         ensure!(
-                            request.request_id.starts_with("host-input:"),
-                            "expected host-input request, got {}",
+                            request.source == agena_domain::UserInputSource::Host,
+                            "expected a host user-input request, got source={} (id {})",
+                            request.source.as_str(),
                             request.request_id
                         );
                         let answers = request

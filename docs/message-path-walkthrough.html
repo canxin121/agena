@@ -1,0 +1,634 @@
+<style>
+  :root {
+    --ground: #f7f5f0;
+    --ink: #251d13;
+    --mut: #6e6459;
+    --cap: #8a7d6d;
+    --line: #e1d9cb;
+    --card: #fffdf8;
+    --chip: #ece6d9;
+    --acc: #b45309;
+    --acc-soft: #f4e4cf;
+    --crim: #b3271d;
+    --crim-soft: #f6e0dc;
+    --grn: #4a6d28;
+    --grn-soft: #e9f1da;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #131110;
+      --ink: #ece5da;
+      --mut: #9a9184;
+      --cap: #8a7f70;
+      --line: #2c2721;
+      --card: #1a1714;
+      --chip: #28231d;
+      --acc: #f0a451;
+      --acc-soft: #3b2a16;
+      --crim: #ef8d7e;
+      --crim-soft: #40211c;
+      --grn: #a3c06e;
+      --grn-soft: #26311a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #131110;
+    --ink: #ece5da;
+    --mut: #9a9184;
+    --cap: #8a7f70;
+    --line: #2c2721;
+    --card: #1a1714;
+    --chip: #28231d;
+    --acc: #f0a451;
+    --acc-soft: #3b2a16;
+    --crim: #ef8d7e;
+    --crim-soft: #40211c;
+    --grn: #a3c06e;
+    --grn-soft: #26311a;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px 80px; }
+
+  header.hero { padding: 72px 0 36px; border-bottom: 1px solid var(--line); margin-bottom: 44px; }
+  .hero .kicker { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--acc); margin: 0 0 14px; font-weight: 700; }
+  .hero h1 {
+    font-family: Georgia, "Times New Roman", serif;
+    font-weight: 600;
+    font-size: clamp(27px, 4vw, 42px);
+    line-height: 1.18;
+    text-wrap: balance;
+    margin: 0 0 18px;
+  }
+  .hero p.thesis { max-width: 66ch; color: var(--mut); font-size: 14.5px; line-height: 1.75; margin: 0 0 22px; }
+  .hero .meta { display: flex; flex-wrap: wrap; gap: 8px; }
+  .hero .meta span {
+    font-size: 11px; color: var(--mut); border: 1px solid var(--line);
+    background: var(--card); padding: 4px 10px; border-radius: 999px; white-space: nowrap;
+  }
+
+  .layout { display: grid; gap: 56px; }
+  @media (min-width: 1080px) {
+    .layout { grid-template-columns: minmax(0, 1fr) 224px; align-items: start; }
+    .content { grid-column: 1; min-width: 0; }
+    .rail { grid-column: 2; position: sticky; top: 28px; align-self: start; }
+  }
+
+  section { scroll-margin-top: 28px; }
+  .sec-head { margin-bottom: 20px; }
+  .sec-head .eyebrow { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--acc); font-weight: 700; margin: 0 0 6px; }
+  .sec-head h2 {
+    font-family: Georgia, "Times New Roman", serif;
+    font-weight: 600; font-size: 24px; line-height: 1.25; text-wrap: balance;
+    margin: 0 0 8px;
+  }
+  .sec-head p { color: var(--mut); font-size: 13px; max-width: 72ch; margin: 0; }
+
+  figure { margin: 0 0 8px; }
+  figure svg {
+    width: 100%; height: auto; display: block;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  }
+  figcaption { margin-top: 10px; font-size: 12px; color: var(--mut); line-height: 1.6; max-width: 84ch; }
+  .lg { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 11.5px; color: var(--mut); }
+  .lg .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: -1px; }
+
+  .loop { list-style: none; counter-reset: step; padding: 0; margin: 22px 0 0; display: grid; gap: 12px; }
+  .loop li {
+    counter-increment: step; position: relative;
+    padding: 15px 18px 15px 58px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .loop li::before {
+    content: counter(step); position: absolute; left: 16px; top: 15px;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--acc-soft); color: var(--acc);
+    font-weight: 700; font-size: 12px;
+    display: grid; place-items: center;
+  }
+  .loop h3 { margin: 0 0 4px; font-size: 13.5px; font-weight: 700; }
+  .loop p { margin: 0; font-size: 12.5px; color: var(--mut); line-height: 1.65; }
+  .loop p + p { margin-top: 6px; }
+
+  .callout {
+    margin-top: 22px; padding: 14px 16px; border-radius: 10px;
+    border: 1px solid var(--crim); border-left-width: 4px;
+    background: var(--crim-soft); color: var(--ink);
+    font-size: 12.5px; line-height: 1.65; max-width: 84ch;
+  }
+  .callout strong { color: var(--crim); }
+
+  .index { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  .index th {
+    text-align: left; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--cap); padding: 8px 12px; border-bottom: 1px solid var(--line); font-weight: 700;
+  }
+  .index td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.5; }
+  .index tr:last-child td { border-bottom: none; }
+  .index td.crate { font-weight: 700; white-space: nowrap; }
+  .index td.anch { color: var(--mut); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .index code { font-size: 11.5px; }
+
+  code, .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  code {
+    font-size: .92em; background: var(--chip); color: var(--ink);
+    padding: 1px 5px; border-radius: 4px;
+  }
+  a.ref { color: var(--acc); text-decoration: none; border-bottom: 1px dotted var(--acc); }
+  a.ref:hover { border-bottom-style: solid; }
+
+  .notes { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 10px; }
+  .notes li {
+    padding: 12px 15px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; font-size: 12.5px; color: var(--mut); line-height: 1.65;
+  }
+  .notes li b { color: var(--ink); font-weight: 700; }
+
+  .rail h4 {
+    font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--cap);
+    margin: 0 0 10px;
+  }
+  .rail nav a {
+    display: block; padding: 6px 10px; color: var(--mut); text-decoration: none;
+    font-size: 12.5px; border-left: 2px solid transparent; line-height: 1.45;
+  }
+  .rail nav a:hover, .rail nav a:focus-visible { color: var(--acc); border-left-color: var(--acc); outline: none; }
+  .rail nav a small { display: block; font-size: 10.5px; color: var(--cap); }
+  .rail .note { margin-top: 18px; font-size: 11.5px; color: var(--cap); line-height: 1.6; }
+
+  footer { border-top: 1px solid var(--line); margin-top: 64px; padding-top: 18px; font-size: 11.5px; color: var(--cap); line-height: 1.7; }
+  footer code { font-size: 10.5px; }
+
+  /* ---- SVG ---- */
+  .fig { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; }
+  .fig .n { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+  .fig .cap { fill: var(--cap); font-size: 9px; font-weight: 700; letter-spacing: .1em; }
+  .fig .t { fill: var(--ink); font-size: 12.5px; font-weight: 700; }
+  .fig .d { fill: var(--mut); font-size: 11px; }
+  .fig .lb { fill: var(--mut); font-size: 10.5px; }
+  .fig .es, .fig .el { fill: none; stroke-width: 1.6; }
+  .fig .e-a { stroke: var(--acc); marker-end: url(#mp-a); }
+  .fig .e-g { stroke: var(--grn); marker-end: url(#mp-g); }
+  .fig .e-i { stroke: var(--ink); marker-end: url(#mp-i); }
+  .fig .e-c { stroke: var(--crim); marker-end: url(#mp-c); }
+  .fig .e-m { stroke: var(--mut); marker-end: url(#mp-m); }
+  .fig .e-dash { stroke-dasharray: 5 4; }
+  .fig #mp-a path { fill: var(--acc); }
+  .fig #mp-g path { fill: var(--grn); }
+  .fig #mp-i path { fill: var(--ink); }
+  .fig #mp-c path { fill: var(--crim); }
+  .fig #mp-m path { fill: var(--mut); }
+  .fig .r-a { stroke: var(--acc); marker-end: url(#mr-a); }
+  .fig .r-g { stroke: var(--grn); marker-end: url(#mr-g); }
+  .fig .r-i { stroke: var(--ink); marker-end: url(#mr-i); }
+  .fig #mr-a path { fill: var(--acc); }
+  .fig #mr-g path { fill: var(--grn); }
+  .fig #mr-i path { fill: var(--ink); }
+</style>
+<title>agena · 一条消息从按键到工具调用的完整路径</title>
+
+<header class="hero">
+  <p class="kicker">agena · Rust agent TUI · 代码走读</p>
+  <h1>一条消息,从按键到工具调用,在 agena 里走过哪些层</h1>
+  <p class="thesis">在 TUI 里发一句话、回车、AI 开始打字、还调了工具——这条路径在代码里横穿 4 个 crate 层:键盘事件经 <b>tui-platform → tui-app</b> 进入,再由 <code>tui-app::app_backend</code>(旧 <code>agena-tui-backend</code> 已并入)经 <b>application</b> 的 <code>SessionExecutionCommandService</code> trait 直接进入 runtime——旧的 <code>ApiCommand::SubmitMessage</code> → <code>dispatch_command</code> 中转已被剥掉。随后在 <code>SessionManager::run_until_stable</code> 里进入一个 <b>agentic loop</b>:发请求 → 收流 → 有 <code>tool_use</code> 就执行 → 把结果投影成 <code>tool_result</code> 再发,直到模型不再要工具。AI 的输出再经 storage 的事件广播流回 transcript 渲染。下图是这条信号的完整路径,所有锚点验证于 <code>HEAD c65c307c</code>。</p>
+  <div class="meta">
+    <span>4 个跨 crate 边界</span>
+    <span>1 条 agentic loop</span>
+    <span>≈ 16 个 crate 参与一次往返</span>
+    <span>provider 中立:Anthropic / OpenAI / Gemini / Ollama / Bedrock</span>
+  </div>
+</header>
+
+<div class="layout">
+<main class="content">
+
+  <section id="fig-path">
+    <div class="sec-head">
+      <p class="eyebrow">图 1 · 发送路径</p>
+      <h2>从按键到模型请求:一次调用的完整下落</h2>
+      <p>竖轴是时间。左列是 TUI 侧事件消化,中列是跨 crate 边界的调用栈,右列是 provider 适配器。菱形标记是 trait / 通道边界——真正值得记的三处是 <code>SessionExecutionCommandService</code>(application→runtime)、<code>ModelRuntime</code>(provider 抽象)和 <code>CompletionStreamEvent</code>(流式事件契约)。</p>
+    </div>
+    <figure>
+      <svg class="fig" viewBox="0 0 890 1490" role="img" aria-label="从键盘事件到 provider 请求的完整调用链:四层边界、agentic loop 入口、provider 适配器">
+        <defs>
+          <marker id="mp-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="mp-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="mp-i" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="mp-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="mp-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+
+        <!-- ============ edges ============ -->
+        <g class="es">
+          <line class="e-i" x1="270" y1="40" x2="314" y2="40"/>
+          <path class="e-i" d="M435,72 L435,96 L270,96 L270,126"/>
+          <path class="e-a" d="M155,158 L155,166"/>
+          <path class="e-a" d="M155,244 L155,252"/>
+          <path class="e-a" d="M155,330 L155,338"/>
+          <path class="e-a" d="M155,416 L155,424"/>
+          <path class="e-a" d="M155,502 L155,510"/>
+          <path class="e-a" d="M155,588 L155,612 L312,612"/>
+          <path class="e-a" d="M435,664 L435,678"/>
+          <path class="e-a" d="M435,742 L435,756"/>
+          <path class="e-a" d="M435,820 L435,834"/>
+          <path class="e-a" d="M435,898 L435,912"/>
+          <path class="e-a" d="M435,976 L435,990"/>
+          <path class="e-a" d="M435,1054 L435,1068"/>
+          <path class="e-a" d="M435,1132 L435,1146"/>
+          <path class="e-a" d="M435,1210 L435,1232 L612,1232 L612,1256"/>
+          <path class="e-a" d="M730,1288 L730,1302"/>
+          <path class="e-a" d="M730,1366 L730,1380"/>
+          <path class="e-c e-dash" d="M320,1032 L296,1032 L296,850 L276,850"/>
+        </g>
+
+        <!-- ============ labels ============ -->
+        <g class="lb">
+          <text x="296" y="32">Event</text>
+          <text x="300" y="88">→ handle</text>
+          <text x="162" y="158">Key</text>
+          <text x="162" y="244">Focus::Composer</text>
+          <text x="162" y="330">Ctrl+Enter → Submit</text>
+          <text x="162" y="416">空闲 → 发送</text>
+          <text x="162" y="502">普通消息</text>
+          <text x="180" y="604">tokio::spawn →</text>
+          <text x="442" y="667">submit_document_with_options</text>
+          <text x="442" y="745">session_user_run_request</text>
+          <text x="442" y="823">impl SessionExecutionCommandService</text>
+          <text x="442" y="901">submit_user_run_inner · persist</text>
+          <text x="442" y="979">run_model_turn →</text>
+          <text x="442" y="1057">complete_stream</text>
+          <text x="442" y="1135">with_request_cancellation</text>
+          <text x="502" y="1224">adapter 选择</text>
+          <text x="738" y="1291">HTTP · SSE</text>
+          <text x="738" y="1369">CompletionStreamEvent</text>
+          <text x="296" y="1024" text-anchor="end">blocked → 挂起</text>
+        </g>
+
+        <!-- ============ L column ============ -->
+        <g class="fig">
+          <rect class="n" x="40" y="8" width="230" height="64" rx="7"/>
+          <text class="cap" x="54" y="24">agena-tui-platform · crossterm</text>
+          <text class="t" x="54" y="40">TerminalInput::next</text>
+          <text class="d" x="54" y="54">poll + AsyncFd 等 stdin,事件经</text>
+          <text class="d" x="54" y="68">InputNormalizer 归一化</text>
+
+          <rect class="n" x="40" y="94" width="230" height="64" rx="7"/>
+          <text class="cap" x="54" y="110">agena-tui-app</text>
+          <text class="t" x="54" y="126">handle_terminal_event</text>
+          <text class="d" x="54" y="140">按 Key / Paste / Resize / Mouse</text>
+          <text class="d" x="54" y="154">分发;Key → handle_key_event</text>
+
+          <rect class="n" x="40" y="180" width="230" height="64" rx="7"/>
+          <text class="cap" x="54" y="196">agena-tui-app</text>
+          <text class="t" x="54" y="212">handle_key_event</text>
+          <text class="d" x="54" y="226">keymap::resolve(KeyContext::Main)</text>
+          <text class="d" x="54" y="240">→ 按 Focus 路由到 Composer</text>
+
+          <rect class="n" x="40" y="266" width="230" height="64" rx="7"/>
+          <text class="cap" x="54" y="282">agena-tui-app</text>
+          <text class="t" x="54" y="298">handle_composer_key</text>
+          <text class="d" x="54" y="312">ComposerKeyBindings::match_action</text>
+          <text class="d" x="54" y="326">→ ComposerAction::Submit</text>
+
+          <rect class="n" x="40" y="352" width="230" height="64" rx="7"/>
+          <text class="cap" x="54" y="368">agena-tui-app</text>
+          <text class="t" x="54" y="384">submit_or_steer</text>
+          <text class="d" x="54" y="398">空闲 → 发送;运行中 → 打断</text>
+          <text class="d" x="54" y="412">并入队 queue.set(draft)</text>
+
+          <rect class="n" x="40" y="438" width="230" height="64" rx="7"/>
+          <text class="cap" x="54" y="454">agena-tui-app</text>
+          <text class="t" x="54" y="470">submit_composer</text>
+          <text class="d" x="54" y="484">斜杠命令本地解析;普通消息</text>
+          <text class="d" x="54" y="498">→ request_submit_message</text>
+
+          <rect class="n" x="40" y="524" width="230" height="64" rx="7"/>
+          <text class="cap" x="54" y="540">agena-tui-app</text>
+          <text class="t" x="54" y="556">request_submit_message_with_pending</text>
+          <text class="d" x="54" y="570">PendingUserMessage + begin_run_operation</text>
+          <text class="d" x="54" y="584">spawn 异步任务 → app_backend</text>
+
+          <rect class="n" x="40" y="780" width="230" height="124" rx="7"/>
+          <text class="cap" x="54" y="796">agena-permission · 纯决策核心</text>
+          <text class="t" x="54" y="812">PermissionRequest → part Pending</text>
+          <text class="d" x="54" y="826">aggregate_permission_outcome = Request</text>
+          <text class="d" x="54" y="840">→ session.blocked() 置位,主循环在</text>
+          <text class="d" x="54" y="854">wait_for_interaction_after 挂起</text>
+          <text class="d" x="54" y="868">批准 → signal_interaction 唤醒,以</text>
+          <text class="d" x="54" y="882">ExecutionSource::PermissionReply 重回</text>
+          <text class="d" x="54" y="896">run_until_stable 续跑</text>
+        </g>
+
+        <!-- ============ M column ============ -->
+        <g class="fig">
+          <rect class="n" x="320" y="8" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="24">agena-tui-app</text>
+          <text class="t" x="334" y="40">App::run</text>
+          <text class="d" x="334" y="54">主事件循环 tokio::select! 三路</text>
+          <text class="d" x="334" y="68">terminal.next_event / rx.recv / tick</text>
+
+          <rect class="n" x="320" y="600" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="616">agena-tui-app · app_backend</text>
+          <text class="t" x="334" y="632">operations::submit_document_with_options</text>
+          <text class="d" x="334" y="646">构建 SessionUserRunRequest</text>
+          <text class="d" x="334" y="660">+ 拉执行快照</text>
+
+          <rect class="n" x="320" y="678" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="694">agena-application · 装配</text>
+          <text class="t" x="334" y="710">session::session_user_run_request</text>
+          <text class="d" x="334" y="724">ComposerDocument → 请求</text>
+          <text class="d" x="334" y="738">session_execution_services()</text>
+
+          <rect class="n" x="320" y="756" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="772">agena-runtime-session · trait 边界</text>
+          <text class="t" x="334" y="788">SessionExecutionCommandService::</text>
+          <text class="t" x="334" y="802">submit_user_run</text>
+          <text class="d" x="334" y="818">application 持 Arc&lt;dyn …&gt;</text>
+
+          <rect class="n" x="320" y="834" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="850">agena-runtime-session · SessionManager</text>
+          <text class="t" x="334" y="866">submit_user_run_inner</text>
+          <text class="d" x="334" y="880">user.prompt.submit 钩子 + persist</text>
+          <text class="d" x="334" y="894">(start_user_message_parts 已内联)</text>
+
+          <rect class="n" x="320" y="912" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="928">agena-runtime-session · SessionManager</text>
+          <text class="t" x="334" y="944">run_until_stable</text>
+          <text class="d" x="334" y="958">agentic loop — 见下图 2</text>
+          <text class="d" x="334" y="972">一条用户消息 = 一个 run marker</text>
+          <rect x="508" y="918" width="36" height="15" rx="4" fill="var(--acc)"/>
+          <text x="526" y="929" text-anchor="middle" font-size="9" font-weight="700" fill="var(--ground)">LOOP</text>
+
+          <rect class="n" x="320" y="990" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="1006">agena-runtime-session · processor</text>
+          <text class="t" x="334" y="1022">SessionProcessor::run_turn</text>
+          <text class="d" x="334" y="1036">loop stream.next() 逐事件累积:</text>
+          <text class="d" x="334" y="1050">TextDelta / ToolCallDelta / …</text>
+
+          <rect class="n" x="320" y="1068" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="1084">agena-runtime-provider</text>
+          <text class="t" x="334" y="1100">ProviderRegistry::complete_stream</text>
+          <text class="d" x="334" y="1114">tool-mode 剥离 + 能力校验</text>
+          <text class="d" x="334" y="1128">重试 / 断路器 / 流重放 / 修复</text>
+
+          <rect class="n" x="320" y="1146" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="1162">trait ModelRuntime · 边界</text>
+          <text class="t" x="334" y="1178">complete_stream_for_adapter</text>
+          <text class="d" x="334" y="1192">tool-mode 剥离 + reasoning backfill</text>
+          <text class="d" x="334" y="1206">已上移 registry,adapter 路由保留</text>
+        </g>
+
+        <!-- ============ R column ============ -->
+        <g class="fig">
+          <rect class="n" x="620" y="1224" width="230" height="64" rx="7"/>
+          <text class="cap" x="634" y="1240">agena-runtime-provider-adapters</text>
+          <text class="t" x="634" y="1256">anthropic_runtime::complete_stream</text>
+          <text class="d" x="634" y="1270">send_with_credential_refresh → HTTP</text>
+          <text class="d" x="634" y="1284">SSE → CompletionStreamEvent(全厂商同构)</text>
+
+          <rect class="n" x="620" y="1302" width="230" height="64" rx="7"/>
+          <text class="cap" x="634" y="1318">agena-provider · anthropic_wire</text>
+          <text class="t" x="634" y="1334">Anthropic SSE wire</text>
+          <text class="d" x="634" y="1348">MessageStart / ContentBlockDelta /</text>
+          <text class="d" x="634" y="1362">MessageStop → Completed</text>
+
+          <rect class="n" x="620" y="1380" width="230" height="64" rx="7"/>
+          <text class="cap" x="634" y="1396">agena-provider · contract</text>
+          <text class="t" x="634" y="1412">← tool_result 回填</text>
+          <text class="d" x="634" y="1426">ToolResultContent 在下轮 prompt</text>
+          <text class="d" x="634" y="1440">投影成 wire 的 tool_result</text>
+        </g>
+      </svg>
+      <figcaption><b>关键:</b>键盘事件下行到 <code>request_submit_message_with_pending</code> 后 <b>spawn</b> 出异步任务,UI 线程不阻塞;其后整条 runtime 链都是异步。虚线红框是权限暂停点——工具调用需批准时,主循环 <b>不返回</b>,而是在 <code>wait_for_interaction_after</code> 挂起,等用户批准经 <code>signal_interaction</code> 唤醒后从 <code>ExecutionSource::PermissionReply</code> 重新进入 loop。</figcaption>
+      <div class="lg">
+        <span><span class="dot" style="background:var(--acc)"></span>调用路径(琥珀)</span>
+        <span><span class="dot" style="background:var(--crim)"></span>权限暂停(红)</span>
+        <span><span class="dot" style="background:var(--ink)"></span>事件入口</span>
+      </div>
+    </figure>
+  </section>
+
+  <section id="loop">
+    <div class="sec-head">
+      <p class="eyebrow">图 2 · Agentic 循环</p>
+      <h2>为什么一次工具调用会"多发一轮"</h2>
+      <p><code>run_until_stable</code>(replies_execution.rs:256)不是"调一次 API 就完",而是一个 <code>loop</code>,每轮迭代处理一个阶段。工具的 <code>tool_use</code> part 不会立刻变成独立消息——执行结果内联写回同一个 part 的 Operation,<b>下一次</b>请求模型时由 <code>build_prepared_prompt</code>(prompt_window.rs:788)→ <code>project_persisted</code>(wire_message.rs:147)投影成 wire 的 <code>tool_result</code>。顺序如下:</p>
+    </div>
+    <ol class="loop">
+      <li><h3>并发守卫注册</h3><p><code>start_registered(ExecutionSource::User, NewTurn)</code> 防重入;一条用户消息 = 一个 run marker,多轮模型请求共享同一 marker,<code>content["rounds"]</code> 记录每轮。</p></li>
+      <li><h3>检查取消 · 注入新输入</h3><p><code>control.cancel</code>(CancellationToken)→ 终止;<code>drain_steer_input</code>(replies_state.rs:526)把运行中新到的用户消息并进当前 run。</p></li>
+      <li><h3>blocked?→ 挂起</h3><p><code>session.blocked()</code>(等待权限/用户输入)→ 切 <code>ExecutionPhase::AwaitingInteraction</code> 并在 <code>wait_for_interaction_after</code>(execution_registry.rs:116)让出,直到批准信号唤醒。</p></li>
+      <li><h3>doom-loop 检测</h3><p><code>doom_loop::detect</code>,最多恢复 2 次,每次注入 <code>DOOM_LOOP_RECOVERY_PROMPT</code>。</p></li>
+      <li><h3>有 pending tools?→ 执行</h3><p><code>resolve_pending_tools</code>(:1477)把 batch 分成 Ready / AwaitingPermission / Sequential → preflight 权限(<code>aggregate_permission_outcome</code> :2155)→ <code>ToolExecutor</code> 执行(<code>prepare_invocation</code> → <code>execute_invocation_detailed_with_prepared_shell</code>)→ <code>apply_tool_success_with_rules</code>(:3015,直接读 <code>execution.view</code>)写回 Operation part → <b>continue 回第 2 步再发一次模型</b>。</p></li>
+      <li><h3>!model_requested?→ 收尾</h3><p>发 <code>agent.stop</code> 钩子(可被插件改写/续命)→ <code>return Ok(session)</code>。</p></li>
+      <li><h3>预算校验</h3><p><code>model_turns_taken</code> 超 <code>DEFAULT_MAX_MODEL_TURNS=500</code> → <code>ModelTurnBudgetExhausted</code>;另有 follow-up(4 次)与截断续写(4 次)预算。</p></li>
+      <li><h3>run_model_turn</h3><p>构造 <code>SessionRunRequest</code> → <code>SessionProcessor::run_turn</code>(run.rs:138,注意新签名带 <code>&amp;ProviderRegistry</code> 参数):<code>provider_registry.complete_stream</code>(run.rs:170)发起请求,<code>loop stream.next()</code> 把 <code>TextDelta / ToolCallDelta / ThinkingDelta / Completed</code> 累积进 parts;结束后 <code>should_continue_turn</code>(:97)决定是否再循环——优先级:有 pending 工具 &gt; follow-up &gt; 截断 &gt; Stop。</p></li>
+    </ol>
+    <div class="callout">
+      <strong>暂停/恢复是"暂停循环",不是"结束"。</strong>工具要批准时,<code>PermissionRequest</code> 被写进 tool part 的 <code>authorization</code>,part 置 <code>Pending</code>,session 派生后 <code>blocked()==true</code>。用户批准走 <code>reply_permission_dispatch</code>(replies.rs:988)→ 记 reply → <code>signal_interaction</code> 唤醒挂起循环 → 以 <code>ExecutionSource::PermissionReply</code> 重新进入 <code>run_until_stable</code>,工具继续执行、模型继续生成。
+    </div>
+  </section>
+
+  <section id="fig-render">
+    <div class="sec-head">
+      <p class="eyebrow">图 3 · 渲染回流</p>
+      <h2>AI 的输出怎么流回屏幕</h2>
+      <p>两条并行管道,都汇到 transcript。琥珀线是<b>流式通道</b>(核心):runtime 每写一个 part 都经 storage 广播 <code>SessionChange</code>,backend 订阅后转成 <code>RuntimePresentationEvent</code>。绿线是<b>一次性结果通道</b>:提交完成时 backend 返回执行快照。两者最终都触发 <code>refresh_session</code> 拉新快照并重绘——但每个 <code>PartUpdated</code> 不会都刷全屏:普通事件只做缓存失效,仅 <code>force_refresh</code>(提交完成、bus 溢出降级)才被 <code>pending_refresh_for</code> park 到 tick 预算;真正重绘靠 <code>on_tick</code> 的 <code>REFRESH_INTERVAL_MS</code>(250ms)门控。</p>
+    </div>
+    <figure>
+      <svg class="fig" viewBox="0 0 890 650" role="img" aria-label="AI 输出回流:流式 SessionChange 事件与一次性提交结果两条通道,汇入 transcript 并重绘">
+        <defs>
+          <marker id="mr-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="mr-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="mr-i" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+
+        <g class="es">
+          <path class="r-a" d="M155,72 L155,90 L318,90 L318,128"/>
+          <path class="r-a" d="M435,160 L435,186"/>
+          <path class="r-a" d="M435,250 L435,276"/>
+          <path class="r-i" d="M435,340 L435,366"/>
+          <path class="r-i" d="M435,430 L435,456"/>
+          <path class="r-i" d="M435,520 L435,546"/>
+          <path class="r-g" d="M730,72 L730,164"/>
+          <path class="r-g" d="M730,228 L730,276"/>
+          <path class="r-g" d="M730,340 L730,366"/>
+          <path class="r-g" d="M620,398 L550,398 L550,488"/>
+        </g>
+
+        <g class="lb">
+          <text x="170" y="84">subscribe_all → LiveEvent</text>
+          <text x="442" y="173">rx.recv()</text>
+          <text x="442" y="263">AppMessage</text>
+          <text x="442" y="353">refresh_needed</text>
+          <text x="442" y="443">SessionRefreshed</text>
+          <text x="442" y="533">重绘</text>
+          <text x="738" y="122">一次性 · SessionMessageSubmitted</text>
+          <text x="738" y="252">apply_transcript_execution</text>
+          <text x="738" y="353">→ 刷新</text>
+          <text x="600" y="390">force refresh</text>
+        </g>
+
+        <!-- L column -->
+        <g class="fig">
+          <rect class="n" x="40" y="8" width="230" height="64" rx="7"/>
+          <text class="cap" x="54" y="24">agena-runtime · storage facade</text>
+          <text class="t" x="54" y="40">SessionChange 广播</text>
+          <text class="d" x="54" y="54">PartAdded / PartUpdated /</text>
+          <text class="d" x="54" y="68">PartRemoved / SessionMetaUpdated</text>
+
+          <rect class="n" x="40" y="164" width="230" height="64" rx="7"/>
+          <text class="cap" x="54" y="180">agena-tui-app · app_backend</text>
+          <text class="t" x="54" y="196">submit_document_with_options 返回</text>
+          <text class="d" x="54" y="210">SessionExecutionResource</text>
+          <text class="d" x="54" y="224">(提交完成时的一次性执行快照)</text>
+        </g>
+
+        <!-- M column -->
+        <g class="fig">
+          <rect class="n" x="320" y="96" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="112">agena-tui-app · app_backend</text>
+          <text class="t" x="334" y="128">live_events::subscribe_session_events</text>
+          <text class="d" x="334" y="142">spawn 循环:store → RuntimePresentationEvent(PartPatch)</text>
+          <text class="d" x="334" y="156">live_signal_service → LiveEvent</text>
+
+          <rect class="n" x="320" y="186" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="202">agena-tui-app · mpsc</text>
+          <text class="t" x="334" y="218">AppMessage::SessionEventArrived</text>
+          <text class="d" x="334" y="232">forwarder 任务把 LiveEvent</text>
+          <text class="d" x="334" y="246">转发到主循环 tx</text>
+
+          <rect class="n" x="320" y="276" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="292">agena-tui-app · transcript_state</text>
+          <text class="t" x="334" y="308">transcript.apply_presentation_event</text>
+          <text class="d" x="334" y="322">PartPatch → 缓存失效;ActivityV2 就地</text>
+          <text class="d" x="334" y="336">merge;水位 last_event_seq</text>
+
+          <rect class="n" x="320" y="366" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="382">agena-tui-app · app_backend</text>
+          <text class="t" x="334" y="398">app_backend::refresh_session</text>
+          <text class="d" x="334" y="412">按 after_seq 拉执行快照</text>
+          <text class="d" x="334" y="426">→ SessionRefresh</text>
+
+          <rect class="n" x="320" y="456" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="472">agena-tui-app</text>
+          <text class="t" x="334" y="488">handle_session_refreshed</text>
+          <text class="d" x="334" y="502">apply_transcript_execution +</text>
+          <text class="d" x="334" y="516">try_send_pending 补发排队消息</text>
+
+          <rect class="n" x="320" y="546" width="230" height="64" rx="7"/>
+          <text class="cap" x="334" y="562">主循环</text>
+          <text class="t" x="334" y="578">terminal.draw</text>
+          <text class="d" x="334" y="592">每 tick 把更新后的 transcript</text>
+          <text class="d" x="334" y="606">画到屏幕</text>
+        </g>
+
+        <!-- R column -->
+        <g class="fig">
+          <rect class="n" x="620" y="8" width="230" height="64" rx="7"/>
+          <text class="cap" x="634" y="24">agena-tui-app · mpsc</text>
+          <text class="t" x="634" y="40">AppMessage::SessionMessageSubmitted</text>
+          <text class="d" x="634" y="54">提交完成结果(一次性)</text>
+
+          <rect class="n" x="620" y="164" width="230" height="64" rx="7"/>
+          <text class="cap" x="634" y="180">agena-tui-app</text>
+          <text class="t" x="634" y="196">handle_session_turn_submitted</text>
+          <text class="d" x="634" y="210">confirm_pending_user_message</text>
+          <text class="d" x="634" y="224">把挂起消息确认为真实消息</text>
+
+          <rect class="n" x="620" y="276" width="230" height="64" rx="7"/>
+          <text class="cap" x="634" y="292">agena-tui-app</text>
+          <text class="t" x="634" y="308">transcript.apply_execution</text>
+          <text class="d" x="634" y="322">执行快照 → transcript 状态</text>
+
+          <rect class="n" x="620" y="366" width="230" height="64" rx="7"/>
+          <text class="cap" x="634" y="382">agena-tui-app</text>
+          <text class="t" x="634" y="398">request_refresh(force)</text>
+          <text class="d" x="634" y="412">强制刷新一次</text>
+        </g>
+      </svg>
+      <figcaption><b>两条通道的差别:</b>流式通道 B 是<b>增量</b>的(每个 part 变化都来一个事件,UI 据此失效缓存并限流刷新);结果通道 A 是<b>全量</b>的(提交完成的一次性快照,确认挂起消息 + 应用整个执行)。二者最终都走到 <code>terminal.draw</code>——TUI 每 tick 重画一次当前 transcript 状态,这就是流式打字效果的来源。</figcaption>
+      <div class="lg">
+        <span><span class="dot" style="background:var(--acc)"></span>流式通道 B(增量事件)</span>
+        <span><span class="dot" style="background:var(--grn)"></span>结果通道 A(一次性快照)</span>
+        <span><span class="dot" style="background:var(--ink)"></span>刷新 / 重绘</span>
+      </div>
+    </figure>
+  </section>
+
+  <section id="index">
+    <div class="sec-head">
+      <p class="eyebrow">图 4 · crate 索引</p>
+      <h2>参与一次往返的 crate 和它们的入口</h2>
+      <p>按消息流向排序。锚点格式 <code>文件:行号</code>,均验证于 <code>HEAD c65c307c</code>。</p>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="index">
+        <thead>
+          <tr><th>层 / crate</th><th>关键入口</th><th>职责</th><th>锚点</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="crate">agena-tui-platform</td><td><code>TerminalRuntime::next_event</code></td><td>键盘 / 粘贴事件来源,crossterm 封装</td><td class="anch">terminal/mod.rs:327</td></tr>
+          <tr><td class="crate">agena-tui</td><td><code>keymap::resolve</code> · <code>ComposerAction</code></td><td>键位 → 动作映射</td><td class="anch">keymap/mod.rs:239 · input.rs:139</td></tr>
+          <tr><td class="crate">agena-tui-app</td><td><code>App::run</code> · <code>request_submit_message_with_pending</code> · <code>transcript.apply_presentation_event</code></td><td>事件循环 / 发送 / 渲染状态</td><td class="anch">app_lifecycle.rs:231 · requests.rs:319 · transcript_state.rs:206</td></tr>
+          <tr><td class="crate">agena-tui-app · app_backend</td><td><code>operations::submit_document_with_options</code> · <code>subscribe_session_events</code> · <code>refresh_session</code></td><td>application 代理 + 事件桥(旧 <code>agena-tui-backend</code> 并入)</td><td class="anch">operations.rs:51 · live_events.rs:23 · session_refresh.rs:18</td></tr>
+          <tr><td class="crate">agena-application</td><td><code>session::session_user_run_request</code> · <code>ApplicationSessionServices</code></td><td>请求装配 / service 聚合(旧 <code>dispatch_command</code> 已剥)</td><td class="anch">session.rs:189 · application.rs:69</td></tr>
+          <tr><td class="crate">agena-runtime-session</td><td><code>run_until_stable</code> · <code>resolve_pending_tools</code> · <code>apply_tool_execution_result</code></td><td>agentic loop / 工具分派 / 权限暂停恢复</td><td class="anch">replies_execution.rs:256 / 1477 / 2130</td></tr>
+          <tr><td class="crate">agena-runtime-session-core</td><td><code>Session::derive_pending_operations</code> · <code>blocked</code></td><td>part → pending 操作投影</td><td class="anch">model.rs:996 / 950</td></tr>
+          <tr><td class="crate">agena-runtime-provider</td><td><code>ProviderRegistry::complete_stream</code> · <code>trait ModelRuntime</code></td><td>tool-mode 剥离 / reasoning backfill / 重试 / 断路器(单层)</td><td class="anch">registry/completion.rs:824 · core.rs:83</td></tr>
+          <tr><td class="crate">agena-provider</td><td><code>CompletionStreamEvent</code> · <code>ToolStreamAccumulator</code></td><td>provider 中立事件与工具流累积</td><td class="anch">contract.rs:1558 · tool_stream.rs:48</td></tr>
+          <tr><td class="crate">agena-runtime-provider-adapters</td><td><code>anthropic_runtime::complete_stream</code> · <code>openai_runtime::complete_stream</code></td><td>厂商 SSE → 统一事件流(HTTP 边界 <code>utils.rs:650</code>)</td><td class="anch">anthropic_runtime.rs:339 · openai_runtime.rs:574</td></tr>
+          <tr><td class="crate">agena-tool</td><td><code>ToolExecutionSummary</code> · <code>PreparedToolInvocation</code></td><td>跨 crate 工具数据结构(中性)</td><td class="anch">lib.rs:386 / 480</td></tr>
+          <tr><td class="crate">agena-runtime-tools</td><td><code>ToolExecutor</code> · <code>execute_invocation_detailed_with_prepared_shell</code> · <code>orchestrator::execute_tool</code></td><td>注册表 / 分派执行 / 内建工具</td><td class="anch">tool_registry.rs:606 · executor_execution.rs:343 · orchestrator.rs:74</td></tr>
+          <tr><td class="crate">agena-plugin-host</td><td><code>PluginHost::invoke_tool</code> · <code>transport::stdio</code></td><td>插件加载 + 跨进程调用</td><td class="anch">host/plugin_host_core.rs:272 · transport/stdio.rs:934</td></tr>
+          <tr><td class="crate">agena-plugin-sdk</td><td><code>trait Plugin</code> · <code>PluginDispatcher::dispatch</code></td><td>插件侧 tool_invoke 实现</td><td class="anch">plugin.rs:115 · drivers/dispatch.rs:49</td></tr>
+          <tr><td class="crate">agena-mcp-client</td><td><code>McpConnectionManager::call_tool</code></td><td>MCP 工具桥(静态 mcp 插件)</td><td class="anch">manager.rs:929</td></tr>
+          <tr><td class="crate">agena-permission</td><td><code>rules::apply_rules</code> · <code>pipeline::decide_sync</code></td><td>纯权限决策核心(无副作用)</td><td class="anch">rules.rs:26 · pipeline.rs:39</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="notes">
+    <div class="sec-head">
+      <p class="eyebrow">走读笔记</p>
+      <h2>六条读完能少踩坑的结论</h2>
+    </div>
+    <ul class="notes">
+      <li><b>一条用户消息 = 一个 run marker。</b>多轮模型请求(工具结果、follow-up、截断续写)共享同一 marker,<code>content["rounds"]</code> 逐轮计数——排查"为什么一次输入调了好多次 API"先看这里。</li>
+      <li><b>tool_result 不是独立消息。</b>工具输出内联在 tool_call part 的 Operation 里;发给模型的 <code>tool_result</code> 是下轮 prompt 构建时由 <code>build_prepared_prompt</code>(prompt_window.rs:788)→ <code>project_persisted</code>(wire_message.rs:147)投影出来的。改 wire 层时别去存一条假的 tool_result。</li>
+      <li><b>权限暂停是"暂停循环",不是"结束"。</b>批准经 <code>signal_interaction</code> 唤醒后以 <code>ExecutionSource::PermissionReply</code> 重新进入 <code>run_until_stable</code>(replies.rs:988 · execution_registry.rs:111)。</li>
+      <li><b>流式 UI 靠"失效 + tick 门控刷新"。</b>每个 PartUpdated 都来一个事件,普通事件只做缓存失效、不排队刷新;仅 <code>force_refresh</code>(提交完成 / bus 溢出)被 <code>pending_refresh_for</code> park,由 <code>on_tick</code> 的 250ms 门控消费;真正的打字效果来自每 tick 重画 transcript 状态。</li>
+      <li><b>插件错误从不信任插件文本。</b><code>ToolError::Plugin</code> 用 host 模板重建 Failure,诊断截断清洗(<code>tool_registry.rs:478</code>);插件工具超时默认 300s(interactive/task 24h),内建 shell 靠 watchdog 线程强制超时。</li>
+      <li><b>循环有预算,不是无限。</b>max_turns 默认 500,doom-loop 恢复 2 次,follow-up 与截断续写各 4 次;provider 层另有重试 / 断路器 / 流重放(<code>registry/completion.rs:824</code>)。</li>
+    </ul>
+  </section>
+
+</main>
+
+<aside class="rail">
+  <h4>跳转</h4>
+  <nav>
+    <a href="#fig-path">图 1 · 发送路径<small>按键 → provider 请求</small></a>
+    <a href="#loop">图 2 · Agentic 循环<small>为什么多发几轮</small></a>
+    <a href="#fig-render">图 3 · 渲染回流<small>AI 输出 → 屏幕</small></a>
+    <a href="#index">图 4 · crate 索引<small>入口与锚点</small></a>
+    <a href="#notes">走读笔记<small>六条结论</small></a>
+  </nav>
+  <p class="note">只想要整体结构看<b>图 1</b>;想知道工具调用为什么拉出多轮请求看<b>图 2</b>;想看打字效果怎么来、权限弹窗怎么暂停,分别是<b>图 3</b>和图 1 里的红框。</p>
+</aside>
+
+</div>
+
+<footer>
+  生成于 2026-08-11 · 代码状态 <code>HEAD c65c307c</code> · 锚点全部经过符号验证。这是对 agena 一次"发消息 → AI 回复 + 工具调用"往返的静态走读;运行时行为(如流式 chunk 的具体厂商差异)以适配器源码为准。
+</footer>

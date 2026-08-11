@@ -614,20 +614,14 @@ impl ModelRuntime for MultiAdapterProvider {
         mut request: CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         let visible_model = request.model.clone();
-        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
         let (
             _adapter_id,
             target_model,
             agena_tool_mode,
-            provider_native_tools,
+            _provider_native_tools,
             _definition,
             adapter,
         ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
-        agena_provider::apply_configured_tool_request(
-            agena_tool_mode,
-            &provider_native_tools,
-            &mut request,
-        );
         request.model = target_model;
         let mut response = adapter.complete(request).await?;
         if agena_tool_mode.is_disabled() {
@@ -658,20 +652,14 @@ impl ModelRuntime for MultiAdapterProvider {
         let (
             _adapter_id,
             target_model,
-            agena_tool_mode,
-            provider_native_tools,
+            _agena_tool_mode,
+            _provider_native_tools,
             _definition,
             adapter,
         ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
         if !self.native_compaction_enabled_for_adapter(adapter_id, &visible_model) {
             return Ok(None);
         }
-        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        agena_provider::apply_configured_tool_request(
-            agena_tool_mode,
-            &provider_native_tools,
-            &mut request,
-        );
         request.model = target_model;
         adapter.compact_conversation(request).await
     }
@@ -695,20 +683,14 @@ impl ModelRuntime for MultiAdapterProvider {
         ProviderError,
     > {
         let visible_model = request.model.clone();
-        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
         let (
             _adapter_id,
             target_model,
             agena_tool_mode,
-            provider_native_tools,
+            _provider_native_tools,
             _definition,
             adapter,
         ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
-        agena_provider::apply_configured_tool_request(
-            agena_tool_mode,
-            &provider_native_tools,
-            &mut request,
-        );
         request.model = target_model;
         let provider_id = self.id.clone();
         let stream = adapter.complete_stream(request.clone()).await?;
@@ -1114,77 +1096,6 @@ mod tests {
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0].native_compaction, enabled);
         }
-    }
-
-    #[tokio::test]
-    async fn disabled_mode_strips_all_tool_configuration_from_provider_request() {
-        let adapter = Arc::new(RecordingAdapter {
-            model: ModelId::new("model"),
-            request: Mutex::new(None),
-            compact_calls: AtomicUsize::new(0),
-        });
-        let provider = provider_for_adapter_with_mode(
-            adapter.clone() as Arc<dyn ModelRuntime>,
-            AgenaToolMode::Disabled,
-        );
-        let mut input = request();
-        input.provider_native_tools.routes.web_search =
-            Some(ProviderNativeToolRoute::ProviderHosted);
-
-        provider
-            .complete(input)
-            .await
-            .expect("disabled tool mode should still complete normally");
-
-        let recorded = adapter
-            .request
-            .lock()
-            .expect("recorded request")
-            .clone()
-            .expect("adapter should receive a request");
-        assert!(recorded.tool_api_functions.is_empty());
-        assert!(recorded.provider_native_tools.is_empty());
-        assert_eq!(recorded.system.as_deref(), Some("base system"));
-    }
-
-    #[tokio::test]
-    async fn provider_protocol_strips_removed_route_native_tool_configuration() {
-        let adapter = Arc::new(RecordingAdapter {
-            model: ModelId::new("model"),
-            request: Mutex::new(None),
-            compact_calls: AtomicUsize::new(0),
-        });
-        let mut configured_native = ProviderNativeToolsConfig::default();
-        configured_native.routes.web_search = Some(ProviderNativeToolRoute::ProviderHosted);
-        let provider = provider_for_adapter_with_tool_policy(
-            adapter.clone() as Arc<dyn ModelRuntime>,
-            AgenaToolMode::ProviderProtocol,
-            configured_native,
-        );
-        let mut input = request();
-        input.provider_native_tools.routes.file_search =
-            Some(ProviderNativeToolRoute::ProviderHosted);
-        input.previous_response_id = Some("provider-response".to_owned());
-
-        provider
-            .complete(input)
-            .await
-            .expect("provider protocol should complete normally");
-
-        let recorded = adapter
-            .request
-            .lock()
-            .expect("recorded request")
-            .clone()
-            .expect("adapter should receive a request");
-        assert_eq!(recorded.tool_api_functions.len(), 1);
-        assert!(recorded.provider_native_tools.is_empty());
-        assert_eq!(recorded.provider_native_tools.routes.file_search, None);
-        assert_eq!(
-            recorded.previous_response_id.as_deref(),
-            Some("provider-response")
-        );
-        assert_eq!(recorded.system.as_deref(), Some("base system"));
     }
 
     #[tokio::test]

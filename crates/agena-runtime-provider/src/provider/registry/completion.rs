@@ -1553,7 +1553,8 @@ mod tool_api_function_validation_tests {
     use agena_plugin_host::sdk::{PluginKey, ToolDefinition};
     use agena_provider::CompletionStreamEvent;
     use agena_provider::{
-        CompletionFinishReason, CompletionRequest, CompletionToolCall, CompletionUsage,
+        AgenaToolMode, CompletionFinishReason, CompletionRequest, CompletionToolCall,
+        CompletionUsage, ProviderNativeToolRoute, ProviderNativeToolsConfig,
     };
     use agena_runtime_contracts::part::{OperationCompletion, OperationPart};
     use agena_runtime_tools::tool::ToolApiBinding;
@@ -1719,6 +1720,163 @@ mod tool_api_function_validation_tests {
             ];
             Ok(Box::pin(stream::iter(events)))
         }
+    }
+
+    struct ToolModeProbeProvider {
+        mode: AgenaToolMode,
+        model: ModelId,
+        requests: Mutex<Vec<CompletionRequest>>,
+    }
+
+    impl ToolModeProbeProvider {
+        fn new(mode: AgenaToolMode) -> Self {
+            Self {
+                mode,
+                model: ModelId::new("test-model"),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ModelRuntime for ToolModeProbeProvider {
+        fn id(&self) -> &str {
+            "tool-mode-test"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        fn agena_tool_mode(&self, _model: &ModelId) -> AgenaToolMode {
+            self.mode.clone()
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, crate::ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, crate::ProviderError> {
+            self.requests.lock().expect("requests lock").push(request);
+            Ok(CompletionResponse {
+                provider_id: ProviderId::new("tool-mode-test"),
+                model: self.model.clone(),
+                text: "ok".to_owned(),
+                reasoning_text: None,
+                finish_reason: None,
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+    }
+
+    fn tool_mode_probe_request() -> CompletionRequest {
+        CompletionRequest {
+            model: ModelId::new("test-model"),
+            system: Some("base system".to_owned()),
+            turns: Vec::new(),
+            tool_api_functions: Vec::new(),
+            provider_native_tools: ProviderNativeToolsConfig::default(),
+            disable_tools: false,
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            provider_compaction: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            response_format: None,
+            responses_api_metadata: None,
+            request_override: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_mode_strips_tool_configuration_at_registry_boundary() {
+        let provider =
+            std::sync::Arc::new(ToolModeProbeProvider::new(AgenaToolMode::Disabled));
+        let mut registry = crate::provider::ProviderRegistry::new();
+        registry.register_arc(provider.clone());
+
+        let mut request = tool_mode_probe_request();
+        request.tool_api_functions = all_tool_api_definitions();
+        request.provider_native_tools.routes.web_search =
+            Some(ProviderNativeToolRoute::ProviderHosted);
+        request.previous_response_id = Some("provider-response".to_owned());
+        request
+            .request_override
+            .body_patch
+            .insert("tools".to_owned(), serde_json::json!([{"type": "function"}]));
+
+        registry
+            .complete(
+                &ModelRef::new("tool-mode-test", "test-model"),
+                request,
+            )
+            .await
+            .expect("disabled tool mode should still complete normally");
+
+        let recorded = provider
+            .requests
+            .lock()
+            .expect("requests lock")
+            .pop()
+            .expect("provider should receive a request");
+        assert!(recorded.tool_api_functions.is_empty());
+        assert!(recorded.provider_native_tools.is_empty());
+        assert_eq!(recorded.previous_response_id, None);
+        assert!(!recorded.request_override.body_patch.contains_key("tools"));
+        assert_eq!(recorded.system.as_deref(), Some("base system"));
+    }
+
+    #[tokio::test]
+    async fn provider_protocol_strips_removed_native_tools_at_registry_boundary() {
+        let provider =
+            std::sync::Arc::new(ToolModeProbeProvider::new(AgenaToolMode::ProviderProtocol));
+        let mut registry = crate::provider::ProviderRegistry::new();
+        registry.register_arc(provider.clone());
+
+        let mut request = tool_mode_probe_request();
+        request.tool_api_functions = all_tool_api_definitions();
+        request.provider_native_tools.routes.file_search =
+            Some(ProviderNativeToolRoute::ProviderHosted);
+        request.previous_response_id = Some("provider-response".to_owned());
+        request.request_override.body_patch.insert(
+            "functions".to_owned(),
+            serde_json::json!([{"name": "f", "description": "d", "input_schema": {"type": "object"}}]),
+        );
+
+        registry
+            .complete(
+                &ModelRef::new("tool-mode-test", "test-model"),
+                request,
+            )
+            .await
+            .expect("provider protocol should complete normally");
+
+        let recorded = provider
+            .requests
+            .lock()
+            .expect("requests lock")
+            .pop()
+            .expect("provider should receive a request");
+        assert_eq!(recorded.tool_api_functions.len(), 5);
+        assert!(recorded.provider_native_tools.is_empty());
+        assert!(!recorded.request_override.body_patch.contains_key("functions"));
+        assert_eq!(
+            recorded.previous_response_id.as_deref(),
+            Some("provider-response")
+        );
+        assert_eq!(recorded.system.as_deref(), Some("base system"));
     }
 
     fn all_tool_api_definitions() -> Vec<agena_provider::ToolApiDefinition> {

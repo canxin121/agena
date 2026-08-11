@@ -71,7 +71,7 @@ pub async fn dispatch_query(
         Query::Runtime => Ok(QueryResult::Runtime(state.runtime_status_response().await)),
         Query::ListActivities(params) => {
             let service = state.runtime_activities()?;
-            let filter = activity_filter_from_params(&params);
+            let filter = agena_application::service::activity_filter_from_params(&params);
             let activities = service.list_activities(&filter);
             Ok(QueryResult::Activities(
                 activities
@@ -208,37 +208,11 @@ pub async fn dispatch_query(
 use super::{
     ActivityLogsParams, Application, ApplicationError, CursorPaginationQuery, GetActivityParams,
     GetOperationDetailParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
-    ListActivitiesParams, ListPermissionRulesParams, ListProviderAdapterModelsParams,
-    ListProviderModelsParams, ListSavedProviderAdapterModelsParams, ListSessionsParams,
+    ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
+    ListSavedProviderAdapterModelsParams, ListSessionsParams,
     ListWorkspacesParams, OperationDetailResource, Query, QueryResult, SearchPaginationQuery,
     SessionListQuery, WorkspaceListQuery, http_optional_result, http_page_result,
 };
-
-fn activity_filter_from_params(
-    params: &ListActivitiesParams,
-) -> agena_domain::BackgroundActivityFilter {
-    use agena_domain::{BackgroundActivityKind, BackgroundActivityStatus};
-    let parse_kinds = |value: &Option<String>| -> Vec<BackgroundActivityKind> {
-        value.as_deref().map_or_else(Vec::new, |csv| {
-            csv.split(',')
-                .filter_map(|raw| raw.trim().parse::<BackgroundActivityKind>().ok())
-                .collect()
-        })
-    };
-    let parse_statuses = |value: &Option<String>| -> Vec<BackgroundActivityStatus> {
-        value.as_deref().map_or_else(Vec::new, |csv| {
-            csv.split(',')
-                .filter_map(|raw| raw.trim().parse::<BackgroundActivityStatus>().ok())
-                .collect()
-        })
-    };
-    agena_domain::BackgroundActivityFilter {
-        kinds: parse_kinds(&params.kinds),
-        statuses: parse_statuses(&params.statuses),
-        session_id: params.session_id,
-        active_only: params.active_only,
-    }
-}
 
 fn activity_control_error(error: agena_runtime::ActivityControlError) -> ApplicationError {
     ApplicationError::bad_request_with_diagnostic(

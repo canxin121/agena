@@ -222,10 +222,9 @@ impl App {
                     })
                     .collect(),
             ),
-            ProviderStudioField::Profile => Some(provider_studio_profile_choice_items(
-                &self.i18n,
-                &self.application,
-            )),
+            ProviderStudioField::Profile => {
+                Some(provider_studio_profile_choice_items(&self.i18n))
+            }
             ProviderStudioField::ApiKeySource => Some(vec![
                 choice_item(
                     "inline",

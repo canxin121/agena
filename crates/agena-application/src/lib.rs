@@ -18,10 +18,16 @@
 //!   chat history is per-session ordered parts, never a global event log.
 
 mod application;
+mod application_config;
+mod application_models;
+mod application_plugins;
+mod application_provider_studio;
+mod application_sessions;
 pub mod dto;
 mod error;
 pub mod pagination;
 pub mod provider_queries;
+pub mod provider_studio;
 pub mod service;
 pub mod session;
 

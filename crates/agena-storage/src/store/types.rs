@@ -185,6 +185,27 @@ impl Part {
     }
 }
 
+/// A minimal projection of [`Part`] for presentation layers that only need
+/// the timeline fields.
+///
+/// `role` and `state` remain typed so presentation code maps them to strings
+/// (`as_str().to_owned()`) at the boundary instead of the store doing so.
+#[derive(Debug, Clone)]
+pub struct SessionPartView {
+    pub part_id: i64,
+    pub kind: String,
+    pub role: PartRole,
+    pub state: PartState,
+    pub summary: Option<String>,
+    pub content: Value,
+    pub rendered_markdown: Option<String>,
+    pub parent_part_id: Option<i64>,
+    pub run_id: Option<i64>,
+    pub revision: i64,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
 /// A part to create. The engine allocates the id, timestamps, revision, and
 /// membership edge.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

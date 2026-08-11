@@ -8,6 +8,7 @@ description = "Agena product use cases and application-facing runtime handle"
 
 [dependencies]
 agena-runtime = { workspace = true }
+anyhow = { workspace = true }
 agena-runtime-contracts = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }

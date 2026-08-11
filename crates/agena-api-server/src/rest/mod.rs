@@ -5,9 +5,7 @@
 use std::{convert::Infallible, future::Future};
 
 use agena_api::{
-    queries::{
-        ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams, Query, QueryResult,
-    },
+    queries::{ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams},
     resource::{
         PermissionReply, ProviderAdapterModelsRequest, SavedProviderAdapterModelsRequest,
         UserInputReply,
@@ -51,7 +49,6 @@ use serde::Deserialize;
 
 use crate::{error::ServerError, state::AppState};
 use agena_application::ApplicationError;
-use agena_application::dispatch;
 
 pub(crate) fn server_error_from_application(error: ApplicationError) -> ServerError {
     ServerError::from(error)
@@ -166,19 +163,6 @@ async fn json_http_found<T>(
             ServerError::not_found_with_diagnostic("The resource was not found.", not_found())
         })?;
     Ok(Json(value))
-}
-
-async fn query_json<T>(
-    state: &AppState,
-    query: Query,
-    select: impl FnOnce(QueryResult) -> Option<T>,
-    unexpected: &'static str,
-) -> Result<Json<T>, ServerError> {
-    let result = dispatch::dispatch_query(state, query).await?;
-    match select(result) {
-        Some(value) => Ok(Json(value)),
-        None => unreachable!("{unexpected}"),
-    }
 }
 
 fn items_json<T>(items: Vec<T>) -> Json<ItemsResponse<T>> {
@@ -372,16 +356,9 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
 pub async fn get_runtime_status(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    query_json(
-        &state,
-        Query::Runtime,
-        |result| match result {
-            QueryResult::Runtime(runtime) => Some(runtime),
-            _ => None,
-        },
-        "runtime query returned unexpected result",
-    )
-    .await
+    Ok(Json(
+        state.application().runtime_status_response().await,
+    ))
 }
 
 pub async fn get_usage_stats(

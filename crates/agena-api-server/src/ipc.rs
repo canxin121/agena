@@ -28,12 +28,12 @@ mod unix {
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{Mutex, mpsc};
 
+    use crate::dispatch;
     use crate::{
         error::ServerError,
         live::{self, LiveItem},
         state::AppState,
     };
-    use crate::dispatch;
 
     /// Bind a Unix socket at `path` and serve the WS-equivalent protocol
     /// until the future is dropped.

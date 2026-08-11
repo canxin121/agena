@@ -513,7 +513,9 @@ impl Backend {
             .cancel_execution(session_id, execution_id)
             .await
             .map_err(|error| {
-                anyhow::Error::new(agena_application::ApplicationError::from_failure(error.failure))
+                anyhow::Error::new(agena_application::ApplicationError::from_failure(
+                    error.failure,
+                ))
             })
             .context("failed to cancel active run")
     }
@@ -570,9 +572,7 @@ impl Backend {
                 reason: None,
                 scope: scope.map(|scope| match scope {
                     PermissionScope::Session => agena_api::resource::PermissionScope::Session,
-                    PermissionScope::Workspace => {
-                        agena_api::resource::PermissionScope::Workspace
-                    }
+                    PermissionScope::Workspace => agena_api::resource::PermissionScope::Workspace,
                     PermissionScope::Global => agena_api::resource::PermissionScope::Global,
                 }),
             },
@@ -855,6 +855,6 @@ use crate::{
     ActivityId, Backend, HashSet, ListSessionsParams, LiveEvent, OperationDetailResource, Path,
     PathBuf, PermissionReply, PermissionReplyKind, PermissionScope, RunOptions,
     SessionExecutionResource, SessionPermissionStudioState, SessionRefresh, SessionResource,
-    SessionTimelineEntry, UserInputReply, build_file_index, direct_path_candidate, file_search_score,
-    mpsc,
+    SessionTimelineEntry, UserInputReply, build_file_index, direct_path_candidate,
+    file_search_score, mpsc,
 };

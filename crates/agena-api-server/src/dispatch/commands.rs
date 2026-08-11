@@ -1,11 +1,11 @@
+use crate::dispatch::{ApplicationResultExt, IntoWire};
+use agena_application::ApplicationSessionServices;
 use agena_application::dto::{SessionCreateRequest, SessionHierarchyRequest, SessionUpdateRequest};
 use agena_application::session::{
     resolve_session_run_options, session_execution_request, session_execution_resource,
     session_permission_reply_request, session_resource_from_summary,
     session_user_input_reply_request, session_user_run_request,
 };
-use agena_application::ApplicationSessionServices;
-use crate::dispatch::{ApplicationResultExt, IntoWire};
 
 // ─── Command dispatch ───────────────────────────────────────────────────
 

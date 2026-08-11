@@ -124,14 +124,8 @@ async fn main() -> anyhow::Result<()> {
                             .filter(|part| part.kind == "tool_result")
                             .count();
                         format!(
-                            "run{}:{}:{} t={} h={} c={} r={}",
-                            run.id,
-                            format!("{:?}", run.role),
-                            format!("{:?}", run.state),
-                            think_units,
-                            text_len,
-                            tool_calls,
-                            results
+                            "run{}:{:?}:{:?} t={} h={} c={} r={}",
+                            run.id, run.role, run.state, think_units, text_len, tool_calls, results
                         )
                     })
                     .collect::<Vec<_>>();

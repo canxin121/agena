@@ -377,7 +377,7 @@ use crate::{
     Application, Arc, Backend, ConfigJsonSources, ConfigSettingsEditResponse, JsonValue,
     ListSessionsParams, OnceLock, PaginatedResponse, PathBuf, ProviderAdapterSummaryResource,
     ProviderDefaultsResource, ProviderSummaryResource, SessionResource, env, fs,
-    normalize_plugin_record_for_config_edit, parse_aws_profile_names,
-    plugin_config_setting_target, plugin_record_for_config_edit, quoted_settings_segment,
-    remove_nested_json_value, set_nested_json_value,
+    normalize_plugin_record_for_config_edit, parse_aws_profile_names, plugin_config_setting_target,
+    plugin_record_for_config_edit, quoted_settings_segment, remove_nested_json_value,
+    set_nested_json_value,
 };

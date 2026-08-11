@@ -44,9 +44,9 @@ pub async fn list_activities(
         .runtime_activities()
         .map_err(server_error_from_application)?;
     let params: ListActivitiesParams = query.into();
-    let activities = service.list_activities(&agena_application::service::activity_filter_from_params(
-        &params,
-    ));
+    let activities = service.list_activities(
+        &agena_application::service::activity_filter_from_params(&params),
+    );
     let resources: Vec<BackgroundActivityResource> = activities
         .iter()
         .map(BackgroundActivityResource::from)

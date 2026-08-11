@@ -107,8 +107,11 @@ pub async fn dispatch_query(
         )),
         Query::ListProviderModels(ListProviderModelsParams { provider_id }) => {
             Ok(QueryResult::ProviderModels(
-                agena_application::provider_queries::list_provider_models_response(state, provider_id)
-                    .await?,
+                agena_application::provider_queries::list_provider_models_response(
+                    state,
+                    provider_id,
+                )
+                .await?,
             ))
         }
         Query::ListProviderAdapterModels(ListProviderAdapterModelsParams {

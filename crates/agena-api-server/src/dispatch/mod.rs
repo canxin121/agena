@@ -4,15 +4,6 @@
 
 use std::future::Future;
 
-use agena_application::{
-    Application, ApplicationError,
-    dto::{
-        CursorPaginationQuery, ModelCatalogResponse as ApplicationModelCatalogResponse,
-        PermissionRuleWriteRequest, SearchPaginationQuery, SessionListQuery, WorkspaceListQuery,
-        WorkspacePathRequest, WorkspaceResolveRequest,
-    },
-    pagination::PaginatedResponse as ApplicationPaginatedResponse,
-};
 use agena_api::{
     commands::{
         CancelRunParams, Command, CommandResult, CompactSessionParams, ContinueRunParams,
@@ -33,6 +24,15 @@ use agena_api::{
         QueryResult,
     },
     resource::{ModelCatalogResponse, ModelCatalogSourceKind, OperationDetailResource},
+};
+use agena_application::{
+    Application, ApplicationError,
+    dto::{
+        CursorPaginationQuery, ModelCatalogResponse as ApplicationModelCatalogResponse,
+        PermissionRuleWriteRequest, SearchPaginationQuery, SessionListQuery, WorkspaceListQuery,
+        WorkspacePathRequest, WorkspaceResolveRequest,
+    },
+    pagination::PaginatedResponse as ApplicationPaginatedResponse,
 };
 
 const fn model_catalog_source_kind_from_domain(

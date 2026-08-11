@@ -22,12 +22,12 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, mpsc};
 
+use crate::dispatch;
 use crate::{
     error::ServerError,
     live::{self, LiveItem},
     state::AppState,
 };
-use crate::dispatch;
 
 pub async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| run(socket, state))

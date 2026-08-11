@@ -30,8 +30,8 @@ use agena_api::{
         WorkspaceResource,
     },
 };
-use agena_application::dto::{CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse};
 use agena_application::Application;
+use agena_application::dto::{CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse};
 use agena_domain::ActivityId;
 use agena_domain::Model as ProviderModel;
 use agena_domain::PermissionScope;

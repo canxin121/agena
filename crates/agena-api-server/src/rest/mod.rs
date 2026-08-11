@@ -356,9 +356,7 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
 pub async fn get_runtime_status(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
-        state.application().runtime_status_response().await,
-    ))
+    Ok(Json(state.application().runtime_status_response().await))
 }
 
 pub async fn get_usage_stats(

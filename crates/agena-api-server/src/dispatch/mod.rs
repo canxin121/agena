@@ -18,7 +18,7 @@ use agena_api::{
     pagination::{PageInfo, PaginatedResponse},
     queries::{
         ActivityLogsParams, GetActivityParams, GetOperationDetailParams, GetPermissionRuleParams,
-        GetSessionParams, GetWorkspaceParams, ListActivitiesParams, ListPermissionRulesParams,
+        GetSessionParams, GetWorkspaceParams, ListPermissionRulesParams,
         ListProviderAdapterModelsParams, ListProviderModelsParams,
         ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, Query,
         QueryResult,

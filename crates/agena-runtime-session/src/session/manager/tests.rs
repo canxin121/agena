@@ -33,12 +33,12 @@ use crate::session::store::{
     run_marker_content, text_content, typed_content_to_value,
 };
 use crate::{
-    RuntimeSessionManagerConfig,
+    ContextGovernor, RuntimeSessionManagerConfig,
     authorization::ExecutionPrincipal,
     part::{InteractiveRequestPart, RequestPart},
     permission::{PermissionPolicy, ToolPermissionPolicy},
     provider::ProviderRegistry,
-    session::{ContextGovernor, Session, SessionProcessor},
+    session::{Session, SessionProcessor},
     tool::ToolExecutor,
 };
 use agena_runtime_contracts::part_content::TypedContent;
@@ -72,18 +72,17 @@ async fn test_manager_with_database() -> (SessionManager, DatabaseConnection) {
         None,
         None,
     );
-    let processor = SessionProcessor::new(
-        Arc::new(ProviderRegistry::new()),
-        ContextGovernor::new(agena_domain::ContextPolicy::default()),
-        plugins,
-        workspace_root,
-    );
+    let provider_registry = Arc::new(ProviderRegistry::new());
+    let context_governor = ContextGovernor::new(agena_domain::ContextPolicy::default());
+    let processor = SessionProcessor::new(plugins, workspace_root);
     let database = Database::connect("sqlite::memory:")
         .await
         .expect("open v2 test database");
     initialize(&database).await;
     let manager = SessionManager::new(
         database.clone(),
+        provider_registry,
+        context_governor,
         processor,
         executor,
         RuntimeSessionManagerConfig::default(),
@@ -925,18 +924,17 @@ async fn manager_with_provider(provider: Arc<dyn ModelRuntime>) -> SessionManage
     );
     let mut registry = ProviderRegistry::new();
     registry.register_arc(provider);
-    let processor = SessionProcessor::new(
-        Arc::new(registry),
-        ContextGovernor::new(agena_domain::ContextPolicy::default()),
-        plugins,
-        workspace_root,
-    );
+    let provider_registry = Arc::new(registry);
+    let context_governor = ContextGovernor::new(agena_domain::ContextPolicy::default());
+    let processor = SessionProcessor::new(plugins, workspace_root);
     let database = Database::connect("sqlite::memory:")
         .await
         .expect("open v2 test database");
     initialize(&database).await;
     SessionManager::new(
         database,
+        provider_registry,
+        context_governor,
         processor,
         executor,
         RuntimeSessionManagerConfig::default(),
@@ -1321,18 +1319,17 @@ async fn manager_with_tool_search_fixture(provider: Arc<dyn ModelRuntime>) -> Se
     );
     let mut registry = ProviderRegistry::new();
     registry.register_arc(provider);
-    let processor = SessionProcessor::new(
-        Arc::new(registry),
-        ContextGovernor::new(agena_domain::ContextPolicy::default()),
-        plugins,
-        workspace_root,
-    );
+    let provider_registry = Arc::new(registry);
+    let context_governor = ContextGovernor::new(agena_domain::ContextPolicy::default());
+    let processor = SessionProcessor::new(plugins, workspace_root);
     let database = Database::connect("sqlite::memory:")
         .await
         .expect("open v2 test database");
     initialize(&database).await;
     SessionManager::new(
         database,
+        provider_registry,
+        context_governor,
         processor,
         executor,
         RuntimeSessionManagerConfig::default(),
@@ -1408,10 +1405,10 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
         cancel: None,
     };
 
-    let result = manager
-        .execution_state()
+    let state = manager.execution_state();
+    let result = state
         .processor
-        .run_turn(run)
+        .run_turn(run, &state.provider_registry)
         .await
         .expect("stream one assistant turn through the parts-native processor");
 

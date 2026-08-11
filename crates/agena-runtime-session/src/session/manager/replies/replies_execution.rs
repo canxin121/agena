@@ -191,6 +191,30 @@ impl From<ToolError> for PendingToolPreparationError {
     }
 }
 
+/// Outcome of the shared preflight chain for one pending tool.
+struct PreparedToolPreflight {
+    resolved: ResolvedPendingTool,
+    /// Shell-prepared invocation used for the concurrency-safety check and
+    /// invocation-changed detection.
+    prepared_invocation: agena_domain::ToolInvocation,
+    permission_checks: Vec<ToolPermissionCheck>,
+    session_changed: bool,
+}
+
+/// Error split so callers keep their own preflight semantics: batch defers
+/// non-cancelled tool errors to the sequential path, while the sequential
+/// path wraps them in `PendingToolPreparationError`.
+enum PendingToolPreflightError {
+    Session(AppError),
+    Tool(ToolError),
+}
+
+impl From<ToolError> for PendingToolPreflightError {
+    fn from(error: ToolError) -> Self {
+        Self::Tool(error)
+    }
+}
+
 impl SessionManager {
     /// Build a per-operation sink for process lifecycle/output events. Shell
     /// execution is synchronous and may run on a blocking worker, so delivery
@@ -1047,7 +1071,7 @@ impl SessionManager {
             model_id = %options.model.model_id,
         );
         {
-            let provider_registry = state.processor.provider_registry();
+            let provider_registry = &state.provider_registry;
             let native_compaction_enabled =
                 provider_registry.native_compaction_enabled(&options.model)?;
             let scoped_executor = state
@@ -1069,9 +1093,11 @@ impl SessionManager {
                 tool_api_functions.as_slice(),
                 state.as_ref(),
             );
-            let provider_request_shape = state.processor.prompt_cache_shape(&options.model)?;
-            let continuation_supported =
-                state.processor.supports_prompt_continuation(&options.model);
+            let provider_request_shape = state.provider_registry.prompt_cache_shape(&options.model)?;
+            let continuation_supported = state
+                .provider_registry
+                .supports_prompt_continuation(&options.model)
+                .unwrap_or(false);
             let prompt_request_options = PromptRequestOptions {
                 provider_id: options.model.provider_id.as_ref(),
                 adapter_id: options.model.adapter_id.as_ref().map(AsRef::as_ref),
@@ -1095,9 +1121,10 @@ impl SessionManager {
             )
             .is_some_and(|estimate| estimate.total_tokens > prompt_budget.max_prompt_tokens);
             if prompt_exceeds_runtime_budget
-                || state
-                    .processor
-                    .prompt_exceeds_budget(active_window_parts, prompt_budget.max_prompt_chars)
+                || state.context_governor.prompt_exceeds_budget(
+                    prompt_window::approximate_prompt_payload_chars(active_window_parts),
+                    prompt_budget.max_prompt_chars,
+                )
             {
                 tracing::warn!(
                     session_id = session.id,
@@ -1190,7 +1217,7 @@ impl SessionManager {
                 .map_err(execution_control_to_app_error)?;
             let run_outcome = state
                 .processor
-                .run_turn(run)
+                .run_turn(run, &state.provider_registry)
                 .instrument(run_span.clone())
                 .await;
             match run_outcome {
@@ -1221,7 +1248,7 @@ impl SessionManager {
                         prompt_window::prompt_transcript_digest(transcript_parts.as_slice())
                     };
                     let anchored_provider_request_shape = match state
-                        .processor
+                        .provider_registry
                         .prompt_cache_shape(&options.model)
                     {
                         Ok(shape) => shape,
@@ -1423,9 +1450,9 @@ impl SessionManager {
         tool_api_functions: &[crate::tool::ToolApiBinding],
         state: &SessionManagerState,
     ) -> PromptTurnBudget {
-        let fallback_budget = state.processor.max_prompt_chars();
+        let fallback_budget = state.context_governor.max_prompt_chars();
         let metadata = state
-            .processor
+            .provider_registry
             .model_metadata(&options.model)
             .unwrap_or_default();
         let context_window_tokens = metadata.limits.context_window_tokens;
@@ -1592,24 +1619,24 @@ impl SessionManager {
         Ok(session)
     }
 
-    async fn prepare_pending_tool_batch_member(
+    /// Shared single-tool preflight: validate the advertised identity, prepare
+    /// the invocation and shell command, collect permission checks, and
+    /// rewrite the persisted operation preview when the invocation changed.
+    /// Callers keep their own error semantics (batch defers non-cancelled tool
+    /// failures to the sequential path; the sequential path routes them
+    /// through `PendingToolPreparationError`).
+    async fn prepare_pending_tool_preflight(
         &self,
         session: &mut Session,
-        pending_tool: &SessionPendingTool,
-        state: &SessionManagerState,
-        batch_executor: &ToolExecutor,
-    ) -> Result<PendingToolBatchMember, AppError> {
-        self.refresh_execution_policy(session, state);
-        let before_prepare = session.clone();
-        let mut resolved = resolve_pending_tool(session, pending_tool)?;
-        let cancellation = self.execution_registry.cancellation_token(session.id).await;
+        mut resolved: ResolvedPendingTool,
+        scoped_executor: &ToolExecutor,
+    ) -> Result<PreparedToolPreflight, PendingToolPreflightError> {
         let invocation = resolved.invocation.clone();
         let original_invocation = invocation.clone();
         let advertised_identity = resolved.advertised_tool_identity.clone();
         let call_id = resolved.call_id;
         let session_id = session.id;
-        let scoped_executor = batch_executor.clone().with_cancellation_token(cancellation);
-        let prepared: Result<_, ToolError> = async {
+        let (prepared, prepared_invocation, prepared_shell_command, permission_checks) = {
             scoped_executor
                 .validate_advertised_tool_identity(&invocation, advertised_identity.as_deref())?;
             let prepared = scoped_executor
@@ -1624,39 +1651,7 @@ impl SessionManager {
                     Some(session_id),
                 )
                 .await?;
-            let concurrency_safe =
-                scoped_executor.is_concurrency_safe_invocation(&prepared_invocation);
-            Ok::<_, ToolError>((
-                prepared,
-                prepared_invocation,
-                prepared_shell_command,
-                permission_checks,
-                concurrency_safe,
-            ))
-        }
-        .await;
-        let (
-            prepared,
-            prepared_invocation,
-            prepared_shell_command,
-            permission_checks,
-            concurrency_safe,
-        ) = match prepared {
-            Ok(prepared) => prepared,
-            Err(err) => {
-                if matches!(&err, ToolError::Cancelled) {
-                    return Err(AppError::Cancelled);
-                }
-                tracing::debug!(
-                    target: "agena::session::tools",
-                    session_id,
-                    call_id,
-                    error = %err,
-                    "deferring tool preflight error to sequential failure handling"
-                );
-                *session = before_prepare;
-                return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
-            }
+            (prepared, prepared_invocation, prepared_shell_command, permission_checks)
         };
         let invocation_changed = prepared_invocation != original_invocation;
         resolved.prepared_shell_command = prepared_shell_command;
@@ -1665,6 +1660,7 @@ impl SessionManager {
         // pre-rewrite form once — the shell-rewritten value would otherwise be
         // overwritten inside the block below.
         resolved.invocation = prepared.invocation.clone();
+        let mut session_changed = false;
         if invocation_changed || prepared.title_override.is_some() {
             let authorization = operation_authorization(session, &resolved);
             let current_title = match session
@@ -1678,10 +1674,10 @@ impl SessionManager {
             };
 
             let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
-                AppError::Internal(format!(
+                PendingToolPreflightError::Session(AppError::Internal(format!(
                     "pending tool part not found: part={}",
                     resolved.pending.part.part_id
-                ))
+                )))
             })?;
             tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
                 tool_call_from_operation(&pending_operation_for_resolved(
@@ -1693,7 +1689,57 @@ impl SessionManager {
                 )),
             ))
             .expect("operation content is always JSON serializable");
+            session_changed = true;
         }
+        Ok(PreparedToolPreflight {
+            resolved,
+            prepared_invocation,
+            permission_checks,
+            session_changed,
+        })
+    }
+
+    async fn prepare_pending_tool_batch_member(
+        &self,
+        session: &mut Session,
+        pending_tool: &SessionPendingTool,
+        state: &SessionManagerState,
+        batch_executor: &ToolExecutor,
+    ) -> Result<PendingToolBatchMember, AppError> {
+        self.refresh_execution_policy(session, state);
+        let before_prepare = session.clone();
+        let resolved = resolve_pending_tool(session, pending_tool)?;
+        let cancellation = self.execution_registry.cancellation_token(session.id).await;
+        let session_id = session.id;
+        let call_id = resolved.call_id;
+        let scoped_executor = batch_executor.clone().with_cancellation_token(cancellation);
+        let PreparedToolPreflight {
+            resolved,
+            prepared_invocation,
+            permission_checks,
+            session_changed: _,
+        } = match self
+            .prepare_pending_tool_preflight(session, resolved, &scoped_executor)
+            .await
+        {
+            Ok(prepared) => prepared,
+            Err(PendingToolPreflightError::Tool(ToolError::Cancelled)) => {
+                return Err(AppError::Cancelled);
+            }
+            Err(PendingToolPreflightError::Tool(err)) => {
+                tracing::debug!(
+                    target: "agena::session::tools",
+                    session_id,
+                    call_id,
+                    error = %err,
+                    "deferring tool preflight error to sequential failure handling"
+                );
+                *session = before_prepare;
+                return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
+            }
+            Err(PendingToolPreflightError::Session(error)) => return Err(error),
+        };
+        let concurrency_safe = scoped_executor.is_concurrency_safe_invocation(&prepared_invocation);
 
         let approved_actions = operation_permission_approved_actions(
             session,
@@ -1810,76 +1856,24 @@ impl SessionManager {
         resolved.session_runtime = session.runtime.clone();
         let execution_context = session.runtime.execution.clone();
         let executor = state.tool_executor.clone();
-        let invocation = resolved.invocation.clone();
-        let advertised_identity = resolved.advertised_tool_identity.clone();
-        let session_id = session.id;
-        let call_id = resolved.call_id;
-        let original_invocation = invocation.clone();
         let scoped_executor = executor
             .for_session_context_async(&execution_context)
             .await
             .with_cancellation_token(cancellation);
-        let (prepared, prepared_invocation, prepared_shell_command, permission_checks) = async {
-            scoped_executor
-                .validate_advertised_tool_identity(&invocation, advertised_identity.as_deref())?;
-            let prepared = scoped_executor
-                .prepare_invocation(&invocation, session_id, call_id)
-                .await?;
-            let (prepared_invocation, prepared_shell_command) = scoped_executor
-                .prepare_shell_invocation(&prepared.invocation, session_id, call_id)
-                .await?;
-            let permission_checks = scoped_executor
-                .collect_permission_checks_for_invocation_in_session(
-                    &prepared_invocation,
-                    Some(session_id),
-                )
-                .await?;
-            Ok::<_, ToolError>((
-                prepared,
-                prepared_invocation,
-                prepared_shell_command,
-                permission_checks,
-            ))
-        }
-        .await
-        .map_err(PendingToolPreparationError::Tool)?;
-        let invocation_changed = prepared_invocation != original_invocation;
-        resolved.prepared_shell_command = prepared_shell_command;
-        // See the batch path: execution runs against `prepared_shell_command`;
-        // the persisted operation preview uses the pre-rewrite invocation.
-        resolved.invocation = prepared.invocation.clone();
-
-        let mut session_changed = false;
-        if invocation_changed || prepared.title_override.is_some() {
-            let authorization = operation_authorization(session, &resolved);
-            let current_title = match session
-                .part(&resolved.pending.part)
-                .and_then(|part| typed_content_from_value(&part.kind, &part.content).ok())
-            {
-                Some(TypedContent::ToolCall(tool_call)) => {
-                    operation_from_tool_call(&tool_call).title.clone()
+        let PreparedToolPreflight {
+            resolved,
+            prepared_invocation: _,
+            permission_checks,
+            session_changed,
+        } = self
+            .prepare_pending_tool_preflight(session, resolved, &scoped_executor)
+            .await
+            .map_err(|error| match error {
+                PendingToolPreflightError::Session(error) => {
+                    PendingToolPreparationError::Session(error)
                 }
-                _ => format!("Tool {}", tool_name(&resolved.invocation)),
-            };
-
-            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
-                PendingToolPreparationError::Session(AppError::Internal(format!(
-                    "pending tool part not found: part={}",
-                    resolved.pending.part.part_id
-                )))
+                PendingToolPreflightError::Tool(error) => PendingToolPreparationError::Tool(error),
             })?;
-            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
-                tool_call_from_operation(&pending_operation_for_resolved(
-                    &resolved,
-                    prepared.invocation,
-                    prepared.title_override.unwrap_or(current_title),
-                    resolved.lifecycle.clone(),
-                    authorization,
-                )),
-            ))
-            .expect("operation content is always JSON serializable");
-            session_changed = true;
-        }
 
         Ok(PreparedPendingToolExecution {
             resolved,
@@ -1889,26 +1883,16 @@ impl SessionManager {
         })
     }
 
-    async fn apply_pending_tool_start_error(
+    /// Route a terminal tool error to its canonical handler. Every execution
+    /// path (sequential, parallel, and streaming) must converge here so an
+    /// error can never leave the original operation pending.
+    async fn route_tool_error(
         &self,
-        mut session: Session,
+        session: Session,
         pending: &SessionPendingTool,
         error: ToolError,
         state: Arc<SessionManagerState>,
-        reload_specialized_state: bool,
     ) -> Result<Session, AppError> {
-        if reload_specialized_state
-            && matches!(
-                &error,
-                ToolError::PolicyDenied(_)
-                    | ToolError::UserDeclined(_)
-                    | ToolError::CapabilityUnavailable(_)
-                    | ToolError::ToolUnavailable(_)
-            )
-        {
-            session = self.store.load_session(session.id).await?;
-        }
-
         match error {
             ToolError::Cancelled => {
                 Box::pin(self.apply_tool_cancellation(session, pending, state)).await
@@ -1940,6 +1924,29 @@ impl SessionManager {
             }
             error => Box::pin(self.apply_tool_error(session, pending, error, None, state)).await,
         }
+    }
+
+    async fn apply_pending_tool_start_error(
+        &self,
+        mut session: Session,
+        pending: &SessionPendingTool,
+        error: ToolError,
+        state: Arc<SessionManagerState>,
+        reload_specialized_state: bool,
+    ) -> Result<Session, AppError> {
+        if reload_specialized_state
+            && matches!(
+                &error,
+                ToolError::PolicyDenied(_)
+                    | ToolError::UserDeclined(_)
+                    | ToolError::CapabilityUnavailable(_)
+                    | ToolError::ToolUnavailable(_)
+            )
+        {
+            session = self.store.load_session(session.id).await?;
+        }
+
+        self.route_tool_error(session, pending, error, state).await
     }
 
     pub(in crate::session::manager) async fn resolve_pending_tool(
@@ -2141,38 +2148,7 @@ impl SessionManager {
             Err(ToolError::UserInputRequired(input)) => {
                 Box::pin(self.apply_user_input_request(session, pending_tool, *input, state)).await
             }
-            Err(ToolError::Cancelled) => {
-                Box::pin(self.apply_tool_cancellation(session, pending_tool, state)).await
-            }
-            Err(ToolError::PolicyDenied(denial)) => {
-                Box::pin(self.apply_tool_policy_denied(session, pending_tool, *denial, state)).await
-            }
-            Err(ToolError::UserDeclined(decline)) => {
-                Box::pin(self.apply_tool_user_declined(
-                    session,
-                    pending_tool,
-                    *decline,
-                    Vec::new(),
-                    state,
-                ))
-                .await
-            }
-            Err(ToolError::CapabilityUnavailable(unavailable)) => {
-                Box::pin(self.apply_tool_capability_unavailable(
-                    session,
-                    pending_tool,
-                    *unavailable,
-                    state,
-                ))
-                .await
-            }
-            Err(ToolError::ToolUnavailable(unavailable)) => {
-                Box::pin(self.apply_tool_unavailable(session, pending_tool, *unavailable, state))
-                    .await
-            }
-            Err(error) => {
-                Box::pin(self.apply_tool_error(session, pending_tool, error, None, state)).await
-            }
+            Err(error) => self.route_tool_error(session, pending_tool, error, state).await,
         }
     }
 
@@ -2444,44 +2420,8 @@ impl SessionManager {
     #[allow(clippy::too_many_arguments)]
     pub(in crate::session::manager) async fn apply_permission_request(
         &self,
-        session: Session,
-        pending_tool: &SessionPendingTool,
-        action: PermissionAction,
-        related_actions: Vec<PermissionAction>,
-        requested_actions: Vec<PermissionAction>,
-        reason: String,
-        explanation: String,
-        source: Option<String>,
-        scope: Option<PermissionScope>,
-        operator: Option<String>,
-        trace: Vec<DecisionTraceStep>,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        let request_id = resolve_pending_tool(&session, pending_tool)?.operation_id;
-        self.apply_permission_request_with_id(
-            session,
-            pending_tool,
-            request_id,
-            action,
-            related_actions,
-            requested_actions,
-            reason,
-            explanation,
-            source,
-            scope,
-            operator,
-            trace,
-            state,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(in crate::session::manager) async fn apply_permission_request_with_id(
-        &self,
         mut session: Session,
         pending_tool: &SessionPendingTool,
-        request_id: String,
         action: PermissionAction,
         related_actions: Vec<PermissionAction>,
         requested_actions: Vec<PermissionAction>,
@@ -2494,6 +2434,7 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
+        let request_id = resolved.operation_id.clone();
         let existing_permission_replied = session
             .part(&resolved.pending.part)
             .and_then(|part| typed_content_from_value(&part.kind, &part.content).ok())
@@ -3075,7 +3016,7 @@ impl SessionManager {
         &self,
         mut session: Session,
         pending_tool: &SessionPendingTool,
-        execution: ToolInvocationExecution,
+        mut execution: ToolInvocationExecution,
         persisted_rules: Vec<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
@@ -3104,8 +3045,8 @@ impl SessionManager {
                 tool_output = restored;
             }
         }
-        let mut summary = execution.summary();
-        let attributed_usage = summary
+        let attributed_usage = execution
+            .view
             .metadata
             .remove(agena_provider::PROVIDER_TOOL_USAGE_METADATA_KEY)
             .map(|value| {
@@ -3118,8 +3059,8 @@ impl SessionManager {
                 )
             })
             .transpose()?;
-        let output_text = summary.output_text.clone();
-        let presentation_summary = summary.summary.clone();
+        let output_text = execution.view.output_text.clone();
+        let presentation_summary = execution.view.summary.clone();
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
         let blocks = operation_blocks_from_tool_output(
             &resolved.invocation,
@@ -3128,7 +3069,7 @@ impl SessionManager {
             output_text.as_str(),
         );
         let completion_title = {
-            let execution_title = summary.title.trim();
+            let execution_title = execution.view.title.trim();
             if !execution_title.is_empty() && !is_authorization_phase_title(execution_title) {
                 agena_tool::compose_tool_title(resolved.invocation.name.as_str(), execution_title)
             } else {
@@ -3152,9 +3093,10 @@ impl SessionManager {
                 lifecycle.clone(),
             );
             operation.authorization = authorization.clone();
-            operation.set_presentation_sections(summary.sections.clone());
+            operation.set_presentation_sections(execution.view.sections.clone());
             operation.result.metadata.extend(
-                summary
+                execution
+                    .view
                     .metadata
                     .iter()
                     .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone()))),

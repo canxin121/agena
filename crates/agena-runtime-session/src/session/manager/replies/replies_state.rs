@@ -145,7 +145,7 @@ impl SessionManager {
         );
         if options.temperature.is_none() {
             let execution = self.execution_state();
-            let provider_registry = execution.processor.provider_registry();
+            let provider_registry = &execution.provider_registry;
             if let Ok(metadata) = provider_registry.model_metadata(&options.model) {
                 options.temperature = metadata.parsed_default_temperature();
             }
@@ -202,7 +202,7 @@ impl SessionManager {
         options: &mut SessionRunOptions,
     ) -> Result<(), AppError> {
         let execution = self.execution_state();
-        let provider_registry = execution.processor.provider_registry();
+        let provider_registry = &execution.provider_registry;
         let resolved_adapter_id = options.model.adapter_id.clone().or_else(|| {
             provider_registry
                 .get(options.model.provider_id.as_ref())
@@ -329,8 +329,7 @@ impl SessionManager {
         state: &SessionManagerState,
     ) -> Result<Option<ModelRef>, AppError> {
         Ok(state
-            .processor
-            .provider_registry()
+            .provider_registry
             .resolve_default_model_selection(&state.config.default_selection)?)
     }
 
@@ -477,7 +476,7 @@ impl SessionManager {
             })?,
         };
         let model = self.resolve_model_selection_override(
-            state.processor.provider_registry(),
+            &state.provider_registry,
             &parent_model,
             requested_selection,
         )?;

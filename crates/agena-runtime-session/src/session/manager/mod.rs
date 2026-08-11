@@ -11,7 +11,9 @@ use chrono::Utc;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use crate::AppError;
+use crate::context_governor::ContextGovernor;
 use crate::part::{AttachmentItem, AttachmentKind, AttachmentSource, OperationPart};
+use crate::provider::ProviderRegistry;
 use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
 use agena_domain::ExecutionStatus;
 use agena_domain::ToolInvocation;
@@ -51,7 +53,7 @@ fn completion_request(
     previous_response_id: Option<String>,
     prompt_window_generation: Option<u64>,
 ) -> agena_provider::CompletionRequest {
-    agena_runtime::build_completion_request(agena_runtime::CompletionRequestInputs {
+    agena_provider::CompletionRequest {
         model: options.model.model_id.clone(),
         system,
         turns,
@@ -59,15 +61,24 @@ fn completion_request(
             .into_iter()
             .map(|binding| binding.definition())
             .collect(),
+        provider_native_tools: Default::default(),
+        disable_tools: false,
         temperature: options.temperature,
         max_output_tokens: options.max_output_tokens,
         prompt_cache_key,
         previous_response_id,
         prompt_window_generation,
+        provider_compaction: None,
+        stop_sequences: Vec::new(),
+        top_p: None,
+        top_k: None,
+        seed: None,
         thinking: options.thinking.clone(),
         verbosity: options.verbosity.clone(),
+        response_format: None,
+        responses_api_metadata: None,
         request_override: options.request_override.clone(),
-    })
+    }
 }
 
 pub(super) use agena_runtime::merge_system_prompts;
@@ -216,6 +227,8 @@ impl Drop for HostUserInputSequenceGuard {
 
 #[derive(Clone)]
 struct SessionManagerState {
+    provider_registry: Arc<ProviderRegistry>,
+    context_governor: ContextGovernor,
     processor: SessionProcessor,
     tool_executor: ToolExecutor,
     config: RuntimeSessionManagerConfig,
@@ -359,12 +372,16 @@ use self::helpers::*;
 
 impl SessionManagerState {
     fn new(
+        provider_registry: Arc<ProviderRegistry>,
+        context_governor: ContextGovernor,
         processor: SessionProcessor,
         tool_executor: ToolExecutor,
         config: RuntimeSessionManagerConfig,
     ) -> Self {
         let shared_permission = Arc::new(StdRwLock::new(config.permission.clone()));
         Self::new_with_permission_stores(
+            provider_registry,
+            context_governor,
             processor,
             tool_executor,
             config,
@@ -377,6 +394,8 @@ impl SessionManagerState {
     }
 
     fn new_with_permission_stores(
+        provider_registry: Arc<ProviderRegistry>,
+        context_governor: ContextGovernor,
         processor: SessionProcessor,
         tool_executor: ToolExecutor,
         config: RuntimeSessionManagerConfig,
@@ -390,6 +409,8 @@ impl SessionManagerState {
     ) -> Self {
         let tool_execution_semaphore = Arc::new(Semaphore::new(config.max_concurrent_tools));
         Self {
+            provider_registry,
+            context_governor,
             processor,
             tool_executor,
             config,
@@ -564,9 +585,21 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
             parts,
             idempotency_key,
         };
-        let outcome = SessionManager::start_user_message_parts(self, request)
-            .await
-            .map_err(session_execution_command_error)?;
+        let session_id = request.run.session_id;
+        let outcome = SessionManager::start_registered(
+            self,
+            session_id,
+            ExecutionSource::User,
+            ExecutionConversationTarget::NewTurn,
+            "user execution",
+            move |manager, control, steer_rx| async move {
+                manager
+                    .submit_user_run_inner(request, control, steer_rx, None)
+                    .await
+            },
+        )
+        .await
+        .map_err(session_execution_command_error)?;
         Ok(outcome)
     }
 
@@ -1172,6 +1205,8 @@ impl SessionManager {
 
     pub fn new(
         db: sea_orm::DatabaseConnection,
+        provider_registry: Arc<ProviderRegistry>,
+        context_governor: ContextGovernor,
         processor: SessionProcessor,
         tool_executor: ToolExecutor,
         config: RuntimeSessionManagerConfig,
@@ -1210,7 +1245,13 @@ impl SessionManager {
         let workspace_repository: Arc<dyn agena_storage::WorkspaceRepository> = Arc::new(
             agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::clone(&db_arc)),
         );
-        let state = SessionManagerState::new(processor, tool_executor, config);
+        let state = SessionManagerState::new(
+            provider_registry,
+            context_governor,
+            processor,
+            tool_executor,
+            config,
+        );
         Self {
             store,
             permission_rules: permission_rule_repository,
@@ -1603,6 +1644,8 @@ impl SessionManager {
 
     pub fn reconfigure(
         &self,
+        provider_registry: Arc<ProviderRegistry>,
+        context_governor: ContextGovernor,
         processor: SessionProcessor,
         tool_executor: ToolExecutor,
         config: RuntimeSessionManagerConfig,
@@ -1613,6 +1656,8 @@ impl SessionManager {
         }
         self.execution
             .store(Arc::new(SessionManagerState::new_with_permission_stores(
+                provider_registry,
+                context_governor,
                 processor,
                 tool_executor,
                 config,

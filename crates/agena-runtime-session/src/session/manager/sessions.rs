@@ -297,7 +297,7 @@ impl SessionManager {
             )));
         }
         let state = self.execution_state();
-        state.processor.model_metadata(&model)?;
+        state.provider_registry.model_metadata(&model)?;
         let mut session = self.store.load_session(session_id).await?;
         session.runtime.set_model_override(
             Some(model.provider_id.to_string()),
@@ -321,8 +321,7 @@ impl SessionManager {
             .as_ref()
             .map(|options| {
                 state
-                    .processor
-                    .provider_registry()
+                    .provider_registry
                     .native_compaction_enabled(&options.model)
             })
             .transpose()?
@@ -331,8 +330,7 @@ impl SessionManager {
             .as_ref()
             .and_then(|options| {
                 state
-                    .processor
-                    .provider_registry()
+                    .provider_registry
                     .agena_tool_mode(&options.model)
                     .ok()
             })
@@ -372,7 +370,7 @@ impl SessionManager {
         self.apply_selection_modes_to_run_options(session, &mut options)?;
         options.system =
             Some(self.assemble_session_system_prompt_with_executor(scoped_executor, None));
-        if let Ok(metadata) = state.processor.model_metadata(&options.model) {
+        if let Ok(metadata) = state.provider_registry.model_metadata(&options.model) {
             options.temperature = metadata.parsed_default_temperature();
         }
         Ok(options)
@@ -392,7 +390,7 @@ impl SessionManager {
             .or_else(|| Some(crate::identity::system_prompt()));
         let metadata = options
             .as_ref()
-            .and_then(|options| state.processor.model_metadata(&options.model).ok())
+            .and_then(|options| state.provider_registry.model_metadata(&options.model).ok())
             .unwrap_or_default();
         let context_window_tokens = metadata.limits.context_window_tokens;
         let max_input_tokens = metadata.limits.max_input_tokens;
@@ -428,12 +426,14 @@ impl SessionManager {
 
         let prompt_fingerprints = options.as_ref().map(|options| {
             let provider_request_shape = state
-                .processor
+                .provider_registry
                 .prompt_cache_shape(&options.model)
                 .ok()
                 .flatten();
-            let continuation_supported =
-                state.processor.supports_prompt_continuation(&options.model);
+            let continuation_supported = state
+                .provider_registry
+                .supports_prompt_continuation(&options.model)
+                .unwrap_or(false);
             prompt_window::prompt_request_fingerprints(
                 &crate::session::prompt_window::PromptRequestOptions {
                     provider_id: options.model.provider_id.as_ref(),

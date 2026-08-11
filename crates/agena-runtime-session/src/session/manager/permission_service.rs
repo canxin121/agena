@@ -161,8 +161,7 @@ impl SessionManager {
             ))
         })?;
         state
-            .processor
-            .provider_registry()
+            .provider_registry
             .resolve_model_selection(
                 model.provider_id.as_ref(),
                 model.adapter_id.as_ref().map(|adapter| adapter.as_ref()),
@@ -256,7 +255,7 @@ impl SessionManager {
         }
 
         let transcript_budget_chars = state
-            .processor
+            .provider_registry
             .model_metadata(&model)
             .ok()
             .and_then(|metadata| metadata.limits.context_window_tokens)
@@ -359,8 +358,7 @@ impl SessionManager {
                 match tokio::time::timeout(
                     agena_permission::AUTO_APPROVAL_CLASSIFY_TIMEOUT,
                     state
-                        .processor
-                        .provider_registry()
+                        .provider_registry
                         .complete(&model_ref, request),
                 )
                 .await

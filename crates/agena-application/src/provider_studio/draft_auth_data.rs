@@ -651,6 +651,10 @@ pub enum ProviderDraftAuthError {
 }
 
 impl ProviderDraftAuthError {
+    #[expect(
+        dead_code,
+        reason = "draft auth orchestration remains in agena-tui-backend during the staged migration"
+    )]
     pub(crate) fn other(error: impl std::fmt::Display) -> Self {
         Self::Other(provider_backend_problem(
             "provider.authentication_failed",

@@ -133,16 +133,15 @@ impl App {
                 let permission = match session_id {
                     Some(session_id) => Some(
                         crate::app_backend::permission_studio::get_session_permission_studio_state(
-                            &application, session_id,
+                            &application,
+                            session_id,
                         )
                         .await?,
                     ),
                     None => None,
                 };
-                let runtime_summary = crate::app_backend::operations::runtime_snapshot_summary(
-                    &application,
-                )
-                .await?;
+                let runtime_summary =
+                    crate::app_backend::operations::runtime_snapshot_summary(&application).await?;
                 Ok::<_, anyhow::Error>((session_id, permission, runtime_summary))
             },
             |app, result| match result {

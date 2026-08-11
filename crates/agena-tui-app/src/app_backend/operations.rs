@@ -11,7 +11,8 @@ use agena_api::resource::{
     PermissionReply as ApiPermissionReply, PermissionReplyKind as ApiPermissionReplyKind,
     PermissionScope as ApiPermissionScope, ProviderAdapterSummaryResource,
     ProviderDefaultsResource, ProviderSummaryResource, RunOptions, SessionExecutionResource,
-    SessionResource, UserInputReply as ApiUserInputReply, UserInputReplyKind as ApiUserInputReplyKind,
+    SessionResource, UserInputReply as ApiUserInputReply,
+    UserInputReplyKind as ApiUserInputReplyKind,
 };
 use agena_domain::{PermissionReplyKind, PermissionScope, UserInputReply};
 
@@ -109,8 +110,9 @@ pub(crate) async fn continue_session_with_options(
     session_id: i64,
     request: RunOptions,
 ) -> Result<SessionExecutionResource> {
-    let request = agena_application::session::session_execution_request(application, session_id, request)
-        .await?;
+    let request =
+        agena_application::session::session_execution_request(application, session_id, request)
+            .await?;
     let session_services = application.session_execution_services()?;
     let outcome = session_services
         .commands
@@ -134,8 +136,9 @@ pub(crate) async fn compact_session_with_options(
     session_id: i64,
     request: RunOptions,
 ) -> Result<SessionExecutionResource> {
-    let request = agena_application::session::session_execution_request(application, session_id, request)
-        .await?;
+    let request =
+        agena_application::session::session_execution_request(application, session_id, request)
+            .await?;
     let session_services = application.session_execution_services()?;
     let outcome = session_services
         .commands
@@ -166,7 +169,9 @@ pub(crate) async fn cancel_run(
         .cancel_execution(session_id, execution_id)
         .await
         .map_err(|error| {
-            anyhow::Error::new(agena_application::ApplicationError::from_failure(error.failure))
+            anyhow::Error::new(agena_application::ApplicationError::from_failure(
+                error.failure,
+            ))
         })
         .context("failed to cancel active run")
 }

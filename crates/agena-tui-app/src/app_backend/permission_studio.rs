@@ -18,17 +18,15 @@ pub(crate) async fn get_session_permission_studio_state(
     application: &Application,
     session_id: i64,
 ) -> Result<SessionPermissionStudioState> {
-    let execution = crate::app_backend::operations::get_session_state(application, session_id)
-        .await?;
+    let execution =
+        crate::app_backend::operations::get_session_state(application, session_id).await?;
     let execution_context = application
         .session_execution_services()?
         .queries
         .execution_context(session_id)
         .await
         .map_err(anyhow::Error::new)
-        .with_context(|| {
-            format!("failed to load execution context for session {session_id}")
-        })?;
+        .with_context(|| format!("failed to load execution context for session {session_id}"))?;
     Ok(SessionPermissionStudioState {
         session_id,
         session_title: execution.session.title.clone(),

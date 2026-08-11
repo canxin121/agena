@@ -72,11 +72,10 @@ impl App {
                 })
             })
             .collect::<Vec<_>>();
-        let catalog_entries =
-            crate::app_backend::provider_mappings::lookup_model_catalog_models(
-                &self.application,
-                &lookup_ids,
-            );
+        let catalog_entries = crate::app_backend::provider_mappings::lookup_model_catalog_models(
+            &self.application,
+            &lookup_ids,
+        );
         dialog.catalog_matches = dialog
             .adapter_models
             .iter()

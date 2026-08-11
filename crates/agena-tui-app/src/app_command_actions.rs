@@ -329,9 +329,8 @@ impl App {
     }
 
     pub(crate) fn handle_export_command(&mut self, args: &str) {
-        let requested_path = non_empty_owned(args.to_string()).map(|value| {
-            self.resolve_workspace_path(Path::new(value.as_str()))
-        });
+        let requested_path = non_empty_owned(args.to_string())
+            .map(|value| self.resolve_workspace_path(Path::new(value.as_str())));
         self.pending_ui_action = Some(UiAction::ExportTranscript {
             path: requested_path,
         });
@@ -401,10 +400,10 @@ fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
             | CommandId::Side
     )
 }
+use crate::app_backend::PluginCommandEffect;
 use crate::{
     App, AppMessage, CommandId, CommandSpec, ComposerDraft, NoticeScope, Path, PermissionReplyKind,
     TIMELINE_EVENT_LIMIT, UiAction, non_empty_owned, parse_pr_command_args, ui_text,
 };
 use agena_tui::main_focus::Focus;
-use crate::app_backend::PluginCommandEffect;
 use agena_tui_session::session_view::SessionViewMode;

@@ -279,8 +279,7 @@ impl App {
                 if let agena_domain::ResourceReference::WorkspacePath { path } = &resource.reference
                 {
                     self.pending_ui_action = Some(UiAction::OpenPath {
-                        path: self
-                            .resolve_workspace_path(std::path::Path::new(path)),
+                        path: self.resolve_workspace_path(std::path::Path::new(path)),
                     });
                 } else {
                     self.flash_info(ui_text::t(&self.i18n, "flash-large-paste-no-file-view"));

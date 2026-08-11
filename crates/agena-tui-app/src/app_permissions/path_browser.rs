@@ -35,7 +35,10 @@ impl App {
             agena_tui::path_browser::PathBrowserEffect::Close => true,
             agena_tui::path_browser::PathBrowserEffect::KeepOpen => false,
             agena_tui::path_browser::PathBrowserEffect::Refresh => {
-                Self::refresh_path_browser_overlay_with_root(self.application.workspace_root(), dialog);
+                Self::refresh_path_browser_overlay_with_root(
+                    self.application.workspace_root(),
+                    dialog,
+                );
                 false
             }
             agena_tui::path_browser::PathBrowserEffect::Parent => {

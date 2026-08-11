@@ -21,7 +21,11 @@ impl App {
                 .map_err(crate::UiFailure::internal)?,
                 ui_text::speed_mode_display_value,
             ),
-            SessionModelModeStep::Verbosity => crate::app_backend::provider_mappings::model_verbosity_values(&self.application, model)
+            SessionModelModeStep::Verbosity => {
+                crate::app_backend::provider_mappings::model_verbosity_values(
+                    &self.application,
+                    model,
+                )
                 .map_err(crate::UiFailure::internal)?
                 .into_iter()
                 .map(|value| {
@@ -30,7 +34,8 @@ impl App {
                         runtime_setting_choice_supported_model_detail(&self.i18n),
                     )
                 })
-                .collect::<Vec<_>>(),
+                .collect::<Vec<_>>()
+            }
         };
         if !items.is_empty() {
             items.insert(
@@ -140,11 +145,12 @@ impl App {
                 .map_err(crate::UiFailure::internal)?,
                 ui_text::speed_mode_display_value,
             ),
-            SessionModelModeStep::Verbosity => crate::app_backend::provider_mappings::runtime_verbosity_values(
-                &self.application,
-                &self.run_options.to_request(),
-            )
-            .map_err(crate::UiFailure::internal)?
+            SessionModelModeStep::Verbosity => {
+                crate::app_backend::provider_mappings::runtime_verbosity_values(
+                    &self.application,
+                    &self.run_options.to_request(),
+                )
+                .map_err(crate::UiFailure::internal)?
                 .into_iter()
                 .map(|value| {
                     choice_item(
@@ -152,7 +158,8 @@ impl App {
                         runtime_setting_choice_supported_model_detail(&self.i18n),
                     )
                 })
-                .collect::<Vec<_>>(),
+                .collect::<Vec<_>>()
+            }
         };
         if items.is_empty() {
             return Ok(Vec::new());

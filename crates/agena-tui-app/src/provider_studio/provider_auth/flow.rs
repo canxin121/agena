@@ -12,6 +12,7 @@ use super::{
     provider_studio_labeled_summary, provider_studio_missing_continue_auth_field,
     provider_studio_missing_start_auth_field, provider_studio_required_field_summary,
 };
+use crate::ui_text;
 use agena_application::provider_studio::{
     ProviderBrowserAuthSessionDraft, ProviderDeviceAuthSessionDraft, ProviderDraftAuthActionResult,
     ProviderDraftAuthError, ProviderDraftAuthField, ProviderDraftAuthMessage,
@@ -22,7 +23,6 @@ use agena_runtime::{
     parse_oauth_callback_url,
 };
 use agena_tui::link::shorten_url_for_display;
-use crate::ui_text;
 
 pub(crate) fn provider_studio_start_auth_summary(
     i18n: &I18n,
@@ -580,7 +580,10 @@ pub(crate) async fn start_provider_draft_auth(
             )
             .unwrap_or("github.com");
             let start = auth
-                .start_draft_auth_device(RuntimeDraftAuthKind::GithubCopilot, Some(domain.to_owned()))
+                .start_draft_auth_device(
+                    RuntimeDraftAuthKind::GithubCopilot,
+                    Some(domain.to_owned()),
+                )
                 .await
                 .map_err(ProviderDraftAuthError::other)?;
             let display_url = shorten_url_for_display(start.verification_url.as_str()).await;

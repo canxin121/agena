@@ -597,7 +597,10 @@ impl App {
                 tokio::spawn(async move {
                     let result = match tokio::time::timeout(
                         super::Duration::from_secs(ACTIVITY_REQUEST_TIMEOUT_SECS),
-                        crate::app_backend::activities::dismiss_activity(&application, &activity_id),
+                        crate::app_backend::activities::dismiss_activity(
+                            &application,
+                            &activity_id,
+                        ),
                     )
                     .await
                     {

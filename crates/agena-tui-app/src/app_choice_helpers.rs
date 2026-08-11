@@ -612,8 +612,8 @@ pub(crate) fn provider_studio_catalog_match_model<'a>(
 }
 
 use crate::{
-    BTreeSet, CatalogModelResource, ChoiceItem, ChoiceOverlayAction, ConfigJsonSources,
-    I18n, InspectorRow, JsonValue, ModelCatalogListResponse, ModelRef, PermissionMode,
+    BTreeSet, CatalogModelResource, ChoiceItem, ChoiceOverlayAction, ConfigJsonSources, I18n,
+    InspectorRow, JsonValue, ModelCatalogListResponse, ModelRef, PermissionMode,
     PermissionRuleStudioChoiceField, ProviderModel, ProviderModelResource, ProviderStudioField,
     ProviderStudioProviderRow, ProviderSummaryResource, SelectionPickerCommand,
     SessionModelChoiceItem, SessionModelIdentity, SettingsFieldKind, SettingsFieldSpec,

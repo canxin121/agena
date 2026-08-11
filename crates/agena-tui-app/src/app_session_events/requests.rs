@@ -148,10 +148,11 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::get_session_state(&application, session_id)
-                .await
-                .map(|state| rewind_targets_from_parts(&state.parts))
-                .map_err(crate::UiFailure::from_backend);
+            let result =
+                crate::app_backend::operations::get_session_state(&application, session_id)
+                    .await
+                    .map(|state| rewind_targets_from_parts(&state.parts))
+                    .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::RewindMessagesLoaded { session_id, result })
                 .await;
@@ -194,7 +195,9 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = crate::app_backend::timeline::list_session_timeline(
-                &application, session_id, limit,
+                &application,
+                session_id,
+                limit,
             )
             .await
             .map_err(crate::UiFailure::internal);
@@ -243,9 +246,10 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::get_session_state(&application, session_id)
-                .await
-                .map_err(crate::UiFailure::from_backend);
+            let result =
+                crate::app_backend::operations::get_session_state(&application, session_id)
+                    .await
+                    .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionStateLoaded { session_id, result })
                 .await;
@@ -457,21 +461,18 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::cancel_run(
-                &application,
-                session_id,
-                execution_id,
-            )
-            .await
-            .and_then(|result| match result {
-                    agena_domain::CancellationResult::CancellationRequested
-                    | agena_domain::CancellationResult::AlreadyTerminal
-                    | agena_domain::CancellationResult::NotFound => Ok(()),
-                    agena_domain::CancellationResult::ExecutionMismatch => Err(anyhow::anyhow!(
-                        "the active execution changed before cancellation"
-                    )),
-                })
-                .map_err(crate::UiFailure::from_backend);
+            let result =
+                crate::app_backend::operations::cancel_run(&application, session_id, execution_id)
+                    .await
+                    .and_then(|result| match result {
+                        agena_domain::CancellationResult::CancellationRequested
+                        | agena_domain::CancellationResult::AlreadyTerminal
+                        | agena_domain::CancellationResult::NotFound => Ok(()),
+                        agena_domain::CancellationResult::ExecutionMismatch => Err(
+                            anyhow::anyhow!("the active execution changed before cancellation"),
+                        ),
+                    })
+                    .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::RunCancelled { session_id, result })
                 .await;

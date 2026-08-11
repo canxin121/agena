@@ -46,16 +46,18 @@ pub(crate) fn provider_draft_auth_action_message(
         agena_application::provider_studio::ProviderDraftAuthMessage::OpenaiBrowserStarted => {
             ui_text::t(i18n, "flash-provider-auth-openai-browser-started")
         }
-        agena_application::provider_studio::ProviderDraftAuthMessage::OpenaiDeviceStarted { user_code } => i18n
-            .text_args(
-                "flash-provider-auth-openai-device-started",
-                &agena_tui::fl_args!("code" => user_code.clone()),
-            ),
-        agena_application::provider_studio::ProviderDraftAuthMessage::CopilotDeviceStarted { user_code } => i18n
-            .text_args(
-                "flash-provider-auth-copilot-device-started",
-                &agena_tui::fl_args!("code" => user_code.clone()),
-            ),
+        agena_application::provider_studio::ProviderDraftAuthMessage::OpenaiDeviceStarted {
+            user_code,
+        } => i18n.text_args(
+            "flash-provider-auth-openai-device-started",
+            &agena_tui::fl_args!("code" => user_code.clone()),
+        ),
+        agena_application::provider_studio::ProviderDraftAuthMessage::CopilotDeviceStarted {
+            user_code,
+        } => i18n.text_args(
+            "flash-provider-auth-copilot-device-started",
+            &agena_tui::fl_args!("code" => user_code.clone()),
+        ),
         agena_application::provider_studio::ProviderDraftAuthMessage::GitlabBrowserStarted => {
             ui_text::t(i18n, "flash-provider-auth-gitlab-browser-started")
         }
@@ -101,11 +103,14 @@ pub(crate) fn provider_draft_auth_error_message(
         agena_application::provider_studio::ProviderDraftAuthError::StartDeviceAuthFirst => {
             ui_text::t(i18n, "flash-provider-auth-error-start-device-first")
         }
-        agena_application::provider_studio::ProviderDraftAuthError::RequiredField(field) => i18n.text_args(
-            "flash-provider-auth-error-required-field",
-            &agena_tui::fl_args!("field" => provider_draft_auth_field_label(i18n, field)),
-        ),
-        agena_application::provider_studio::ProviderDraftAuthError::Other(problem) => problem.user.fallback.clone(),
+        agena_application::provider_studio::ProviderDraftAuthError::RequiredField(field) => i18n
+            .text_args(
+                "flash-provider-auth-error-required-field",
+                &agena_tui::fl_args!("field" => provider_draft_auth_field_label(i18n, field)),
+            ),
+        agena_application::provider_studio::ProviderDraftAuthError::Other(problem) => {
+            problem.user.fallback.clone()
+        }
     }
 }
 
@@ -116,9 +121,15 @@ pub(crate) fn provider_draft_auth_field_label(
     ui_text::t(
         i18n,
         match field {
-            agena_application::provider_studio::ProviderDraftAuthField::RedirectUri => "provider-field-redirect-uri",
-            agena_application::provider_studio::ProviderDraftAuthField::InstanceUrl => "provider-field-instance-url",
-            agena_application::provider_studio::ProviderDraftAuthField::CallbackUrl => "provider-field-callback-url",
+            agena_application::provider_studio::ProviderDraftAuthField::RedirectUri => {
+                "provider-field-redirect-uri"
+            }
+            agena_application::provider_studio::ProviderDraftAuthField::InstanceUrl => {
+                "provider-field-instance-url"
+            }
+            agena_application::provider_studio::ProviderDraftAuthField::CallbackUrl => {
+                "provider-field-callback-url"
+            }
         },
     )
 }
@@ -165,11 +176,12 @@ pub(crate) fn provider_studio_save_result_message(
                 "model" => model_id.clone(),
             ),
         ),
-        agena_application::provider_studio::ProviderStudioSaveResult::ProviderDeleted { provider_id } => i18n
-            .text_args(
-                "flash-provider-delete-provider",
-                &agena_tui::fl_args!("provider" => provider_id.clone()),
-            ),
+        agena_application::provider_studio::ProviderStudioSaveResult::ProviderDeleted {
+            provider_id,
+        } => i18n.text_args(
+            "flash-provider-delete-provider",
+            &agena_tui::fl_args!("provider" => provider_id.clone()),
+        ),
         agena_application::provider_studio::ProviderStudioSaveResult::AdapterDeleted {
             provider_id,
             adapter_id,
@@ -297,13 +309,21 @@ pub(crate) fn provider_studio_save_field_label(
     ui_text::t(
         i18n,
         match field {
-            agena_application::provider_studio::ProviderStudioSaveField::ProviderId => "provider-field-provider-id",
+            agena_application::provider_studio::ProviderStudioSaveField::ProviderId => {
+                "provider-field-provider-id"
+            }
             agena_application::provider_studio::ProviderStudioSaveField::DefaultAdapter => {
                 "provider-field-default-adapter"
             }
-            agena_application::provider_studio::ProviderStudioSaveField::AdapterId => "provider-field-adapter-id",
-            agena_application::provider_studio::ProviderStudioSaveField::ModelId => "provider-field-model-id",
-            agena_application::provider_studio::ProviderStudioSaveField::AuthMode => "provider-field-auth-mode",
+            agena_application::provider_studio::ProviderStudioSaveField::AdapterId => {
+                "provider-field-adapter-id"
+            }
+            agena_application::provider_studio::ProviderStudioSaveField::ModelId => {
+                "provider-field-model-id"
+            }
+            agena_application::provider_studio::ProviderStudioSaveField::AuthMode => {
+                "provider-field-auth-mode"
+            }
             agena_application::provider_studio::ProviderStudioSaveField::AuthSubtype => {
                 "provider-field-auth-subtype"
             }

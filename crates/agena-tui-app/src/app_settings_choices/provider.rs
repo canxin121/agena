@@ -18,10 +18,8 @@ impl App {
         let provider_id = get_json_path(&sources.effective, Some("providers.default"))
             .ok()
             .and_then(|value| value.as_str().map(str::to_owned))?;
-        let provider = crate::app_backend::operations::list_configured_providers(
-            &self.application,
-        )
-        .into_iter()
+        let provider = crate::app_backend::operations::list_configured_providers(&self.application)
+            .into_iter()
             .find(|provider| provider.provider_id == provider_id)?;
         let model_id = provider.defaults.model.trim();
         if model_id.is_empty() {

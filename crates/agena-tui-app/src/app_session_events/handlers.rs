@@ -600,9 +600,8 @@ impl App {
                     self.restore_provider_list_after_provider_delete();
                     return;
                 }
-                let providers = crate::app_backend::operations::list_configured_providers(
-                    &self.application,
-                );
+                let providers =
+                    crate::app_backend::operations::list_configured_providers(&self.application);
                 let provider_rows = provider_studio_provider_rows(&self.i18n, providers.as_slice());
                 let selected_provider = provider_rows
                     .iter()

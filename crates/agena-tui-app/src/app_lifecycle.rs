@@ -164,10 +164,9 @@ impl App {
     }
 
     pub(crate) fn refresh_tui_palette_from_runtime(&mut self) {
-        self.launch.tui_config =
-            crate::tui_config_from_preferences(&crate::app_backend::config::ui_configuration(
-                &self.application,
-            ));
+        self.launch.tui_config = crate::tui_config_from_preferences(
+            &crate::app_backend::config::ui_configuration(&self.application),
+        );
         self.plugin_theme = self.launch.tui_config.theme.as_ref().and_then(|theme_id| {
             crate::app_backend::plugin_effects::plugin_theme_palettes(&self.application)
                 .into_iter()
@@ -535,11 +534,11 @@ use crate::{
     TranscriptState, UI_COMMAND_QUEUE_CAPACITY, UI_TICK_MS, default_draft_store_path,
     default_prompt_history_path, interval, provider_studio_auth_poll_interval, ui_text,
 };
-use std::sync::{Arc, OnceLock};
 use agena_tui::main_focus::Focus;
 use agena_tui::status_line::StatusLinePresentation;
 use agena_tui_media::MathGraphicsRenderer;
 use agena_tui_session::session_list::SessionListPresentation;
+use std::sync::{Arc, OnceLock};
 
 #[cfg(test)]
 mod tests {

@@ -35,16 +35,16 @@ pub(crate) fn subscribe_session_events(
     let (tx, rx) = mpsc::channel::<LiveEvent>(LIVE_EVENT_QUEUE_CAPACITY);
     let (change_tx, mut change_rx) = mpsc::channel(SESSION_CHANGE_QUEUE_CAPACITY);
     let (overflow_tx, mut overflow_rx) = tokio::sync::watch::channel(0u64);
-    let subscription = store.subscribe_all(std::sync::Arc::new(move |change| match change_tx
-        .try_send(change)
-    {
-        Ok(()) => {}
-        Err(mpsc::error::TrySendError::Full(_)) => {
-            overflow_tx.send_modify(|generation| {
-                *generation = generation.wrapping_add(1);
-            });
+    let subscription = store.subscribe_all(std::sync::Arc::new(move |change| {
+        match change_tx.try_send(change) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                overflow_tx.send_modify(|generation| {
+                    *generation = generation.wrapping_add(1);
+                });
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {}
         }
-        Err(mpsc::error::TrySendError::Closed(_)) => {}
     }));
     let change_output = tx.clone();
     tokio::spawn(async move {

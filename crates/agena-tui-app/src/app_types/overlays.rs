@@ -9,11 +9,11 @@ use agena_domain::{ModelRef, PermissionConfig, UserInputRequest};
 use agena_domain::{PermissionMode, PermissionReplyKind, PermissionRequest, PermissionScope};
 
 use agena_application::dto::{CatalogModelResource, ModelCatalogResponse};
+use agena_application::provider_studio::ProviderConfigDraft;
 use agena_provider::AgenaToolMode;
 use agena_tui::model_catalog::ModelCatalogPresentation;
 use agena_tui::permission_prompt::PermissionPromptAutoApproveStatus;
 use agena_tui::permission_prompt::PermissionPromptPresentation;
-use agena_application::provider_studio::ProviderConfigDraft;
 use agena_tui_components::{
     ConfirmDialogState, DashboardSelectionState, EditorDialogState, InputDialogState,
     SectionedListState, SelectableListState, SelectionCursor,

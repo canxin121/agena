@@ -83,11 +83,11 @@ use unicode_width::UnicodeWidthChar;
 #[cfg(test)]
 use agena_api::resource::RunRole;
 
+use crate::app_backend::{InspectorRow, LiveEvent, SessionPermissionStudioState, SessionRefresh};
 use agena_application::provider_studio::{
     ProviderConfigDraft, ProviderDraftAdapterRule, ProviderDraftAuthKind,
     ProviderDraftInteractiveLoginKind, ProviderDraftSecretSourceKind,
 };
-use crate::app_backend::{InspectorRow, LiveEvent, SessionPermissionStudioState, SessionRefresh};
 
 mod commands;
 mod composer_queue;

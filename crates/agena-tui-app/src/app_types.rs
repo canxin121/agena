@@ -21,6 +21,7 @@ use agena_domain::UsagePeriod;
 use agena_domain::UsageStats;
 use tokio::sync::mpsc::{Receiver, Sender};
 
+use crate::app_backend::{LiveEvent, SessionPermissionStudioState, SessionRefresh};
 use crate::composer_queue::ComposerQueue;
 use crate::notifications::NotificationStore;
 use agena_application::dto::ModelCatalogListResponse;
@@ -31,7 +32,6 @@ use agena_tui::main_focus::Focus;
 use agena_tui::presentation_config::TuiConfig;
 use agena_tui::status_line::StatusLinePresentation;
 use agena_tui::usage::{UsageDashboardData, UsageDashboardPresentation};
-use crate::app_backend::{LiveEvent, SessionPermissionStudioState, SessionRefresh};
 use agena_tui_components::{Editor, InputDialogState};
 use agena_tui_media::{MathGraphicsConfig, MathGraphicsRenderer, MathRenderContext};
 use agena_tui_platform::terminal::TerminalContext;

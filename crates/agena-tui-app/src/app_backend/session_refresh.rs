@@ -48,8 +48,8 @@ pub(crate) async fn refresh_session(
         .map(|(after, current)| current.saturating_sub(after).clamp(0, 256) as usize)
         .unwrap_or(0);
 
-    let execution = crate::app_backend::operations::get_session_state(application, session_id)
-        .await?;
+    let execution =
+        crate::app_backend::operations::get_session_state(application, session_id).await?;
     Ok(SessionRefresh {
         latest_event_seq,
         event_count,

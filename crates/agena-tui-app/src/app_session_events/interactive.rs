@@ -48,9 +48,10 @@ impl App {
         if let Some(handle) = self.active_subscription.take() {
             handle.abort();
         }
-        let Some(mut rx) =
-            crate::app_backend::live_events::subscribe_session_events(&self.application, session_id)
-        else {
+        let Some(mut rx) = crate::app_backend::live_events::subscribe_session_events(
+            &self.application,
+            session_id,
+        ) else {
             return;
         };
         let tx = self.tx.clone();

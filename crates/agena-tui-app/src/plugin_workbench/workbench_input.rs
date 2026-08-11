@@ -33,8 +33,10 @@ impl App {
             .into_iter()
             .map(|status| {
                 let plugin_id = status.plugin_id.clone();
-                let inspect =
-                    crate::app_backend::plugin_effects::plugin_inspect(&self.application, &plugin_id);
+                let inspect = crate::app_backend::plugin_effects::plugin_inspect(
+                    &self.application,
+                    &plugin_id,
+                );
                 let logs = crate::app_backend::plugin_effects::plugin_logs(
                     &self.application,
                     &plugin_id,

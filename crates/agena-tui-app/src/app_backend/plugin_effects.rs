@@ -171,7 +171,10 @@ pub(crate) fn plugin_display_contributions(
 /// storage (the planning plugin re-publishes on every plan read) without
 /// mutating the plan. Returns `true` when the session has an active plan, so
 /// the caller can back off for sessions without one.
-pub(crate) async fn refresh_plan_display(application: &Application, session_id: i64) -> Result<bool> {
+pub(crate) async fn refresh_plan_display(
+    application: &Application,
+    session_id: i64,
+) -> Result<bool> {
     let response = application
         .invoke_plugin_ui_tool(
             "agena.plan",
@@ -208,11 +211,15 @@ pub(crate) fn workspace_name(application: &Application) -> String {
 
 /// Theme palettes contributed by plugins. Synchronous: applied at startup and
 /// whenever the runtime reloads.
-pub(crate) fn plugin_theme_palettes(application: &Application) -> Vec<agena_plugin_host::HostThemePalette> {
+pub(crate) fn plugin_theme_palettes(
+    application: &Application,
+) -> Vec<agena_plugin_host::HostThemePalette> {
     application.plugin_runtime().theme_palettes()
 }
 
-pub(crate) fn plugin_statuses(application: &Application) -> Vec<agena_plugin_host::status::PluginStatus> {
+pub(crate) fn plugin_statuses(
+    application: &Application,
+) -> Vec<agena_plugin_host::status::PluginStatus> {
     application.plugin_runtime().plugin_statuses()
 }
 

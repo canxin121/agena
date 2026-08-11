@@ -156,10 +156,7 @@ pub(crate) fn model_speed_mode_rows(
         .into_iter()
         .map(|(name, mode)| InspectorRow {
             label: name,
-            detail: summarize_named_mode(
-                mode.display_name.as_deref(),
-                mode.description.as_deref(),
-            ),
+            detail: summarize_named_mode(mode.display_name.as_deref(), mode.description.as_deref()),
         })
         .collect::<Vec<_>>();
     rows.sort_by(|left, right| left.label.cmp(&right.label));

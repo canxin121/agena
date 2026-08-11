@@ -82,19 +82,19 @@ fn plugin_terminal_activity(app: &App) -> Option<SessionActivity> {
     let contribution =
         crate::app_backend::plugin_effects::plugin_display_contributions(&app.application)
             .into_iter()
-        .find(|contribution| {
-            contribution.contribution.id == "agena.terminal.activity"
-                && matches!(
-                    (
-                        contribution.contribution.kind,
-                        &contribution.contribution.content,
-                    ),
-                    (
-                        agena_plugin_host::ContributionKind::TerminalActivity,
-                        agena_plugin_host::PluginDisplayContent::TerminalActivity { .. },
+            .find(|contribution| {
+                contribution.contribution.id == "agena.terminal.activity"
+                    && matches!(
+                        (
+                            contribution.contribution.kind,
+                            &contribution.contribution.content,
+                        ),
+                        (
+                            agena_plugin_host::ContributionKind::TerminalActivity,
+                            agena_plugin_host::PluginDisplayContent::TerminalActivity { .. },
+                        )
                     )
-                )
-        })?;
+            })?;
     match contribution.contribution.content {
         agena_plugin_host::PluginDisplayContent::TerminalActivity { value } => match value.trim() {
             "idle" => Some(SessionActivity::Idle),
@@ -267,7 +267,8 @@ pub(crate) fn drain_terminal_notification(
 /// consumed once so a bell fires a single time even while the host keeps the
 /// bounded recent queue around.
 fn take_plugin_notify(app: &mut App) -> Option<NotificationMethod> {
-    for notification in crate::app_backend::plugin_effects::plugin_host_notifications(&app.application)
+    for notification in
+        crate::app_backend::plugin_effects::plugin_host_notifications(&app.application)
     {
         let key = format!(
             "{}:{}:{}",

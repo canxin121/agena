@@ -4,11 +4,12 @@
 //! `agena-storage` and `agena-storage-sqlite`; these tests prove the execution
 //! manager's adapter preserves that model at its boundary.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::BTreeMap, collections::HashMap, sync::Arc};
 
 use agena_domain::{
     AssistantReasoningField, AssistantReplyId, ModelId, ModelRef, ProviderId, Role,
-    StructuredObject, TimeRange, ToolInvocation, TurnId,
+    StructuredObject, TimeRange, ToolInvocation, TurnId, UserInputOption, UserInputQuestion,
+    UserInputReply, UserInputReplyKind,
 };
 use agena_plugin_host::{
     ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
@@ -2138,5 +2139,164 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
     assert!(
         !replied.parts().is_empty(),
         "the reply returns the continued session"
+||||||| ef4c3bae
+/// Regression for the born-InProgress lifecycle (the core of the strong-typing
+/// fix): the `interaction` part a host ask_user creates must be `InProgress`
+/// (NOT `Pending`) so the reply can complete through the legal
+/// `in_progress -> completed` edge — the store forbids `pending -> completed`
+/// (17.2) and would otherwise reject the reply with `StoreError::InvalidState`.
+/// `mark_interactive_request_presented` must also stamp `presented_at` on the
+/// in-flight part (its guard is `is_in_flight()`).
+#[tokio::test]
+async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
+    let (manager, _database) = test_manager_with_database().await;
+    let session = create(&manager, "host ask_user lifecycle").await;
+
+    let operation = agena_runtime_contracts::part::OperationPart::pending(
+        1,
+        ToolInvocation::new("plan.set", StructuredObject::default()),
+        "Create plan",
+        TimeRange { start_ms: 1, end_ms: None },
+    );
+    let tool_part = new_part_from_content(
+        "tool_call",
+        PartRole::Assistant,
+        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        PartState::InProgress,
+    )
+    .expect("build tool part");
+    let store = manager.session_store();
+    store
+        .submit_user_run(session.id, manager.store.owner_id.as_str(), vec![tool_part], None)
+        .await
+        .expect("submit run with in-progress tool part");
+
+    // Drive the host ask_user through the public entry point in a background
+    // task: it registers the host waiter and blocks awaiting the reply, exactly
+    // as the plugin host flow does in production.
+    let request = crate::part::AskUserToolInput {
+        title: "Approve New Plan".to_owned(),
+        kind: "review".to_owned(),
+        auto_resolution_ms: None,
+        questions: vec![UserInputQuestion {
+            header: String::new(),
+            question: "Approve the new plan?".to_owned(),
+            options: vec![UserInputOption {
+                label: "Approve".to_owned(),
+                description: String::new(),
+            }],
+            multiple: false,
+            allow_custom: false,
+        }],
+    };
+    let session_id = session.id;
+    let host = manager.background_handle();
+    let host_join = tokio::spawn(async move {
+        host.request_host_user_input(session_id, 1, request).await
+    });
+
+    // Wait until the interaction part is durable, then capture its state and
+    // the authoritative request id from the nested request object.
+    let (interaction_part_id, request_id, state) = {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let persisted = store.load(session_id).await.expect("reload parts");
+            if let Some(part) = persisted
+                .parts
+                .iter()
+                .find(|part| part.kind == "interaction")
+            {
+                let request_id = part
+                    .content
+                    .get("request")
+                    .and_then(|value| value.get("request_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .expect("interaction request carries a request id")
+                    .to_owned();
+                break (part.part_id, request_id, part.state);
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "host ask_user interaction part was never created"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    };
+    assert_eq!(
+        state,
+        PartState::InProgress,
+        "the host ask_user interaction part is born InProgress, not Pending — only \
+         InProgress can complete through the legal in_progress -> completed edge"
+    );
+
+    // The durable presentation acknowledgement stamps presented_at on the
+    // in-flight part (the guard is is_in_flight()).
+    manager
+        .mark_interactive_request_presented(session_id, request_id.clone())
+        .await
+        .expect("acknowledge presentation");
+    let persisted = store.load(session_id).await.expect("reload parts");
+    let presented = persisted
+        .parts
+        .iter()
+        .find(|part| part.part_id == interaction_part_id)
+        .expect("interaction part still present");
+    assert!(
+        presented
+            .content
+            .get("request")
+            .and_then(|value| value.get("presented_at"))
+            .and_then(serde_json::Value::as_str)
+            .is_some(),
+        "mark_interactive_request_presented stamps presented_at on the InProgress interaction part"
+    );
+
+    // Drive the reply. With the part born InProgress the completion is the
+    // legal in_progress -> completed transition; a Pending part would be
+    // rejected by the store with StoreError::InvalidState (pending -> completed
+    // is not in the forward-only lifecycle, 17.2).
+    let reply_request = agena_runtime::SessionExecutionReplyRequest::new(
+        session_id,
+        agena_runtime::SessionRunOptions {
+            model: ModelRef::new("fake", "fake-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        },
+        UserInputReply {
+            request_id: request_id.clone(),
+            kind: UserInputReplyKind::Submit,
+            answers: BTreeMap::from([("0".to_owned(), vec!["Approve".to_owned()])]),
+            reason: None,
+        },
+    );
+    let _replied = manager
+        .reply_user_input(reply_request)
+        .await
+        .expect("reply completes the InProgress interaction part without an invalid part transition");
+
+    // The host call is woken through its waiter and resolves.
+    let host_response = host_join
+        .await
+        .expect("host request task completed")
+        .expect("host ask_user returned a response");
+    assert!(!host_response.cancelled);
+    assert_eq!(host_response.answers.get("0").map(Vec::as_slice), Some(&["Approve".to_owned()][..]));
+
+    let persisted = store.load(session_id).await.expect("reload parts");
+    let interaction = persisted
+        .parts
+        .iter()
+        .find(|part| part.part_id == interaction_part_id)
+        .expect("interaction part still present");
+    assert_eq!(
+        interaction.state,
+        PartState::Completed,
+        "the replied interaction part completes to PartState::Completed"
     );
 }

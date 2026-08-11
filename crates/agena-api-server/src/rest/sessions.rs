@@ -315,18 +315,13 @@ pub async fn cancel_run(
     Path(session_id): Path<i64>,
     Json(request): Json<CancelRunRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
-    match dispatch::dispatch_command(
-        &state,
-        agena_api::commands::Command::CancelRun(agena_api::commands::CancelRunParams {
-            session_id,
-            execution_id: request.execution_id,
-        }),
-    )
-    .await?
-    {
-        agena_api::commands::CommandResult::Cancellation(result) => Ok(Json(result)),
-        _ => unreachable!("cancel run returned unexpected result"),
-    }
+    let services = state.application().session_execution_services()?;
+    let result = services
+        .execution_control
+        .cancel_execution(session_id, request.execution_id)
+        .await
+        .map_err(|error| ServerError::from_failure(error.failure))?;
+    Ok(Json(result))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -470,6 +465,6 @@ use super::{
     PermissionReply, ServerError, SessionChangeStreamQuery, SessionCreateRequest,
     SessionForkRequestBody, SessionListQuery, SessionPartListQuery, SessionReplyRequestBody,
     SessionRewindRequestBody, SessionRunRequest, SessionRunRequestBody, SessionUpdateRequest, Sse,
-    State, UserInputReply, dispatch, if_match_version, json_http, json_http_found,
+    State, UserInputReply, if_match_version, json_http, json_http_found,
     server_error_from_application, sse_error_event, stream,
 };

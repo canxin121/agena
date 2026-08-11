@@ -1,11 +1,11 @@
 //! REST handlers for the unified background-activity surface.
 
-use agena_api::queries::{ActivityLogsParams, GetActivityParams, ListActivitiesParams};
-use agena_api::resource::BackgroundActivityResource;
+use agena_api::queries::ListActivitiesParams;
+use agena_api::resource::{BackgroundActivityLogResource, BackgroundActivityResource};
 use serde::Deserialize;
 
 use super::{
-    AppState, AxumQuery, IntoResponse, Json, Path, ServerError, State, query_json,
+    AppState, AxumQuery, IntoResponse, Json, Path, ServerError, State,
     server_error_from_application,
 };
 
@@ -39,32 +39,32 @@ pub async fn list_activities(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<ListActivitiesQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    query_json(
-        &state,
-        agena_api::queries::Query::ListActivities(query.into()),
-        |result| match result {
-            agena_api::queries::QueryResult::Activities(items) => Some(items),
-            _ => None,
-        },
-        "list_activities returned unexpected result",
-    )
-    .await
+    let service = state
+        .application()
+        .runtime_activities()
+        .map_err(server_error_from_application)?;
+    let params: ListActivitiesParams = query.into();
+    let activities = service.list_activities(&agena_application::service::activity_filter_from_params(
+        &params,
+    ));
+    let resources: Vec<BackgroundActivityResource> = activities
+        .iter()
+        .map(BackgroundActivityResource::from)
+        .collect();
+    Ok(Json(resources))
 }
 
 pub async fn get_activity(
     State(state): State<AppState>,
     Path(activity_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
-    query_json(
-        &state,
-        agena_api::queries::Query::GetActivity(GetActivityParams { activity_id }),
-        |result| match result {
-            agena_api::queries::QueryResult::Activity(activity) => Some(activity),
-            _ => None,
-        },
-        "get_activity returned unexpected result",
-    )
-    .await
+    let activity = state
+        .application()
+        .runtime_activities()
+        .map_err(server_error_from_application)?
+        .get_activity(&activity_id)
+        .map_err(activity_control_error)?;
+    Ok(Json(BackgroundActivityResource::from(&activity)))
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -86,21 +86,14 @@ pub async fn get_activity_logs(
     Path(activity_id): Path<String>,
     AxumQuery(query): AxumQuery<ActivityLogsQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    query_json(
-        &state,
-        agena_api::queries::Query::ActivityLogs(ActivityLogsParams {
-            activity_id,
-            since_seq: query.since_seq,
-            limit: query.limit,
-            wait_ms: query.wait_ms,
-        }),
-        |result| match result {
-            agena_api::queries::QueryResult::ActivityLogs(logs) => Some(logs),
-            _ => None,
-        },
-        "activity_logs returned unexpected result",
-    )
-    .await
+    let read = state
+        .application()
+        .runtime_activities()
+        .map_err(server_error_from_application)?
+        .activity_logs(&activity_id, query.since_seq, query.limit, query.wait_ms)
+        .await
+        .map_err(activity_control_error)?;
+    Ok(Json(BackgroundActivityLogResource::from(read)))
 }
 
 pub async fn stop_activity(

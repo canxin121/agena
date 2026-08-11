@@ -5156,6 +5156,7 @@ User interaction tools.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `auto_resolution_ms` | `integer / null` | — | — | Automatically continue without an answer after this many milliseconds.<br>Values are limited to 60 seconds through 10 minutes. |
+| `body_markdown` | `string` | — | — | Optional Markdown body shown in the review dialog. Only the plan<br>approval review (`kind == "review"`) sets it to the full plan document;<br>other ask_user requests leave it empty. |
 | `kind` | `string` | — | — |  |
 | `questions` | `array<UserInputQuestion>` | — | — |  |
 | `title` | `string` | — | — |  |
@@ -5222,6 +5223,12 @@ User interaction tools.
         "integer",
         "null"
       ],
+      "x-agena-order": "000003"
+    },
+    "body_markdown": {
+      "description": "Optional Markdown body shown in the review dialog. Only the plan\napproval review (`kind == \"review\"`) sets it to the full plan document;\nother ask_user requests leave it empty.",
+      "maxLength": 16000,
+      "type": "string",
       "x-agena-order": "000002"
     },
     "kind": {
@@ -5235,7 +5242,7 @@ User interaction tools.
       "maxItems": 3,
       "minItems": 1,
       "type": "array",
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "title": {
       "type": "string",

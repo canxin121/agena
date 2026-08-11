@@ -84,6 +84,7 @@ mod tests {
         let input = AskUserToolInput {
             title: "Decision".to_string(),
             kind: String::new(),
+            body_markdown: String::new(),
             auto_resolution_ms: Some(60_000),
             questions: vec![UserInputQuestion {
                 header: String::new(),

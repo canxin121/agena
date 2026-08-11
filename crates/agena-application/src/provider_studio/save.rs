@@ -31,7 +31,9 @@ use super::draft_config::ProviderConfigDraft;
 use crate::Application;
 use agena_domain::ProviderId;
 
-pub(crate) fn parse_credential_issuer(value: &str) -> anyhow::Result<agena_provider::CredentialIssuer> {
+pub(crate) fn parse_credential_issuer(
+    value: &str,
+) -> anyhow::Result<agena_provider::CredentialIssuer> {
     match value.trim().to_ascii_lowercase().as_str() {
         "openai_chatgpt" => Ok(agena_provider::CredentialIssuer::OpenaiChatgpt),
         "github_copilot" => Ok(agena_provider::CredentialIssuer::GithubCopilot),
@@ -66,7 +68,8 @@ pub(crate) fn trimmed_owned(value: &str) -> Option<String> {
 pub(crate) fn plugin_config_setting_target(
     path: &str,
 ) -> anyhow::Result<Option<(String, Vec<String>)>> {
-    let segments = agena_domain::parse_json_path(path).map_err(|error| anyhow!(error.to_string()))?;
+    let segments =
+        agena_domain::parse_json_path(path).map_err(|error| anyhow!(error.to_string()))?;
     if segments.len() < 4
         || segments.first().is_none_or(|segment| segment != "plugins")
         || segments.get(1).is_none_or(|segment| segment != "list")
@@ -230,10 +233,8 @@ pub(crate) async fn list_draft_provider_adapter_models(
     app: &Application,
     draft: &ProviderConfigDraft,
     adapter_ids: &[String],
-) -> std::result::Result<
-    agena_api::resource::ProviderAdapterModelsResponse,
-    crate::ApplicationError,
-> {
+) -> std::result::Result<agena_api::resource::ProviderAdapterModelsResponse, crate::ApplicationError>
+{
     let mut draft = draft.clone();
     draft.normalize_shape();
     let request = draft
@@ -251,10 +252,8 @@ pub(crate) async fn list_saved_provider_adapter_models(
     app: &Application,
     provider_id: &str,
     adapter_ids: &[String],
-) -> std::result::Result<
-    agena_api::resource::ProviderAdapterModelsResponse,
-    crate::ApplicationError,
-> {
+) -> std::result::Result<agena_api::resource::ProviderAdapterModelsResponse, crate::ApplicationError>
+{
     let provider_id = provider_id.trim();
     let adapter_models = app
         .provider_catalog()
@@ -515,11 +514,8 @@ pub(crate) async fn save_provider_adapter_matches(
         .models
         .iter()
         .map(|model| {
-            let generated = provider_model_json_for_model_id(
-                &catalog_entries,
-                model.id.as_ref(),
-                Some(model),
-            );
+            let generated =
+                provider_model_json_for_model_id(&catalog_entries, model.id.as_ref(), Some(model));
             (
                 model.id.to_string(),
                 preserve_existing_model_execution_policy(
@@ -677,14 +673,11 @@ pub(crate) async fn set_provider_default_selection(
         })?;
 
     if response.reload_required {
-        app.runtime_control()
-            .reload()
-            .await
-            .map_err(|error| {
-                crate::ApplicationError::internal(format!(
-                    "failed to reload runtime after provider default selection change: {error}"
-                ))
-            })?;
+        app.runtime_control().reload().await.map_err(|error| {
+            crate::ApplicationError::internal(format!(
+                "failed to reload runtime after provider default selection change: {error}"
+            ))
+        })?;
     }
     Ok(response)
 }
@@ -795,9 +788,8 @@ pub(crate) async fn save_provider_model_value(
         ProviderStudioSaveField::ProviderId,
     )
     .map_err(ProviderStudioSaveError::Validation)?;
-    let adapter_id =
-        required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
-            .map_err(ProviderStudioSaveError::Validation)?;
+    let adapter_id = required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
+        .map_err(ProviderStudioSaveError::Validation)?;
     let model_id = required_provider_save_field(model_id, ProviderStudioSaveField::ModelId)
         .map_err(ProviderStudioSaveError::Validation)?;
     let JsonValue::Object(_) = &model_value else {
@@ -811,8 +803,8 @@ pub(crate) async fn save_provider_model_value(
     draft
         .validate_for_adapters_for_save(&effective_adapter_ids)
         .map_err(ProviderStudioSaveError::Validation)?;
-    let current_provider = read_file_provider_settings(app, provider_id)
-        .map_err(ProviderStudioSaveError::other)?;
+    let current_provider =
+        read_file_provider_settings(app, provider_id).map_err(ProviderStudioSaveError::other)?;
     let current_defaults = current_provider
         .as_ref()
         .and_then(JsonValue::as_object)
@@ -844,10 +836,9 @@ pub(crate) async fn save_provider_model_value(
                 .map(|response| response.value)
         })
         .transpose()?;
-    let model_overlay = serde_json::from_value::<agena_provider::ResolvedProviderModelConfig>(
-        model_value,
-    )
-    .map_err(ProviderStudioSaveError::other)?;
+    let model_overlay =
+        serde_json::from_value::<agena_provider::ResolvedProviderModelConfig>(model_value)
+            .map_err(ProviderStudioSaveError::other)?;
     let mut adapter_patch = merge_provider_model_adapter_patch_for_save(
         existing_adapter,
         model_id,
@@ -907,9 +898,8 @@ pub(crate) async fn delete_provider_model(
         ProviderStudioSaveField::ProviderId,
     )
     .map_err(ProviderStudioSaveError::Validation)?;
-    let adapter_id =
-        required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
-            .map_err(ProviderStudioSaveError::Validation)?;
+    let adapter_id = required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
+        .map_err(ProviderStudioSaveError::Validation)?;
     let model_id = required_provider_save_field(model_id, ProviderStudioSaveField::ModelId)
         .map_err(ProviderStudioSaveError::Validation)?;
     let effective_adapter_ids =
@@ -1056,9 +1046,8 @@ pub(crate) async fn delete_provider_adapter(
         ProviderStudioSaveField::ProviderId,
     )
     .map_err(ProviderStudioSaveError::Validation)?;
-    let adapter_id =
-        required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
-            .map_err(ProviderStudioSaveError::Validation)?;
+    let adapter_id = required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
+        .map_err(ProviderStudioSaveError::Validation)?;
 
     let mut provider_value = read_file_provider_settings(app, provider_id)
         .map_err(ProviderStudioSaveError::other)?
@@ -1085,9 +1074,7 @@ pub(crate) async fn delete_provider_adapter(
             Some(JsonValue::Object(models)) => models.len(),
             Some(JsonValue::Null) | None => 0,
             Some(_) => {
-                return Err(
-                    ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject,
-                );
+                return Err(ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject);
             }
         };
         (removed_model_count, adapters.is_empty())
@@ -1207,13 +1194,9 @@ pub(crate) async fn patch_provider_settings(
     app: &Application,
     provider_id: &str,
     provider_patch: JsonValue,
-) -> std::result::Result<
-    agena_runtime::ConfigSettingsEditResponse,
-    ProviderStudioSaveError,
-> {
-    let response = app
-        .runtime_config_settings()
-        .patch_file_settings(agena_runtime::ConfigSettingsPatchInput {
+) -> std::result::Result<agena_runtime::ConfigSettingsEditResponse, ProviderStudioSaveError> {
+    let response = app.runtime_config_settings().patch_file_settings(
+        agena_runtime::ConfigSettingsPatchInput {
             target: agena_runtime::ConfigSettingsPathInput {
                 path: Some("providers".to_owned()),
             },
@@ -1225,7 +1208,8 @@ pub(crate) async fn patch_provider_settings(
                 validate: true,
                 reload: true,
             },
-        })?;
+        },
+    )?;
 
     if response.reload_required {
         app.runtime_control()
@@ -1243,13 +1227,9 @@ pub(crate) async fn patch_provider_settings(
 pub(crate) async fn patch_provider_settings_root(
     app: &Application,
     changes: JsonValue,
-) -> std::result::Result<
-    agena_runtime::ConfigSettingsEditResponse,
-    ProviderStudioSaveError,
-> {
-    let response = app
-        .runtime_config_settings()
-        .patch_file_settings(agena_runtime::ConfigSettingsPatchInput {
+) -> std::result::Result<agena_runtime::ConfigSettingsEditResponse, ProviderStudioSaveError> {
+    let response = app.runtime_config_settings().patch_file_settings(
+        agena_runtime::ConfigSettingsPatchInput {
             target: agena_runtime::ConfigSettingsPathInput {
                 path: Some("providers".to_owned()),
             },
@@ -1259,7 +1239,8 @@ pub(crate) async fn patch_provider_settings_root(
                 validate: true,
                 reload: true,
             },
-        })?;
+        },
+    )?;
 
     if response.reload_required {
         app.runtime_control()
@@ -1275,21 +1256,18 @@ pub(crate) async fn set_provider_settings(
     app: &Application,
     provider_id: &str,
     provider_value: JsonValue,
-) -> std::result::Result<
-    agena_runtime::ConfigSettingsEditResponse,
-    ProviderStudioSaveError,
-> {
-    let response = app
-        .runtime_config_settings()
-        .set_file_setting(agena_runtime::ConfigSettingsSetInput {
-            path: format!("providers.{}", quoted_settings_segment(provider_id)),
-            value: provider_value,
-            options: agena_runtime::ConfigSettingsEditOptions {
-                dry_run: false,
-                validate: true,
-                reload: true,
-            },
-        })?;
+) -> std::result::Result<agena_runtime::ConfigSettingsEditResponse, ProviderStudioSaveError> {
+    let response =
+        app.runtime_config_settings()
+            .set_file_setting(agena_runtime::ConfigSettingsSetInput {
+                path: format!("providers.{}", quoted_settings_segment(provider_id)),
+                value: provider_value,
+                options: agena_runtime::ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            })?;
 
     if response.reload_required {
         app.runtime_control()

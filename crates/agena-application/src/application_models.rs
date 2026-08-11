@@ -12,13 +12,11 @@ impl Application {
     ) -> Result<agena_domain::ModelRef, ApplicationError> {
         if let Some(model) = request.model.as_ref() {
             return match model.adapter_id.as_deref() {
-                Some(adapter_id) => {
-                    agena_domain::ModelRef::try_new_with_adapter(
-                        &model.provider_id,
-                        adapter_id,
-                        &model.model_id,
-                    )
-                }
+                Some(adapter_id) => agena_domain::ModelRef::try_new_with_adapter(
+                    &model.provider_id,
+                    adapter_id,
+                    &model.model_id,
+                ),
                 None => agena_domain::ModelRef::try_new(&model.provider_id, &model.model_id),
             }
             .map_err(|error| {

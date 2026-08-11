@@ -33,14 +33,21 @@ impl Application {
             search: None,
         })
         .await
-        .map_err(|error| ApplicationError::internal(format!("failed to list child sessions: {error}")))
+        .map_err(|error| {
+            ApplicationError::internal(format!("failed to list child sessions: {error}"))
+        })
     }
 
-    async fn get_session(&self, session_id: i64) -> Result<Option<SessionResource>, ApplicationError> {
+    async fn get_session(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<SessionResource>, ApplicationError> {
         self.service()
             .get_session(session_id)
             .await
-            .map_err(|error| ApplicationError::internal(format!("failed to fetch session: {error}")))
+            .map_err(|error| {
+                ApplicationError::internal(format!("failed to fetch session: {error}"))
+            })
     }
 
     pub async fn list_session_subtree(
@@ -90,7 +97,9 @@ impl Application {
             .load(session_id)
             .await
             .map_err(|error| {
-                ApplicationError::internal(format!("failed to load session timeline parts: {error}"))
+                ApplicationError::internal(format!(
+                    "failed to load session timeline parts: {error}"
+                ))
             })?;
         let visible = view
             .parts
@@ -130,7 +139,9 @@ impl Application {
             session_id,
         )
         .await
-        .map_err(|error| ApplicationError::internal(format!("failed to load session state: {error}")))
+        .map_err(|error| {
+            ApplicationError::internal(format!("failed to load session state: {error}"))
+        })
     }
 
     pub async fn set_session_permission(
@@ -158,9 +169,7 @@ impl Application {
         let expected_version = self
             .get_session(session_id)
             .await?
-            .ok_or_else(|| {
-                ApplicationError::internal(format!("session not found: {session_id}"))
-            })?
+            .ok_or_else(|| ApplicationError::internal(format!("session not found: {session_id}")))?
             .version;
         let session_services = self.session_execution_services()?;
         let outcome = session_services
@@ -223,7 +232,9 @@ impl Application {
                 session: SessionHierarchyRequest { title, parent_id },
             })
             .await
-            .map_err(|error| ApplicationError::internal(format!("failed to create session: {error}")))
+            .map_err(|error| {
+                ApplicationError::internal(format!("failed to create session: {error}"))
+            })
     }
 
     pub async fn rename_session(
@@ -235,11 +246,11 @@ impl Application {
             .get_session(session_id)
             .await
             .map_err(|error| {
-                ApplicationError::internal(format!(
-                    "failed to load session before rename: {error}"
-                ))
+                ApplicationError::internal(format!("failed to load session before rename: {error}"))
             })?
-            .ok_or_else(|| ApplicationError::internal(format!("session not found: {session_id}")))?;
+            .ok_or_else(|| {
+                ApplicationError::internal(format!("session not found: {session_id}"))
+            })?;
 
         self.service()
             .assert_session_version(session_id, existing.version)
@@ -251,12 +262,11 @@ impl Application {
             })?;
 
         self.service()
-            .replace_session(
-                session_id,
-                crate::dto::SessionUpdateRequest { title },
-            )
+            .replace_session(session_id, crate::dto::SessionUpdateRequest { title })
             .await
-            .map_err(|error| ApplicationError::internal(format!("failed to rename session: {error}")))
+            .map_err(|error| {
+                ApplicationError::internal(format!("failed to rename session: {error}"))
+            })
     }
 
     async fn resolve_workspace_resource(
@@ -271,7 +281,9 @@ impl Application {
                 create_if_missing,
             })
             .await
-            .map_err(|error| ApplicationError::internal(format!("failed to resolve workspace: {error}")))
+            .map_err(|error| {
+                ApplicationError::internal(format!("failed to resolve workspace: {error}"))
+            })
     }
 
     async fn current_workspace_id(&self) -> Result<i64, ApplicationError> {
@@ -279,9 +291,7 @@ impl Application {
             .resolve_workspace_resource(true)
             .await
             .map_err(|error| {
-                ApplicationError::internal(format!(
-                    "failed to resolve current workspace: {error}"
-                ))
+                ApplicationError::internal(format!("failed to resolve current workspace: {error}"))
             })?
             .id)
     }
@@ -320,16 +330,17 @@ impl Application {
         Ok(items)
     }
 
-    async fn resolve_session_root(&self, session_id: i64) -> Result<SessionResource, ApplicationError> {
-        let mut current = self
-            .get_session(session_id)
-            .await?
-            .ok_or_else(|| ApplicationError::internal(format!("session not found: {session_id}")))?;
+    async fn resolve_session_root(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionResource, ApplicationError> {
+        let mut current = self.get_session(session_id).await?.ok_or_else(|| {
+            ApplicationError::internal(format!("session not found: {session_id}"))
+        })?;
         while let Some(parent_id) = current.parent_id {
-            current = self
-                .get_session(parent_id)
-                .await?
-                .ok_or_else(|| ApplicationError::internal(format!("session not found: {parent_id}")))?;
+            current = self.get_session(parent_id).await?.ok_or_else(|| {
+                ApplicationError::internal(format!("session not found: {parent_id}"))
+            })?;
         }
         Ok(current)
     }

@@ -57,7 +57,9 @@ impl Application {
             .plugin_runtime()
             .resolve_plugin_tool(Some(plugin_id), tool_name)
             .ok_or_else(|| {
-                ApplicationError::internal(format!("plugin tool not found: {plugin_id}/{tool_name}"))
+                ApplicationError::internal(format!(
+                    "plugin tool not found: {plugin_id}/{tool_name}"
+                ))
             })?;
         let input = match input {
             serde_json::Value::Null => serde_json::json!({}),

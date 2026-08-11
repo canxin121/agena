@@ -20,8 +20,8 @@ impl Application {
         path: &str,
         value: serde_json::Value,
     ) -> Result<ConfigSettingsEditResponse, ApplicationError> {
-        if let Some((plugin_id, config_segments)) = plugin_config_setting_target(path)
-            .map_err(ApplicationError::internal)?
+        if let Some((plugin_id, config_segments)) =
+            plugin_config_setting_target(path).map_err(ApplicationError::internal)?
         {
             return self
                 .set_plugin_config_setting(plugin_id.as_str(), config_segments.as_slice(), value)
@@ -34,8 +34,8 @@ impl Application {
         &self,
         path: &str,
     ) -> Result<ConfigSettingsEditResponse, ApplicationError> {
-        if let Some((plugin_id, config_segments)) = plugin_config_setting_target(path)
-            .map_err(ApplicationError::internal)?
+        if let Some((plugin_id, config_segments)) =
+            plugin_config_setting_target(path).map_err(ApplicationError::internal)?
         {
             return self
                 .delete_plugin_config_setting(plugin_id.as_str(), config_segments.as_slice())
@@ -56,14 +56,11 @@ impl Application {
             })?;
 
         if response.reload_required {
-            self.runtime_control()
-                .reload()
-                .await
-                .map_err(|error| {
-                    ApplicationError::internal(format!(
-                        "failed to reload runtime after config change: {error}"
-                    ))
-                })?;
+            self.runtime_control().reload().await.map_err(|error| {
+                ApplicationError::internal(format!(
+                    "failed to reload runtime after config change: {error}"
+                ))
+            })?;
         }
         Ok(response)
     }
@@ -118,14 +115,11 @@ impl Application {
             })?;
 
         if response.reload_required {
-            self.runtime_control()
-                .reload()
-                .await
-                .map_err(|error| {
-                    ApplicationError::internal(format!(
-                        "failed to reload runtime after config change: {error}"
-                    ))
-                })?;
+            self.runtime_control().reload().await.map_err(|error| {
+                ApplicationError::internal(format!(
+                    "failed to reload runtime after config change: {error}"
+                ))
+            })?;
         }
         Ok(response)
     }

@@ -22,9 +22,9 @@ pub use draft_auth_data::{
     GithubCopilotCredentialDraft, GitlabCredentialDraft, OpenAiChatgptCredentialDraft,
     ProviderBrowserAuthSessionDraft, ProviderCredentialDraftBundle, ProviderDeviceAuthSessionDraft,
     ProviderDraftAdapterRule, ProviderDraftAuthActionResult, ProviderDraftAuthDetails,
-    ProviderDraftAuthError, ProviderDraftAuthField, ProviderDraftAuthKind, ProviderDraftAuthMessage,
-    ProviderDraftInteractiveLoginKind, ProviderDraftSecretSourceKind, ProviderOAuthTokensDraft,
-    ProviderStudioSaveError, ProviderStudioSaveField, ProviderStudioSaveResult,
-    ProviderStudioSaveValidationError,
+    ProviderDraftAuthError, ProviderDraftAuthField, ProviderDraftAuthKind,
+    ProviderDraftAuthMessage, ProviderDraftInteractiveLoginKind, ProviderDraftSecretSourceKind,
+    ProviderOAuthTokensDraft, ProviderStudioSaveError, ProviderStudioSaveField,
+    ProviderStudioSaveResult, ProviderStudioSaveValidationError,
 };
 pub use draft_config::ProviderConfigDraft;

@@ -14,8 +14,8 @@ use super::draft_auth_data::{
 };
 use super::draft_config::ProviderConfigDraft;
 use agena_provider::{
-    CatalogModelDefinition, CredentialIssuer, OpenAiResponsesBackendConfig,
-    ProviderAdapterOverlay, ProviderCapabilityFamilyConfig,
+    CatalogModelDefinition, CredentialIssuer, OpenAiResponsesBackendConfig, ProviderAdapterOverlay,
+    ProviderCapabilityFamilyConfig,
 };
 
 pub(crate) fn preferred_catalog_model_for_model_id<'a>(

@@ -4,7 +4,9 @@
 //! migrated free functions in `provider_studio::save`.
 
 use crate::provider_studio::save;
-use crate::provider_studio::{ProviderConfigDraft, ProviderStudioSaveError, ProviderStudioSaveResult};
+use crate::provider_studio::{
+    ProviderConfigDraft, ProviderStudioSaveError, ProviderStudioSaveResult,
+};
 use crate::{Application, ApplicationError};
 
 impl Application {

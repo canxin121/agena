@@ -3,9 +3,7 @@
 
 use anyhow::{Result, anyhow};
 
-use super::catalog::{
-    credential_issuer_label, optional_non_empty, parse_oauth_expires_at_ms,
-};
+use super::catalog::{credential_issuer_label, optional_non_empty, parse_oauth_expires_at_ms};
 use super::draft_auth_data::{
     DEFAULT_GITLAB_INSTANCE_URL, ProviderCredentialDraftBundle, ProviderDraftAuthDetails,
     ProviderDraftAuthKind, ProviderDraftInteractiveLoginKind, ProviderDraftSecretSourceKind,

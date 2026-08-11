@@ -135,20 +135,40 @@ fn todo_priority_resource_label(
 
 pub(crate) fn render_user_input_request(
     request: &agena_api::resource::UserInputRequest,
+    reply: Option<&agena_api::resource::UserInputReply>,
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,
 ) {
-    push_multiline(
-        out,
-        "  ▸ ",
-        &i18n.text_args(
-            "message-awaiting-user-input",
-            &agena_tui::fl_args!("request_id" => request.request_id.as_str()),
-        ),
-        Style::default().fg(agena_tui_components::theme::special_color()),
-        width,
-    );
+    match reply {
+        Some(reply) => {
+            push_multiline(
+                out,
+                "  ▸ ",
+                &i18n.text_args(
+                    "message-user-input-replied",
+                    &agena_tui::fl_args!("request_id" => reply.request_id.as_str()),
+                ),
+                Style::default().fg(agena_tui_components::theme::success_color()),
+                width,
+            );
+            for value in reply.answers.values().flatten() {
+                push_multiline(out, "    ✓ ", value, Style::default(), width);
+            }
+        }
+        None => {
+            push_multiline(
+                out,
+                "  ▸ ",
+                &i18n.text_args(
+                    "message-awaiting-user-input",
+                    &agena_tui::fl_args!("request_id" => request.request_id.as_str()),
+                ),
+                Style::default().fg(agena_tui_components::theme::special_color()),
+                width,
+            );
+        }
+    }
     for question in &request.questions {
         push_multiline(
             out,

@@ -134,6 +134,7 @@ message-todo-list = 할 일 목록
 message-error = 오류 [{$code}]: {$message}
 message-attachments = 첨부
 message-awaiting-user-input = 사용자 입력 대기 중: {$request_id}
+message-user-input-replied = 사용자 입력에 답변함：{$request_id}
 message-question-line = - {$question} ({$id})
 message-part-detail-unavailable = 파트 상세를 사용할 수 없습니다
 message-tool-pending = 대기 중: {$label}

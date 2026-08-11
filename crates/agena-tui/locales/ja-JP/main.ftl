@@ -134,6 +134,7 @@ message-todo-list = TODO リスト
 message-error = エラー [{$code}]: {$message}
 message-attachments = 添付
 message-awaiting-user-input = ユーザー入力待ち: {$request_id}
+message-user-input-replied = ユーザー入力に回答済み：{$request_id}
 message-question-line = - {$question} ({$id})
 message-part-detail-unavailable = パート詳細を利用できません
 message-tool-pending = 保留: {$label}

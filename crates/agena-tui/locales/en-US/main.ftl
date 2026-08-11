@@ -1663,6 +1663,7 @@ message-todo-list = todo list
 message-error = error [{$code}]: {$message}
 message-attachments = attachments
 message-awaiting-user-input = awaiting user input: {$request_id}
+message-user-input-replied = answered user input: {$request_id}
 message-question-line = - {$question}
 message-part-detail-unavailable = part detail unavailable
 message-tool-pending = pending: {$label}

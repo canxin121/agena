@@ -33,7 +33,6 @@ pub mod tool {
 }
 
 mod compaction_policy;
-mod completion_request;
 mod context_budget;
 mod context_governor;
 mod error;
@@ -66,7 +65,6 @@ pub use agena_runtime_tools::{
     list_managed_snapshots, project_state_dir,
 };
 pub use compaction_policy::*;
-pub use completion_request::{CompletionRequestInputs, build_completion_request};
 pub use context_budget::*;
 pub use context_governor::ContextGovernor;
 pub use error::AppError;

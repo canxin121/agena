@@ -9,7 +9,6 @@ mod prompt_window;
 mod store;
 mod transcript;
 
-pub(crate) use agena_runtime::ContextGovernor;
 pub use agena_runtime_session_core::model::Session;
 pub(crate) use agena_runtime_session_core::model::{
     PromptCompactionMessage, SessionRuntimeState, SubtaskRuntimeState,

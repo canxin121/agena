@@ -1,10 +1,11 @@
 use super::{
-    AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, ContextGovernor,
-    FinishReason, ModelRef, PathBuf, PendingProviderNativeToolCall, PendingToolCall,
-    ProviderRegistry, REASONING_PLACEHOLDER, SessionProcessor, SessionRunRequest, SessionRunResult,
-    SessionRunTermination, cancel_nonterminal_parts, complete_part_status, fail_nonterminal_parts,
-    map_finish_reason, message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
+    AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, FinishReason, PathBuf,
+    PendingProviderNativeToolCall, PendingToolCall, REASONING_PLACEHOLDER, SessionProcessor,
+    SessionRunRequest, SessionRunResult, SessionRunTermination, cancel_nonterminal_parts,
+    complete_part_status, fail_nonterminal_parts, map_finish_reason,
+    message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
 };
+use crate::provider::ProviderRegistry;
 use agena_provider::{ProviderNativeToolArtifact, ProviderNativeToolOutputBlock};
 use agena_storage::store::{Part, PartDelta, PartState, RunOutcome};
 use futures_util::StreamExt;
@@ -58,21 +59,13 @@ fn merge_round_record(
 
 impl SessionProcessor {
     pub fn new(
-        provider_registry: Arc<ProviderRegistry>,
-        context_governor: ContextGovernor,
         plugins: Arc<agena_plugin_host::PluginHost>,
         workspace_root: impl Into<PathBuf>,
     ) -> Self {
         Self {
-            provider_registry,
-            context_governor,
             plugins,
             workspace_root: workspace_root.into(),
         }
-    }
-
-    pub(crate) fn provider_registry(&self) -> &Arc<ProviderRegistry> {
-        &self.provider_registry
     }
 
     /// Apply the `chat.params` plugin hook chain to a [`CompletionRequest`]
@@ -145,6 +138,7 @@ impl SessionProcessor {
     pub(crate) async fn run_turn(
         &self,
         mut run: SessionRunRequest,
+        provider_registry: &ProviderRegistry,
     ) -> Result<SessionRunResult, AppError> {
         let processor_span = tracing::info_span!(
             "session.processor_turn",
@@ -172,7 +166,7 @@ impl SessionProcessor {
         }
         let provider_request = crate::provider::with_request_cancellation(
             run.cancel.clone(),
-            self.provider_registry
+            provider_registry
                 .complete_stream(&run.model, run.completion.clone())
                 .instrument(processor_span.clone()),
         );
@@ -683,37 +677,6 @@ impl SessionProcessor {
             finish_reason: finish_reason_enum,
             usage,
         })
-    }
-
-    pub(crate) fn prompt_exceeds_budget(&self, parts: &[Part], max_prompt_chars: usize) -> bool {
-        self.context_governor.prompt_exceeds_budget(
-            crate::session::prompt_window::approximate_prompt_payload_chars(parts),
-            max_prompt_chars,
-        )
-    }
-
-    pub(crate) fn max_prompt_chars(&self) -> usize {
-        self.context_governor.max_prompt_chars()
-    }
-
-    pub(crate) fn supports_prompt_continuation(&self, model: &ModelRef) -> bool {
-        self.provider_registry
-            .supports_prompt_continuation(model)
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn prompt_cache_shape(
-        &self,
-        model: &ModelRef,
-    ) -> Result<Option<agena_provider::PromptCacheShape>, AppError> {
-        Ok(self.provider_registry.prompt_cache_shape(model)?)
-    }
-
-    pub(crate) fn model_metadata(
-        &self,
-        model: &ModelRef,
-    ) -> Result<agena_domain::ModelMetadata, AppError> {
-        Ok(self.provider_registry.model_metadata(model)?)
     }
 }
 

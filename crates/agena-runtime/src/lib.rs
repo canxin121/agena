@@ -185,7 +185,6 @@ pub(crate) use agena_runtime_session::{
     prompt_token_budget,
 };
 pub(crate) use agena_runtime_session::{AbortOnDrop, spawn_abortable, spawn_detached};
-pub(crate) use agena_runtime_session::{CompletionRequestInputs, build_completion_request};
 pub(crate) use agena_runtime_session::{
     DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTOR_RUN_CHARS,
     MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,

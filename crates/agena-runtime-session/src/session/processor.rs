@@ -6,7 +6,6 @@ use chrono::Utc;
 
 use crate::error::AppError;
 use crate::part::OperationPart;
-use crate::provider::ProviderRegistry;
 use crate::provider_state::PartProviderState;
 use agena_domain::ModelRef;
 use agena_domain::{
@@ -17,7 +16,6 @@ use agena_provider::CompletionRequest;
 use agena_provider::CompletionStreamEvent;
 
 use super::{
-    ContextGovernor,
     store::{ProcessorPartIdAllocator, StoreAdapter},
 };
 use agena_storage::store::Part;
@@ -87,10 +85,10 @@ pub(crate) enum SessionRunTermination {
 }
 
 #[derive(Clone)]
-/// Processor executing session runs against providers and tools.
+/// Processor executing session runs against providers and tools. Keeps only
+/// the run-specific collaborators (plugin host, workspace root); provider and
+/// context-budget state live on `SessionManagerState`.
 pub struct SessionProcessor {
-    provider_registry: Arc<ProviderRegistry>,
-    context_governor: ContextGovernor,
     plugins: Arc<agena_plugin_host::PluginHost>,
     workspace_root: PathBuf,
 }

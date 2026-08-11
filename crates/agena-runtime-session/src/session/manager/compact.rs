@@ -316,7 +316,7 @@ impl SessionManager {
         options: &SessionRunOptions,
         state: &SessionManagerState,
     ) -> Result<PromptInputs, AppError> {
-        let provider_registry = state.processor.provider_registry();
+        let provider_registry = &state.provider_registry;
         let scoped_executor = state
             .tool_executor
             .for_session_context_async(&session.runtime.execution)
@@ -350,7 +350,7 @@ impl SessionManager {
             provider_compaction.as_ref(),
         );
         let metadata = state
-            .processor
+            .provider_registry
             .model_metadata(&options.model)
             .unwrap_or_default();
         let max_output = options
@@ -363,7 +363,7 @@ impl SessionManager {
             None,
         )
         .unwrap_or_else(|| {
-            agena_runtime::estimate_prompt_tokens_from_chars(state.processor.max_prompt_chars())
+            agena_runtime::estimate_prompt_tokens_from_chars(state.context_governor.max_prompt_chars())
         });
         Ok(PromptInputs {
             turns,
@@ -383,7 +383,7 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
         cancellation: tokio_util::sync::CancellationToken,
     ) -> Result<Option<ProviderCompactionOutput>, AppError> {
-        let provider_registry = state.processor.provider_registry();
+        let provider_registry = &state.provider_registry;
         let mut request = super::completion_request(
             options,
             options.system.clone(),
@@ -434,7 +434,7 @@ impl SessionManager {
         bound_recent_messages(&mut recent_messages);
 
         let max_input_chars = if inputs.hard_limit_tokens == u64::MAX {
-            state.processor.max_prompt_chars()
+            state.context_governor.max_prompt_chars()
         } else {
             usize::try_from(inputs.hard_limit_tokens)
                 .unwrap_or(usize::MAX / 4)
@@ -454,7 +454,7 @@ impl SessionManager {
         }
 
         let metadata = state
-            .processor
+            .provider_registry
             .model_metadata(&options.model)
             .unwrap_or_default();
         let max_output_tokens = metadata
@@ -495,10 +495,7 @@ impl SessionManager {
 
         let future = crate::provider::with_request_cancellation(
             Some(cancellation.clone()),
-            state
-                .processor
-                .provider_registry()
-                .complete(&options.model, request),
+            state.provider_registry.complete(&options.model, request),
         );
         let response = tokio::select! {
             biased;

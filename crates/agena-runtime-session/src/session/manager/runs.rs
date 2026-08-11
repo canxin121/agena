@@ -208,27 +208,7 @@ impl SessionManager {
         })
     }
 
-    #[tracing::instrument(skip(self, request), fields(session_id = request.run.session_id))]
-    pub(in crate::session::manager) async fn start_user_message_parts(
-        &self,
-        request: SessionUserRunRequest,
-    ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
-        let session_id = request.run.session_id;
-        self.start_registered(
-            session_id,
-            ExecutionSource::User,
-            ExecutionConversationTarget::NewTurn,
-            "user execution",
-            move |manager, control, steer_rx| async move {
-                manager
-                    .submit_user_run_inner(request, control, steer_rx, None)
-                    .await
-            },
-        )
-        .await
-    }
-
-    async fn submit_user_run_inner(
+    pub(in crate::session::manager) async fn submit_user_run_inner(
         &self,
         mut request: SessionUserRunRequest,
         control: Arc<ExecutionControl>,
@@ -242,7 +222,7 @@ impl SessionManager {
         let prompt_text = request
             .parts
             .iter()
-            .filter_map(|p| typed_text(&p.content))
+            .filter_map(|p| typed_text(p))
             .collect::<Vec<_>>()
             .join("\n");
         if !prompt_text.is_empty() {
@@ -296,7 +276,7 @@ impl SessionManager {
         let user_parts = input_parts
             .iter()
             .map(|part| {
-                new_part_from_content("text", PartRole::User, &part.content, PartState::Completed)
+                new_part_from_content("text", PartRole::User, part, PartState::Completed)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let outcome = self

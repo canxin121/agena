@@ -1499,8 +1499,8 @@ pub(crate) fn render_part_node(
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
             match request.as_ref() {
-                RequestPartResource::UserInput { request, .. } => {
-                    render_user_input_request(request, out, width, i18n);
+                RequestPartResource::UserInput { request, reply } => {
+                    render_user_input_request(request, reply.as_ref(), out, width, i18n);
                     RenderedNodeDraft {
                         key: TranscriptNodeKey::Activity {
                             entry_id: message.id,

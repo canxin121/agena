@@ -134,6 +134,7 @@ message-todo-list = lista de tareas
 message-error = error [{$code}]: {$message}
 message-attachments = adjuntos
 message-awaiting-user-input = esperando entrada de usuario: {$request_id}
+message-user-input-replied = entrada de usuario respondida: {$request_id}
 message-question-line = - {$question} ({$id})
 message-part-detail-unavailable = detalle de parte no disponible
 message-tool-pending = pendiente: {$label}

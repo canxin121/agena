@@ -134,6 +134,7 @@ message-todo-list = 待辦清單
 message-error = 錯誤 [{$code}]：{$message}
 message-attachments = 附件
 message-awaiting-user-input = 等待使用者輸入：{$request_id}
+message-user-input-replied = 使用者輸入已回覆：{$request_id}
 message-question-line = - {$question} ({$id})
 message-part-detail-unavailable = 此分段詳情不可用
 message-tool-pending = 待執行：{$label}

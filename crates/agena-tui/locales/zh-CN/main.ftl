@@ -1663,6 +1663,7 @@ message-todo-list = 待办列表
 message-error = 错误 [{$code}]：{$message}
 message-attachments = 附件
 message-awaiting-user-input = 等待用户输入：{$request_id}
+message-user-input-replied = 用户输入已答复：{$request_id}
 message-question-line = - {$question}
 message-part-detail-unavailable = 该分段详情不可用
 message-tool-pending = 待执行：{$label}

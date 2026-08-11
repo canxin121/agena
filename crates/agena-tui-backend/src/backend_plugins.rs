@@ -260,17 +260,41 @@ impl Backend {
         &self,
         params: UpsertPermissionRuleParams,
     ) -> Result<PermissionRuleResource> {
-        match dispatch::dispatch_command(
-            &self.application,
-            ApiCommand::UpsertPermissionRule(params),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            CommandResult::PermissionRule(rule) => Ok(rule),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
-        .context("failed to create permission rule")
+        let UpsertPermissionRuleParams {
+            action_key,
+            subject_kind,
+            tool_name,
+            qualifier,
+            path_access_kind,
+            workspace_root,
+            target_path,
+            network_target,
+            network_host,
+            network_port,
+            scope,
+            session_id,
+            mode,
+        } = params;
+        self.application
+            .service()
+            .create_permission_rule(agena_application::dto::PermissionRuleWriteRequest {
+                action_key,
+                subject_kind,
+                tool_name,
+                qualifier,
+                path_access_kind,
+                workspace_root,
+                target_path,
+                network_target,
+                network_host,
+                network_port,
+                scope,
+                session_id,
+                mode,
+            })
+            .await
+            .map_err(anyhow::Error::new)
+            .context("failed to create permission rule")
     }
 
     pub async fn replace_permission_rule(
@@ -278,37 +302,53 @@ impl Backend {
         rule_id: i64,
         params: UpsertPermissionRuleParams,
     ) -> Result<PermissionRuleResource> {
-        match dispatch::dispatch_command(
-            &self.application,
-            ApiCommand::ReplacePermissionRule(ReplacePermissionRuleParams {
+        let UpsertPermissionRuleParams {
+            action_key,
+            subject_kind,
+            tool_name,
+            qualifier,
+            path_access_kind,
+            workspace_root,
+            target_path,
+            network_target,
+            network_host,
+            network_port,
+            scope,
+            session_id,
+            mode,
+        } = params;
+        self.application
+            .service()
+            .replace_permission_rule(
                 rule_id,
-                rule: params,
-            }),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            CommandResult::PermissionRule(rule) => Ok(rule),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
-        .context("failed to replace permission rule")
+                agena_application::dto::PermissionRuleWriteRequest {
+                    action_key,
+                    subject_kind,
+                    tool_name,
+                    qualifier,
+                    path_access_kind,
+                    workspace_root,
+                    target_path,
+                    network_target,
+                    network_host,
+                    network_port,
+                    scope,
+                    session_id,
+                    mode,
+                },
+            )
+            .await
+            .map_err(anyhow::Error::new)
+            .context("failed to replace permission rule")
     }
 
     pub async fn revoke_permission_rule(&self, rule_id: i64) -> Result<PermissionRuleResource> {
-        match dispatch::dispatch_command(
-            &self.application,
-            ApiCommand::RevokePermissionRule(agena_api::commands::RevokePermissionRuleParams {
-                rule_id,
-                reason: None,
-            }),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            CommandResult::PermissionRule(rule) => Ok(rule),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
-        .context("failed to revoke permission rule")
+        self.application
+            .service()
+            .revoke_permission_rule(rule_id, None)
+            .await
+            .map_err(anyhow::Error::new)
+            .context("failed to revoke permission rule")
     }
 
     pub async fn invoke_plugin_slash_command(
@@ -602,20 +642,17 @@ impl Backend {
         &self,
         create_if_missing: bool,
     ) -> Result<WorkspaceResource> {
-        match dispatch::dispatch_command(
-            &self.application,
-            ApiCommand::ResolveWorkspace(agena_api::commands::ResolveWorkspaceParams {
-                path: self.workspace_root.to_string_lossy().to_string(),
+        self.application
+            .service()
+            .resolve_workspace(agena_application::dto::WorkspaceResolveRequest {
+                workspace: agena_application::dto::WorkspacePathRequest {
+                    path: self.workspace_root.to_string_lossy().to_string(),
+                },
                 create_if_missing,
-            }),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            CommandResult::Workspace(workspace) => Ok(workspace),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
-        .context("failed to resolve workspace")
+            })
+            .await
+            .map_err(anyhow::Error::new)
+            .context("failed to resolve workspace")
     }
 
     pub(super) async fn current_workspace_id(&self) -> Result<i64> {
@@ -635,23 +672,23 @@ impl Backend {
         let mut items = Vec::new();
 
         loop {
-            let page = match dispatch::dispatch_query(
-                &self.application,
-                Query::ListSessions(ListSessionsParams {
-                    cursor: cursor.clone(),
-                    limit: Some(limit),
+            let page = self
+                .application
+                .service()
+                .list_sessions(agena_application::dto::SessionListQuery {
+                    pagination: agena_application::dto::SearchPaginationQuery {
+                        pagination: agena_application::dto::CursorPaginationQuery {
+                            cursor: cursor.clone(),
+                            limit: Some(limit),
+                        },
+                        search: query.search.clone(),
+                    },
                     workspace_id: query.workspace_id,
                     parent_id: query.parent_id,
                     roots: query.roots,
-                    search: query.search.clone(),
-                }),
-            )
-            .await
-            .map_err(api_error)?
-            {
-                QueryResult::Sessions(page) => page,
-                other => return Err(anyhow!("unexpected query result: {:?}", other)),
-            };
+                })
+                .await
+                .map_err(anyhow::Error::new)?;
             cursor = page.page.next_cursor.clone();
             items.extend(page.items);
             if !page.page.has_more || cursor.is_none() {
@@ -678,8 +715,7 @@ impl Backend {
 }
 use crate::Result;
 use crate::{
-    ApiCommand, Backend, CommandResult, ListSessionsParams, Path, PermissionRuleResource,
-    PermissionToolCatalogItem, PluginCommandEffect, Query, QueryResult,
-    ReplacePermissionRuleParams, SessionResource, ToolInvocation, UpsertPermissionRuleParams,
-    WorkspaceResource, api_error, dispatch,
+    Backend, ListSessionsParams, Path, PermissionRuleResource, PermissionToolCatalogItem,
+    PluginCommandEffect, SessionResource, ToolInvocation, UpsertPermissionRuleParams,
+    WorkspaceResource,
 };

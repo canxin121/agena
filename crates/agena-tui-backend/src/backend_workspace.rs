@@ -48,24 +48,28 @@ impl Backend {
         limit: u64,
     ) -> Result<PaginatedResponse<SessionResource>> {
         let workspace_id = self.current_workspace_id().await?;
-        match dispatch::dispatch_query(
-            &self.application,
-            Query::ListSessions(ListSessionsParams {
-                cursor,
-                limit: Some(limit),
+        let page = self
+            .application
+            .service()
+            .list_sessions(agena_application::dto::SessionListQuery {
+                pagination: agena_application::dto::SearchPaginationQuery {
+                    pagination: agena_application::dto::CursorPaginationQuery {
+                        cursor,
+                        limit: Some(limit),
+                    },
+                    search: search.map(str::to_string),
+                },
                 workspace_id: Some(workspace_id),
                 parent_id: None,
                 roots: roots_only,
-                search: search.map(str::to_string),
-            }),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            QueryResult::Sessions(page) => Ok(page),
-            other => Err(anyhow!("unexpected query result: {:?}", other)),
-        }
-        .context("failed to list workspace sessions page")
+            })
+            .await
+            .map_err(anyhow::Error::new)
+            .context("failed to list workspace sessions page")?;
+        Ok(agena_application::pagination::api_page_from_application(
+            page,
+            |item| item,
+        ))
     }
 
     pub async fn create_session(
@@ -78,21 +82,15 @@ impl Backend {
             .await
             .context("failed to resolve workspace for terminal UI")?;
 
-        match dispatch::dispatch_command(
-            &self.application,
-            ApiCommand::CreateSession(CreateSessionParams {
+        self.application
+            .service()
+            .create_session(agena_application::dto::SessionCreateRequest {
                 workspace_id: workspace.id,
-                title,
-                parent_id,
-            }),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            CommandResult::Session(session) => Ok(session),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
-        .context("failed to create session")
+                session: agena_application::dto::SessionHierarchyRequest { title, parent_id },
+            })
+            .await
+            .map_err(anyhow::Error::new)
+            .context("failed to create session")
     }
 
     pub async fn rename_session(&self, session_id: i64, title: String) -> Result<SessionResource> {
@@ -102,21 +100,22 @@ impl Backend {
             .context("failed to load session before rename")?
             .ok_or_else(|| anyhow!("session not found: {session_id}"))?;
 
-        match dispatch::dispatch_command(
-            &self.application,
-            ApiCommand::UpdateSession(UpdateSessionParams {
+        self.application
+            .service()
+            .assert_session_version(session_id, existing.version)
+            .await
+            .map_err(anyhow::Error::new)
+            .context("failed to assert session version before rename")?;
+
+        self.application
+            .service()
+            .replace_session(
                 session_id,
-                title,
-                expected_version: Some(existing.version),
-            }),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            CommandResult::Session(session) => Ok(session),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
-        .context("failed to rename session")
+                agena_application::dto::SessionUpdateRequest { title },
+            )
+            .await
+            .map_err(anyhow::Error::new)
+            .context("failed to rename session")
     }
 
     pub fn list_providers(&self) -> Vec<ProviderSummaryResource> {
@@ -375,11 +374,10 @@ fn provider_summary_resource_from_catalog(
 }
 use crate::Result;
 use crate::{
-    ApiCommand, Application, Arc, Backend, CommandResult, ConfigJsonSources,
-    ConfigSettingsEditResponse, CreateSessionParams, JsonValue, ListSessionsParams, OnceLock,
-    PaginatedResponse, PathBuf, ProviderAdapterSummaryResource, ProviderDefaultsResource,
-    ProviderSummaryResource, Query, QueryResult, SessionResource, UpdateSessionParams, api_error,
-    dispatch, env, fs, normalize_plugin_record_for_config_edit, parse_aws_profile_names,
+    Application, Arc, Backend, ConfigJsonSources, ConfigSettingsEditResponse, JsonValue,
+    ListSessionsParams, OnceLock, PaginatedResponse, PathBuf, ProviderAdapterSummaryResource,
+    ProviderDefaultsResource, ProviderSummaryResource, SessionResource, env, fs,
+    normalize_plugin_record_for_config_edit, parse_aws_profile_names,
     plugin_config_setting_target, plugin_record_for_config_edit, quoted_settings_segment,
     remove_nested_json_value, set_nested_json_value,
 };

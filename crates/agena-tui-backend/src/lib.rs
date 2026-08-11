@@ -3,9 +3,9 @@
 //! Runtime backend bridge for the Agena terminal UI.
 //!
 //! Implements the command/query surface the TUI needs (sessions, permissions,
-//! providers, configuration, workspace, plugins, events) by dispatching to the
-//! shared [`agena_application`] layer and translating API resources into
-//! UI-friendly forms.
+//! providers, configuration, workspace, plugins, events) by calling the shared
+//! [`agena_application`] service layer directly and translating API resources
+//! into UI-friendly forms.
 //!
 //! The main [`Backend`] type is owned by the TUI app and exposes typed methods
 //! plus a live event stream ([`LiveEvent`]).
@@ -19,15 +19,9 @@ use std::{
 };
 
 use agena_api::{
-    commands::{
-        Command as ApiCommand, CommandResult, CompactSessionParams, ContinueRunParams,
-        CreateSessionParams, ForkSessionParams, MarkInteractiveRequestPresentedParams,
-        ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
-        RewindSessionParams, SubmitRunParams, UpdateSessionParams, UpdateSessionSelectionParams,
-        UpsertPermissionRuleParams,
-    },
+    commands::UpsertPermissionRuleParams,
     pagination::PaginatedResponse,
-    queries::{GetOperationDetailParams, GetSessionParams, ListSessionsParams, Query, QueryResult},
+    queries::ListSessionsParams,
     resource::{
         OperationDetailResource, PermissionReply, PermissionRuleResource,
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
@@ -37,7 +31,7 @@ use agena_api::{
     },
 };
 use agena_application::dto::{CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse};
-use agena_application::{Application, dispatch};
+use agena_application::Application;
 use agena_domain::ActivityId;
 use agena_domain::Model as ProviderModel;
 use agena_domain::PermissionScope;

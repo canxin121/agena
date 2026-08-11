@@ -76,10 +76,6 @@ pub(super) fn direct_path_candidate(workspace_root: &Path, query: &str) -> Optio
         .or(Some(resolved))
 }
 
-pub(super) fn api_error(error: agena_application::ApplicationError) -> anyhow::Error {
-    anyhow::Error::new(error)
-}
-
 pub(super) fn optional_non_empty(value: &str) -> Option<&str> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed)

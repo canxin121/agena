@@ -29,18 +29,12 @@ impl Backend {
     }
 
     pub async fn get_session(&self, session_id: i64) -> Result<Option<SessionResource>> {
-        match dispatch::dispatch_query(
-            &self.application,
-            Query::GetSession(GetSessionParams { session_id }),
-        )
-        .await
-        {
-            Ok(QueryResult::Session(session)) => Ok(Some(session)),
-            Ok(other) => Err(anyhow!("unexpected query result: {:?}", other))
-                .context("failed to fetch session"),
-            Err(error) if error.is_not_found() => Ok(None),
-            Err(error) => Err(api_error(error).context("failed to fetch session")),
-        }
+        self.application
+            .service()
+            .get_session(session_id)
+            .await
+            .map_err(anyhow::Error::new)
+            .context("failed to fetch session")
     }
 
     pub async fn list_session_subtree(&self, session_id: i64) -> Result<Vec<SessionResource>> {
@@ -114,16 +108,15 @@ impl Backend {
     }
 
     pub async fn get_session_state(&self, session_id: i64) -> Result<SessionExecutionResource> {
-        match dispatch::dispatch_query(
+        let session_services = self.application.session_execution_services()?;
+        agena_application::session::session_execution_resource(
             &self.application,
-            Query::GetSessionState(GetSessionParams { session_id }),
+            session_services.execution_control.as_ref(),
+            session_services.queries.as_ref(),
+            session_id,
         )
         .await
-        .map_err(api_error)?
-        {
-            QueryResult::SessionState(state) => Ok(state),
-            other => Err(anyhow!("unexpected query result: {:?}", other)),
-        }
+        .map_err(anyhow::Error::new)
         .context("failed to load session state")
     }
 
@@ -133,20 +126,23 @@ impl Backend {
         session_id: i64,
         activity_id: ActivityId,
     ) -> Result<OperationDetailResource> {
-        match dispatch::dispatch_query(
-            &self.application,
-            Query::GetOperationDetail(GetOperationDetailParams {
-                session_id,
+        let queries = self.application.session_execution_services()?.queries;
+        let detail = queries
+            .operation_detail(session_id, activity_id)
+            .await
+            .map_err(|error| anyhow!("operation detail query failed: {error}"))
+            .context("failed to load operation detail")?;
+        Ok(detail
+            .map(|detail| OperationDetailResource {
+                activity_id: detail.activity_id,
+                markdown: detail.markdown,
+                streaming: detail.streaming,
+            })
+            .unwrap_or(OperationDetailResource {
                 activity_id,
-            }),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            QueryResult::OperationDetail(detail) => Ok(detail),
-            other => Err(anyhow!("unexpected query result: {:?}", other)),
-        }
-        .context("failed to load operation detail")
+                markdown: String::new(),
+                streaming: false,
+            }))
     }
 
     pub async fn get_session_permission_studio_state(
@@ -331,20 +327,27 @@ impl Backend {
         document: agena_domain::ComposerDocument,
         request: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        match dispatch::dispatch_command(
+        let request = agena_application::session::session_user_run_request(
             &self.application,
-            ApiCommand::SubmitMessage(SubmitRunParams {
-                session_id,
-                options: request,
-                document,
-            }),
+            session_id,
+            request,
+            document,
+        )
+        .await?;
+        let session_services = self.application.session_execution_services()?;
+        let outcome = session_services
+            .commands
+            .submit_user_run(request)
+            .await
+            .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
+        agena_application::session::session_execution_resource(
+            &self.application,
+            session_services.execution_control.as_ref(),
+            session_services.queries.as_ref(),
+            outcome.session_id,
         )
         .await
-        .map_err(api_error)?
-        {
-            CommandResult::Execution(state) => Ok(state),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
+        .map_err(anyhow::Error::new)
         .context("failed to submit user message")
     }
 
@@ -353,19 +356,26 @@ impl Backend {
         session_id: i64,
         options: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        match dispatch::dispatch_command(
+        let options = agena_application::session::resolve_session_run_options(
             &self.application,
-            ApiCommand::UpdateSessionSelection(UpdateSessionSelectionParams {
-                session_id,
-                options,
-            }),
+            session_id,
+            options,
+        )
+        .await?;
+        let session_services = self.application.session_execution_services()?;
+        let outcome = session_services
+            .commands
+            .update_session_selection(session_id, options)
+            .await
+            .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
+        agena_application::session::session_execution_resource(
+            &self.application,
+            session_services.execution_control.as_ref(),
+            session_services.queries.as_ref(),
+            outcome.session_id,
         )
         .await
-        .map_err(api_error)?
-        {
-            CommandResult::Execution(state) => Ok(state),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
+        .map_err(anyhow::Error::new)
         .context("failed to update session model selection")
     }
 
@@ -424,19 +434,26 @@ impl Backend {
         session_id: i64,
         request: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        match dispatch::dispatch_command(
+        let request = agena_application::session::session_execution_request(
             &self.application,
-            ApiCommand::ContinueRun(ContinueRunParams {
-                session_id,
-                options: request,
-            }),
+            session_id,
+            request,
+        )
+        .await?;
+        let session_services = self.application.session_execution_services()?;
+        let outcome = session_services
+            .commands
+            .continue_session(request)
+            .await
+            .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
+        agena_application::session::session_execution_resource(
+            &self.application,
+            session_services.execution_control.as_ref(),
+            session_services.queries.as_ref(),
+            outcome.session_id,
         )
         .await
-        .map_err(api_error)?
-        {
-            CommandResult::Execution(state) => Ok(state),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
+        .map_err(anyhow::Error::new)
         .context("failed to continue session")
     }
 
@@ -445,19 +462,26 @@ impl Backend {
         session_id: i64,
         request: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        match dispatch::dispatch_command(
+        let request = agena_application::session::session_execution_request(
             &self.application,
-            ApiCommand::CompactSession(CompactSessionParams {
-                session_id,
-                options: request,
-            }),
+            session_id,
+            request,
+        )
+        .await?;
+        let session_services = self.application.session_execution_services()?;
+        let outcome = session_services
+            .commands
+            .compact_session(request)
+            .await
+            .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
+        agena_application::session::session_execution_resource(
+            &self.application,
+            session_services.execution_control.as_ref(),
+            session_services.queries.as_ref(),
+            outcome.session_id,
         )
         .await
-        .map_err(api_error)?
-        {
-            CommandResult::Execution(state) => Ok(state),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
+        .map_err(anyhow::Error::new)
         .context("failed to compact session")
     }
 
@@ -482,20 +506,16 @@ impl Backend {
         session_id: i64,
         execution_id: agena_domain::ExecutionId,
     ) -> Result<agena_domain::CancellationResult> {
-        match dispatch::dispatch_command(
-            &self.application,
-            ApiCommand::CancelRun(agena_api::commands::CancelRunParams {
-                session_id,
-                execution_id,
-            }),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            CommandResult::Cancellation(result) => Ok(result),
-            other => Err(anyhow!("unexpected command result: {other:?}")),
-        }
-        .context("failed to cancel active run")
+        self.application
+            .session_execution_services()
+            .map_err(anyhow::Error::new)?
+            .execution_control
+            .cancel_execution(session_id, execution_id)
+            .await
+            .map_err(|error| {
+                anyhow::Error::new(agena_application::ApplicationError::from_failure(error.failure))
+            })
+            .context("failed to cancel active run")
     }
 
     /// Inject `parts` as a steer message into the active execution. Returns
@@ -524,47 +544,55 @@ impl Backend {
         scope: Option<PermissionScope>,
         request: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        match dispatch::dispatch_command(
+        let request = agena_application::session::session_permission_reply_request(
             &self.application,
-            ApiCommand::ReplyPermission(ReplyPermissionParams {
-                session_id,
-                options: request,
-                reply: PermissionReply {
-                    request_id,
-                    kind: match kind {
-                        PermissionReplyKind::AllowOnce => {
-                            agena_api::resource::PermissionReplyKind::AllowOnce
-                        }
-                        PermissionReplyKind::AllowAlways => {
-                            agena_api::resource::PermissionReplyKind::AllowAlways
-                        }
-                        PermissionReplyKind::DenyOnce => {
-                            agena_api::resource::PermissionReplyKind::DenyOnce
-                        }
-                        PermissionReplyKind::DenyAlways => {
-                            agena_api::resource::PermissionReplyKind::DenyAlways
-                        }
-                        PermissionReplyKind::AutoApprove => {
-                            agena_api::resource::PermissionReplyKind::AutoApprove
-                        }
-                    },
-                    reason: None,
-                    scope: scope.map(|scope| match scope {
-                        PermissionScope::Session => agena_api::resource::PermissionScope::Session,
-                        PermissionScope::Workspace => {
-                            agena_api::resource::PermissionScope::Workspace
-                        }
-                        PermissionScope::Global => agena_api::resource::PermissionScope::Global,
-                    }),
+            session_id,
+            request,
+            PermissionReply {
+                request_id,
+                kind: match kind {
+                    PermissionReplyKind::AllowOnce => {
+                        agena_api::resource::PermissionReplyKind::AllowOnce
+                    }
+                    PermissionReplyKind::AllowAlways => {
+                        agena_api::resource::PermissionReplyKind::AllowAlways
+                    }
+                    PermissionReplyKind::DenyOnce => {
+                        agena_api::resource::PermissionReplyKind::DenyOnce
+                    }
+                    PermissionReplyKind::DenyAlways => {
+                        agena_api::resource::PermissionReplyKind::DenyAlways
+                    }
+                    PermissionReplyKind::AutoApprove => {
+                        agena_api::resource::PermissionReplyKind::AutoApprove
+                    }
                 },
-            }),
+                reason: None,
+                scope: scope.map(|scope| match scope {
+                    PermissionScope::Session => agena_api::resource::PermissionScope::Session,
+                    PermissionScope::Workspace => {
+                        agena_api::resource::PermissionScope::Workspace
+                    }
+                    PermissionScope::Global => agena_api::resource::PermissionScope::Global,
+                }),
+            },
+            Some("jsonrpc".to_string()),
+        )
+        .await?;
+        let session_services = self.application.session_execution_services()?;
+        let outcome = session_services
+            .commands
+            .reply_permission(request)
+            .await
+            .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
+        agena_application::session::session_execution_resource(
+            &self.application,
+            session_services.execution_control.as_ref(),
+            session_services.queries.as_ref(),
+            outcome.session_id,
         )
         .await
-        .map_err(api_error)?
-        {
-            CommandResult::Execution(state) => Ok(state),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
+        .map_err(anyhow::Error::new)
         .context("failed to reply to permission request")
     }
 
@@ -574,35 +602,42 @@ impl Backend {
         reply: UserInputReply,
         request: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        match dispatch::dispatch_command(
+        let request = agena_application::session::session_user_input_reply_request(
             &self.application,
-            ApiCommand::ReplyUserInput(ReplyUserInputParams {
-                session_id,
-                options: request,
-                reply: agena_api::resource::UserInputReply {
-                    request_id: reply.request_id,
-                    kind: match reply.kind {
-                        agena_domain::UserInputReplyKind::Submit => {
-                            agena_api::resource::UserInputReplyKind::Submit
-                        }
-                        agena_domain::UserInputReplyKind::Cancel => {
-                            agena_api::resource::UserInputReplyKind::Cancel
-                        }
-                        agena_domain::UserInputReplyKind::Timeout => {
-                            agena_api::resource::UserInputReplyKind::Timeout
-                        }
-                    },
-                    answers: reply.answers,
-                    reason: reply.reason,
+            session_id,
+            request,
+            agena_api::resource::UserInputReply {
+                request_id: reply.request_id,
+                kind: match reply.kind {
+                    agena_domain::UserInputReplyKind::Submit => {
+                        agena_api::resource::UserInputReplyKind::Submit
+                    }
+                    agena_domain::UserInputReplyKind::Cancel => {
+                        agena_api::resource::UserInputReplyKind::Cancel
+                    }
+                    agena_domain::UserInputReplyKind::Timeout => {
+                        agena_api::resource::UserInputReplyKind::Timeout
+                    }
                 },
-            }),
+                answers: reply.answers,
+                reason: reply.reason,
+            },
+        )
+        .await?;
+        let session_services = self.application.session_execution_services()?;
+        let outcome = session_services
+            .commands
+            .reply_user_input(request)
+            .await
+            .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
+        agena_application::session::session_execution_resource(
+            &self.application,
+            session_services.execution_control.as_ref(),
+            session_services.queries.as_ref(),
+            outcome.session_id,
         )
         .await
-        .map_err(api_error)?
-        {
-            CommandResult::Execution(state) => Ok(state),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
+        .map_err(anyhow::Error::new)
         .context("failed to submit user input reply")
     }
 
@@ -616,20 +651,24 @@ impl Backend {
             .await?
             .ok_or_else(|| anyhow!("session not found: {session_id}"))?
             .version;
-        match dispatch::dispatch_command(
-            &self.application,
-            ApiCommand::RewindSession(RewindSessionParams {
+        let session_services = self.application.session_execution_services()?;
+        let outcome = session_services
+            .commands
+            .rewind_session(agena_runtime::SessionRewindRequest {
                 session_id,
                 turn_id,
                 expected_version: Some(expected_version),
-            }),
+            })
+            .await
+            .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
+        agena_application::session::session_execution_resource(
+            &self.application,
+            session_services.execution_control.as_ref(),
+            session_services.queries.as_ref(),
+            outcome.session_id,
         )
         .await
-        .map_err(api_error)?
-        {
-            CommandResult::Execution(state) => Ok(state),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
+        .map_err(anyhow::Error::new)
         .context("failed to rewind session to turn")
     }
 
@@ -642,20 +681,25 @@ impl Backend {
         session_id: i64,
         title: Option<String>,
     ) -> Result<SessionExecutionResource> {
-        match dispatch::dispatch_command(
-            &self.application,
-            ApiCommand::ForkSession(ForkSessionParams {
+        let session_services = self.application.session_execution_services()?;
+        let outcome = session_services
+            .commands
+            .fork_session(agena_runtime::SessionForkRequest {
                 session_id,
                 at_message_id: None,
                 title,
-            }),
+                expected_version: None,
+            })
+            .await
+            .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
+        agena_application::session::session_execution_resource(
+            &self.application,
+            session_services.execution_control.as_ref(),
+            session_services.queries.as_ref(),
+            outcome.session_id,
         )
         .await
-        .map_err(api_error)?
-        {
-            CommandResult::Execution(state) => Ok(state),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
+        .map_err(anyhow::Error::new)
         .context("failed to fork session")
     }
 
@@ -670,19 +714,20 @@ impl Backend {
         session_id: i64,
         request_id: String,
     ) -> Result<SessionExecutionResource> {
-        match dispatch::dispatch_command(
+        let session_services = self.application.session_execution_services()?;
+        let outcome = session_services
+            .commands
+            .mark_interactive_request_presented(session_id, request_id)
+            .await
+            .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
+        agena_application::session::session_execution_resource(
             &self.application,
-            ApiCommand::MarkInteractiveRequestPresented(MarkInteractiveRequestPresentedParams {
-                session_id,
-                request_id,
-            }),
+            session_services.execution_control.as_ref(),
+            session_services.queries.as_ref(),
+            outcome.session_id,
         )
         .await
-        .map_err(api_error)?
-        {
-            CommandResult::Execution(state) => Ok(state),
-            other => Err(anyhow!("unexpected command result: {:?}", other)),
-        }
+        .map_err(anyhow::Error::new)
         .context("failed to mark interactive request presented")
     }
 }
@@ -807,12 +852,9 @@ fn live_event_from_runtime_signal(
 
 use crate::Result;
 use crate::{
-    ActivityId, ApiCommand, Backend, CommandResult, CompactSessionParams, ContinueRunParams,
-    ForkSessionParams, GetOperationDetailParams, GetSessionParams, HashSet, ListSessionsParams,
-    LiveEvent, MarkInteractiveRequestPresentedParams, OperationDetailResource, Path, PathBuf,
-    PermissionReply, PermissionReplyKind, PermissionScope, Query, QueryResult,
-    ReplyPermissionParams, ReplyUserInputParams, RewindSessionParams, RunOptions,
+    ActivityId, Backend, HashSet, ListSessionsParams, LiveEvent, OperationDetailResource, Path,
+    PathBuf, PermissionReply, PermissionReplyKind, PermissionScope, RunOptions,
     SessionExecutionResource, SessionPermissionStudioState, SessionRefresh, SessionResource,
-    SessionTimelineEntry, SubmitRunParams, UpdateSessionSelectionParams, UserInputReply, api_error,
-    build_file_index, direct_path_candidate, dispatch, file_search_score, mpsc,
+    SessionTimelineEntry, UserInputReply, build_file_index, direct_path_candidate, file_search_score,
+    mpsc,
 };

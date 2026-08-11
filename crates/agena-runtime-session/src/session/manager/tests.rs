@@ -2139,7 +2139,9 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
     assert!(
         !replied.parts().is_empty(),
         "the reply returns the continued session"
-||||||| ef4c3bae
+    );
+}
+
 /// Regression for the born-InProgress lifecycle (the core of the strong-typing
 /// fix): the `interaction` part a host ask_user creates must be `InProgress`
 /// (NOT `Pending`) so the reply can complete through the legal

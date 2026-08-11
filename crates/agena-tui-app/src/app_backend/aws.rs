@@ -1,11 +1,10 @@
 //! AWS profile name presentation for provider/credential choices.
 
-use agena_application::Application;
 use std::{env, fs, path::PathBuf};
 
 /// List AWS profile names from `~/.aws/credentials` and `~/.aws/config`
 /// (honoring `AWS_SHARED_CREDENTIALS_FILE` / `AWS_CONFIG_FILE`).
-pub(crate) fn list_aws_profile_names(_application: &Application) -> Vec<String> {
+pub(crate) fn list_aws_profile_names() -> Vec<String> {
     let credentials_path = env::var("AWS_SHARED_CREDENTIALS_FILE")
         .ok()
         .map(PathBuf::from)

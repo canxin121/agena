@@ -221,11 +221,8 @@ pub(crate) fn boolean_choice_items(detail: &str) -> Vec<ChoiceItem> {
     vec![choice_item("true", detail), choice_item("false", detail)]
 }
 
-pub(crate) fn provider_studio_profile_choice_items(
-    i18n: &I18n,
-    application: &agena_application::Application,
-) -> Vec<ChoiceItem> {
-    let mut items = crate::app_backend::aws::list_aws_profile_names(application)
+pub(crate) fn provider_studio_profile_choice_items(i18n: &I18n) -> Vec<ChoiceItem> {
+    let mut items = crate::app_backend::aws::list_aws_profile_names()
         .into_iter()
         .map(|profile| choice_item(profile, ui_text::t(i18n, "provider-profile-choice-detail")))
         .collect::<Vec<_>>();

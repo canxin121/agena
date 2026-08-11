@@ -11,6 +11,7 @@ agena-api = { workspace = true }
 agena-failure = { workspace = true }
 agena-domain = { workspace = true }
 agena-plugin-sdk = { workspace = true }
+agena-runtime-contracts = { workspace = true }
 agena-tool = { workspace = true }
 agena-tui = { workspace = true }
 agena-tui-components = { workspace = true }

@@ -1403,6 +1403,7 @@ dependencies = [
  "agena-domain",
  "agena-failure",
  "agena-plugin-sdk",
+ "agena-runtime-contracts",
  "agena-tool",
  "agena-tui",
  "agena-tui-components",

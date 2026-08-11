@@ -1,24 +1,16 @@
 use agena_application::{
     dto::SessionPermissionUpdateRequest,
-    session::{
-        session_execution_request, session_execution_resource, session_permission_reply_request,
-        session_resource_from_summary, session_user_input_reply_request, session_user_run_request,
-    },
+    session::session_resource_from_summary,
 };
 
+/// Thin adapter: project a session's execution resource through the shared
+/// Application read-back and wrap it in JSON.
 async fn session_execution_json_from_id(
     state: &AppState,
     session_id: i64,
 ) -> Result<Json<agena_application::dto::SessionExecutionResource>, ServerError> {
-    let services = state.application().session_execution_services()?;
     Ok(Json(
-        session_execution_resource(
-            state.application(),
-            services.execution_control.as_ref(),
-            services.queries.as_ref(),
-            session_id,
-        )
-        .await?,
+        state.session_execution_resource(session_id).await?,
     ))
 }
 
@@ -97,13 +89,9 @@ pub async fn replace_session_permission(
 ) -> Result<impl IntoResponse, ServerError> {
     assert_if_match_session_version(&state, session_id, &headers).await?;
     let permission = agena_application::permission_config_domain_from_resource(request.permission)?;
-    let services = state.application().session_execution_services()?;
-    let outcome = services
-        .commands
-        .set_session_permission(session_id, permission)
-        .await
-        .map_err(|error| ServerError::from_failure(error.failure))?;
-    session_execution_json_from_id(&state, outcome.session_id).await
+    Ok(Json(
+        state.set_session_permission(session_id, permission).await?,
+    ))
 }
 
 #[tracing::instrument(skip_all)]
@@ -237,16 +225,11 @@ pub async fn submit_message(
     Json(request): Json<SessionRunRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
     assert_if_match_session_version(&state, session_id, &headers).await?;
-
-    let request =
-        session_user_run_request(&state, session_id, request.run.options, request.document).await?;
-    let session_services = state.application().session_execution_services()?;
-    let outcome = session_services
-        .commands
-        .submit_user_run(request)
-        .await
-        .map_err(|error| ServerError::from_failure(error.failure))?;
-    session_execution_json_from_id(&state, outcome.session_id).await
+    Ok(Json(
+        state
+            .submit_user_run(session_id, request.document, request.run.options)
+            .await?,
+    ))
 }
 
 pub async fn continue_run(
@@ -256,15 +239,9 @@ pub async fn continue_run(
     Json(request): Json<SessionRunRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
     assert_if_match_session_version(&state, session_id, &headers).await?;
-
-    let request = session_execution_request(&state, session_id, request.options).await?;
-    let services = state.application().session_execution_services()?;
-    let outcome = services
-        .commands
-        .continue_session(request)
-        .await
-        .map_err(|error| ServerError::from_failure(error.failure))?;
-    session_execution_json_from_id(&state, outcome.session_id).await
+    Ok(Json(
+        state.continue_session(session_id, request.options).await?,
+    ))
 }
 
 pub async fn compact_session(
@@ -274,15 +251,9 @@ pub async fn compact_session(
     Json(request): Json<SessionRunRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
     assert_if_match_session_version(&state, session_id, &headers).await?;
-
-    let request = session_execution_request(&state, session_id, request.options).await?;
-    let services = state.application().session_execution_services()?;
-    let outcome = services
-        .commands
-        .compact_session(request)
-        .await
-        .map_err(|error| ServerError::from_failure(error.failure))?;
-    session_execution_json_from_id(&state, outcome.session_id).await
+    Ok(Json(
+        state.compact_session(session_id, request.options).await?,
+    ))
 }
 
 pub async fn fork_session(
@@ -296,18 +267,16 @@ pub async fn fork_session(
             "fork expects at_message_id; at_event_seq is no longer supported",
         ));
     }
-    let services = state.application().session_execution_services()?;
-    let outcome = services
-        .commands
-        .fork_session(agena_runtime::SessionForkRequest {
-            session_id,
-            at_message_id: request.at_message_id,
-            title: request.title,
-            expected_version: if_match_version(&headers)?,
-        })
-        .await
-        .map_err(|error| ServerError::from_failure(error.failure))?;
-    session_execution_json_from_id(&state, outcome.session_id).await
+    Ok(Json(
+        state
+            .fork_session(
+                session_id,
+                request.at_message_id,
+                request.title,
+                if_match_version(&headers)?,
+            )
+            .await?,
+    ))
 }
 
 pub async fn cancel_run(
@@ -315,13 +284,9 @@ pub async fn cancel_run(
     Path(session_id): Path<i64>,
     Json(request): Json<CancelRunRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let services = state.application().session_execution_services()?;
-    let result = services
-        .execution_control
-        .cancel_execution(session_id, request.execution_id)
-        .await
-        .map_err(|error| ServerError::from_failure(error.failure))?;
-    Ok(Json(result))
+    Ok(Json(
+        state.cancel_run(session_id, request.execution_id).await?,
+    ))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -337,22 +302,16 @@ pub async fn reply_permission(
     Json(request): Json<SessionReplyRequestBody<PermissionReply>>,
 ) -> Result<impl IntoResponse, ServerError> {
     assert_if_match_session_version(&state, session_id, &headers).await?;
-
-    let request = session_permission_reply_request(
-        &state,
-        session_id,
-        request.run.options,
-        request.reply,
-        Some("http_api".to_string()),
-    )
-    .await?;
-    let services = state.application().session_execution_services()?;
-    let outcome = services
-        .commands
-        .reply_permission(request)
-        .await
-        .map_err(|error| ServerError::from_failure(error.failure))?;
-    session_execution_json_from_id(&state, outcome.session_id).await
+    Ok(Json(
+        state
+            .reply_permission(
+                session_id,
+                request.run.options,
+                request.reply,
+                Some("http_api".to_string()),
+            )
+            .await?,
+    ))
 }
 
 pub async fn reply_user_input(
@@ -362,30 +321,22 @@ pub async fn reply_user_input(
     Json(request): Json<SessionReplyRequestBody<UserInputReply>>,
 ) -> Result<impl IntoResponse, ServerError> {
     assert_if_match_session_version(&state, session_id, &headers).await?;
-
-    let request =
-        session_user_input_reply_request(&state, session_id, request.run.options, request.reply)
-            .await?;
-    let services = state.application().session_execution_services()?;
-    let outcome = services
-        .commands
-        .reply_user_input(request)
-        .await
-        .map_err(|error| ServerError::from_failure(error.failure))?;
-    session_execution_json_from_id(&state, outcome.session_id).await
+    Ok(Json(
+        state
+            .reply_user_input(session_id, request.run.options, request.reply)
+            .await?,
+    ))
 }
 
 pub async fn mark_interactive_request_presented(
     State(state): State<AppState>,
     Path((session_id, request_id)): Path<(i64, String)>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let services = state.application().session_execution_services()?;
-    let outcome = services
-        .commands
-        .mark_interactive_request_presented(session_id, request_id)
-        .await
-        .map_err(|error| ServerError::from_failure(error.failure))?;
-    session_execution_json_from_id(&state, outcome.session_id).await
+    Ok(Json(
+        state
+            .mark_interactive_request_presented(session_id, request_id)
+            .await?,
+    ))
 }
 
 pub async fn rewind_session(
@@ -405,7 +356,9 @@ pub async fn rewind_session(
         })
         .await
         .map_err(|error| ServerError::from_failure(error.failure))?;
-    session_execution_json_from_id(&state, outcome.session_id).await
+    Ok(Json(
+        state.session_execution_resource(outcome.session_id).await?,
+    ))
 }
 
 pub async fn list_session_tree(
@@ -457,7 +410,9 @@ pub async fn import_session(
         .import_session_jsonl(&request.jsonl)
         .await
         .map_err(|error| ServerError::from_failure(error.failure))?;
-    session_execution_json_from_id(&state, outcome.session_id).await
+    Ok(Json(
+        state.session_execution_resource(outcome.session_id).await?,
+    ))
 }
 
 use super::{

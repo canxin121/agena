@@ -7,9 +7,14 @@
 use std::collections::HashSet;
 
 use agena_api::queries::ListSessionsParams;
-use agena_api::resource::{SessionExecutionResource, SessionResource, WorkspaceResource};
-use agena_domain::{PermissionConfig, TurnId};
-use agena_runtime::SessionRewindRequest;
+use agena_api::resource::{
+    PermissionReply, RunOptions, SessionExecutionResource, SessionResource, UserInputReply,
+    WorkspaceResource,
+};
+use agena_domain::{
+    CancellationResult, ComposerDocument, ExecutionId, PermissionConfig, TurnId,
+};
+use agena_runtime::{SessionForkRequest, SessionRewindRequest};
 use agena_storage::store::SessionPartView;
 
 use crate::dto::{
@@ -127,21 +132,23 @@ impl Application {
             .collect())
     }
 
-    async fn get_session_state(
+    /// Shared read-back: project a session's execution resource after a
+    /// command or for a state query. Every session command method reads back
+    /// through this single helper instead of re-assembling the runtime
+    /// services per call (this absorbed the old
+    /// `session::session_execution_resource` free-function passthrough).
+    pub async fn session_execution_resource(
         &self,
         session_id: i64,
     ) -> Result<SessionExecutionResource, ApplicationError> {
         let session_services = self.session_execution_services()?;
-        crate::session::session_execution_resource(
-            self,
-            session_services.execution_control.as_ref(),
-            session_services.queries.as_ref(),
-            session_id,
-        )
-        .await
-        .map_err(|error| {
-            ApplicationError::internal(format!("failed to load session state: {error}"))
-        })
+        self.service()
+            .session_execution_resource(
+                session_services.execution_control.as_ref(),
+                session_services.queries.as_ref(),
+                session_id,
+            )
+            .await
     }
 
     pub async fn set_session_permission(
@@ -158,7 +165,7 @@ impl Application {
                     "failed to set permission for session {session_id}: {error}"
                 ))
             })?;
-        self.get_session_state(session_id).await
+        self.session_execution_resource(session_id).await
     }
 
     pub async fn rewind_session_to_turn(
@@ -181,16 +188,174 @@ impl Application {
             })
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        crate::session::session_execution_resource(
-            self,
-            session_services.execution_control.as_ref(),
-            session_services.queries.as_ref(),
-            outcome.session_id,
+        self.session_execution_resource(outcome.session_id).await
+    }
+
+    // ── Unified session command family ────────────────────────────────────
+    // The terminal, JSON-RPC dispatch, and REST handlers all drive these
+    // Application methods. Each one is the same "assemble request → call the
+    // runtime command trait → read back the execution projection" sequence, so
+    // transports keep only their own wire adaptation (request/response shape
+    // and error mapping) and never re-assemble the runtime services.
+
+    /// Submit a user document (composer message) as a run and read back the
+    /// resulting execution state.
+    pub async fn submit_user_run(
+        &self,
+        session_id: i64,
+        document: ComposerDocument,
+        options: RunOptions,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        let request =
+            crate::session::session_user_run_request(self, session_id, options, document).await?;
+        let outcome = self
+            .session_execution_services()?
+            .commands
+            .submit_user_run(request)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        self.session_execution_resource(outcome.session_id).await
+    }
+
+    /// Continue an existing session with the given run options.
+    pub async fn continue_session(
+        &self,
+        session_id: i64,
+        options: RunOptions,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        let request = crate::session::session_execution_request(self, session_id, options).await?;
+        let outcome = self
+            .session_execution_services()?
+            .commands
+            .continue_session(request)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        self.session_execution_resource(outcome.session_id).await
+    }
+
+    /// Compact an existing session with the given run options.
+    pub async fn compact_session(
+        &self,
+        session_id: i64,
+        options: RunOptions,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        let request = crate::session::session_execution_request(self, session_id, options).await?;
+        let outcome = self
+            .session_execution_services()?
+            .commands
+            .compact_session(request)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        self.session_execution_resource(outcome.session_id).await
+    }
+
+    /// Reply to a pending permission request.
+    pub async fn reply_permission(
+        &self,
+        session_id: i64,
+        options: RunOptions,
+        reply: PermissionReply,
+        source: Option<String>,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        let request = crate::session::session_permission_reply_request(
+            self, session_id, options, reply, source,
         )
-        .await
-        .map_err(|error| {
-            ApplicationError::internal(format!("failed to rewind session to turn: {error}"))
-        })
+        .await?;
+        let outcome = self
+            .session_execution_services()?
+            .commands
+            .reply_permission(request)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        self.session_execution_resource(outcome.session_id).await
+    }
+
+    /// Reply to a pending interactive user-input request.
+    pub async fn reply_user_input(
+        &self,
+        session_id: i64,
+        options: RunOptions,
+        reply: UserInputReply,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        let request = crate::session::session_user_input_reply_request(
+            self, session_id, options, reply,
+        )
+        .await?;
+        let outcome = self
+            .session_execution_services()?
+            .commands
+            .reply_user_input(request)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        self.session_execution_resource(outcome.session_id).await
+    }
+
+    /// Clone a session's full history into a new child session.
+    pub async fn fork_session(
+        &self,
+        session_id: i64,
+        at_message_id: Option<i64>,
+        title: Option<String>,
+        expected_version: Option<i64>,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        let outcome = self
+            .session_execution_services()?
+            .commands
+            .fork_session(SessionForkRequest {
+                session_id,
+                at_message_id,
+                title,
+                expected_version,
+            })
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        self.session_execution_resource(outcome.session_id).await
+    }
+
+    /// Cancel the active run of `session_id`.
+    pub async fn cancel_run(
+        &self,
+        session_id: i64,
+        execution_id: ExecutionId,
+    ) -> Result<CancellationResult, ApplicationError> {
+        self.session_execution_services()?
+            .execution_control
+            .cancel_execution(session_id, execution_id)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
+    /// Durable, idempotent acknowledgement that an interactive user-input
+    /// request has been shown to the user.
+    pub async fn mark_interactive_request_presented(
+        &self,
+        session_id: i64,
+        request_id: String,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        let outcome = self
+            .session_execution_services()?
+            .commands
+            .mark_interactive_request_presented(session_id, request_id)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        self.session_execution_resource(outcome.session_id).await
+    }
+
+    /// Update the session's selected model/options without starting a run.
+    pub async fn update_session_selection(
+        &self,
+        session_id: i64,
+        options: RunOptions,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        let options = crate::session::resolve_session_run_options(self, session_id, options)
+            .await?;
+        let outcome = self
+            .session_execution_services()?
+            .commands
+            .update_session_selection(session_id, options)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        self.session_execution_resource(outcome.session_id).await
     }
 
     pub async fn list_workspace_sessions(

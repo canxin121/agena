@@ -1,5 +1,3 @@
-use agena_application::session::session_execution_resource;
-
 // ─── Query dispatch ─────────────────────────────────────────────────────
 
 fn cursor_pagination(cursor: Option<String>, limit: Option<u64>) -> CursorPaginationQuery {
@@ -146,17 +144,9 @@ pub async fn dispatch_query(
             )
             .await?,
         )),
-        Query::GetSessionState(GetSessionParams { session_id }) => {
-            let session_services = state.session_execution_services()?;
-            let state_resource = session_execution_resource(
-                state,
-                session_services.execution_control.as_ref(),
-                session_services.queries.as_ref(),
-                session_id,
-            )
-            .await?;
-            Ok(QueryResult::SessionState(state_resource))
-        }
+        Query::GetSessionState(GetSessionParams { session_id }) => Ok(QueryResult::SessionState(
+            state.session_execution_resource(session_id).await?,
+        )),
         Query::GetOperationDetail(GetOperationDetailParams {
             session_id,
             activity_id,

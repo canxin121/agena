@@ -357,18 +357,9 @@ impl Application {
     /// Returns the Application-owned catalog projection used by terminal
     /// presentation. Runtime still owns refresh, curation, and storage; App
     /// must not duplicate the Runtime response-to-display projection.
-    pub fn list_model_catalog(
-        &self,
-        query: &str,
-        offset: usize,
-        limit: usize,
-    ) -> ModelCatalogListResponse {
-        self.list_model_catalog_with_origin(query, None, offset, limit)
-    }
-
-    /// Lists the Application-owned catalog projection with an optional origin
-    /// filter. Transport adapters receive only this resource, never the
-    /// Runtime catalog snapshot service.
+    ///
+    /// Lists with an optional origin filter. Transport adapters receive only
+    /// this resource, never the Runtime catalog snapshot service.
     pub fn list_model_catalog_with_origin(
         &self,
         query: &str,
@@ -438,12 +429,6 @@ impl Application {
             .into_iter()
             .filter(|model| requested.contains(model.model_id.as_str()))
             .collect()
-    }
-
-    /// Starts the user-requested catalog refresh without leaking Runtime task
-    /// origin or task-construction values to App presentation code.
-    pub fn request_model_catalog_refresh(&self) -> Result<(), ApplicationError> {
-        self.refresh_model_catalog().map(|_| ())
     }
 
     /// Starts a user-requested catalog refresh and returns the Application
@@ -614,6 +599,8 @@ impl Application {
 
     /// Projects the complete Studio diagnostic surface without exposing a
     /// RuntimeApplicationServices bundle or Runtime status record to Studio.
+    /// Kept live for the legacy `apps/agena` JSON-RPC backend diagnostics
+    /// surface.
     pub async fn runtime_diagnostics(&self) -> RuntimeDiagnosticsResource {
         let status = self.runtime_status.runtime_status().await;
         RuntimeDiagnosticsResource {

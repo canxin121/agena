@@ -1,27 +1,13 @@
-use agena_application::ApplicationSessionServices;
+use agena_api::resource::SessionExecutionResource;
 use agena_application::dto::{SessionCreateRequest, SessionHierarchyRequest, SessionUpdateRequest};
-use agena_application::session::{
-    resolve_session_run_options, session_execution_request, session_execution_resource,
-    session_permission_reply_request, session_resource_from_summary,
-    session_user_input_reply_request, session_user_run_request,
-};
+use agena_application::session::session_resource_from_summary;
 
 // ─── Command dispatch ───────────────────────────────────────────────────
 
-async fn execution_command_result(
-    state: &Application,
-    session_services: &ApplicationSessionServices,
-    session_id: i64,
-) -> Result<CommandResult, ApplicationError> {
-    Ok(CommandResult::Execution(
-        session_execution_resource(
-            state,
-            session_services.execution_control.as_ref(),
-            session_services.queries.as_ref(),
-            session_id,
-        )
-        .await?,
-    ))
+/// Thin wire adapter: wrap the Application-provided execution projection into
+/// the JSON-RPC command result.
+fn execution_command_result(resource: SessionExecutionResource) -> CommandResult {
+    CommandResult::Execution(resource)
 }
 
 pub async fn dispatch_command(
@@ -84,50 +70,27 @@ pub async fn dispatch_command(
             session_id,
             options,
             document,
-        }) => {
-            let request = session_user_run_request(state, session_id, options, document).await?;
-            let outcome = session_services
-                .commands
-                .submit_user_run(request)
-                .await
-                .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            execution_command_result(state, &session_services, outcome.session_id).await
-        }
+        }) => Ok(execution_command_result(
+            state.submit_user_run(session_id, document, options).await?,
+        )),
         Command::ContinueRun(ContinueRunParams {
             session_id,
             options,
-        }) => {
-            let request = session_execution_request(state, session_id, options).await?;
-            let outcome = session_services
-                .commands
-                .continue_session(request)
-                .await
-                .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            execution_command_result(state, &session_services, outcome.session_id).await
-        }
+        }) => Ok(execution_command_result(
+            state.continue_session(session_id, options).await?,
+        )),
         Command::CompactSession(CompactSessionParams {
             session_id,
             options,
-        }) => {
-            let request = session_execution_request(state, session_id, options).await?;
-            let outcome = session_services
-                .commands
-                .compact_session(request)
-                .await
-                .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            execution_command_result(state, &session_services, outcome.session_id).await
-        }
+        }) => Ok(execution_command_result(
+            state.compact_session(session_id, options).await?,
+        )),
         Command::CancelRun(CancelRunParams {
             session_id,
             execution_id,
-        }) => {
-            let result = session_services
-                .execution_control
-                .cancel_execution(session_id, execution_id)
-                .await
-                .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            Ok(CommandResult::Cancellation(result))
-        }
+        }) => Ok(CommandResult::Cancellation(
+            state.cancel_run(session_id, execution_id).await?,
+        )),
         Command::RewindSession(RewindSessionParams {
             session_id,
             turn_id,
@@ -142,25 +105,19 @@ pub async fn dispatch_command(
                 })
                 .await
                 .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            execution_command_result(state, &session_services, outcome.session_id).await
+            Ok(execution_command_result(
+                state.session_execution_resource(outcome.session_id).await?,
+            ))
         }
         Command::ForkSession(ForkSessionParams {
             session_id,
             at_message_id,
             title,
-        }) => {
-            let outcome = session_services
-                .commands
-                .fork_session(agena_runtime::SessionForkRequest {
-                    session_id,
-                    at_message_id,
-                    title,
-                    expected_version: None,
-                })
-                .await
-                .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            execution_command_result(state, &session_services, outcome.session_id).await
-        }
+        }) => Ok(execution_command_result(
+            state
+                .fork_session(session_id, at_message_id, title, None)
+                .await?,
+        )),
         Command::ListSessionTree(ListSessionTreeParams { root_id }) => {
             let summaries = session_services
                 .queries
@@ -187,53 +144,34 @@ pub async fn dispatch_command(
                 .import_session_jsonl(&jsonl)
                 .await
                 .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            execution_command_result(state, &session_services, outcome.session_id).await
+            Ok(execution_command_result(
+                state.session_execution_resource(outcome.session_id).await?,
+            ))
         }
         Command::ReplyPermission(ReplyPermissionParams {
             session_id,
             options,
             reply,
-        }) => {
-            let request = session_permission_reply_request(
-                state,
-                session_id,
-                options,
-                reply,
-                Some("jsonrpc".to_string()),
-            )
-            .await?;
-            let outcome = session_services
-                .commands
-                .reply_permission(request)
-                .await
-                .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            execution_command_result(state, &session_services, outcome.session_id).await
-        }
+        }) => Ok(execution_command_result(
+            state
+                .reply_permission(session_id, options, reply, Some("jsonrpc".to_string()))
+                .await?,
+        )),
         Command::ReplyUserInput(ReplyUserInputParams {
             session_id,
             options,
             reply,
-        }) => {
-            let request =
-                session_user_input_reply_request(state, session_id, options, reply).await?;
-            let outcome = session_services
-                .commands
-                .reply_user_input(request)
-                .await
-                .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            execution_command_result(state, &session_services, outcome.session_id).await
-        }
+        }) => Ok(execution_command_result(
+            state.reply_user_input(session_id, options, reply).await?,
+        )),
         Command::MarkInteractiveRequestPresented(MarkInteractiveRequestPresentedParams {
             session_id,
             request_id,
-        }) => {
-            let outcome = session_services
-                .commands
+        }) => Ok(execution_command_result(
+            state
                 .mark_interactive_request_presented(session_id, request_id)
-                .await
-                .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            execution_command_result(state, &session_services, outcome.session_id).await
-        }
+                .await?,
+        )),
         Command::UpdateSession(UpdateSessionParams {
             session_id,
             title,
@@ -254,15 +192,9 @@ pub async fn dispatch_command(
         Command::UpdateSessionSelection(UpdateSessionSelectionParams {
             session_id,
             options,
-        }) => {
-            let options = resolve_session_run_options(state, session_id, options).await?;
-            let outcome = session_services
-                .commands
-                .update_session_selection(session_id, options)
-                .await
-                .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            execution_command_result(state, &session_services, outcome.session_id).await
-        }
+        }) => Ok(execution_command_result(
+            state.update_session_selection(session_id, options).await?,
+        )),
         Command::DeleteSession(DeleteSessionParams {
             session_id,
             expected_version,

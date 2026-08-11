@@ -27,7 +27,7 @@ use crate::{
     live::{self, LiveItem},
     state::AppState,
 };
-use agena_application::dispatch;
+use crate::dispatch;
 
 pub async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| run(socket, state))

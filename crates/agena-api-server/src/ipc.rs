@@ -33,7 +33,7 @@ mod unix {
         live::{self, LiveItem},
         state::AppState,
     };
-    use agena_application::dispatch;
+    use crate::dispatch;
 
     /// Bind a Unix socket at `path` and serve the WS-equivalent protocol
     /// until the future is dropped.

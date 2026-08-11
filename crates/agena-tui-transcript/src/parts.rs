@@ -22,9 +22,11 @@ use agena_api::{
     },
     resource::{
         PartAttachment, PartAttachmentKind, PartAttachmentSource, PartSkillReference, RunRole,
-        RunStatus, SessionTranscriptPart, UserInputQuestion, UserInputReply, UserInputRequest,
+        RunStatus, SessionTranscriptPart, UserInputOption, UserInputQuestion, UserInputReply,
+        UserInputReplyKind, UserInputRequest,
     },
 };
+use agena_runtime_contracts::part_content::InteractionContent;
 use serde_json::Value;
 
 use crate::{
@@ -335,21 +337,29 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
             // carries `type`/`prompt`/`options` plus the lossless `request`
             // and `reply` objects under `extra`. Decode both so the row
             // renders as a friendly awaiting-user-input part rather than
-            // dumping its raw JSON as body text.
+            // dumping its raw JSON as body text. The v2 shape is read through
+            // the typed [`InteractionContent`] accessors rather than raw JSON
+            // keys, so request/reply reconstruction stays in one place.
             match serde_json::from_value::<RequestPartResource>(part.content.clone()) {
                 Ok(request) => TranscriptPartContent::Activity(TranscriptActivityContent::Request(
                     Box::new(request),
                 )),
-                Err(_) => match interaction_request_resource(content) {
-                    Some(request) => {
-                        TranscriptPartContent::Activity(TranscriptActivityContent::Request(
-                            Box::new(RequestPartResource::UserInput {
-                                request,
-                                reply: interaction_reply_resource(content),
-                            }),
-                        ))
-                    }
-                    None => TranscriptPartContent::Text(TextPartResource {
+                Err(_) => match InteractionContent::try_from(content) {
+                    Ok(interaction) => match interaction_request_resource(&interaction) {
+                        Some(request) => {
+                            TranscriptPartContent::Activity(TranscriptActivityContent::Request(
+                                Box::new(RequestPartResource::UserInput {
+                                    request,
+                                    reply: interaction_reply_resource(&interaction),
+                                }),
+                            ))
+                        }
+                        None => TranscriptPartContent::Text(TextPartResource {
+                            text: fallback_json_text(content),
+                            synthetic: false,
+                        }),
+                    },
+                    Err(_) => TranscriptPartContent::Text(TextPartResource {
                         text: fallback_json_text(content),
                         synthetic: false,
                     }),
@@ -456,40 +466,33 @@ fn structured_value(value: &Value) -> StructuredValueResource {
     }
 }
 
-/// Recover a [`UserInputRequest`] from the v2 canonical `interaction` content:
-/// prefer the lossless `extra["request"]` object, otherwise reconstruct from
-/// the display keys (`type`/`prompt`/`options`). Returns `None` only when the
+/// Recover a [`UserInputRequest`] from the typed `interaction` content:
+/// prefer the lossless typed `request()` accessor, otherwise reconstruct from
+/// the display keys (`kind`/`prompt`/`options`). Returns `None` only when the
 /// content carries neither a usable request nor enough display fields.
-fn interaction_request_resource(content: &Value) -> Option<UserInputRequest> {
-    if let Some(request) = content
-        .get("request")
-        .and_then(|value| serde_json::from_value::<UserInputRequest>(value.clone()).ok())
-    {
-        return Some(request);
+fn interaction_request_resource(interaction: &InteractionContent) -> Option<UserInputRequest> {
+    if let Some(request) = interaction.request() {
+        return Some(user_input_request_resource(request));
     }
-    let kind = string_field(content, "type").unwrap_or_default();
-    let questions = content
-        .get("options")
+    let kind = interaction.kind.as_str();
+    let questions = interaction
+        .options
+        .as_ref()
         .and_then(|value| serde_json::from_value::<Vec<UserInputQuestion>>(value.clone()).ok())
         .unwrap_or_default();
-    if kind.is_empty() && questions.is_empty() {
+    if interaction.kind == agena_domain::UserInputKind::AskUser
+        && interaction.prompt.is_none()
+        && questions.is_empty()
+    {
         return None;
     }
-    let request_id = content
-        .get("request")
-        .and_then(|request| request.get("request_id"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
     Some(UserInputRequest {
-        request_id: if request_id.is_empty() {
-            format!("interaction-{}", kind)
-        } else {
-            request_id
-        },
+        request_id: interaction
+            .request_id()
+            .unwrap_or_else(|| format!("interaction-{}", kind)),
         session_id: None,
-        title: string_field(content, "prompt").unwrap_or_default(),
-        kind,
+        title: interaction.prompt.clone().unwrap_or_default(),
+        kind: kind.to_owned(),
         auto_resolution_ms: None,
         presented_at: None,
         questions,
@@ -497,13 +500,57 @@ fn interaction_request_resource(content: &Value) -> Option<UserInputRequest> {
     })
 }
 
-/// Recover an optional [`UserInputReply`] from the v2 canonical `interaction`
-/// content (`extra["reply"]`, falling back to the display `response` key).
-fn interaction_reply_resource(content: &Value) -> Option<UserInputReply> {
-    content
-        .get("reply")
-        .or_else(|| content.get("response"))
-        .and_then(|value| serde_json::from_value::<UserInputReply>(value.clone()).ok())
+/// Recover an optional [`UserInputReply`] from the typed `interaction`
+/// content via the `reply()` accessor (`extra["reply"]`, falling back to the
+/// display `response` key).
+fn interaction_reply_resource(interaction: &InteractionContent) -> Option<UserInputReply> {
+    interaction.reply().map(user_input_reply_resource)
+}
+
+/// Project a typed domain request onto the API presentation resource,
+/// canonicalizing the enum kind back to its wire string.
+fn user_input_request_resource(request: agena_domain::UserInputRequest) -> UserInputRequest {
+    UserInputRequest {
+        request_id: request.request_id,
+        session_id: request.session_id,
+        title: request.title,
+        kind: request.kind.as_str().to_owned(),
+        auto_resolution_ms: request.auto_resolution_ms,
+        presented_at: request.presented_at,
+        questions: request
+            .questions
+            .into_iter()
+            .map(|question| UserInputQuestion {
+                header: question.header,
+                question: question.question,
+                options: question
+                    .options
+                    .into_iter()
+                    .map(|option| UserInputOption {
+                        label: option.label,
+                        description: option.description,
+                    })
+                    .collect(),
+                multiple: question.multiple,
+                allow_custom: question.allow_custom,
+            })
+            .collect(),
+        created_at: request.created_at,
+    }
+}
+
+/// Project a typed domain reply onto the API presentation resource.
+fn user_input_reply_resource(reply: agena_domain::UserInputReply) -> UserInputReply {
+    UserInputReply {
+        request_id: reply.request_id,
+        kind: match reply.kind {
+            agena_domain::UserInputReplyKind::Submit => UserInputReplyKind::Submit,
+            agena_domain::UserInputReplyKind::Cancel => UserInputReplyKind::Cancel,
+            agena_domain::UserInputReplyKind::Timeout => UserInputReplyKind::Timeout,
+        },
+        answers: reply.answers,
+        reason: reply.reason,
+    }
 }
 
 /// A readable fallback for parts whose kind we do not render specially: use a

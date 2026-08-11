@@ -1264,7 +1264,7 @@ fn notification_from_session_change(
     ))
 }
 
-fn model_catalog_source_kind_from_domain(
+pub fn model_catalog_source_kind_from_domain(
     value: agena_provider::ModelCatalogSnapshotSourceKind,
 ) -> agena_api::resource::ModelCatalogSourceKind {
     match value {

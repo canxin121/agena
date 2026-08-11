@@ -322,19 +322,9 @@ pub(super) fn interaction_operation_id(part: &Part) -> Option<&str> {
         .and_then(serde_json::Value::as_str)
 }
 
-fn interactive_request_kind_label(
-    request_kind: agena_domain::PendingInteractiveRequestKind,
-) -> &'static str {
-    match request_kind {
-        agena_domain::PendingInteractiveRequestKind::Permission => "permission",
-        agena_domain::PendingInteractiveRequestKind::UserInput => "user input",
-    }
-}
-
 fn matching_request_part_refs(
     session: &Session,
     request_id: &str,
-    request_kind: agena_domain::PendingInteractiveRequestKind,
     pending_only: bool,
 ) -> Vec<SessionPartRef> {
     session
@@ -346,19 +336,6 @@ fn matching_request_part_refs(
                 return None;
             }
             if pending_only && !part.state.is_in_flight() {
-                return None;
-            }
-            let kind_matches = match request_kind {
-                agena_domain::PendingInteractiveRequestKind::Permission => {
-                    part.content.get("kind").and_then(serde_json::Value::as_str)
-                        == Some("permission")
-                }
-                agena_domain::PendingInteractiveRequestKind::UserInput => {
-                    part.content.get("kind").and_then(serde_json::Value::as_str)
-                        != Some("permission")
-                }
-            };
-            if !kind_matches {
                 return None;
             }
             let matches_request = part
@@ -731,28 +708,24 @@ impl SessionManager {
     }
 
     /// Complete every pending interaction part for `request_id` with the
-    /// replied canonical content and terminal `completed` state.
+    /// replied canonical content and terminal `completed` state. Interaction
+    /// parts are strictly user input (permissions live on the tool_call
+    /// operation's authorization and never produce a part), so the label is
+    /// fixed.
     fn complete_reply_request_parts(
         &self,
         session: &mut Session,
         request_id: &str,
-        request_kind: agena_domain::PendingInteractiveRequestKind,
         content: serde_json::Value,
     ) -> Result<(), AppError> {
-        let request_parts = matching_request_part_refs(session, request_id, request_kind, true);
+        let request_parts = matching_request_part_refs(session, request_id, true);
         if request_parts.is_empty() {
-            return Err(pending_reply_part_missing_error(
-                interactive_request_kind_label(request_kind),
-                request_id,
-            ));
+            return Err(pending_reply_part_missing_error("user input", request_id));
         }
 
         for request_part in request_parts {
             let part = session.part_mut(&request_part).ok_or_else(|| {
-                pending_reply_part_missing_error(
-                    interactive_request_kind_label(request_kind),
-                    request_id,
-                )
+                pending_reply_part_missing_error("user input", request_id)
             })?;
             part.content = content.clone();
             part.state = PartState::Completed;
@@ -1322,12 +1295,8 @@ impl SessionManager {
         self.session_mutations
             .run(session_id, async {
                 let (state, mut session) = self.load_reply_session(session_id).await?;
-                let request_parts = matching_request_part_refs(
-                    &session,
-                    request_id.as_str(),
-                    agena_domain::PendingInteractiveRequestKind::UserInput,
-                    false,
-                );
+                let request_parts =
+                    matching_request_part_refs(&session, request_id.as_str(), false);
                 if request_parts.is_empty() {
                     return Err(pending_reply_part_missing_error(
                         "user input",
@@ -1435,7 +1404,6 @@ impl SessionManager {
                 self.complete_reply_request_parts(
                     &mut session,
                     request_id.as_str(),
-                    agena_domain::PendingInteractiveRequestKind::UserInput,
                     replied_content,
                 )?;
 

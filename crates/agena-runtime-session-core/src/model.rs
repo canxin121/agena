@@ -990,8 +990,9 @@ impl Session {
     /// - `tool_call` parts not yet `completed`/`cancelled` and without a
     ///   paired `tool_result` become [`SessionPendingOperation::Tool`];
     /// - `interaction` parts in flight become
-    ///   [`SessionPendingOperation::Permission`] when their content
-    ///   `kind == "permission"`, otherwise [`SessionPendingOperation::UserInput`].
+    ///   [`SessionPendingOperation::UserInput`]. Permissions are never recorded
+    ///   on interaction parts: they live on the `tool_call` part's operation
+    ///   authorization.
     fn derive_pending_operations(&self) -> Vec<SessionPendingOperation> {
         let mut operations = Vec::new();
         for (index, part) in self.parts.iter().enumerate() {
@@ -1005,21 +1006,12 @@ impl Session {
                 }
                 "interaction" if part.state.is_in_flight() => {
                     let part_ref = SessionPartRef::new(index, part);
-                    if interaction_kind(part) == Some("permission") {
-                        operations.push(SessionPendingOperation::Permission {
-                            pending: SessionPendingPermissionRequest {
-                                request_id: interaction_request_id(part),
-                                tool: SessionPendingTool { part: part_ref },
-                            },
-                        });
-                    } else {
-                        operations.push(SessionPendingOperation::UserInput {
-                            pending: SessionPendingInteractiveRequest {
-                                request: part_ref.clone(),
-                                tool: SessionPendingTool { part: part_ref },
-                            },
-                        });
-                    }
+                    operations.push(SessionPendingOperation::UserInput {
+                        pending: SessionPendingInteractiveRequest {
+                            request: part_ref.clone(),
+                            tool: SessionPendingTool { part: part_ref },
+                        },
+                    });
                 }
                 _ => {}
             }
@@ -1107,18 +1099,6 @@ impl Session {
         }
         bytes
     }
-}
-
-fn interaction_kind(part: &Part) -> Option<&str> {
-    part.content.get("kind").and_then(serde_json::Value::as_str)
-}
-
-fn interaction_request_id(part: &Part) -> String {
-    part.content
-        .get("request_id")
-        .and_then(serde_json::Value::as_str)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| part.part_id.to_string())
 }
 
 /// Best-effort text rendering of a part for `last_assistant_text` /
@@ -1340,7 +1320,7 @@ mod parts_projection_tests {
     }
 
     #[test]
-    fn derive_pending_operations_maps_parts_to_tool_permission_and_user_input() {
+    fn derive_pending_operations_maps_tool_and_interaction_parts() {
         let tool = part(
             30,
             "tool_call",
@@ -1355,7 +1335,10 @@ mod parts_projection_tests {
             PartState::Pending,
             json!({"kind": "ask_user", "prompt": "proceed?"}),
         );
-        let permission = part(
+        // Interaction parts are strictly user input: even a part whose content
+        // carries a "permission" kind maps to UserInput — permissions live on
+        // the tool_call operation's authorization, never on interaction parts.
+        let permission_ish = part(
             32,
             "interaction",
             PartRole::Runtime,
@@ -1363,7 +1346,7 @@ mod parts_projection_tests {
             json!({"kind": "permission", "prompt": "allow?", "request_id": "req-1"}),
         );
 
-        let session = session_with(vec![tool, ask, permission]);
+        let session = session_with(vec![tool, ask, permission_ish]);
         let ops = &session.pending_operations;
 
         assert_eq!(ops.len(), 3);
@@ -1371,18 +1354,14 @@ mod parts_projection_tests {
             SessionPendingOperation::Tool { tool } => assert_eq!(tool.part.part_id, 30),
             _ => panic!("expected Tool op"),
         }
-        match &ops[1] {
-            SessionPendingOperation::UserInput { pending } => {
-                assert_eq!(pending.request.part_id, 31)
+        for (index, expected_part_id) in [(1, 31), (2, 32)] {
+            match &ops[index] {
+                SessionPendingOperation::UserInput { pending } => {
+                    assert_eq!(pending.request.part_id, expected_part_id);
+                    assert_eq!(pending.tool.part.part_id, expected_part_id);
+                }
+                _ => panic!("expected UserInput op for part {expected_part_id}"),
             }
-            _ => panic!("expected UserInput op"),
-        }
-        match &ops[2] {
-            SessionPendingOperation::Permission { pending } => {
-                assert_eq!(pending.request_id, "req-1");
-                assert_eq!(pending.tool.part.part_id, 32);
-            }
-            _ => panic!("expected Permission op"),
         }
 
         let tool_refs = session.pending_tools();

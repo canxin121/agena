@@ -77,7 +77,9 @@ pub enum PendingInteractiveRequestKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{PendingInteractiveRequestKind, UserInputReplyKind};
+    use super::{PendingInteractiveRequestKind, UserInputKind, UserInputReplyKind};
+    use crate::UserInputRequest;
+    use serde_json::json;
 
     #[test]
     fn reply_kind_has_stable_wire_spelling() {
@@ -93,5 +95,72 @@ mod tests {
             serde_json::to_string(&PendingInteractiveRequestKind::UserInput).unwrap(),
             "\"user_input\""
         );
+    }
+
+    #[test]
+    fn user_input_kind_serializes_to_the_plain_string() {
+        assert_eq!(
+            serde_json::to_string(&UserInputKind::Review).unwrap(),
+            "\"review\""
+        );
+        assert_eq!(
+            serde_json::to_string(&UserInputKind::AskUser).unwrap(),
+            "\"ask_user\""
+        );
+        assert_eq!(
+            serde_json::to_string(&UserInputKind::Custom("x".into())).unwrap(),
+            "\"x\""
+        );
+    }
+
+    #[test]
+    fn user_input_kind_deserializes_leniently() {
+        assert_eq!(
+            serde_json::from_value::<UserInputKind>(json!("review")).unwrap(),
+            UserInputKind::Review
+        );
+        assert_eq!(
+            serde_json::from_value::<UserInputKind>(json!("ask_user")).unwrap(),
+            UserInputKind::AskUser
+        );
+        assert_eq!(
+            serde_json::from_value::<UserInputKind>(json!("weird")).unwrap(),
+            UserInputKind::Custom("weird".into())
+        );
+        // Empty, null, and absent (field default) all fall back to AskUser.
+        assert_eq!(
+            serde_json::from_value::<UserInputKind>(json!("")).unwrap(),
+            UserInputKind::AskUser
+        );
+        assert_eq!(
+            serde_json::from_value::<UserInputKind>(serde_json::Value::Null).unwrap(),
+            UserInputKind::AskUser
+        );
+        let request: UserInputRequest =
+            serde_json::from_value(json!({"request_id": "r1", "created_at": "2026-01-01T00:00:00Z"}))
+                .unwrap();
+        assert_eq!(request.kind, UserInputKind::AskUser);
+    }
+
+    #[test]
+    fn user_input_request_round_trips_preserving_kind() {
+        let request = UserInputRequest {
+            request_id: "r1".to_owned(),
+            session_id: Some(7),
+            title: "Approve?".to_owned(),
+            kind: UserInputKind::Review,
+            auto_resolution_ms: None,
+            presented_at: None,
+            questions: Vec::new(),
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        };
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["kind"], json!("review"));
+        let back: UserInputRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(back.kind, UserInputKind::Review);
+        assert_eq!(back.request_id, "r1");
+        assert_eq!(back, request);
     }
 }

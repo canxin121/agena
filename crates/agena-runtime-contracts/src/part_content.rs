@@ -976,6 +976,79 @@ mod tests {
         );
     }
 
+    /// One struct, two shapes: the legacy v1-flat payload (`kind` alias, flat
+    /// `request_id`/`tool_part_id`/`request`/`response` keys) and the canonical
+    /// payload (`type`, display keys, full `request`/`reply` objects, mirrored
+    /// correlation keys including `operation_id`) both decode into
+    /// `InteractionContent`, and the typed accessors return equivalent values.
+    #[test]
+    fn interaction_content_decodes_v1_flat_and_canonical_shapes_identically() {
+        let request = json!({
+            "request_id": "r1",
+            "session_id": 7,
+            "title": "Approve?",
+            "kind": "review",
+            "questions": [{"question": "Approve?", "options": [{"label": "Approve"}]}],
+            "created_at": "2026-01-01T00:00:00Z",
+        });
+        let reply = json!({
+            "request_id": "r1",
+            "kind": "submit",
+            "answers": {"0": ["Approve"]},
+        });
+        let v1_flat = json!({
+            "kind": "review",
+            "request_id": "r1",
+            "prompt": "Approve?",
+            "tool_part_id": 5,
+            "request": request,
+            "response": reply,
+        });
+        let canonical = json!({
+            "type": "review",
+            "prompt": "Approve?",
+            "options": [{"question": "Approve?", "options": [{"label": "Approve"}]}],
+            "response": reply,
+            "request": request,
+            "reply": reply,
+            "request_id": "r1",
+            "tool_part_id": 5,
+            "operation_id": "op-1",
+        });
+        let flat = InteractionContent::try_from(&v1_flat).unwrap();
+        let canon = InteractionContent::try_from(&canonical).unwrap();
+
+        // The kind coerces to the typed enum from both shapes.
+        assert_eq!(flat.kind, agena_domain::UserInputKind::Review);
+        assert_eq!(canon.kind, agena_domain::UserInputKind::Review);
+        assert_eq!(flat.kind, canon.kind);
+
+        // Typed accessors agree across shapes.
+        assert_eq!(flat.request_id(), Some("r1".to_owned()));
+        assert_eq!(canon.request_id(), flat.request_id());
+        assert_eq!(flat.tool_part_id(), Some(5));
+        assert_eq!(canon.tool_part_id(), flat.tool_part_id());
+        // The v1-flat payload never carried an operation id; only the canonical
+        // shape mirrors it.
+        assert_eq!(flat.operation_id(), None);
+        assert_eq!(canon.operation_id(), Some("op-1"));
+
+        let flat_request = flat.request().expect("v1-flat request decodes");
+        let canon_request = canon.request().expect("canonical request decodes");
+        assert_eq!(flat_request, canon_request);
+        assert_eq!(flat_request.request_id, "r1");
+        assert_eq!(flat_request.title, "Approve?");
+        assert_eq!(flat_request.kind, agena_domain::UserInputKind::Review);
+
+        // reply() reads extra["reply"] (canonical) or the top-level response
+        // (v1-flat) and yields the same typed reply.
+        let flat_reply = flat.reply().expect("v1-flat reply decodes from response");
+        let canon_reply = canon.reply().expect("canonical reply decodes from reply");
+        assert_eq!(flat_reply, canon_reply);
+        assert_eq!(flat_reply.request_id, "r1");
+        assert_eq!(flat_reply.kind, agena_domain::UserInputReplyKind::Submit);
+    }
+
     #[test]
     fn error_round_trips_full_user_problem() {
         let content = ErrorContent {

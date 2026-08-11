@@ -15,9 +15,7 @@ use agena_domain::{PermissionReplyKind, PermissionScope};
 use agena_provider::ProviderCatalog;
 use agena_runtime::bootstrap_application_services;
 use agena_runtime::{
-    RuntimeApplicationServices, SessionCreateRequest, SessionExecutionCommandService,
-    SessionExecutionControl, SessionPermissionReplyRequest, SessionQueryService, SessionRunOptions,
-    SessionUserRunRequest,
+    SessionPermissionReplyRequest, SessionRunOptions, SessionUserRunRequest,
 };
 use async_trait::async_trait;
 use clap::Parser;
@@ -55,8 +53,12 @@ pub(crate) async fn run_command(cli: AgenaCli) -> Result<(), AgenaProcessError> 
 
 pub(crate) async fn run(request: RpcServerRequest) -> Result<(), AgenaProcessError> {
     let runtime = session_runtime_with_workspace(&request, request.args.workspace.as_ref()).await?;
+    let application = agena_application::Application::from_composed_runtime_services(
+        runtime.application_services(),
+    )
+    .map_err(|error| AgenaProcessError::Internal(error.to_string()))?;
     let backend = AgenaAppServerBackend {
-        services: runtime.application_services(),
+        application,
         runtime: runtime.clone(),
     };
     // Keep the result as part of the backend's server-lifetime state rather
@@ -93,7 +95,7 @@ async fn session_runtime_with_workspace(
 
 #[derive(Clone)]
 struct AgenaAppServerBackend {
-    services: RuntimeApplicationServices,
+    application: agena_application::Application,
     // Retain Runtime lifecycle ownership for the complete RPC-server lifetime.
     runtime: agena_runtime::RuntimeBootstrapResult,
 }
@@ -104,21 +106,17 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         &self,
         params: CreateSessionParams,
     ) -> Result<CreateSessionResult, AppServerError> {
-        let commands = app_session_commands(&self.services)?;
-        let session = commands
-            .create_session(SessionCreateRequest {
-                title: params.title.unwrap_or_else(|| "IDE session".to_owned()),
-                parent_session_id: params.parent_session_id,
-            })
-            .await
-            .map_err(app_backend_error)?;
-        let presentation = app_session_queries(&self.services)?
-            .session_presentation(session.session_id)
+        let session = self
+            .application
+            .create_session(
+                params.title.unwrap_or_else(|| "IDE session".to_owned()),
+                params.parent_session_id,
+            )
             .await
             .map_err(app_backend_error)?;
         Ok(CreateSessionResult {
-            session_id: presentation.id,
-            title: presentation.title,
+            session_id: session.id,
+            title: session.title,
         })
     }
 
@@ -126,9 +124,18 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         &self,
         params: SubmitRunParams,
     ) -> Result<SubmitRunResult, AppServerError> {
-        let commands = app_session_commands(&self.services)?;
+        let queries = self
+            .application
+            .session_query_service()
+            .map_err(app_backend_error)?;
+        let commands = self
+            .application
+            .session_execution_services()
+            .map_err(app_backend_error)?
+            .commands
+            .clone();
         let options = resolve_run_options(
-            self.services.provider_catalog.as_ref(),
+            self.application.provider_catalog().as_ref(),
             params.model.as_deref(),
             params.temperature,
             params.max_output_tokens,
@@ -144,7 +151,6 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             ))
             .await
             .map_err(app_backend_error)?;
-        let queries = app_session_queries(&self.services)?;
         let presentation = queries
             .session_presentation(outcome.session_id)
             .await
@@ -174,13 +180,22 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         &self,
         params: PermissionReplyParams,
     ) -> Result<PermissionReplyResult, AppServerError> {
-        let commands = app_session_commands(&self.services)?;
-        let selected_model = app_session_control(&self.services)?
+        let services = self
+            .application
+            .session_execution_services()
+            .map_err(app_backend_error)?;
+        let commands = services.commands.clone();
+        let selected_model = services
+            .execution_control
             .selected_model(params.session_id)
             .await
             .map_err(app_backend_error)?;
+        let queries = self
+            .application
+            .session_query_service()
+            .map_err(app_backend_error)?;
         let options = resolve_permission_continue_options(
-            self.services.provider_catalog.as_ref(),
+            self.application.provider_catalog().as_ref(),
             selected_model,
         )
         .map_err(app_backend_error)?;
@@ -198,7 +213,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             ))
             .await
             .map_err(app_backend_error)?;
-        let presentation = app_session_queries(&self.services)?
+        let presentation = queries
             .session_presentation(outcome.session_id)
             .await
             .map_err(app_backend_error)?;
@@ -212,7 +227,11 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         &self,
         params: AppListSessionsParams,
     ) -> Result<AppListSessionsResult, AppServerError> {
-        let sessions = app_session_queries(&self.services)?
+        let queries = self
+            .application
+            .session_query_service()
+            .map_err(app_backend_error)?;
+        let sessions = queries
             .list_session_summaries(SessionListRequest {
                 offset: params.offset,
                 limit: params.limit,
@@ -240,7 +259,11 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         &self,
         params: ReadPartsParams,
     ) -> Result<ReadPartsResult, AppServerError> {
-        let messages = app_session_queries(&self.services)?
+        let queries = self
+            .application
+            .session_query_service()
+            .map_err(app_backend_error)?;
+        let messages = queries
             .list_projected_runs(params.session_id, true)
             .await
             .map_err(app_backend_error)?;
@@ -250,7 +273,13 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
     }
 
     async fn cancel_run(&self, params: CancelRunParams) -> Result<CancelRunResult, AppServerError> {
-        let result = app_session_control(&self.services)?
+        let execution_control = self
+            .application
+            .session_execution_services()
+            .map_err(app_backend_error)?
+            .execution_control
+            .clone();
+        let result = execution_control
             .cancel_execution(params.session_id, params.execution_id)
             .await
             .map_err(app_backend_error)?;
@@ -259,33 +288,6 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             result,
         })
     }
-}
-
-fn app_session_queries(
-    services: &RuntimeApplicationServices,
-) -> Result<&std::sync::Arc<dyn SessionQueryService>, AppServerError> {
-    services
-        .session_queries
-        .as_ref()
-        .ok_or_else(|| AppServerError::Backend(session_storage_error().to_string()))
-}
-
-fn app_session_commands(
-    services: &RuntimeApplicationServices,
-) -> Result<&std::sync::Arc<dyn SessionExecutionCommandService>, AppServerError> {
-    services
-        .execution_commands
-        .as_ref()
-        .ok_or_else(|| AppServerError::Backend(session_storage_error().to_string()))
-}
-
-fn app_session_control(
-    services: &RuntimeApplicationServices,
-) -> Result<&std::sync::Arc<dyn SessionExecutionControl>, AppServerError> {
-    services
-        .execution_control
-        .as_ref()
-        .ok_or_else(|| AppServerError::Backend(session_storage_error().to_string()))
 }
 
 fn app_backend_error(error: impl ToString) -> AppServerError {
@@ -349,12 +351,6 @@ fn default_model(
         .default_model()
         .map_err(|error| AgenaProcessError::Configuration(error.to_string()))?
         .ok_or_else(|| AgenaProcessError::Configuration("no providers configured".to_owned()))
-}
-
-fn session_storage_error() -> AgenaProcessError {
-    AgenaProcessError::Configuration(
-        "session storage is unavailable; configure a database URL or path".to_owned(),
-    )
 }
 
 fn app_permission_reply_kind(

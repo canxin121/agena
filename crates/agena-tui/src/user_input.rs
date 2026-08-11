@@ -67,6 +67,12 @@ pub struct UserInputAnswerDraft {
 /// before choosing.
 #[derive(Debug, Clone, Default)]
 pub struct UserInputReviewPresentation {
+    /// Chat-style pre-rendered plan rows (wrapped to `content_width`), set by
+    /// the App through [`UserInputPresentation::set_review_plan`].
+    plan_lines: Vec<Line<'static>>,
+    /// Width used to pre-render `plan_lines`; decision rows wrap at this width
+    /// too so cursor arithmetic stays consistent.
+    content_width: u16,
     /// Cursor row inside the flat review document.
     cursor_line: usize,
     /// First visible row of the review document.
@@ -202,10 +208,23 @@ impl UserInputPresentation {
                 .unwrap_or(false)
     }
 
-    /// First row of the decision block inside the flat review document: the
-    /// separator row is row zero, so decisions begin at row one.
+    /// Stores chat-style pre-rendered plan rows for a review-decision overlay.
+    /// The App renders `body_markdown` through the transcript Markdown pipeline
+    /// (inside `with_text_math_rendering`) at `content_width` columns.
+    pub fn set_review_plan(&mut self, lines: Vec<Line<'static>>, content_width: u16) {
+        self.review.plan_lines = lines;
+        self.review.content_width = content_width;
+    }
+
+    /// Number of plan rows (at least one placeholder row so an empty body
+    /// still gives the cursor a document to move through).
+    fn review_plan_rows(&self) -> usize {
+        self.review.plan_lines.len().max(1)
+    }
+
+    /// First row of the decision block inside the flat review document.
     fn review_decision_start(&self) -> usize {
-        1
+        self.review_plan_rows().saturating_add(1)
     }
 
     /// Number of decision rows (label + detail per option, plus the feedback
@@ -1161,8 +1180,9 @@ pub fn render_overlay(
     }
 }
 
-/// The width at which the review-decision document is laid out. Used by the
-/// renderer and paging logic so cursor arithmetic matches the rendered rows.
+/// The width at which the review-decision document is laid out. The App
+/// pre-renders the plan body at this width so cursor arithmetic matches the
+/// rendered rows.
 pub fn user_input_review_content_width(area: Rect) -> u16 {
     SurfaceMode::Overlay.content_width(area, 92).max(1)
 }
@@ -1182,7 +1202,10 @@ fn review_decision_layout(
     area: Rect,
 ) -> ReviewDecisionLayout {
     let overlay = presentation.overlay();
-    let content_width = user_input_review_content_width(area);
+    let content_width = presentation
+        .review()
+        .content_width
+        .max(user_input_review_content_width(area));
     let footer = Text::from(review_footer_lines(overlay, i18n));
     let footer_height =
         usize::from(wrapped_text_height_for_text(&footer, content_width).clamp(1, 2));
@@ -1236,6 +1259,15 @@ fn build_review_document(
     content_width: u16,
 ) -> Vec<Line<'static>> {
     let mut document = Vec::new();
+    let plan = presentation.review().plan_lines.clone();
+    if plan.is_empty() {
+        document.push(Line::from(Span::styled(
+            i18n.text("overlay-user-input-no-questions"),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        )));
+    } else {
+        document.extend(plan);
+    }
     document.push(Line::from(Span::styled(
         "─".repeat(usize::from(content_width.max(1))),
         Style::default().fg(agena_tui_components::theme::muted_color()),
@@ -1333,7 +1365,10 @@ fn render_review_decision(
     let Some(question) = presentation.questions().first() else {
         return;
     };
-    let content_width = user_input_review_content_width(area);
+    let content_width = presentation
+        .review()
+        .content_width
+        .max(user_input_review_content_width(area));
     let layout = review_decision_layout(presentation, i18n, area);
     let scroll = presentation
         .review()
@@ -1618,7 +1653,7 @@ fn sanitize_display_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        UserInputEffect, UserInputOptionPresentation, UserInputPresentation,
+        Line, UserInputEffect, UserInputOptionPresentation, UserInputPresentation,
         UserInputQuestionPresentation,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -1682,6 +1717,12 @@ mod tests {
     fn review_decision_starts_on_the_plan_and_requires_scrolling_to_decisions() {
         let mut presentation =
             UserInputPresentation::new(overlay(true), vec![question(false, false)]);
+        presentation.set_review_plan(
+            (0..4)
+                .map(|index| Line::from(format!("plan line {index}")))
+                .collect(),
+            60,
+        );
 
         assert_eq!(presentation.review().cursor_line(), 0);
         assert_eq!(
@@ -1689,10 +1730,21 @@ mod tests {
             UserInputEffect::KeepOpen,
             "Enter on the plan must not submit the first decision"
         );
-        // Walk past the placeholder + separator into the decision block.
+        // The first Enter walked the cursor off the first plan row; keep
+        // walking down through the remaining plan rows to the separator.
+        assert_eq!(presentation.review().cursor_line(), 1);
         for _ in 0..3 {
             presentation.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 10);
         }
+        assert_eq!(presentation.review().cursor_line(), 4);
+        assert_eq!(
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
+            UserInputEffect::KeepOpen,
+            "Enter on the separator must not submit a decision"
+        );
+        // The Enter walked down into the decision block, which starts right
+        // after the four plan rows and the separator.
+        assert_eq!(presentation.review().cursor_line(), 5);
         assert_eq!(presentation.review().selected_option(), 0);
         assert_eq!(
             presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
@@ -1712,7 +1764,7 @@ mod tests {
 
         // G jumps to the bottom of the document.
         presentation.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT), 10);
-        assert_eq!(presentation.review().cursor_line(), 2);
+        assert_eq!(presentation.review().cursor_line(), 3);
         assert_eq!(
             presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
             UserInputEffect::Submit
@@ -1734,12 +1786,23 @@ mod tests {
     fn review_decision_page_keys_step_by_page_size() {
         let mut presentation =
             UserInputPresentation::new(overlay(true), vec![question(false, false)]);
+        presentation.set_review_plan(
+            (0..40)
+                .map(|index| Line::from(format!("line {index}")))
+                .collect(),
+            60,
+        );
 
-        // total = separator row + 2 decision rows = 3; the viewport (page
-        // size 10) is taller than the document so scroll stays clamped to 0.
+        // total = 40 plan rows + separator + 2 decision rows = 43.
         presentation.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), 10);
-        assert_eq!(presentation.review().cursor_line(), 2);
-        assert_eq!(presentation.review().scroll(), 0);
+        assert_eq!(presentation.review().cursor_line(), 10);
+        assert_eq!(presentation.review().scroll(), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().cursor_line(), 20);
+        assert_eq!(presentation.review().scroll(), 20);
+        presentation.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().cursor_line(), 10);
+        assert_eq!(presentation.review().scroll(), 1);
         presentation.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), 10);
         assert_eq!(presentation.review().cursor_line(), 0);
         assert_eq!(presentation.review().scroll(), 0);
@@ -1790,7 +1853,7 @@ mod tests {
         );
         assert!(!presentation.review().is_editing_custom());
         assert_eq!(presentation.review().selected_option(), 1);
-        assert_eq!(presentation.review().cursor_line(), 3);
+        assert_eq!(presentation.review().cursor_line(), 4);
     }
 
     #[test]

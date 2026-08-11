@@ -1660,7 +1660,11 @@ impl SessionManager {
         };
         let invocation_changed = prepared_invocation != original_invocation;
         resolved.prepared_shell_command = prepared_shell_command;
-        resolved.invocation = prepared_invocation;
+        // The rewritten invocation only feeds the persisted operation preview;
+        // execution itself runs against `prepared_shell_command`. Set the
+        // pre-rewrite form once — the shell-rewritten value would otherwise be
+        // overwritten inside the block below.
+        resolved.invocation = prepared.invocation.clone();
         if invocation_changed || prepared.title_override.is_some() {
             let authorization = operation_authorization(session, &resolved);
             let current_title = match session
@@ -1673,7 +1677,6 @@ impl SessionManager {
                 _ => format!("Tool {}", tool_name(&resolved.invocation)),
             };
 
-            resolved.invocation = prepared.invocation.clone();
             let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
                 AppError::Internal(format!(
                     "pending tool part not found: part={}",
@@ -1842,7 +1845,9 @@ impl SessionManager {
         .map_err(PendingToolPreparationError::Tool)?;
         let invocation_changed = prepared_invocation != original_invocation;
         resolved.prepared_shell_command = prepared_shell_command;
-        resolved.invocation = prepared_invocation;
+        // See the batch path: execution runs against `prepared_shell_command`;
+        // the persisted operation preview uses the pre-rewrite invocation.
+        resolved.invocation = prepared.invocation.clone();
 
         let mut session_changed = false;
         if invocation_changed || prepared.title_override.is_some() {
@@ -1857,7 +1862,6 @@ impl SessionManager {
                 _ => format!("Tool {}", tool_name(&resolved.invocation)),
             };
 
-            resolved.invocation = prepared.invocation.clone();
             let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
                 PendingToolPreparationError::Session(AppError::Internal(format!(
                     "pending tool part not found: part={}",
@@ -2125,8 +2129,14 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         match execution {
             Ok(execution) => {
-                Box::pin(self.apply_tool_success(session, pending_tool, execution, None, state))
-                    .await
+                Box::pin(self.apply_tool_success_with_rules(
+                    session,
+                    pending_tool,
+                    execution,
+                    Vec::new(),
+                    state,
+                ))
+                .await
             }
             Err(ToolError::UserInputRequired(input)) => {
                 Box::pin(self.apply_user_input_request(session, pending_tool, *input, state)).await
@@ -2164,46 +2174,6 @@ impl SessionManager {
                 Box::pin(self.apply_tool_error(session, pending_tool, error, None, state)).await
             }
         }
-    }
-
-    pub async fn resolve_tool_permission_check(
-        &self,
-        session_id: Option<i64>,
-        check: &ToolPermissionCheck,
-    ) -> Result<agena_domain::PermissionResolution, AppError> {
-        self.resolve_permission_decision(session_id, check).await
-    }
-
-    pub(in crate::session::manager) async fn resolve_permission_decision(
-        &self,
-        session_id: Option<i64>,
-        check: &ToolPermissionCheck,
-    ) -> Result<agena_domain::PermissionResolution, AppError> {
-        let cancellation = match session_id {
-            Some(session_id) => self.execution_registry.cancellation_token(session_id).await,
-            None => None,
-        };
-        if cancellation
-            .as_ref()
-            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
-        {
-            return Err(AppError::Cancelled);
-        }
-        let key = permission_action_key(&check.action)?;
-        let state = self.execution_state();
-        let snapshot = self.rule_snapshot(&state, session_id).await?;
-        let resolution =
-            agena_permission::rules::apply_rules(&check.decision, snapshot.rules_for(key.as_str()));
-        tracing::debug!(
-            target: "agena::permission",
-            session_id,
-            action = key.as_str(),
-            static_decision = ?check.decision,
-            persisted_rule_count = snapshot.rules_for(key.as_str()).len(),
-            resolved_decision = ?resolution.decision,
-            "resolved tool permission"
-        );
-        Ok(resolution)
     }
 
     pub(in crate::session::manager) async fn aggregate_permission_outcome(
@@ -2944,7 +2914,7 @@ impl SessionManager {
         }
 
         let session = self.store.load_session(session.id).await?;
-        self.apply_tool_success(session, pending_tool, execution, None, state)
+        self.apply_tool_success_with_rules(session, pending_tool, execution, Vec::new(), state)
             .await
     }
 
@@ -3099,24 +3069,6 @@ impl SessionManager {
         }
         self.persist_session_changes(session, vec![pending_tool.part.part_id], None, state)
             .await
-    }
-
-    pub(in crate::session::manager) async fn apply_tool_success(
-        &self,
-        session: Session,
-        pending_tool: &SessionPendingTool,
-        execution: ToolInvocationExecution,
-        persisted_rule: Option<PersistedPermissionRule>,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        Box::pin(self.apply_tool_success_with_rules(
-            session,
-            pending_tool,
-            execution,
-            persisted_rule.into_iter().collect(),
-            state,
-        ))
-        .await
     }
 
     pub(in crate::session::manager) async fn apply_tool_success_with_rules(

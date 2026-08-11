@@ -114,7 +114,9 @@ impl App {
                     ]),
                 };
                 match session_id {
-                    Some(session_id) => self.request_submit_message(session_id, draft),
+                    Some(session_id) => {
+                        self.request_submit_message_with_pending(session_id, draft, None)
+                    }
                     None => self.create_session(Some(draft)),
                 }
             }
@@ -261,7 +263,7 @@ impl App {
                         agena_domain::ComposerNode::Text { text: prompt },
                     ]),
                 };
-                app.request_submit_message(session_id, draft);
+                app.request_submit_message_with_pending(session_id, draft, None);
             },
         );
     }

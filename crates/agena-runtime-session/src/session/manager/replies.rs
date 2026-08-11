@@ -1456,11 +1456,11 @@ impl SessionManager {
                             let execution =
                                 user_input_execution(&user_input_request, &request.reply)?;
                             session = self
-                                .apply_tool_success(
+                                .apply_tool_success_with_rules(
                                     session,
                                     &pending.tool,
                                     execution,
-                                    None,
+                                    Vec::new(),
                                     state.clone(),
                                 )
                                 .await?;
@@ -1483,11 +1483,11 @@ impl SessionManager {
                                 },
                             );
                             session = self
-                                .apply_tool_success(
+                                .apply_tool_success_with_rules(
                                     session,
                                     &pending.tool,
                                     execution.into(),
-                                    None,
+                                    Vec::new(),
                                     state.clone(),
                                 )
                                 .await?;

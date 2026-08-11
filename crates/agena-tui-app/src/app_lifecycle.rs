@@ -132,7 +132,6 @@ impl App {
                 .checked_sub(Duration::from_millis(REFRESH_INTERVAL_MS))
                 .unwrap_or_else(Instant::now),
             pending_refresh: None,
-            refresh_pending: false,
             pending_ui_action: None,
             current_lineage: None,
             side_sessions: HashMap::new(),
@@ -372,7 +371,6 @@ impl App {
         {
             self.last_refresh_at = Instant::now();
             let force = self.pending_refresh.take().is_some();
-            self.refresh_pending = false;
             // While a run is executing, storage commits streamed parts only
             // at part completion (end-only flush), so the in-memory overlay
             // advances without bumping the durable watermark. A changed-gated

@@ -75,7 +75,7 @@ pub(super) use agena_runtime::merge_system_prompts;
 #[derive(Debug, Clone)]
 struct SessionUserRunRequest {
     run: SessionExecutionRequest,
-    parts: Vec<UserInputPart>,
+    parts: Vec<TypedContent>,
     idempotency_key: Option<String>,
 }
 
@@ -83,29 +83,9 @@ impl SessionUserRunRequest {
     fn new(session_id: i64, options: SessionRunOptions, parts: Vec<TypedContent>) -> Self {
         Self {
             run: SessionExecutionRequest::new(session_id, options),
-            parts: parts
-                .into_iter()
-                .map(UserInputPart::text_or_runtime)
-                .collect(),
+            parts,
             idempotency_key: None,
         }
-    }
-
-    fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
-        let key = key.into();
-        self.idempotency_key = (!key.trim().is_empty()).then_some(key);
-        self
-    }
-}
-
-#[derive(Debug, Clone)]
-struct UserInputPart {
-    content: TypedContent,
-}
-
-impl UserInputPart {
-    fn text_or_runtime(content: TypedContent) -> Self {
-        Self { content }
     }
 }
 
@@ -577,14 +557,13 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
         } = request;
         let parts = part_contents_from_composer_document(document)
             .map_err(session_execution_command_error)?;
-        let mut request = SessionUserRunRequest {
+        // The wire type already normalized the key (trim / non-empty) in
+        // `SessionUserRunRequest::with_idempotency_key`; pass it through.
+        let request = SessionUserRunRequest {
             run,
             parts,
-            idempotency_key: None,
+            idempotency_key,
         };
-        if let Some(key) = idempotency_key {
-            request = request.with_idempotency_key(key);
-        }
         let outcome = SessionManager::start_user_message_parts(self, request)
             .await
             .map_err(session_execution_command_error)?;
@@ -598,12 +577,7 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
     ) -> Result<(), agena_runtime::SessionExecutionCommandError> {
         let parts = part_contents_from_composer_document(document)
             .map_err(session_execution_command_error)?;
-        SessionManager::steer_input(
-            self,
-            session_id,
-            parts.into_iter().map(|part| part.content).collect(),
-        )
-        .await
+        SessionManager::steer_input(self, session_id, parts).await
         .map_err(session_execution_command_error)
     }
 
@@ -756,20 +730,18 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
 
 fn part_contents_from_composer_document(
     document: agena_domain::ComposerDocument,
-) -> Result<Vec<UserInputPart>, AppError> {
+) -> Result<Vec<TypedContent>, AppError> {
     use agena_domain::{ActivityPayload, ComposerNode, ResourceKind, ResourceReference};
 
     document
         .0
         .into_iter()
         .map(|node| match node {
-            ComposerNode::Text { text } => Ok(UserInputPart {
-                content: TypedContent::Text(TextContent {
-                    text,
-                    synthetic: false,
-                    extra: Default::default(),
-                }),
-            }),
+            ComposerNode::Text { text } => Ok(TypedContent::Text(TextContent {
+                text,
+                synthetic: false,
+                extra: Default::default(),
+            })),
             ComposerNode::Activity { activity } => match activity.payload {
                 ActivityPayload::Resource(resource) => {
                     let kind = match resource.kind {
@@ -794,10 +766,9 @@ fn part_contents_from_composer_document(
                             AttachmentSource::FileId { file_id }
                         }
                     };
-                    Ok(UserInputPart {
-                        content: TypedContent::FileRef(super::store::file_ref_from_attachment(
-                            &crate::part::AttachmentPart {
-                                attachments: vec![AttachmentItem {
+                    Ok(TypedContent::FileRef(super::store::file_ref_from_attachment(
+                        &crate::part::AttachmentPart {
+                            attachments: vec![AttachmentItem {
                                 kind,
                                 mime: resource.media_type.unwrap_or_else(|| {
                                     if resource.kind == ResourceKind::Directory {
@@ -815,32 +786,27 @@ fn part_contents_from_composer_document(
                                 height: resource.height,
                                 duration_ms: resource.duration_ms,
                                 page_count: resource.page_count,
-                                }],
-                            },
-                        )),
-                    })
-                }
-                ActivityPayload::SkillReference(skill) => Ok(UserInputPart {
-                    content: TypedContent::SkillRef(super::store::skill_ref_from_reference(
-                        &crate::part::SkillReferencePart {
-                            skills: vec![crate::part::SkillReference {
-                                name: skill.name,
-                                description: skill.description,
-                                instructions: skill.instructions,
-                                content_hash: skill.content_hash,
-                                source: skill.source,
-                                aliases: skill.aliases,
                             }],
                         },
-                    )),
-                }),
-                ActivityPayload::TextArtifact(artifact) => Ok(UserInputPart {
-                    content: TypedContent::Text(TextContent {
-                        text: artifact.text,
-                        synthetic: false,
-                        extra: Default::default(),
+                    ))),
+                }
+                ActivityPayload::SkillReference(skill) => Ok(TypedContent::SkillRef(
+                    super::store::skill_ref_from_reference(&crate::part::SkillReferencePart {
+                        skills: vec![crate::part::SkillReference {
+                            name: skill.name,
+                            description: skill.description,
+                            instructions: skill.instructions,
+                            content_hash: skill.content_hash,
+                            source: skill.source,
+                            aliases: skill.aliases,
+                        }],
                     }),
-                }),
+                )),
+                ActivityPayload::TextArtifact(artifact) => Ok(TypedContent::Text(TextContent {
+                    text: artifact.text,
+                    synthetic: false,
+                    extra: Default::default(),
+                })),
                 _ => Err(AppError::Config(
                     "turn input accepts only resource, skill_reference, and text_artifact activities"
                         .to_owned(),

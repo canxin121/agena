@@ -13,9 +13,6 @@ pub struct LiveEvent {
     /// `None` means the receiver lagged and the UI should force-refresh
     /// from persisted state instead of trying to apply an incremental patch.
     pub event: Option<agena_runtime::RuntimePresentationEvent>,
-    /// True for events that materially change session state — the UI should
-    /// trigger a `refresh_session` after handling.
-    pub triggers_refresh: bool,
     /// True when the UI should ignore incremental assumptions and force a
     /// replay from persisted state (for example after bus lag).
     pub force_refresh: bool,
@@ -59,7 +56,6 @@ pub(crate) fn subscribe_session_events(
                     if change_output
                         .send(LiveEvent {
                             event: None,
-                            triggers_refresh: true,
                             force_refresh: true,
                         })
                         .await
@@ -90,7 +86,6 @@ pub(crate) fn subscribe_session_events(
                 if change_output
                     .send(LiveEvent {
                         event: None,
-                        triggers_refresh: true,
                         force_refresh: true,
                     })
                     .await
@@ -102,7 +97,6 @@ pub(crate) fn subscribe_session_events(
             }
             let live = LiveEvent {
                 event: Some(event),
-                triggers_refresh: true,
                 force_refresh: false,
             };
             if change_output.send(live).await.is_err() {
@@ -188,7 +182,6 @@ fn live_event_from_runtime_signal(
         agena_runtime::RuntimeLiveSignalItem::Lagged(_) => {
             return Some(LiveEvent {
                 event: None,
-                triggers_refresh: true,
                 force_refresh: true,
             });
         }
@@ -244,7 +237,6 @@ fn live_event_from_runtime_signal(
             durable: false,
             kind,
         }),
-        triggers_refresh: true,
         force_refresh: false,
     })
 }

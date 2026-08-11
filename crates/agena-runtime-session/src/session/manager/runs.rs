@@ -1,7 +1,7 @@
 use super::{
     AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
     SessionExecutionRequest, SessionManager, SessionSubtaskRequest, SessionSubtaskResponse,
-    SessionUserRunRequest, StableRunContext, UserInputPart, mpsc,
+    SessionUserRunRequest, StableRunContext, mpsc,
 };
 use crate::session::Session;
 use crate::session::store::{
@@ -260,16 +260,14 @@ impl SessionManager {
                     // Replace text parts with the (potentially rewritten) prompt.
                     let mut replaced = false;
                     for part in &mut request.parts {
-                        if typed_text(&part.content).is_some() {
-                            part.content = TypedContent::Text(text_content(updated.prompt.clone()));
+                        if typed_text(part).is_some() {
+                            *part = TypedContent::Text(text_content(updated.prompt.clone()));
                             replaced = true;
                             break;
                         }
                     }
                     if !replaced {
-                        request.parts.push(UserInputPart {
-                            content: TypedContent::Text(text_content(updated.prompt)),
-                        });
+                        request.parts.push(TypedContent::Text(text_content(updated.prompt)));
                     }
                 }
                 Err(err) => {

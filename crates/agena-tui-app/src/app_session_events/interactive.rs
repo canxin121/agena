@@ -23,7 +23,6 @@ impl App {
         // A refresh requested for the previous session must not be re-issued
         // against the newly opened one.
         self.pending_refresh = None;
-        self.refresh_pending = false;
         // A model selection belongs to the session that produced it. Clear the
         // previous session's stack until this session's persisted execution
         // context arrives.
@@ -228,21 +227,20 @@ impl App {
         if self.transcript.session_id != Some(session_id) {
             return;
         }
-        let refresh_needed_from_event = live.event.as_ref().is_some_and(|event| {
+        // Apply the incremental patch (cache invalidation, activity merge,
+        // watermark). A refresh is parked only when forced: streaming flushes
+        // emit `PartUpdated` far faster than the TUI can apply full-snapshot
+        // refreshes, and `on_tick` repaints on its own `REFRESH_INTERVAL_MS`
+        // gate, so ordinary events don't schedule one.
+        let _ = live.event.as_ref().is_some_and(|event| {
             self.transcript.apply_presentation_event(
                 event,
                 self.layout.transcript_body.width,
                 self.layout.transcript_body.height,
             )
         });
-        if live.force_refresh || live.triggers_refresh || refresh_needed_from_event {
-            // Park the refresh into the periodic tick budget instead of
-            // flushing immediately: streaming flushes emit `PartUpdated` far
-            // faster than the TUI can apply full-snapshot refreshes, and
-            // spawning one per event leaves the transcript permanently behind
-            // a running reply. `on_tick` repaints at most once per
-            // `REFRESH_INTERVAL_MS`.
-            self.pending_refresh_for(session_id, live.force_refresh);
+        if live.force_refresh {
+            self.pending_refresh_for(session_id);
         }
     }
 }

@@ -232,16 +232,6 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<Option<StreamingToolExecution>, ToolError> {
-        self.execute_invocation_streaming_inner(invocation, session_id, call_id)
-            .await
-    }
-
-    pub(crate) async fn execute_invocation_streaming_inner(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: i64,
-        call_id: i64,
-    ) -> Result<Option<StreamingToolExecution>, ToolError> {
         self.ensure_not_cancelled()?;
         if !matches!(
             self.invocation_streaming_mode(invocation),
@@ -350,7 +340,7 @@ impl ToolExecutor {
         }))
     }
 
-    pub(crate) async fn execute_invocation_detailed_inner(
+    pub async fn execute_invocation_detailed_with_prepared_shell(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
@@ -508,22 +498,6 @@ impl ToolExecutor {
     ) -> Result<ToolInvocationExecution, ToolError> {
         self.execute_invocation_detailed_with_prepared_shell(invocation, session_id, call_id, None)
             .await
-    }
-
-    pub async fn execute_invocation_detailed_with_prepared_shell(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: i64,
-        call_id: i64,
-        prepared_shell_command: Option<PreparedShellCommand>,
-    ) -> Result<ToolInvocationExecution, ToolError> {
-        self.execute_invocation_detailed_inner(
-            invocation,
-            session_id,
-            call_id,
-            prepared_shell_command,
-        )
-        .await
     }
 }
 use agena_domain::{

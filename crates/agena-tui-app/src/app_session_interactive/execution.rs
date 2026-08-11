@@ -17,14 +17,6 @@ impl App {
     }
 
     pub(crate) fn create_session(&mut self, submit_draft: Option<ComposerDraft>) {
-        self.create_session_with_parent(submit_draft, None);
-    }
-
-    pub(crate) fn create_session_with_parent(
-        &mut self,
-        submit_draft: Option<ComposerDraft>,
-        parent_id: Option<i64>,
-    ) {
         let pending_message_id = submit_draft
             .as_ref()
             .map(|draft| self.begin_pending_user_message(draft));
@@ -44,9 +36,7 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = application
-                .create_session(title, parent_id)
-                .await
+            let result = application.create_session(title, None).await
                 .map_err(|error| crate::UiFailure::from_backend(anyhow::Error::new(error)));
             let _ = tx
                 .send(AppMessage::SessionCreated {
@@ -230,7 +220,7 @@ impl App {
             .or_else(|| self.sessions.current_selected_id());
 
         match target_session_id {
-            Some(session_id) => self.request_submit_message(session_id, draft),
+            Some(session_id) => self.request_submit_message_with_pending(session_id, draft, None),
             None => self.create_session(Some(draft)),
         }
     }

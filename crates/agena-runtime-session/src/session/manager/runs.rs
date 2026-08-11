@@ -242,7 +242,7 @@ impl SessionManager {
         let prompt_text = request
             .parts
             .iter()
-            .filter_map(|p| typed_text(&p.content))
+            .filter_map(|p| typed_text(p))
             .collect::<Vec<_>>()
             .join("\n");
         if !prompt_text.is_empty() {
@@ -296,7 +296,7 @@ impl SessionManager {
         let user_parts = input_parts
             .iter()
             .map(|part| {
-                new_part_from_content("text", PartRole::User, &part.content, PartState::Completed)
+                new_part_from_content("text", PartRole::User, part, PartState::Completed)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let outcome = self

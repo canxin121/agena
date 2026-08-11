@@ -788,7 +788,7 @@ fn part_contents_from_composer_document(
                                 page_count: resource.page_count,
                             }],
                         },
-                    ))),
+                    )))
                 }
                 ActivityPayload::SkillReference(skill) => Ok(TypedContent::SkillRef(
                     super::store::skill_ref_from_reference(&crate::part::SkillReferencePart {

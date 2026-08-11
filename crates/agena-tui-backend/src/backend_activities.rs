@@ -63,7 +63,8 @@ impl Backend {
         service
             .dismiss_activity(activity_id)
             .map_err(|error| anyhow!("{error}"))
-            .context("failed to dismiss background activity")
+            .context("failed to dismiss background activity")?;
+        Ok(())
     }
 
     pub async fn clear_finished_activities(&self) -> Result<usize> {

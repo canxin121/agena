@@ -290,6 +290,22 @@ fn apply_configured_tool_mode(
     agena_provider::apply_configured_tool_request(mode, &provider_native, request);
 }
 
+/// Backfill the assistant reasoning wire field onto the request's assistant
+/// turns, resolved from the provider's configured metadata for this route.
+///
+/// This runs unconditionally at the registry boundary - parallel to
+/// `apply_configured_tool_mode` - so it applies to every provider, including
+/// bare providers that are not wrapped in a catalog. It must run after
+/// `request.model` is resolved to the route's model id, because the backfill
+/// reads `model_metadata_for_adapter` for that model.
+fn apply_request_backfill(
+    model: &ModelRef,
+    provider: &dyn ModelRuntime,
+    request: &mut CompletionRequest,
+) {
+    provider.backfill_assistant_reasoning_field(model.adapter_id.as_ref(), request);
+}
+
 fn validate_provider_native_tool_definition_boundary(
     request: &CompletionRequest,
 ) -> Result<(), ProviderError> {
@@ -719,6 +735,7 @@ impl ProviderRegistry {
         let declared_tool_api_functions = declared_tool_api_functions(&request);
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
+        apply_request_backfill(model, provider.as_ref(), &mut request);
         let mut repair_count = 0_usize;
         let mut discarded_usage = None;
         loop {
@@ -803,6 +820,7 @@ impl ProviderRegistry {
         crate::provider::wire_message::validate_provider_native_tool_input_history(&request.turns)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
+        apply_request_backfill(model, provider.as_ref(), &mut request);
         self.call_with_retry(model.provider_id.as_ref(), "compact_conversation", {
             let provider = provider.clone();
             let request = request.clone();
@@ -836,6 +854,7 @@ impl ProviderRegistry {
         let declared_tool_api_functions = declared_tool_api_functions(&request);
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
+        apply_request_backfill(model, provider.as_ref(), &mut request);
         let provider_id = model.provider_id.to_string();
         let model_id = model.model_id.to_string();
         let adapter_id = model.adapter_id.clone();
@@ -2405,6 +2424,138 @@ mod tool_api_function_validation_tests {
     fn tolerant_parse_rejects_truly_malformed_arguments() {
         let json = "{\"tool\":";
         assert!(parse_tool_api_arguments_tolerant(json).is_none());
+    }
+
+    struct BackfillProbeProvider {
+        model: ModelId,
+        requests: Mutex<Vec<CompletionRequest>>,
+    }
+
+    #[async_trait]
+    impl ModelRuntime for BackfillProbeProvider {
+        fn id(&self) -> &str {
+            "backfill-test"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        fn model_metadata(&self, _model: &ModelId) -> agena_domain::ModelMetadata {
+            agena_domain::ModelMetadata {
+                assistant_reasoning_field: Some("reasoning_content".to_owned()),
+                assistant_reasoning_interleaved: Some(true),
+                ..agena_domain::ModelMetadata::default()
+            }
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, crate::ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, crate::ProviderError> {
+            self.requests.lock().expect("requests lock").push(request);
+            Ok(CompletionResponse {
+                provider_id: ProviderId::new("backfill-test"),
+                model: self.model.clone(),
+                text: "ok".to_owned(),
+                reasoning_text: None,
+                finish_reason: None,
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+    }
+
+    fn backfill_probe_request() -> CompletionRequest {
+        let mut request = tool_mode_probe_request();
+        request.turns.push(agena_provider::CompletionInputRun {
+            role: agena_domain::Role::Assistant,
+            parts: vec![agena_provider::CompletionInputPart::Text {
+                text: "previous assistant turn with reasoning".to_owned(),
+            }],
+            provider_state: Default::default(),
+        });
+        request
+    }
+
+    #[tokio::test]
+    async fn reasoning_backfill_runs_for_bare_provider_at_registry_boundary() {
+        let provider = std::sync::Arc::new(BackfillProbeProvider {
+            model: ModelId::new("test-model"),
+            requests: Mutex::new(Vec::new()),
+        });
+        let mut registry = crate::provider::ProviderRegistry::new();
+        // Register the raw provider with no catalog wrapper: the previous
+        // prepare_request-only backfill never ran for this case, which is the
+        // gap this migration closes.
+        registry.register_arc(provider.clone());
+
+        registry
+            .complete(
+                &ModelRef::new("backfill-test", "test-model"),
+                backfill_probe_request(),
+            )
+            .await
+            .expect("bare provider should complete normally");
+
+        let recorded = provider
+            .requests
+            .lock()
+            .expect("requests lock")
+            .pop()
+            .expect("provider should receive a request");
+        assert_eq!(
+            recorded.turns[0].provider_state.assistant_reasoning_field,
+            Some(agena_domain::AssistantReasoningField::ReasoningContent),
+            "backfill must run for a bare provider with no catalog wrapper"
+        );
+    }
+
+    #[tokio::test]
+    async fn reasoning_backfill_keeps_running_through_catalog_wrapper() {
+        let target = std::sync::Arc::new(BackfillProbeProvider {
+            model: ModelId::new("test-model"),
+            requests: Mutex::new(Vec::new()),
+        });
+        let provider = crate::provider::CatalogedModelsProvider::new(
+            target.clone(),
+            agena_provider::ProviderModelCatalog {
+                models: [(
+                    "test-model".to_owned(),
+                    agena_provider::ConfiguredModelDefinition::default(),
+                )]
+                .into_iter()
+                .collect(),
+                appendable_model_ids: Default::default(),
+            },
+        );
+        let mut registry = crate::provider::ProviderRegistry::new();
+        registry.register_arc(provider);
+
+        registry
+            .complete(
+                &ModelRef::new("backfill-test", "test-model"),
+                backfill_probe_request(),
+            )
+            .await
+            .expect("cataloged provider should complete normally");
+
+        let recorded = target
+            .requests
+            .lock()
+            .expect("requests lock")
+            .pop()
+            .expect("provider should receive a request");
+        assert_eq!(
+            recorded.turns[0].provider_state.assistant_reasoning_field,
+            Some(agena_domain::AssistantReasoningField::ReasoningContent),
+            "backfill must still run through a catalog-wrapped provider"
+        );
     }
 }
 

@@ -296,7 +296,7 @@ pub(crate) async fn invoke_plugin_slash_command(
                 input: base_input,
                 submit_output_as_prompt,
             } => {
-                let output = invoke_plugin_command_tool(
+                let output = invoke_plugin_workbench_tool(
                     application,
                     plugin_id.as_str(),
                     tool.as_str(),
@@ -389,19 +389,6 @@ pub(crate) async fn invoke_plugin_slash_command(
 /// Invoke a plugin Tool API endpoint from a user-driven TUI surface, returning
 /// the human-readable output text.
 pub(crate) async fn invoke_plugin_workbench_tool(
-    application: &Application,
-    plugin_id: &str,
-    tool_name: &str,
-    input: serde_json::Value,
-    session_id: Option<i64>,
-) -> Result<String> {
-    let response = application
-        .invoke_plugin_ui_tool(plugin_id, tool_name, input, session_id)
-        .await?;
-    Ok(response.output_text)
-}
-
-async fn invoke_plugin_command_tool(
     application: &Application,
     plugin_id: &str,
     tool_name: &str,

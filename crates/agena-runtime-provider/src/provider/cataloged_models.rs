@@ -117,10 +117,6 @@ impl ForwardingModelRuntime for CatalogedModelsProvider {
     fn target(&self) -> &dyn ModelRuntime {
         self.target.as_ref()
     }
-
-    fn prepare_request(&self, adapter_id: Option<&AdapterId>, request: &mut CompletionRequest) {
-        ModelRuntime::backfill_assistant_reasoning_field(self, adapter_id, request);
-    }
 }
 
 #[async_trait]

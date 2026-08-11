@@ -13,6 +13,11 @@ pub struct UserInputRequest {
     pub body_markdown: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
+    /// Origin of the request: `Host` for the runtime's own `ask_user`, `Plugin`
+    /// for third-party/tool asks. Absent on legacy payloads (defaults to
+    /// `Plugin`).
+    #[serde(default)]
+    pub source: agena_domain::UserInputSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_resolution_ms: Option<u64>,
     /// Durable presentation acknowledgement set when a client has shown this

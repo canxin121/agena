@@ -142,6 +142,12 @@ pub struct UserInputRequest {
     pub body_markdown: String,
     #[serde(default)]
     pub kind: crate::UserInputKind,
+    /// Origin of the request: the runtime's own host `ask_user` (`Host`) vs a
+    /// third-party/tool `interaction.ask` (`Plugin`). Legacy rows predate the
+    /// field and default to `Plugin`; their real origin is recovered from the
+    /// correlation ids by the runtime's typed accessor.
+    #[serde(default, skip_serializing_if = "user_input_source_is_default")]
+    pub source: crate::UserInputSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_resolution_ms: Option<u64>,
     /// Durable presentation acknowledgement: set when a client has shown this
@@ -154,6 +160,10 @@ pub struct UserInputRequest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<UserInputQuestion>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub fn user_input_source_is_default(source: &crate::UserInputSource) -> bool {
+    *source == crate::UserInputSource::default()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

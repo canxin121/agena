@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, collections::HashMap, sync::Arc};
 use agena_domain::{
     AssistantReasoningField, AssistantReplyId, ModelId, ModelRef, ProviderId, Role,
     StructuredObject, TimeRange, ToolInvocation, TurnId, UserInputOption, UserInputQuestion,
-    UserInputReply, UserInputReplyKind,
+    UserInputReply, UserInputReplyKind, UserInputSource,
 };
 use agena_plugin_host::{
     ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
@@ -31,8 +31,9 @@ use super::{
 use crate::provider::{ModelRuntime, ProviderError};
 use crate::session::manager::runs::run_visible_text_lossy;
 use crate::session::store::{
-    ProcessorPartIdAllocator, interaction_from_request, new_part_from_content, parts_into_runs,
-    run_marker_content, text_content, tool_call_from_operation, typed_content_to_value,
+    OPERATION_ID_METADATA_KEY, ProcessorPartIdAllocator, interaction_from_request,
+    new_part_from_content, parts_into_runs, run_marker_content, text_content,
+    tool_call_from_operation, typed_content_to_value,
 };
 use crate::{
     ContextGovernor, RuntimeSessionManagerConfig, SessionExecutionReplyRequest,
@@ -514,6 +515,7 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
                         title: "Choose a path".to_owned(),
                         body_markdown: String::new(),
                         kind: "ask_user".to_owned().into(),
+                        source: UserInputSource::Plugin,
                         auto_resolution_ms: None,
                         presented_at: None,
                         questions: Vec::new(),
@@ -1857,6 +1859,7 @@ async fn host_user_input_does_not_downgrade_an_in_progress_tool_part() {
             &pending_tool,
             request,
             "host-input:1:1:0".to_owned(),
+            UserInputSource::Host,
             manager.execution_state(),
         )
         .await
@@ -1934,6 +1937,7 @@ async fn host_ask_user_interaction_part_is_reply_resolvable() {
             &pending_tool,
             request,
             "host-input:1:1:0".to_owned(),
+            UserInputSource::Host,
             manager.execution_state(),
         )
         .await
@@ -1983,6 +1987,11 @@ async fn host_ask_user_interaction_part_is_reply_resolvable() {
         .expect("request payload is recoverable");
     assert_eq!(resolved_request.title, "Approve New Plan");
     assert_eq!(resolved_request.kind, agena_domain::UserInputKind::Review);
+    assert_eq!(
+        resolved_request.source,
+        UserInputSource::Host,
+        "a host ask_user request carries the typed Host source"
+    );
 }
 
 /// A non-host user-input reply (Submit/Cancel/Timeout — the request id is the
@@ -2023,7 +2032,7 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
         .await
         .expect("start assistant run marker");
 
-    let operation = agena_runtime_contracts::part::OperationPart::pending(
+    let mut operation = agena_runtime_contracts::part::OperationPart::pending(
         1,
         ToolInvocation::new("plan.set", StructuredObject::default()),
         "Create plan",
@@ -2032,6 +2041,12 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
             end_ms: None,
         },
     );
+    // A plugin ask_user carries the operation id as its request id (exactly
+    // what `apply_tool_execution_result` produces), so the legacy origin
+    // inference classifies it as `Plugin`.
+    operation
+        .metadata
+        .insert(OPERATION_ID_METADATA_KEY.to_owned(), serde_json::json!("ask-1"));
     let tool_part = new_part_from_content(
         "tool_call",
         PartRole::Assistant,
@@ -2068,6 +2083,7 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
             &pending_tool,
             request,
             "ask-1".to_owned(),
+            UserInputSource::Plugin,
             manager.execution_state(),
         )
         .await
@@ -2087,6 +2103,13 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
     assert!(
         interaction.state.is_in_flight(),
         "the request is pending (in flight) before the reply"
+    );
+    let content = InteractionContent::try_from(&interaction.content)
+        .expect("interaction content is typed");
+    assert_eq!(
+        content.source(),
+        UserInputSource::Plugin,
+        "a non-host (tool) ask_user carries the typed Plugin source"
     );
 
     let replied = tokio::time::timeout(

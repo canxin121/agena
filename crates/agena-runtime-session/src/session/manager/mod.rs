@@ -18,7 +18,7 @@ use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocatio
 use agena_domain::ExecutionStatus;
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
-use agena_domain::UserInputReply;
+use agena_domain::{UserInputReply, UserInputSource};
 use agena_domain::{
     DecisionTraceStep, ExecutionOutcome, ExecutionSource, PermissionAction, PermissionMode,
     PermissionReplyKind, PermissionScope, RunAbortReason, TimeRange, UserInputReplyKind,
@@ -1378,6 +1378,7 @@ impl SessionManager {
                 &pending_tool,
                 request,
                 request_id.clone(),
+                UserInputSource::Host,
                 state.clone(),
             )
             .await

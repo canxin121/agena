@@ -519,6 +519,35 @@ impl InteractionContent {
             .get("operation_id")
             .and_then(serde_json::Value::as_str)
     }
+
+    /// The typed origin of this interaction: `Host` for the runtime's own
+    /// `ask_user` (previously correlated by the `host-input:` request-id
+    /// prefix), `Plugin` for third-party/tool asks.
+    ///
+    /// New rows store the typed `source` on the nested request. Legacy rows
+    /// predate the field and deserialize to `Plugin`, so their real origin is
+    /// recovered from the correlation ids: host parts always wrote
+    /// `request_id = host-input:...` ≠ `operation_id`, while plugin parts
+    /// wrote `request_id == operation_id`.
+    pub fn source(&self) -> agena_domain::UserInputSource {
+        if let Some(request) = self.request() {
+            let stored = self
+                .extra
+                .get("request")
+                .and_then(serde_json::Value::as_object)
+                .map(|object| object.contains_key("source"))
+                .unwrap_or(false);
+            if stored {
+                return request.source;
+            }
+        }
+        // Legacy inference from the correlation ids.
+        if self.request_id().as_deref() != self.operation_id() {
+            agena_domain::UserInputSource::Host
+        } else {
+            agena_domain::UserInputSource::Plugin
+        }
+    }
 }
 
 impl TryFrom<&Value> for InteractionContent {
@@ -760,6 +789,7 @@ pub fn interaction_from_content(part: &InteractionContent) -> RequestPart {
             title: part.prompt.clone().unwrap_or_default(),
             body_markdown: String::new(),
             kind: part.kind.clone(),
+            source: Default::default(),
             auto_resolution_ms: None,
             presented_at: None,
             questions: part
@@ -1048,6 +1078,56 @@ mod tests {
         assert_eq!(flat_reply, canon_reply);
         assert_eq!(flat_reply.request_id, "r1");
         assert_eq!(flat_reply.kind, agena_domain::UserInputReplyKind::Submit);
+    }
+
+    #[test]
+    fn interaction_source_infers_legacy_origin_and_honors_typed_rows() {
+        // Legacy host part: `request_id` (host-input:...) ≠ `operation_id`.
+        let host = InteractionContent::try_from(&json!({
+            "type": "ask_user",
+            "request_id": "host-input:1:98:0",
+            "operation_id": "op-7",
+            "request": {"request_id": "host-input:1:98:0", "created_at": "2026-01-01T00:00:00Z"},
+        }))
+        .unwrap();
+        assert_eq!(
+            host.source(),
+            agena_domain::UserInputSource::Host,
+            "legacy host part infers Host from request_id != operation_id"
+        );
+
+        // Legacy plugin part: `request_id == operation_id`.
+        let plugin = InteractionContent::try_from(&json!({
+            "type": "ask_user",
+            "request_id": "op-7",
+            "operation_id": "op-7",
+            "request": {"request_id": "op-7", "created_at": "2026-01-01T00:00:00Z"},
+        }))
+        .unwrap();
+        assert_eq!(
+            plugin.source(),
+            agena_domain::UserInputSource::Plugin,
+            "legacy plugin part infers Plugin from request_id == operation_id"
+        );
+
+        // Typed row: honors the stored source even when the correlation ids
+        // would infer the opposite (a host input on a plugin-tool operation).
+        let typed = InteractionContent::try_from(&json!({
+            "type": "ask_user",
+            "request_id": "op-7",
+            "operation_id": "op-7",
+            "request": {
+                "request_id": "op-7",
+                "source": "host",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        }))
+        .unwrap();
+        assert_eq!(
+            typed.source(),
+            agena_domain::UserInputSource::Host,
+            "typed row honors the stored source over the id inference"
+        );
     }
 
     #[test]

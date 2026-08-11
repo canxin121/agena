@@ -1316,12 +1316,17 @@ impl WorkflowPlugin {
                 description: "Cancel the plan entirely and stop work on it.".to_string(),
             },
         ]);
+        // The review dialog renders this body above the decision options, so
+        // the user sees the plan they are approving. The plan markdown is the
+        // same full document `plan.get` with `PlanGetView::Full` produces.
+        let body_markdown = Self::workflow_plan_markdown(plan);
         AskUserRequest {
             title: match review_kind {
                 PlanReviewKind::Creation => "Approve New Plan".to_string(),
                 PlanReviewKind::StatusChange => "Review Plan Status Change".to_string(),
             },
             kind: "review".to_string(),
+            body_markdown,
             auto_resolution_ms: None,
             questions: vec![HostAskUserQuestion {
                 header: "Decision".to_string(),

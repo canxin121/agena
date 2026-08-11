@@ -507,6 +507,12 @@ pub struct AskUserRequest {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
+    /// Optional Markdown body shown in the review dialog. The plan approval
+    /// review (`kind == "review"`) sets it to the full plan document so the
+    /// user can see the plan being approved; other ask_user requests leave it
+    /// empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body_markdown: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_resolution_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

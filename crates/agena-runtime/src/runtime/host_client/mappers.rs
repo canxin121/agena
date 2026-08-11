@@ -173,6 +173,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
         let input = AskUserToolInput {
             title: req.title,
             kind: req.kind,
+            body_markdown: req.body_markdown,
             auto_resolution_ms: req.auto_resolution_ms,
             questions,
         };
@@ -193,6 +194,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
     let input = AskUserToolInput {
         title: req.title,
         kind: req.kind,
+        body_markdown: req.body_markdown,
         auto_resolution_ms: req.auto_resolution_ms,
         questions: vec![UserInputQuestion {
             header: String::new(),

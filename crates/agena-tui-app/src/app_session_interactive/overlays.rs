@@ -591,6 +591,7 @@ fn user_input_request_from_wire(value: agena_api::resource::UserInputRequest) ->
         request_id: value.request_id,
         session_id: value.session_id,
         title: value.title,
+        body_markdown: value.body_markdown,
         kind: value.kind.into(),
         auto_resolution_ms: value.auto_resolution_ms,
         presented_at: value.presented_at,

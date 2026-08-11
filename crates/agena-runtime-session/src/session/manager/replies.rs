@@ -1421,6 +1421,7 @@ impl SessionManager {
                                 &crate::part::AskUserToolInput {
                                     title: user_input_request.title.clone(),
                                     kind: user_input_request.kind.as_str().to_owned(),
+                                    body_markdown: user_input_request.body_markdown.clone(),
                                     auto_resolution_ms: user_input_request.auto_resolution_ms,
                                     questions: user_input_request.questions.clone(),
                                 },

@@ -492,6 +492,10 @@ fn interaction_request_resource(interaction: &InteractionContent) -> Option<User
             .unwrap_or_else(|| format!("interaction-{}", kind)),
         session_id: None,
         title: interaction.prompt.clone().unwrap_or_default(),
+        body_markdown: interaction
+            .request()
+            .map(|request| request.body_markdown)
+            .unwrap_or_default(),
         kind: kind.to_owned(),
         auto_resolution_ms: None,
         presented_at: None,
@@ -514,6 +518,7 @@ fn user_input_request_resource(request: agena_domain::UserInputRequest) -> UserI
         request_id: request.request_id,
         session_id: request.session_id,
         title: request.title,
+        body_markdown: request.body_markdown,
         kind: request.kind.as_str().to_owned(),
         auto_resolution_ms: request.auto_resolution_ms,
         presented_at: request.presented_at,

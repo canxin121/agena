@@ -7,6 +7,10 @@ pub struct UserInputRequest {
     pub session_id: Option<i64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
+    /// Optional Markdown body shown in the review dialog (the full plan
+    /// document for plan-approval reviews; empty for other requests).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body_markdown: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

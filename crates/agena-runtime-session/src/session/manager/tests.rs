@@ -512,6 +512,7 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
                         request_id: "ask-1".to_owned(),
                         session_id: Some(session.id),
                         title: "Choose a path".to_owned(),
+                        body_markdown: String::new(),
                         kind: "ask_user".to_owned().into(),
                         auto_resolution_ms: None,
                         presented_at: None,
@@ -1846,6 +1847,7 @@ async fn host_user_input_does_not_downgrade_an_in_progress_tool_part() {
     let request = crate::part::AskUserToolInput {
         title: "Approve New Plan".to_owned(),
         kind: "review".to_owned(),
+        body_markdown: String::new(),
         auto_resolution_ms: None,
         questions: Vec::new(),
     };
@@ -1922,6 +1924,7 @@ async fn host_ask_user_interaction_part_is_reply_resolvable() {
     let request = crate::part::AskUserToolInput {
         title: "Approve New Plan".to_owned(),
         kind: "review".to_owned(),
+        body_markdown: String::new(),
         auto_resolution_ms: None,
         questions: Vec::new(),
     };
@@ -2055,6 +2058,7 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
     let request = crate::part::AskUserToolInput {
         title: "Continue?".to_owned(),
         kind: "ask_user".to_owned(),
+        body_markdown: String::new(),
         auto_resolution_ms: None,
         questions: Vec::new(),
     };
@@ -2179,6 +2183,7 @@ async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
     let request = crate::part::AskUserToolInput {
         title: "Approve New Plan".to_owned(),
         kind: "review".to_owned(),
+        body_markdown: String::new(),
         auto_resolution_ms: None,
         questions: vec![UserInputQuestion {
             header: String::new(),

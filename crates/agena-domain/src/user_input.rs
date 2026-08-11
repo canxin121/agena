@@ -148,6 +148,7 @@ mod tests {
             request_id: "r1".to_owned(),
             session_id: Some(7),
             title: "Approve?".to_owned(),
+            body_markdown: "## Proposed Plan".to_owned(),
             kind: UserInputKind::Review,
             auto_resolution_ms: None,
             presented_at: None,

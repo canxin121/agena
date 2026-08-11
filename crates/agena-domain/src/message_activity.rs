@@ -134,6 +134,12 @@ pub struct UserInputRequest {
     pub session_id: Option<i64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
+    /// Optional Markdown body for the request. Only the plan-approval review
+    /// (`kind == Review`) populates it with the full plan document so the
+    /// review dialog can show what is being approved; other ask_user requests
+    /// leave it empty and the dialog shows only the questions.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body_markdown: String,
     #[serde(default)]
     pub kind: crate::UserInputKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -413,6 +413,7 @@ impl WorkflowPlugin {
             .ask_user(AskUserRequest {
                 title: input.title.clone(),
                 kind: input.kind.clone(),
+                body_markdown: input.body_markdown.clone(),
                 auto_resolution_ms: input.auto_resolution_ms,
                 questions: Self::host_ask_user_questions(input),
                 prompt: String::new(),

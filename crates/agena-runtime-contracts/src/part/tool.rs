@@ -376,6 +376,7 @@ pub enum ShellToolInput {
     trim(
         "title",
         "kind",
+        "body_markdown",
         "questions[].header",
         "questions[].question",
         "questions[].options[].label",
@@ -385,6 +386,7 @@ pub enum ShellToolInput {
     max_items("questions", 3),
     max_items("questions[].options", 8),
     max_chars("questions[].header", 12),
+    max_chars("body_markdown", 16000),
     minimum("auto_resolution_ms", 60000),
     maximum("auto_resolution_ms", 600000),
     required_unless_present("questions[].allow_custom", "questions[].options"),
@@ -398,6 +400,11 @@ pub struct AskUserToolInput {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
+    /// Optional Markdown body shown in the review dialog. Only the plan
+    /// approval review (`kind == "review"`) sets it to the full plan document;
+    /// other ask_user requests leave it empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body_markdown: String,
     /// Automatically continue without an answer after this many milliseconds.
     /// Values are limited to 60 seconds through 10 minutes.
     #[serde(default, skip_serializing_if = "Option::is_none")]

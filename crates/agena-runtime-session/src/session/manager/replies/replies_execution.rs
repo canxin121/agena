@@ -2533,6 +2533,7 @@ impl SessionManager {
             request_id,
             session_id: Some(session.id),
             title: input.title,
+            body_markdown: input.body_markdown,
             kind: UserInputKind::from(input.kind),
             auto_resolution_ms: super::super::helpers::effective_user_input_timeout_ms(
                 input.auto_resolution_ms,

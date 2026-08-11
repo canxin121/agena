@@ -758,6 +758,7 @@ pub fn interaction_from_content(part: &InteractionContent) -> RequestPart {
             request_id: format!("restored-{}", part.kind.as_str()),
             session_id: None,
             title: part.prompt.clone().unwrap_or_default(),
+            body_markdown: String::new(),
             kind: part.kind.clone(),
             auto_resolution_ms: None,
             presented_at: None,

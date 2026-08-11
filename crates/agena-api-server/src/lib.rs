@@ -31,6 +31,7 @@
 //!   REST surface keeps returning the plain JSON resources the Studio web UI
 //!   already consumes.
 
+pub mod dispatch;
 pub mod error;
 #[cfg(feature = "ipc")]
 pub mod ipc;

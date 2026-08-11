@@ -12,15 +12,12 @@
 //!   frontend.
 //! - [`ApplicationError`] — typed application failures.
 //! - [`AuthLoginKind`] — kinds of provider login flows.
-//! - [`dispatch`] — command/query dispatch used by the API server and TUI
-//!   backend.
 //! - [`dto`] — data-transfer objects for frontend resources.
 //! - [`service`], [`session`], [`provider_queries`] — use-case services and
 //!   projections. v2 dropped the global runtime event projection (D11):
 //!   chat history is per-session ordered parts, never a global event log.
 
 mod application;
-pub mod dispatch;
 pub mod dto;
 mod error;
 pub mod pagination;
@@ -28,7 +25,7 @@ pub mod provider_queries;
 pub mod service;
 pub mod session;
 
-pub use application::{Application, AuthLoginKind};
+pub use application::{Application, ApplicationSessionServices, AuthLoginKind};
 pub use error::ApplicationError;
 pub use provider_queries::provider_model_resource_from_domain;
 pub use service::{permission_config_domain_from_resource, permission_config_resource_from_domain};

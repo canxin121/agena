@@ -1,4 +1,4 @@
-use crate::session::session_execution_resource;
+use agena_application::session::session_execution_resource;
 
 // ─── Query dispatch ─────────────────────────────────────────────────────
 
@@ -68,7 +68,7 @@ pub async fn dispatch_query(
             loaded_at: chrono::Utc::now(),
             database_connected: true,
         })),
-        Query::Runtime => Ok(QueryResult::Runtime(runtime_status_response(state).await)),
+        Query::Runtime => Ok(QueryResult::Runtime(state.runtime_status_response().await)),
         Query::ListActivities(params) => {
             let service = state.runtime_activities()?;
             let filter = activity_filter_from_params(&params);
@@ -103,11 +103,12 @@ pub async fn dispatch_query(
             Ok(QueryResult::ActivityLogs(read.into()))
         }
         Query::ListProviders => Ok(QueryResult::Providers(
-            crate::provider_queries::list_providers_response(state),
+            agena_application::provider_queries::list_providers_response(state),
         )),
         Query::ListProviderModels(ListProviderModelsParams { provider_id }) => {
             Ok(QueryResult::ProviderModels(
-                crate::provider_queries::list_provider_models_response(state, provider_id).await?,
+                agena_application::provider_queries::list_provider_models_response(state, provider_id)
+                    .await?,
             ))
         }
         Query::ListProviderAdapterModels(ListProviderAdapterModelsParams {
@@ -117,7 +118,7 @@ pub async fn dispatch_query(
             api_key,
             adapter_ids,
         }) => Ok(QueryResult::ProviderAdapterModels(
-            crate::provider_queries::list_provider_adapter_models_response(
+            agena_application::provider_queries::list_provider_adapter_models_response(
                 state,
                 ListProviderAdapterModelsParams {
                     provider_id,
@@ -133,7 +134,7 @@ pub async fn dispatch_query(
             provider_id,
             adapter_ids,
         }) => Ok(QueryResult::ProviderAdapterModels(
-            crate::provider_queries::list_saved_provider_adapter_models_response(
+            agena_application::provider_queries::list_saved_provider_adapter_models_response(
                 state,
                 ListSavedProviderAdapterModelsParams {
                     provider_id,
@@ -208,7 +209,6 @@ use super::{
     ListProviderModelsParams, ListSavedProviderAdapterModelsParams, ListSessionsParams,
     ListWorkspacesParams, OperationDetailResource, Query, QueryResult, SearchPaginationQuery,
     SessionListQuery, WorkspaceListQuery, http_optional_result, http_page_result,
-    runtime_status_response,
 };
 
 fn activity_filter_from_params(

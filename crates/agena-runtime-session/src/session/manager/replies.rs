@@ -1436,6 +1436,20 @@ impl SessionManager {
                                 .await?;
                         }
                     }
+                    // Persist the replied interaction part after the
+                    // tool-success/user-declined handling (which may persist or
+                    // cancel other parts). The interaction part is already
+                    // Completed in-memory, so this InProgress->Completed write
+                    // keeps an answered request from resurrecting as pending on
+                    // reload, mirroring the host-input branch above.
+                    session = self
+                        .persist_session_changes(
+                            session,
+                            vec![pending.request.part_id],
+                            None,
+                            state.clone(),
+                        )
+                        .await?;
                     None
                 };
 

@@ -34,7 +34,7 @@ use crate::session::store::{
     run_marker_content, text_content, tool_call_from_operation, typed_content_to_value,
 };
 use crate::{
-    ContextGovernor, RuntimeSessionManagerConfig,
+    ContextGovernor, RuntimeSessionManagerConfig, SessionExecutionReplyRequest,
     authorization::ExecutionPrincipal,
     part::{InteractiveRequestPart, RequestPart},
     permission::{PermissionPolicy, ToolPermissionPolicy},
@@ -42,7 +42,7 @@ use crate::{
     session::{Session, SessionProcessor},
     tool::ToolExecutor,
 };
-use agena_runtime_contracts::part_content::TypedContent;
+use agena_runtime_contracts::part_content::{InteractionContent, TypedContent};
 
 async fn test_manager() -> SessionManager {
     test_manager_with_database().await.0
@@ -1979,4 +1979,164 @@ async fn host_ask_user_interaction_part_is_reply_resolvable() {
         .expect("request payload is recoverable");
     assert_eq!(resolved_request.title, "Approve New Plan");
     assert_eq!(resolved_request.kind, agena_domain::UserInputKind::Review);
+}
+
+/// A non-host user-input reply (Submit/Cancel/Timeout — the request id is the
+/// operation id, not a `host-input:` prefix) completes the interaction part
+/// in-memory and must persist that completion. Regression: the non-host branch
+/// only persisted the tool part, so an answered request resurrected as pending
+/// on reload.
+#[tokio::test]
+async fn non_host_user_input_reply_persists_completed_interaction_part() {
+    let provider = Arc::new(FakeProvider {
+        provider_id: "fake",
+        model: ModelId::new("fake-model"),
+        deltas: vec!["continuing after the answer".to_owned()],
+        thinking_deltas: Vec::new(),
+        finish_reason: Some(CompletionFinishReason::Stop),
+    });
+    let manager = manager_with_provider(provider).await;
+    let session = create(&manager, "non-host ask_user reply durability").await;
+
+    // An assistant run marker carrying the canonical turn/reply identity, so
+    // the reply continuation can resolve the conversation after the answer is
+    // committed (v2 stores the identity in the marker content).
+    let turn_id = TurnId::new();
+    let reply_id = AssistantReplyId::new();
+    let run_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            run_marker_content(
+                "continue",
+                Some("fake"),
+                Some("fake-model"),
+                Some(turn_id),
+                Some(reply_id),
+            ),
+        )
+        .await
+        .expect("start assistant run marker");
+
+    let operation = agena_runtime_contracts::part::OperationPart::pending(
+        1,
+        ToolInvocation::new("plan.set", StructuredObject::default()),
+        "Create plan",
+        TimeRange {
+            start_ms: 1,
+            end_ms: None,
+        },
+    );
+    let tool_part = new_part_from_content(
+        "tool_call",
+        PartRole::Assistant,
+        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        PartState::InProgress,
+    )
+    .expect("build tool part");
+    let created = manager
+        .store
+        .append_parts(session.id, run_id, vec![tool_part])
+        .await
+        .expect("append tool part under the assistant marker");
+    let tool_part_id = created[0].part_id;
+    let session = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("reload submitted run");
+    let pending_tool = session
+        .pending_tool_by_part_id(tool_part_id)
+        .expect("in-progress tool part resolves as a pending tool");
+
+    // Non-host request id: the operation id, not a "host-input:" prefix.
+    let request = crate::part::AskUserToolInput {
+        title: "Continue?".to_owned(),
+        kind: "ask_user".to_owned(),
+        auto_resolution_ms: None,
+        questions: Vec::new(),
+    };
+    manager
+        .apply_user_input_request_with_id(
+            session.clone(),
+            &pending_tool,
+            request,
+            "ask-1".to_owned(),
+            manager.execution_state(),
+        )
+        .await
+        .expect("request user input");
+
+    let persisted = manager
+        .session_store()
+        .load(session.id)
+        .await
+        .expect("reload parts after requesting");
+    let interaction = persisted
+        .parts
+        .iter()
+        .find(|part| part.kind == "interaction")
+        .expect("interaction part exists");
+    let interaction_part_id = interaction.part_id;
+    assert!(
+        interaction.state.is_in_flight(),
+        "the request is pending (in flight) before the reply"
+    );
+
+    let replied = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        manager.reply_user_input(SessionExecutionReplyRequest::new(
+            session.id,
+            agena_runtime::SessionRunOptions {
+                model: ModelRef::new("fake", "fake-model"),
+                thinking_mode: None,
+                speed_mode: None,
+                verbosity: None,
+                thinking: None,
+                request_override: Default::default(),
+                system: None,
+                temperature: None,
+                max_output_tokens: None,
+            },
+            agena_domain::UserInputReply {
+                request_id: "ask-1".to_owned(),
+                kind: agena_domain::UserInputReplyKind::Submit,
+                answers: Default::default(),
+                reason: None,
+            },
+        )),
+    )
+    .await
+    .expect("non-host reply must not hang")
+    .expect("non-host reply completes");
+
+    // Reload from the durable store: the answered interaction must be
+    // Completed with the reply payload present, not resurrected as pending.
+    let persisted = manager
+        .session_store()
+        .load(session.id)
+        .await
+        .expect("reload parts after reply");
+    let interaction = persisted
+        .parts
+        .iter()
+        .find(|part| part.part_id == interaction_part_id)
+        .expect("interaction part remains");
+    assert_eq!(
+        interaction.state,
+        PartState::Completed,
+        "non-host reply must durably persist the interaction part as Completed"
+    );
+    let content = InteractionContent::try_from(&interaction.content)
+        .expect("interaction content is typed");
+    let reply = content
+        .reply()
+        .expect("the replied payload is present on the persisted interaction");
+    assert_eq!(reply.request_id, "ask-1");
+    assert_eq!(reply.kind, agena_domain::UserInputReplyKind::Submit);
+    assert!(
+        !replied.parts().is_empty(),
+        "the reply returns the continued session"
+    );
 }

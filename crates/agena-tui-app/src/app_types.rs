@@ -3,6 +3,7 @@ use std::{
     future::Future,
     path::PathBuf,
     pin::Pin,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -30,7 +31,7 @@ use agena_tui::main_focus::Focus;
 use agena_tui::presentation_config::TuiConfig;
 use agena_tui::status_line::StatusLinePresentation;
 use agena_tui::usage::{UsageDashboardData, UsageDashboardPresentation};
-use agena_tui_backend::{Backend, LiveEvent, SessionPermissionStudioState, SessionRefresh};
+use crate::app_backend::{LiveEvent, SessionPermissionStudioState, SessionRefresh};
 use agena_tui_components::{Editor, InputDialogState};
 use agena_tui_media::{MathGraphicsConfig, MathGraphicsRenderer, MathRenderContext};
 use agena_tui_platform::terminal::TerminalContext;
@@ -437,7 +438,10 @@ pub(super) struct PlanDisplayRefreshState {
 }
 
 pub struct App {
-    pub(super) backend: Backend,
+    pub(super) application: agena_application::Application,
+    /// Lazy workspace file index for file mentions. `Application` carries no
+    /// file index; the TUI owns the cached directory listing.
+    pub(super) file_index: Arc<OnceLock<Vec<PathBuf>>>,
     pub(super) i18n: I18n,
     pub(super) tx: Sender<AppMessage>,
     pub(super) rx: Receiver<AppMessage>,
@@ -529,7 +533,7 @@ pub struct App {
     /// a late response from an older, closed dashboard matching a newly
     /// opened dashboard that is also on its first request.
     pub(super) next_usage_request_id: u64,
-    /// Forwarder task that pumps `Backend::subscribe_session_events` into
+    /// Forwarder task that pumps `app_backend::live_events::subscribe_session_events` into
     /// [`AppMessage::SessionEventArrived`]. Aborted whenever the active
     /// session changes so we don't accumulate stale subscriptions.
     pub(super) active_subscription: Option<tokio::task::JoinHandle<()>>,
@@ -715,15 +719,15 @@ pub(super) enum AppMessage {
     ProviderStudioAuthCompleted {
         request_key: String,
         result: std::result::Result<
-            agena_tui_backend::ProviderDraftAuthActionResult,
-            agena_tui_backend::ProviderDraftAuthError,
+            agena_application::provider_studio::ProviderDraftAuthActionResult,
+            agena_application::provider_studio::ProviderDraftAuthError,
         >,
     },
     ProviderStudioSaved {
         provider_id: String,
         result: std::result::Result<
-            agena_tui_backend::ProviderStudioSaveResult,
-            agena_tui_backend::ProviderStudioSaveError,
+            agena_application::provider_studio::ProviderStudioSaveResult,
+            agena_application::provider_studio::ProviderStudioSaveError,
         >,
     },
     ModelCatalogRefreshed {
@@ -735,7 +739,7 @@ pub(super) enum AppMessage {
     },
     TimelineLoaded {
         session_id: i64,
-        result: UiResult<Vec<agena_tui_backend::SessionTimelineEntry>>,
+        result: UiResult<Vec<crate::app_backend::SessionTimelineEntry>>,
     },
     SessionRewound {
         session_id: i64,
@@ -743,7 +747,7 @@ pub(super) enum AppMessage {
         target: String,
         result: UiResult<SessionExecutionResource>,
     },
-    /// Pushed by the unified event bus (`Backend::subscribe_session_events`).
+    /// Pushed by the unified event bus (`app_backend::live_events::subscribe_session_events`).
     /// Callers receive each domain event in real time, with a hint about
     /// whether a refresh is needed.
     SessionEventArrived {

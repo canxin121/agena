@@ -1,13 +1,15 @@
 impl App {
     pub(crate) fn session_model_chooser_items(&self) -> UiResult<Vec<SessionModelChoiceItem>> {
-        let providers = self.backend.list_configured_providers();
+        let providers =
+            crate::app_backend::operations::list_configured_providers(&self.application);
         let mut items = Vec::new();
         for provider in providers {
             let default_adapter = provider.defaults.adapter.clone();
-            let models = self
-                .backend
-                .list_local_provider_models(provider.provider_id.as_str())
-                .map_err(crate::UiFailure::internal)?;
+            let models = crate::app_backend::provider_mappings::list_local_provider_models(
+                &self.application,
+                provider.provider_id.as_str(),
+            )
+            .map_err(crate::UiFailure::internal)?;
             for model in models {
                 items.push(session_model_choice_item(
                     &self.i18n,
@@ -36,11 +38,11 @@ impl App {
         // Convert at the adapter boundary; the feature crate never sees the
         // concrete backend draft or authentication types.
         let _protocol_draft = provider_studio_snapshot(&dialog);
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         let adapter_ids = provider_studio_request_adapter_ids(&dialog);
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .save_provider_draft(
                     dialog.draft.clone(),
                     dialog.adapter_models.as_slice(),
@@ -68,10 +70,10 @@ impl App {
             ));
             return;
         };
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .save_provider_adapter_matches(dialog.draft.clone(), adapter_models)
                 .await;
             let _ = tx
@@ -90,10 +92,10 @@ impl App {
         model_id: String,
         model_value: JsonValue,
     ) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .save_provider_model_value(
                     draft.clone(),
                     adapter_id.as_str(),
@@ -116,10 +118,10 @@ impl App {
         adapter_id: String,
         model_id: String,
     ) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .delete_provider_model(draft.clone(), adapter_id.as_str(), model_id.as_str())
                 .await;
             let _ = tx
@@ -132,10 +134,10 @@ impl App {
     }
 
     pub(crate) fn request_provider_studio_delete_provider(&mut self, provider_id: String) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend.delete_provider(provider_id.as_str()).await;
+            let result = application.delete_provider(provider_id.as_str()).await;
             let _ = tx
                 .send(AppMessage::ProviderStudioSaved {
                     provider_id,
@@ -150,10 +152,10 @@ impl App {
         draft: ProviderConfigDraft,
         adapter_id: String,
     ) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .delete_provider_adapter(draft.clone(), adapter_id.as_str())
                 .await;
             let _ = tx
@@ -331,7 +333,7 @@ impl App {
         model_id: String,
         provider_model: Option<ProviderModelResource>,
     ) {
-        match self.backend.provider_model_draft_value(
+        match self.application.provider_model_draft_value(
             &dialog.draft,
             adapter_id.as_str(),
             model_id.as_str(),

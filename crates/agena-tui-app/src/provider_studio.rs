@@ -1,4 +1,4 @@
-use agena_tui_backend::ProviderDraftSecretSourceKind;
+use agena_application::provider_studio::ProviderDraftSecretSourceKind;
 
 /// Project the concrete backend draft into the provider feature contract.
 /// Authentication polling and persistence stay in this app adapter.

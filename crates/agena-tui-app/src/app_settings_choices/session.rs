@@ -6,20 +6,22 @@ impl App {
     ) -> UiResult<Vec<ChoiceItem>> {
         let mut items = match step {
             SessionModelModeStep::ThinkingMode => inspector_rows_to_mode_choice_items(
-                self.backend
-                    .model_thinking_mode_rows(model)
-                    .map_err(crate::UiFailure::internal)?,
+                crate::app_backend::provider_mappings::model_thinking_mode_rows(
+                    &self.application,
+                    model,
+                )
+                .map_err(crate::UiFailure::internal)?,
                 ui_text::thinking_mode_display_value,
             ),
             SessionModelModeStep::SpeedMode => inspector_rows_to_mode_choice_items(
-                self.backend
-                    .model_speed_mode_rows(model)
-                    .map_err(crate::UiFailure::internal)?,
+                crate::app_backend::provider_mappings::model_speed_mode_rows(
+                    &self.application,
+                    model,
+                )
+                .map_err(crate::UiFailure::internal)?,
                 ui_text::speed_mode_display_value,
             ),
-            SessionModelModeStep::Verbosity => self
-                .backend
-                .model_verbosity_values(model)
+            SessionModelModeStep::Verbosity => crate::app_backend::provider_mappings::model_verbosity_values(&self.application, model)
                 .map_err(crate::UiFailure::internal)?
                 .into_iter()
                 .map(|value| {
@@ -123,21 +125,26 @@ impl App {
     ) -> UiResult<Vec<ChoiceItem>> {
         let mut items = match step {
             SessionModelModeStep::ThinkingMode => inspector_rows_to_mode_choice_items(
-                self.backend
-                    .runtime_thinking_mode_rows(&self.run_options.to_request())
-                    .map_err(crate::UiFailure::internal)?,
+                crate::app_backend::provider_mappings::runtime_thinking_mode_rows(
+                    &self.application,
+                    &self.run_options.to_request(),
+                )
+                .map_err(crate::UiFailure::internal)?,
                 ui_text::thinking_mode_display_value,
             ),
             SessionModelModeStep::SpeedMode => inspector_rows_to_mode_choice_items(
-                self.backend
-                    .runtime_speed_mode_rows(&self.run_options.to_request())
-                    .map_err(crate::UiFailure::internal)?,
+                crate::app_backend::provider_mappings::runtime_speed_mode_rows(
+                    &self.application,
+                    &self.run_options.to_request(),
+                )
+                .map_err(crate::UiFailure::internal)?,
                 ui_text::speed_mode_display_value,
             ),
-            SessionModelModeStep::Verbosity => self
-                .backend
-                .runtime_verbosity_values(&self.run_options.to_request())
-                .map_err(crate::UiFailure::internal)?
+            SessionModelModeStep::Verbosity => crate::app_backend::provider_mappings::runtime_verbosity_values(
+                &self.application,
+                &self.run_options.to_request(),
+            )
+            .map_err(crate::UiFailure::internal)?
                 .into_iter()
                 .map(|value| {
                     choice_item(

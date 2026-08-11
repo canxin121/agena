@@ -54,7 +54,8 @@ impl App {
         dialog: &PermissionStudioOverlay,
         kind: PermissionStudioCatalogKind,
     ) {
-        let catalog = self.backend.permission_tool_catalog();
+        let catalog =
+            crate::app_backend::permission_catalog::permission_tool_catalog(&self.application);
         let existing = match kind {
             PermissionStudioCatalogKind::ToolNames => dialog
                 .permission
@@ -338,7 +339,9 @@ impl App {
             return;
         };
         self.dispatch_backend_operation(
-            move |backend| async move { backend.get_session_state(session_id).await },
+            move |application| async move {
+                crate::app_backend::operations::get_session_state(&application, session_id).await
+            },
             |app, result| match result {
                 Ok(execution) => {
                     let _ = app.apply_transcript_execution(execution);

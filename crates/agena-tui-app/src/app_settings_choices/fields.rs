@@ -7,8 +7,7 @@ impl App {
             "providers.default" => {
                 let fallback_adapter = settings_choice_adapter_fallback(&self.i18n);
                 Some(
-                    self.backend
-                        .list_providers()
+                    crate::app_backend::operations::list_providers(&self.application)
                         .into_iter()
                         .map(|provider| {
                             choice_item(
@@ -44,8 +43,7 @@ impl App {
                 .collect(),
             ),
             "ui.tui.theme" => Some(
-                self.backend
-                    .plugin_theme_palettes()
+                crate::app_backend::plugin_effects::plugin_theme_palettes(&self.application)
                     .into_iter()
                     .map(|theme| choice_item(theme.id, theme.display_name))
                     .collect(),
@@ -226,7 +224,7 @@ impl App {
             ),
             ProviderStudioField::Profile => Some(provider_studio_profile_choice_items(
                 &self.i18n,
-                &self.backend,
+                &self.application,
             )),
             ProviderStudioField::ApiKeySource => Some(vec![
                 choice_item(

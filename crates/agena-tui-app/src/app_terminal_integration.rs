@@ -79,10 +79,9 @@ fn effective_terminal_activity(app: &App) -> SessionActivity {
 /// Reads the `agena.terminal.activity` display contribution published by the
 /// bundled terminal plugin, if loaded.
 fn plugin_terminal_activity(app: &App) -> Option<SessionActivity> {
-    let contribution = app
-        .backend
-        .plugin_display_contributions()
-        .into_iter()
+    let contribution =
+        crate::app_backend::plugin_effects::plugin_display_contributions(&app.application)
+            .into_iter()
         .find(|contribution| {
             contribution.contribution.id == "agena.terminal.activity"
                 && matches!(
@@ -109,7 +108,7 @@ fn plugin_terminal_activity(app: &App) -> Option<SessionActivity> {
 
 fn current_title_text(app: &App) -> String {
     let session_title = app.current_or_selected_session_title();
-    let workspace = app.backend.workspace_name();
+    let workspace = crate::app_backend::plugin_effects::workspace_name(&app.application);
     let activity = effective_terminal_activity(app);
     let state = match activity {
         SessionActivity::Idle => None,
@@ -268,7 +267,8 @@ pub(crate) fn drain_terminal_notification(
 /// consumed once so a bell fires a single time even while the host keeps the
 /// bounded recent queue around.
 fn take_plugin_notify(app: &mut App) -> Option<NotificationMethod> {
-    for notification in app.backend.plugin_host_notifications() {
+    for notification in crate::app_backend::plugin_effects::plugin_host_notifications(&app.application)
+    {
         let key = format!(
             "{}:{}:{}",
             notification.plugin_id, notification.severity, notification.body

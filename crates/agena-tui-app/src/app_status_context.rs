@@ -33,13 +33,13 @@ impl App {
     ) where
         T: Send + 'static,
         E: Into<anyhow::Error> + Send + 'static,
-        Op: FnOnce(agena_tui_backend::Backend) -> Fut + Send + 'static,
+        Op: FnOnce(agena_application::Application) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = std::result::Result<T, E>> + Send + 'static,
         Complete: FnOnce(&mut App, UiResult<T>) + Send + 'static,
     {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let command: crate::UiCommand = Box::pin(async move {
-            let result = operation(backend)
+            let result = operation(application)
                 .await
                 .map_err(|error| crate::UiFailure::from_backend(error.into()));
             let completion: crate::UiCompletion =
@@ -77,7 +77,10 @@ impl App {
             &agena_tui::fl_args!(
                 "value" => ui_text::t(
                     &self.i18n,
-                                        if self.backend.plugin_display_contributions().is_empty() {
+                                        if crate::app_backend::plugin_effects::plugin_display_contributions(
+                                            &self.application,
+                                        )
+                                        .is_empty() {
                         "runtime-status-display-default"
                     } else {
                         "runtime-status-display-plugin"
@@ -106,7 +109,9 @@ impl App {
     pub(crate) fn workspace_context_label(&self) -> String {
         self.i18n.text_args(
             "status-part-workspace",
-            &agena_tui::fl_args!("value" => self.backend.workspace_name()),
+            &agena_tui::fl_args!(
+                "value" => crate::app_backend::plugin_effects::workspace_name(&self.application)
+            ),
         )
     }
 
@@ -221,12 +226,11 @@ impl App {
 
     pub(crate) fn current_session_status_parts(&self) -> Vec<String> {
         let model_label = |model: &crate::ModelRef| {
-            self.backend
-                .model_display_name(model)
+            crate::app_backend::provider_mappings::model_display_name(&self.application, model)
                 .unwrap_or_else(|| model_name_status_label(model))
         };
         let fallback_model = || {
-            self.backend
+            self.application
                 .resolved_model_for_run_options(&self.run_options.to_request())
                 .ok()
                 .map(|model| model_label(&model))
@@ -251,7 +255,7 @@ impl App {
         // default modes so the modes are always visible before the first
         // message is sent.
         let (default_thinking, default_speed) = self
-            .backend
+            .application
             .resolved_model_default_modes(&self.run_options.to_request());
         let thinking_mode = status_mode_value(
             self.transcript

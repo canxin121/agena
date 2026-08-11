@@ -223,10 +223,9 @@ pub(crate) fn boolean_choice_items(detail: &str) -> Vec<ChoiceItem> {
 
 pub(crate) fn provider_studio_profile_choice_items(
     i18n: &I18n,
-    backend: &Backend,
+    application: &agena_application::Application,
 ) -> Vec<ChoiceItem> {
-    let mut items = backend
-        .list_aws_profile_names()
+    let mut items = crate::app_backend::aws::list_aws_profile_names(application)
         .into_iter()
         .map(|profile| choice_item(profile, ui_text::t(i18n, "provider-profile-choice-detail")))
         .collect::<Vec<_>>();
@@ -613,7 +612,7 @@ pub(crate) fn provider_studio_catalog_match_model<'a>(
 }
 
 use crate::{
-    BTreeSet, Backend, CatalogModelResource, ChoiceItem, ChoiceOverlayAction, ConfigJsonSources,
+    BTreeSet, CatalogModelResource, ChoiceItem, ChoiceOverlayAction, ConfigJsonSources,
     I18n, InspectorRow, JsonValue, ModelCatalogListResponse, ModelRef, PermissionMode,
     PermissionRuleStudioChoiceField, ProviderModel, ProviderModelResource, ProviderStudioField,
     ProviderStudioProviderRow, ProviderSummaryResource, SelectionPickerCommand,

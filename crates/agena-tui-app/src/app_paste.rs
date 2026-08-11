@@ -174,7 +174,7 @@ impl App {
                 Overlay::PathBrowser(dialog) => {
                     dialog.presentation.input.insert_str(text.as_str());
                     Self::refresh_path_browser_overlay_with_root(
-                        self.backend.workspace_root(),
+                        self.application.workspace_root(),
                         dialog,
                     );
                 }

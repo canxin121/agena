@@ -75,10 +75,14 @@ impl App {
             .or_else(|| self.sessions.current_selected_id());
         let args = args.to_string();
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend
-                    .invoke_plugin_slash_command(&entry, session_id, &args)
-                    .await
+            move |application| async move {
+                crate::app_backend::plugin_effects::invoke_plugin_slash_command(
+                    &application,
+                    &entry,
+                    session_id,
+                    &args,
+                )
+                .await
             },
             move |app, result| match result {
                 Ok(effect) => app.apply_plugin_command_effect(effect, session_id),
@@ -166,10 +170,12 @@ impl App {
             ForkKind::Side => format!("side: {}", ui_text::default_session_title(&self.i18n)),
         };
         let track_as_side = kind == ForkKind::Side;
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let forked = backend.fork_session(parent_id, Some(title)).await;
+            let forked =
+                crate::app_backend::operations::fork_session(&application, parent_id, Some(title))
+                    .await;
             match forked {
                 Ok(state) => {
                     let session_id = state.session.id;
@@ -216,8 +222,8 @@ impl App {
         };
         let review_focus = args.trim().to_string();
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend
+            move |application| async move {
+                application
                     .invoke_plugin_ui_tool(
                         "agena.skills",
                         "get",
@@ -272,7 +278,9 @@ impl App {
 
         let message = message.to_string();
         self.dispatch_backend_operation(
-            move |backend| async move { backend.create_commit(message).await },
+            move |application| async move {
+                crate::app_backend::plugin_effects::create_commit(&application, message).await
+            },
             |app, result| match result {
                 Ok((commit, summary)) => app.flash_success(ui_text::commit_created_message(
                     &app.i18n,
@@ -306,7 +314,10 @@ impl App {
         };
 
         self.dispatch_backend_operation(
-            move |backend| async move { backend.create_pr(title, body, base, head).await },
+            move |application| async move {
+                crate::app_backend::plugin_effects::create_pr(&application, title, body, base, head)
+                    .await
+            },
             |app, result| match result {
                 Ok(url) => app.flash_success(ui_text::pull_request_created_message(
                     &app.i18n,
@@ -319,8 +330,7 @@ impl App {
 
     pub(crate) fn handle_export_command(&mut self, args: &str) {
         let requested_path = non_empty_owned(args.to_string()).map(|value| {
-            self.backend
-                .resolve_workspace_path(Path::new(value.as_str()))
+            self.resolve_workspace_path(Path::new(value.as_str()))
         });
         self.pending_ui_action = Some(UiAction::ExportTranscript {
             path: requested_path,
@@ -396,5 +406,5 @@ use crate::{
     TIMELINE_EVENT_LIMIT, UiAction, non_empty_owned, parse_pr_command_args, ui_text,
 };
 use agena_tui::main_focus::Focus;
-use agena_tui_backend::PluginCommandEffect;
+use crate::app_backend::PluginCommandEffect;
 use agena_tui_session::session_view::SessionViewMode;

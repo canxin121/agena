@@ -173,10 +173,23 @@ impl App {
         let params = permission_rule_params_from_draft(&draft);
         let rule_id = dialog.rule_id;
         self.dispatch_backend_operation(
-            move |backend| async move {
+            move |application| async move {
                 match rule_id {
-                    Some(rule_id) => backend.replace_permission_rule(rule_id, params).await,
-                    None => backend.create_permission_rule(params).await,
+                    Some(rule_id) => {
+                        crate::app_backend::plugin_effects::replace_permission_rule(
+                            &application,
+                            rule_id,
+                            params,
+                        )
+                        .await
+                    }
+                    None => {
+                        crate::app_backend::plugin_effects::create_permission_rule(
+                            &application,
+                            params,
+                        )
+                        .await
+                    }
                 }
             },
             |app, result| match result {
@@ -227,7 +240,10 @@ impl App {
         };
         let name = permission_rule_draft_label(&self.i18n, &dialog.draft);
         self.dispatch_backend_operation(
-            move |backend| async move { backend.revoke_permission_rule(rule_id).await },
+            move |application| async move {
+                crate::app_backend::plugin_effects::revoke_permission_rule(&application, rule_id)
+                    .await
+            },
             move |app, result| match result {
                 Ok(_) => {
                     app.flash_success(app.i18n.text_args(

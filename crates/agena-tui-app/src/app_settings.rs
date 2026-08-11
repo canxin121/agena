@@ -11,8 +11,8 @@ impl App {
                     Ok(Some(value)) => {
                         let path = action.path.clone();
                         self.dispatch_backend_operation(
-                            move |backend| async move {
-                                backend.set_config_setting(path.as_str(), value).await
+                            move |application| async move {
+                                application.set_config_setting(path.as_str(), value).await
                             },
                             move |app, result| match result {
                                 Ok(_) => {
@@ -30,8 +30,8 @@ impl App {
                     Ok(None) => {
                         let path = action.path.clone();
                         self.dispatch_backend_operation(
-                            move |backend| async move {
-                                backend.delete_config_setting(path.as_str()).await
+                            move |application| async move {
+                                application.delete_config_setting(path.as_str()).await
                             },
                             move |app, result| match result {
                                 Ok(_) => {

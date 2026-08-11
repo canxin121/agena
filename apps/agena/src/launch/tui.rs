@@ -12,7 +12,6 @@ use agena_runtime::bootstrap_application_services;
 use agena_cli::TuiLaunchRequest;
 use agena_tui::i18n::I18n;
 use agena_tui_app::{App, LaunchOptions};
-use agena_tui_backend::Backend;
 use agena_tui_platform::terminal;
 use anyhow::Context;
 use tracing_subscriber::{fmt::writer::MakeWriter, layer::SubscriberExt, util::SubscriberInitExt};
@@ -169,9 +168,13 @@ pub async fn run_embedded(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> 
     .await
     .map_err(|error| AgenaProcessError::Internal(error.to_string()))?;
 
-    let backend = Backend::new(runtime.application_services(), workspace_root.clone())
-        .map_err(|error| AgenaProcessError::Internal(error.to_string()))?;
-    let tui_preferences = backend.ui_configuration();
+    let application = agena_application::Application::from_composed_runtime_services(
+        runtime.application_services(),
+    )
+    .map_err(|error| AgenaProcessError::Internal(error.to_string()))?;
+    let tui_preferences = application
+        .tui_preferences()
+        .expect("Application configuration projection must provide UI preferences");
     let i18n = I18n::resolve(args.locale.as_deref(), tui_preferences.locale.as_deref());
     let tui_config = agena_tui_app::tui_config_from_preferences(&tui_preferences);
     let mut terminal = terminal::TerminalRuntime::enter(tui_config.graphics)
@@ -194,7 +197,7 @@ pub async fn run_embedded(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> 
         );
     }
     let mut app = App::new(
-        backend,
+        application,
         LaunchOptions {
             initial_session_id: args.session,
             initial_session_search: args.search,

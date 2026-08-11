@@ -15,8 +15,7 @@ impl App {
         } else {
             let mut rows = vec![provider_list_create_item(&self.i18n)];
             rows.extend(
-                self.backend
-                    .list_configured_providers()
+                crate::app_backend::operations::list_configured_providers(&self.application)
                     .into_iter()
                     .map(|provider| {
                         let label = provider.provider_id.clone();
@@ -110,7 +109,8 @@ impl App {
     }
 
     pub(crate) fn open_provider_studio(&mut self, initial_provider: Option<&str>) {
-        let providers = self.backend.list_configured_providers();
+        let providers =
+            crate::app_backend::operations::list_configured_providers(&self.application);
         let provider_rows = provider_studio_provider_rows(&self.i18n, providers.as_slice());
         let selected_provider = initial_provider
             .and_then(|provider_id| {
@@ -145,7 +145,7 @@ impl App {
                 0,
             ),
             draft: self
-                .backend
+                .application
                 .provider_config_draft(None)
                 .unwrap_or_else(|_| ProviderConfigDraft::new_empty()),
             adapter_models: Vec::new(),
@@ -177,7 +177,7 @@ impl App {
         provider_id: Option<&str>,
         prefill_new_id: Option<String>,
     ) {
-        match self.backend.provider_config_draft(provider_id) {
+        match self.application.provider_config_draft(provider_id) {
             Ok(mut draft) => {
                 if provider_id.is_none()
                     && let Some(prefill) = prefill_new_id
@@ -187,14 +187,15 @@ impl App {
                 }
                 dialog.draft = draft;
                 dialog.selection.set_top_selected(0);
-                dialog.adapter_models =
-                    self.backend.configured_provider_adapter_models(provider_id);
+                dialog.adapter_models = crate::app_backend::provider_mappings::
+                    configured_provider_adapter_models(&self.application, provider_id);
                 let configured_adapters = provider_id
                     .and_then(|id| {
-                        self.backend
-                            .list_configured_providers()
-                            .into_iter()
-                            .find(|provider| provider.provider_id == id)
+                        crate::app_backend::operations::list_configured_providers(
+                            &self.application,
+                        )
+                        .into_iter()
+                        .find(|provider| provider.provider_id == id)
                     })
                     .map(|provider| provider.adapters)
                     .unwrap_or_default();
@@ -216,9 +217,8 @@ impl App {
                 dialog.model_page = None;
                 dialog.listing_adapter_models = false;
                 dialog.selected_adapter_ids = enabled_adapter_ids;
-                dialog.selected_model_keys = self
-                    .backend
-                    .configured_provider_model_routes(provider_id)
+                dialog.selected_model_keys = crate::app_backend::provider_mappings::
+                    configured_provider_model_routes(&self.application, provider_id)
                     .into_iter()
                     .map(|(adapter_id, model_id)| {
                         provider_studio_model_key(adapter_id.as_str(), model_id.as_str())
@@ -263,12 +263,16 @@ impl App {
     }
 
     pub(crate) fn request_model_catalog_page(&mut self, query: String, offset: usize) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
-                .list_model_catalog_models(query.as_str(), offset, 50)
-                .map_err(crate::UiFailure::internal);
+            let result = crate::app_backend::provider_mappings::list_model_catalog_models(
+                &application,
+                query.as_str(),
+                offset,
+                50,
+            )
+            .map_err(crate::UiFailure::internal);
             let _ = tx
                 .send(AppMessage::ModelCatalogLoaded {
                     query,
@@ -280,13 +284,14 @@ impl App {
     }
 
     pub(crate) fn request_model_catalog_refresh(&mut self) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
-                .refresh_model_catalog()
-                .await
-                .map_err(crate::UiFailure::internal);
+            let result = crate::app_backend::provider_mappings::refresh_model_catalog(
+                &application,
+            )
+            .await
+            .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::ModelCatalogRefreshed { result }).await;
         });
     }
@@ -333,18 +338,18 @@ impl App {
         let request_key = provider_studio_request_key(&dialog.draft, &adapter_ids);
         dialog.pending_adapter_models_key = Some(request_key.clone());
         dialog.listing_adapter_models = true;
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let i18n = self.i18n.clone();
         let tx = self.tx.clone();
         let draft = dialog.draft.clone();
         tokio::spawn(async move {
             let result = if draft.auth_kind.supports_draft_model_listing() {
-                backend
+                application
                     .list_draft_provider_adapter_models(&draft, &adapter_ids)
                     .await
                     .map_err(crate::UiFailure::internal)
             } else if let Some(provider_id) = draft.source_provider_id.as_deref() {
-                backend
+                application
                     .list_saved_provider_adapter_models(provider_id, &adapter_ids)
                     .await
                     .map_err(crate::UiFailure::internal)
@@ -371,11 +376,16 @@ impl App {
         }
         let request_key = provider_studio_auth_request_key(&dialog.draft, "start");
         dialog.pending_auth_key = Some(request_key.clone());
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         let draft = dialog.draft.clone();
         tokio::spawn(async move {
-            let result = backend.start_provider_draft_auth(draft).await;
+            let result =
+                crate::provider_studio::provider_auth::start_provider_draft_auth(
+                    &application,
+                    draft,
+                )
+                .await;
             let _ = tx
                 .send(AppMessage::ProviderStudioAuthCompleted {
                     request_key,
@@ -394,11 +404,16 @@ impl App {
         }
         let request_key = provider_studio_auth_request_key(&dialog.draft, "continue");
         dialog.pending_auth_key = Some(request_key.clone());
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         let draft = dialog.draft.clone();
         tokio::spawn(async move {
-            let result = backend.continue_provider_draft_auth(draft).await;
+            let result =
+                crate::provider_studio::provider_auth::continue_provider_draft_auth(
+                    &application,
+                    draft,
+                )
+                .await;
             let _ = tx
                 .send(AppMessage::ProviderStudioAuthCompleted {
                     request_key,

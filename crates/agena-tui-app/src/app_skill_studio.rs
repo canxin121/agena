@@ -217,8 +217,8 @@ impl App {
         };
         let limit = dialog.limit;
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend
+            move |application| async move {
+                application
                     .invoke_plugin_ui_tool(
                         "agena.skills",
                         "list",
@@ -322,8 +322,8 @@ impl App {
         };
         let requested_name = item.name.clone();
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend
+            move |application| async move {
+                application
                     .invoke_plugin_ui_tool(
                         "agena.skills",
                         "get",
@@ -396,8 +396,8 @@ impl App {
             ),
         };
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend
+            move |application| async move {
+                application
                     .invoke_plugin_ui_tool("agena.skills", tool, input, Some(session_id))
                     .await
             },
@@ -453,8 +453,8 @@ impl App {
         };
         let name = name.to_string();
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend
+            move |application| async move {
+                application
                     .invoke_plugin_ui_tool(
                         "agena.skills",
                         "delete",

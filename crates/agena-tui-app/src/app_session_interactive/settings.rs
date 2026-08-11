@@ -31,7 +31,7 @@ impl App {
             ui_text::t(&self.i18n, "overlay-attach-browser-footer"),
             ui_text::t(&self.i18n, empty_key),
             PathBrowserMode::AnyPath,
-            self.backend.workspace_root().display().to_string(),
+            self.application.workspace_root().display().to_string(),
             PathBrowserTarget::FileAttachment { images_only },
         )));
     }
@@ -48,14 +48,14 @@ impl App {
             return;
         }
 
-        let workspace = match fs::canonicalize(self.backend.workspace_root()) {
+        let workspace = match fs::canonicalize(self.application.workspace_root()) {
             Ok(workspace) => workspace,
             Err(error) => {
                 self.flash_error(format!("Could not access the current workspace: {error}"));
                 return;
             }
         };
-        let path = self.backend.resolve_workspace_path(requested);
+        let path = self.resolve_workspace_path(requested);
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) => {
@@ -129,16 +129,20 @@ impl App {
     fn request_settings_async_context(&mut self) {
         let session_id = self.current_or_selected_session_id();
         self.dispatch_backend_operation(
-            move |backend| async move {
+            move |application| async move {
                 let permission = match session_id {
                     Some(session_id) => Some(
-                        backend
-                            .get_session_permission_studio_state(session_id)
-                            .await?,
+                        crate::app_backend::permission_studio::get_session_permission_studio_state(
+                            &application, session_id,
+                        )
+                        .await?,
                     ),
                     None => None,
                 };
-                let runtime_summary = backend.runtime_snapshot_summary().await?;
+                let runtime_summary = crate::app_backend::operations::runtime_snapshot_summary(
+                    &application,
+                )
+                .await?;
                 Ok::<_, anyhow::Error>((session_id, permission, runtime_summary))
             },
             |app, result| match result {
@@ -158,11 +162,10 @@ impl App {
         preferred_item_label: Option<&str>,
         focus: SettingsStudioFocus,
     ) -> UiResult<SettingsStudioOverlay> {
-        let sources = self
-            .backend
-            .config_json_sources()
+        let sources = crate::app_backend::config::config_json_sources(&self.application)
             .map_err(crate::UiFailure::internal)?;
-        let configured_providers = self.backend.list_configured_providers();
+        let configured_providers =
+            crate::app_backend::operations::list_configured_providers(&self.application);
         let global_permission = permission_config_from_json_value(
             &get_json_path(&sources.file, Some("permission")).unwrap_or(JsonValue::Null),
         )?;
@@ -180,10 +183,13 @@ impl App {
                         .filter(|(cached_session_id, _)| *cached_session_id == session_id)
                         .map(|(_, permission)| permission)
                 });
-        let model_catalog = self
-            .backend
-            .list_model_catalog_models("", 0, 1)
-            .map_err(crate::UiFailure::internal)?;
+        let model_catalog = crate::app_backend::provider_mappings::list_model_catalog_models(
+            &self.application,
+            "",
+            0,
+            1,
+        )
+        .map_err(crate::UiFailure::internal)?;
 
         let mut plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
         plugin_items.extend(settings_studio_harness_items(&self.i18n, &sources));
@@ -214,7 +220,7 @@ impl App {
             settings_studio_field_items(&self.i18n, &sources, SettingsStudioSectionId::Interface);
         ui_items.extend(settings_studio_activity_kind_items(
             &self.i18n,
-            &self.backend,
+            &self.application,
             &sources,
         ));
         let mut runtime_session_items = vec![SettingsStudioItem::new(
@@ -354,9 +360,7 @@ impl App {
     }
 
     pub(crate) fn build_client_versions_studio_overlay(&self) -> UiResult<SettingsStudioOverlay> {
-        let sources = self
-            .backend
-            .config_json_sources()
+        let sources = crate::app_backend::config::config_json_sources(&self.application)
             .map_err(crate::UiFailure::internal)?;
         let items = settings_studio_field_items(
             &self.i18n,

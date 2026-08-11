@@ -56,11 +56,10 @@ impl App {
             Vec::new(),
             state.presentation.include_subagents,
         );
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
-                .usage_stats(query)
+            let result = crate::app_backend::operations::usage_stats(&application, query)
                 .await
                 .map_err(crate::UiFailure::internal);
             let _ = tx

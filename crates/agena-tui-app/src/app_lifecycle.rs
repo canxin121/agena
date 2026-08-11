@@ -7,11 +7,24 @@ impl App {
         self.current_route_is_main() && self.overlay.is_none() && self.context_help.is_none()
     }
 
-    pub fn new(backend: Backend, mut launch: LaunchOptions, i18n: I18n) -> Self {
+    /// Resolve a possibly-relative path against the workspace root.
+    pub(crate) fn resolve_workspace_path(&self, path: &std::path::Path) -> std::path::PathBuf {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.application.workspace_root().join(path)
+        }
+    }
+
+    pub fn new(
+        application: agena_application::Application,
+        mut launch: LaunchOptions,
+        i18n: I18n,
+    ) -> Self {
         apply_math_graphics_appearance(&mut launch);
         let math_render_context = agena_tui_media::MathRenderContext::new(
             launch.math_graphics.as_ref(),
-            backend.workspace_root(),
+            application.workspace_root(),
         );
         let (tx, rx) = tokio::sync::mpsc::channel(APP_MESSAGE_QUEUE_CAPACITY);
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(UI_COMMAND_QUEUE_CAPACITY);
@@ -30,8 +43,7 @@ impl App {
         let status_line = StatusLinePresentation::from_config(&launch.tui_config.status_line);
         let double_esc_window = Duration::from_millis(launch.tui_config.double_esc_window_ms);
         let plugin_theme = launch.tui_config.theme.as_ref().and_then(|theme_id| {
-            backend
-                .plugin_theme_palettes()
+            crate::app_backend::plugin_effects::plugin_theme_palettes(&application)
                 .into_iter()
                 .find(|palette| palette.id == *theme_id)
         });
@@ -47,7 +59,8 @@ impl App {
         );
         transcript.set_math_render_context(math_render_context.clone());
         let mut app = Self {
-            backend,
+            application,
+            file_index: Arc::new(OnceLock::new()),
             i18n: i18n.clone(),
             tx,
             rx,
@@ -152,10 +165,11 @@ impl App {
 
     pub(crate) fn refresh_tui_palette_from_runtime(&mut self) {
         self.launch.tui_config =
-            crate::tui_config_from_preferences(&self.backend.ui_configuration());
+            crate::tui_config_from_preferences(&crate::app_backend::config::ui_configuration(
+                &self.application,
+            ));
         self.plugin_theme = self.launch.tui_config.theme.as_ref().and_then(|theme_id| {
-            self.backend
-                .plugin_theme_palettes()
+            crate::app_backend::plugin_effects::plugin_theme_palettes(&self.application)
                 .into_iter()
                 .find(|palette| palette.id == *theme_id)
         });
@@ -199,7 +213,7 @@ impl App {
         apply_math_graphics_appearance(&mut self.launch);
         self.math_render_context = agena_tui_media::MathRenderContext::new(
             self.launch.math_graphics.as_ref(),
-            self.backend.workspace_root(),
+            self.application.workspace_root(),
         );
         self.transcript
             .set_math_render_context(self.math_render_context.clone());
@@ -513,7 +527,7 @@ fn tui_plugin_color(color: Option<&agena_plugin_sdk::PluginTuiColor>) -> Option<
 
 use crate::Result;
 use crate::{
-    APP_MESSAGE_QUEUE_CAPACITY, App, BTreeMap, BTreeSet, Backend, Color, ComposerQueue,
+    APP_MESSAGE_QUEUE_CAPACITY, App, BTreeMap, BTreeSet, Color, ComposerQueue,
     DRAFT_PERSIST_INTERVAL_MS, DraftSlot, DraftStore, Duration, Editor, Event, HashMap, HashSet,
     I18n, Instant, LaunchOptions, LayoutCache, PromptHistory, REFRESH_INTERVAL_MS,
     REFRESH_STALL_TIMEOUT_MS, Route, RunActivityTracker, RunOptionsState, SessionComposerState,
@@ -521,6 +535,7 @@ use crate::{
     TranscriptState, UI_COMMAND_QUEUE_CAPACITY, UI_TICK_MS, default_draft_store_path,
     default_prompt_history_path, interval, provider_studio_auth_poll_interval, ui_text,
 };
+use std::sync::{Arc, OnceLock};
 use agena_tui::main_focus::Focus;
 use agena_tui::status_line::StatusLinePresentation;
 use agena_tui_media::MathGraphicsRenderer;

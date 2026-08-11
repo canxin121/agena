@@ -23,10 +23,10 @@ use agena_api::{
         ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, Query,
         QueryResult,
     },
-    resource::{ModelCatalogResponse, ModelCatalogSourceKind, OperationDetailResource},
+    resource::{ModelCatalogResponse, OperationDetailResource},
 };
 use agena_application::{
-    Application, ApplicationError,
+    Application, ApplicationError, model_catalog_source_kind_from_domain,
     dto::{
         CursorPaginationQuery, ModelCatalogResponse as ApplicationModelCatalogResponse,
         PermissionRuleWriteRequest, SearchPaginationQuery, SessionListQuery, WorkspaceListQuery,
@@ -34,17 +34,6 @@ use agena_application::{
     },
     pagination::PaginatedResponse as ApplicationPaginatedResponse,
 };
-
-const fn model_catalog_source_kind_from_domain(
-    value: agena_provider::ModelCatalogSnapshotSourceKind,
-) -> ModelCatalogSourceKind {
-    match value {
-        agena_provider::ModelCatalogSnapshotSourceKind::Generated => {
-            ModelCatalogSourceKind::Generated
-        }
-        agena_provider::ModelCatalogSnapshotSourceKind::Cache => ModelCatalogSourceKind::Cache,
-    }
-}
 
 trait ApplicationResultExt<T> {
     fn application(self) -> Result<T, ApplicationError>;

@@ -1,48 +1,5 @@
 use super::*;
 
-// ─── Auth providers ──────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-/// Type of stored provider credential.
-pub enum AuthCredentialType {
-    Api,
-    Oauth,
-    WellKnown,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Authentication state of a provider.
-pub struct AuthProviderResource {
-    pub provider_id: String,
-    pub configured: bool,
-    pub credential_present: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential_type: Option<AuthCredentialType>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_preview: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "is_false")]
-    pub expired: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub account_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enterprise_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub email: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub avatar_url: Option<String>,
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Summary of one provider adapter.
 pub struct ProviderAdapterSummaryResource {

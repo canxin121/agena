@@ -92,7 +92,7 @@ pub(crate) fn list_model_catalog_models(
     offset: usize,
     limit: usize,
 ) -> Result<ModelCatalogListResponse> {
-    Ok(application.list_model_catalog(query, offset, limit))
+    Ok(application.list_model_catalog_with_origin(query, None, offset, limit))
 }
 
 pub(crate) fn lookup_model_catalog_models(
@@ -186,7 +186,7 @@ pub(crate) fn model_verbosity_values(
 
 pub(crate) async fn refresh_model_catalog(application: &Application) -> Result<()> {
     application
-        .request_model_catalog_refresh()
+        .refresh_model_catalog()
         .map_err(|error| anyhow!(error.to_string()))?;
     Ok(())
 }

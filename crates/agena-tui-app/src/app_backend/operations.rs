@@ -35,16 +35,11 @@ pub(crate) async fn get_session_state(
     application: &Application,
     session_id: i64,
 ) -> Result<SessionExecutionResource> {
-    let session_services = application.session_execution_services()?;
-    agena_application::session::session_execution_resource(
-        application,
-        session_services.execution_control.as_ref(),
-        session_services.queries.as_ref(),
-        session_id,
-    )
-    .await
-    .map_err(anyhow::Error::new)
-    .context("failed to load session state")
+    application
+        .session_execution_resource(session_id)
+        .await
+        .map_err(anyhow::Error::new)
+        .context("failed to load session state")
 }
 
 /// Submit a user document (composer message) as a run.
@@ -54,28 +49,11 @@ pub(crate) async fn submit_document_with_options(
     document: agena_domain::ComposerDocument,
     request: RunOptions,
 ) -> Result<SessionExecutionResource> {
-    let request = agena_application::session::session_user_run_request(
-        application,
-        session_id,
-        request,
-        document,
-    )
-    .await?;
-    let session_services = application.session_execution_services()?;
-    let outcome = session_services
-        .commands
-        .submit_user_run(request)
+    application
+        .submit_user_run(session_id, document, request)
         .await
-        .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
-    agena_application::session::session_execution_resource(
-        application,
-        session_services.execution_control.as_ref(),
-        session_services.queries.as_ref(),
-        outcome.session_id,
-    )
-    .await
-    .map_err(anyhow::Error::new)
-    .context("failed to submit user message")
+        .map_err(anyhow::Error::new)
+        .context("failed to submit user message")
 }
 
 /// Update the session's selected model/options without starting a run.
@@ -84,24 +62,11 @@ pub(crate) async fn update_session_selection(
     session_id: i64,
     options: RunOptions,
 ) -> Result<SessionExecutionResource> {
-    let options =
-        agena_application::session::resolve_session_run_options(application, session_id, options)
-            .await?;
-    let session_services = application.session_execution_services()?;
-    let outcome = session_services
-        .commands
+    application
         .update_session_selection(session_id, options)
         .await
-        .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
-    agena_application::session::session_execution_resource(
-        application,
-        session_services.execution_control.as_ref(),
-        session_services.queries.as_ref(),
-        outcome.session_id,
-    )
-    .await
-    .map_err(anyhow::Error::new)
-    .context("failed to update session model selection")
+        .map_err(anyhow::Error::new)
+        .context("failed to update session model selection")
 }
 
 /// Continue an existing session with the given run options.
@@ -110,24 +75,11 @@ pub(crate) async fn continue_session_with_options(
     session_id: i64,
     request: RunOptions,
 ) -> Result<SessionExecutionResource> {
-    let request =
-        agena_application::session::session_execution_request(application, session_id, request)
-            .await?;
-    let session_services = application.session_execution_services()?;
-    let outcome = session_services
-        .commands
-        .continue_session(request)
+    application
+        .continue_session(session_id, request)
         .await
-        .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
-    agena_application::session::session_execution_resource(
-        application,
-        session_services.execution_control.as_ref(),
-        session_services.queries.as_ref(),
-        outcome.session_id,
-    )
-    .await
-    .map_err(anyhow::Error::new)
-    .context("failed to continue session")
+        .map_err(anyhow::Error::new)
+        .context("failed to continue session")
 }
 
 /// Compact an existing session with the given run options.
@@ -136,24 +88,11 @@ pub(crate) async fn compact_session_with_options(
     session_id: i64,
     request: RunOptions,
 ) -> Result<SessionExecutionResource> {
-    let request =
-        agena_application::session::session_execution_request(application, session_id, request)
-            .await?;
-    let session_services = application.session_execution_services()?;
-    let outcome = session_services
-        .commands
-        .compact_session(request)
+    application
+        .compact_session(session_id, request)
         .await
-        .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
-    agena_application::session::session_execution_resource(
-        application,
-        session_services.execution_control.as_ref(),
-        session_services.queries.as_ref(),
-        outcome.session_id,
-    )
-    .await
-    .map_err(anyhow::Error::new)
-    .context("failed to compact session")
+        .map_err(anyhow::Error::new)
+        .context("failed to compact session")
 }
 
 /// Cancel the active run of `session_id`.
@@ -163,16 +102,9 @@ pub(crate) async fn cancel_run(
     execution_id: agena_domain::ExecutionId,
 ) -> Result<agena_domain::CancellationResult> {
     application
-        .session_execution_services()
-        .map_err(anyhow::Error::new)?
-        .execution_control
-        .cancel_execution(session_id, execution_id)
+        .cancel_run(session_id, execution_id)
         .await
-        .map_err(|error| {
-            anyhow::Error::new(agena_application::ApplicationError::from_failure(
-                error.failure,
-            ))
-        })
+        .map_err(anyhow::Error::new)
         .context("failed to cancel active run")
 }
 
@@ -185,44 +117,31 @@ pub(crate) async fn reply_permission_with_options(
     scope: Option<PermissionScope>,
     request: RunOptions,
 ) -> Result<SessionExecutionResource> {
-    let request = agena_application::session::session_permission_reply_request(
-        application,
-        session_id,
-        request,
-        ApiPermissionReply {
-            request_id,
-            kind: match kind {
-                PermissionReplyKind::AllowOnce => ApiPermissionReplyKind::AllowOnce,
-                PermissionReplyKind::AllowAlways => ApiPermissionReplyKind::AllowAlways,
-                PermissionReplyKind::DenyOnce => ApiPermissionReplyKind::DenyOnce,
-                PermissionReplyKind::DenyAlways => ApiPermissionReplyKind::DenyAlways,
-                PermissionReplyKind::AutoApprove => ApiPermissionReplyKind::AutoApprove,
+    application
+        .reply_permission(
+            session_id,
+            request,
+            ApiPermissionReply {
+                request_id,
+                kind: match kind {
+                    PermissionReplyKind::AllowOnce => ApiPermissionReplyKind::AllowOnce,
+                    PermissionReplyKind::AllowAlways => ApiPermissionReplyKind::AllowAlways,
+                    PermissionReplyKind::DenyOnce => ApiPermissionReplyKind::DenyOnce,
+                    PermissionReplyKind::DenyAlways => ApiPermissionReplyKind::DenyAlways,
+                    PermissionReplyKind::AutoApprove => ApiPermissionReplyKind::AutoApprove,
+                },
+                reason: None,
+                scope: scope.map(|scope| match scope {
+                    PermissionScope::Session => ApiPermissionScope::Session,
+                    PermissionScope::Workspace => ApiPermissionScope::Workspace,
+                    PermissionScope::Global => ApiPermissionScope::Global,
+                }),
             },
-            reason: None,
-            scope: scope.map(|scope| match scope {
-                PermissionScope::Session => ApiPermissionScope::Session,
-                PermissionScope::Workspace => ApiPermissionScope::Workspace,
-                PermissionScope::Global => ApiPermissionScope::Global,
-            }),
-        },
-        Some("jsonrpc".to_string()),
-    )
-    .await?;
-    let session_services = application.session_execution_services()?;
-    let outcome = session_services
-        .commands
-        .reply_permission(request)
+            Some("jsonrpc".to_string()),
+        )
         .await
-        .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
-    agena_application::session::session_execution_resource(
-        application,
-        session_services.execution_control.as_ref(),
-        session_services.queries.as_ref(),
-        outcome.session_id,
-    )
-    .await
-    .map_err(anyhow::Error::new)
-    .context("failed to reply to permission request")
+        .map_err(anyhow::Error::new)
+        .context("failed to reply to permission request")
 }
 
 /// Reply to a pending interactive user-input request.
@@ -232,37 +151,24 @@ pub(crate) async fn reply_user_input_with_options(
     reply: UserInputReply,
     request: RunOptions,
 ) -> Result<SessionExecutionResource> {
-    let request = agena_application::session::session_user_input_reply_request(
-        application,
-        session_id,
-        request,
-        ApiUserInputReply {
-            request_id: reply.request_id,
-            kind: match reply.kind {
-                agena_domain::UserInputReplyKind::Submit => ApiUserInputReplyKind::Submit,
-                agena_domain::UserInputReplyKind::Cancel => ApiUserInputReplyKind::Cancel,
-                agena_domain::UserInputReplyKind::Timeout => ApiUserInputReplyKind::Timeout,
+    application
+        .reply_user_input(
+            session_id,
+            request,
+            ApiUserInputReply {
+                request_id: reply.request_id,
+                kind: match reply.kind {
+                    agena_domain::UserInputReplyKind::Submit => ApiUserInputReplyKind::Submit,
+                    agena_domain::UserInputReplyKind::Cancel => ApiUserInputReplyKind::Cancel,
+                    agena_domain::UserInputReplyKind::Timeout => ApiUserInputReplyKind::Timeout,
+                },
+                answers: reply.answers,
+                reason: reply.reason,
             },
-            answers: reply.answers,
-            reason: reply.reason,
-        },
-    )
-    .await?;
-    let session_services = application.session_execution_services()?;
-    let outcome = session_services
-        .commands
-        .reply_user_input(request)
+        )
         .await
-        .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
-    agena_application::session::session_execution_resource(
-        application,
-        session_services.execution_control.as_ref(),
-        session_services.queries.as_ref(),
-        outcome.session_id,
-    )
-    .await
-    .map_err(anyhow::Error::new)
-    .context("failed to submit user input reply")
+        .map_err(anyhow::Error::new)
+        .context("failed to submit user input reply")
 }
 
 /// Clone a session's full history into a new child session — a real fork,
@@ -272,26 +178,11 @@ pub(crate) async fn fork_session(
     session_id: i64,
     title: Option<String>,
 ) -> Result<SessionExecutionResource> {
-    let session_services = application.session_execution_services()?;
-    let outcome = session_services
-        .commands
-        .fork_session(agena_runtime::SessionForkRequest {
-            session_id,
-            at_message_id: None,
-            title,
-            expected_version: None,
-        })
+    application
+        .fork_session(session_id, None, title, None)
         .await
-        .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
-    agena_application::session::session_execution_resource(
-        application,
-        session_services.execution_control.as_ref(),
-        session_services.queries.as_ref(),
-        outcome.session_id,
-    )
-    .await
-    .map_err(anyhow::Error::new)
-    .context("failed to fork session")
+        .map_err(anyhow::Error::new)
+        .context("failed to fork session")
 }
 
 /// Durable, idempotent acknowledgement that an interactive user-input request
@@ -301,21 +192,11 @@ pub(crate) async fn present_interactive_request(
     session_id: i64,
     request_id: String,
 ) -> Result<SessionExecutionResource> {
-    let session_services = application.session_execution_services()?;
-    let outcome = session_services
-        .commands
+    application
         .mark_interactive_request_presented(session_id, request_id)
         .await
-        .map_err(|error| agena_application::ApplicationError::from_failure(error.failure))?;
-    agena_application::session::session_execution_resource(
-        application,
-        session_services.execution_control.as_ref(),
-        session_services.queries.as_ref(),
-        outcome.session_id,
-    )
-    .await
-    .map_err(anyhow::Error::new)
-    .context("failed to mark interactive request presented")
+        .map_err(anyhow::Error::new)
+        .context("failed to mark interactive request presented")
 }
 
 /// Render the terminal diagnostic summary from the Runtime-owned status

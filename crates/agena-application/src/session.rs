@@ -2,8 +2,8 @@
 
 use crate::{Application, ApplicationError};
 use agena_api::resource::{
-    PermissionReply, PermissionReplyKind, PermissionScope, RunOptions, SessionExecutionResource,
-    UserInputReply, UserInputReplyKind,
+    PermissionReply, PermissionReplyKind, PermissionScope, RunOptions, UserInputReply,
+    UserInputReplyKind,
 };
 use agena_domain::{
     ComposerDocument, SessionSummary, UserInputReplyKind as DomainUserInputReplyKind,
@@ -298,16 +298,4 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
         ));
     }
     Ok(())
-}
-
-pub async fn session_execution_resource(
-    state: &Application,
-    execution_control: &dyn agena_runtime::SessionExecutionControl,
-    session_queries: &dyn agena_runtime::SessionQueryService,
-    session_id: i64,
-) -> Result<SessionExecutionResource, ApplicationError> {
-    state
-        .service()
-        .session_execution_resource(execution_control, session_queries, session_id)
-        .await
 }

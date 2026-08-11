@@ -5,7 +5,7 @@
 //! Owns the TUI's session view model: list/navigation/search helpers
 //! ([`session_list`], [`session_navigation`], [`session_search`],
 //! [`session_view`]), the session page/summary/message shapes, live events,
-//! and the [`SessionController`] that maps UI actions to runtime commands.
+//! and the [`SessionController`] that tracks the active session from events.
 
 pub mod session_helpers;
 pub mod session_list;
@@ -23,43 +23,6 @@ pub use session_navigation::{
 };
 pub use session_search::{SessionSearchEffect, SessionSearchItem, SessionSearchPresentation};
 pub use session_view::SessionViewMode;
-
-/// Text and opaque attachment identifiers are the only composer data that
-/// crosses the session protocol. Platform/editor state stays in the app.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct SessionDraft {
-    pub text: String,
-    pub attachment_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Reply to a pending permission request.
-pub enum PermissionReply {
-    Allow,
-    AllowForSession,
-    Deny,
-    Cancel,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Reply to a pending user input request.
-pub enum UserInputReply {
-    Answers(Vec<String>),
-    Cancel,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Command sent to the session controller.
-pub enum SessionCommand {
-    CreateSession,
-    SubmitMessage { draft: SessionDraft },
-    Continue,
-    Compact,
-    Rewind { message_id: i64 },
-    Cancel,
-    ReplyPermission { reply: PermissionReply },
-    ReplyUserInput { reply: UserInputReply },
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// A page of session items.
@@ -117,50 +80,6 @@ pub enum SessionLiveEvent {
     RefreshRequested,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Effect produced by the session controller.
-pub enum SessionEffect {
-    LoadSessions {
-        cursor: Option<String>,
-    },
-    LoadMessages {
-        session_id: i64,
-        cursor: Option<String>,
-    },
-    RefreshSession {
-        session_id: i64,
-        sequence: Option<i64>,
-    },
-    SubmitMessage {
-        session_id: Option<i64>,
-        draft: SessionDraft,
-    },
-    Continue {
-        session_id: i64,
-    },
-    Compact {
-        session_id: i64,
-    },
-    Rewind {
-        session_id: i64,
-        message_id: i64,
-    },
-    Cancel {
-        session_id: i64,
-    },
-    ReplyPermission {
-        session_id: i64,
-        reply: PermissionReply,
-    },
-    ReplyUserInput {
-        session_id: i64,
-        reply: UserInputReply,
-    },
-    SubscribeSessionEvents {
-        session_id: i64,
-    },
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 /// Controller bridging the session view to the runtime.
 pub struct SessionController {
@@ -170,41 +89,6 @@ pub struct SessionController {
 }
 
 impl SessionController {
-    pub fn reduce(&self, command: SessionCommand) -> Option<SessionEffect> {
-        match command {
-            SessionCommand::CreateSession => Some(SessionEffect::SubmitMessage {
-                session_id: None,
-                draft: SessionDraft::default(),
-            }),
-            SessionCommand::SubmitMessage { draft } => Some(SessionEffect::SubmitMessage {
-                session_id: self.current_session_id,
-                draft,
-            }),
-            SessionCommand::Continue => self
-                .current_session_id
-                .map(|session_id| SessionEffect::Continue { session_id }),
-            SessionCommand::Compact => self
-                .current_session_id
-                .map(|session_id| SessionEffect::Compact { session_id }),
-            SessionCommand::Rewind { message_id } => {
-                self.current_session_id
-                    .map(|session_id| SessionEffect::Rewind {
-                        session_id,
-                        message_id,
-                    })
-            }
-            SessionCommand::Cancel => self
-                .current_session_id
-                .map(|session_id| SessionEffect::Cancel { session_id }),
-            SessionCommand::ReplyPermission { reply } => self
-                .current_session_id
-                .map(|session_id| SessionEffect::ReplyPermission { session_id, reply }),
-            SessionCommand::ReplyUserInput { reply } => self
-                .current_session_id
-                .map(|session_id| SessionEffect::ReplyUserInput { session_id, reply }),
-        }
-    }
-
     pub fn apply(&mut self, event: &SessionEvent) {
         match event {
             SessionEvent::SessionsLoaded(_) => {}
@@ -231,31 +115,7 @@ impl SessionController {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        SessionCommand, SessionController, SessionDraft, SessionEffect, SessionEvent,
-        SessionSummary,
-    };
-
-    #[test]
-    fn controller_keeps_transport_out_of_the_protocol() {
-        let controller = SessionController::default();
-        assert_eq!(controller.reduce(SessionCommand::Continue), None);
-        assert_eq!(
-            controller.reduce(SessionCommand::SubmitMessage {
-                draft: SessionDraft {
-                    text: "hello".into(),
-                    attachment_ids: vec![]
-                }
-            }),
-            Some(SessionEffect::SubmitMessage {
-                session_id: None,
-                draft: SessionDraft {
-                    text: "hello".into(),
-                    attachment_ids: vec![]
-                }
-            })
-        );
-    }
+    use super::{SessionController, SessionEvent, SessionSummary};
 
     #[test]
     fn creation_and_cancellation_update_protocol_state() {

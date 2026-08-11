@@ -1500,21 +1500,56 @@ pub(crate) fn render_part_node(
         TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
             match request.as_ref() {
                 RequestPartResource::UserInput { request, reply } => {
-                    render_user_input_request(request, reply.as_ref(), out, width, i18n);
+                    let key = TranscriptNodeKey::Activity {
+                        entry_id: message.id,
+                        content_id: part.id,
+                    };
+                    // Answered user-input requests render as a foldable
+                    // Activity, so the full "用户输入已答复" dump does not read
+                    // like AI reply prose. The interaction kind id is already
+                    // wired through `activity_kind_id_for_part`, so the per-kind
+                    // transcript expansion setting applies here too.
+                    let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
+                        defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_INTERACTION))
+                    });
+                    let title = if request.kind == "review" {
+                        "Plan review"
+                    } else {
+                        "User input"
+                    };
+                    let summary = request
+                        .questions
+                        .first()
+                        .map(|question| question.question.as_str())
+                        .filter(|text| !text.trim().is_empty())
+                        .unwrap_or(request.title.as_str());
+                    push_activity_headline(
+                        out,
+                        part.status,
+                        expanded,
+                        true,
+                        title,
+                        summary,
+                        width,
+                    );
+                    if expanded {
+                        render_user_input_request(request, reply.as_ref(), out, width, i18n);
+                    }
                     RenderedNodeDraft {
-                        key: TranscriptNodeKey::Activity {
-                            entry_id: message.id,
-                            content_id: part.id,
-                        },
+                        key,
                         kind: TranscriptNodeKind::Activity,
-                        copy_text: request
-                            .questions
-                            .iter()
-                            .map(|question| question.question.clone())
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                        toggleable: false,
-                        expanded: true,
+                        copy_text: if expanded {
+                            request
+                                .questions
+                                .iter()
+                                .map(|question| question.question.clone())
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        } else {
+                            String::new()
+                        },
+                        toggleable: true,
+                        expanded,
                         end_line: None,
                         children: Vec::new(),
                     }

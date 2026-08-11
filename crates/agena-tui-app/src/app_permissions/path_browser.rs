@@ -35,17 +35,17 @@ impl App {
             agena_tui::path_browser::PathBrowserEffect::Close => true,
             agena_tui::path_browser::PathBrowserEffect::KeepOpen => false,
             agena_tui::path_browser::PathBrowserEffect::Refresh => {
-                Self::refresh_path_browser_overlay_with_root(self.backend.workspace_root(), dialog);
+                Self::refresh_path_browser_overlay_with_root(self.application.workspace_root(), dialog);
                 false
             }
             agena_tui::path_browser::PathBrowserEffect::Parent => {
                 let (directory, _) = Self::path_browser_directory_and_needle_for_overlay(
-                    self.backend.workspace_root(),
+                    self.application.workspace_root(),
                     dialog,
                 );
                 if let Some(parent) = directory.parent() {
                     Self::navigate_path_browser_to_with_root(
-                        self.backend.workspace_root(),
+                        self.application.workspace_root(),
                         dialog,
                         parent.to_path_buf(),
                     );
@@ -58,7 +58,7 @@ impl App {
                 };
                 if path.is_dir() {
                     Self::navigate_path_browser_to_with_root(
-                        self.backend.workspace_root(),
+                        self.application.workspace_root(),
                         dialog,
                         path,
                     );
@@ -71,7 +71,7 @@ impl App {
                 };
                 if path_browser_enter_navigates(dialog.target, is_dir) {
                     Self::navigate_path_browser_to_with_root(
-                        self.backend.workspace_root(),
+                        self.application.workspace_root(),
                         dialog,
                         path,
                     );
@@ -82,13 +82,13 @@ impl App {
             }
             agena_tui::path_browser::PathBrowserEffect::SelectCustom { raw } => {
                 let path = Self::resolve_path_browser_input_with_root(
-                    self.backend.workspace_root(),
+                    self.application.workspace_root(),
                     dialog,
                     &raw,
                 );
                 if path_browser_enter_navigates(dialog.target, path.is_dir()) {
                     Self::navigate_path_browser_to_with_root(
-                        self.backend.workspace_root(),
+                        self.application.workspace_root(),
                         dialog,
                         path,
                     );
@@ -107,7 +107,7 @@ impl App {
     ) -> bool {
         match dialog.target {
             PathBrowserTarget::PermissionRuleStudio(field) => {
-                let workspace_root = self.backend.workspace_root();
+                let workspace_root = self.application.workspace_root();
                 let value = match field {
                     PermissionRuleStudioPathField::WorkspaceRoot => path.display().to_string(),
                     PermissionRuleStudioPathField::TargetPath => path

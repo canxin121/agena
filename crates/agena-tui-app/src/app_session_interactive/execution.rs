@@ -41,13 +41,13 @@ impl App {
             .map(|text| derive_session_title(&self.i18n, text.as_str()))
             .unwrap_or_else(|| ui_text::default_session_title(&self.i18n));
 
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .create_session(title, parent_id)
                 .await
-                .map_err(crate::UiFailure::from_backend);
+                .map_err(|error| crate::UiFailure::from_backend(anyhow::Error::new(error)));
             let _ = tx
                 .send(AppMessage::SessionCreated {
                     submit_draft,

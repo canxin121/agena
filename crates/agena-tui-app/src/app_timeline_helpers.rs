@@ -9,7 +9,7 @@ pub(crate) fn format_timestamp(timestamp: DateTime<Utc>) -> String {
 /// Build the terminal item from one ordered v2 session part.
 pub(crate) fn build_timeline_item(
     i18n: &I18n,
-    record: &agena_tui_backend::SessionTimelineEntry,
+    record: &crate::app_backend::SessionTimelineEntry,
 ) -> TimelineItem {
     let label = record
         .summary

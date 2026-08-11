@@ -250,11 +250,14 @@ impl App {
         session_id: i64,
         request_id: String,
     ) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         tokio::spawn(async move {
-            if let Err(error) = backend
-                .present_interactive_request(session_id, request_id)
-                .await
+            if let Err(error) = crate::app_backend::operations::present_interactive_request(
+                &application,
+                session_id,
+                request_id,
+            )
+            .await
             {
                 tracing::debug!(
                     target: "agena::tui::interactive",
@@ -432,7 +435,7 @@ impl App {
         initial: String,
         target: PathBrowserTarget,
     ) -> PathBrowserOverlay {
-        let workspace_root = self.backend.workspace_root();
+        let workspace_root = self.application.workspace_root();
         let initial_path = App::resolve_browser_input_path_with_root(workspace_root, &initial);
         let current_directory = if initial_path.is_dir() {
             initial_path

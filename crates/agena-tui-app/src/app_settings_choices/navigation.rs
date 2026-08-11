@@ -1,6 +1,6 @@
 impl App {
     pub(crate) fn open_runtime_config_in_editor(&mut self) {
-        let path = self.backend.config_path();
+        let path = crate::app_backend::config::config_path(&self.application);
         if !path.exists() {
             if let Some(parent) = path.parent()
                 && let Err(error) = fs::create_dir_all(parent)
@@ -104,8 +104,7 @@ impl App {
     }
 
     pub(crate) fn plugin_slash_commands(&self) -> Vec<agena_plugin_host::PluginCommandCatalogItem> {
-        self.backend
-            .plugin_slash_commands()
+        crate::app_backend::plugin_effects::plugin_slash_commands(&self.application)
             .into_iter()
             .filter(|entry| {
                 plugin_command_slash_name(entry)

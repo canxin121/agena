@@ -22,7 +22,6 @@ agena-provider = { workspace = true }
 agena-runtime = { workspace = true }
 agena-tui = { workspace = true }
 agena-tui-app = { workspace = true }
-agena-tui-backend = { workspace = true }
 agena-tui-platform = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }

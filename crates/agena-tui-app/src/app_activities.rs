@@ -37,12 +37,12 @@ impl App {
             active_only: true,
             ..Default::default()
         };
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let count = tokio::time::timeout(
                 super::Duration::from_secs(ACTIVITY_REQUEST_TIMEOUT_SECS),
-                backend.list_activities(filter),
+                crate::app_backend::activities::list_activities(&application, filter),
             )
             .await
             .ok()
@@ -103,12 +103,12 @@ impl App {
         state.error = None;
         state.last_refresh_at = super::Instant::now();
         let filter = agena_domain::BackgroundActivityFilter::default();
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = match tokio::time::timeout(
                 super::Duration::from_secs(ACTIVITY_REQUEST_TIMEOUT_SECS),
-                backend.list_activities(filter),
+                crate::app_backend::activities::list_activities(&application, filter),
             )
             .await
             {
@@ -147,12 +147,18 @@ impl App {
         state.log_loading = true;
         state.log_error = None;
         state.last_log_refresh_at = super::Instant::now();
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = match tokio::time::timeout(
                 super::Duration::from_secs(ACTIVITY_REQUEST_TIMEOUT_SECS),
-                backend.activity_logs(&activity_id, since_seq, Some(ACTIVITY_LOG_LIMIT as u32), 0),
+                crate::app_backend::activities::activity_logs(
+                    &application,
+                    &activity_id,
+                    since_seq,
+                    Some(ACTIVITY_LOG_LIMIT as u32),
+                    0,
+                ),
             )
             .await
             {
@@ -558,12 +564,12 @@ impl App {
                 self.next_usage_request_id = request_id;
                 state.mutation_request_id = request_id;
                 state.mutation_loading = true;
-                let backend = self.backend.clone();
+                let application = self.application.clone();
                 let tx = self.tx.clone();
                 tokio::spawn(async move {
                     let result = match tokio::time::timeout(
                         super::Duration::from_secs(ACTIVITY_REQUEST_TIMEOUT_SECS),
-                        backend.stop_activity(&activity_id),
+                        crate::app_backend::activities::stop_activity(&application, &activity_id),
                     )
                     .await
                     {
@@ -586,12 +592,12 @@ impl App {
                 self.next_usage_request_id = request_id;
                 state.mutation_request_id = request_id;
                 state.mutation_loading = true;
-                let backend = self.backend.clone();
+                let application = self.application.clone();
                 let tx = self.tx.clone();
                 tokio::spawn(async move {
                     let result = match tokio::time::timeout(
                         super::Duration::from_secs(ACTIVITY_REQUEST_TIMEOUT_SECS),
-                        backend.dismiss_activity(&activity_id),
+                        crate::app_backend::activities::dismiss_activity(&application, &activity_id),
                     )
                     .await
                     {
@@ -614,12 +620,12 @@ impl App {
                 self.next_usage_request_id = request_id;
                 state.mutation_request_id = request_id;
                 state.mutation_loading = true;
-                let backend = self.backend.clone();
+                let application = self.application.clone();
                 let tx = self.tx.clone();
                 tokio::spawn(async move {
                     let result = match tokio::time::timeout(
                         super::Duration::from_secs(ACTIVITY_REQUEST_TIMEOUT_SECS),
-                        backend.clear_finished_activities(),
+                        crate::app_backend::activities::clear_finished_activities(&application),
                     )
                     .await
                     {

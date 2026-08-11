@@ -25,19 +25,19 @@ impl App {
     }
 
     pub(crate) fn build_plugin_workbench(&self, query: &str) -> UiResult<PluginWorkbenchOverlay> {
-        let sources = self
-            .backend
-            .config_json_sources()
+        let sources = crate::app_backend::config::config_json_sources(&self.application)
             .map_err(crate::UiFailure::internal)?;
         let locale = self.i18n.locale_tag();
-        let statuses = self.backend.plugin_statuses();
+        let statuses = crate::app_backend::plugin_effects::plugin_statuses(&self.application);
         let mut plugins = statuses
             .into_iter()
             .map(|status| {
                 let plugin_id = status.plugin_id.clone();
-                let inspect = self.backend.plugin_inspect(&plugin_id.to_string());
-                let logs = self.backend.plugin_logs(
-                    &plugin_id.to_string(),
+                let inspect =
+                    crate::app_backend::plugin_effects::plugin_inspect(&self.application, &plugin_id);
+                let logs = crate::app_backend::plugin_effects::plugin_logs(
+                    &self.application,
+                    &plugin_id,
                     None,
                     PLUGIN_WORKBENCH_LOG_LIMIT,
                 );
@@ -409,15 +409,15 @@ impl App {
         let request_plugin_id = plugin_id.clone();
         let request_tool_name = tool_name.clone();
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend
-                    .invoke_plugin_workbench_tool(
-                        request_plugin_id.as_str(),
-                        request_tool_name.as_str(),
-                        value,
-                        Some(session_id),
-                    )
-                    .await
+            move |application| async move {
+                crate::app_backend::plugin_effects::invoke_plugin_workbench_tool(
+                    &application,
+                    request_plugin_id.as_str(),
+                    request_tool_name.as_str(),
+                    value,
+                    Some(session_id),
+                )
+                .await
             },
             move |app, result| {
                 let (output, succeeded) = match result {

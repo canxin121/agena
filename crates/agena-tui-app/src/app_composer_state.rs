@@ -21,7 +21,7 @@ impl App {
                 }
                 Overlay::PathBrowser(dialog) => {
                     Self::refresh_path_browser_overlay_with_root(
-                        self.backend.workspace_root(),
+                        self.application.workspace_root(),
                         dialog,
                     );
                 }
@@ -34,7 +34,7 @@ impl App {
         let Some(path) = normalize_pasted_path(pasted) else {
             return false;
         };
-        let resolved = self.backend.resolve_workspace_path(path.as_path());
+        let resolved = self.resolve_workspace_path(path.as_path());
         if !resolved.exists() || !resolved.is_file() {
             return false;
         }
@@ -69,7 +69,7 @@ impl App {
         path: &Path,
         images_only: bool,
     ) -> UiResult<agena_domain::ResourceActivity> {
-        let resolved = self.backend.resolve_workspace_path(path);
+        let resolved = self.resolve_workspace_path(path);
         let metadata = std::fs::metadata(&resolved).map_err(crate::UiFailure::internal)?;
         let is_directory = metadata.is_dir();
         if !is_directory && !metadata.is_file() {
@@ -92,7 +92,7 @@ impl App {
             )));
         }
         let relative = resolved
-            .strip_prefix(self.backend.workspace_root())
+            .strip_prefix(self.application.workspace_root())
             .map_err(|_| {
                 crate::UiFailure::message("The attachment must be inside the active workspace.")
             })?;
@@ -160,7 +160,7 @@ impl App {
         path: &Path,
         resource: agena_domain::ResourceActivity,
     ) -> UiResult<()> {
-        let resolved = self.backend.resolve_workspace_path(path);
+        let resolved = self.resolve_workspace_path(path);
         let metadata = std::fs::metadata(&resolved).map_err(crate::UiFailure::internal)?;
         let is_directory = metadata.is_dir();
         let label = attachment_chip_label(

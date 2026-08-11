@@ -95,8 +95,8 @@ impl App {
         let limit = dialog.limit;
         let session_id = dialog.session_id;
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend
+            move |application| async move {
+                application
                     .invoke_plugin_ui_tool(
                         "agena.skills",
                         "list",
@@ -171,8 +171,8 @@ impl App {
 
     fn request_skill_snapshot(&mut self, session_id: i64, name: String) {
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend
+            move |application| async move {
+                application
                     .invoke_plugin_ui_tool(
                         "agena.skills",
                         "get",

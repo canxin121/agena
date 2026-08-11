@@ -17,7 +17,6 @@ agena-plugin-sdk = { workspace = true }
 agena-provider = { workspace = true }
 agena-runtime = { workspace = true }
 agena-tui = { workspace = true }
-agena-tui-backend = { workspace = true }
 agena-tui-components = { workspace = true }
 agena-tui-media = { workspace = true }
 agena-tui-platform = { workspace = true }
@@ -32,6 +31,7 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 comrak = { workspace = true }
 crossterm = { workspace = true }
+ignore = { workspace = true }
 image = { workspace = true }
 indexmap = { workspace = true }
 ratatui = { workspace = true }

@@ -23,8 +23,8 @@ impl App {
                     Ok(Some(value)) => {
                         let path = field.path.clone();
                         self.dispatch_backend_operation(
-                            move |backend| async move {
-                                backend.set_config_setting(path.as_str(), value).await
+                            move |application| async move {
+                                application.set_config_setting(path.as_str(), value).await
                             },
                             move |app, result| match result {
                                 Ok(_) => {
@@ -42,8 +42,8 @@ impl App {
                     Ok(None) => {
                         let path = field.path.clone();
                         self.dispatch_backend_operation(
-                            move |backend| async move {
-                                backend.delete_config_setting(path.as_str()).await
+                            move |application| async move {
+                                application.delete_config_setting(path.as_str()).await
                             },
                             move |app, result| match result {
                                 Ok(_) => {
@@ -327,7 +327,7 @@ impl App {
         field: SettingsFieldSpec,
         _return_query: &str,
     ) {
-        let sources = match self.backend.config_json_sources() {
+        let sources = match crate::app_backend::config::config_json_sources(&self.application) {
             Ok(sources) => sources,
             Err(error) => {
                 self.flash_error(crate::UiFailure::internal(error));

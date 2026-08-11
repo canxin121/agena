@@ -8,7 +8,7 @@ impl App {
         }
         self.session_load.loading = true;
 
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         let scope = SessionLoadScope {
             mode: self.sessions.view_mode(),
@@ -29,14 +29,14 @@ impl App {
         tokio::spawn(async move {
             let (result, subtree_root_id) = match scope.mode {
                 SessionViewMode::All => (
-                    backend
+                    application
                         .list_workspace_sessions(false)
                         .await
                         .map_err(crate::UiFailure::internal),
                     None,
                 ),
                 SessionViewMode::Roots => (
-                    backend
+                    application
                         .list_workspace_sessions(true)
                         .await
                         .map_err(crate::UiFailure::internal),
@@ -46,7 +46,7 @@ impl App {
                     let anchor_session_id = scope
                         .anchor_session_id
                         .expect("subtree scope requires anchor");
-                    let result = backend
+                    let result = application
                         .list_session_subtree(anchor_session_id)
                         .await
                         .map_err(crate::UiFailure::internal);
@@ -70,10 +70,12 @@ impl App {
     }
 
     pub(crate) fn request_providers(&mut self, purpose: ProviderPickerPurpose) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = Ok(backend.list_configured_providers());
+            let result = Ok(crate::app_backend::operations::list_configured_providers(
+                &application,
+            ));
             let _ = tx
                 .send(AppMessage::ProvidersLoaded { purpose, result })
                 .await;
@@ -87,18 +89,18 @@ impl App {
         page_index: usize,
         cursor: Option<String>,
     ) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
-                .list_workspace_sessions_page(
-                    mode == SessionViewMode::Roots,
-                    (!query.trim().is_empty()).then_some(query.as_str()),
-                    cursor,
-                    50,
-                )
-                .await
-                .map_err(crate::UiFailure::internal);
+            let result = crate::app_backend::operations::list_workspace_sessions_page(
+                &application,
+                mode == SessionViewMode::Roots,
+                (!query.trim().is_empty()).then_some(query.as_str()),
+                cursor,
+                50,
+            )
+            .await
+            .map_err(crate::UiFailure::internal);
             let _ = tx
                 .send(AppMessage::SessionSearchPageLoaded {
                     mode,
@@ -111,10 +113,10 @@ impl App {
     }
 
     pub(crate) fn request_session_search_subtree(&mut self, session_id: i64, query: String) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .list_session_subtree(session_id)
                 .await
                 .map_err(crate::UiFailure::internal);
@@ -129,10 +131,10 @@ impl App {
     }
 
     pub(crate) fn request_lineage(&mut self, session_id: i64) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .list_session_subtree(session_id)
                 .await
                 .map_err(crate::UiFailure::internal);
@@ -143,11 +145,10 @@ impl App {
     }
 
     pub(crate) fn request_rewind_messages(&mut self, session_id: i64) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
-                .get_session_state(session_id)
+            let result = crate::app_backend::operations::get_session_state(&application, session_id)
                 .await
                 .map(|state| rewind_targets_from_parts(&state.parts))
                 .map_err(crate::UiFailure::from_backend);
@@ -158,10 +159,10 @@ impl App {
     }
 
     pub(crate) fn request_child_sessions(&mut self, parent_session_id: i64) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .list_child_sessions(parent_session_id)
                 .await
                 .map_err(crate::UiFailure::internal);
@@ -175,10 +176,10 @@ impl App {
     }
 
     pub(crate) fn request_session_rename(&mut self, session_id: i64, title: String) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .rename_session(session_id, title)
                 .await
                 .map_err(crate::UiFailure::internal);
@@ -189,13 +190,14 @@ impl App {
     }
 
     pub(crate) fn request_timeline(&mut self, session_id: i64, limit: u64) {
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
-                .list_session_timeline(session_id, limit)
-                .await
-                .map_err(crate::UiFailure::internal);
+            let result = crate::app_backend::timeline::list_session_timeline(
+                &application, session_id, limit,
+            )
+            .await
+            .map_err(crate::UiFailure::internal);
             let _ = tx
                 .send(AppMessage::TimelineLoaded { session_id, result })
                 .await;
@@ -213,13 +215,13 @@ impl App {
         self.persist_draft_store_with_feedback(true);
         self.begin_run_operation(RunActivityTarget::Session(session_id), RunOperation::Rewind);
 
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .rewind_session_to_turn(session_id, turn_id)
                 .await
-                .map_err(crate::UiFailure::from_backend);
+                .map_err(|error| crate::UiFailure::from_backend(anyhow::Error::new(error)));
             let _ = tx
                 .send(AppMessage::SessionRewound {
                     session_id,
@@ -238,11 +240,10 @@ impl App {
 
         self.transcript.state_loading = true;
         self.transcript.state_load_in_flight_since = Some(Instant::now());
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
-                .get_session_state(session_id)
+            let result = crate::app_backend::operations::get_session_state(&application, session_id)
                 .await
                 .map_err(crate::UiFailure::from_backend);
             let _ = tx
@@ -285,14 +286,18 @@ impl App {
         self.transcript.refresh_in_flight_since = Some(Instant::now());
         self.last_refresh_at = Instant::now();
 
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         let after_seq = self.transcript.last_event_seq;
         tokio::spawn(async move {
-            let result = backend
-                .refresh_session(session_id, after_seq, force)
-                .await
-                .map_err(crate::UiFailure::from_backend);
+            let result = crate::app_backend::session_refresh::refresh_session(
+                &application,
+                session_id,
+                after_seq,
+                force,
+            )
+            .await
+            .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionRefreshed { session_id, result })
                 .await;
@@ -359,14 +364,18 @@ impl App {
                 return;
             }
         };
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
         tokio::spawn(async move {
-            let result = backend
-                .submit_document_with_options(session_id, document, options)
-                .await
-                .map_err(crate::UiFailure::from_backend);
+            let result = crate::app_backend::operations::submit_document_with_options(
+                &application,
+                session_id,
+                document,
+                options,
+            )
+            .await
+            .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionMessageSubmitted {
                     session_id,
@@ -383,14 +392,17 @@ impl App {
             RunActivityTarget::Session(session_id),
             RunOperation::Continue,
         );
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
         tokio::spawn(async move {
-            let result = backend
-                .continue_session_with_options(session_id, options)
-                .await
-                .map_err(crate::UiFailure::from_backend);
+            let result = crate::app_backend::operations::continue_session_with_options(
+                &application,
+                session_id,
+                options,
+            )
+            .await
+            .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionContinued { session_id, result })
                 .await;
@@ -402,14 +414,17 @@ impl App {
             RunActivityTarget::Session(session_id),
             RunOperation::Compact,
         );
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
         tokio::spawn(async move {
-            let result = backend
-                .compact_session_with_options(session_id, options)
-                .await
-                .map_err(crate::UiFailure::from_backend);
+            let result = crate::app_backend::operations::compact_session_with_options(
+                &application,
+                session_id,
+                options,
+            )
+            .await
+            .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionCompacted { session_id, result })
                 .await;
@@ -439,13 +454,16 @@ impl App {
             // triggers a fresh load; transcript messages are stored separately.
             self.transcript.execution = None;
         }
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
-                .cancel_run(session_id, execution_id)
-                .await
-                .and_then(|result| match result {
+            let result = crate::app_backend::operations::cancel_run(
+                &application,
+                session_id,
+                execution_id,
+            )
+            .await
+            .and_then(|result| match result {
                     agena_domain::CancellationResult::CancellationRequested
                     | agena_domain::CancellationResult::AlreadyTerminal
                     | agena_domain::CancellationResult::NotFound => Ok(()),
@@ -472,16 +490,22 @@ impl App {
             RunActivityTarget::Session(session_id),
             RunOperation::PermissionReply,
         );
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
         let replied_request_id = request_id.clone();
         let replied_kind = kind;
         tokio::spawn(async move {
-            let result = backend
-                .reply_permission_with_options(session_id, request_id, kind, scope, options)
-                .await
-                .map_err(crate::UiFailure::from_backend);
+            let result = crate::app_backend::operations::reply_permission_with_options(
+                &application,
+                session_id,
+                request_id,
+                kind,
+                scope,
+                options,
+            )
+            .await
+            .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::PermissionReplied {
                     session_id,
@@ -499,15 +523,19 @@ impl App {
             RunActivityTarget::Session(session_id),
             RunOperation::UserInputReply,
         );
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
         let request_id = reply.request_id.clone();
         tokio::spawn(async move {
-            let result = backend
-                .reply_user_input_with_options(session_id, reply, options)
-                .await
-                .map_err(crate::UiFailure::from_backend);
+            let result = crate::app_backend::operations::reply_user_input_with_options(
+                &application,
+                session_id,
+                reply,
+                options,
+            )
+            .await
+            .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::UserInputReplied {
                     session_id,

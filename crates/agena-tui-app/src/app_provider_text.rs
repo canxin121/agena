@@ -40,95 +40,95 @@ pub(crate) fn provider_studio_no_auth_details_message(i18n: &I18n) -> String {
 
 pub(crate) fn provider_draft_auth_action_message(
     i18n: &I18n,
-    message: &agena_tui_backend::ProviderDraftAuthMessage,
+    message: &agena_application::provider_studio::ProviderDraftAuthMessage,
 ) -> String {
     match message {
-        agena_tui_backend::ProviderDraftAuthMessage::OpenaiBrowserStarted => {
+        agena_application::provider_studio::ProviderDraftAuthMessage::OpenaiBrowserStarted => {
             ui_text::t(i18n, "flash-provider-auth-openai-browser-started")
         }
-        agena_tui_backend::ProviderDraftAuthMessage::OpenaiDeviceStarted { user_code } => i18n
+        agena_application::provider_studio::ProviderDraftAuthMessage::OpenaiDeviceStarted { user_code } => i18n
             .text_args(
                 "flash-provider-auth-openai-device-started",
                 &agena_tui::fl_args!("code" => user_code.clone()),
             ),
-        agena_tui_backend::ProviderDraftAuthMessage::CopilotDeviceStarted { user_code } => i18n
+        agena_application::provider_studio::ProviderDraftAuthMessage::CopilotDeviceStarted { user_code } => i18n
             .text_args(
                 "flash-provider-auth-copilot-device-started",
                 &agena_tui::fl_args!("code" => user_code.clone()),
             ),
-        agena_tui_backend::ProviderDraftAuthMessage::GitlabBrowserStarted => {
+        agena_application::provider_studio::ProviderDraftAuthMessage::GitlabBrowserStarted => {
             ui_text::t(i18n, "flash-provider-auth-gitlab-browser-started")
         }
-        agena_tui_backend::ProviderDraftAuthMessage::OpenaiCredentialCaptured => {
+        agena_application::provider_studio::ProviderDraftAuthMessage::OpenaiCredentialCaptured => {
             ui_text::t(i18n, "flash-provider-auth-openai-captured")
         }
-        agena_tui_backend::ProviderDraftAuthMessage::OpenaiPending => {
+        agena_application::provider_studio::ProviderDraftAuthMessage::OpenaiPending => {
             ui_text::t(i18n, "flash-provider-auth-openai-pending")
         }
-        agena_tui_backend::ProviderDraftAuthMessage::CopilotPending => {
+        agena_application::provider_studio::ProviderDraftAuthMessage::CopilotPending => {
             ui_text::t(i18n, "flash-provider-auth-copilot-pending")
         }
-        agena_tui_backend::ProviderDraftAuthMessage::CopilotCredentialCaptured => {
+        agena_application::provider_studio::ProviderDraftAuthMessage::CopilotCredentialCaptured => {
             ui_text::t(i18n, "flash-provider-auth-copilot-captured")
         }
-        agena_tui_backend::ProviderDraftAuthMessage::GitlabCredentialCaptured => {
+        agena_application::provider_studio::ProviderDraftAuthMessage::GitlabCredentialCaptured => {
             ui_text::t(i18n, "flash-provider-auth-gitlab-captured")
         }
     }
 }
 
 pub(crate) fn provider_draft_auth_message_is_pending(
-    message: &agena_tui_backend::ProviderDraftAuthMessage,
+    message: &agena_application::provider_studio::ProviderDraftAuthMessage,
 ) -> bool {
     matches!(
         message,
-        agena_tui_backend::ProviderDraftAuthMessage::OpenaiPending
-            | agena_tui_backend::ProviderDraftAuthMessage::CopilotPending
+        agena_application::provider_studio::ProviderDraftAuthMessage::OpenaiPending
+            | agena_application::provider_studio::ProviderDraftAuthMessage::CopilotPending
     )
 }
 
 pub(crate) fn provider_draft_auth_error_message(
     i18n: &I18n,
-    error: &agena_tui_backend::ProviderDraftAuthError,
+    error: &agena_application::provider_studio::ProviderDraftAuthError,
 ) -> String {
     match error {
-        agena_tui_backend::ProviderDraftAuthError::UnsupportedInteractiveLogin => {
+        agena_application::provider_studio::ProviderDraftAuthError::UnsupportedInteractiveLogin => {
             ui_text::t(i18n, "flash-provider-auth-error-unsupported")
         }
-        agena_tui_backend::ProviderDraftAuthError::StartBrowserAuthFirst => {
+        agena_application::provider_studio::ProviderDraftAuthError::StartBrowserAuthFirst => {
             ui_text::t(i18n, "flash-provider-auth-error-start-browser-first")
         }
-        agena_tui_backend::ProviderDraftAuthError::StartDeviceAuthFirst => {
+        agena_application::provider_studio::ProviderDraftAuthError::StartDeviceAuthFirst => {
             ui_text::t(i18n, "flash-provider-auth-error-start-device-first")
         }
-        agena_tui_backend::ProviderDraftAuthError::RequiredField(field) => i18n.text_args(
+        agena_application::provider_studio::ProviderDraftAuthError::RequiredField(field) => i18n.text_args(
             "flash-provider-auth-error-required-field",
             &agena_tui::fl_args!("field" => provider_draft_auth_field_label(i18n, field)),
         ),
-        agena_tui_backend::ProviderDraftAuthError::Other(problem) => problem.user.fallback.clone(),
+        agena_application::provider_studio::ProviderDraftAuthError::Other(problem) => problem.user.fallback.clone(),
     }
 }
 
 pub(crate) fn provider_draft_auth_field_label(
     i18n: &I18n,
-    field: &agena_tui_backend::ProviderDraftAuthField,
+    field: &agena_application::provider_studio::ProviderDraftAuthField,
 ) -> String {
     ui_text::t(
         i18n,
         match field {
-            agena_tui_backend::ProviderDraftAuthField::RedirectUri => "provider-field-redirect-uri",
-            agena_tui_backend::ProviderDraftAuthField::InstanceUrl => "provider-field-instance-url",
-            agena_tui_backend::ProviderDraftAuthField::CallbackUrl => "provider-field-callback-url",
+            agena_application::provider_studio::ProviderDraftAuthField::RedirectUri => "provider-field-redirect-uri",
+            agena_application::provider_studio::ProviderDraftAuthField::InstanceUrl => "provider-field-instance-url",
+            agena_application::provider_studio::ProviderDraftAuthField::CallbackUrl => "provider-field-callback-url",
         },
     )
 }
 
 pub(crate) fn provider_studio_save_result_message(
     i18n: &I18n,
-    result: &agena_tui_backend::ProviderStudioSaveResult,
+    result: &agena_application::provider_studio::ProviderStudioSaveResult,
 ) -> String {
     match result {
-        agena_tui_backend::ProviderStudioSaveResult::ProviderDraftSaved {
+        agena_application::provider_studio::ProviderStudioSaveResult::ProviderDraftSaved {
             provider_id,
             default_adapter,
             ..
@@ -139,7 +139,7 @@ pub(crate) fn provider_studio_save_result_message(
                 "adapter" => default_adapter.clone(),
             ),
         ),
-        agena_tui_backend::ProviderStudioSaveResult::AdapterMatchesSaved {
+        agena_application::provider_studio::ProviderStudioSaveResult::AdapterMatchesSaved {
             provider_id,
             adapter_id,
             listed_model_count,
@@ -153,7 +153,7 @@ pub(crate) fn provider_studio_save_result_message(
                 "matched" => *matched_model_count as i64,
             ),
         ),
-        agena_tui_backend::ProviderStudioSaveResult::ConfiguredModelSaved {
+        agena_application::provider_studio::ProviderStudioSaveResult::ConfiguredModelSaved {
             provider_id,
             adapter_id,
             model_id,
@@ -165,12 +165,12 @@ pub(crate) fn provider_studio_save_result_message(
                 "model" => model_id.clone(),
             ),
         ),
-        agena_tui_backend::ProviderStudioSaveResult::ProviderDeleted { provider_id } => i18n
+        agena_application::provider_studio::ProviderStudioSaveResult::ProviderDeleted { provider_id } => i18n
             .text_args(
                 "flash-provider-delete-provider",
                 &agena_tui::fl_args!("provider" => provider_id.clone()),
             ),
-        agena_tui_backend::ProviderStudioSaveResult::AdapterDeleted {
+        agena_application::provider_studio::ProviderStudioSaveResult::AdapterDeleted {
             provider_id,
             adapter_id,
             removed_model_count,
@@ -182,7 +182,7 @@ pub(crate) fn provider_studio_save_result_message(
                 "count" => *removed_model_count as i64,
             ),
         ),
-        agena_tui_backend::ProviderStudioSaveResult::ModelDeleted {
+        agena_application::provider_studio::ProviderStudioSaveResult::ModelDeleted {
             provider_id,
             adapter_id,
             model_id,
@@ -199,30 +199,30 @@ pub(crate) fn provider_studio_save_result_message(
 
 pub(crate) fn provider_studio_save_error_message(
     i18n: &I18n,
-    error: &agena_tui_backend::ProviderStudioSaveError,
+    error: &agena_application::provider_studio::ProviderStudioSaveError,
 ) -> String {
     match error {
-        agena_tui_backend::ProviderStudioSaveError::Validation(error) => {
+        agena_application::provider_studio::ProviderStudioSaveError::Validation(error) => {
             provider_studio_save_validation_error_message(i18n, error)
         }
-        agena_tui_backend::ProviderStudioSaveError::ExistingProviderSettingsMustBeObject => {
+        agena_application::provider_studio::ProviderStudioSaveError::ExistingProviderSettingsMustBeObject => {
             ui_text::t(i18n, "flash-provider-save-error-settings-object")
         }
-        agena_tui_backend::ProviderStudioSaveError::ProviderAdapterMustBeObject { adapter_id } => i18n
+        agena_application::provider_studio::ProviderStudioSaveError::ProviderAdapterMustBeObject { adapter_id } => i18n
             .text_args(
                 "flash-provider-save-error-adapter-object",
                 &agena_tui::fl_args!("adapter" => adapter_id.clone()),
             ),
-        agena_tui_backend::ProviderStudioSaveError::ProviderModelConfigMustBeObject => {
+        agena_application::provider_studio::ProviderStudioSaveError::ProviderModelConfigMustBeObject => {
             ui_text::t(i18n, "flash-provider-save-error-model-object")
         }
-        agena_tui_backend::ProviderStudioSaveError::ConfiguredProviderAdapterSettingsMustBeObject => {
+        agena_application::provider_studio::ProviderStudioSaveError::ConfiguredProviderAdapterSettingsMustBeObject => {
             ui_text::t(i18n, "flash-provider-save-error-configured-adapter-object")
         }
-        agena_tui_backend::ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject => {
+        agena_application::provider_studio::ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject => {
             ui_text::t(i18n, "flash-provider-save-error-configured-models-object")
         }
-        agena_tui_backend::ProviderStudioSaveError::Other(problem) => {
+        agena_application::provider_studio::ProviderStudioSaveError::Other(problem) => {
             problem.user.fallback.clone()
         }
     }
@@ -230,15 +230,15 @@ pub(crate) fn provider_studio_save_error_message(
 
 pub(crate) fn provider_studio_save_validation_error_message(
     i18n: &I18n,
-    error: &agena_tui_backend::ProviderStudioSaveValidationError,
+    error: &agena_application::provider_studio::ProviderStudioSaveValidationError,
 ) -> String {
     match error {
-        agena_tui_backend::ProviderStudioSaveValidationError::FieldRequired(field) => i18n
+        agena_application::provider_studio::ProviderStudioSaveValidationError::FieldRequired(field) => i18n
             .text_args(
                 "flash-provider-save-error-required-field",
                 &agena_tui::fl_args!("field" => provider_studio_save_field_label(i18n, field)),
             ),
-        agena_tui_backend::ProviderStudioSaveValidationError::UnsupportedDefaultAdapter {
+        agena_application::provider_studio::ProviderStudioSaveValidationError::UnsupportedDefaultAdapter {
             auth_kind,
             adapter,
             supported,
@@ -250,7 +250,7 @@ pub(crate) fn provider_studio_save_validation_error_message(
                 "supported" => supported.clone(),
             ),
         ),
-        agena_tui_backend::ProviderStudioSaveValidationError::UnsupportedAdapters {
+        agena_application::provider_studio::ProviderStudioSaveValidationError::UnsupportedAdapters {
             auth_kind,
             adapters,
             supported,
@@ -262,13 +262,13 @@ pub(crate) fn provider_studio_save_validation_error_message(
                 "supported" => supported.clone(),
             ),
         ),
-        agena_tui_backend::ProviderStudioSaveValidationError::ApiBaseUrlRequired => {
+        agena_application::provider_studio::ProviderStudioSaveValidationError::ApiBaseUrlRequired => {
             ui_text::t(i18n, "flash-provider-save-error-api-base-url")
         }
-        agena_tui_backend::ProviderStudioSaveValidationError::GitlabApiKeyOrEnvRequired => {
+        agena_application::provider_studio::ProviderStudioSaveValidationError::GitlabApiKeyOrEnvRequired => {
             ui_text::t(i18n, "flash-provider-save-error-gitlab-token")
         }
-        agena_tui_backend::ProviderStudioSaveValidationError::CredentialBaseUrlRequired {
+        agena_application::provider_studio::ProviderStudioSaveValidationError::CredentialBaseUrlRequired {
             issuer,
         } => i18n.text_args(
             "flash-provider-save-error-credential-base-url",
@@ -276,7 +276,7 @@ pub(crate) fn provider_studio_save_validation_error_message(
                 "issuer" => provider_credential_issuer_label_localized(i18n, *issuer),
             ),
         ),
-        agena_tui_backend::ProviderStudioSaveValidationError::CredentialServiceKeyEnvRequired {
+        agena_application::provider_studio::ProviderStudioSaveValidationError::CredentialServiceKeyEnvRequired {
             issuer,
         } => i18n.text_args(
             "flash-provider-save-error-credential-service-key-env",
@@ -284,7 +284,7 @@ pub(crate) fn provider_studio_save_validation_error_message(
                 "issuer" => provider_credential_issuer_label_localized(i18n, *issuer),
             ),
         ),
-        agena_tui_backend::ProviderStudioSaveValidationError::BedrockKeyPairRequired => {
+        agena_application::provider_studio::ProviderStudioSaveValidationError::BedrockKeyPairRequired => {
             ui_text::t(i18n, "flash-provider-save-error-bedrock-key-pair")
         }
     }
@@ -292,22 +292,22 @@ pub(crate) fn provider_studio_save_validation_error_message(
 
 pub(crate) fn provider_studio_save_field_label(
     i18n: &I18n,
-    field: &agena_tui_backend::ProviderStudioSaveField,
+    field: &agena_application::provider_studio::ProviderStudioSaveField,
 ) -> String {
     ui_text::t(
         i18n,
         match field {
-            agena_tui_backend::ProviderStudioSaveField::ProviderId => "provider-field-provider-id",
-            agena_tui_backend::ProviderStudioSaveField::DefaultAdapter => {
+            agena_application::provider_studio::ProviderStudioSaveField::ProviderId => "provider-field-provider-id",
+            agena_application::provider_studio::ProviderStudioSaveField::DefaultAdapter => {
                 "provider-field-default-adapter"
             }
-            agena_tui_backend::ProviderStudioSaveField::AdapterId => "provider-field-adapter-id",
-            agena_tui_backend::ProviderStudioSaveField::ModelId => "provider-field-model-id",
-            agena_tui_backend::ProviderStudioSaveField::AuthMode => "provider-field-auth-mode",
-            agena_tui_backend::ProviderStudioSaveField::AuthSubtype => {
+            agena_application::provider_studio::ProviderStudioSaveField::AdapterId => "provider-field-adapter-id",
+            agena_application::provider_studio::ProviderStudioSaveField::ModelId => "provider-field-model-id",
+            agena_application::provider_studio::ProviderStudioSaveField::AuthMode => "provider-field-auth-mode",
+            agena_application::provider_studio::ProviderStudioSaveField::AuthSubtype => {
                 "provider-field-auth-subtype"
             }
-            agena_tui_backend::ProviderStudioSaveField::CredentialIssuer => {
+            agena_application::provider_studio::ProviderStudioSaveField::CredentialIssuer => {
                 "provider-field-auth-subtype"
             }
         },

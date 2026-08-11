@@ -519,7 +519,9 @@ impl App {
         {
             parts.push(status_line.trim().to_string());
         }
-        for contribution in self.backend.plugin_display_contributions() {
+        for contribution in
+            crate::app_backend::plugin_effects::plugin_display_contributions(&self.application)
+        {
             // Only text-bearing display contributions (status line text and
             // footer blocks) are user-facing footer content. Progress belongs
             // to the composer chip; terminal activity/notify are internal
@@ -700,8 +702,7 @@ impl App {
     pub(crate) fn composer_plan_progress_part(&self) -> Option<String> {
         let session_id = self.transcript.session_id?;
         let expected_id = format!("plan:{session_id}");
-        self.backend
-            .plugin_display_contributions()
+        crate::app_backend::plugin_effects::plugin_display_contributions(&self.application)
             .into_iter()
             .find(|contribution| {
                 contribution.contribution.id == expected_id

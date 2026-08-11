@@ -127,7 +127,12 @@ impl App {
             // rebuilds this interface in place so the user stays here.
             agena_tui_settings::SettingsStudioEffect::Refresh => {
                 self.dispatch_backend_operation(
-                    |backend| async move { backend.refresh_provider_client_versions().await },
+                    |application| async move {
+                        crate::app_backend::operations::refresh_provider_client_versions(
+                            &application,
+                        )
+                        .await
+                    },
                     |app, result| {
                         match result {
                             Ok(versions) => app.flash_success(app.i18n.text_args(

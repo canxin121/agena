@@ -29,8 +29,8 @@ impl App {
         );
         let plugin_id = plugin.plugin_id.clone();
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend
+            move |application| async move {
+                application
                     .set_config_setting(path.as_str(), configured_plugin_value)
                     .await
             },

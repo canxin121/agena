@@ -199,8 +199,8 @@ impl App {
         self.session_selection_revision = self.session_selection_revision.wrapping_add(1);
         let revision = self.session_selection_revision;
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend.update_session_selection(session_id, options).await
+            move |application| async move {
+                application.update_session_selection(session_id, options).await
             },
             move |app, result| match result {
                 Ok(execution) => {
@@ -401,7 +401,7 @@ impl App {
             .filter(|path| !path.is_empty());
         let path = effective
             .map(str::to_owned)
-            .unwrap_or_else(|| self.backend.workspace_root().display().to_string());
+            .unwrap_or_else(|| self.application.workspace_root().display().to_string());
         if path.trim().is_empty() {
             return None;
         }

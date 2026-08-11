@@ -1,6 +1,6 @@
 impl App {
     pub(crate) fn current_provider_default_model_ref(&self) -> Option<ModelRef> {
-        let sources = self.backend.config_json_sources().ok()?;
+        let sources = crate::app_backend::config::config_json_sources(&self.application).ok()?;
         if let Some(selection) =
             get_json_path(&sources.effective, Some("providers.default_selection"))
                 .ok()
@@ -18,10 +18,10 @@ impl App {
         let provider_id = get_json_path(&sources.effective, Some("providers.default"))
             .ok()
             .and_then(|value| value.as_str().map(str::to_owned))?;
-        let provider = self
-            .backend
-            .list_configured_providers()
-            .into_iter()
+        let provider = crate::app_backend::operations::list_configured_providers(
+            &self.application,
+        )
+        .into_iter()
             .find(|provider| provider.provider_id == provider_id)?;
         let model_id = provider.defaults.model.trim();
         if model_id.is_empty() {
@@ -59,8 +59,8 @@ impl App {
             agena_tui::model_chooser::SessionModelChooserPurpose::ProviderDefault => {
                 let provider_id = model.provider_id.to_string();
                 self.dispatch_backend_operation(
-                    move |backend| async move {
-                        backend
+                    move |application| async move {
+                        application
                             .set_provider_default_selection(provider_id.as_str(), selection)
                             .await
                     },
@@ -90,8 +90,8 @@ impl App {
                 insert_optional_selection_value(&mut approval, "speed_mode", speed_mode);
                 insert_optional_selection_value(&mut approval, "verbosity", verbosity);
                 self.dispatch_backend_operation(
-                    move |backend| async move {
-                        backend
+                    move |application| async move {
+                        application
                             .set_config_setting(
                                 "permission.approval_model",
                                 JsonValue::Object(approval),
@@ -146,7 +146,7 @@ impl App {
     }
 
     pub(crate) fn current_permission_approval_model_ref(&self) -> Option<ModelRef> {
-        let sources = self.backend.config_json_sources().ok()?;
+        let sources = crate::app_backend::config::config_json_sources(&self.application).ok()?;
         let permission = get_json_path(&sources.effective, Some("permission")).ok()?;
         let permission = serde_json::from_value::<PermissionConfig>(permission).ok()?;
         permission.approval_model?.model_ref().ok()

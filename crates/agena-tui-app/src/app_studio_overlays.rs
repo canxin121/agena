@@ -47,10 +47,12 @@ impl App {
             _ => return,
         };
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend
-                    .get_session_permission_studio_state(session_id)
-                    .await
+            move |application| async move {
+                crate::app_backend::permission_studio::get_session_permission_studio_state(
+                    &application,
+                    session_id,
+                )
+                .await
             },
             move |app, result| match result {
                 Ok(state) => {
@@ -74,7 +76,7 @@ impl App {
     fn cached_session_permission_studio_state(
         &self,
         session_id: i64,
-    ) -> UiResult<&agena_tui_backend::SessionPermissionStudioState> {
+    ) -> UiResult<&crate::app_backend::SessionPermissionStudioState> {
         self.settings_session_permission
             .as_ref()
             .filter(|(cached_session_id, _)| *cached_session_id == session_id)
@@ -92,9 +94,7 @@ impl App {
     ) -> UiResult<PermissionStudioOverlay> {
         let (title_context, source_label, scope_label, editable, permission) = match &source {
             PermissionStudioSource::GlobalConfig => {
-                let sources = self
-                    .backend
-                    .config_json_sources()
+                let sources = crate::app_backend::config::config_json_sources(&self.application)
                     .map_err(crate::UiFailure::internal)?;
                 let permission = permission_config_from_json_value(
                     &get_json_path(&sources.file, Some("permission")).unwrap_or(JsonValue::Null),
@@ -108,9 +108,7 @@ impl App {
                 )
             }
             PermissionStudioSource::WorkspaceConfig => {
-                let sources = self
-                    .backend
-                    .config_json_sources()
+                let sources = crate::app_backend::config::config_json_sources(&self.application)
                     .map_err(crate::UiFailure::internal)?;
                 let permission = permission_config_from_json_value(
                     &get_json_path(&sources.project_file, Some("permission"))
@@ -223,30 +221,35 @@ impl App {
             .transpose()?;
         let cleared = permission_value.is_none();
         self.dispatch_backend_operation(
-            move |backend| async move {
+            move |application| async move {
                 match source {
                     PermissionStudioSource::GlobalConfig => match permission_value {
                         Some(value) => {
-                            backend.set_config_setting("permission", value).await?;
+                            application.set_config_setting("permission", value).await?;
                         }
                         None => {
-                            backend.delete_config_setting("permission").await?;
+                            application.delete_config_setting("permission").await?;
                         }
                     },
                     PermissionStudioSource::WorkspaceConfig => match permission_value {
                         Some(value) => {
-                            backend
-                                .set_workspace_config_setting("permission", value)
-                                .await?;
+                            crate::app_backend::operations::set_workspace_config_setting(
+                                &application,
+                                "permission",
+                                value,
+                            )
+                            .await?;
                         }
                         None => {
-                            backend
-                                .delete_workspace_config_setting("permission")
-                                .await?;
+                            crate::app_backend::operations::delete_workspace_config_setting(
+                                &application,
+                                "permission",
+                            )
+                            .await?;
                         }
                     },
                     PermissionStudioSource::Session { session_id } => {
-                        let execution = backend
+                        let execution = application
                             .set_session_permission(session_id, permission)
                             .await?;
                         return Ok::<_, anyhow::Error>(Some(execution));
@@ -289,10 +292,12 @@ impl App {
 
     fn refresh_session_permission_studio_state(&mut self, session_id: i64) {
         self.dispatch_backend_operation(
-            move |backend| async move {
-                backend
-                    .get_session_permission_studio_state(session_id)
-                    .await
+            move |application| async move {
+                crate::app_backend::permission_studio::get_session_permission_studio_state(
+                    &application,
+                    session_id,
+                )
+                .await
             },
             move |app, result| match result {
                 Ok(state) => {

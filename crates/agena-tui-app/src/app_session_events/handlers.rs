@@ -481,8 +481,8 @@ impl App {
         &mut self,
         request_key: String,
         result: std::result::Result<
-            agena_tui_backend::ProviderDraftAuthActionResult,
-            agena_tui_backend::ProviderDraftAuthError,
+            agena_application::provider_studio::ProviderDraftAuthActionResult,
+            agena_application::provider_studio::ProviderDraftAuthError,
         >,
     ) {
         let Some((host, mut dialog)) = self.take_provider_studio_dialog() else {
@@ -541,8 +541,8 @@ impl App {
         &mut self,
         provider_id: String,
         result: std::result::Result<
-            agena_tui_backend::ProviderStudioSaveResult,
-            agena_tui_backend::ProviderStudioSaveError,
+            agena_application::provider_studio::ProviderStudioSaveResult,
+            agena_application::provider_studio::ProviderStudioSaveError,
         >,
     ) {
         let Some((host, mut dialog)) = self.take_provider_studio_dialog() else {
@@ -565,7 +565,7 @@ impl App {
                 let mut preserved_selected_adapter_ids = preserved_selected_adapter_ids;
                 let mut preserved_selected_adapter_id = preserved_selected_adapter_id;
                 match &message {
-                    agena_tui_backend::ProviderStudioSaveResult::ModelDeleted {
+                    agena_application::provider_studio::ProviderStudioSaveResult::ModelDeleted {
                         adapter_id,
                         model_id,
                         ..
@@ -573,7 +573,7 @@ impl App {
                         preserved_selected_model_keys
                             .remove(provider_studio_model_key(adapter_id, model_id).as_str());
                     }
-                    agena_tui_backend::ProviderStudioSaveResult::AdapterDeleted {
+                    agena_application::provider_studio::ProviderStudioSaveResult::AdapterDeleted {
                         adapter_id,
                         ..
                     } => {
@@ -585,22 +585,24 @@ impl App {
                         preserved_selected_model_keys
                             .retain(|key| !key.starts_with(prefix.as_str()));
                     }
-                    agena_tui_backend::ProviderStudioSaveResult::ProviderDeleted { .. } => {}
-                    agena_tui_backend::ProviderStudioSaveResult::ProviderDraftSaved { .. }
-                    | agena_tui_backend::ProviderStudioSaveResult::AdapterMatchesSaved { .. }
-                    | agena_tui_backend::ProviderStudioSaveResult::ConfiguredModelSaved {
+                    agena_application::provider_studio::ProviderStudioSaveResult::ProviderDeleted { .. } => {}
+                    agena_application::provider_studio::ProviderStudioSaveResult::ProviderDraftSaved { .. }
+                    | agena_application::provider_studio::ProviderStudioSaveResult::AdapterMatchesSaved { .. }
+                    | agena_application::provider_studio::ProviderStudioSaveResult::ConfiguredModelSaved {
                         ..
                     } => {}
                 }
                 self.flash_success(provider_studio_save_result_message(&self.i18n, &message));
                 if matches!(
                     &message,
-                    agena_tui_backend::ProviderStudioSaveResult::ProviderDeleted { .. }
+                    agena_application::provider_studio::ProviderStudioSaveResult::ProviderDeleted { .. }
                 ) {
                     self.restore_provider_list_after_provider_delete();
                     return;
                 }
-                let providers = self.backend.list_configured_providers();
+                let providers = crate::app_backend::operations::list_configured_providers(
+                    &self.application,
+                );
                 let provider_rows = provider_studio_provider_rows(&self.i18n, providers.as_slice());
                 let selected_provider = provider_rows
                     .iter()
@@ -615,10 +617,10 @@ impl App {
                 );
                 dialog.selected_model_keys = preserved_selected_model_keys;
                 match &message {
-                    agena_tui_backend::ProviderStudioSaveResult::AdapterDeleted { .. } => {
+                    agena_application::provider_studio::ProviderStudioSaveResult::AdapterDeleted { .. } => {
                         dialog.selection.set_focus(ProviderStudioFocus::Adapters);
                     }
-                    agena_tui_backend::ProviderStudioSaveResult::ModelDeleted { .. } => {
+                    agena_application::provider_studio::ProviderStudioSaveResult::ModelDeleted { .. } => {
                         dialog.selection.set_focus(ProviderStudioFocus::Models);
                     }
                     _ => {}
@@ -741,7 +743,7 @@ impl App {
     pub(crate) fn handle_timeline_loaded(
         &mut self,
         session_id: i64,
-        result: UiResult<Vec<agena_tui_backend::SessionTimelineEntry>>,
+        result: UiResult<Vec<crate::app_backend::SessionTimelineEntry>>,
     ) {
         let Some((host, mut dialog)) = self.take_timeline_dialog() else {
             return;

@@ -42,10 +42,10 @@ impl App {
         let summary = self.plan_viewer_summary(session_id);
         let request_id = self.next_usage_request_id.saturating_add(1);
         self.next_usage_request_id = request_id;
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .invoke_plugin_ui_tool(
                     "agena.plan",
                     "get",
@@ -178,10 +178,10 @@ impl App {
         let target = !current;
         let request_id = self.next_usage_request_id.saturating_add(1);
         self.next_usage_request_id = request_id;
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend
+            let result = application
                 .invoke_plugin_ui_tool(
                     "agena.plan",
                     "update",
@@ -202,8 +202,7 @@ impl App {
     /// `session_id` (for example `▶ 2/5 ↻`).
     fn plan_viewer_summary(&self, session_id: i64) -> Option<String> {
         let expected_id = format!("plan:{session_id}");
-        self.backend
-            .plugin_display_contributions()
+        crate::app_backend::plugin_effects::plugin_display_contributions(&self.application)
             .into_iter()
             .find(|contribution| {
                 contribution.contribution.id == expected_id
@@ -261,10 +260,12 @@ impl App {
             requested_at: Instant::now(),
             result: None,
         });
-        let backend = self.backend.clone();
+        let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = backend.refresh_plan_display(session_id).await;
+            let result =
+                crate::app_backend::plugin_effects::refresh_plan_display(&application, session_id)
+                    .await;
             let _ = tx
                 .send(AppMessage::PlanDisplayRefreshed {
                     session_id,

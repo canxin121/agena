@@ -280,7 +280,6 @@ impl App {
                 {
                     self.pending_ui_action = Some(UiAction::OpenPath {
                         path: self
-                            .backend
                             .resolve_workspace_path(std::path::Path::new(path)),
                     });
                 } else {
@@ -497,12 +496,15 @@ impl App {
     ) {
         let mut items = Vec::new();
         let mut actions = BTreeMap::new();
-        for (index, path) in self
-            .backend
-            .search_workspace_files(query, MAX_FILE_MENTION_SUGGESTIONS)
-            .unwrap_or_default()
-            .into_iter()
-            .enumerate()
+        for (index, path) in crate::app_backend::file_index::search_workspace_files(
+            &self.application,
+            &self.file_index,
+            query,
+            MAX_FILE_MENTION_SUGGESTIONS,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
         {
             let key = format!("path:{index}");
             let label = path

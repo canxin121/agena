@@ -7,7 +7,7 @@ use super::{
     CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelCapabilities, ModelId,
     ModelRuntime, ModelThinkingMode, OpenAiChatCompletionsAdapter, OpenAiInputContent,
     OpenAiInputMessage, OpenAiModelListResponse, OpenAiProfile, OpenAiRealtimeAdapter,
-    OpenAiResponsesAdapter, OpenAiResponsesBackend, OpenAiResponsesCompactRequest,
+    OpenAiResponsesAdapter, OpenAiResponsesBackend,
     OpenAiResponsesCompactResponse, OpenAiResponsesInputItem, OpenAiResponsesRequest,
     OpenAiResponsesResponse, OpenAiTransport, OpenAiUsage, ProviderError, ProviderId,
     ProviderImageCapabilities, ProviderImageOperation, ProviderImageRequest, ProviderImageResponse,
@@ -306,15 +306,15 @@ impl ModelRuntime for OpenAiResponsesAdapter {
             // This is the key direct-execution invariant: the adapter forces
             // the only declared hosted tool in this request and returns its
             // terminal artifact from the same API call.
-            tool_choice: "required".to_owned(),
+            tool_choice: Some("required".to_owned()),
             parallel_tool_calls: false,
             include: None,
             max_output_tokens: None,
             temperature: None,
             prompt_cache_key: None,
             previous_response_id: None,
-            store: false,
-            stream: false,
+            store: Some(false),
+            stream: Some(false),
             top_p: None,
             reasoning: None,
             service_tier: None,
@@ -423,7 +423,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
             instructions: OpenAiTransport::responses_instructions(&request),
             input,
             tools: tool_plan.tools,
-            tool_choice: "auto".to_owned(),
+            tool_choice: Some("auto".to_owned()),
             parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
             include: OpenAiTransport::responses_include(
                 tool_plan.include,
@@ -438,8 +438,8 @@ impl ModelRuntime for OpenAiResponsesAdapter {
             previous_response_id: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
                 .then(|| request.previous_response_id.clone())
                 .flatten(),
-            store: false,
-            stream: false,
+            store: Some(false),
+            stream: Some(false),
             top_p: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
                 .then_some(request.top_p)
                 .flatten(),
@@ -530,17 +530,25 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         input_request.previous_response_id = None;
         let input = self.responses_input_for_request(&input_request)?;
         let tool_plan = self.responses_tool_plan_for_request(&request)?;
-        let body = OpenAiResponsesCompactRequest {
+        let body = OpenAiResponsesRequest {
             model: model.to_string(),
             instructions: OpenAiTransport::responses_instructions(&request),
             input,
             tools: tool_plan.tools,
-            include: (!tool_plan.include.is_empty()).then_some(tool_plan.include),
+            tool_choice: None,
             parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
+            include: (!tool_plan.include.is_empty()).then_some(tool_plan.include),
+            max_output_tokens: None,
+            temperature: None,
             prompt_cache_key: request.prompt_cache_key.clone(),
+            previous_response_id: None,
+            store: None,
+            stream: None,
+            top_p: None,
             reasoning: OpenAiTransport::responses_reasoning_config(&request, model.as_ref()),
             service_tier: OpenAiTransport::responses_service_tier(&request),
             text: OpenAiTransport::responses_text_config(&request),
+            client_metadata: None,
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -603,7 +611,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 instructions: OpenAiTransport::responses_instructions(&request),
                 input: attempt_input,
                 tools: tool_plan.tools.clone(),
-                tool_choice: "auto".to_owned(),
+                tool_choice: Some("auto".to_owned()),
                 parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
                 include: include.clone(),
                 max_output_tokens: self.responses_request_max_output_tokens(&request),
@@ -617,8 +625,8 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 ))
                 .then(|| request.previous_response_id.clone())
                 .flatten(),
-                store: false,
-                stream: true,
+                store: Some(false),
+                stream: Some(true),
                 top_p: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
                     .then_some(request.top_p)
                     .flatten(),

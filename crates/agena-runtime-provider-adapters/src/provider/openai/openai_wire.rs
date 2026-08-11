@@ -15,7 +15,8 @@ pub(super) struct OpenAiResponsesRequest {
     pub(super) input: Vec<OpenAiResponsesInputItem>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) tools: Vec<serde_json::Value>,
-    pub(super) tool_choice: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) tool_choice: Option<String>,
     pub(super) parallel_tool_calls: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) include: Option<Vec<String>>,
@@ -27,8 +28,10 @@ pub(super) struct OpenAiResponsesRequest {
     pub(super) prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) previous_response_id: Option<String>,
-    pub(super) store: bool,
-    pub(super) stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) store: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -39,27 +42,6 @@ pub(super) struct OpenAiResponsesRequest {
     pub(super) text: Option<OpenAiResponsesTextConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) client_metadata: Option<HashMap<String, String>>,
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct OpenAiResponsesCompactRequest {
-    pub(super) model: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) instructions: Option<String>,
-    pub(super) input: Vec<OpenAiResponsesInputItem>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(super) tools: Vec<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) include: Option<Vec<String>>,
-    pub(super) parallel_tool_calls: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) prompt_cache_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) reasoning: Option<OpenAiResponsesReasoningConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) service_tier: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) text: Option<OpenAiResponsesTextConfig>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -528,15 +510,15 @@ mod tests {
                 copilot_cache_control: None,
             })],
             tools: Vec::new(),
-            tool_choice: "auto".to_owned(),
+            tool_choice: Some("auto".to_owned()),
             parallel_tool_calls: false,
             include: None,
             max_output_tokens: Some(1024),
             temperature: None,
             prompt_cache_key: None,
             previous_response_id: Some("resp_previous".to_owned()),
-            store: false,
-            stream: true,
+            store: Some(false),
+            stream: Some(true),
             top_p: None,
             reasoning: None,
             service_tier: None,

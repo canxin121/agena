@@ -139,7 +139,7 @@ pub enum AnthropicSseEvent {
         #[serde(default)]
         index: Option<usize>,
         #[serde(default)]
-        content_block: AnthropicSseContentBlock,
+        content_block: AnthropicTextBlock,
     },
     ContentBlockDelta {
         #[serde(default)]
@@ -167,25 +167,6 @@ pub enum AnthropicSseEvent {
     },
     #[serde(other)]
     Other,
-}
-
-#[derive(Debug, Deserialize, Default)]
-/// Wire shape of an Anthropic SSE content block.
-pub struct AnthropicSseContentBlock {
-    #[serde(default, rename = "type")]
-    pub kind: String,
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub input: Option<Value>,
-    #[serde(default)]
-    pub thinking: Option<String>,
-    #[serde(default)]
-    pub signature: Option<String>,
-    #[serde(default)]
-    pub data: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]

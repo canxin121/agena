@@ -10,9 +10,9 @@ use serde_json::Value;
 use crate::PromptCacheControl;
 
 /// A content block in the Anthropic Messages protocol.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AnthropicTextBlock {
-    #[serde(rename = "type")]
+    #[serde(default, rename = "type")]
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,

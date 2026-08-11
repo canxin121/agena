@@ -7,29 +7,7 @@ pub(crate) fn normalize_path_for_display(path: &Path) -> String {
 /// the missing suffix. This closes ordinary workspace-symlink escapes while
 /// retaining support for creating new files.
 pub(super) fn canonicalize_path_for_execution(path: &Path) -> PathBuf {
-    let mut current = path.to_path_buf();
-    let mut missing = Vec::new();
-    loop {
-        match std::fs::canonicalize(&current) {
-            Ok(mut resolved) => {
-                for component in missing.iter().rev() {
-                    resolved.push(component);
-                }
-                return resolved;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let Some(name) = current.file_name().map(OsString::from) else {
-                    return path.to_path_buf();
-                };
-                let Some(parent) = current.parent() else {
-                    return path.to_path_buf();
-                };
-                missing.push(name);
-                current = parent.to_path_buf();
-            }
-            Err(_) => return path.to_path_buf(),
-        }
-    }
+    crate::canonicalize_mutation_path(path)
 }
 
 pub(super) fn truncate_to_char_count(value: &str, max_chars: usize) -> String {
@@ -278,8 +256,7 @@ pub(super) fn persist_tool_result_output(
             .unwrap_or_else(|_| "synthetic".to_string())
     };
     let path = dir.join(format!("{call_part}-{safe_tool}-{short_digest}.txt"));
-    let mut file = fs::File::create(&path)?;
-    file.write_all(output_text.as_bytes())?;
+    crate::atomic_write_file(&path, output_text.as_bytes())?;
     Ok(Some(path))
 }
 
@@ -683,11 +660,11 @@ pub(super) enum InputJsonPathSegment {
     ArrayAll,
 }
 use super::{
-    AccessKind, OsString, Path, PathBuf, RegisteredTool, SdkInputNetworkSpec, SdkInputPathSpec,
-    SdkPathKind, StructuredObject, TOOL_MODEL_STRUCTURED_MAX_DEPTH,
-    TOOL_MODEL_STRUCTURED_MAX_FIELDS, TOOL_MODEL_STRUCTURED_MAX_ITEMS,
-    TOOL_MODEL_STRUCTURED_OUTPUT_MAX_BYTES, TOOL_MODEL_STRUCTURED_STRING_MAX_BYTES, ToolError,
-    ToolInvocation, ToolInvocationExecution, ToolOutput, ToolPayloadInput, Write, fs, shell_tools,
+    AccessKind, Path, PathBuf, RegisteredTool, SdkInputNetworkSpec, SdkInputPathSpec, SdkPathKind,
+    StructuredObject, TOOL_MODEL_STRUCTURED_MAX_DEPTH, TOOL_MODEL_STRUCTURED_MAX_FIELDS,
+    TOOL_MODEL_STRUCTURED_MAX_ITEMS, TOOL_MODEL_STRUCTURED_OUTPUT_MAX_BYTES,
+    TOOL_MODEL_STRUCTURED_STRING_MAX_BYTES, ToolError, ToolInvocation, ToolInvocationExecution,
+    ToolOutput, ToolPayloadInput, fs, shell_tools,
 };
 use agena_domain::{FilesystemEffects, PluginInvocation};
 use agena_tool::{AppliedFileChange, ApplyPatchExecution, PatchOpKind};

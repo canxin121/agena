@@ -1,6 +1,3 @@
-use std::path::PathBuf;
-
-use base64::Engine as _;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -28,20 +25,19 @@ fn git_http_auth_options(username: &str, password: &str) -> Vec<String> {
 }
 
 pub(crate) struct TempGitAskpass {
-    pub(crate) path: PathBuf,
-}
-
-impl Drop for TempGitAskpass {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
+    pub(crate) path: tempfile::TempPath,
 }
 
 async fn create_git_askpass_script() -> Result<TempGitAskpass, String> {
     // This script contains no secrets; it reads them from env vars.
-    // Using a temp file is not ideal, but keeps credentials out of argv.
-    let mut path = std::env::temp_dir();
-    path.push(format!("agena-git-http-askpass-{}.sh", issue_token()));
+    // `TempPath` provides collision-safe creation and automatic cleanup while
+    // keeping credentials out of argv.
+    let path = tempfile::Builder::new()
+        .prefix("agena-git-http-askpass-")
+        .suffix(".sh")
+        .tempfile()
+        .map_err(|error| error.to_string())?
+        .into_temp_path();
 
     let body = "#!/usr/bin/env sh\n\
 set -e\n\
@@ -51,7 +47,7 @@ case \"$prompt\" in\n\
   *) printf '%s' \"${OC_GIT_ASKPASS_PASSWORD:-}\" ;;\n\
 esac\n";
 
-    tokio::fs::write(&path, body)
+    tokio::fs::write(&*path, body)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -59,16 +55,12 @@ esac\n";
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o700);
-        std::fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
+        tokio::fs::set_permissions(&*path, perms)
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(TempGitAskpass { path })
-}
-
-fn issue_token() -> String {
-    let mut bytes = [0_u8; 32];
-    getrandom::fill(&mut bytes).expect("issue_token: getrandom failed");
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 pub(crate) async fn git_http_auth_env(

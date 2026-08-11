@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -124,18 +125,58 @@ fn secure_directory(path: &Path) -> Result<(), MarketplaceError> {
 }
 
 pub fn write_secure_file(path: &Path, contents: &[u8]) -> Result<(), MarketplaceError> {
-    if let Some(parent) = path.parent() {
-        ensure_dir(parent)?;
-    }
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, contents)?;
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("secure file path has no parent: {}", path.display()),
+        )
+    })?;
+    ensure_dir(parent)?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".agena-marketplace-").suffix(".tmp");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+        builder.permissions(fs::Permissions::from_mode(0o600));
     }
-    fs::rename(&tmp, path)?;
+    let mut staged = builder.tempfile_in(parent)?;
+    staged.write_all(contents)?;
+    staged.flush()?;
+    staged.as_file().sync_all()?;
+    staged.persist(path).map_err(|error| error.error)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_secure_file;
+
+    #[test]
+    fn secure_write_atomically_replaces_without_fixed_staging_file() {
+        let directory = tempfile::tempdir().expect("marketplace directory");
+        let path = directory.path().join("installed.json");
+
+        write_secure_file(&path, b"first").expect("first write");
+        write_secure_file(&path, b"replacement").expect("replacement write");
+
+        assert_eq!(std::fs::read(&path).expect("read result"), b"replacement");
+        assert_eq!(
+            directory.path().read_dir().expect("read directory").count(),
+            1
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(path)
+                    .expect("secure file metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

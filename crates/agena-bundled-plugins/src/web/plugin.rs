@@ -2131,14 +2131,9 @@ impl WebPlugin {
         } else {
             self.workspace_root()?.join(relative.as_str())
         };
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                PluginError::internal(format!("cannot create screenshot directory: {error}"))
-            })?;
-        }
-        tokio::fs::write(&path, bytes.as_slice())
-            .await
-            .map_err(|error| PluginError::internal(format!("cannot write screenshot: {error}")))?;
+        let size_bytes = bytes.len() as u64;
+        crate::artifact_file::persist_replace_or_create(path.clone(), bytes, "browser screenshot")
+            .await?;
         let attachment = AttachmentItem {
             kind: AttachmentKind::Image,
             mime: "image/png".to_string(),
@@ -2150,7 +2145,7 @@ impl WebPlugin {
                 .and_then(|value| value.to_str())
                 .map(ToOwned::to_owned),
             title: Some(format!("Browser screenshot {}", input.session_id)),
-            size_bytes: Some(bytes.len() as u64),
+            size_bytes: Some(size_bytes),
             sha256: None,
             width: None,
             height: None,
@@ -2159,12 +2154,12 @@ impl WebPlugin {
         };
         Ok(ToolInvokeOutput::from_parts(
             "browser screenshot",
-            format!("image/png · {} bytes", bytes.len()),
+            format!("image/png · {size_bytes} bytes"),
             format!("Saved browser screenshot to '{}'.", path.display()),
             Some(serde_json::json!({
                 "session_id": input.session_id,
                 "path": path,
-                "size_bytes": bytes.len(),
+                "size_bytes": size_bytes,
             })),
             std::collections::BTreeMap::from([
                 ("agena.effect".to_string(), "file_changes".to_string()),

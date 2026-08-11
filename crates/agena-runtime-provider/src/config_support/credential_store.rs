@@ -47,10 +47,8 @@ impl ProviderConfigCredentialStore {
     }
 
     fn write_doc(&self, doc: &JsonValue) -> Result<(), ProviderError> {
-        if let Some(parent) = self.config_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&self.config_path, serde_json::to_string_pretty(doc)?)?;
+        let bytes = serde_json::to_vec_pretty(doc)?;
+        agena_runtime_config::write_config_file_atomically(&self.config_path, &bytes)?;
         Ok(())
     }
 
@@ -99,88 +97,92 @@ impl AuthStore for ProviderConfigCredentialStore {
     }
 
     fn set(&self, provider_id: &str, auth: AuthData) -> Result<(), ProviderError> {
-        let mut doc = self.read_doc()?;
-        let auth_table = self.ensure_provider_auth_table(&mut doc, provider_id);
-        auth_table.remove("mode");
-        auth_table.remove("credential");
-        auth_table.remove("issuer");
-        auth_table.remove("access");
+        agena_runtime_config::with_config_file_write_lock(|| {
+            let mut doc = self.read_doc()?;
+            let auth_table = self.ensure_provider_auth_table(&mut doc, provider_id);
+            auth_table.remove("mode");
+            auth_table.remove("credential");
+            auth_table.remove("issuer");
+            auth_table.remove("access");
 
-        match auth {
-            AuthData::Api { key } => {
-                auth_table.insert("mode".to_owned(), JsonValue::String("api".to_owned()));
-                auth_table.insert(
-                    "api_key".to_owned(),
-                    serde_json::json!({
-                        "kind": "inline",
-                        "value": key,
-                    }),
-                );
+            match auth {
+                AuthData::Api { key } => {
+                    auth_table.insert("mode".to_owned(), JsonValue::String("api".to_owned()));
+                    auth_table.insert(
+                        "api_key".to_owned(),
+                        serde_json::json!({
+                            "kind": "inline",
+                            "value": key,
+                        }),
+                    );
+                }
+                AuthData::OAuth { .. } => {
+                    let issuer = auth.issuer().ok_or_else(|| {
+                        ProviderError::Config(format!(
+                            "{provider_id} oauth credential must include an issuer"
+                        ))
+                    })?;
+                    auth_table.insert(
+                        "mode".to_owned(),
+                        JsonValue::String("credential".to_owned()),
+                    );
+                    auth_table.insert(
+                        "issuer".to_owned(),
+                        JsonValue::String(credential_issuer_value(issuer).to_owned()),
+                    );
+                    auth_table.insert("credential".to_owned(), auth_data_item(auth));
+                }
+                AuthData::WellKnown { .. } => {
+                    auth_table.insert(
+                        "mode".to_owned(),
+                        JsonValue::String("credential".to_owned()),
+                    );
+                    auth_table.insert("credential".to_owned(), auth_data_item(auth));
+                }
             }
-            AuthData::OAuth { .. } => {
-                let issuer = auth.issuer().ok_or_else(|| {
-                    ProviderError::Config(format!(
-                        "{provider_id} oauth credential must include an issuer"
-                    ))
-                })?;
-                auth_table.insert(
-                    "mode".to_owned(),
-                    JsonValue::String("credential".to_owned()),
-                );
-                auth_table.insert(
-                    "issuer".to_owned(),
-                    JsonValue::String(credential_issuer_value(issuer).to_owned()),
-                );
-                auth_table.insert("credential".to_owned(), auth_data_item(auth));
-            }
-            AuthData::WellKnown { .. } => {
-                auth_table.insert(
-                    "mode".to_owned(),
-                    JsonValue::String("credential".to_owned()),
-                );
-                auth_table.insert("credential".to_owned(), auth_data_item(auth));
-            }
-        }
-        self.write_doc(&doc)
+            self.write_doc(&doc)
+        })
     }
 
     fn remove(&self, provider_id: &str) -> Result<(), ProviderError> {
-        if !self.config_path.exists() {
-            return Ok(());
-        }
+        agena_runtime_config::with_config_file_write_lock(|| {
+            if !self.config_path.exists() {
+                return Ok(());
+            }
 
-        let mut doc = self.read_doc()?;
-        let Some(providers) = doc
-            .as_object_mut()
-            .and_then(|root| root.get_mut("providers"))
-            .and_then(JsonValue::as_object_mut)
-        else {
-            return Ok(());
-        };
-        let Some(provider) = providers
-            .get_mut(provider_id)
-            .and_then(JsonValue::as_object_mut)
-        else {
-            return Ok(());
-        };
-        let Some(auth) = provider.get_mut("auth").and_then(JsonValue::as_object_mut) else {
-            return Ok(());
-        };
+            let mut doc = self.read_doc()?;
+            let Some(providers) = doc
+                .as_object_mut()
+                .and_then(|root| root.get_mut("providers"))
+                .and_then(JsonValue::as_object_mut)
+            else {
+                return Ok(());
+            };
+            let Some(provider) = providers
+                .get_mut(provider_id)
+                .and_then(JsonValue::as_object_mut)
+            else {
+                return Ok(());
+            };
+            let Some(auth) = provider.get_mut("auth").and_then(JsonValue::as_object_mut) else {
+                return Ok(());
+            };
 
-        auth.remove("credential");
-        auth.remove("issuer");
-        auth.remove("api_key");
-        auth.remove("access");
+            auth.remove("credential");
+            auth.remove("issuer");
+            auth.remove("api_key");
+            auth.remove("access");
 
-        if auth_table_has_no_sources(auth) {
-            auth.remove("mode");
-        }
+            if auth_table_has_no_sources(auth) {
+                auth.remove("mode");
+            }
 
-        if auth.is_empty() {
-            provider.remove("auth");
-        }
+            if auth.is_empty() {
+                provider.remove("auth");
+            }
 
-        self.write_doc(&doc)
+            self.write_doc(&doc)
+        })
     }
 }
 

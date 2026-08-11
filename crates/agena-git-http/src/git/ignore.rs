@@ -87,7 +87,9 @@ pub async fn git_ignore(
         }
         next.push_str(&entry);
         next.push('\n');
-        if let Err(e) = tokio::fs::write(&ignore_path, next).await {
+        if let Err(e) =
+            super::atomic_file::write_file_atomically(ignore_path, next.into_bytes()).await
+        {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": e.to_string(), "code": "gitignore_write_failed"})),

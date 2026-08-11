@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 
 use agena_macros::ToolInput;
@@ -14,6 +14,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const ENVIRONMENT_PLUGIN_ID: &str = "agena.environment";
+static ENVIRONMENT_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("the static readiness HTTP client has valid options")
+});
 
 pub(crate) struct EnvironmentPlugin {
     workspace_root: OnceLock<PathBuf>,
@@ -182,10 +188,16 @@ impl EnvironmentPlugin {
                     .get()
                     .ok_or_else(|| "environment plugin invoked before init".to_string())?;
                 let target = resolve_path(root, path);
-                target
-                    .exists()
-                    .then(|| format!("path '{}' exists", target.display()))
-                    .ok_or_else(|| format!("path '{}' does not exist", target.display()))
+                match tokio::fs::metadata(&target).await {
+                    Ok(_) => Ok(format!("path '{}' exists", target.display())),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        Err(format!("path '{}' does not exist", target.display()))
+                    }
+                    Err(error) => Err(format!(
+                        "cannot inspect path '{}': {error}",
+                        target.display()
+                    )),
+                }
             }
             WaitCondition::Tcp { host, port } => tokio::time::timeout(
                 Duration::from_secs(5),
@@ -200,13 +212,9 @@ impl EnvironmentPlugin {
                 expected_status,
                 contains,
             } => {
-                let client = reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::none())
-                    .timeout(Duration::from_secs(10))
-                    .build()
-                    .map_err(|error| format!("cannot build HTTP client: {error}"))?;
-                let mut response = client
+                let mut response = ENVIRONMENT_HTTP_CLIENT
                     .get(url)
+                    .timeout(Duration::from_secs(10))
                     .send()
                     .await
                     .map_err(|error| format!("HTTP request failed: {error}"))?;

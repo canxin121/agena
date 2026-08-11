@@ -38,36 +38,27 @@ pub struct GitRemoteInfoResponse {
 
 fn parse_remote_url(url: &str) -> (String, Option<String>) {
     let u = url.trim();
-    if u.starts_with("http://") || u.starts_with("https://") {
-        let rest = u.split("//").nth(1).unwrap_or("");
-        let host = rest.split('/').next().unwrap_or("").trim();
-        return (
-            "https".to_string(),
-            if host.is_empty() {
-                None
-            } else {
-                Some(host.to_string())
-            },
-        );
+    if let Ok(parsed) = url::Url::parse(u) {
+        let protocol = match parsed.scheme() {
+            "http" => "http",
+            "https" => "https",
+            "ssh" | "git+ssh" => "ssh",
+            "file" => "file",
+            _ => "unknown",
+        };
+        let host = parsed.host_str().map(str::to_string);
+        return (protocol.to_string(), host);
     }
-    if u.starts_with("ssh://") {
-        // ssh://user@host/...
-        let rest = u.trim_start_matches("ssh://");
-        let host_part = rest.split('/').next().unwrap_or("");
-        let host = host_part.split('@').next_back().unwrap_or(host_part).trim();
-        return (
-            "ssh".to_string(),
-            if host.is_empty() {
-                None
-            } else {
-                Some(host.to_string())
-            },
-        );
-    }
-    // scp-like: git@host:owner/repo.git
-    if u.contains('@') && u.contains(':') {
-        let after_at = u.split('@').nth(1).unwrap_or("");
-        let host = after_at.split(':').next().unwrap_or("").trim();
+
+    // Git also accepts an scp-like syntax that is intentionally not a URL.
+    if let Some((authority, path)) = u.split_once(':')
+        && !authority.contains(['/', '\\'])
+        && !path.is_empty()
+    {
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        let host = host.trim();
         return (
             "ssh".to_string(),
             if host.is_empty() {
@@ -76,9 +67,6 @@ fn parse_remote_url(url: &str) -> (String, Option<String>) {
                 Some(host.to_string())
             },
         );
-    }
-    if u.starts_with("file://") {
-        return ("file".to_string(), None);
     }
     // local path or unknown.
     ("unknown".to_string(), None)
@@ -677,5 +665,30 @@ pub(crate) async fn git_upstream_ref(dir: &Path) -> Option<String> {
         None
     } else {
         Some(s.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_remote_url;
+
+    #[test]
+    fn remote_urls_use_url_parser_and_keep_git_scp_syntax() {
+        assert_eq!(
+            parse_remote_url("http://example.com:8080/team/repo.git"),
+            ("http".to_string(), Some("example.com".to_string()))
+        );
+        assert_eq!(
+            parse_remote_url("ssh://git@[2001:db8::1]/team/repo.git"),
+            ("ssh".to_string(), Some("[2001:db8::1]".to_string()))
+        );
+        assert_eq!(
+            parse_remote_url("git@example.com:team/repo.git"),
+            ("ssh".to_string(), Some("example.com".to_string()))
+        );
+        assert_eq!(
+            parse_remote_url("../local/repo.git"),
+            ("unknown".to_string(), None)
+        );
     }
 }

@@ -3729,7 +3729,7 @@ Filesystem command tools for read/search and explicit edits.
 
 **Tags**: `mutate` `filesystem`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
 > Use `apply_patch` for explicit text patch operations against workspace files. The `patch` argument is a plain-text patch that MUST start with the exact marker line `*** Begin Patch` and end with the exact marker line `*** End Patch`. Inside, use only these directives: `*** Update File: <path>` followed by `@@`-separated hunks (context lines start with a space, removed lines with `-`, added lines with `+`), `*** Add File: <path>` with every content line prefixed by `+`, or `*** Delete File: <path>`. A patch that does not start with `*** Begin Patch` is rejected. Use paths relative to the workspace root.
@@ -4056,7 +4056,7 @@ Filesystem command tools for read/search and explicit edits.
 
 **Tags**: `mutate` `filesystem`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -4089,10 +4089,12 @@ Filesystem command tools for read/search and explicit edits.
       "x-agena-order": "000005"
     },
     "new": {
+      "maxLength": 16777216,
       "type": "string",
       "x-agena-order": "000002"
     },
     "old": {
+      "maxLength": 16777216,
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000001"
@@ -4207,7 +4209,7 @@ Filesystem command tools for read/search and explicit edits.
 
 **Tags**: `mutate` `filesystem`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
 > Creating a new file needs no hash. Replacing an existing file requires expected_sha256 from fs.stat, preventing stale or parallel overwrites.
@@ -4226,6 +4228,7 @@ Filesystem command tools for read/search and explicit edits.
   "additionalProperties": false,
   "properties": {
     "content": {
+      "maxLength": 16777216,
       "type": "string",
       "x-agena-order": "000001"
     },
@@ -6081,7 +6084,7 @@ Revision-safe Jupyter notebook cell editing.
 
 **Tags**: `mutate` `filesystem`
 
-**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |

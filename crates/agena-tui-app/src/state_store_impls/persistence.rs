@@ -1,3 +1,44 @@
+use std::io::Write as _;
+
+fn persist_atomically(path: &Path, raw: &[u8]) -> UiResult<()> {
+    let parent = path.parent().ok_or_else(|| {
+        crate::UiFailure::message(format!(
+            "persistent TUI state path has no parent: {}",
+            path.display()
+        ))
+    })?;
+    let permissions = fs::metadata(path)
+        .ok()
+        .filter(|metadata| metadata.is_file())
+        .map(|metadata| metadata.permissions());
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".agena-tui-state-").suffix(".tmp");
+    #[cfg(unix)]
+    if permissions.is_none() {
+        use std::os::unix::fs::PermissionsExt as _;
+        builder.permissions(fs::Permissions::from_mode(0o600));
+    }
+    let mut staged = builder
+        .tempfile_in(parent)
+        .map_err(crate::UiFailure::internal)?;
+    staged.write_all(raw).map_err(crate::UiFailure::internal)?;
+    staged.flush().map_err(crate::UiFailure::internal)?;
+    staged
+        .as_file()
+        .sync_all()
+        .map_err(crate::UiFailure::internal)?;
+    if let Some(permissions) = permissions {
+        staged
+            .as_file()
+            .set_permissions(permissions)
+            .map_err(crate::UiFailure::internal)?;
+    }
+    staged
+        .persist(path)
+        .map_err(|error| crate::UiFailure::internal(error.error))?;
+    Ok(())
+}
+
 impl DraftStore {
     pub(crate) fn load(path: &Path) -> UiResult<Self> {
         let raw = match fs::read_to_string(path) {
@@ -37,15 +78,7 @@ impl DraftStore {
         }
 
         let raw = serde_json::to_string_pretty(&persistent).map_err(crate::UiFailure::internal)?;
-        let tmp_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| format!("{name}.tmp"))
-            .unwrap_or_else(|| "tui-drafts.json.tmp".to_string());
-        let tmp_path = path.with_file_name(tmp_name);
-        fs::write(&tmp_path, raw).map_err(crate::UiFailure::internal)?;
-        fs::rename(&tmp_path, path).map_err(crate::UiFailure::internal)?;
-        Ok(())
+        persist_atomically(path, raw.as_bytes())
     }
 
     pub(crate) fn get(&self, slot: DraftSlot) -> Option<&ComposerDraft> {
@@ -127,15 +160,7 @@ impl PromptHistory {
             raw.push('\n');
         }
 
-        let tmp_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| format!("{name}.tmp"))
-            .unwrap_or_else(|| "tui-prompt-history.jsonl.tmp".to_string());
-        let tmp_path = path.with_file_name(tmp_name);
-        fs::write(&tmp_path, raw).map_err(crate::UiFailure::internal)?;
-        fs::rename(&tmp_path, path).map_err(crate::UiFailure::internal)?;
-        Ok(())
+        persist_atomically(path, raw.as_bytes())
     }
 
     pub(crate) fn normalized_text(text: &str) -> Option<String> {
@@ -168,6 +193,21 @@ use crate::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_state_persistence_replaces_without_fixed_temp_file() {
+        let directory = tempfile::tempdir().expect("temporary state directory");
+        let path = directory.path().join("state.json");
+
+        persist_atomically(&path, b"first").expect("first state");
+        persist_atomically(&path, b"replacement").expect("replacement state");
+
+        assert_eq!(fs::read(&path).expect("read state"), b"replacement");
+        assert_eq!(
+            directory.path().read_dir().expect("read directory").count(),
+            1
+        );
+    }
 
     #[test]
     fn rejects_pre_typed_terminal_response_draft_schema() {

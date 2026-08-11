@@ -14,7 +14,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -424,31 +424,27 @@ impl FileTokenStore {
     pub fn put_bearer(&self, server: &str, token: &str) -> Result<(), TokenStoreError> {
         let server = normalized_server_name(server)?;
         let token = normalized_token(token)?;
-        {
-            let mut guard = self
-                .inner
-                .lock()
-                .map_err(|_| TokenStoreError::LockPoisoned)?;
-            let entry = guard
-                .servers
-                .entry(server)
-                .or_insert_with(|| ServerTokenRecord { bearer: None });
-            entry.bearer = Some(token);
-        }
-        self.persist()
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| TokenStoreError::LockPoisoned)?;
+        let entry = guard
+            .servers
+            .entry(server)
+            .or_insert_with(|| ServerTokenRecord { bearer: None });
+        entry.bearer = Some(token);
+        self.persist_snapshot(&guard)
     }
 
     pub fn delete(&self, server: &str) -> Result<bool, TokenStoreError> {
         let server = normalized_server_name(server)?;
-        let removed = {
-            let mut guard = self
-                .inner
-                .lock()
-                .map_err(|_| TokenStoreError::LockPoisoned)?;
-            guard.servers.remove(server.as_str()).is_some()
-        };
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| TokenStoreError::LockPoisoned)?;
+        let removed = guard.servers.remove(server.as_str()).is_some();
         if removed {
-            self.persist()?;
+            self.persist_snapshot(&guard)?;
         }
         Ok(removed)
     }
@@ -461,19 +457,30 @@ impl FileTokenStore {
         Ok(guard.servers.keys().cloned().collect())
     }
 
-    fn persist(&self) -> Result<(), TokenStoreError> {
-        let snapshot = {
-            let guard = self
-                .inner
-                .lock()
-                .map_err(|_| TokenStoreError::LockPoisoned)?;
-            guard.clone()
-        };
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
+    fn persist_snapshot(&self, snapshot: &StoreFile) -> Result<(), TokenStoreError> {
+        let parent = self.path.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "MCP token-store path has no parent: {}",
+                    self.path.display()
+                ),
+            )
+        })?;
+        fs::create_dir_all(parent)?;
+        let body = serde_json::to_vec_pretty(snapshot)?;
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(".agena-mcp-token-").suffix(".json.tmp");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            builder.permissions(fs::Permissions::from_mode(0o600));
         }
-        let body = serde_json::to_string_pretty(&snapshot)?;
-        fs::write(&self.path, body)?;
+        let mut staged = builder.tempfile_in(parent)?;
+        staged.write_all(body.as_slice())?;
+        staged.flush()?;
+        staged.as_file().sync_all()?;
+        staged.persist(&self.path).map_err(|error| error.error)?;
         chmod_user_only(&self.path);
         Ok(())
     }
@@ -575,7 +582,7 @@ fn chmod_user_only(_: &Path) {}
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Barrier, Mutex};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use agena_keyring_store::{SecretStore, SecretStoreError};
@@ -585,8 +592,8 @@ mod tests {
     use rmcp::transport::{CredentialStore, StoredCredentials};
 
     use super::{
-        KeyringOAuthCredentialStore, KeyringTokenStore, OAuthCredentialState, OAuthExpiryState,
-        TokenStore, keyring_key, oauth_keyring_key,
+        FileTokenStore, KeyringOAuthCredentialStore, KeyringTokenStore, OAuthCredentialState,
+        OAuthExpiryState, TokenStore, keyring_key, oauth_keyring_key,
     };
 
     #[derive(Default)]
@@ -609,6 +616,33 @@ mod tests {
             self.0.lock().expect("lock").remove(key);
             Ok(())
         }
+    }
+
+    #[test]
+    fn file_fallback_serializes_concurrent_mutation_and_atomic_persistence() {
+        let directory = tempfile::tempdir().expect("MCP token directory");
+        let path = directory.path().join("tokens.json");
+        let store = Arc::new(FileTokenStore::open(&path).expect("token store"));
+        let barrier = Arc::new(Barrier::new(2));
+        let handles = [("first", "token-one"), ("second", "token-two")].map(|(server, token)| {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                store.put_bearer(server, token).expect("put bearer");
+            })
+        });
+        for handle in handles {
+            handle.join().expect("token writer");
+        }
+
+        let reopened = FileTokenStore::open(&path).expect("reopen token store");
+        assert_eq!(reopened.bearer("first").as_deref(), Some("token-one"));
+        assert_eq!(reopened.bearer("second").as_deref(), Some("token-two"));
+        assert_eq!(
+            directory.path().read_dir().expect("read directory").count(),
+            1
+        );
     }
 
     #[test]

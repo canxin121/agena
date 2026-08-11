@@ -650,15 +650,11 @@ impl ChatGptToolsPlugin {
                 .map_err(|error| PluginError::internal(format!("invalid image MIME: {error}")))?;
             form = form.part("image[]", part);
         }
-        let response = reqwest::Client::builder()
+        let response = crate::PROVIDER_HTTP_CLIENT
+            .post(url)
             .timeout(std::time::Duration::from_secs(
                 self.config()?.timeout_secs.max(1),
             ))
-            .build()
-            .map_err(|error| {
-                PluginError::internal(format!("cannot create OpenAI client: {error}"))
-            })?
-            .post(url)
             .bearer_auth(env_secret(
                 self.config()?.api_key_env.as_str(),
                 "ChatGPT/OpenAI",

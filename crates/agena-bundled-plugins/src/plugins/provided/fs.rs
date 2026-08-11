@@ -26,7 +26,8 @@ pub(crate) struct FsPlugin;
 #[input(
     trim("path", "expected_sha256"),
     non_empty("path"),
-    non_empty_if_present("expected_sha256")
+    non_empty_if_present("expected_sha256"),
+    max_chars("content", 16777216)
 )]
 #[serde(deny_unknown_fields)]
 struct WriteFileInput {
@@ -45,7 +46,9 @@ struct WriteFileInput {
     trim("path", "old", "expected_sha256"),
     non_empty("path", "old"),
     non_empty_if_present("expected_sha256"),
-    minimum("expected_occurrences", 1)
+    minimum("expected_occurrences", 1),
+    max_chars("old", 16777216),
+    max_chars("new", 16777216)
 )]
 #[serde(deny_unknown_fields)]
 struct ReplaceFileInput {
@@ -183,8 +186,7 @@ impl FsPlugin {
         mutating,
 
         examples(r#"{"patch":"*** Begin Patch\n*** Update File: README.md\n@@\n-old line\n+new line\n*** End Patch"}"#),
-        path(requests = permission_paths_internal("apply_patch", input)?),
-        concurrency_safe
+        path(requests = permission_paths_internal("apply_patch", input)?)
     )]
     async fn invoke_apply_patch(
         &self,
@@ -200,8 +202,7 @@ impl FsPlugin {
         help = "Creating a new file needs no hash. Replacing an existing file requires expected_sha256 from fs.stat, preventing stale or parallel overwrites.",
         mutating,
 
-        path(requests = vec![PathRequest::write(input.path.clone())]),
-        concurrency_safe
+        path(requests = vec![PathRequest::write(input.path.clone())])
     )]
     async fn invoke_write(
         &self,
@@ -212,63 +213,87 @@ impl FsPlugin {
         let input = input.clone();
         run_fs_blocking(move || {
             let target = resolve_path(workspace_root.as_str(), input.path.as_str());
-            let existed = target.exists();
-            if existed {
-                let expected = input.expected_sha256.as_deref().ok_or_else(|| {
-                    PluginError::invalid_params(
-                        "expected_sha256 is required when fs.write replaces an existing file",
-                    )
-                })?;
-                verify_expected_hash(&target, expected)?;
-            } else if input.expected_sha256.is_some() {
-                return Err(PluginError::invalid_params(
-                    "expected_sha256 was supplied but the target does not exist",
-                ));
-            }
-            if let Some(parent) = target.parent()
-                && !parent.exists()
-            {
-                if input.create_parents {
-                    std::fs::create_dir_all(parent).map_err(fs_error)?;
-                } else {
+            agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&target), || {
+                if input.content.len() as u64 > MAX_MUTATING_TEXT_BYTES {
                     return Err(PluginError::invalid_params(format!(
-                        "parent directory does not exist: {}",
-                        parent.display()
+                        "fs.write supports content up to {} MiB",
+                        MAX_MUTATING_TEXT_BYTES / 1024 / 1024
                     )));
                 }
-            }
-            std::fs::write(&target, input.content.as_bytes()).map_err(fs_error)?;
-            let hash = sha256_bytes(input.content.as_bytes());
-            Ok(ToolInvokeOutput::from_parts(
-                format!(
-                    "{} {}",
-                    if existed { "updated" } else { "created" },
-                    input.path
-                ),
-                format!(
-                    "{} · {} bytes",
-                    if existed { "Updated" } else { "Created" },
-                    input.content.len()
-                ),
-                format!(
-                    "{} '{}' ({} bytes, sha256={hash}).",
-                    if existed { "Updated" } else { "Created" },
-                    input.path,
-                    input.content.len()
-                ),
-                Some(serde_json::json!({
-                    "path": input.path,
-                    "kind": if existed { "updated" } else { "created" },
-                    "bytes": input.content.len(),
-                    "sha256": hash,
-                })),
-                std::collections::BTreeMap::from([
-                    ("agena.effect".to_string(), "file_changes".to_string()),
-                    ("path".to_string(), input.path.clone()),
-                    ("sha256".to_string(), hash),
-                ]),
-                Vec::new(),
-            ))
+                let existed = target.exists();
+                if existed {
+                    if !target.is_file() {
+                        return Err(PluginError::invalid_params(format!(
+                            "write target is not a file: {}",
+                            input.path
+                        )));
+                    }
+                    let expected = input.expected_sha256.as_deref().ok_or_else(|| {
+                        PluginError::invalid_params(
+                            "expected_sha256 is required when fs.write replaces an existing file",
+                        )
+                    })?;
+                    verify_expected_hash(&target, expected)?;
+                } else if input.expected_sha256.is_some() {
+                    return Err(PluginError::invalid_params(
+                        "expected_sha256 was supplied but the target does not exist",
+                    ));
+                }
+                if let Some(parent) = target.parent()
+                    && !parent.exists()
+                {
+                    if input.create_parents {
+                        std::fs::create_dir_all(parent).map_err(fs_error)?;
+                    } else {
+                        return Err(PluginError::invalid_params(format!(
+                            "parent directory does not exist: {}",
+                            parent.display()
+                        )));
+                    }
+                }
+                if existed {
+                    agena_runtime_tools::atomic_replace_file(&target, input.content.as_bytes())
+                        .map_err(fs_error)?;
+                } else {
+                    agena_runtime_tools::atomic_create_file(
+                        &target,
+                        input.content.as_bytes(),
+                        None,
+                    )
+                    .map_err(fs_error)?;
+                }
+                let hash = sha256_bytes(input.content.as_bytes());
+                Ok(ToolInvokeOutput::from_parts(
+                    format!(
+                        "{} {}",
+                        if existed { "updated" } else { "created" },
+                        input.path
+                    ),
+                    format!(
+                        "{} · {} bytes",
+                        if existed { "Updated" } else { "Created" },
+                        input.content.len()
+                    ),
+                    format!(
+                        "{} '{}' ({} bytes, sha256={hash}).",
+                        if existed { "Updated" } else { "Created" },
+                        input.path,
+                        input.content.len()
+                    ),
+                    Some(serde_json::json!({
+                        "path": input.path,
+                        "kind": if existed { "updated" } else { "created" },
+                        "bytes": input.content.len(),
+                        "sha256": hash,
+                    })),
+                    std::collections::BTreeMap::from([
+                        ("agena.effect".to_string(), "file_changes".to_string()),
+                        ("path".to_string(), input.path.clone()),
+                        ("sha256".to_string(), hash),
+                    ]),
+                    Vec::new(),
+                ))
+            })
         })
         .await
     }
@@ -279,8 +304,7 @@ impl FsPlugin {
         mutating,
 
 
-        path(requests = vec![PathRequest::read(input.path.clone()), PathRequest::write(input.path.clone())]),
-        concurrency_safe
+        path(requests = vec![PathRequest::read(input.path.clone()), PathRequest::write(input.path.clone())])
     )]
     async fn invoke_replace(
         &self,
@@ -291,66 +315,75 @@ impl FsPlugin {
         let input = input.clone();
         run_fs_blocking(move || {
             let target = resolve_path(workspace_root.as_str(), input.path.as_str());
-            if !target.is_file() {
-                return Err(PluginError::invalid_params(format!(
-                    "replace target is not a file: {}",
-                    input.path
-                )));
-            }
-            if let Some(expected) = input.expected_sha256.as_deref() {
-                verify_expected_hash(&target, expected)?;
-            }
-            let original = String::from_utf8(read_file_bounded(
-                &target,
-                MAX_MUTATING_TEXT_BYTES,
-                "fs.replace",
-            )?)
-            .map_err(|_| {
-                PluginError::invalid_params(format!(
-                    "replace target is not UTF-8 text: {}",
-                    input.path
+            agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&target), || {
+                if !target.is_file() {
+                    return Err(PluginError::invalid_params(format!(
+                        "replace target is not a file: {}",
+                        input.path
+                    )));
+                }
+                if let Some(expected) = input.expected_sha256.as_deref() {
+                    verify_expected_hash(&target, expected)?;
+                }
+                let original = String::from_utf8(read_file_bounded(
+                    &target,
+                    MAX_MUTATING_TEXT_BYTES,
+                    "fs.replace",
+                )?)
+                .map_err(|_| {
+                    PluginError::invalid_params(format!(
+                        "replace target is not UTF-8 text: {}",
+                        input.path
+                    ))
+                })?;
+                let occurrences = original.match_indices(input.old.as_str()).count();
+                if occurrences != input.expected_occurrences as usize {
+                    return Err(PluginError::invalid_params(format!(
+                        "expected {} occurrence(s) of old text in '{}', found {occurrences}",
+                        input.expected_occurrences, input.path
+                    )));
+                }
+                let updated = if input.replace_all {
+                    original.replace(input.old.as_str(), input.new.as_str())
+                } else {
+                    original.replacen(input.old.as_str(), input.new.as_str(), 1)
+                };
+                if updated.len() as u64 > MAX_MUTATING_TEXT_BYTES {
+                    return Err(PluginError::invalid_params(format!(
+                        "fs.replace result exceeds the {} MiB limit",
+                        MAX_MUTATING_TEXT_BYTES / 1024 / 1024
+                    )));
+                }
+                agena_runtime_tools::atomic_replace_file(&target, updated.as_bytes())
+                    .map_err(fs_error)?;
+                let before_sha256 = sha256_bytes(original.as_bytes());
+                let after_sha256 = sha256_bytes(updated.as_bytes());
+                Ok(ToolInvokeOutput::from_parts(
+                    format!("replaced text in {}", input.path),
+                    format!(
+                        "{} replacements",
+                        if input.replace_all { occurrences } else { 1 }
+                    ),
+                    format!(
+                        "Replaced {} occurrence(s) in '{}' (sha256 {before_sha256} -> {after_sha256}).",
+                        if input.replace_all { occurrences } else { 1 },
+                        input.path
+                    ),
+                    Some(serde_json::json!({
+                        "path": input.path,
+                        "replacements": if input.replace_all { occurrences } else { 1 },
+                        "before_sha256": before_sha256,
+                        "after_sha256": after_sha256,
+                    })),
+                    std::collections::BTreeMap::from([
+                        ("agena.effect".to_string(), "file_changes".to_string()),
+                        ("path".to_string(), input.path.clone()),
+                        ("before_sha256".to_string(), before_sha256),
+                        ("after_sha256".to_string(), after_sha256),
+                    ]),
+                    Vec::new(),
                 ))
-            })?;
-            let occurrences = original.match_indices(input.old.as_str()).count();
-            if occurrences != input.expected_occurrences as usize {
-                return Err(PluginError::invalid_params(format!(
-                    "expected {} occurrence(s) of old text in '{}', found {occurrences}",
-                    input.expected_occurrences, input.path
-                )));
-            }
-            let updated = if input.replace_all {
-                original.replace(input.old.as_str(), input.new.as_str())
-            } else {
-                original.replacen(input.old.as_str(), input.new.as_str(), 1)
-            };
-            std::fs::write(&target, updated.as_bytes()).map_err(fs_error)?;
-            let before_sha256 = sha256_bytes(original.as_bytes());
-            let after_sha256 = sha256_bytes(updated.as_bytes());
-            Ok(ToolInvokeOutput::from_parts(
-                format!("replaced text in {}", input.path),
-                format!(
-                    "{} replacements",
-                    if input.replace_all { occurrences } else { 1 }
-                ),
-                format!(
-                    "Replaced {} occurrence(s) in '{}' (sha256 {before_sha256} -> {after_sha256}).",
-                    if input.replace_all { occurrences } else { 1 },
-                    input.path
-                ),
-                Some(serde_json::json!({
-                    "path": input.path,
-                    "replacements": if input.replace_all { occurrences } else { 1 },
-                    "before_sha256": before_sha256,
-                    "after_sha256": after_sha256,
-                })),
-                std::collections::BTreeMap::from([
-                    ("agena.effect".to_string(), "file_changes".to_string()),
-                    ("path".to_string(), input.path.clone()),
-                    ("before_sha256".to_string(), before_sha256),
-                    ("after_sha256".to_string(), after_sha256),
-                ]),
-                Vec::new(),
-            ))
+            })
         })
         .await
     }
@@ -625,9 +658,9 @@ fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {
 fn resolve_path(workspace_root: &str, path: &str) -> PathBuf {
     let path = Path::new(path);
     if path.is_absolute() {
-        path.to_path_buf()
+        agena_runtime_tools::canonicalize_mutation_path(path)
     } else {
-        Path::new(workspace_root).join(path)
+        agena_runtime_tools::canonicalize_mutation_path(&Path::new(workspace_root).join(path))
     }
 }
 
@@ -818,6 +851,43 @@ mod tests {
             std::fs::read_to_string(dir.path().join("demo.txt")).expect("read result"),
             "two two"
         );
+    }
+
+    #[tokio::test]
+    async fn parallel_writes_with_one_revision_cannot_both_commit() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().display().to_string();
+        let context = ToolInvokeContext {
+            tool_name: "write",
+            session_id: 1,
+            call_id: 1,
+            workspace_root: root.as_str(),
+        };
+        let path = dir.path().join("race.txt");
+        std::fs::write(&path, "original").expect("race fixture");
+        let expected = sha256_file(&path).expect("fixture revision");
+        let plugin = FsPlugin;
+        let first = WriteFileInput {
+            path: "race.txt".to_string(),
+            content: "first".to_string(),
+            create_parents: false,
+            expected_sha256: Some(expected.clone()),
+        };
+        let second = WriteFileInput {
+            path: "race.txt".to_string(),
+            content: "second".to_string(),
+            create_parents: false,
+            expected_sha256: Some(expected),
+        };
+
+        let (first_result, second_result) = tokio::join!(
+            plugin.invoke_write(&context, &first),
+            plugin.invoke_write(&context, &second)
+        );
+
+        assert_ne!(first_result.is_ok(), second_result.is_ok());
+        let final_text = std::fs::read_to_string(path).expect("final race content");
+        assert!(matches!(final_text.as_str(), "first" | "second"));
     }
 
     #[test]

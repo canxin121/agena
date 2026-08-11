@@ -13,6 +13,7 @@ chrono = { workspace = true }
 crw-extract = { workspace = true }
 governor = { workspace = true }
 moka = { workspace = true }
+process_control = { workspace = true }
 reqwest = { workspace = true, features = ["rustls"] }
 redb = { workspace = true }
 scraper = { workspace = true }
@@ -22,6 +23,7 @@ simhash = { workspace = true }
 spider = { workspace = true }
 tantivy = { workspace = true }
 text-splitter = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }

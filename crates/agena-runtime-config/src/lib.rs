@@ -13,6 +13,7 @@
 
 pub mod config;
 pub mod config_error;
+mod config_file;
 pub mod config_override;
 pub mod config_values;
 pub mod lsp_config;
@@ -32,6 +33,7 @@ pub use config::{
 pub use config_environment::{ConfigEnvironment, ProcessEnvironment};
 pub use config_error::ConfigError;
 pub use config_error::*;
+pub use config_file::{with_config_file_write_lock, write_config_file_atomically};
 pub use config_override::{
     ConfigOverride, LoadConfigRequest, RuntimeConfigOverrideError,
     parse_config_override_expressions,

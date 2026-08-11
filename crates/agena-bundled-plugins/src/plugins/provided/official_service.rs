@@ -277,13 +277,10 @@ pub(crate) async fn post_json(
     operation: &str,
 ) -> SdkResult<ProviderHttpResponse> {
     authorize_network(host, url).await?;
-    let client = reqwest::Client::builder()
+    let mut request = crate::PROVIDER_HTTP_CLIENT
+        .post(url)
         .timeout(Duration::from_secs(timeout_secs.max(1)))
-        .build()
-        .map_err(|error| {
-            PluginError::internal(format!("cannot create {provider} HTTP client: {error}"))
-        })?;
-    let mut request = client.post(url).json(body);
+        .json(body);
     for (name, value) in headers {
         request = request.header(name, value);
     }
@@ -995,14 +992,7 @@ async fn persist_response_receipt(
             safe_tool,
             uuid::Uuid::new_v4().simple()
         ));
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|error| {
-            PluginError::internal(format!("cannot create receipt directory: {error}"))
-        })?;
-    }
-    tokio::fs::write(&path, bytes).await.map_err(|error| {
-        PluginError::internal(format!("cannot write provider receipt: {error}"))
-    })?;
+    crate::artifact_file::persist_new(path.clone(), bytes, "provider receipt").await?;
     Ok((path.to_string_lossy().to_string(), sha256))
 }
 
@@ -1234,21 +1224,8 @@ async fn persist_images(
             .join(".agena/artifacts/provider-tools")
             .join(provider)
             .join(format!("{}.{}", uuid::Uuid::new_v4().simple(), extension));
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                PluginError::internal(format!(
-                    "cannot create provider artifact directory: {error}"
-                ))
-            })?;
-        }
-        tokio::fs::write(&path, bytes.as_slice())
-            .await
-            .map_err(|error| {
-                PluginError::internal(format!(
-                    "cannot persist provider image '{}': {error}",
-                    path.display()
-                ))
-            })?;
+        let size_bytes = bytes.len() as u64;
+        crate::artifact_file::persist_new(path.clone(), bytes, "provider image").await?;
         attachments.push(AttachmentItem {
             kind: AttachmentKind::Image,
             mime: candidate.mime.clone(),
@@ -1260,7 +1237,7 @@ async fn persist_images(
                 .and_then(|value| value.to_str())
                 .map(str::to_owned),
             title: Some(title.to_owned()),
-            size_bytes: Some(bytes.len() as u64),
+            size_bytes: Some(size_bytes),
             sha256: Some(sha256),
             width: None,
             height: None,

@@ -125,27 +125,29 @@ fn set_file_setting_impl(
     env: &dyn ConfigEnvironment,
     layered: Option<&LayeredValidation>,
 ) -> Result<ConfigSettingsEditResponse, ConfigError> {
-    let segments = required_path_segments(&input.path)?;
-    let (config_found, mut doc) = read_or_create_doc(&config_path)?;
-    let before = doc.clone();
-    let previous = get_json_path(&before, Some(input.path.as_str()))?;
-    let created = previous.is_null();
-    set_json_path(&mut doc, &segments, input.value)?;
-    finish_edit(
-        config_path,
-        config_found,
-        doc,
-        before,
-        Some(input.path),
-        "set",
-        input.options.dry_run,
-        input.options.validate,
-        input.options.reload,
-        created,
-        false,
-        env,
-        layered,
-    )
+    crate::with_config_file_write_lock(|| {
+        let segments = required_path_segments(&input.path)?;
+        let (config_found, mut doc) = read_or_create_doc(&config_path)?;
+        let before = doc.clone();
+        let previous = get_json_path(&before, Some(input.path.as_str()))?;
+        let created = previous.is_null();
+        set_json_path(&mut doc, &segments, input.value)?;
+        finish_edit(
+            config_path,
+            config_found,
+            doc,
+            before,
+            Some(input.path),
+            "set",
+            input.options.dry_run,
+            input.options.validate,
+            input.options.reload,
+            created,
+            false,
+            env,
+            layered,
+        )
+    })
 }
 
 pub fn delete_layered_file_setting(
@@ -187,25 +189,27 @@ fn delete_file_setting_impl(
     env: &dyn ConfigEnvironment,
     layered: Option<&LayeredValidation>,
 ) -> Result<ConfigSettingsEditResponse, ConfigError> {
-    let segments = required_path_segments(&input.path)?;
-    let (config_found, mut doc) = read_or_create_doc(&config_path)?;
-    let before = doc.clone();
-    let deleted = remove_json_path(&mut doc, &segments)?;
-    finish_edit(
-        config_path,
-        config_found,
-        doc,
-        before,
-        Some(input.path),
-        "delete",
-        input.options.dry_run,
-        input.options.validate,
-        input.options.reload,
-        false,
-        deleted,
-        env,
-        layered,
-    )
+    crate::with_config_file_write_lock(|| {
+        let segments = required_path_segments(&input.path)?;
+        let (config_found, mut doc) = read_or_create_doc(&config_path)?;
+        let before = doc.clone();
+        let deleted = remove_json_path(&mut doc, &segments)?;
+        finish_edit(
+            config_path,
+            config_found,
+            doc,
+            before,
+            Some(input.path),
+            "delete",
+            input.options.dry_run,
+            input.options.validate,
+            input.options.reload,
+            false,
+            deleted,
+            env,
+            layered,
+        )
+    })
 }
 
 pub fn patch_layered_file_settings(
@@ -247,32 +251,34 @@ fn patch_file_settings_impl(
     env: &dyn ConfigEnvironment,
     layered: Option<&LayeredValidation>,
 ) -> Result<ConfigSettingsEditResponse, ConfigError> {
-    let changes = input.changes.as_object().ok_or_else(|| {
-        ConfigError::Validation("settings_patch changes must be a JSON object".to_owned())
-    })?;
-    let (config_found, mut doc) = read_or_create_doc(&config_path)?;
-    let before = doc.clone();
-    let created = match input.target.path.as_deref() {
-        Some(path) => get_json_path(&before, Some(path))?.is_null(),
-        None => false,
-    };
-    let target = ensure_object_path(&mut doc, input.target.path.as_deref())?;
-    merge_json_object(target, changes)?;
-    finish_edit(
-        config_path,
-        config_found,
-        doc,
-        before,
-        input.target.path,
-        "patch",
-        input.options.dry_run,
-        input.options.validate,
-        input.options.reload,
-        created,
-        false,
-        env,
-        layered,
-    )
+    crate::with_config_file_write_lock(|| {
+        let changes = input.changes.as_object().ok_or_else(|| {
+            ConfigError::Validation("settings_patch changes must be a JSON object".to_owned())
+        })?;
+        let (config_found, mut doc) = read_or_create_doc(&config_path)?;
+        let before = doc.clone();
+        let created = match input.target.path.as_deref() {
+            Some(path) => get_json_path(&before, Some(path))?.is_null(),
+            None => false,
+        };
+        let target = ensure_object_path(&mut doc, input.target.path.as_deref())?;
+        merge_json_object(target, changes)?;
+        finish_edit(
+            config_path,
+            config_found,
+            doc,
+            before,
+            input.target.path,
+            "patch",
+            input.options.dry_run,
+            input.options.validate,
+            input.options.reload,
+            created,
+            false,
+            env,
+            layered,
+        )
+    })
 }
 
 pub fn validate_layered_file_settings(
@@ -391,16 +397,12 @@ fn normalize_root_object(value: JsonValue) -> JsonValue {
     }
 }
 
-fn write_doc(path: &PathBuf, text: &str) -> Result<(), ConfigError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ConfigError::WriteFile {
-            path: path.clone(),
+fn write_doc(path: &Path, text: &str) -> Result<(), ConfigError> {
+    crate::write_config_file_atomically(path, text.as_bytes()).map_err(|source| {
+        ConfigError::WriteFile {
+            path: path.to_path_buf(),
             source,
-        })?;
-    }
-    fs::write(path, text).map_err(|source| ConfigError::WriteFile {
-        path: path.clone(),
-        source,
+        }
     })
 }
 

@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use axum::{
     Json,
     extract::Query,
@@ -6,9 +8,11 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::git2_utils::{self, Git2OpenError};
+
 use super::{
-    DirectoryQuery, git_success_response, require_directory, run_locked_git_checked,
-    run_locked_git_env_checked,
+    DirectoryQuery, git_success_response, git2_open_error_response, require_directory,
+    run_locked_git_checked, run_locked_git_env_checked, spawn_libgit2,
 };
 
 #[derive(Debug, Serialize)]
@@ -26,56 +30,32 @@ pub struct GitSubmoduleListResponse {
     pub submodules: Vec<GitSubmoduleInfo>,
 }
 
-fn parse_gitmodules(contents: &str) -> Vec<GitSubmoduleInfo> {
-    let mut out: Vec<GitSubmoduleInfo> = Vec::new();
-    let mut current_path: Option<String> = None;
-    let mut current_url: Option<String> = None;
-    let mut current_branch: Option<String> = None;
+fn list_submodules(dir: &Path) -> Result<Vec<GitSubmoduleInfo>, Git2OpenError> {
+    let repo = git2_utils::open_repo_discover(dir)?;
+    let discovered = repo
+        .submodules()
+        .map_err(|error| Git2OpenError::Other(error.message().to_string()))?;
 
-    let flush = |out: &mut Vec<GitSubmoduleInfo>,
-                 path: &mut Option<String>,
-                 url: &mut Option<String>,
-                 branch: &mut Option<String>| {
-        if let (Some(p), Some(u)) = (path.take(), url.take()) {
-            out.push(GitSubmoduleInfo {
-                path: p,
-                url: u,
-                branch: branch.take(),
-            });
-        } else {
-            path.take();
-            url.take();
-            branch.take();
-        }
-    };
-
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.starts_with("[submodule") {
-            flush(
-                &mut out,
-                &mut current_path,
-                &mut current_url,
-                &mut current_branch,
-            );
+    let mut submodules = Vec::with_capacity(discovered.len());
+    for submodule in discovered {
+        let Some(url) = submodule
+            .url()
+            .map_err(|error| Git2OpenError::Other(error.message().to_string()))?
+        else {
             continue;
-        }
-        if let Some(rest) = line.strip_prefix("path =") {
-            current_path = Some(rest.trim().to_string());
-        } else if let Some(rest) = line.strip_prefix("url =") {
-            current_url = Some(rest.trim().to_string());
-        } else if let Some(rest) = line.strip_prefix("branch =") {
-            current_branch = Some(rest.trim().to_string());
-        }
+        };
+        let branch = submodule
+            .branch()
+            .map_err(|error| Git2OpenError::Other(error.message().to_string()))?
+            .map(str::to_string);
+        submodules.push(GitSubmoduleInfo {
+            path: submodule.path().to_string_lossy().into_owned(),
+            url: url.to_string(),
+            branch,
+        });
     }
-
-    flush(
-        &mut out,
-        &mut current_path,
-        &mut current_url,
-        &mut current_branch,
-    );
-    out
+    submodules.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(submodules)
 }
 
 pub async fn git_submodules(Query(q): Query<DirectoryQuery>) -> Response {
@@ -84,14 +64,18 @@ pub async fn git_submodules(Query(q): Query<DirectoryQuery>) -> Response {
         Err(resp) => return *resp,
     };
 
-    let gitmodules = dir.join(".gitmodules");
-    let contents = tokio::fs::read_to_string(&gitmodules)
-        .await
-        .unwrap_or_default();
-    let mut submodules = parse_gitmodules(&contents);
-    submodules.sort_by(|a, b| a.path.cmp(&b.path));
-
-    Json(GitSubmoduleListResponse { submodules }).into_response()
+    match spawn_libgit2(move || list_submodules(&dir)).await {
+        Ok(Ok(submodules)) => Json(GitSubmoduleListResponse { submodules }).into_response(),
+        Ok(Err(error)) => git2_open_error_response(error),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("submodule worker failed: {error}"),
+                "code": "submodule_worker_failed",
+            })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,4 +211,33 @@ pub async fn git_submodule_update(
     }
 
     git_success_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::list_submodules;
+
+    #[test]
+    fn libgit2_lists_submodules_with_git_config_quoting() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        git2::Repository::init(temp.path()).expect("repository");
+        fs::write(
+            temp.path().join(".gitmodules"),
+            concat!(
+                "[submodule \"quoted name\"]\n",
+                "\tpath = vendor/quoted path\n",
+                "\turl = ssh://git@example.com/team/repository.git\n",
+                "\tbranch = release/v2\n",
+            ),
+        )
+        .expect("gitmodules");
+
+        let listed = list_submodules(temp.path()).expect("submodule list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].path, "vendor/quoted path");
+        assert_eq!(listed[0].url, "ssh://git@example.com/team/repository.git");
+        assert_eq!(listed[0].branch.as_deref(), Some("release/v2"));
+    }
 }

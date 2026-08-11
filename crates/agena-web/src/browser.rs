@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{LazyLock, Mutex, Once};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+
+use process_control::{ChildExt as _, Control as _};
+use tempfile::TempDir;
 
 use crate::CrawlError;
 
@@ -30,14 +33,15 @@ impl Default for LocalBrowserOptions {
 struct ManagedBrowser {
     child: Child,
     endpoint: String,
-    profile_dir: PathBuf,
+    _profile_dir: TempDir,
 }
 
 impl ManagedBrowser {
     fn spawn(options: &LocalBrowserOptions) -> Result<Self, CrawlError> {
         let executable = find_browser_executable(options.executable_path.as_deref())?;
-        let profile_dir = browser_profile_dir();
-        fs::create_dir_all(&profile_dir)?;
+        let profile_dir = tempfile::Builder::new()
+            .prefix("agena-web-browser-")
+            .tempdir()?;
         let mut command = Command::new(&executable);
         command
             .arg("--headless=new")
@@ -48,7 +52,7 @@ impl ManagedBrowser {
             .arg("--no-default-browser-check")
             .arg("--remote-debugging-address=127.0.0.1")
             .arg("--remote-debugging-port=0")
-            .arg(format!("--user-data-dir={}", profile_dir.display()))
+            .arg(format!("--user-data-dir={}", profile_dir.path().display()))
             .arg("about:blank")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -67,16 +71,18 @@ impl ManagedBrowser {
             ))
         })?;
 
-        let endpoint =
-            match wait_for_devtools_endpoint(&mut child, &profile_dir, options.startup_timeout) {
-                Ok(endpoint) => endpoint,
-                Err(err) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = fs::remove_dir_all(&profile_dir);
-                    return Err(err);
-                }
-            };
+        let endpoint = match wait_for_devtools_endpoint(
+            &mut child,
+            profile_dir.path(),
+            options.startup_timeout,
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(err) => {
+                kill_browser_tree(&mut child);
+                let _ = child.wait();
+                return Err(err);
+            }
+        };
 
         tracing::debug!(
             target: "agena::web",
@@ -88,7 +94,7 @@ impl ManagedBrowser {
         Ok(Self {
             child,
             endpoint,
-            profile_dir,
+            _profile_dir: profile_dir,
         })
     }
 
@@ -96,11 +102,11 @@ impl ManagedBrowser {
         matches!(self.child.try_wait(), Ok(None))
     }
 
-    /// Kill the browser process tree and remove its temporary profile.
+    /// Kill the browser process tree. `TempDir` removes the profile when this
+    /// managed entry is dropped, including startup-error paths.
     fn shutdown(&mut self) {
         kill_browser_tree(&mut self.child);
         let _ = self.child.wait();
-        let _ = fs::remove_dir_all(&self.profile_dir);
     }
 }
 
@@ -331,13 +337,24 @@ fn find_browser_executable(configured: Option<&Path>) -> Result<PathBuf, CrawlEr
 }
 
 fn is_executable_candidate(path: &Path) -> bool {
-    Command::new(path)
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+    let Ok(mut child) = Command::new(path)
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .spawn()
+    else {
+        return false;
+    };
+    child
+        .controlled()
+        .time_limit(PROBE_TIMEOUT)
+        .terminate_for_timeout()
+        .wait()
+        .ok()
+        .flatten()
+        .is_some_and(process_control::ExitStatus::success)
 }
 
 fn browser_candidates() -> &'static [&'static str] {
@@ -370,14 +387,6 @@ fn browser_candidates() -> &'static [&'static str] {
             "brave-browser",
         ]
     }
-}
-
-fn browser_profile_dir() -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
-    std::env::temp_dir().join(format!("agena-web-browser-{}-{nanos}", std::process::id()))
 }
 
 #[cfg(test)]

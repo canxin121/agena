@@ -182,11 +182,36 @@ fn secure_directory(path: &Path) -> Result<(), PluginStorageError> {
     Ok(())
 }
 
-fn write_secure_file(path: &Path, contents: &[u8]) -> Result<(), PluginStorageError> {
-    if let Some(parent) = path.parent() {
-        ensure_dir(parent)?;
+fn write_secure_file_unlocked(path: &Path, contents: &[u8]) -> Result<(), PluginStorageError> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("plugin storage path has no parent: {}", path.display()),
+        )
+    })?;
+    ensure_dir(parent)?;
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {
+            agena_runtime_tools::atomic_replace_file(path, contents)?;
+        }
+        Ok(_) => {
+            return Err(PluginStorageError::Data(format!(
+                "plugin storage target is not a regular file: {}",
+                path.display()
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
+            let permissions = {
+                use std::os::unix::fs::PermissionsExt as _;
+                Some(fs::Permissions::from_mode(0o600))
+            };
+            #[cfg(not(unix))]
+            let permissions = None;
+            agena_runtime_tools::atomic_create_file(path, contents, permissions)?;
+        }
+        Err(error) => return Err(error.into()),
     }
-    fs::write(path, contents)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -206,15 +231,6 @@ fn read_namespace_map(path: &Path) -> Result<BTreeMap<String, String>, PluginSto
     serde_json::from_str(&text).map_err(|e| PluginStorageError::Data(e.to_string()))
 }
 
-fn write_namespace_map(
-    path: &Path,
-    map: &BTreeMap<String, String>,
-) -> Result<(), PluginStorageError> {
-    let json =
-        serde_json::to_string_pretty(map).map_err(|e| PluginStorageError::Data(e.to_string()))?;
-    write_secure_file(path, json.as_bytes())
-}
-
 fn read_index(path: &Path) -> Result<BTreeSet<String>, PluginStorageError> {
     if !path.exists() {
         return Ok(BTreeSet::new());
@@ -224,12 +240,6 @@ fn read_index(path: &Path) -> Result<BTreeSet<String>, PluginStorageError> {
         return Ok(BTreeSet::new());
     }
     serde_json::from_str(&text).map_err(|e| PluginStorageError::Data(e.to_string()))
-}
-
-fn write_index(path: &Path, names: &BTreeSet<String>) -> Result<(), PluginStorageError> {
-    let json =
-        serde_json::to_string_pretty(names).map_err(|e| PluginStorageError::Data(e.to_string()))?;
-    write_secure_file(path, json.as_bytes())
 }
 
 fn plugin_dir(root: &Path, plugin_id: &PluginKey) -> PathBuf {
@@ -340,9 +350,13 @@ impl PluginStorage for FilePluginStorage {
         validate_namespace(namespace)?;
         validate_key(key)?;
         let path = namespace_path(&self.root, locator, namespace)?;
-        let mut map = read_namespace_map(&path)?;
-        map.insert(key.to_string(), value.to_string());
-        write_namespace_map(&path, &map)
+        agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
+            let mut map = read_namespace_map(&path)?;
+            map.insert(key.to_string(), value.to_string());
+            let json = serde_json::to_string_pretty(&map)
+                .map_err(|error| PluginStorageError::Data(error.to_string()))?;
+            write_secure_file_unlocked(&path, json.as_bytes())
+        })
     }
 
     fn delete(
@@ -354,19 +368,23 @@ impl PluginStorage for FilePluginStorage {
         validate_namespace(namespace)?;
         validate_key(key)?;
         let path = namespace_path(&self.root, locator, namespace)?;
-        if !path.exists() {
-            return Ok(());
-        }
-        let mut map = read_namespace_map(&path)?;
-        if map.remove(key).is_none() {
-            return Ok(());
-        }
-        if map.is_empty() {
-            fs::remove_file(&path)?;
-        } else {
-            write_namespace_map(&path, &map)?;
-        }
-        Ok(())
+        agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
+            if !path.exists() {
+                return Ok(());
+            }
+            let mut map = read_namespace_map(&path)?;
+            if map.remove(key).is_none() {
+                return Ok(());
+            }
+            if map.is_empty() {
+                fs::remove_file(&path)?;
+            } else {
+                let json = serde_json::to_string_pretty(&map)
+                    .map_err(|error| PluginStorageError::Data(error.to_string()))?;
+                write_secure_file_unlocked(&path, json.as_bytes())?;
+            }
+            Ok(())
+        })
     }
 
     fn list(
@@ -482,43 +500,55 @@ impl PluginKeyringSecretStore {
         serde_json::from_str(&text).map_err(|e| PluginStorageError::Data(e.to_string()))
     }
 
-    fn write_fallback(
+    fn update_fallback(
         &self,
         plugin_id: &PluginKey,
-        map: &BTreeMap<String, String>,
+        update: impl FnOnce(&mut BTreeMap<String, String>),
     ) -> Result<(), PluginStorageError> {
         let path = secrets_fallback_path(&self.root, plugin_id);
-        if map.is_empty() {
-            if path.exists() {
-                fs::remove_file(&path)?;
+        agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
+            let mut map = self.read_fallback(plugin_id)?;
+            update(&mut map);
+            if map.is_empty() {
+                if path.exists() {
+                    fs::remove_file(&path)?;
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
-        let json = serde_json::to_string_pretty(map)
-            .map_err(|e| PluginStorageError::Data(e.to_string()))?;
-        write_secure_file(&path, json.as_bytes())
+            let json = serde_json::to_string_pretty(&map)
+                .map_err(|error| PluginStorageError::Data(error.to_string()))?;
+            write_secure_file_unlocked(&path, json.as_bytes())
+        })
     }
 
     fn record_name(&self, plugin_id: &PluginKey, name: &str) -> Result<(), PluginStorageError> {
         let path = secrets_index_path(&self.root, plugin_id);
-        let mut names = read_index(&path)?;
-        if names.insert(name.to_string()) {
-            write_index(&path, &names)?;
-        }
-        Ok(())
+        agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
+            let mut names = read_index(&path)?;
+            if names.insert(name.to_string()) {
+                let json = serde_json::to_string_pretty(&names)
+                    .map_err(|error| PluginStorageError::Data(error.to_string()))?;
+                write_secure_file_unlocked(&path, json.as_bytes())?;
+            }
+            Ok(())
+        })
     }
 
     fn forget_name(&self, plugin_id: &PluginKey, name: &str) -> Result<(), PluginStorageError> {
         let path = secrets_index_path(&self.root, plugin_id);
-        let mut names = read_index(&path)?;
-        if names.remove(name) {
-            if names.is_empty() {
-                fs::remove_file(&path)?;
-            } else {
-                write_index(&path, &names)?;
+        agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
+            let mut names = read_index(&path)?;
+            if names.remove(name) {
+                if names.is_empty() {
+                    fs::remove_file(&path)?;
+                } else {
+                    let json = serde_json::to_string_pretty(&names)
+                        .map_err(|error| PluginStorageError::Data(error.to_string()))?;
+                    write_secure_file_unlocked(&path, json.as_bytes())?;
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn map_secret_err(&self, err: SecretStoreError) -> PluginStorageError {
@@ -562,9 +592,9 @@ impl PluginSecretStore for PluginKeyringSecretStore {
             }
             Err(err) if err.is_unavailable() => {
                 if self.fallback_to_file {
-                    let mut map = self.read_fallback(plugin_id)?;
-                    map.insert(name.to_string(), value.to_string());
-                    self.write_fallback(plugin_id, &map)?;
+                    self.update_fallback(plugin_id, |map| {
+                        map.insert(name.to_string(), value.to_string());
+                    })?;
                     self.record_name(plugin_id, name)?;
                     Ok(())
                 } else {
@@ -588,9 +618,9 @@ impl PluginSecretStore for PluginKeyringSecretStore {
             Err(err) => return Err(self.map_secret_err(err)),
         }
         if self.fallback_to_file {
-            let mut map = self.read_fallback(plugin_id)?;
-            map.remove(name);
-            self.write_fallback(plugin_id, &map)?;
+            self.update_fallback(plugin_id, |map| {
+                map.remove(name);
+            })?;
         }
         self.forget_name(plugin_id, name)?;
         Ok(())
@@ -599,5 +629,60 @@ impl PluginSecretStore for PluginKeyringSecretStore {
     fn list(&self, plugin_id: &PluginKey) -> Result<Vec<String>, PluginStorageError> {
         let path = secrets_index_path(&self.root, plugin_id);
         Ok(read_index(&path)?.into_iter().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Barrier};
+
+    use agena_plugin_host::sdk::host_api::{HostStorageScope, HostStorageVisibility};
+    use agena_plugin_sdk::PluginKey;
+
+    use super::{FilePluginStorage, PluginStorage, StorageLocator};
+
+    #[test]
+    fn concurrent_namespace_updates_keep_both_records() {
+        let directory = tempfile::tempdir().expect("plugin storage directory");
+        let storage = Arc::new(FilePluginStorage::new(directory.path()));
+        let locator = StorageLocator::new(
+            HostStorageScope::Global,
+            HostStorageVisibility::Private,
+            PluginKey::new("test", "storage").expect("plugin key"),
+            None,
+            None,
+        )
+        .expect("storage locator");
+        let barrier = Arc::new(Barrier::new(2));
+
+        let handles = [("first", "one"), ("second", "two")].map(|(key, value)| {
+            let storage = Arc::clone(&storage);
+            let locator = locator.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                storage
+                    .set(&locator, "state", key, value)
+                    .expect("concurrent set");
+            })
+        });
+        for handle in handles {
+            handle.join().expect("storage writer");
+        }
+
+        assert_eq!(
+            storage
+                .get(&locator, "state", "first")
+                .expect("first record")
+                .as_deref(),
+            Some("one")
+        );
+        assert_eq!(
+            storage
+                .get(&locator, "state", "second")
+                .expect("second record")
+                .as_deref(),
+            Some("two")
+        );
     }
 }

@@ -38,6 +38,7 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
 shlex = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
@@ -52,7 +53,6 @@ plugin-signing = ["agena-plugin-host/signing"]
 
 [dev-dependencies]
 axum = { workspace = true }
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

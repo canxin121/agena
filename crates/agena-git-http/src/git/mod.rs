@@ -8,6 +8,7 @@ use axum::{
 use serde::Deserialize;
 use tokio::sync::Semaphore;
 
+mod atomic_file;
 mod auth;
 mod blame;
 mod branches;

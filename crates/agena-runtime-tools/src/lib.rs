@@ -10,6 +10,7 @@
 pub use agena_runtime_contracts::ToolSessionContext;
 pub use agena_runtime_contracts::{authorization, identity, part, permission, provider_state};
 
+mod atomic_file;
 mod bounded_process;
 mod monitor;
 mod project_paths;
@@ -19,6 +20,10 @@ mod snapshot_operations;
 mod snapshot_registry;
 pub mod tool;
 
+pub use atomic_file::{
+    atomic_create_file, atomic_replace_file, atomic_write_file, canonicalize_mutation_path,
+    with_file_mutation_locks,
+};
 pub use monitor::{
     MonitorError, MonitorListener, MonitorRead, MonitorRegistry, MonitorService, MonitorStart,
     MonitorStopOutcome, default_monitor_registry,

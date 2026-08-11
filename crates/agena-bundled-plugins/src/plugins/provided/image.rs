@@ -273,15 +273,9 @@ impl OpenAiToolsPlugin {
             .workspace_root()?
             .join(".agena/artifacts/openai/images")
             .join(format!("{}.png", uuid::Uuid::new_v4().simple()));
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                PluginError::internal(format!("cannot create image directory: {error}"))
-            })?;
-        }
-        tokio::fs::write(&path, bytes.as_slice())
-            .await
-            .map_err(|error| PluginError::internal(format!("cannot save OpenAI image: {error}")))?;
+        let size_bytes = bytes.len() as u64;
         let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
+        crate::artifact_file::persist_new(path.clone(), bytes, "OpenAI image").await?;
         let revised_prompt = response
             .pointer("/data/0/revised_prompt")
             .and_then(serde_json::Value::as_str)
@@ -297,7 +291,7 @@ impl OpenAiToolsPlugin {
                 .and_then(|value| value.to_str())
                 .map(ToOwned::to_owned),
             title: Some(title.to_owned()),
-            size_bytes: Some(bytes.len() as u64),
+            size_bytes: Some(size_bytes),
             sha256: Some(sha256.clone()),
             width: None,
             height: None,
@@ -306,14 +300,14 @@ impl OpenAiToolsPlugin {
         };
         Ok(ToolInvokeOutput::from_parts(
             title,
-            format!("image/png · {} bytes", bytes.len()),
+            format!("image/png · {size_bytes} bytes"),
             format!("Saved OpenAI image artifact to '{}'.", path.display()),
             Some(serde_json::json!({
                 "provider": "openai",
                 "model": model,
                 "path": path,
                 "mime": "image/png",
-                "size_bytes": bytes.len(),
+                "size_bytes": size_bytes,
                 "sha256": sha256,
                 "revised_prompt": revised_prompt,
             })),

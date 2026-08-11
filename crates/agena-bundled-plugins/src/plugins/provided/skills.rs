@@ -697,18 +697,13 @@ fn parse_managed_skill_document(document: &str) -> SdkResult<Skill> {
 
 fn write_skill_document(path: &Path, document: &str) -> SdkResult<()> {
     enforce_skill_document_size(document)?;
-    let parent = path.parent().ok_or_else(|| {
-        PluginError::internal("managed Skill path unexpectedly has no parent directory")
-    })?;
-    let temporary = parent.join(".SKILL.md.agena-tmp");
-    if temporary.exists() {
-        std::fs::remove_file(&temporary).map_err(skill_write_error)?;
-    }
-    std::fs::write(&temporary, document).map_err(skill_write_error)?;
-    std::fs::rename(&temporary, path).map_err(|error| {
-        let _ = std::fs::remove_file(&temporary);
-        skill_write_error(error)
-    })
+    agena_runtime_tools::atomic_replace_file(path, document.as_bytes()).map_err(skill_write_error)
+}
+
+fn create_skill_document(path: &Path, document: &str) -> SdkResult<()> {
+    enforce_skill_document_size(document)?;
+    agena_runtime_tools::atomic_create_file(path, document.as_bytes(), None)
+        .map_err(skill_write_error)
 }
 
 fn skill_write_error(error: std::io::Error) -> PluginError {
@@ -1047,27 +1042,30 @@ impl SkillsPlugin {
         let skill = parse_managed_skill_document(document)?;
         let name = skill.frontmatter.name;
         let path = self.managed_skill_path(name.as_str())?;
-        if path.exists() {
-            return Err(PluginError::invalid_params(format!(
-                "workspace-managed Skill '{name}' already exists; use update instead"
-            )));
-        }
-        let parent = path.parent().ok_or_else(|| {
-            PluginError::internal("managed Skill path unexpectedly has no parent directory")
-        })?;
-        std::fs::create_dir_all(parent).map_err(skill_write_error)?;
-        let canonical_root = self.managed_root()?;
-        let canonical_parent = parent.canonicalize().map_err(skill_write_error)?;
-        if !canonical_parent.starts_with(&canonical_root) || parent.is_symlink() {
-            return Err(PluginError::invalid_params(
-                "workspace-managed Skill directory resolves outside the workspace",
-            ));
-        }
-        write_skill_document(path.as_path(), document)?;
-        Ok(SkillWriteResult {
-            name,
-            path,
-            operation: "created",
+        let lock_path = path.clone();
+        agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&lock_path), || {
+            if path.exists() {
+                return Err(PluginError::invalid_params(format!(
+                    "workspace-managed Skill '{name}' already exists; use update instead"
+                )));
+            }
+            let parent = path.parent().ok_or_else(|| {
+                PluginError::internal("managed Skill path unexpectedly has no parent directory")
+            })?;
+            std::fs::create_dir_all(parent).map_err(skill_write_error)?;
+            let canonical_root = self.managed_root()?;
+            let canonical_parent = parent.canonicalize().map_err(skill_write_error)?;
+            if !canonical_parent.starts_with(&canonical_root) || parent.is_symlink() {
+                return Err(PluginError::invalid_params(
+                    "workspace-managed Skill directory resolves outside the workspace",
+                ));
+            }
+            create_skill_document(path.as_path(), document)?;
+            Ok(SkillWriteResult {
+                name,
+                path,
+                operation: "created",
+            })
         })
     }
 
@@ -1085,42 +1083,48 @@ impl SkillsPlugin {
                 replacement.frontmatter.name
             )));
         }
-        let (existing, path) = self.managed_skill_document(canonical_name)?;
-        // Parse first so an invalid legacy document cannot be overwritten by
-        // accident. The names must remain stable even when an alias was used.
-        let existing_skill = parse_managed_skill_document(existing.as_str())?;
-        if existing_skill.frontmatter.name != canonical_name {
-            return Err(PluginError::invalid_params(format!(
-                "workspace-managed Skill file for '{canonical_name}' declares '{}'",
-                existing_skill.frontmatter.name
-            )));
-        }
-        write_skill_document(path.as_path(), document)?;
-        Ok(SkillWriteResult {
-            name: canonical_name.to_owned(),
-            path,
-            operation: "updated",
+        let lock_path = self.managed_skill_path(canonical_name)?;
+        agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&lock_path), || {
+            let (existing, path) = self.managed_skill_document(canonical_name)?;
+            // Parse first so an invalid legacy document cannot be overwritten
+            // by accident. Names stay stable even when an alias was used.
+            let existing_skill = parse_managed_skill_document(existing.as_str())?;
+            if existing_skill.frontmatter.name != canonical_name {
+                return Err(PluginError::invalid_params(format!(
+                    "workspace-managed Skill file for '{canonical_name}' declares '{}'",
+                    existing_skill.frontmatter.name
+                )));
+            }
+            write_skill_document(path.as_path(), document)?;
+            Ok(SkillWriteResult {
+                name: canonical_name.to_owned(),
+                path,
+                operation: "updated",
+            })
         })
     }
 
     fn delete_managed_skill(&self, requested_name: &str) -> SdkResult<SkillWriteResult> {
         let tools = self.discovered_tools()?;
         let (canonical_name, _) = Self::resolve_tool(&tools, requested_name)?;
-        let (_, path) = self.managed_skill_document(canonical_name)?;
-        std::fs::remove_file(&path).map_err(skill_write_error)?;
-        if let Some(parent) = path.parent()
-            && parent
-                .read_dir()
-                .map_err(skill_write_error)?
-                .next()
-                .is_none()
-        {
-            std::fs::remove_dir(parent).map_err(skill_write_error)?;
-        }
-        Ok(SkillWriteResult {
-            name: canonical_name.to_owned(),
-            path,
-            operation: "deleted",
+        let lock_path = self.managed_skill_path(canonical_name)?;
+        agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&lock_path), || {
+            let (_, path) = self.managed_skill_document(canonical_name)?;
+            std::fs::remove_file(&path).map_err(skill_write_error)?;
+            if let Some(parent) = path.parent()
+                && parent
+                    .read_dir()
+                    .map_err(skill_write_error)?
+                    .next()
+                    .is_none()
+            {
+                std::fs::remove_dir(parent).map_err(skill_write_error)?;
+            }
+            Ok(SkillWriteResult {
+                name: canonical_name.to_owned(),
+                path,
+                operation: "deleted",
+            })
         })
     }
 

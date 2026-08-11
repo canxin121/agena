@@ -372,24 +372,26 @@ pub fn set_runtime_file_setting(
     validator: Option<&RuntimeSettingsDocumentValidator>,
 ) -> Result<ConfigSettingsEditResponse, RuntimeConfigSettingsError> {
     let config_path = config_path.into();
-    let segments = required_runtime_settings_path_segments(&input.path)?;
-    let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
-    let before = document.clone();
-    let previous = get_json_path(&before, Some(input.path.as_str()))?;
-    let created = previous.is_null();
-    set_runtime_json_path(&mut document, &segments, input.value)?;
-    finish_runtime_settings_edit(
-        config_path,
-        config_found,
-        document,
-        before,
-        Some(input.path),
-        "set",
-        input.options,
-        created,
-        false,
-        validator,
-    )
+    crate::with_config_file_write_lock(|| {
+        let segments = required_runtime_settings_path_segments(&input.path)?;
+        let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
+        let before = document.clone();
+        let previous = get_json_path(&before, Some(input.path.as_str()))?;
+        let created = previous.is_null();
+        set_runtime_json_path(&mut document, &segments, input.value)?;
+        finish_runtime_settings_edit(
+            config_path,
+            config_found,
+            document,
+            before,
+            Some(input.path),
+            "set",
+            input.options,
+            created,
+            false,
+            validator,
+        )
+    })
 }
 
 pub fn delete_runtime_file_setting(
@@ -398,22 +400,24 @@ pub fn delete_runtime_file_setting(
     validator: Option<&RuntimeSettingsDocumentValidator>,
 ) -> Result<ConfigSettingsEditResponse, RuntimeConfigSettingsError> {
     let config_path = config_path.into();
-    let segments = required_runtime_settings_path_segments(&input.path)?;
-    let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
-    let before = document.clone();
-    let deleted = remove_runtime_json_path(&mut document, &segments)?;
-    finish_runtime_settings_edit(
-        config_path,
-        config_found,
-        document,
-        before,
-        Some(input.path),
-        "delete",
-        input.options,
-        false,
-        deleted,
-        validator,
-    )
+    crate::with_config_file_write_lock(|| {
+        let segments = required_runtime_settings_path_segments(&input.path)?;
+        let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
+        let before = document.clone();
+        let deleted = remove_runtime_json_path(&mut document, &segments)?;
+        finish_runtime_settings_edit(
+            config_path,
+            config_found,
+            document,
+            before,
+            Some(input.path),
+            "delete",
+            input.options,
+            false,
+            deleted,
+            validator,
+        )
+    })
 }
 
 pub fn patch_runtime_file_settings(
@@ -421,33 +425,37 @@ pub fn patch_runtime_file_settings(
     input: ConfigSettingsPatchInput,
     validator: Option<&RuntimeSettingsDocumentValidator>,
 ) -> Result<ConfigSettingsEditResponse, RuntimeConfigSettingsError> {
-    let changes = input.changes.as_object().ok_or_else(|| {
-        RuntimeConfigSettingsError::invalid_input("settings_patch changes must be a JSON object")
-    })?;
     let config_path = config_path.into();
-    let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
-    let before = document.clone();
-    let created = input
-        .target
-        .path
-        .as_deref()
-        .map(|path| get_json_path(&before, Some(path)).map(|value| value.is_null()))
-        .transpose()?
-        .unwrap_or(false);
-    let target = ensure_runtime_object_path(&mut document, input.target.path.as_deref())?;
-    merge_runtime_json_object(target, changes)?;
-    finish_runtime_settings_edit(
-        config_path,
-        config_found,
-        document,
-        before,
-        input.target.path,
-        "patch",
-        input.options,
-        created,
-        false,
-        validator,
-    )
+    crate::with_config_file_write_lock(|| {
+        let changes = input.changes.as_object().ok_or_else(|| {
+            RuntimeConfigSettingsError::invalid_input(
+                "settings_patch changes must be a JSON object",
+            )
+        })?;
+        let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
+        let before = document.clone();
+        let created = input
+            .target
+            .path
+            .as_deref()
+            .map(|path| get_json_path(&before, Some(path)).map(|value| value.is_null()))
+            .transpose()?
+            .unwrap_or(false);
+        let target = ensure_runtime_object_path(&mut document, input.target.path.as_deref())?;
+        merge_runtime_json_object(target, changes)?;
+        finish_runtime_settings_edit(
+            config_path,
+            config_found,
+            document,
+            before,
+            input.target.path,
+            "patch",
+            input.options,
+            created,
+            false,
+            validator,
+        )
+    })
 }
 
 pub fn validate_runtime_file_settings(
@@ -517,15 +525,7 @@ fn write_runtime_settings_document(
     config_path: &Path,
     text: &str,
 ) -> Result<(), RuntimeConfigSettingsError> {
-    if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            RuntimeConfigSettingsError::internal(format!(
-                "failed to create configuration directory {}: {error}",
-                parent.display()
-            ))
-        })?;
-    }
-    fs::write(config_path, text).map_err(|error| {
+    crate::write_config_file_atomically(config_path, text.as_bytes()).map_err(|error| {
         RuntimeConfigSettingsError::internal(format!(
             "failed to write configuration file {}: {error}",
             config_path.display()

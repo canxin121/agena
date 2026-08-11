@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write as _;
 use std::path::Path;
 
 use crate::{
@@ -47,10 +48,8 @@ impl CrawlStore {
     pub fn save_document(&self, document: &StoredDocument) -> Result<(), CrawlError> {
         self.ensure_exists()?;
         let path = self.document_path(document.id.as_str());
-        let temp_path = path.with_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(document)?;
-        fs::write(&temp_path, bytes)?;
-        fs::rename(temp_path, path)?;
+        persist_document_atomically(&path, &bytes)?;
         self.metadata()?.save_document(document)?;
         Ok(())
     }
@@ -213,5 +212,56 @@ impl CrawlStore {
         }
         entries.sort_by_key(|(document, _)| std::cmp::Reverse(document.fetched_at));
         Ok(entries)
+    }
+}
+
+fn persist_document_atomically(path: &Path, bytes: &[u8]) -> Result<(), CrawlError> {
+    let parent = path.parent().ok_or_else(|| {
+        CrawlError::InvalidInput(format!(
+            "crawl document path has no parent: {}",
+            path.display()
+        ))
+    })?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".agena-web-document-").suffix(".json.tmp");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    let mut staged = builder.tempfile_in(parent)?;
+    staged.write_all(bytes)?;
+    staged.flush()?;
+    staged.as_file().sync_all()?;
+    staged
+        .persist(path)
+        .map(|_| ())
+        .map_err(|error| CrawlError::Io(error.error))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::persist_document_atomically;
+
+    #[test]
+    fn document_persistence_replaces_atomically_without_fixed_temp_files() {
+        let directory = tempfile::tempdir().expect("crawl document directory");
+        let path = directory.path().join("document.json");
+
+        persist_document_atomically(&path, br#"{"version":1}"#).expect("first document");
+        persist_document_atomically(&path, br#"{"version":2}"#).expect("replace document");
+
+        assert_eq!(
+            std::fs::read(&path).expect("read document"),
+            br#"{"version":2}"#
+        );
+        assert_eq!(
+            directory
+                .path()
+                .read_dir()
+                .expect("read crawl directory")
+                .count(),
+            1
+        );
     }
 }

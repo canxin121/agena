@@ -5,6 +5,7 @@
 //! together with their detailed help text, examples, tags, runtime flags, and
 //! JSON Schema contracts.
 
+mod artifact_file;
 pub mod capability_manifest;
 pub mod docs_reference;
 pub mod memory;
@@ -14,6 +15,8 @@ pub mod web;
 
 pub(crate) static BLOCKING_PLUGIN_WORKERS: tokio::sync::Semaphore =
     tokio::sync::Semaphore::const_new(32);
+pub(crate) static PROVIDER_HTTP_CLIENT: std::sync::LazyLock<reqwest::Client> =
+    std::sync::LazyLock::new(reqwest::Client::new);
 
 /// Generated Markdown reference for every bundled tool: definitions, detailed
 /// help text, examples, tags, runtime flags, and JSON Schema contracts.

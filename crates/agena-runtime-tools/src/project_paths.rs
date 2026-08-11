@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 const MAX_WORKSPACE_KEY_LEN: usize = 80;
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 pub const MAX_GENERATED_IMAGE_BYTES: usize = 50 * 1024 * 1024;
+static GENERATED_IMAGE_FILE_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// A generated image artifact managed by the runtime.
@@ -117,7 +118,19 @@ pub async fn persist_generated_image_artifact(
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    tokio::fs::write(&path, bytes.as_slice()).await?;
+    let size_bytes = bytes.len() as u64;
+    let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
+    let write_path = path.clone();
+    let worker_permit = GENERATED_IMAGE_FILE_WORKERS
+        .acquire()
+        .await
+        .expect("the static generated-image semaphore is never closed");
+    tokio::task::spawn_blocking(move || {
+        let _worker_permit = worker_permit;
+        crate::atomic_write_file(&write_path, bytes.as_slice())
+    })
+    .await
+    .map_err(|error| std::io::Error::other(format!("generated image worker failed: {error}")))??;
 
     let filename = path
         .file_name()
@@ -127,8 +140,8 @@ pub async fn persist_generated_image_artifact(
     Ok(Some(ManagedGeneratedImageArtifact {
         path: path.to_string_lossy().to_string(),
         filename,
-        size_bytes: bytes.len() as u64,
-        sha256: hex::encode(Sha256::digest(bytes.as_slice())),
+        size_bytes,
+        sha256,
     }))
 }
 

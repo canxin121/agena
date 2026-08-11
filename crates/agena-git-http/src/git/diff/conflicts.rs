@@ -378,7 +378,9 @@ pub async fn git_conflict_resolve(
             "ours"
         };
         let new_text = apply_conflict_choices(&text, &map, default_choice);
-        if let Err(e) = tokio::fs::write(&full, new_text).await {
+        if let Err(e) =
+            super::super::atomic_file::write_file_atomically(full, new_text.into_bytes()).await
+        {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": e.to_string(), "code": "write_failed"})),

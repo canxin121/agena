@@ -28,7 +28,6 @@ pub(crate) mod timeline;
 
 pub(crate) use self::inspector::InspectorRow;
 pub(crate) use self::live_events::LiveEvent;
-pub(crate) use self::permission_catalog::PermissionToolCatalogItem;
 pub(crate) use self::permission_studio::SessionPermissionStudioState;
 pub(crate) use self::plugin_effects::PluginCommandEffect;
 pub(crate) use self::session_refresh::SessionRefresh;

@@ -105,7 +105,6 @@ dependencies = [
  "agena-runtime",
  "agena-tui",
  "agena-tui-app",
- "agena-tui-backend",
  "agena-tui-platform",
  "anyhow",
  "argon2",
@@ -1237,8 +1236,8 @@ dependencies = [
  "agena-process",
  "agena-provider",
  "agena-runtime",
+ "agena-storage",
  "agena-tui",
- "agena-tui-backend",
  "agena-tui-components",
  "agena-tui-media",
  "agena-tui-permission-studio",
@@ -1253,6 +1252,7 @@ dependencies = [
  "chrono",
  "comrak",
  "crossterm",
+ "ignore",
  "image",
  "indexmap",
  "ratatui",
@@ -1271,33 +1271,6 @@ dependencies = [
  "url",
  "uuid",
  "yaml_serde",
-]
-
-[[package]]
-name = "agena-tui-backend"
-version = "0.1.0"
-dependencies = [
- "agena-api",
- "agena-application",
- "agena-domain",
- "agena-failure",
- "agena-plugin-host",
- "agena-plugin-sdk",
- "agena-provider",
- "agena-runtime",
- "agena-storage",
- "agena-tui",
- "anyhow",
- "base64",
- "chrono",
- "ignore",
- "imagesize 0.15.0",
- "mime_guess",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -1396,7 +1369,6 @@ dependencies = [
  "agena-domain",
  "agena-provider",
  "agena-tui",
- "agena-tui-backend",
  "serde",
  "serde_json",
 ]

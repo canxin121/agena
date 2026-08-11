@@ -20,20 +20,6 @@ pub(crate) async fn list_activities(
         .collect())
 }
 
-pub(crate) async fn get_activity(
-    application: &Application,
-    activity_id: &str,
-) -> Result<BackgroundActivityResource> {
-    let service = application.runtime_activities()?;
-    let activity = service
-        .get_activity(activity_id)
-        .map_err(|error| anyhow!("{error}"))
-        .context("failed to get background activity")?;
-    Ok(agena_api::resource::BackgroundActivityResource::from(
-        &activity,
-    ))
-}
-
 pub(crate) async fn activity_logs(
     application: &Application,
     activity_id: &str,

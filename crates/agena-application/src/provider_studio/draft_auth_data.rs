@@ -441,7 +441,8 @@ pub struct OpenAiChatgptCredentialDraft {
 }
 
 impl OpenAiChatgptCredentialDraft {
-    pub(crate) fn clear_pending(&mut self) {
+    /// Clear any in-progress interactive authentication state.
+    pub fn clear_pending(&mut self) {
         self.callback_url.clear();
         self.browser = None;
         self.device = None;
@@ -651,11 +652,8 @@ pub enum ProviderDraftAuthError {
 }
 
 impl ProviderDraftAuthError {
-    #[expect(
-        dead_code,
-        reason = "draft auth orchestration remains in agena-tui-backend during the staged migration"
-    )]
-    pub(crate) fn other(error: impl std::fmt::Display) -> Self {
+    /// Project an authentication backend diagnostic into a safe user problem.
+    pub fn other(error: impl std::fmt::Display) -> Self {
         Self::Other(provider_backend_problem(
             "provider.authentication_failed",
             "Provider authentication could not be completed.",

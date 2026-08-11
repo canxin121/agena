@@ -1,11 +1,11 @@
 //! Provider/model presentation mappings: routing views, local model lists,
 //! catalog lookups, and the inspector rows for think/speed/verbosity choices.
 
-use agena_api::resource::{
-    CatalogModelResource, ModelCatalogListResponse, ProviderAdapterModelsResource,
-    ProviderModelResource,
+use agena_api::resource::{ProviderAdapterModelsResource, ProviderModelResource};
+use agena_application::{
+    Application,
+    dto::{CatalogModelResource, ModelCatalogListResponse},
 };
-use agena_application::Application;
 use agena_domain::Model as ProviderModel;
 use agena_domain::{ModelRef, ProviderId};
 use anyhow::{Result, anyhow};

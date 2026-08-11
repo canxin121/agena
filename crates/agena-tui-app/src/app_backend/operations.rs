@@ -4,7 +4,7 @@
 //! on `Application` itself; this module holds everything else).
 
 use agena_application::Application;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use serde_json::Value as JsonValue;
 
 use agena_api::resource::{
@@ -174,24 +174,6 @@ pub(crate) async fn cancel_run(
             ))
         })
         .context("failed to cancel active run")
-}
-
-/// Inject `document` as a steer message into the active execution. Returns
-/// `Err` when there is no active run or the run is in a phase that no longer
-/// accepts steers (the caller should re-queue).
-pub(crate) async fn steer_input(
-    application: &Application,
-    session_id: i64,
-    document: agena_domain::ComposerDocument,
-) -> Result<()> {
-    application
-        .session_execution_services()
-        .map_err(anyhow::Error::new)?
-        .commands
-        .steer_input(session_id, document)
-        .await
-        .map_err(anyhow::Error::new)
-        .context("failed to steer run")
 }
 
 /// Reply to a pending permission request.

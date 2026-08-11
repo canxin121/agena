@@ -20,7 +20,6 @@ pub struct SessionTimelineEntry {
     pub run_id: Option<i64>,
     pub revision: i64,
     pub created_at_ms: i64,
-    pub updated_at_ms: i64,
 }
 
 /// Loads the visible timeline parts through `Application` and maps them into
@@ -50,6 +49,5 @@ fn entry_from_part(part: agena_storage::store::SessionPartView) -> SessionTimeli
         run_id: part.run_id,
         revision: part.revision,
         created_at_ms: part.created_at_ms,
-        updated_at_ms: part.updated_at_ms,
     }
 }

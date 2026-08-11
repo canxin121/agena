@@ -32,7 +32,7 @@ impl App {
         let mut plugins = statuses
             .into_iter()
             .map(|status| {
-                let plugin_id = status.plugin_id.clone();
+                let plugin_id = status.plugin_id.to_string();
                 let inspect = crate::app_backend::plugin_effects::plugin_inspect(
                     &self.application,
                     &plugin_id,

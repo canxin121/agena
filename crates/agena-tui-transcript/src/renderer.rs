@@ -1846,6 +1846,211 @@ mod tests {
     }
 
     #[test]
+    fn expanded_tool_input_renders_as_nested_markdown_bullets() {
+        let operation = OperationPartResource {
+            call_id: 7,
+            invocation: ToolInvocationResource {
+                name: "agena.fs.read".to_owned(),
+                input: agena_api::part::StructuredObjectResource {
+                    fields: vec![
+                        agena_api::part::StructuredFieldResource {
+                            name: "path".to_owned(),
+                            value: agena_api::part::StructuredValueResource::Text {
+                                value: "README.md".to_owned(),
+                            },
+                        },
+                        agena_api::part::StructuredFieldResource {
+                            name: "line_count".to_owned(),
+                            value: agena_api::part::StructuredValueResource::Integer { value: 5 },
+                        },
+                        agena_api::part::StructuredFieldResource {
+                            name: "options".to_owned(),
+                            value: agena_api::part::StructuredValueResource::Object {
+                                fields: vec![agena_api::part::StructuredFieldResource {
+                                    name: "follow_symlinks".to_owned(),
+                                    value: agena_api::part::StructuredValueResource::Boolean {
+                                        value: true,
+                                    },
+                                }],
+                            },
+                        },
+                    ],
+                },
+                ..Default::default()
+            },
+            title: "fs.read · Read README.md".to_owned(),
+            ..Default::default()
+        };
+        let part = TranscriptFixture::operation_part(
+            9,
+            3,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            operation,
+        );
+        let mut rendered = Vec::new();
+        render_tool_execution(
+            &part,
+            operation_resource(&part),
+            &mut rendered,
+            80,
+            &I18n::english(),
+            true,
+        );
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("› Input"), "{text}");
+        // Markdown bullets render as terminal list markers; `**` emphasis and
+        // backticks are styling, not literal text.
+        assert!(text.contains("• path: README.md"), "{text}");
+        assert!(text.contains("• line_count: 5"), "{text}");
+        assert!(text.contains("• options:"), "{text}");
+        assert!(text.contains("◦ follow_symlinks: true"), "{text}");
+    }
+
+    #[test]
+    fn tools_call_input_unwraps_to_the_inner_tool_arguments() {
+        let operation = OperationPartResource {
+            call_id: 7,
+            invocation: ToolInvocationResource {
+                name: "tools_call".to_owned(),
+                input: agena_api::part::StructuredObjectResource {
+                    fields: vec![
+                        agena_api::part::StructuredFieldResource {
+                            name: "tool".to_owned(),
+                            value: agena_api::part::StructuredValueResource::Text {
+                                value: "web.search".to_owned(),
+                            },
+                        },
+                        agena_api::part::StructuredFieldResource {
+                            name: "input".to_owned(),
+                            value: agena_api::part::StructuredValueResource::Object {
+                                fields: vec![agena_api::part::StructuredFieldResource {
+                                    name: "query".to_owned(),
+                                    value: agena_api::part::StructuredValueResource::Text {
+                                        value: "agena docs".to_owned(),
+                                    },
+                                }],
+                            },
+                        },
+                    ],
+                },
+                ..Default::default()
+            },
+            title: "tools.call · web.search".to_owned(),
+            ..Default::default()
+        };
+        let part = TranscriptFixture::operation_part(
+            9,
+            3,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            operation,
+        );
+        let mut rendered = Vec::new();
+        render_tool_execution(
+            &part,
+            operation_resource(&part),
+            &mut rendered,
+            80,
+            &I18n::english(),
+            true,
+        );
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The wrapper's `tool`/`input` fields must not leak; only the inner
+        // tool's real arguments render.
+        assert!(text.contains("• query: agena docs"), "{text}");
+        assert!(!text.contains("• tool:"), "{text}");
+        assert!(!text.contains("tool:"), "{text}");
+    }
+
+    #[test]
+    fn json_table_log_and_custom_blocks_render_richly() {
+        let operation = OperationPartResource {
+            call_id: 7,
+            invocation: ToolInvocationResource {
+                name: "agena.test".to_owned(),
+                ..Default::default()
+            },
+            blocks: vec![
+                agena_api::part::OperationBlockResource::Json {
+                    value: serde_json::json!({ "key": "value", "n": 42 }),
+                },
+                agena_api::part::OperationBlockResource::Table {
+                    columns: vec![
+                        agena_api::part::TableColumnResource {
+                            key: "name".to_owned(),
+                            label: None,
+                        },
+                        agena_api::part::TableColumnResource {
+                            key: "score".to_owned(),
+                            label: Some("Score".to_owned()),
+                        },
+                    ],
+                    rows: vec![
+                        vec![
+                            serde_json::json!("alice"),
+                            serde_json::json!(9.5),
+                        ],
+                        vec![serde_json::json!("bob"), serde_json::json!(8)],
+                    ],
+                },
+                agena_api::part::OperationBlockResource::Log {
+                    stream: Some("stderr".to_owned()),
+                    text: "warning: something odd".to_owned(),
+                },
+                agena_api::part::OperationBlockResource::Custom {
+                    schema: None,
+                    value: serde_json::json!({ "presentation": { "title": "Chips" } }),
+                },
+            ],
+            ..Default::default()
+        };
+        let part = TranscriptFixture::operation_part(
+            9,
+            3,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            operation,
+        );
+        let mut rendered = Vec::new();
+        render_tool_execution(
+            &part,
+            operation_resource(&part),
+            &mut rendered,
+            80,
+            &I18n::english(),
+            true,
+        );
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Json block: pretty-printed JSON inside a fenced code box.
+        assert!(text.contains("┌─ json"), "{text}");
+        assert!(text.contains("\"key\": \"value\""), "{text}");
+        // Table block: a box-drawn table carrying the column labels and rows.
+        assert!(text.contains("│ name"), "{text}");
+        assert!(text.contains("│ Score"), "{text}");
+        assert!(text.contains("alice"), "{text}");
+        assert!(text.contains("9.5"), "{text}");
+        // Log block: stream label + text body.
+        assert!(text.contains("[stderr]"), "{text}");
+        assert!(text.contains("warning: something odd"), "{text}");
+        // Custom object payload: nested bullets from the presentation map.
+        assert!(text.contains("• presentation:"), "{text}");
+        assert!(text.contains("◦ title: Chips"), "{text}");
+    }
+
+    #[test]
     fn tool_image_attachments_render_once_through_the_rich_content_pipeline() {
         let png = concat!(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk",

@@ -380,10 +380,85 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
 /// invocation identity; execution output, display text and lifecycle live in
 /// this nested envelope. Projecting only the shallow keys makes a completed
 /// tool look expandable in the TUI while giving it an empty body.
+/// Rewrite one stored `ViewBlock` JSON object into the API
+/// `OperationBlockResource` wire shape in place:
+///
+/// - `table`: `columns: ["name"]` → `[{"key":"name","label":null}]`
+/// - `search_results`: `items: [{title,url,snippet}]` → `results: [{title,uri,snippet}]`
+/// - `custom`: expose `presentation`/`schema` as the required `value`
+///
+/// Known-compatible kinds (text/markdown/json/log/command/diff/file_changes/
+/// media) are left untouched. Unknown kinds stay as-is so the typed decode can
+/// still represent them.
+fn normalize_stored_operation_block(block: &mut Value) {
+    let Some(object) = block.as_object_mut() else {
+        return;
+    };
+    match object.get("type").and_then(Value::as_str) {
+        Some("table") => {
+            if let Some(columns) = object.get_mut("columns").and_then(Value::as_array_mut) {
+                for column in columns {
+                    if column.is_string() {
+                        let key = std::mem::take(column);
+                        *column = serde_json::json!({ "key": key, "label": null });
+                    }
+                }
+            }
+        }
+        Some("search_results") => {
+            if let Some(items) = object.remove("items").and_then(|items| items.as_array().cloned())
+            {
+                let results = items
+                    .into_iter()
+                    .map(|mut item| {
+                        if let Some(uri) = item
+                            .as_object_mut()
+                            .and_then(|item| item.remove("url"))
+                        {
+                            item.as_object_mut()
+                                .map(|item| item.insert("uri".to_owned(), uri));
+                        }
+                        item
+                    })
+                    .collect();
+                object.insert("results".to_owned(), Value::Array(results));
+            }
+        }
+        Some("custom") => {
+            if !object.contains_key("value") {
+                let value = object
+                    .get("presentation")
+                    .cloned()
+                    .or_else(|| object.get("schema").cloned())
+                    .unwrap_or_else(|| Value::Object(Default::default()));
+                object.insert("value".to_owned(), value);
+            }
+            if let Some(kind) = object.get("kind").cloned() {
+                object.insert("schema".to_owned(), kind);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn operation_resource_from_content(content: &Value) -> Option<OperationPartResource> {
-    let mut operation = content
-        .get("operation")
-        .and_then(|value| serde_json::from_value::<OperationPartResource>(value.clone()).ok())?;
+    // The stored `operation` rides the full v1 payload whose `result.content`
+    // holds runtime `ViewBlock` JSON (agena-domain). That shape differs from
+    // the API `OperationBlockResource` for `table` (string columns),
+    // `search_results` (`items`/`url` instead of `results`/`uri`) and `custom`
+    // (a `presentation` map instead of a required `value`). Normalize those
+    // blocks to the API shape first so the typed decode below is tolerant and
+    // never fails atomically on a single rich block (which would otherwise
+    // degrade the whole operation to a bare name + input).
+    let mut operation_value = content.get("operation")?.clone();
+    if let Some(result) = operation_value.get_mut("result") {
+        if let Some(blocks) = result.get_mut("content").and_then(Value::as_array_mut) {
+            for block in blocks {
+                normalize_stored_operation_block(block);
+            }
+        }
+    }
+    let mut operation = serde_json::from_value::<OperationPartResource>(operation_value).ok()?;
 
     if operation.invocation.gateway_function.is_none() {
         let gateway_name = content

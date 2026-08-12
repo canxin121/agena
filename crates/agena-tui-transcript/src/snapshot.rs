@@ -1279,7 +1279,7 @@ mod tests {
             "{expanded_text}"
         );
         assert!(
-            expanded_text.contains("▸ Input · 1 field"),
+            expanded_text.contains("▸ Input · command: ls"),
             "{expanded_text}"
         );
         // The approval sentence must never be wrapped in an "Output" section.
@@ -1915,7 +1915,7 @@ mod tests {
             .join("\n");
         assert!(expanded_text.contains("Output\n"), "{expanded_text}");
         assert!(
-            expanded_text.contains("▸ Input · 2 fields"),
+            expanded_text.contains("▸ Input · limit: 33"),
             "{expanded_text}"
         );
         assert!(!expanded_text.contains("\"limit\": 33"), "{expanded_text}");
@@ -1938,7 +1938,7 @@ mod tests {
             .expect("collapsed nested Input node");
         assert!(input_node.toggleable);
         assert!(!input_node.expanded);
-        assert!(input_node.copy_text.contains("\"limit\": 33"));
+        assert!(input_node.copy_text.contains("- **limit**: 33"));
 
         let input_expanded = crate::render_entry_detailed(
             &entry,
@@ -1962,7 +1962,7 @@ mod tests {
             "{input_expanded_text}"
         );
         assert!(
-            input_expanded_text.contains("\"limit\": 33"),
+            input_expanded_text.contains("• limit: 33"),
             "{input_expanded_text}"
         );
         let input_node = input_expanded
@@ -2104,7 +2104,7 @@ mod tests {
             .find(|node| node.key == key)
             .expect("expanded Activity node");
         assert!(
-            input_expanded_node.copy_text.contains("\"limit\": 33"),
+            input_expanded_node.copy_text.contains("- **limit**: 33"),
             "an expanded Input section belongs in copy text: {}",
             input_expanded_node.copy_text
         );
@@ -2231,7 +2231,7 @@ mod tests {
             .find(|node| node.key == key)
             .expect("Markdown Operation Activity node");
         assert!(
-            expanded_text.contains("▸ Input · 1 field"),
+            expanded_text.contains("▸ Input · command: cargo test"),
             "{expanded_text}"
         );
         assert!(!expanded_text.contains("┌─ json"), "{expanded_text}");
@@ -2315,11 +2315,7 @@ mod tests {
             "{input_expanded_text}"
         );
         assert!(
-            input_expanded_text.contains("┌─ json"),
-            "{input_expanded_text}"
-        );
-        assert!(
-            input_expanded_text.contains("cargo test -p agena-tui-transcript"),
+            input_expanded_text.contains("• command: cargo test -p agena-tui-transcript"),
             "{input_expanded_text}"
         );
     }
@@ -2408,7 +2404,7 @@ mod tests {
             .expect("failed shell.run Activity node");
 
         assert!(
-            expanded_text.contains("▸ Input · 7 fields"),
+            expanded_text.contains("▸ Input · command: rm -rf /tmp/agena-snapshot-test"),
             "{expanded_text}"
         );
         assert!(!expanded_text.contains("┌─ json"), "{expanded_text}");

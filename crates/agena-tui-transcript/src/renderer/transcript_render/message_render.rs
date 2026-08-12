@@ -4,12 +4,12 @@ use super::super::{
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
     ToolOutputPreview, TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey,
     TranscriptNodeKind, UnicodeWidthStr, concise_text, format_occurred_time, format_timestamp,
-    push_activity_headline, push_expanded_markdown, push_expanded_tool_text, push_label_value,
-    push_markdown_document, push_markdown_rule, push_section_heading, push_single_line,
-    push_wrapped_line, render_entry_detailed, render_expanded_tool_text_block,
-    strip_terminal_ansi_sequences, style_for_role, tool_output_copy_text,
-    transcript_message_parts, transcript_part_content, transcript_spinner_placeholder,
-    trim_empty_line_edges, truncate_display_width,
+    json_value_to_markdown, push_activity_headline, push_expanded_markdown,
+    push_expanded_tool_text, push_label_value, push_markdown_document, push_markdown_rule,
+    push_section_heading, push_single_line, push_wrapped_line, render_entry_detailed,
+    render_expanded_tool_text_block, strip_terminal_ansi_sequences, style_for_role,
+    tool_output_copy_text, transcript_message_parts, transcript_part_content,
+    transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
 };
 use super::operation_render::render_tool_execution;
 use super::request_render::{preview_for_part, render_user_input_request};
@@ -336,16 +336,18 @@ fn canonical_activity_details(
                     false,
                 ));
             }
-            if !operation.invocation.input.is_empty()
-                && let Ok(input) = serde_json::to_string_pretty(&serde_json::Value::from(
+            if !operation.invocation.input.is_empty() {
+                // Tool arguments as nested Markdown bullets (matching the
+                // single-activity `render_tool_execution` input section)
+                // instead of a raw JSON fence.
+                let input = json_value_to_markdown(&serde_json::Value::from(
                     operation.invocation.input.clone(),
-                ))
-            {
+                ));
                 details.push(CanonicalActivityDetail::identified_section(
                     TranscriptActivitySection::Input,
                     "Input",
                     input,
-                    CanonicalActivityDetailFormat::Json,
+                    CanonicalActivityDetailFormat::Markdown,
                     false,
                 ));
             }

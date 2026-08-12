@@ -1,10 +1,10 @@
 use super::super::transcript_ast::render_attachment_image;
 use super::super::{
-    I18n, Modifier, RenderedLine, Style, apply_patch_details, compact_tool_identity, diff_stats,
-    push_activity_headline, push_collapsible_text, push_expanded_diff_text, push_expanded_markdown,
-    push_expanded_tool_text, push_label_value, push_multiline, push_section_heading,
-    push_single_line, render_expanded_tool_text_block, should_render_tool_model_output,
-    tool_display_label,
+    I18n, Modifier, RenderedLine, Style, apply_patch_details, compact_json_cell,
+    compact_tool_identity, diff_stats, json_value_to_markdown, push_activity_headline,
+    push_collapsible_text, push_expanded_diff_text, push_expanded_markdown, push_expanded_tool_text,
+    push_label_value, push_multiline, push_section_heading, push_single_line,
+    render_expanded_tool_text_block, should_render_tool_model_output, tool_display_label,
 };
 use super::request_render::{render_checklist, render_file_changes};
 use crate::ui_text;
@@ -70,6 +70,33 @@ pub(crate) fn render_tool_execution(
             &mut out[error_start..],
             Style::default().fg(agena_tui_components::theme::danger_color()),
         );
+    }
+
+    // Tool arguments, presented as a nested Markdown bullet list instead of the
+    // raw JSON dump. `compact_tool_identity` also unwraps a `tools.call` wrapper
+    // to the inner tool + its real input.
+    let tool_input = compact_tool_identity(&tool.invocation).1;
+    if !tool_input.is_null() && tool_input.as_object().is_none_or(|fields| !fields.is_empty()) {
+        push_section_heading(
+            out,
+            "    › Input",
+            Style::default()
+                .fg(agena_tui_components::theme::special_color())
+                .add_modifier(Modifier::BOLD),
+            width,
+        );
+        if expanded {
+            push_expanded_markdown(out, "      ", json_value_to_markdown(&tool_input).as_str(), width);
+        } else {
+            push_collapsible_text(
+                out,
+                "      ",
+                json_value_to_markdown(&tool_input).as_str(),
+                Style::default(),
+                width,
+                i18n,
+            );
+        }
     }
 
     // The human view is a single Markdown document the tool produced; it takes
@@ -555,10 +582,114 @@ pub(crate) fn render_operation_blocks(
                     width,
                 );
             }
-            OperationBlockResource::Json { .. }
-            | OperationBlockResource::Table { .. }
-            | OperationBlockResource::Log { .. }
-            | OperationBlockResource::Custom { .. } => {}
+            OperationBlockResource::Json { value } => {
+                let text = serde_json::to_string_pretty(value)
+                    .unwrap_or_else(|_| value.to_string());
+                if expanded {
+                    push_expanded_markdown(
+                        out,
+                        "    ",
+                        format!("```json\n{text}\n```").as_str(),
+                        width,
+                    );
+                } else {
+                    push_collapsible_text(
+                        out,
+                        "    ",
+                        text.as_str(),
+                        Style::default().fg(agena_tui_components::theme::muted_color()),
+                        width,
+                        i18n,
+                    );
+                }
+            }
+            OperationBlockResource::Table { columns, rows } => {
+                let headings = columns
+                    .iter()
+                    .map(|column| column.label.as_deref().unwrap_or(column.key.as_str()))
+                    .collect::<Vec<_>>();
+                let mut table = String::new();
+                table.push_str(&format!(
+                    "| {} |\n",
+                    headings.iter().copied().collect::<Vec<_>>().join(" | ")
+                ));
+                table.push_str(&format!(
+                    "| {} |\n",
+                    headings.iter().map(|_| "---").collect::<Vec<_>>().join(" | ")
+                ));
+                for row in rows {
+                    let cells = row
+                        .iter()
+                        .map(compact_json_cell)
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    table.push_str(&format!("| {cells} |\n"));
+                }
+                if expanded {
+                    push_expanded_markdown(out, "    ", table.as_str(), width);
+                } else {
+                    push_collapsible_text(out, "    ", table.as_str(), Style::default(), width, i18n);
+                }
+            }
+            OperationBlockResource::Log { stream, text } => {
+                let is_stderr = stream.as_deref().is_some_and(|stream| {
+                    stream.eq_ignore_ascii_case("stderr") || stream.eq_ignore_ascii_case("err")
+                });
+                let style = if is_stderr {
+                    Style::default().fg(agena_tui_components::theme::danger_color())
+                } else {
+                    Style::default().fg(agena_tui_components::theme::muted_color())
+                };
+                if let Some(stream) = stream
+                    && !stream.trim().is_empty()
+                {
+                    push_label_value(
+                        out,
+                        "    ",
+                        &format!("[{stream}]"),
+                        Style::default().fg(agena_tui_components::theme::accent_color()),
+                        width,
+                    );
+                }
+                if expanded {
+                    push_expanded_tool_text(out, "      ", text, style, width);
+                } else {
+                    push_collapsible_text(out, "      ", text, style, width, i18n);
+                }
+            }
+            OperationBlockResource::Custom { schema: _, value } => {
+                // Object payloads (e.g. a plugin's `presentation` map) read
+                // best as nested bullets; any other shape falls back to
+                // pretty-printed JSON.
+                if value.is_object() {
+                    let text = json_value_to_markdown(value);
+                    if expanded {
+                        push_expanded_markdown(out, "    ", text.as_str(), width);
+                    } else {
+                        push_collapsible_text(out, "    ", text.as_str(), Style::default(), width, i18n);
+                    }
+                } else {
+                    let text = serde_json::to_string_pretty(value)
+                        .unwrap_or_else(|_| value.to_string());
+                    if expanded {
+                        push_expanded_markdown(
+                            out,
+                            "    ",
+                            format!("```json\n{text}\n```").as_str(),
+                            width,
+                        );
+                    } else {
+                        push_collapsible_text(
+                            out,
+                            "    ",
+                            text.as_str(),
+                            Style::default().fg(agena_tui_components::theme::muted_color()),
+                            width,
+                            i18n,
+                        );
+                    }
+                }
+            }
         }
     }
 }

@@ -108,10 +108,34 @@ pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I
             title.as_deref().unwrap_or(task_id.as_str()),
             *status,
         ),
-        OperationBlockResource::Json { .. }
-        | OperationBlockResource::Table { .. }
-        | OperationBlockResource::Log { .. }
-        | OperationBlockResource::Custom { .. } => String::new(),
+        OperationBlockResource::Json { value } => serde_json::to_string_pretty(value)
+            .unwrap_or_else(|_| value.to_string()),
+        OperationBlockResource::Table { columns, rows } => {
+            let headings = columns
+                .iter()
+                .map(|column| column.label.as_deref().unwrap_or(column.key.as_str()))
+                .collect::<Vec<_>>();
+            let mut table = format!(
+                "| {} |\n| {} |\n",
+                headings.iter().copied().collect::<Vec<_>>().join(" | "),
+                headings.iter().map(|_| "---").collect::<Vec<_>>().join(" | ")
+            );
+            for row in rows {
+                let cells = row
+                    .iter()
+                    .map(compact_json_cell)
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                table.push_str(&format!("| {cells} |\n"));
+            }
+            table
+        }
+        OperationBlockResource::Log { stream, text } => match stream.as_deref() {
+            Some(stream) if !stream.trim().is_empty() => format!("[{stream}]\n{text}"),
+            _ => text.clone(),
+        },
+        OperationBlockResource::Custom { schema: _, value } => serde_json::to_string_pretty(value)
+            .unwrap_or_else(|_| value.to_string()),
     }
 }
 
@@ -265,6 +289,149 @@ pub(crate) fn is_markdown_ordered_list_item(line: &str) -> bool {
             .chars()
             .nth(digit_count + 1)
             .is_some_and(|separator| separator == ' ')
+}
+
+/// Render a JSON value as nested Markdown bullets, the human-facing
+/// replacement for a raw tool-argument dump.
+///
+/// Objects render as `- **name**: value` bullets; scalar arrays as an inline
+/// code list; multi-line strings as a fenced block under their bullet; nested
+/// objects and arrays as indented sub-bullets. Tool inputs are usually flat
+/// (`{path, pattern, include}`) and read perfectly as one bullet per argument.
+pub(crate) fn json_value_to_markdown(value: &serde_json::Value) -> String {
+    let mut lines = Vec::new();
+    match value {
+        serde_json::Value::Object(fields) => {
+            for (name, field) in fields {
+                push_json_field(name, field, 0, &mut lines);
+            }
+        }
+        serde_json::Value::Array(items) if items.iter().all(is_json_scalar) => {
+            lines.push(json_inline_scalar_list(items));
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                push_json_item(item, 0, &mut lines);
+            }
+        }
+        serde_json::Value::String(text) if text.contains('\n') => {
+            push_json_fence(text, 0, &mut lines);
+        }
+        other => lines.push(json_scalar_markdown(other, true)),
+    }
+    lines.join("\n")
+}
+
+/// A named object field: `- **name**: …` with nested content (sub-bullets or a
+/// fenced block) indented one level under the bullet.
+fn push_json_field(name: &str, value: &serde_json::Value, indent: usize, out: &mut Vec<String>) {
+    let prefix = "  ".repeat(indent);
+    match value {
+        serde_json::Value::Object(fields) => {
+            out.push(format!("{prefix}- **{name}**:"));
+            for (field_name, field) in fields {
+                push_json_field(field_name, field, indent + 1, out);
+            }
+        }
+        serde_json::Value::Array(items) if items.iter().all(is_json_scalar) => {
+            out.push(format!("{prefix}- **{name}**: {}", json_inline_scalar_list(items)));
+        }
+        serde_json::Value::Array(items) => {
+            out.push(format!("{prefix}- **{name}**:"));
+            for item in items {
+                push_json_item(item, indent + 1, out);
+            }
+        }
+        serde_json::Value::String(text) if text.contains('\n') => {
+            out.push(format!("{prefix}- **{name}**:"));
+            push_json_fence(text, indent + 1, out);
+        }
+        other => {
+            out.push(format!("{prefix}- **{name}**: {}", json_scalar_markdown(other, true)));
+        }
+    }
+}
+
+/// An array element that is not a scalar: nested objects render their own
+/// bullets, other arrays recurse.
+fn push_json_item(value: &serde_json::Value, indent: usize, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            for (name, field) in fields {
+                push_json_field(name, field, indent, out);
+            }
+        }
+        serde_json::Value::Array(_) => {
+            push_json_field("", value, indent, out);
+        }
+        other => out.push(format!("{}{}", "  ".repeat(indent), json_scalar_markdown(other, true))),
+    }
+}
+
+/// A scalar array as an inline code list: `` `a`, `b` ``.
+fn json_inline_scalar_list(items: &[serde_json::Value]) -> String {
+    items
+        .iter()
+        .map(json_scalar_markdown_inline)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A fenced code block, indented to `indent` so it nests under a list bullet
+/// as standard Markdown expects.
+fn push_json_fence(text: &str, indent: usize, out: &mut Vec<String>) {
+    let prefix = "  ".repeat(indent);
+    out.push(format!("{prefix}```text"));
+    for line in text.lines() {
+        out.push(format!("{prefix}{line}"));
+    }
+    out.push(format!("{prefix}```"));
+}
+
+/// Single-line scalar Markdown. Strings render inside backticks (inline code),
+/// other scalars as their literal JSON text.
+fn json_scalar_markdown(value: &serde_json::Value, inline_strings: bool) -> String {
+    if inline_strings && value.is_string() {
+        json_scalar_markdown_inline(value)
+    } else {
+        json_scalar_text(value)
+    }
+}
+
+fn json_scalar_markdown_inline(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => format!("`{}`", text.replace('`', "\\`")),
+        _ => json_scalar_text(value),
+    }
+}
+
+fn json_scalar_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".to_owned(),
+        serde_json::Value::Bool(value) => value.to_string(),
+        serde_json::Value::Number(value) => value.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// True for JSON scalars (null, bool, number, string) — used to decide
+/// whether an array renders as an inline code list or as sub-bullets.
+fn is_json_scalar(value: &serde_json::Value) -> bool {
+    value.is_null()
+        || value.is_boolean()
+        || value.is_number()
+        || value.is_string()
+}
+
+/// Compact single-line rendering of a table cell value: strings bare (with
+/// inline newlines collapsed), other scalars as JSON text, containers as
+/// inline JSON.
+pub(crate) fn compact_json_cell(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.replace('\n', " ").replace('|', "\\|"),
+        serde_json::Value::Null => "—".to_owned(),
+        other => other.to_string(),
+    }
 }
 
 /// Parses a Markdown text part into independently navigable transcript blocks.
@@ -794,5 +961,64 @@ mod markdown_document_tests {
                 "every rendered line must carry a rich Line for overlay reuse"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod json_value_to_markdown_tests {
+    use super::*;
+
+    #[test]
+    fn flat_object_renders_one_bullet_per_field() {
+        let value = serde_json::json!({
+            "path": "README.md",
+            "pattern": "*.rs",
+            "follow": true,
+            "depth": 2,
+            "flags": ["a", "b"],
+            "nothing": null,
+        });
+        let markdown = json_value_to_markdown(&value);
+        assert!(markdown.contains("- **path**: `README.md`"), "{markdown}");
+        assert!(markdown.contains("- **pattern**: `*.rs`"), "{markdown}");
+        assert!(markdown.contains("- **follow**: true"), "{markdown}");
+        assert!(markdown.contains("- **depth**: 2"), "{markdown}");
+        assert!(markdown.contains("- **flags**: `a`, `b`"), "{markdown}");
+        assert!(markdown.contains("- **nothing**: null"), "{markdown}");
+    }
+
+    #[test]
+    fn multiline_string_renders_as_a_fenced_block() {
+        let value = serde_json::json!({ "content": "line one\nline two" });
+        let markdown = json_value_to_markdown(&value);
+        assert!(markdown.contains("- **content**:"), "{markdown}");
+        assert!(markdown.contains("  ```text"), "{markdown}");
+        assert!(markdown.contains("line one"), "{markdown}");
+        assert!(markdown.contains("line two"), "{markdown}");
+    }
+
+    #[test]
+    fn nested_object_and_arrays_indent_sub_bullets() {
+        let value = serde_json::json!({
+            "server": {
+                "host": "localhost",
+                "port": 8080,
+                "tags": ["api", "internal"],
+            },
+            "list": [
+                { "kind": "file", "path": "a.rs" },
+                { "kind": "dir", "path": "src" },
+            ],
+        });
+        let markdown = json_value_to_markdown(&value);
+        assert!(markdown.contains("- **server**:"), "{markdown}");
+        assert!(markdown.contains("  - **host**: `localhost`"), "{markdown}");
+        assert!(markdown.contains("  - **port**: 8080"), "{markdown}");
+        assert!(markdown.contains("  - **tags**: `api`, `internal`"), "{markdown}");
+        assert!(markdown.contains("- **list**:"), "{markdown}");
+        assert!(markdown.contains("  - **kind**: `file`"), "{markdown}");
+        assert!(markdown.contains("  - **path**: `a.rs`"), "{markdown}");
+        assert!(markdown.contains("  - **kind**: `dir`"), "{markdown}");
+        assert!(markdown.contains("  - **path**: `src`"), "{markdown}");
     }
 }

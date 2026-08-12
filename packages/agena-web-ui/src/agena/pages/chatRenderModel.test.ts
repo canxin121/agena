@@ -244,6 +244,139 @@ describe('v2 part rendering (4.1.1 kinds)', () => {
     expect(resultBlocks[0]?.body).toBe('# README\n')
   })
 
+  test('renders tool_call input as nested markdown bullets, not raw JSON', () => {
+    const blocks = partBlocks({
+      id: 2,
+      message_id: 'run:1',
+      part_index: 1,
+      status: 'in_progress',
+      kind: 'tool_call',
+      created_at: '2026-07-13T00:00:00Z',
+      content: { name: 'fs.read', input: { path: 'README.md', line_count: 5 } },
+    })
+    expect(blocks[0]?.title).toBe('fs.read')
+    expect(blocks[0]?.kind).toBe('markdown')
+    expect(blocks[0]?.body).toBe('- **path**: `README.md`\n- **line_count**: 5')
+  })
+
+  test('renders tool_call input, model output, and rich blocks from the stored operation', () => {
+    const blocks = partBlocks({
+      id: 2,
+      message_id: 'run:1',
+      part_index: 1,
+      status: 'completed',
+      kind: 'tool_call',
+      created_at: '2026-07-13T00:00:00Z',
+      content: {
+        name: 'web.search',
+        input: { query: 'agena docs', limit: 3 },
+        operation: {
+          call_id: 9,
+          invocation: { name: 'web.search', input: { query: 'agena docs', limit: 3 } },
+          title: 'web.search · agena docs',
+          summary: '3 results',
+          result: {
+            state: 'completed',
+            model_preview: { text: 'Found 3 results for agena docs.' },
+            content: [
+              { type: 'json', value: { total: 3 } },
+              {
+                type: 'table',
+                columns: ['title', 'url'],
+                rows: [
+                  ['Agena docs', 'https://agena.dev'],
+                  ['Guide', 'https://agena.dev/guide'],
+                ],
+              },
+              { type: 'log', stream: 'stdout', text: 'cached 2 results' },
+              { type: 'markdown', text: 'Found 3 results for agena docs.' },
+            ],
+          },
+        },
+      },
+    })
+
+    const [inputBlock, outputBlock, jsonBlock, tableBlock, logBlock] = blocks
+    expect(inputBlock?.body).toBe('- **query**: `agena docs`\n- **limit**: 3')
+    expect(outputBlock?.body).toBe('Found 3 results for agena docs.')
+    expect(jsonBlock?.kind).toBe('terminal')
+    expect(jsonBlock?.language).toBe('json')
+    expect(jsonBlock?.body).toBe('{\n  "total": 3\n}')
+    expect(tableBlock?.kind).toBe('markdown')
+    expect(tableBlock?.body).toContain('| title | url |')
+    expect(tableBlock?.body).toContain('| Agena docs | https://agena.dev |')
+    expect(logBlock?.kind).toBe('terminal')
+    expect(logBlock?.title).toBe('stdout')
+    expect(logBlock?.body).toBe('cached 2 results')
+    // The markdown block duplicating the model preview is deduplicated.
+    expect(blocks.some((block) => block.body === 'Found 3 results for agena docs.' && block !== outputBlock)).toBe(false)
+  })
+
+  test('renders a denied tool_call as a readable outcome instead of an input dump', () => {
+    const blocks = partBlocks({
+      id: 2,
+      message_id: 'run:1',
+      part_index: 1,
+      status: 'policy_denied',
+      kind: 'tool_call',
+      created_at: '2026-07-13T00:00:00Z',
+      content: {
+        name: 'fs.write',
+        input: { path: 'secret.txt' },
+        operation: {
+          call_id: 9,
+          invocation: { name: 'fs.write', input: { path: 'secret.txt' } },
+          authorization: {
+            permissions: [
+              {
+                request: { request_id: 'perm:1', source: 'policy', reason: 'write to secret.txt' },
+                reply: { request_id: 'perm:1', kind: 'deny_once', reason: 'Path matches deny rule' },
+              },
+            ],
+          },
+        },
+      },
+    })
+
+    expect(blocks.length).toBe(1)
+    expect(blocks[0]?.kind).toBe('operation_outcome')
+    expect(blocks[0]?.outcome).toBe('policy_denied')
+    expect(blocks[0]?.title).toBe('Blocked by permission policy')
+    expect(blocks[0]?.body).toContain('Path matches deny rule')
+  })
+
+  test('renders an unavailable tool_call from the failure message', () => {
+    const blocks = partBlocks({
+      id: 2,
+      message_id: 'run:1',
+      part_index: 1,
+      status: 'tool_unavailable',
+      kind: 'tool_call',
+      created_at: '2026-07-13T00:00:00Z',
+      content: {
+        name: 'slack.post',
+        input: { text: 'hello' },
+        operation: {
+          call_id: 9,
+          invocation: { name: 'slack.post', input: { text: 'hello' } },
+          result: {
+            state: 'failed',
+            error: {
+              failure: {
+                user: { key: 'tool_unavailable', fallback: 'The slack.post tool is not available in this session.' },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    expect(blocks.length).toBe(1)
+    expect(blocks[0]?.kind).toBe('operation_outcome')
+    expect(blocks[0]?.outcome).toBe('tool_unavailable')
+    expect(blocks[0]?.body).toContain('not available')
+  })
+
   test('renders no tool block for a tool_call awaiting a host ask (it is the form)', () => {
     const blocks = partBlocks({
       id: 5,

@@ -220,6 +220,99 @@ function toolCallInputText(content: Record<string, unknown> | null): string {
   }
 }
 
+/** JSON value rendered as nested Markdown bullets — the human-facing
+ * replacement for a raw tool-argument dump. Objects render one bullet per
+ * field (`- **path**: `README.md``), multi-line strings as a fenced block,
+ * scalar arrays as an inline code list, and nested objects/arrays as indented
+ * sub-bullets. Mirrors the TUI's `json_value_to_markdown`. */
+function jsonToMarkdown(value: unknown): string {
+  if (isJsonScalar(value)) return jsonScalarText(value)
+  if (Array.isArray(value)) {
+    if (value.every(isJsonScalar)) {
+      return value.map((item) => `\`${String(item).replaceAll('`', '\\`')}\``).join(', ')
+    }
+    return value.map((item) => jsonItemMarkdown(item, 0)).filter(Boolean).join('\n')
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([name, field]) => jsonFieldMarkdown(name, field, 0))
+      .join('\n')
+  }
+  return String(value)
+}
+
+function isJsonScalar(value: unknown): boolean {
+  return value === null || ['string', 'boolean', 'number'].includes(typeof value)
+}
+
+function jsonScalarText(value: unknown): string {
+  if (value === null) return 'null'
+  if (typeof value === 'string') return `\`${value.replaceAll('`', '\\`')}\``
+  return String(value)
+}
+
+/** A named object field: `- **name**: …` with nested content indented one
+ * level under the bullet (fenced block for multi-line strings, sub-bullets
+ * for nested objects/arrays). */
+function jsonFieldMarkdown(name: string, value: unknown, indent: number): string {
+  const prefix = '  '.repeat(indent)
+  if (isJsonScalar(value)) {
+    return `${prefix}- **${name}**: ${jsonScalarText(value)}`
+  }
+  if (Array.isArray(value)) {
+    if (value.every(isJsonScalar)) {
+      return `${prefix}- **${name}**: ${value.map((item) => `\`${String(item).replaceAll('`', '\\`')}\``).join(', ')}`
+    }
+    const sub = value.map((item) => jsonItemMarkdown(item, indent + 1)).filter(Boolean).join('\n')
+    return `${prefix}- **${name}**:\n${sub}`
+  }
+  if (value && typeof value === 'object') {
+    const sub = Object.entries(value as Record<string, unknown>)
+      .map(([fieldName, field]) => jsonFieldMarkdown(fieldName, field, indent + 1))
+      .join('\n')
+    return `${prefix}- **${name}**:\n${sub}`
+  }
+  return `${prefix}- **${name}**: ${String(value)}`
+}
+
+/** A non-scalar array element: objects render their own bullets, other
+ * containers recurse, multi-line strings become fenced blocks. */
+function jsonItemMarkdown(value: unknown, indent: number): string {
+  const prefix = '  '.repeat(indent)
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([name, field]) => jsonFieldMarkdown(name, field, indent))
+      .join('\n')
+  }
+  if (typeof value === 'string' && value.includes('\n')) {
+    return `${prefix}\`\`\`text\n${value}\n${prefix}\`\`\``
+  }
+  if (Array.isArray(value)) {
+    return jsonFieldMarkdown('', value, indent)
+  }
+  return `${prefix}${jsonScalarText(value)}`
+}
+
+/** The tool arguments as nested Markdown bullets, preferring the flattened
+ * `content.input` (plain JSON) and falling back to the stored operation's
+ * invocation input when it is already a plain object. */
+function toolCallInputMarkdown(content: Record<string, unknown> | null): string {
+  if (!content) return ''
+  const input = content.input
+  if (input !== undefined && input !== null) {
+    const markdown = jsonToMarkdown(input)
+    if (markdown.trim().length > 0) return markdown
+  }
+  const operation = asRecord(content.operation)
+  const invocation = asRecord(operation?.invocation)
+  const invocationInput = invocation?.input
+  if (invocationInput !== undefined && invocationInput !== null && typeof invocationInput === 'object') {
+    const markdown = jsonToMarkdown(invocationInput)
+    if (markdown.trim().length > 0) return markdown
+  }
+  return ''
+}
+
 function interactionStatusLabel(part: MessagePart): string {
   if (part.status === 'pending' || part.status === 'in_progress') return 'Waiting for input'
   if (part.status === 'completed') return 'Answered'
@@ -371,15 +464,36 @@ export function partBlocks(part: MessagePart): RenderBlock[] {
     // a tool block: it renders as the foldable inline form instead.
     if (part.userInput) return []
     const toolName = readString(content?.name) || readString(content?.plugin) || 'tool'
-    const input = toolCallInputText(content)
+    // Denied or unavailable calls show the readable outcome (who blocked it /
+    // why) instead of a raw input dump.
+    if (
+      part.status === 'policy_denied' ||
+      part.status === 'user_declined' ||
+      part.status === 'capability_unavailable' ||
+      part.status === 'tool_unavailable'
+    ) {
+      const outcome = toolCallOutcomeBlock(part, content)
+      if (outcome) return [outcome]
+    }
+    const operation = asRecord(content?.operation)
+    const input = toolCallInputMarkdown(content)
     const blocks: RenderBlock[] = [
       {
         title: toolName,
-        body: input ? `\`\`\`json\n${input}\n\`\`\`` : 'Tool call',
+        body: input || 'Tool call',
         kind: 'markdown',
         summary: part.status,
       },
     ]
+    // The stored operation's result (v1 `OperationPart` JSON) carries the
+    // output the tool produced: `model_preview.text` first, then the rich
+    // blocks — deduplicated so the same content is never shown twice.
+    const result = asRecord(operation?.result)
+    if (result) {
+      const output = readString((asRecord(result.model_preview)?.text as string) ?? '')
+      if (output) blocks.push({ body: output, kind: 'markdown' })
+      blocks.push(...storedOperationBlocks(result, output))
+    }
     return blocks
   }
 
@@ -734,6 +848,170 @@ function operationRenderBlocks(content: Record<string, unknown> | null): RenderB
   }
 
   return rendered
+}
+
+/**
+ * The rich output blocks of a stored operation (`content.operation.result`),
+ * rendered from the runtime `ViewBlock` JSON the tool produced. Text/Markdown
+ * blocks whose body duplicates the model preview already shown are skipped so
+ * the same content never renders twice. Mirrors the TUI's `render_operation_blocks`.
+ */
+function storedOperationBlocks(result: Record<string, unknown>, outputText: string | null): RenderBlock[] {
+  const blocks = Array.isArray(result.content) ? result.content : []
+  const rendered: RenderBlock[] = []
+  for (const item of blocks) {
+    const block = asRecord(item)
+    if (!block) continue
+    const blockType = readString(block.type)
+    if (blockType === 'text' || blockType === 'markdown') {
+      const body = readString(block.text)
+      if (body && outputText !== body) rendered.push({ body, kind: 'markdown' })
+      continue
+    }
+    if (blockType === 'json') {
+      if (block.value !== undefined) {
+        rendered.push({ body: JSON.stringify(block.value, null, 2), kind: 'terminal', language: 'json' })
+      }
+      continue
+    }
+    if (blockType === 'table') {
+      // Runtime tables carry string columns; API tables carry {key,label}.
+      const columns = Array.isArray(block.columns) ? block.columns : []
+      const labels = columns.map((value) =>
+        typeof value === 'string' ? value : readString(asRecord(value)?.label) || readString(asRecord(value)?.key) || '',
+      )
+      const rows = Array.isArray(block.rows) ? block.rows : []
+      if (labels.length) {
+        const separator = labels.map(() => '---')
+        const tableRows = rows.map((row) =>
+          Array.isArray(row) ? `| ${row.map((value) => String(value ?? '')).join(' | ')} |` : '| |',
+        )
+        rendered.push({
+          body: [`| ${labels.join(' | ')} |`, `| ${separator.join(' | ')} |`, ...tableRows].join('\n'),
+          kind: 'markdown',
+        })
+      }
+      continue
+    }
+    if (blockType === 'log') {
+      const body = readString(block.text)
+      if (body) rendered.push({ body, kind: 'terminal', language: 'text', title: readString(block.stream) || undefined })
+      continue
+    }
+    if (blockType === 'command') {
+      const command = readString(block.command)
+      const stdout = readString(block.stdout)
+      const stderr = readString(block.stderr)
+      if (command) rendered.push({ body: `$ ${command}`, kind: 'terminal', language: 'shell', title: 'Command' })
+      if (stdout) rendered.push({ body: stdout, kind: 'terminal', language: 'text', title: 'stdout' })
+      if (stderr) rendered.push({ body: stderr, kind: 'terminal', language: 'text', title: 'stderr' })
+      continue
+    }
+    if (blockType === 'diff') {
+      const body = readString(block.diff)
+      if (body) rendered.push({ body, kind: 'diff', summary: 'Diff', language: readString(block.language) || 'diff' })
+      continue
+    }
+    if (blockType === 'file_changes') {
+      const changes = Array.isArray(block.changes) ? block.changes : []
+      if (changes.length) {
+        const lines = changes.map((value) => {
+          const change = asRecord(value)
+          const path = readString(change?.path) || 'unknown path'
+          const kind = readString(change?.kind) || 'updated'
+          const from = readString(change?.from_path)
+          return `- **${kind}** \`${from ? `${from} → ` : ''}${path}\``
+        })
+        rendered.push({ body: lines.join('\n'), kind: 'markdown', title: 'File changes' })
+      }
+      continue
+    }
+    if (blockType === 'search_results') {
+      const items = Array.isArray(block.items) ? block.items : []
+      if (items.length) {
+        const lines = items.map((value) => {
+          const item = asRecord(value)
+          const title = readString(item?.title)
+          const url = readString(item?.url)
+          const snippet = readString(item?.snippet)
+          const heading = title ? (url ? `- [${title}](${url})` : `- ${title}`) : url ? `- ${url}` : ''
+          return [heading, snippet ? `  ${snippet}` : ''].filter(Boolean).join('\n')
+        })
+        rendered.push({ body: lines.filter(Boolean).join('\n'), kind: 'markdown', title: 'Search results' })
+      }
+      continue
+    }
+    if (blockType === 'custom') {
+      // Plugin payloads: the `presentation` map reads best as bullets.
+      const presentation = asRecord(block.presentation)
+      if (presentation && Object.keys(presentation).length) {
+        const body = Object.entries(presentation)
+          .map(([name, field]) => `- **${name}**: \`${String(field)}\``)
+          .join('\n')
+        rendered.push({ body, kind: 'markdown' })
+        continue
+      }
+      if (block.value !== undefined) {
+        rendered.push({ body: JSON.stringify(block.value, null, 2), kind: 'terminal', language: 'json' })
+      }
+      continue
+    }
+  }
+  return rendered
+}
+
+/** A denied or unavailable tool call renders as the readable outcome: the
+ * authorization reply reason or the failure message, with a status-specific
+ * title — instead of a raw input dump. */
+function toolCallOutcomeBlock(part: MessagePart, content: Record<string, unknown> | null): RenderBlock | null {
+  const operation = asRecord(content?.operation)
+  const outcomeTitle:
+    | { status: NonNullable<RenderBlock['outcome']>; title: string }
+    | null =
+    part.status === 'policy_denied'
+      ? { status: 'policy_denied', title: 'Blocked by permission policy' }
+      : part.status === 'user_declined'
+        ? { status: 'user_declined', title: 'Declined by user' }
+        : part.status === 'capability_unavailable'
+          ? { status: 'capability_unavailable', title: 'Capability unavailable' }
+          : part.status === 'tool_unavailable'
+            ? { status: 'tool_unavailable', title: 'Tool unavailable' }
+            : null
+  if (!outcomeTitle) return null
+  const { status, title } = outcomeTitle
+
+  // Denial provenance: the permission reply that refused the call.
+  const authorization = asRecord(operation?.authorization)
+  const permissions = Array.isArray(authorization?.permissions) ? authorization.permissions : []
+  const denial = permissions
+    .map((value) => asRecord(value))
+    .filter((value): value is Record<string, unknown> => Boolean(value))
+    .flatMap((permission) => {
+      const reply = asRecord(permission.reply)
+      if (!reply) return []
+      const kind = readString(reply.kind)
+      if (kind !== 'deny_once' && kind !== 'deny_always') return []
+      const reason = readString(reply.reason)
+      const request = asRecord(permission.request)
+      const source = readString(request?.source)
+      const provenance = [reason, source ? `by ${source}` : null].filter(Boolean).join(' · ')
+      return [`${provenance || 'Denied'}${kind === 'deny_always' ? ' (always)' : ''}`]
+    })[0]
+  if (denial) {
+    return { body: denial, kind: 'operation_outcome', outcome: status, title }
+  }
+
+  // Fall back to the failure's user-facing message (e.g. tool_unavailable).
+  const error = asRecord(operation?.result)
+    ? asRecord(asRecord(operation?.result)?.error)
+    : null
+  const failure = asRecord(error?.failure)
+  const fallback = readString((failure?.user as Record<string, unknown> | null)?.fallback as string | undefined)
+  if (fallback) {
+    return { body: fallback, kind: 'operation_outcome', outcome: status, title }
+  }
+
+  return null
 }
 
 export function messageBlocks(message: MessageResource): RenderBlock[] {

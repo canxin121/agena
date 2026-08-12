@@ -226,9 +226,9 @@ mod runtime_tools;
 mod tool_api_inputs;
 
 pub(crate) use planning_tools::{
-    PlanGetInput, PlanGetView, PlanSetInput, PlanUpdateInput, WorkflowPlan, WorkflowPlanCheckpoint,
-    WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepInput,
-    WorkflowPlanStepStatus,
+    PlanEditInput, PlanGetInput, PlanGetView, PlanPhaseInput, PlanReviewInput, PlanSetInput,
+    WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep,
+    WorkflowPlanStepInput, WorkflowPlanStepStatus,
 };
 pub(crate) use repo_tools::{
     EnterSnapshotCommandInput, ExitSnapshotCommandInput, snapshot_enter_permission_paths,
@@ -252,8 +252,7 @@ const PLAN_REVIEW_DECISION_REJECT: &str = "Reject";
 const PLAN_REVIEW_DECISION_CANCELLED: &str = "Cancel plan";
 
 #[derive(Debug)]
-enum PlanUpdateTarget {
-    Plan,
+enum PlanEditTarget {
     Step(usize),
     Check {
         step_index: usize,
@@ -340,7 +339,7 @@ impl WorkflowPlugin {
         }
         Ok(Some(ToolBeforePatch {
             abort_reason: Some(
-                "the active plan is still in planning; use plan.update or clear the plan before using mutating tools"
+                "the active plan is still in planning; use plan.edit, plan.phase, or clear the plan before using mutating tools"
                     .to_string(),
             ),
             ..ToolBeforePatch::default()
@@ -468,8 +467,8 @@ mod tests {
 
     use super::workflow_runtime::discovery_text_output;
     use super::{
-        AvailableToolRecord, HostRegisteredToolDescriptor, PlanUpdateInput, PlanUpdateTarget,
-        ToolApiHelpInput, ToolDescriptor, ToolDiscoveryConfig, WorkflowPlan,
+        AvailableToolRecord, HostRegisteredToolDescriptor, PlanEditInput, PlanEditTarget,
+        PlanPhaseInput, ToolApiHelpInput, ToolDescriptor, ToolDiscoveryConfig, WorkflowPlan,
         WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep,
         WorkflowPlanStepStatus, WorkflowPlugin, compact_tool_summary,
         validate_tool_discovery_config,
@@ -857,35 +856,26 @@ mod tests {
     }
 
     #[test]
-    fn validate_plan_update_input_maps_plan_and_step_targets() {
-        let plan_update = PlanUpdateInput {
-            phase: Some(WorkflowPlanPhase::Active),
-            ..Default::default()
-        };
-        assert!(matches!(
-            WorkflowPlugin::validate_plan_update_input(&plan_update).unwrap(),
-            PlanUpdateTarget::Plan
-        ));
-
-        let step_update = PlanUpdateInput {
+    fn validate_plan_edit_input_maps_step_and_check_targets() {
+        let step_update = PlanEditInput {
             step: Some(2),
             status: Some(WorkflowPlanStepStatus::InProgress),
             ..Default::default()
         };
         assert!(matches!(
-            WorkflowPlugin::validate_plan_update_input(&step_update).unwrap(),
-            PlanUpdateTarget::Step(2)
+            WorkflowPlugin::validate_plan_edit_input(&step_update).unwrap(),
+            PlanEditTarget::Step(2)
         ));
 
-        let check_update = PlanUpdateInput {
+        let check_update = PlanEditInput {
             step: Some(1),
             check: Some(2),
             status: Some(WorkflowPlanStepStatus::Completed),
             ..Default::default()
         };
         assert!(matches!(
-            WorkflowPlugin::validate_plan_update_input(&check_update).unwrap(),
-            PlanUpdateTarget::Check {
+            WorkflowPlugin::validate_plan_edit_input(&check_update).unwrap(),
+            PlanEditTarget::Check {
                 step_index: 1,
                 check_index: 2
             }
@@ -1118,42 +1108,67 @@ mod tests {
     }
 
     #[test]
-    fn validate_plan_update_input_rejects_invalid_combinations() {
-        let check_without_step = PlanUpdateInput {
+    fn validate_plan_edit_input_rejects_invalid_combinations() {
+        let check_without_step = PlanEditInput {
             check: Some(1),
             status: Some(WorkflowPlanStepStatus::Completed),
             ..Default::default()
         };
-        let error = WorkflowPlugin::validate_plan_update_input(&check_without_step)
+        let error = WorkflowPlugin::validate_plan_edit_input(&check_without_step)
             .expect_err("check without step must fail");
         assert_eq!(
             error.diagnostic.message,
-            "plan.update check updates require `step`"
+            "plan.edit check updates require `step`"
         );
 
-        let check_without_status = PlanUpdateInput {
+        let check_without_status = PlanEditInput {
             step: Some(1),
             check: Some(1),
             ..Default::default()
         };
-        let error = WorkflowPlugin::validate_plan_update_input(&check_without_status)
+        let error = WorkflowPlugin::validate_plan_edit_input(&check_without_status)
             .expect_err("check without status must fail");
         assert_eq!(
             error.diagnostic.message,
-            "plan.update check updates require `status`"
+            "plan.edit check updates require `status`"
         );
 
-        let mixed_phase_and_step = PlanUpdateInput {
-            phase: Some(WorkflowPlanPhase::Completed),
+        let step_without_change = PlanEditInput {
             step: Some(1),
-            status: Some(WorkflowPlanStepStatus::Completed),
             ..Default::default()
         };
-        let error = WorkflowPlugin::validate_plan_update_input(&mixed_phase_and_step)
-            .expect_err("mixing phase with step/check fields must fail");
+        let error = WorkflowPlugin::validate_plan_edit_input(&step_without_change)
+            .expect_err("step without status/note must fail");
         assert_eq!(
             error.diagnostic.message,
-            "plan.update must target either the plan itself or a step/check, not both"
+            "plan.edit step updates require at least one of `status` or `note`"
+        );
+    }
+
+    #[test]
+    fn validate_plan_phase_input_requires_phase_or_autorun() {
+        let empty = PlanPhaseInput::default();
+        let error = WorkflowPlugin::validate_plan_phase_input(&empty)
+            .expect_err("empty phase input must fail");
+        assert_eq!(error.diagnostic.message, "plan.phase requires `phase` or `autorun`");
+
+        let autorun_only = PlanPhaseInput {
+            autorun: Some(true),
+            ..Default::default()
+        };
+        WorkflowPlugin::validate_plan_phase_input(&autorun_only)
+            .expect("autorun-only phase input must be valid");
+
+        let summary_without_completed = PlanPhaseInput {
+            phase: Some(WorkflowPlanPhase::Active),
+            summary: Some("done".to_string()),
+            ..Default::default()
+        };
+        let error = WorkflowPlugin::validate_plan_phase_input(&summary_without_completed)
+            .expect_err("summary without completed phase must fail");
+        assert_eq!(
+            error.diagnostic.message,
+            "plan.phase summary is only valid when phase is `completed`"
         );
     }
 }

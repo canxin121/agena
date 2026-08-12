@@ -7,7 +7,12 @@ impl WorkflowPlugin {
         input: &ToolBeforeInput,
     ) -> bool {
         match input.plugin_key().to_string().as_str() {
-            "agena.plan" => return matches!(input.tool_name(), "get" | "set" | "update" | "clear"),
+            "agena.plan" => {
+                return matches!(
+                    input.tool_name(),
+                    "get" | "set" | "edit" | "phase" | "review" | "clear"
+                );
+            }
             "agena.session" => return matches!(input.tool_name(), "get" | "rename"),
             "agena.interaction" => return matches!(input.tool_name(), "ask" | "notify"),
             "agena.tools" => {
@@ -140,10 +145,10 @@ impl WorkflowPlugin {
             lines.extend(pending_checks);
         }
         lines.push(
-            "Update the plan state as you make progress: mark checks completed via `plan.update` with `step` and `check` (1-based indices), mark steps complete when their checks are done, and move to the next step when this one is finished.".to_string(),
+            "Update the plan state as you make progress: mark checks completed via `plan.edit` with `step` and `check` (1-based indices), mark steps complete when their checks are done, and move to the next step when this one is finished.".to_string(),
         );
         lines.push(
-            "When the whole plan is finished, call `plan.update` with `phase: \"completed\"` (or `\"blocked\"`/`\"cancelled\"` as appropriate) so autorun stops cleanly.".to_string(),
+            "When the whole plan is finished, call `plan.phase` with `phase: \"completed\"` (or `\"blocked\"`/`\"cancelled\"` as appropriate) so autorun stops cleanly.".to_string(),
         );
         lines.push(
             "If the next step needs human input or cannot be advanced, stop and say exactly what is needed.".to_string(),
@@ -205,7 +210,7 @@ impl WorkflowPlugin {
         input: &PlanSetInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let previous = self.load_active_plan().await?;
-        let plan = self.build_plan(
+        let mut plan = self.build_plan(
             input.objective.as_str(),
             input.title.as_deref(),
             input.document_markdown.as_deref(),
@@ -213,72 +218,52 @@ impl WorkflowPlugin {
             input.autorun,
             previous.as_ref(),
         )?;
-        self.save_active_plan(&plan).await?;
         if input.request_approval.unwrap_or(true) {
-            // By default a new plan must pass through user approval before it
-            // may become active; the agent can opt out explicitly when the user
-            // has already declared that the plan needs no approval. The review
-            // keeps the plan in planning when the user rejects or leaves
-            // feedback, so the agent can revise it.
-            return self
-                .review_plan_status_transition(
-                    plan,
-                    WorkflowPlanPhase::Active,
-                    input.autorun,
-                    None,
-                    PlanReviewKind::Creation,
-                )
-                .await;
+            // Default: save the plan in `planning` without blocking on the
+            // user. This tool never triggers review by itself; the agent must
+            // call `plan.review` to request user approval before the plan can
+            // become active.
+            self.save_active_plan(&plan).await?;
+            let payload = Self::plan_payload(&plan)?;
+            return Ok(ToolInvokeOutput::from_parts(
+                "plan",
+                format!("Saved · {:?} · {} steps", plan.phase, plan.steps.len()),
+                format!(
+                    "{}\n\nThe plan is saved in the `planning` phase. Call `plan.review` to request user approval before it becomes active.",
+                    Self::plan_output_text("Saved the plan.", &plan)
+                ),
+                Some(payload),
+                std::collections::BTreeMap::new(),
+                Vec::new(),
+            ));
         }
+        // request_approval: false — the user has already declared the plan
+        // needs no approval, so start immediately: transition straight to
+        // `active` (the plan already carries the resolved `autorun`) and
+        // return without any user interaction.
+        Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Active, None)?;
+        self.save_active_plan(&plan).await?;
         let payload = Self::plan_payload(&plan)?;
         Ok(ToolInvokeOutput::from_parts(
             "plan",
             format!("Saved · {:?} · {} steps", plan.phase, plan.steps.len()),
-            Self::plan_output_text("Saved the plan.", &plan),
+            Self::plan_output_text("Saved the plan and made it active.", &plan),
             Some(payload),
             std::collections::BTreeMap::new(),
             Vec::new(),
         ))
     }
 
-    pub(crate) async fn invoke_plan_update(
+    pub(crate) async fn invoke_plan_edit(
         &self,
-        input: &PlanUpdateInput,
+        input: &PlanEditInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let Some(mut plan) = self.load_active_plan().await? else {
-            return Err(PluginError::invalid_params("no active plan to update"));
+            return Err(PluginError::invalid_params("no active plan to edit"));
         };
-        let target = Self::validate_plan_update_input(input)?;
+        let target = Self::validate_plan_edit_input(input)?;
         let message = match target {
-            PlanUpdateTarget::Plan => {
-                let completion_summary = match input.phase {
-                    Some(WorkflowPlanPhase::Completed) => input.summary.as_deref(),
-                    _ => None,
-                };
-                if let Some(phase) = input.phase {
-                    Self::validate_plan_phase_change(&plan, phase)?;
-                    if Self::plan_phase_requires_approval(phase)
-                        && !Self::plan_phase_is_approved(plan.phase)
-                        && input.request_approval.unwrap_or(true)
-                    {
-                        return self
-                            .review_plan_status_transition(
-                                plan,
-                                phase,
-                                input.autorun,
-                                completion_summary,
-                                PlanReviewKind::StatusChange,
-                            )
-                            .await;
-                    }
-                    Self::set_plan_phase(&mut plan, phase, completion_summary)?;
-                }
-                if let Some(autorun) = input.autorun {
-                    plan.autorun = autorun;
-                }
-                "Updated the plan.".to_string()
-            }
-            PlanUpdateTarget::Step(step) => {
+            PlanEditTarget::Step(step) => {
                 let step_index = Self::resolve_step_index(&plan, step).map_err(|err| {
                     PluginError::invalid_params(format!(
                         "{}; available steps: {}",
@@ -296,7 +281,7 @@ impl WorkflowPlugin {
                 }
                 format!("Updated step '{}'.", step.title)
             }
-            PlanUpdateTarget::Check {
+            PlanEditTarget::Check {
                 step_index,
                 check_index,
             } => {
@@ -337,6 +322,73 @@ impl WorkflowPlugin {
             std::collections::BTreeMap::new(),
             Vec::new(),
         ))
+    }
+
+    pub(crate) async fn invoke_plan_phase(
+        &self,
+        input: &PlanPhaseInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let Some(mut plan) = self.load_active_plan().await? else {
+            return Err(PluginError::invalid_params("no active plan to update"));
+        };
+        Self::validate_plan_phase_input(input)?;
+        let completion_summary = match input.phase {
+            Some(WorkflowPlanPhase::Completed) => input.summary.as_deref(),
+            _ => None,
+        };
+        if let Some(phase) = input.phase {
+            Self::validate_plan_phase_change(&plan, phase)?;
+            if Self::plan_phase_requires_approval(phase)
+                && !Self::plan_phase_is_approved(plan.phase)
+                && input.request_approval.unwrap_or(true)
+            {
+                return self
+                    .review_plan_status_transition(
+                        plan,
+                        phase,
+                        input.autorun,
+                        completion_summary,
+                        PlanReviewKind::StatusChange,
+                    )
+                    .await;
+            }
+            Self::set_plan_phase(&mut plan, phase, completion_summary)?;
+        }
+        if let Some(autorun) = input.autorun {
+            plan.autorun = autorun;
+        }
+        self.save_active_plan(&plan).await?;
+        let payload = Self::plan_payload(&plan)?;
+        let message = "Updated the plan phase.";
+        Ok(ToolInvokeOutput::from_parts(
+            "plan",
+            format!("{} · {:?}", message.trim_end_matches('.'), plan.phase),
+            Self::plan_output_text(message, &plan),
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
+    }
+
+    pub(crate) async fn invoke_plan_review(
+        &self,
+        _input: &PlanReviewInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let Some(plan) = self.load_active_plan().await? else {
+            return Err(PluginError::invalid_params("no active plan to review"));
+        };
+        // `plan.review` requests user approval to move the current saved plan
+        // from `planning` to `active` (creation review). The plan's own state
+        // drives the dialog: the requested phase is Active, autorun defaults to
+        // the plan's current value, and no completion summary applies.
+        self.review_plan_status_transition(
+            plan,
+            WorkflowPlanPhase::Active,
+            None,
+            None,
+            PlanReviewKind::Creation,
+        )
+        .await
     }
 
     pub(crate) async fn invoke_plan_clear(&self) -> SdkResult<ToolInvokeOutput> {
@@ -1077,8 +1129,9 @@ impl WorkflowPlugin {
 use super::{
     AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord, BTreeMap,
     CommandBeforeInput, EnterSnapshotCommandInput, ExitSnapshotCommandInput, HashMap, HashSet,
-    HostEnterSnapshotRequest, HostExitSnapshotRequest, PathRequest, PlanGetInput, PlanReviewKind,
-    PlanSetInput, PlanUpdateInput, PlanUpdateTarget, PluginError, RunSubtaskAccess,
+    HostEnterSnapshotRequest, HostExitSnapshotRequest, PathRequest, PlanEditInput, PlanEditTarget,
+    PlanGetInput, PlanPhaseInput, PlanReviewInput, PlanReviewKind, PlanSetInput, PluginError,
+    RunSubtaskAccess,
     RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskAccess,
     TaskToolInput, ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput,
     ToolBeforeInput, ToolDescriptor, ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution,

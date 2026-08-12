@@ -1,10 +1,10 @@
 {
   "counts": {
     "bundled_skills": 14,
-    "execution_tools": 138,
+    "execution_tools": 140,
     "gateway_tools": 4,
     "plugins": 24,
-    "tools": 142
+    "tools": 144
   },
   "plugins": [
     {
@@ -1192,6 +1192,18 @@
           ]
         },
         {
+          "canonical_name": "agena.plan.edit",
+          "conditional": null,
+          "definition_identity": "bd312cfa9245e910947351f2dbad877e8c477dd4bd5f1cc59562ab6618ce16de",
+          "gateway": false,
+          "input_schema_sha256": "04e78be5863c3945499288acaa63688778d1a197823c4c15db5f100330910b5d",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "planning"
+          ]
+        },
+        {
           "canonical_name": "agena.plan.get",
           "conditional": null,
           "definition_identity": "1e6049dd09c9011eb201dd706e5a0bf3427a31140e636a6d73cc94884390af9c",
@@ -1204,11 +1216,11 @@
           ]
         },
         {
-          "canonical_name": "agena.plan.set",
+          "canonical_name": "agena.plan.phase",
           "conditional": null,
-          "definition_identity": "1619298827d1eefde7da0bda4d1dd1628a65675fb8ac64ebe2005d21c663b58c",
+          "definition_identity": "03bd581d0715ee362164fe94579869517e19a8ee4af1fce4374bbb4ce8b4514a",
           "gateway": false,
-          "input_schema_sha256": "e45e05dd97577d6e0280e97b490916733bbc6a07d5763535541bb0d0d9de511c",
+          "input_schema_sha256": "78c4d0de27ca03ea506ba5e15af69ae6664fd3287debc7fb2920ed8b0a598724",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1216,11 +1228,23 @@
           ]
         },
         {
-          "canonical_name": "agena.plan.update",
+          "canonical_name": "agena.plan.review",
           "conditional": null,
-          "definition_identity": "0ece1075c24cbdd654e470cf4a73f16b2df263e073e2bf1bcaaeb87a7499d73a",
+          "definition_identity": "7b64b221aeb37234ac1374fd38248896a432f4d59bc38f2adba359679fa53c34",
           "gateway": false,
-          "input_schema_sha256": "3d790c000a558be59d1b175f19e62b2cad3687004360cc15bab00b5d1031ea22",
+          "input_schema_sha256": "0ba25f43e5bbeb87c528931652239a7730a11bccb455d03c89dddaeb07b447e1",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "planning"
+          ]
+        },
+        {
+          "canonical_name": "agena.plan.set",
+          "conditional": null,
+          "definition_identity": "dd6a9b606abaab64c7a0396b0d029bec8a42da51f1d14655856eead547c5e8b8",
+          "gateway": false,
+          "input_schema_sha256": "dec5d11933b67252886557b673672f208b42c7ca4c1e5c56845c097b490722ea",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",

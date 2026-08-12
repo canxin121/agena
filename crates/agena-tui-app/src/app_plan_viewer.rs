@@ -184,7 +184,7 @@ impl App {
             let result = application
                 .invoke_plugin_ui_tool(
                     "agena.plan",
-                    "update",
+                    "phase",
                     serde_json::json!({ "autorun": target }),
                     Some(session_id),
                 )

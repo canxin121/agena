@@ -152,12 +152,16 @@ async fn build_host_with_previous(
     .unwrap()
 }
 
-/// `agena.plan.set` with two AI steps, auto-approved, must register a
-/// `plan:{session_id}` status-line contribution showing active progress.
+/// `agena.plan.set` with two AI steps must register a `plan:{session_id}`
+/// status-line contribution while the plan is still in `planning` (default:
+/// no review). A follow-up `agena.plan.review` — the only tool that requests
+/// user approval — is auto-approved by the fake host and moves the plan to
+/// `active`, updating the chip to show active progress.
 #[tokio::test]
 async fn plan_set_registers_status_line_contribution() {
     let tmp = tempfile::tempdir().unwrap();
-    let host = build_host(&tmp, Arc::new(FakeHostClient::default())).await;
+    let client = Arc::new(FakeHostClient::default());
+    let host = build_host(&tmp, Arc::clone(&client) as Arc<dyn HostClient>).await;
 
     let registered: RegisteredTool = host.lookup_tool("agena.plan.set").unwrap();
     let input = ToolInvokeInput {
@@ -190,6 +194,45 @@ async fn plan_set_registers_status_line_contribution() {
             panic!("expected plan:42 status-line contribution, got: {contributions:#?}")
         });
 
+    match &plan_contribution.contribution.content {
+        PluginDisplayContent::Text { text } => {
+            assert_eq!(text.trim(), "⏳ 0/2 ↻");
+        }
+        other => panic!("expected Text content, got {other:?}"),
+    }
+
+    // plan.review requests approval and (auto-approved here) moves to active.
+    assert_eq!(
+        *client.ask_user_calls.lock().unwrap(),
+        0,
+        "plan.set must not request approval by itself"
+    );
+    let review: RegisteredTool = host.lookup_tool("agena.plan.review").unwrap();
+    host.invoke_tool(
+        &review,
+        ToolInvokeInput {
+            tool_name: "review".to_string(),
+            session_id: 42,
+            call_id: 8,
+            workspace_root: tmp.path().to_string_lossy().to_string(),
+            input: serde_json::json!({}),
+        },
+        None,
+    )
+    .await
+    .expect("agena.plan.review must succeed");
+
+    let contributions = host.display_contributions();
+    let plan_contribution = contributions
+        .iter()
+        .find(|c| {
+            c.plugin_id.to_string() == "agena.plan"
+                && c.contribution.id == "plan:42"
+                && c.contribution.kind == ContributionKind::StatusLineText
+        })
+        .unwrap_or_else(|| {
+            panic!("expected plan:42 status-line contribution, got: {contributions:#?}")
+        });
     match &plan_contribution.contribution.content {
         PluginDisplayContent::Text { text } => {
             assert_eq!(text.trim(), "▶ 0/2 ↻");
@@ -225,6 +268,7 @@ async fn hot_reload_recreates_static_plan_plugin_against_successor_host() {
                 workspace_root: tmp.path().to_string_lossy().to_string(),
                 input: serde_json::json!({
                     "objective": "Build a widget",
+                    "request_approval": false,
                     "steps": [
                         { "title": "Design the widget" },
                         { "title": "Implement the widget" },
@@ -279,6 +323,7 @@ async fn hot_reload_recreates_static_plan_plugin_against_successor_host() {
                 workspace_root: tmp.path().to_string_lossy().to_string(),
                 input: serde_json::json!({
                     "objective": "Rebuild the widget",
+                    "request_approval": false,
                     "steps": [
                         { "title": "Design the rebuild" },
                         { "title": "Implement the rebuild" },
@@ -311,8 +356,9 @@ async fn hot_reload_recreates_static_plan_plugin_against_successor_host() {
     }
 }
 
-/// `request_approval: false` must save the plan in `planning` without asking
-/// the user: the review path (host ask_user) is never entered.
+/// `request_approval: false` must move the plan straight to `active` without
+/// asking the user: the review path (host ask_user) is never entered. This is
+/// the "user pre-declared no approval needed, start immediately" path.
 #[tokio::test]
 async fn plan_set_skips_review_when_request_approval_is_false() {
     let tmp = tempfile::tempdir().unwrap();
@@ -358,7 +404,7 @@ async fn plan_set_skips_review_when_request_approval_is_false() {
         });
     match &plan_contribution.contribution.content {
         PluginDisplayContent::Text { text } => {
-            assert_eq!(text.trim(), "⏳ 0/2 ↻");
+            assert_eq!(text.trim(), "▶ 0/2 ↻");
         }
         other => panic!("expected Text content, got {other:?}"),
     }
@@ -467,6 +513,7 @@ async fn plan_contribution_survives_real_tool_executor_route() {
         "agena.plan",
         StructuredObject::try_from(serde_json::json!({
             "objective": "Build a widget",
+            "request_approval": false,
             "steps": [
                 { "title": "Design the widget" },
                 { "title": "Implement the widget" },
@@ -479,8 +526,8 @@ async fn plan_contribution_survives_real_tool_executor_route() {
         .await
         .expect("plan.set through the real tool executor must succeed");
     assert!(
-        execution.summary().summary.contains("Approve"),
-        "plan review should auto-approve through the executor, got: {:?}",
+        execution.summary().summary.contains("Active"),
+        "plan.set with request_approval=false should go straight to active through the executor, got: {:?}",
         execution.summary().summary
     );
 
@@ -529,6 +576,7 @@ async fn plan_get_restores_status_line_contribution_after_host_rebuild() {
                 workspace_root: tmp.path().to_string_lossy().to_string(),
                 input: serde_json::json!({
                     "objective": "Build a widget",
+                    "request_approval": false,
                     "steps": [{ "title": "Design the widget" }, { "title": "Implement the widget" }],
                 }),
             },

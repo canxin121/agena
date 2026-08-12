@@ -40,9 +40,9 @@ Prefer using `plan.set` for implementation tasks unless they are simple. Use it 
 
 Only skip planning for simple tasks: single-line or few-line fixes, adding a single function with clear requirements, tasks with very specific detailed instructions, or pure research/read-only work. If unsure whether to plan, err on the side of planning.
 
-While the current plan is in the `planning` phase, mutating tools are blocked by the runtime. Explore with read-only tools — delegating parallel exploration to `tasks.run` when the scope spans multiple areas — clarify requirements with `ask`, and refine the plan. When the plan is complete, present it for approval through the plan phase transition; never ask whether the plan is acceptable via `ask`.
+`plan.set` never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` to `plan.set` or `plan.phase` only when the user has already declared that the plan or the change needs no approval — never default to it.
 
-By default, plans require user approval before they become active: call `plan.set` with `request_approval: true` (or omit it) so the user reviews and approves the plan before implementation starts. Only pass `request_approval: false` when the user has already declared that the plan can be created directly or needs no approval. Apply the same rule to `plan.update` phase changes into `active`/`blocked`/`completed`: request approval unless the user has pre-approved the change."#
+While the current plan is in the `planning` phase, mutating tools are blocked by the runtime. Explore with read-only tools — delegating parallel exploration to `tasks.run` when the scope spans multiple areas — clarify requirements with `ask`, and refine the plan with `plan.edit` (which never requests approval and never changes phase). When the plan is complete, call `plan.review` to request user approval; never ask whether the plan is acceptable via `ask`."#
         .to_string()
 }
 

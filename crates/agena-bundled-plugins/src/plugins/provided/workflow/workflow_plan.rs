@@ -1052,61 +1052,37 @@ impl WorkflowPlugin {
         plan.document_markdown = format!("{}\n\n{summary_section}", plan.document_markdown.trim());
     }
 
-    pub(in crate::plugins::provided::workflow) fn validate_plan_update_input(
-        input: &PlanUpdateInput,
-    ) -> SdkResult<PlanUpdateTarget> {
-        let phase_update_requested = input.phase.is_some()
-            || input.autorun.is_some()
-            || input.summary.is_some()
-            || input.request_approval.is_some();
+    /// Validate a `plan.edit` input and classify it as a step or check update.
+    /// This tool never touches the plan phase and never requests approval.
+    pub(in crate::plugins::provided::workflow) fn validate_plan_edit_input(
+        input: &PlanEditInput,
+    ) -> SdkResult<PlanEditTarget> {
         let step = input.step;
         let check = input.check;
-
-        if phase_update_requested {
-            if step.is_some() || check.is_some() || input.status.is_some() || input.note.is_some() {
-                return Err(PluginError::invalid_params(
-                    "plan.update must target either the plan itself or a step/check, not both"
-                        .to_string(),
-                ));
-            }
-            if input.summary.is_some() && input.phase != Some(WorkflowPlanPhase::Completed) {
-                return Err(PluginError::invalid_params(
-                    "plan.update summary is only valid when phase is `completed`".to_string(),
-                ));
-            }
-            if input.phase.is_none() && input.autorun.is_none() && input.request_approval.is_none()
-            {
-                return Err(PluginError::invalid_params(
-                    "plan.update requires `phase`, `autorun`, or `request_approval` for plan-level updates"
-                        .to_string(),
-                ));
-            }
-            return Ok(PlanUpdateTarget::Plan);
-        }
 
         let Some(step) = step else {
             if check.is_some() {
                 return Err(PluginError::invalid_params(
-                    "plan.update check updates require `step`".to_string(),
+                    "plan.edit check updates require `step`".to_string(),
                 ));
             }
             return Err(PluginError::invalid_params(
-                "plan.update requires either `phase` / `autorun` or `step`".to_string(),
+                "plan.edit requires `step` to address a step or check".to_string(),
             ));
         };
 
         if let Some(check) = check {
             if input.status.is_none() {
                 return Err(PluginError::invalid_params(
-                    "plan.update check updates require `status`".to_string(),
+                    "plan.edit check updates require `status`".to_string(),
                 ));
             }
             if input.note.is_some() {
                 return Err(PluginError::invalid_params(
-                    "plan.update check updates do not support `note`".to_string(),
+                    "plan.edit check updates do not support `note`".to_string(),
                 ));
             }
-            return Ok(PlanUpdateTarget::Check {
+            return Ok(PlanEditTarget::Check {
                 step_index: step,
                 check_index: check,
             });
@@ -1114,11 +1090,29 @@ impl WorkflowPlugin {
 
         if input.status.is_none() && input.note.is_none() {
             return Err(PluginError::invalid_params(
-                "plan.update step updates require at least one of `status` or `note`".to_string(),
+                "plan.edit step updates require at least one of `status` or `note`".to_string(),
             ));
         }
 
-        Ok(PlanUpdateTarget::Step(step))
+        Ok(PlanEditTarget::Step(step))
+    }
+
+    /// Validate a `plan.phase` input. At least one of `phase` or `autorun` must
+    /// be present; `summary` is only meaningful with `phase: completed`.
+    pub(in crate::plugins::provided::workflow) fn validate_plan_phase_input(
+        input: &PlanPhaseInput,
+    ) -> SdkResult<()> {
+        if input.phase.is_none() && input.autorun.is_none() {
+            return Err(PluginError::invalid_params(
+                "plan.phase requires `phase` or `autorun`".to_string(),
+            ));
+        }
+        if input.summary.is_some() && input.phase != Some(WorkflowPlanPhase::Completed) {
+            return Err(PluginError::invalid_params(
+                "plan.phase summary is only valid when phase is `completed`".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     pub(in crate::plugins::provided::workflow) fn plan_phase_requires_approval(
@@ -1379,7 +1373,7 @@ impl WorkflowPlugin {
         let output_text = if Self::is_review_feedback_decision(&decision) {
             Self::plan_output_text(
                 format!(
-                    "Plan review decision: {decision}. The user left feedback instead of picking an option; revise the plan to address it (for example with plan.set or plan.update) and propose it again."
+                    "Plan review decision: {decision}. The user left feedback instead of picking an option; revise the plan to address it (for example with plan.edit, then propose it again via plan.review or plan.phase) and propose it again."
                 )
                 .as_str(),
                 &plan,
@@ -1427,8 +1421,8 @@ use super::{
     PLAN_REVIEW_DECISION_APPROVE, PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON, PLAN_REVIEW_DECISION_APPROVE_REQUESTED,
     PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE, PLAN_REVIEW_DECISION_CANCELLED,
-    PLAN_REVIEW_DECISION_KEEP_PLANNING, PLAN_REVIEW_DECISION_REJECT, Path, PathBuf, PlanGetView,
-    PlanReviewKind, PlanUpdateInput, PlanUpdateTarget, PluginDisplayContent,
+    PLAN_REVIEW_DECISION_KEEP_PLANNING, PLAN_REVIEW_DECISION_REJECT, Path, PathBuf, PlanEditInput,
+    PlanEditTarget, PlanGetView, PlanPhaseInput, PlanReviewKind, PluginDisplayContent,
     PluginDisplayContribution, PluginError, RwLock, SdkResult, SessionRenameToolInput,
     SessionToolResponse, ToolDescriptor, ToolInvokeOutput, ToolSearchDocument, ToolTagRecord,
     WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase,

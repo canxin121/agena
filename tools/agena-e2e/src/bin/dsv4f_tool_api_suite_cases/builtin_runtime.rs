@@ -211,7 +211,9 @@ pub(crate) async fn run_plan_cases(
             &[
                 "agena.plan.set",
                 "agena.plan.get",
-                "agena.plan.update",
+                "agena.plan.edit",
+                "agena.plan.phase",
+                "agena.plan.review",
                 "agena.plan.clear",
             ],
             baseline_permission(PermissionMode::Allow),
@@ -252,15 +254,15 @@ pub(crate) async fn run_plan_cases(
     let update = harness
         .run_execution_tool(
             session,
-            "plan.update",
-            "plan.update",
+            "plan.edit",
+            "plan.edit",
             json!({"step": 1, "check": 1, "status": "completed"}),
             PendingReply::None,
             true,
         )
         .await?;
     assert_contains(&update, "completed")?;
-    report.pass("plan.update");
+    report.pass("plan.edit");
     let clear = harness
         .run_execution_tool(
             session,

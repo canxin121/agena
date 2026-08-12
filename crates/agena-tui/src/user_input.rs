@@ -1186,11 +1186,22 @@ pub fn render_overlay(
     }
 }
 
+/// Target width (columns) for the review-decision overlay, comparable to the
+/// skill-studio detail dialog (104). Wide enough for plan documents to read
+/// comfortably; `adaptive_modal_width` still caps it to fit small terminals.
+const REVIEW_DECISION_TARGET_WIDTH: u16 = 108;
+
+/// Minimum dialog height for the review-decision overlay, so short plans still
+/// open as a substantial modal instead of hugging a handful of rows.
+const REVIEW_DECISION_MIN_HEIGHT: usize = 18;
+
 /// The width at which the review-decision document is laid out. The App
 /// pre-renders the plan body at this width so cursor arithmetic matches the
 /// rendered rows.
 pub fn user_input_review_content_width(area: Rect) -> u16 {
-    SurfaceMode::Overlay.content_width(area, 92).max(1)
+    SurfaceMode::Overlay
+        .content_width(area, REVIEW_DECISION_TARGET_WIDTH)
+        .max(1)
 }
 
 /// Layout metrics of the review-decision overlay, shared by the renderer and
@@ -1215,7 +1226,9 @@ fn review_decision_layout(
     let footer = Text::from(review_footer_lines(overlay, i18n));
     let footer_height =
         usize::from(wrapped_text_height_for_text(&footer, content_width).clamp(1, 2));
-    let natural_height = presentation.review_total_lines().max(1);
+    let natural_height = presentation
+        .review_total_lines()
+        .max(REVIEW_DECISION_MIN_HEIGHT);
     let target_height = framed_overlay_height(u16::try_from(natural_height).unwrap_or(u16::MAX));
     let outer_height = SurfaceMode::Overlay
         .outer_rect(area, content_width.saturating_add(2), target_height)
@@ -1659,7 +1672,7 @@ fn sanitize_display_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Line, UserInputEffect, UserInputOptionPresentation, UserInputPresentation,
+        I18n, Line, Rect, UserInputEffect, UserInputOptionPresentation, UserInputPresentation,
         UserInputQuestionPresentation,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -1908,5 +1921,29 @@ mod tests {
         presentation.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL), 10);
         presentation.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL), 10);
         assert_eq!(presentation.flow_scroll(), 0);
+    }
+
+    #[test]
+    fn review_overlay_opens_as_a_roomy_modal() {
+        // The review dialog is meant to read a whole plan document: it targets
+        // a wide column count and a minimum height even for short plans.
+        let width = super::user_input_review_content_width(Rect::new(0, 0, 220, 60));
+        assert!(
+            width >= 100,
+            "review width should be comfortably wide, got {width}"
+        );
+        assert_eq!(width, super::REVIEW_DECISION_TARGET_WIDTH - 2);
+
+        let mut presentation =
+            UserInputPresentation::new(overlay(true), vec![question(false, false)]);
+        presentation.set_review_plan(vec![Line::from("short plan")], width);
+        let layout =
+            super::review_decision_layout(&presentation, &I18n::default(), Rect::new(0, 0, 220, 60));
+        assert!(
+            layout.natural_height >= super::REVIEW_DECISION_MIN_HEIGHT,
+            "a short plan should still open at least {} rows tall, got {}",
+            super::REVIEW_DECISION_MIN_HEIGHT,
+            layout.natural_height
+        );
     }
 }

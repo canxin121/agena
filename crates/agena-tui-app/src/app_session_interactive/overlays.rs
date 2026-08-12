@@ -175,28 +175,26 @@ impl App {
 
     /// The transcript node key of the pending user-input interaction part
     /// matching `request_id`, if the part is present in the transcript parts.
+    /// The canonical single-activity shape renders the ask on the `tool_call`
+    /// **Operation** activity, so the node key is resolved through the same
+    /// shared pending-part predicate the renderer and key router use
+    /// ([`agena_tui_transcript::interaction_request_id_for_part`], which reads
+    /// the awaiting `user_input` record off the operation). The legacy
+    /// `Request` activity arm is covered by that predicate too. The reply-clear
+    /// path also resolves through this function: it runs against the still
+    /// pending snapshot before the answered execution is applied, so the
+    /// awaiting record is still present.
     pub(crate) fn pending_interaction_part_node_key(
         &self,
         request_id: &str,
     ) -> Option<TranscriptNodeKey> {
-        use agena_tui_transcript::{
-            RequestPartResource, TranscriptActivityContent, TranscriptPartContent,
-        };
         agena_tui_transcript::parts_entries(&self.transcript.parts).iter().find_map(|entry| {
             entry.parts.iter().find_map(|part| {
-                let pending = matches!(
-                    &part.content,
-                    TranscriptPartContent::Activity(TranscriptActivityContent::Request(request))
-                        if matches!(
-                            request.as_ref(),
-                            RequestPartResource::UserInput { request, reply }
-                                if reply.is_none() && request.request_id == request_id
-                        )
-                );
-                pending.then(|| TranscriptNodeKey::Activity {
-                    entry_id: entry.id,
-                    content_id: part.id,
-                })
+                (agena_tui_transcript::interaction_request_id_for_part(part) == Some(request_id))
+                    .then(|| TranscriptNodeKey::Activity {
+                        entry_id: entry.id,
+                        content_id: part.id,
+                    })
             })
         })
     }

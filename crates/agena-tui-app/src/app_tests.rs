@@ -678,6 +678,39 @@ mod interaction_part_routing_tests {
         }
     }
 
+    /// The canonical single-activity shape: a `tool_call` operation carrying an
+    /// awaiting `user_input` record IS the pending interaction part (there is no
+    /// separate `interaction` part anymore).
+    fn operation_tool_call_part() -> SessionTranscriptPart {
+        let operation = agena_api::part::OperationPartResource {
+            call_id: 5,
+            invocation: agena_api::part::ToolInvocationResource {
+                name: "plan.review".to_owned(),
+                ..Default::default()
+            },
+            user_input: agena_domain::OperationUserInput {
+                requests: vec![agena_domain::OperationUserInputRecord {
+                    request: domain_request(),
+                    reply: None,
+                    replied_at_ms: None,
+                }],
+            },
+            ..Default::default()
+        };
+        SessionTranscriptPart {
+            part_id: 5,
+            kind: "tool_call".to_owned(),
+            role: "assistant".to_owned(),
+            state: "in_progress".to_owned(),
+            content: serde_json::to_value(serde_json::json!({ "operation": operation }))
+                .expect("operation serializes"),
+            summary: None,
+            created_at_ms: 50,
+            parent_part_id: None,
+            run_id: Some(3),
+        }
+    }
+
     fn parts() -> Vec<SessionTranscriptPart> {
         vec![run_marker(), interaction_part()]
     }
@@ -1015,12 +1048,14 @@ mod interaction_part_routing_tests {
         // Sit on a decision row (body offset 2 = the option label).
         move_cursor_to_body_offset(&mut app, 2);
 
-        // Every plain navigation key must NOT be intercepted: the chat keeps
-        // owning paging and motion ("everything is a part", no injected review
-        // component). `g`/`G` are the motion/end prefixes; `Space` pages.
+        // Line-wise motion (`j`/`k`/arrows) is deliberately OWNED while the
+        // review part is pending: the decision cursor stays confined inside the
+        // part block (see j_and_k_stay_within_the_pending_review_part). Every
+        // other navigation key must NOT be intercepted — the chat keeps owning
+        // horizontal motion, paging, jumps and prefixes ("everything is a
+        // part", no injected review component). `g`/`G` are the motion/end
+        // prefixes; `Space` pages.
         for key in [
-            char_key('j'),
-            char_key('k'),
             char_key('h'),
             char_key('l'),
             page_down(),
@@ -1037,6 +1072,46 @@ mod interaction_part_routing_tests {
         // The interaction stays pending and editable after all those keys.
         assert!(app.user_input_interactions.contains_key(REQUEST_ID));
         assert_eq!(app.interaction_editing, None);
+    }
+
+    #[tokio::test]
+    async fn j_and_k_stay_within_the_pending_review_part() {
+        let mut app = seeded_app().await;
+        seed_pending_review(&mut app);
+        move_cursor_to_body_offset(&mut app, 0);
+        let (start_line, end_line) = {
+            let node = app
+                .transcript
+                .rendered(WIDTH)
+                .nodes
+                .iter()
+                .find(|node| node.key == node_key())
+                .expect("the interaction part renders a node");
+            (node.start_line, node.end_line)
+        };
+
+        // `k` from the first plan row must never escape onto the message
+        // header's role-label column ("用户 / 助手"): the decision cursor stops
+        // at the part headline (the part's own top boundary).
+        app.handle_transcript_key(char_key('k'));
+        assert!(
+            app.transcript.navigation_cursor_line().is_some_and(|line| line >= start_line),
+            "k must not move the cursor above the part headline"
+        );
+
+        // `j` from anywhere inside the part must never leave the block: the
+        // cursor stops at the last decision/footer row before the next part.
+        for _ in 0..10 {
+            app.handle_transcript_key(char_key('j'));
+            assert!(
+                app.transcript
+                    .navigation_cursor_line()
+                    .is_some_and(|line| line < end_line),
+                "j must keep the cursor inside the part block"
+            );
+        }
+        // The part stays pending and interactive after all that motion.
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
     }
 
     #[tokio::test]
@@ -1233,6 +1308,55 @@ mod interaction_part_routing_tests {
         assert!(
             app.transcript.viewport_top() <= start_line,
             "the fit-scroll must not push the part's top above the viewport"
+        );
+    }
+
+    #[tokio::test]
+    async fn reveal_auto_expands_the_tool_call_operation_that_carries_the_ask() {
+        let mut app = seeded_app().await;
+        // The canonical single-activity shape: the ask lives on the tool_call
+        // operation, so the reveal must resolve ITS node key — not the legacy
+        // `interaction` part. This is the pre-approval auto-expand behavior.
+        app.transcript.apply_execution(execution_with(
+            vec![pending_user_input_resource()],
+            vec![run_marker(), operation_tool_call_part()],
+        ));
+        app.user_input_interactions.insert(
+            REQUEST_ID.to_owned(),
+            App::build_user_input_overlay(SESSION_ID, domain_request()),
+        );
+        app.sync_interaction_documents();
+        app.transcript.invalidate_render();
+
+        let key = app
+            .pending_interaction_part_node_key(REQUEST_ID)
+            .expect("the operation activity is the pending interaction part");
+        assert_eq!(
+            key,
+            TranscriptNodeKey::Activity {
+                entry_id: TranscriptEntryId::StoredMessage(3),
+                content_id: TranscriptContentId::StoredPart(5),
+            }
+        );
+
+        app.reveal_pending_user_input_interaction(REQUEST_ID);
+        assert_eq!(
+            app.transcript.node_expansions.get(&key),
+            Some(&true),
+            "a pending ask auto-expands the operation activity on arrival"
+        );
+        assert!(
+            app.transcript
+                .navigation_cursor_line()
+                .is_some_and(|line| {
+                    app.transcript
+                        .rendered(WIDTH)
+                        .nodes
+                        .iter()
+                        .find(|node| node.key == key)
+                        .is_some_and(|node| line >= node.start_line && line < node.end_line)
+                }),
+            "the reveal lands the cursor inside the operation activity"
         );
     }
 

@@ -217,7 +217,60 @@ impl App {
         let Some(hit) = self.interaction_cursor_hit(self.layout.transcript_body.width) else {
             return false;
         };
-        match resolve_tui_key(KeyContext::Transcript, key) {
+        // While the review part is pending, the decision cursor stays confined
+        // INSIDE the expanded part block: `j`/`k` (and the arrow keys) are
+        // owned so the cursor roams only across the plan body and decision
+        // rows, never off onto the message header's role-label column or a
+        // neighbouring part. Plain motions only — a pending operator or
+        // prefix (`3j`, `yj`, `g`, `z`, search, visual selection) still falls
+        // through to the normal transcript dispatch.
+        let action = resolve_tui_key(KeyContext::Transcript, key);
+        if matches!(action, Some(KeyAction::MoveUp | KeyAction::MoveDown))
+            && self.transcript_motion_prefix.is_none()
+            && !self.transcript_yank_pending
+            && !self.transcript_goto_pending
+            && !self.transcript_viewport_pending
+            && self.transcript_find_pending.is_none()
+            && self.transcript_text_object_pending.is_none()
+            && !self.transcript.has_visual_selection()
+        {
+            let width = self.layout.transcript_body.width;
+            let height = self.layout.transcript_body.height;
+            let node = self
+                .transcript
+                .current_cursor_node_cloned(width)
+                .expect("the hit derived a cursor node");
+            let direction = if action == Some(KeyAction::MoveUp) {
+                TranscriptMoveDirection::Up
+            } else {
+                TranscriptMoveDirection::Down
+            };
+            let count = self.transcript_motion_count();
+            let Some(cursor_line) = self.transcript.navigation_cursor_line() else {
+                return false;
+            };
+            // Walk the requested number of rows, stopping at the part
+            // boundary: the headline (part top) is the closest row above, the
+            // last decision/footer row the closest row below.
+            let mut target = cursor_line;
+            for _ in 0..count {
+                let next = match direction {
+                    TranscriptMoveDirection::Up => target.saturating_sub(1),
+                    TranscriptMoveDirection::Down => target.saturating_add(1),
+                };
+                if next < node.start_line || next >= node.end_line {
+                    break;
+                }
+                target = next;
+            }
+            if target != cursor_line {
+                self.transcript
+                    .move_cursor_to_visual_line_number(width, height, Some(target + 1));
+                self.transcript.invalidate_render();
+            }
+            return true;
+        }
+        match action {
             Some(KeyAction::Toggle) if hit.line_kind.is_submit_eligible() => {
                 self.handle_decision_row_enter(&hit.request_id, hit.line_kind);
                 true
@@ -604,9 +657,9 @@ impl App {
 }
 use crate::{
     App, BTreeMap, ConfirmOverlay, I18n, InputDialogKeyResult, KeyEvent, LineInputOverlay,
-    OverlayCommit, TranscriptContentId, TranscriptNodeKey, UserInputOverlay, UserInputReply,
-    UserInputReplyKind, drive_input_dialog_key, ui_text, user_input_answer_values,
-    user_input_question_label,
+    OverlayCommit, TranscriptContentId, TranscriptMoveDirection, TranscriptNodeKey,
+    UserInputOverlay, UserInputReply, UserInputReplyKind, drive_input_dialog_key, ui_text,
+    user_input_answer_values, user_input_question_label,
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;

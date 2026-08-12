@@ -354,7 +354,10 @@ impl App {
     }
 
     /// Switch the wizard to the previous/next question page, or into/out of
-    /// the final summary page.
+    /// the final summary page. Every page change re-runs the fit-scroll
+    /// reveal: a new page can be taller than the viewport, and the previous
+    /// reveal (on arrival, or on the last page turn) would otherwise keep the
+    /// viewport top-anchored and cut off the new page's bottom rows.
     fn wizard_move_tab(&mut self, request_id: &str, delta: isize) {
         let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
             return;
@@ -362,6 +365,7 @@ impl App {
         dialog.presentation.move_wizard_tab(delta);
         self.user_input_interactions.insert(request_id.to_string(), dialog);
         self.sync_interaction_documents();
+        self.reveal_pending_user_input_interaction(request_id);
     }
 
     /// Space on a wizard question page: toggles the option/custom row under
@@ -417,6 +421,11 @@ impl App {
         }
         self.user_input_interactions.insert(request_id.to_string(), dialog);
         self.sync_interaction_documents();
+        // The dialog survived the Enter: either a question page advanced, or the
+        // review validation miss jumped to the unanswered question's page. Both
+        // moved the page, so re-run the fit-scroll reveal the way a Left/Right
+        // page turn does — the new page may be taller than the viewport.
+        self.reveal_pending_user_input_interaction(request_id);
     }
 
     /// Enter on a decision row of the pending interaction part. The line kind

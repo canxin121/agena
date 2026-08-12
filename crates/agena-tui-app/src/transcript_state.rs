@@ -2121,9 +2121,18 @@ impl TranscriptState {
         }
         let visible = usize::from(height.max(1));
         let max_scroll = self.max_scroll(width, height);
-        let target_top = start_line
-            .min(end_line.saturating_sub(visible))
-            .min(max_scroll);
+        // Node shorter than the viewport: anchor the top (show the whole part).
+        // Node taller than the viewport: pin the LAST body row to the bottom so
+        // the interactive/footer rows stay on screen. A plain
+        // `start_line.min(end_line - visible)` chain is wrong here — for a tall
+        // node `end_line - visible` exceeds `start_line`, and `min` would pick
+        // the top anchor and cut the page's bottom off (the "翻页看不全" bug).
+        let target_top = if end_line.saturating_sub(start_line) > visible {
+            end_line.saturating_sub(visible)
+        } else {
+            start_line
+        }
+        .min(max_scroll);
         self.viewport.top = target_top;
         self.install_cursor_at_column(
             width,

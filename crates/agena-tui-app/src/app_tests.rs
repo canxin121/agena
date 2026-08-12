@@ -991,25 +991,49 @@ mod interaction_part_routing_tests {
         }
     }
 
-    fn pending_ask_user_resource() -> PendingInteractiveRequestResource {
-        PendingInteractiveRequestResource {
-            session_id: SESSION_ID,
-            parent_session_id: None,
-            task_id: None,
-            request: PendingInteractiveRequest::UserInput {
-                request: ask_user_wire_request(),
-            },
-        }
+    fn seed_pending_ask_user(app: &mut App) {
+        seed_pending_ask_user_with(app, ask_user_wire_request(), ask_user_domain_request());
     }
 
-    fn seed_pending_ask_user(app: &mut App) {
+    /// Seed a pending ask-user part from caller-controlled wire + domain
+    /// requests (the fixed `REQUEST_ID`/part id are kept), so a test can build
+    /// a page taller than the viewport and pin the fit-scroll contract.
+    fn seed_pending_ask_user_with(
+        app: &mut App,
+        wire: agena_api::resource::UserInputRequest,
+        domain: agena_domain::UserInputRequest,
+    ) {
         app.transcript.apply_execution(execution_with(
-            vec![pending_ask_user_resource()],
-            vec![run_marker(), ask_user_interaction_part()],
+            vec![PendingInteractiveRequestResource {
+                session_id: SESSION_ID,
+                parent_session_id: None,
+                task_id: None,
+                request: PendingInteractiveRequest::UserInput {
+                    request: wire.clone(),
+                },
+            }],
+            vec![
+                run_marker(),
+                SessionTranscriptPart {
+                    part_id: 5,
+                    kind: "interaction".to_owned(),
+                    role: "assistant".to_owned(),
+                    state: "in_progress".to_owned(),
+                    content: serde_json::to_value(RequestPartResource::UserInput {
+                        request: wire,
+                        reply: None,
+                    })
+                    .expect("request part serializes"),
+                    summary: None,
+                    created_at_ms: 50,
+                    parent_part_id: None,
+                    run_id: Some(3),
+                },
+            ],
         ));
         app.user_input_interactions.insert(
             REQUEST_ID.to_owned(),
-            App::build_user_input_overlay(SESSION_ID, ask_user_domain_request()),
+            App::build_user_input_overlay(SESSION_ID, domain),
         );
         app.sync_interaction_documents();
         app.transcript.node_expansions.insert(node_key(), true);
@@ -1543,21 +1567,30 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn ask_user_left_right_switch_pages_and_invalidate() {
+    async fn ask_user_left_right_switch_pages_and_refit() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
         move_cursor_to_part_headline(&mut app);
-        // Materialize the render cache so we can observe invalidation.
-        app.transcript.rendered(WIDTH);
 
-        // Right moves to the second question page and invalidates the render.
+        // Right moves to the second question page. The page turn re-runs the
+        // fit-scroll reveal, which rebuilds the render cache immediately (the
+        // old contract — "switch pages, leave the cache invalidated" — is
+        // gone: a new page can be taller than the viewport, so the view must
+        // be re-fit-scrolled, not just marked stale).
         assert!(
             app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
             "Right is owned while the wizard is active"
         );
         assert_eq!(dialog(&app).presentation.selected_question(), 1);
         assert_eq!(wizard_view(&app).wizard_page, Some(1));
-        assert!(app.transcript.rendered.is_none(), "page switch re-renders");
+        assert!(
+            app.revealed_user_input_request_ids.contains(REQUEST_ID),
+            "the page turn re-runs the fit-scroll reveal"
+        );
+        assert!(
+            app.transcript.rendered.is_some(),
+            "the reveal rebuilds the render cache so the new page is measurable"
+        );
 
         // Right again reaches the summary page (`wizard_page: None`).
         assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)));
@@ -1568,6 +1601,72 @@ mod interaction_part_routing_tests {
         assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)));
         assert_eq!(wizard_view(&app).wizard_page, Some(1));
         assert_eq!(dialog(&app).presentation.selected_question(), 1);
+    }
+
+    #[tokio::test]
+    async fn ask_user_page_turn_refits_a_taller_than_viewport_page() {
+        let mut app = seeded_app().await;
+        // Give the SECOND question page 30 options so it is far taller than
+        // the 24-row viewport. Turning onto it must bottom-anchor the viewport
+        // (the whole page visible) instead of keeping the previous page's
+        // top-anchored view — the regression where page turns stopped scrolling
+        // to the bottom and cut the page off.
+        let tall_options: Vec<agena_api::resource::UserInputOption> = (0..30)
+            .map(|index| agena_api::resource::UserInputOption {
+                label: format!("Option {index}"),
+                description: String::new(),
+            })
+            .collect();
+        let mut wire = ask_user_wire_request();
+        wire.questions[1].options = tall_options.clone();
+        let mut domain = ask_user_domain_request();
+        domain.questions[1].options = tall_options
+            .iter()
+            .map(|option| agena_domain::UserInputOption {
+                label: option.label.clone(),
+                description: option.description.clone(),
+            })
+            .collect();
+        seed_pending_ask_user_with(&mut app, wire, domain);
+        move_cursor_to_part_headline(&mut app);
+
+        assert!(
+            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            "Right is owned while the wizard is active"
+        );
+        assert_eq!(wizard_view(&app).wizard_page, Some(1));
+
+        let height = usize::from(HEIGHT);
+        let (start_line, end_line) = {
+            let rendered = app.transcript.rendered(WIDTH);
+            let node = rendered
+                .nodes
+                .iter()
+                .find(|node| node.key == node_key())
+                .expect("the ask part renders a node");
+            (node.start_line, node.end_line)
+        };
+        assert!(
+            end_line.saturating_sub(start_line) > height,
+            "the fixture page must exceed the viewport for this test to prove the refit"
+        );
+        // The page turn re-runs the fit-scroll: the tall page's bottom row is
+        // pulled into the viewport (bottom-anchored), and the viewport stays
+        // inside the part (the top may scroll above the viewport — that is how
+        // the bottom fits — but the anchor row must not pass the part's bottom).
+        let top = app.transcript.viewport_top();
+        assert!(
+            end_line <= top + height,
+            "the tall page's bottom rows must be pulled into the viewport"
+        );
+        assert!(
+            top <= end_line,
+            "the fit-scroll anchor must stay inside the part"
+        );
+        assert!(
+            top + height >= start_line,
+            "the viewport must still show the part's top rows"
+        );
     }
 
     #[tokio::test]

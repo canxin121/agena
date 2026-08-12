@@ -216,6 +216,7 @@ pub(crate) async fn runtime_snapshot_summary(application: &Application) -> Resul
 pub(crate) async fn list_workspace_sessions_page(
     application: &Application,
     roots_only: bool,
+    exclude_subagents: bool,
     search: Option<&str>,
     cursor: Option<String>,
     limit: u64,
@@ -234,6 +235,7 @@ pub(crate) async fn list_workspace_sessions_page(
             workspace_id: Some(workspace_id),
             parent_id: None,
             roots: roots_only,
+            exclude_subagents,
         })
         .await
         .map_err(anyhow::Error::new)

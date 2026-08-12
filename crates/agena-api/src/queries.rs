@@ -185,6 +185,9 @@ pub struct ListSessionsParams {
     pub parent_id: Option<i64>,
     #[serde(default)]
     pub roots: bool,
+    /// Hide task child sessions (`relation_kind = 'subagent'`).
+    #[serde(default)]
+    pub exclude_subagents: bool,
     #[serde(default)]
     pub search: Option<String>,
 }

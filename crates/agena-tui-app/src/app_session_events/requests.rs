@@ -95,6 +95,7 @@ impl App {
             let result = crate::app_backend::operations::list_workspace_sessions_page(
                 &application,
                 mode == SessionViewMode::Roots,
+                mode == SessionViewMode::All,
                 (!query.trim().is_empty()).then_some(query.as_str()),
                 cursor,
                 50,

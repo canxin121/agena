@@ -660,6 +660,9 @@ impl PersistenceEngine for InMemoryEngine {
             })
             .filter(|meta| !query.roots_only || meta.parent_id.is_none())
             .filter(|meta| {
+                !query.exclude_subagents || !meta.relation_kind.is_subagent()
+            })
+            .filter(|meta| {
                 search
                     .as_ref()
                     .is_none_or(|needle| meta.title.to_lowercase().contains(needle))
@@ -1621,6 +1624,66 @@ mod tests {
             matches!(acquire, LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs.is_empty())
         );
         (engine, session_id)
+    }
+
+    #[tokio::test]
+    async fn list_exclude_subagents_hides_only_task_children() {
+        let (engine, parent_id) = setup().await;
+        let parent = engine
+            .session_meta(parent_id)
+            .await
+            .expect("parent meta");
+        engine
+            .create_subagent_session(parent_id, "task-9".to_owned(), "sub task".to_owned(), engine.now_ms())
+            .await
+            .expect("create subagent");
+        engine
+            .create_session(NewSession {
+                workspace_id: parent.workspace_id,
+                parent_id: Some(parent_id),
+                relation_kind: SessionRelationKind::Child,
+                cutoff_part_id: None,
+                title: "user child".to_owned(),
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
+            })
+            .await
+            .expect("create child");
+
+        let all = engine
+            .list_session_summaries(SessionListQuery {
+                workspace_id: Some(parent.workspace_id),
+                parent_id: None,
+                roots_only: false,
+                exclude_subagents: false,
+                search: None,
+                limit: None,
+                before: None,
+            })
+            .await
+            .expect("list all");
+        assert_eq!(all.len(), 3, "without the filter every session is listed");
+
+        let parents_only = engine
+            .list_session_summaries(SessionListQuery {
+                workspace_id: Some(parent.workspace_id),
+                parent_id: None,
+                roots_only: false,
+                exclude_subagents: true,
+                search: None,
+                limit: None,
+                before: None,
+            })
+            .await
+            .expect("list excluding subagents");
+        assert!(
+            parents_only
+                .iter()
+                .all(|summary| summary.title != "sub task"),
+            "task child must be hidden"
+        );
+        assert_eq!(parents_only.len(), 2, "root + user child remain");
     }
 
     #[tokio::test]

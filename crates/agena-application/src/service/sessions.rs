@@ -30,6 +30,7 @@ impl ApplicationService {
                 workspace_id: query.workspace_id,
                 parent_id: query.parent_id,
                 roots_only: query.roots,
+                exclude_subagents: query.exclude_subagents,
                 search: non_empty(query.pagination.search()).map(ToString::to_string),
                 limit: Some(fetch_limit),
                 before: cursor,
@@ -407,6 +408,56 @@ mod tests {
         assert_eq!(resource.message_count, 2);
         assert_eq!(resource.child_session_count, 1);
         assert!(resource.last_message_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn list_exclude_subagents_hides_only_task_children() {
+        let (service, facade, workspace_id) = test_service().await;
+        let parent = facade
+            .create_session(NewSession {
+                workspace_id,
+                parent_id: None,
+                relation_kind: agena_domain::SessionRelationKind::Root,
+                cutoff_part_id: None,
+                title: "Parent".to_owned(),
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
+            })
+            .await
+            .expect("create parent");
+        // A task child via the store's dedicated subagent path.
+        facade
+            .create_subagent_session(parent.id, "task-1".to_owned(), "Sub task".to_owned())
+            .await
+            .expect("create subagent");
+
+        let all = service
+            .list_sessions(crate::dto::SessionListQuery {
+                workspace_id: Some(workspace_id),
+                ..Default::default()
+            })
+            .await
+            .expect("list all");
+        assert!(
+            all.items.iter().any(|item| item.is_subagent),
+            "without the filter the task child is listed"
+        );
+
+        let parents_only = service
+            .list_sessions(crate::dto::SessionListQuery {
+                workspace_id: Some(workspace_id),
+                exclude_subagents: true,
+                ..Default::default()
+            })
+            .await
+            .expect("list excluding subagents");
+        assert!(
+            parents_only.items.iter().all(|item| !item.is_subagent),
+            "task child must be hidden by exclude_subagents"
+        );
+        assert_eq!(parents_only.items.len(), 1);
+        assert_eq!(parents_only.items[0].id, parent.id);
     }
 
     #[tokio::test]

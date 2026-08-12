@@ -455,6 +455,7 @@ impl StoreAdapter {
                 workspace_id: Some(workspace_id),
                 parent_id: request.parent_id,
                 roots_only: request.roots_only,
+                exclude_subagents: !request.include_subagents,
                 search: request.search,
                 limit: fetch_limit,
                 before: None,

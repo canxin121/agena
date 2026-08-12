@@ -821,6 +821,7 @@ impl AgenaClient {
                 workspace_id,
                 parent_id,
                 roots,
+                exclude_subagents,
                 search,
             }) => {
                 let mut url = self.endpoint("/api/v1/sessions");
@@ -840,6 +841,9 @@ impl AgenaClient {
                     }
                     if roots {
                         q.append_pair("roots", "true");
+                    }
+                    if exclude_subagents {
+                        q.append_pair("exclude_subagents", "true");
                     }
                     if let Some(search) = search.filter(|search| !search.is_empty()) {
                         q.append_pair("search", &search);

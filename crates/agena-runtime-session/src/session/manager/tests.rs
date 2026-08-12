@@ -29,6 +29,7 @@ use super::{
     SessionUserRunRequest, merge_system_prompts,
 };
 use crate::provider::{ModelRuntime, ProviderError};
+use crate::session::manager::replies::operation_id_from_part;
 use crate::session::manager::runs::run_visible_text_lossy;
 use crate::session::store::{
     OPERATION_ID_METADATA_KEY, ProcessorPartIdAllocator, interaction_from_request,
@@ -2329,6 +2330,233 @@ async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
         PartState::Completed,
         "the replied interaction part completes to PartState::Completed"
     );
+}
+
+/// Regression: two host `ask_user` calls from unrelated operations whose
+/// provider operation id is empty (`agena.operation_id` absent — providers
+/// that stream no tool-call id) must never collide in the host re-entry dedup.
+/// The old key was `operation_id` + per-call sequence; with the empty id every
+/// host ask in a session collapsed into the `("", 0)` bucket, so a later
+/// `interaction.ask` would rediscover an earlier `plan.review` request, compare
+/// its (different) questions and fail with "host user input request mismatch".
+/// The dedup key is now the pending tool's durable part id, unique per
+/// operation, so the two asks stay fully independent.
+#[tokio::test]
+async fn host_ask_user_from_unrelated_operations_with_empty_operation_id_do_not_mismatch() {
+    let (manager, _database) = test_manager_with_database().await;
+    let session = create(&manager, "host ask_user independence").await;
+
+    // Two in-progress tool parts with distinct call ids and NO provider
+    // operation id (`agena.operation_id` absent): `plan.set` then
+    // `interaction.ask`, exactly the pair from the bug report.
+    let plan_operation = agena_runtime_contracts::part::OperationPart::pending(
+        1,
+        ToolInvocation::new("plan.set", StructuredObject::default()),
+        "Create plan",
+        TimeRange { start_ms: 1, end_ms: None },
+    );
+    let ask_operation = agena_runtime_contracts::part::OperationPart::pending(
+        2,
+        ToolInvocation::new("interaction.ask", StructuredObject::default()),
+        "Ask user",
+        TimeRange { start_ms: 2, end_ms: None },
+    );
+    let store = manager.session_store();
+    let outcome = store
+        .submit_user_run(
+            session.id,
+            manager.store.owner_id.as_str(),
+            vec![
+                new_part_from_content(
+                    "tool_call",
+                    PartRole::Assistant,
+                    &TypedContent::ToolCall(tool_call_from_operation(&plan_operation)),
+                    PartState::InProgress,
+                )
+                .expect("build plan tool part"),
+                new_part_from_content(
+                    "tool_call",
+                    PartRole::Assistant,
+                    &TypedContent::ToolCall(tool_call_from_operation(&ask_operation)),
+                    PartState::InProgress,
+                )
+                .expect("build ask tool part"),
+            ],
+            None,
+        )
+        .await
+        .expect("submit run with in-progress tool parts");
+    let plan_tool_part_id = outcome.parts[1].part_id;
+    let ask_tool_part_id = outcome.parts[2].part_id;
+
+    // Reload so the session projection carries both pending tools, resolvable
+    // by call id exactly as `request_host_user_input` does.
+    let session = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("reload submitted run");
+    assert_eq!(
+        operation_id_from_part(session.part(&crate::session::model::SessionPartRef {
+            part_index: 0,
+            part_id: plan_tool_part_id,
+        }).expect("plan tool part"))
+        .as_deref(),
+        None,
+        "the test fixture really exercises the empty-operation-id case"
+    );
+
+    // A plan-review style ask for call 1, driven through the public entry
+    // point in a background task (it blocks awaiting the reply, as the plugin
+    // host flow does in production).
+    let plan_request = crate::part::AskUserToolInput {
+        title: "Approve New Plan".to_owned(),
+        kind: "review".to_owned(),
+        body_markdown: String::new(),
+        auto_resolution_ms: None,
+        questions: vec![UserInputQuestion {
+            header: "Decision".to_owned(),
+            question: "Approve the new plan?".to_owned(),
+            options: vec![UserInputOption {
+                label: "Approve".to_owned(),
+                description: String::new(),
+            }],
+            multiple: false,
+            allow_custom: false,
+        }],
+    };
+    let session_id = session.id;
+    let plan_join = tokio::spawn({
+        let host = manager.background_handle();
+        let request = plan_request.clone();
+        async move { host.request_host_user_input(session_id, 1, request).await }
+    });
+
+    // Wait until the plan request is durable, then issue the interaction.ask
+    // for call 2 with DIFFERENT questions. Under the old empty-operation-id
+    // dedup this second call mismatched against the plan request; it must now
+    // create its own independent request.
+    let plan_request_id = wait_for_interaction_request_id(
+        &store,
+        session_id,
+        plan_tool_part_id,
+        "plan interaction part was never created",
+    )
+    .await;
+
+    let ask_request = crate::part::AskUserToolInput {
+        title: "Ask".to_owned(),
+        kind: "ask_user".to_owned(),
+        body_markdown: String::new(),
+        auto_resolution_ms: None,
+        questions: vec![UserInputQuestion {
+            header: "Question".to_owned(),
+            question: "Which flavor?".to_owned(),
+            options: vec![UserInputOption {
+                label: "Vanilla".to_owned(),
+                description: String::new(),
+            }],
+            multiple: false,
+            allow_custom: false,
+        }],
+    };
+    let ask_join = tokio::spawn({
+        let host = manager.background_handle();
+        let request = ask_request.clone();
+        async move { host.request_host_user_input(session_id, 2, request).await }
+    });
+    let ask_request_id = wait_for_interaction_request_id(
+        &store,
+        session_id,
+        ask_tool_part_id,
+        "ask interaction part was never created",
+    )
+    .await;
+    assert_ne!(
+        plan_request_id, ask_request_id,
+        "independent host asks must own distinct request ids"
+    );
+
+    // Reply to each; each completes its own part and wakes its own host call.
+    let reply = |request_id: String, answer: &str| {
+        agena_runtime::SessionExecutionReplyRequest::new(
+            session_id,
+            agena_runtime::SessionRunOptions {
+                model: ModelRef::new("fake", "fake-model"),
+                thinking_mode: None,
+                speed_mode: None,
+                verbosity: None,
+                thinking: None,
+                request_override: Default::default(),
+                system: None,
+                temperature: None,
+                max_output_tokens: None,
+            },
+            UserInputReply {
+                request_id,
+                kind: UserInputReplyKind::Submit,
+                answers: BTreeMap::from([("0".to_owned(), vec![answer.to_owned()])]),
+                reason: None,
+            },
+        )
+    };
+    manager
+        .reply_user_input(reply(plan_request_id.clone(), "Approve"))
+        .await
+        .expect("plan reply completes");
+    manager
+        .reply_user_input(reply(ask_request_id.clone(), "Vanilla"))
+        .await
+        .expect("ask reply completes");
+
+    let plan_response = plan_join
+        .await
+        .expect("plan host task completed")
+        .expect("plan host ask_user returned a response");
+    assert_eq!(
+        plan_response.answers.get("0").map(Vec::as_slice),
+        Some(&["Approve".to_owned()][..]),
+        "plan ask resolves with its own answer, untouched by the ask request"
+    );
+    let ask_response = ask_join
+        .await
+        .expect("ask host task completed")
+        .expect("ask host ask_user returned a response");
+    assert_eq!(
+        ask_response.answers.get("0").map(Vec::as_slice),
+        Some(&["Vanilla".to_owned()][..]),
+        "interaction.ask resolves with its own answer, independent of the plan review"
+    );
+}
+
+/// Poll the store until the `interaction` part bound to `tool_part_id` is
+/// durable, returning its nested request id.
+async fn wait_for_interaction_request_id(
+    store: &Arc<dyn agena_storage::store::SessionStore>,
+    session_id: i64,
+    tool_part_id: i64,
+    failure_message: &str,
+) -> String {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let persisted = store.load(session_id).await.expect("reload parts");
+        if let Some(request_id) = persisted.parts.iter().find_map(|part| {
+            if part.kind != "interaction" {
+                return None;
+            }
+            let content = InteractionContent::try_from(&part.content)
+                .expect("interaction content is typed");
+            (content.tool_part_id() == Some(tool_part_id))
+                .then(|| content.request_id().expect("interaction carries a request id"))
+        }) {
+            return request_id;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{failure_message}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
 }
 
 #[tokio::test]

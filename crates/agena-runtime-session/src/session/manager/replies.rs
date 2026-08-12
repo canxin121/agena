@@ -605,11 +605,22 @@ pub(super) fn operation_permission_approved_actions(
         .unwrap_or_default()
 }
 
-/// The `sequence_index`-th unanswered interactive user-input request owned by
-/// `operation_id` (legacy `Session::user_input_request_for_operation`).
-pub(super) fn user_input_request_for_operation(
+/// The `sequence_index`-th interactive user-input request owned by the tool
+/// operation identified by its durable `tool_part_id` (the `extra["tool_part_id"]`
+/// every request records at creation).
+///
+/// The tool part id is the correlation key host `ask_user` re-entry uses to
+/// find a request it already created for the same pending tool call (after a
+/// reload the in-memory per-call sequence counter resets, so the request must
+/// be rediscovered from the parts projection). It is unique per operation and
+/// never empty, unlike the provider operation id (`agena.operation_id`), which
+/// collapses to `""` for every operation when the provider streams no tool-call
+/// id — keying on the empty id made host asks from *unrelated* operations (e.g.
+/// `plan.review` and `interaction.ask`) share one dedup bucket and mismatch
+/// each other's questions.
+pub(super) fn user_input_request_for_tool_part(
     session: &Session,
-    operation_id: &str,
+    tool_part_id: i64,
     sequence_index: usize,
 ) -> Option<
     crate::part::InteractiveRequestPart<
@@ -622,7 +633,7 @@ pub(super) fn user_input_request_for_operation(
         .iter()
         .filter_map(|part| {
             let interaction = interaction_from_part(part)?;
-            if interaction.operation_id() != Some(operation_id) {
+            if interaction.tool_part_id() != Some(tool_part_id) {
                 return None;
             }
             let request = interaction.request()?;

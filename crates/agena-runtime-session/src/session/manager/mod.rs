@@ -1334,15 +1334,22 @@ impl SessionManager {
         })?;
         let resolved_pending = resolve_pending_tool(&session, &pending_tool)?;
         let sequence_index = self.next_host_user_input_sequence(session_id, call_id);
-        if let Some(existing) = replies::user_input_request_for_operation(
+        // Dedup re-entry on the pending tool's durable part id, not the
+        // provider operation id: the operation id is `""` when the provider
+        // streams no tool-call id, so keying on it would make host asks from
+        // unrelated operations (e.g. `plan.review` and `interaction.ask`)
+        // share one bucket and mismatch each other's questions. The tool part
+        // id is unique per operation and recorded on every request, so it
+        // matches exactly the requests this same tool call created.
+        if let Some(existing) = replies::user_input_request_for_tool_part(
             &session,
-            resolved_pending.operation_id.as_str(),
+            resolved_pending.pending.part.part_id,
             sequence_index,
         ) {
             if existing.request.questions != request.questions {
                 return Err(AppError::Internal(format!(
-                    "host user input request mismatch for operation {} at step {}",
-                    resolved_pending.operation_id, sequence_index
+                    "host user input request mismatch for tool part {} at step {}",
+                    resolved_pending.pending.part.part_id, sequence_index
                 )));
             }
             if let Some(reply) = existing.reply.as_ref() {

@@ -733,7 +733,30 @@ export function messageBlocks(message: MessageResource): RenderBlock[] {
     ? [...message.parts].sort((left, right) => left.part_index - right.part_index)
     : []
   if (!parts.length) return []
-  return parts.flatMap((part) => partBlocks(part))
+  // Pending interaction parts are the interactive surface ("everything is a
+  // part"): they render as foldable inline forms via the messages panel, so
+  // their flat "Waiting for input" block is skipped here to avoid showing
+  // both a summary and the live form for the same part.
+  return parts.flatMap((part) => (isPendingInteractionPart(part) ? [] : partBlocks(part)))
+}
+
+/**
+ * The interaction parts of a message that are still awaiting a reply. These
+ * are the "everything is a part" surface: each pending interaction part
+ * renders as a foldable inline form (plan body + questions) inside the
+ * message, instead of a separate card. Part identity is preserved (unlike
+ * `messageBlocks`, which flattens), so the form can drive its own submit /
+ * cancel lifecycle per `request_id`.
+ */
+export function pendingInteractionParts(message: MessageResource): MessagePart[] {
+  const parts = Array.isArray(message.parts) ? message.parts : []
+  return parts.filter(isPendingInteractionPart)
+}
+
+function isPendingInteractionPart(part: MessagePart): boolean {
+  if (part.status !== 'pending' && part.status !== 'in_progress') return false
+  const content = part.content || null
+  return part.kind === 'interaction' || content?.type === 'interaction'
 }
 
 export function rewindMessageComposerText(message: MessageResource): string {

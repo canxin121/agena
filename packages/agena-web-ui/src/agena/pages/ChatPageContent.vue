@@ -4,7 +4,6 @@ import ChatActiveSessionPanel from './ChatActiveSessionPanel.vue'
 import ChatComposerPanel from './ChatComposerPanel.vue'
 import ChatMessagesPanel from './ChatMessagesPanel.vue'
 import ChatPendingPermissionsPanel from './ChatPendingPermissionsPanel.vue'
-import ChatPendingUserInputPanel from './ChatPendingUserInputPanel.vue'
 import ChatRewindCheckpointsPanel from './ChatRewindCheckpointsPanel.vue'
 import ChatRunOptionsPanel from './ChatRunOptionsPanel.vue'
 import ChatSessionTransferPanel from './ChatSessionTransferPanel.vue'
@@ -13,7 +12,7 @@ import ChatSidebarPanel from './ChatSidebarPanel.vue'
 import ChatUsagePanel from './ChatUsagePanel.vue'
 import ChatSkillPickerDialog from './ChatSkillPickerDialog.vue'
 import type { ChatPageContentState } from './chatPageContentModel'
-import { pendingPermissionRequests, pendingUserInputRequests } from '@/agena/lib/agenaApi'
+import { pendingPermissionRequests } from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
   state: ChatPageContentState
@@ -150,6 +149,11 @@ const selectedSkillIds = computed(() => props.state.skillReferences.value.map((s
         :format-message-time="props.state.formatMessageTime"
         :message-usage-facts="props.state.messageUsageFacts"
         :message-blocks="props.state.messageBlocks"
+        :is-interactive-request-busy="props.state.isInteractiveRequestBusy"
+        :read-user-answer="props.state.readUserAnswer"
+        :update-user-answer="props.state.updateUserAnswer"
+        :submit-user-answers="props.state.submitUserAnswers"
+        :cancel-user-answers="props.state.cancelUserAnswers"
       />
 
       <ChatPendingPermissionsPanel
@@ -160,15 +164,6 @@ const selectedSkillIds = computed(() => props.state.skillReferences.value.map((s
         :permission-reply-preview="props.state.permissionReplyPreview"
         :is-interactive-request-busy="props.state.isInteractiveRequestBusy"
         :approve-permission="props.state.approvePermission"
-      />
-
-      <ChatPendingUserInputPanel
-        :requests="pendingUserInputRequests(props.state.sessionState.value)"
-        :is-interactive-request-busy="props.state.isInteractiveRequestBusy"
-        :read-user-answer="props.state.readUserAnswer"
-        :update-user-answer="props.state.updateUserAnswer"
-        :submit-user-answers="props.state.submitUserAnswers"
-        :cancel-user-answers="props.state.cancelUserAnswers"
       />
 
       <ChatComposerPanel

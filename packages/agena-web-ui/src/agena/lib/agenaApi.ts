@@ -1018,7 +1018,9 @@ export type PermissionRequest = {
 }
 
 export type UserInputQuestion = {
-  id: string
+  /** The backend never sends `id`; answers are keyed by the question's
+   * positional index string instead (matching the TUI's `answers["0"]`). */
+  id?: string
   header?: string
   question: string
   options?: Array<{
@@ -1032,6 +1034,13 @@ export type UserInputQuestion = {
 export type UserInputRequest = {
   request_id: string
   session_id?: number | null
+  title?: string
+  /** Optional Markdown body — the full plan document for plan-approval reviews. */
+  body_markdown?: string
+  kind?: 'review' | 'ask_user' | 'custom' | (string & {})
+  /** Origin: `host` for the runtime's own ask_user, `plugin` for tool asks. */
+  source?: string | null
+  presented_at?: string | null
   questions: UserInputQuestion[]
   created_at: string
 }

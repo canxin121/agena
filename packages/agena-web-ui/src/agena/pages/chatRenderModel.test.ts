@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import type { MessagePart, MessageResource, SessionPart } from '@/agena/lib/agenaApi'
 
-import { partBlocks, partsToMessages, rewindMessageComposerText } from './chatRenderModel'
+import { partBlocks, partsToMessages, pendingInteractionParts, rewindMessageComposerText } from './chatRenderModel'
 
 function userMessage(parts: MessagePart[]): MessageResource {
   return {
@@ -259,6 +259,63 @@ describe('v2 part rendering (4.1.1 kinds)', () => {
 
     expect(blocks[0]?.activityLabel).toBe('Run')
     expect(blocks[0]?.title).toBe('User run')
+  })
+})
+
+describe('pendingInteractionParts', () => {
+  function interactionPart(overrides: Partial<MessagePart> = {}): MessagePart {
+    return {
+      id: 90,
+      message_id: 42,
+      part_index: 0,
+      status: 'in_progress',
+      kind: 'interaction',
+      created_at: '2026-07-13T00:00:00Z',
+      content: {
+        type: 'review',
+        prompt: 'Approve New Plan',
+        request: {
+          request_id: 'host-input:1:2:0',
+          session_id: 7,
+          title: 'Approve New Plan',
+          body_markdown: '## Proposed Plan',
+          kind: 'review',
+          source: 'host',
+        },
+      },
+      ...overrides,
+    }
+  }
+
+  test('returns only pending or in-progress interaction parts', () => {
+    const message = userMessage([
+      interactionPart({ id: 1, part_index: 0, status: 'in_progress' }),
+      interactionPart({ id: 2, part_index: 1, status: 'pending' }),
+      interactionPart({ id: 3, part_index: 2, status: 'completed' }),
+      { ...interactionPart({ id: 4, part_index: 3, status: 'in_progress' }), kind: 'text' },
+    ])
+
+    const pending = pendingInteractionParts(message)
+    expect(pending.map((part) => part.id)).toEqual([1, 2])
+  })
+
+  test('preserves per-part identity and carries the typed request body', () => {
+    const part = interactionPart({ status: 'in_progress' })
+    const message = userMessage([part])
+
+    const pending = pendingInteractionParts(message)
+    expect(pending.length).toBe(1)
+    expect(pending[0]?.id).toBe(part.id)
+    const request = (pending[0]?.content as Record<string, unknown>)?.request as Record<string, unknown>
+    expect(request.body_markdown).toBe('## Proposed Plan')
+    expect(request.kind).toBe('review')
+  })
+
+  test('recognizes interaction content even when the kind field is not set', () => {
+    const part = interactionPart({ kind: 'activity', content: { type: 'interaction', prompt: 'Pick' } })
+    const message = userMessage([part])
+
+    expect(pendingInteractionParts(message).length).toBe(1)
   })
 })
 

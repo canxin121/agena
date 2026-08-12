@@ -733,18 +733,22 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     }
   }
 
-  async function submitUserAnswers(requestId: string) {
+  async function submitUserAnswers(requestId: string, sessionIdFallback?: number | null) {
+    // The inline interaction part is the source of truth; the pending resource
+    // may lag behind the part, so an explicit session id wins when present.
     const request = pendingUserInputRequests(input.sessionState.value).find((item) => item.request_id === requestId)
-    if (!request) return
-    const sessionId = request.session_id
+    const sessionId = request?.session_id || sessionIdFallback || input.selectedSessionId.value
+    if (!sessionId) return
     if (!beginInteractiveRequest(sessionId, requestId)) return
 
+    // The backend never sends a question id, so answers are keyed by the
+    // question's positional index string — matching the TUI's `answers["0"]`.
     const answers: Record<string, string[]> = {}
     const draft = input.userInputDrafts[requestId] || {}
-    for (const question of request.questions) {
-      const raw = String(draft[question.id] || '').trim()
+    for (const [index, question] of (request?.questions || []).entries()) {
+      const raw = String(draft[String(index)] || '').trim()
       if (!raw) continue
-      answers[question.id] = question.multiple
+      answers[String(index)] = question.multiple
         ? raw
             .split(',')
             .map((item) => item.trim())
@@ -767,10 +771,10 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     }
   }
 
-  async function cancelUserAnswers(requestId: string) {
+  async function cancelUserAnswers(requestId: string, sessionIdFallback?: number | null) {
     const request = pendingUserInputRequests(input.sessionState.value).find((item) => item.request_id === requestId)
-    if (!request) return
-    const sessionId = request.session_id
+    const sessionId = request?.session_id || sessionIdFallback || input.selectedSessionId.value
+    if (!sessionId) return
     if (!beginInteractiveRequest(sessionId, requestId)) return
 
     try {

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import type { MessagePart, MessageResource } from '@/agena/lib/agenaApi'
 import { renderDiff, renderMarkdown, renderTerminal } from '@/agena/lib/markdown'
+import { pendingInteractionParts } from './chatRenderModel'
+import ChatPendingInteractionPart from './ChatPendingInteractionPart.vue'
 
 type ChatMessageRenderBlock = {
   body: string
@@ -25,6 +27,11 @@ const props = defineProps<{
   formatMessageTime: (value: string) => string
   messageUsageFacts: (message: MessageResource) => string[]
   messageBlocks: (message: MessageResource) => ChatMessageRenderBlock[]
+  isInteractiveRequestBusy: (requestId: string) => boolean
+  readUserAnswer: (requestId: string, questionId: string) => string
+  updateUserAnswer: (requestId: string, questionId: string, value: string) => void
+  submitUserAnswers: (requestId: string) => void | Promise<void>
+  cancelUserAnswers: (requestId: string) => void | Promise<void>
 }>()
 
 function blockMarkup(block: ChatMessageRenderBlock): string {
@@ -117,7 +124,22 @@ function blockMarkup(block: ChatMessageRenderBlock): string {
             </section>
           </template>
         </div>
-        <div v-else class="muted">No renderable parts.</div>
+        <!-- Pending interaction parts are the interactive surface: each renders
+             as a foldable inline form ("everything is a part"). They are skipped
+             by `messageBlocks`, so this is the only place they appear. -->
+        <ChatPendingInteractionPart
+          v-for="pendingPart in pendingInteractionParts(message)"
+          :key="`${message.id}-interaction-${pendingPart.id}`"
+          :part="pendingPart"
+          :is-interactive-request-busy="props.isInteractiveRequestBusy"
+          :read-user-answer="props.readUserAnswer"
+          :update-user-answer="props.updateUserAnswer"
+          :submit-user-answers="props.submitUserAnswers"
+          :cancel-user-answers="props.cancelUserAnswers"
+        />
+        <div v-if="!props.messageBlocks(message).length && !pendingInteractionParts(message).length" class="muted">
+          No renderable parts.
+        </div>
       </article>
     </div>
     <p v-else class="muted">No messages yet.</p>

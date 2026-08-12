@@ -262,6 +262,28 @@ button {
   color: var(--ink-dim);
 }
 
+/* A selectable option inside an inline interaction part (plan review /
+ * ask-user). The part is the interaction surface, so the options render as
+ * radio/checkbox rows directly in the transcript. */
+.interaction-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 90%, var(--ink-dim) 10%);
+  cursor: pointer;
+}
+
+.interaction-choice input {
+  margin-top: 2px;
+}
+
+.interaction-choice + .interaction-choice {
+  margin-top: 6px;
+}
+
 .input,
 .textarea,
 .select {

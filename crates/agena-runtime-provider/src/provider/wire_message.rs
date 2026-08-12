@@ -250,10 +250,20 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
                     wire.push(WirePart::Reasoning { text });
                 }
             }
-            TypedContent::Notice(_)
-            | TypedContent::Hook(_)
-            | TypedContent::Interaction(_)
-            | TypedContent::Error(_) => {}
+            TypedContent::Hook(hook) => {
+                // A hook that blocked the stop carries its continuation in
+                // `message` (for example the workflow plan autorun's
+                // `<plan_context>` block). Project it as text so the next
+                // model turn sees it, exactly where the injected continuation
+                // used to land — the run's role is Assistant, and the
+                // adapters fold consecutive assistant runs.
+                if let Some(message) = hook.message.as_deref().filter(|text| !text.is_empty()) {
+                    wire.push(WirePart::Text {
+                        text: message.to_owned(),
+                    });
+                }
+            }
+            TypedContent::Notice(_) | TypedContent::Interaction(_) | TypedContent::Error(_) => {}
         }
     }
 
@@ -550,9 +560,14 @@ fn parts_as_text_lossy(parts: &[Part]) -> String {
             }
             TypedContent::FileRef(_)
             | TypedContent::Notice(_)
-            | TypedContent::Hook(_)
             | TypedContent::Interaction(_)
             | TypedContent::Error(_) => part.summary.clone(),
+            TypedContent::Hook(hook) => hook
+                .message
+                .as_deref()
+                .filter(|text| !text.trim().is_empty())
+                .map(str::to_owned)
+                .or_else(|| part.summary.clone()),
         };
         if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
             out.push(text);
@@ -1405,5 +1420,43 @@ mod tests {
             agena_provider::CompletionInputPart::Reasoning { text }
                 if text == "think step by step"
         ));
+    }
+
+    #[test]
+    fn hook_message_projects_as_assistant_text() {
+        // A stop hook that blocked the run carries its continuation in
+        // `message`; projecting the persisted hook run must surface that
+        // message as assistant text so the next model turn sees it.
+        let hook_with_message = part(
+            "hook",
+            PartRole::Assistant,
+            PartState::Completed,
+            serde_json::json!({
+                "hook": "agent.stop",
+                "summary": "agent.stop hook blocked stop: workflow plan autorun",
+                "message": "<plan_context>continue with the next plan step</plan_context>",
+            }),
+        );
+        let wire_parts = project_persisted(&[hook_with_message.clone()]);
+        assert_eq!(wire_parts.len(), 1);
+        assert!(matches!(
+            &wire_parts[0],
+            WirePart::Text { text } if text == "<plan_context>continue with the next plan step</plan_context>"
+        ));
+
+        // A hook with no message stays human-only activity: nothing projects.
+        let hook_without_message = part(
+            "hook",
+            PartRole::Assistant,
+            PartState::Completed,
+            serde_json::json!({
+                "hook": "chat.params",
+                "summary": "chat.params hook ran (no change)",
+            }),
+        );
+        assert!(
+            project_persisted(&[hook_without_message]).is_empty(),
+            "a message-less hook run must not reach the model prompt"
+        );
     }
 }

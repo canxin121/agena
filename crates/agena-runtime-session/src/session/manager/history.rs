@@ -768,7 +768,12 @@ fn activity_payload_from_part(
         Some(TypedContent::Hook(hook)) => Some(ActivityPayload::Notice(NoticeActivity {
             kind: "hook".to_owned(),
             summary: hook.summary.clone(),
-            detail: hook.detail.clone(),
+            detail: hook
+                .message
+                .as_deref()
+                .filter(|text| !text.trim().is_empty())
+                .map(str::to_owned)
+                .or_else(|| hook.detail.clone()),
             occurred_at_ms: None,
             title: None,
         })),
@@ -1371,6 +1376,7 @@ fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjecte
                 plugin_id: value.plugin_id.clone(),
                 summary: value.summary.clone(),
                 detail: value.detail.clone(),
+                message: value.message.clone(),
             },
         )),
         TypedContent::Notice(value) => agena_runtime::SessionProjectedPartDetail::Notice {

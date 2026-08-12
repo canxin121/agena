@@ -312,6 +312,7 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
                 plugin_id: string_field(content, "plugin_id"),
                 summary: string_field(content, "summary").unwrap_or_default(),
                 detail: string_field(content, "detail"),
+                message: string_field(content, "message"),
             }),
         )),
         "compaction" => TranscriptPartContent::Activity(TranscriptActivityContent::Hook(Box::new(
@@ -320,6 +321,7 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
                 plugin_id: None,
                 summary: string_field(content, "summary").unwrap_or_default(),
                 detail: content.get("window").map(|window| window.to_string()),
+                message: None,
             },
         ))),
         "error" => match serde_json::from_value::<ErrorPartResource>(part.content.clone()) {

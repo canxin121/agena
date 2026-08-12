@@ -241,6 +241,83 @@ async fn plan_set_registers_status_line_contribution() {
     }
 }
 
+/// An active autorun plan's `agent.stop` hook blocks the stop and returns a
+/// continuation. The continuation must be carried by the recorded hook run's
+/// `message` field (and its detail), so the session runtime can surface it
+/// inside the hook activity instead of injecting a separate assistant message.
+#[tokio::test]
+async fn agent_stop_continuation_rides_the_hook_run_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    let client = Arc::new(FakeHostClient::default());
+    let host = build_host(&tmp, Arc::clone(&client) as Arc<dyn HostClient>).await;
+
+    let set: RegisteredTool = host.lookup_tool("agena.plan.set").unwrap();
+    host.invoke_tool(
+        &set,
+        ToolInvokeInput {
+            tool_name: "set".to_string(),
+            session_id: 42,
+            call_id: 7,
+            workspace_root: tmp.path().to_string_lossy().to_string(),
+            input: serde_json::json!({
+                "objective": "Build a widget",
+                "steps": [{ "title": "Design the widget" }],
+            }),
+        },
+        None,
+    )
+    .await
+    .expect("agena.plan.set must succeed");
+    let review: RegisteredTool = host.lookup_tool("agena.plan.review").unwrap();
+    host.invoke_tool(
+        &review,
+        ToolInvokeInput {
+            tool_name: "review".to_string(),
+            session_id: 42,
+            call_id: 8,
+            workspace_root: tmp.path().to_string_lossy().to_string(),
+            input: serde_json::json!({}),
+        },
+        None,
+    )
+    .await
+    .expect("agena.plan.review must succeed");
+
+    let patch = host
+        .dispatch_agent_stop(agena_plugin_host::AgentStopInput {
+            session_id: 42,
+            stop_hook_active: false,
+            last_assistant_message: None,
+            run_error: None,
+        })
+        .await
+        .expect("agent.stop dispatch must succeed");
+
+    let continuation = patch
+        .continue_with_message
+        .expect("an active autorun plan blocks the stop with a continuation");
+    assert!(
+        continuation.contains("<plan_context>") && continuation.contains("Design the widget"),
+        "the continuation is the plan autorun prompt: {continuation}"
+    );
+
+    let drained = host.drain_hook_runs(42);
+    let blocking = drained
+        .iter()
+        .find(|record| record.hook == "agent.stop")
+        .expect("the agent.stop hook run was recorded");
+    assert_eq!(
+        blocking.message.as_deref(),
+        Some(continuation.as_str()),
+        "the continuation rides the hook run's message field"
+    );
+    assert_eq!(
+        blocking.detail.as_deref(),
+        Some(continuation.as_str()),
+        "the continuation stays visible as the activity detail"
+    );
+}
+
 /// A hot-reload (`Runtime::reload_with_cause` with byte-identical config)
 /// builds a successor host whose `previous_plugins` match the current config,
 /// so the host's transport-reuse path is taken. In-proc `Static` plugins must

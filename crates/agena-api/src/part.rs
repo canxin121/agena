@@ -152,6 +152,10 @@ pub struct HookPartResource {
     /// Optional human-facing detail rendered when the activity is expanded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Optional message the hook sent to keep the run going (for example the
+    /// workflow plan autorun's continuation). Carried by the hook activity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// An interactive request recorded in the conversation. The concrete request

@@ -1415,7 +1415,8 @@ impl PluginHost {
                         HookRunStatus::Applied,
                         summary,
                         detail,
-                    )]);
+                    )
+                    .with_message(p.continue_with_message.clone())]);
                 }
                 runs.push(AgentStopHookRun {
                     plugin_id,

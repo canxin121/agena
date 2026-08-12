@@ -134,6 +134,11 @@ pub struct HookRunRecord {
     pub summary: String,
     /// Optional extra detail (reason, error, injected continuation).
     pub detail: Option<String>,
+    /// Optional message the hook sent to keep the run going (for example the
+    /// workflow plan autorun's `agent.stop` continuation). Recorded onto the
+    /// `hook` part's `message` field so the activity carries it, instead of
+    /// injecting it as a separate assistant message.
+    pub message: Option<String>,
     /// Wall-clock timestamp (ms since the Unix epoch) captured when the hook
     /// actually ran, not when the record was drained. The session runtime
     /// uses this to place the activity on the transcript timeline at the real
@@ -157,8 +162,15 @@ impl HookRunRecord {
             status,
             summary: summary.into(),
             detail,
+            message: None,
             occurred_at_ms: unix_timestamp_ms(),
         }
+    }
+
+    /// Attach the message the hook sent to keep the run going.
+    pub fn with_message(mut self, message: Option<String>) -> Self {
+        self.message = message;
+        self
     }
 
     /// Override the recorded hook-call time (used by tests to simulate

@@ -1229,6 +1229,7 @@ mod compaction_tests {
                         plugin_id: Some("agena.plan".to_owned()),
                         summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),
                         detail: Some("continue with the next plan step".to_owned()),
+                        message: None,
                         extra: Default::default(),
                     },
                 ))
@@ -1366,6 +1367,79 @@ mod compaction_tests {
         assert_eq!(
             prompt_runs.iter().map(|item| item.id).collect::<Vec<_>>(),
             vec![Some(1), Some(2), Some(3), Some(100)]
+        );
+    }
+
+    #[test]
+    fn hook_message_is_projected_to_the_model_prompt_as_assistant_text() {
+        let now = Utc::now();
+        let mut session = session_with_checkpoint();
+
+        // A stop hook that blocked the run carries its continuation in
+        // `message`; that message must reach the model as assistant text on
+        // the next run (this is how the workflow plan autorun continues).
+        let mut parts = session.parts().to_vec();
+        let mut marker = run_marker_content("execution", None, None, None, None);
+        marker["source"] = serde_json::json!("system");
+        let hook_content = agena_runtime_contracts::part_content::HookContent {
+            hook: "agent.stop".to_owned(),
+            plugin_id: Some("agena.plan".to_owned()),
+            summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),
+            detail: None,
+            message: Some("<plan_context>continue with the next plan step</plan_context>".to_owned()),
+            extra: Default::default(),
+        };
+        parts.push(Part {
+            part_id: 99,
+            kind: "run".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: marker,
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: None,
+            origin_session_id: 7,
+            revision: 0,
+            started_at_ms: now.timestamp_millis(),
+            finished_at_ms: Some(now.timestamp_millis()),
+            created_at_ms: now.timestamp_millis(),
+            updated_at_ms: now.timestamp_millis(),
+            provider_state: None,
+        });
+        parts.push(Part {
+            part_id: 99 * 1000,
+            kind: "hook".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: typed_content_to_value(&TypedContent::Hook(hook_content))
+                .expect("hook content is always serializable"),
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(99),
+            origin_session_id: 7,
+            revision: 0,
+            started_at_ms: now.timestamp_millis(),
+            finished_at_ms: Some(now.timestamp_millis()),
+            created_at_ms: now.timestamp_millis(),
+            updated_at_ms: now.timestamp_millis(),
+            provider_state: None,
+        });
+        session.install_projected_parts(parts);
+
+        let prompt_runs = prompt_runs_for_request(window_items_from_parts(session.parts()));
+        let hook_run = prompt_runs
+            .iter()
+            .find(|item| item.id == Some(99))
+            .expect("the hook run with a message reaches the model prompt");
+        assert_eq!(hook_run.run.role, agena_domain::Role::Assistant);
+        assert!(
+            hook_run.run.as_text_lossy().contains("continue with the next plan step"),
+            "the hook message is projected as assistant text: {}",
+            hook_run.run.as_text_lossy()
         );
     }
 

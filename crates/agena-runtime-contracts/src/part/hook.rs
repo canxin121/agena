@@ -20,4 +20,9 @@ pub struct HookPart {
     /// message) rendered when the activity is expanded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Optional message the hook sent to keep the run going (for example the
+    /// workflow plan autorun's continuation). Carried by the activity; never
+    /// injected as a separate assistant message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }

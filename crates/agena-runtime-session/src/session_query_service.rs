@@ -130,6 +130,10 @@ pub struct SessionProjectedHookPart {
     pub plugin_id: Option<String>,
     pub summary: String,
     pub detail: Option<String>,
+    /// The message the hook sent to keep the run going, when it blocked the
+    /// stop. Carried by the hook activity, never injected as a separate
+    /// assistant message.
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

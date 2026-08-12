@@ -554,13 +554,12 @@ impl SessionManager {
                                 .await?;
                         }
                         if dispatch.patch.continue_with_message.is_some() {
-                            let follow_up =
-                                dispatch.patch.continue_with_message.unwrap_or_default();
-                            let (continued, continuation_marker) = self
-                                .inject_continuation_message(session, follow_up)
-                                .await?;
-                            session = continued;
-                            turn_run_id = continuation_marker;
+                            // The continuation is carried by the hook activity
+                            // recorded above (HookContent.message), never
+                            // injected as a separate assistant message. The
+                            // next model turn opens a fresh `continue` marker
+                            // whose prompt projects the hook message.
+                            turn_run_id = None;
                             model_requested = true;
                             continue;
                         }
@@ -866,12 +865,13 @@ impl SessionManager {
     }
 
     /// Surface a run failure to agent.stop hooks and, if a hook asks to
-    /// continue (for example the workflow plan autorun), inject the
-    /// continuation message. Returns `Some((session, continuation_marker))`
-    /// when the run should continue after backoff — the marker is the
-    /// continuation's run marker (`None` when it extended the reply in place)
-    /// and the caller must install it as the next model turn's marker;
-    /// `None` when the run should fail with `error`.
+    /// continue (for example the workflow plan autorun), record the
+    /// continuation on the hook activity and keep the run alive. Returns
+    /// `Some((session, None))` when the run should continue after backoff
+    /// (the hook activity carries the continuation — the caller must let the
+    /// next model turn open a fresh `continue` marker so the hook message is
+    /// projected into its prompt); `None` when the run should fail with
+    /// `error`.
     ///
     /// Shared by the model-turn error path and the model-turn budget
     /// exhaustion path so both treat run errors uniformly: the error is
@@ -909,14 +909,15 @@ impl SessionManager {
                         .record_hook_runs(session, hook_runs, state.clone())
                         .await?;
                 }
-                if let Some(follow_up) = dispatch.patch.continue_with_message {
-                    let (continued, continuation_marker) = self
-                        .inject_continuation_message(session, follow_up)
-                        .await?;
+                if dispatch.patch.continue_with_message.is_some() {
+                    // The continuation lives on the hook activity recorded
+                    // above; the caller's next model turn opens a fresh
+                    // `continue` marker whose prompt projects the hook
+                    // message. Backoff rate-limits the retry loop.
                     let delay = *retry_backoff_ms;
                     *retry_backoff_ms = (*retry_backoff_ms * 2).min(5_000);
                     tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                    Ok(Some((continued, continuation_marker)))
+                    Ok(Some((session, None)))
                 } else {
                     Ok(None)
                 }
@@ -944,9 +945,10 @@ impl SessionManager {
     }
 
     /// Inject a continuation that asks the model to keep working, without
-    /// fabricating a user message. Used by agent.stop continuation patches,
-    /// truncation continuations, doom-loop recovery, and the run-failure
-    /// retry path.
+    /// fabricating a user message. Used by truncation continuations and
+    /// doom-loop recovery. (agent.stop continuations are no longer injected
+    /// here — they ride the hook activity's `message` field and are projected
+    /// into the next run's prompt as assistant text.)
     ///
     /// The continuation is appended into the last real assistant reply's text
     /// part as an assistant-identity part (the user's own turn already
@@ -1075,6 +1077,7 @@ impl SessionManager {
                         plugin_id: Some(run.plugin_id.clone()),
                         summary: run.summary.clone(),
                         detail: run.detail.clone(),
+                        message: run.message.clone(),
                         extra: Default::default(),
                     }),
                     PartState::Completed,

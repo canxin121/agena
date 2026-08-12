@@ -2485,7 +2485,8 @@ async fn hook_run_marker_is_an_assistant_run_completed_not_running() {
         HookRunStatus::Applied,
         "stopped cleanly",
         None,
-    )];
+    )
+    .with_message(Some("continue with the next plan step".to_owned()))];
     let recorded = manager
         .record_hook_runs(session, runs, manager.execution_state())
         .await
@@ -2526,6 +2527,26 @@ async fn hook_run_marker_is_an_assistant_run_completed_not_running() {
             .get("hook")
             .and_then(serde_json::Value::as_str),
         Some("agent.stop")
+    );
+    assert_eq!(
+        hook_parts[0]
+            .content
+            .get("message")
+            .and_then(serde_json::Value::as_str),
+        Some("continue with the next plan step"),
+        "the hook-sent continuation is carried by the hook part's message"
+    );
+    assert!(
+        recorded
+            .parts()
+            .iter()
+            .filter(|part| part.kind == "text" && part.role == PartRole::Assistant)
+            .all(|part| part
+                .content
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|text| !text.contains("continue with the next plan step"))),
+        "the continuation is not injected as a separate assistant text part"
     );
 
     let state = manager

@@ -515,7 +515,8 @@ mod tests {
             custom_draft: String::new(),
             editing_custom,
             custom_cursor: 0,
-            focused_question: None,
+            wizard_page: None,
+            wizard_option: 0,
             answers: std::collections::BTreeMap::new(),
             plan_body_lines,
             plan_width: 80,
@@ -663,9 +664,8 @@ mod tests {
     #[test]
     fn expanded_pending_interaction_body_row_count_matches_classifier() {
         use crate::{
-            InteractionRequestKind, InteractionLineKind, PendingInteractionView,
-            classify_interaction_line, interaction_plan_body_lines,
-            interaction_question_layouts,
+            InteractionLineKind, PendingInteractionView, classify_interaction_line,
+            interaction_plan_body_lines, interaction_question_layouts,
         };
         let now = Utc::now();
         let request = agena_api::resource::UserInputRequest {
@@ -724,7 +724,8 @@ mod tests {
             custom_draft: String::new(),
             editing_custom: false,
             custom_cursor: 0,
-            focused_question: None,
+            wizard_page: None,
+            wizard_option: 0,
             answers: std::collections::BTreeMap::new(),
             plan_body_lines,
             plan_width: 80,
@@ -757,7 +758,6 @@ mod tests {
         let question = layouts[0];
         for body_offset in plan_body_lines..predicted {
             let kind = classify_interaction_line(
-                InteractionRequestKind::Review,
                 &layouts,
                 plan_body_lines,
                 body_offset,
@@ -769,6 +769,195 @@ mod tests {
             );
             let _ = question;
         }
+    }
+
+    #[test]
+    fn ask_user_wizard_page_row_counts_match_the_layout_contract() {
+        use crate::interaction_view::{
+            PendingInteractionAnswerView, PendingInteractionView,
+            interaction_ask_user_page_body_rows, interaction_ask_user_question_block_rows,
+            interaction_ask_user_summary_body_rows, interaction_plan_body_lines,
+            interaction_question_layouts,
+        };
+        let now = Utc::now();
+        // A long plan body so page 0 carries more than one plan row — the
+        // exact drift class the old AskUser classifier missed.
+        let plan_body = format!("## Proposed Plan\n\n{}", "word ".repeat(20));
+        let request = agena_api::resource::UserInputRequest {
+            request_id: "host-input:1:2:0".to_owned(),
+            session_id: Some(1),
+            title: "Flavor Survey".to_owned(),
+            body_markdown: plan_body.clone(),
+            kind: "ask_user".to_owned(),
+            source: agena_domain::UserInputSource::Host,
+            auto_resolution_ms: None,
+            presented_at: Some(now),
+            questions: vec![
+                agena_api::resource::UserInputQuestion {
+                    header: "Flavor".to_owned(),
+                    question: "Pick one.".to_owned(),
+                    options: vec![
+                        agena_api::resource::UserInputOption {
+                            label: "Vanilla".to_owned(),
+                            description: "Classic.".to_owned(),
+                        },
+                        agena_api::resource::UserInputOption {
+                            label: "Chocolate".to_owned(),
+                            description: "Rich.".to_owned(),
+                        },
+                    ],
+                    multiple: false,
+                    allow_custom: true,
+                },
+                agena_api::resource::UserInputQuestion {
+                    header: "Toppings".to_owned(),
+                    question: "Choose any.".to_owned(),
+                    options: vec![
+                        agena_api::resource::UserInputOption {
+                            label: "Sprinkles".to_owned(),
+                            description: String::new(),
+                        },
+                        agena_api::resource::UserInputOption {
+                            label: "Nuts".to_owned(),
+                            description: String::new(),
+                        },
+                    ],
+                    multiple: true,
+                    allow_custom: false,
+                },
+            ],
+            created_at: now,
+        };
+        let part = TranscriptEntryPart {
+            id: TranscriptContentId::StoredPart(5),
+            status: PartExecutionStatusResource::InProgress,
+            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(
+                Box::new(RequestPartResource::UserInput {
+                    request: request.clone(),
+                    reply: None,
+                }),
+            )),
+        };
+        let message = entry(
+            3,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::InProgress,
+            now,
+            vec![part],
+        );
+        let node_key = TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::StoredMessage(3),
+            content_id: TranscriptContentId::StoredPart(5),
+        };
+        let plan_body_lines = interaction_plan_body_lines(&plan_body, 80);
+        assert!(plan_body_lines > 1, "plan body must wrap: {plan_body_lines}");
+        let render = |view: PendingInteractionView| {
+            let rendered = render_entry_detailed_with_interactions(
+                &message,
+                80,
+                &I18n::english(),
+                &TranscriptDetailDefaults {
+                    activity_default_expanded: true,
+                    kind_defaults: std::collections::BTreeMap::new(),
+                },
+                &std::collections::BTreeMap::from([(node_key.clone(), true)]),
+                &std::collections::BTreeMap::from([(
+                    "host-input:1:2:0".to_owned(),
+                    view,
+                )]),
+            );
+            let node = rendered
+                .nodes
+                .iter()
+                .find(|node| node.key == node_key)
+                .expect("the pending interaction node");
+            let body_rows = node.end_line - node.start_line - 1;
+            let text = rendered
+                .lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            (body_rows, text)
+        };
+        let view = |page: Option<usize>,
+                    option: usize,
+                    answers: std::collections::BTreeMap<usize, PendingInteractionAnswerView>| {
+            PendingInteractionView {
+                selected_option: None,
+                custom_text: String::new(),
+                custom_draft: String::new(),
+                editing_custom: false,
+                custom_cursor: 0,
+                wizard_page: page,
+                wizard_option: option,
+                answers,
+                plan_body_lines,
+                plan_width: 80,
+            }
+        };
+        let empty = std::collections::BTreeMap::new();
+        let layouts_empty = interaction_question_layouts(&request, &empty);
+        // Page 0: plan + separator + question block + footer.
+        let (page0_rows, page0_text) = render(view(Some(0), 0, empty.clone()));
+        assert_eq!(
+            page0_rows,
+            interaction_ask_user_page_body_rows(plan_body_lines, 0, &layouts_empty[0]),
+            "page 0 includes the plan and separator"
+        );
+        assert!(
+            page0_text.contains("Proposed Plan"),
+            "page 0 renders the plan body: {page0_text}"
+        );
+        assert!(page0_text.contains("1/2"), "page 0 footer: {page0_text}");
+        // Page 1: no plan/separator, just the question block + footer.
+        let (page1_rows, page1_text) = render(view(Some(1), 0, empty.clone()));
+        assert_eq!(
+            page1_rows,
+            interaction_ask_user_page_body_rows(plan_body_lines, 1, &layouts_empty[1]),
+            "later pages drop the plan and separator"
+        );
+        assert!(
+            !page1_text.contains("Proposed Plan"),
+            "page 1 has no plan body: {page1_text}"
+        );
+        assert!(page1_text.contains("2/2"), "page 1 footer: {page1_text}");
+        // Summary page: title + one row per question + separator + submit.
+        let (summary_rows, summary_text) = render(view(None, 0, empty));
+        assert_eq!(
+            summary_rows,
+            interaction_ask_user_summary_body_rows(2),
+            "summary is title + per-question rows + separator + submit"
+        );
+        assert!(summary_text.contains("Flavor"), "{summary_text}");
+        assert!(summary_text.contains("Toppings"), "{summary_text}");
+        // An answered question adds one preview row to its block's budget.
+        let answered = std::collections::BTreeMap::from([(
+            0usize,
+            PendingInteractionAnswerView {
+                picked: vec![0],
+                custom_values: Vec::new(),
+            },
+        )]);
+        let layouts_answered = interaction_question_layouts(&request, &answered);
+        assert!(
+            layouts_answered[0].answered,
+            "the answer snapshot marks the question answered"
+        );
+        let (answered_rows, answered_text) = render(view(Some(0), 0, answered));
+        assert_eq!(
+            answered_rows,
+            interaction_ask_user_page_body_rows(plan_body_lines, 0, &layouts_answered[0]),
+            "answered block adds its preview row"
+        );
+        assert!(
+            answered_text.contains("answered"),
+            "answered preview row present: {answered_text}"
+        );
+        assert_eq!(
+            interaction_ask_user_question_block_rows(&layouts_answered[0]),
+            interaction_ask_user_question_block_rows(&layouts_empty[0]) + 1
+        );
     }
 
     #[test]

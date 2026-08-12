@@ -825,6 +825,10 @@ overlay-user-input-footer-review = j/k ↑/↓ move | Enter choose | e edit | Ct
 overlay-user-input-footer-question = Tab/Shift+Tab pages | Space toggle | Ctrl+D clear | Ctrl+Y/Ctrl+E line scroll | PgUp/PgDn pages | Ctrl+X cancel
 overlay-user-input-custom-allowed = custom value allowed
 overlay-user-input-reply-format = Reply format: 0=value;1=value1,value2
+overlay-user-input-wizard-page = Q
+overlay-user-input-wizard-keys = ←→ pages · ↑↓ options · Enter select · Esc collapse
+overlay-user-input-wizard-summary-title = Your answers
+overlay-user-input-wizard-unanswered = not answered
 overlay-user-input-cancel-hint = Ctrl+X cancels the request
 overlay-user-input-footer = Ctrl+X cancel
 composer-prompt-history-label = history> 

@@ -854,6 +854,10 @@ overlay-user-input-footer-review = j/k ↑/↓ 移动 | Enter 选择 | e 编辑 
 overlay-user-input-footer-question = Tab/Shift+Tab 页面 | Space 切换 | Ctrl+D 清除 | Ctrl+Y/Ctrl+E 逐行滚动 | PgUp/PgDn 翻页 | Ctrl+X 取消
 overlay-user-input-custom-allowed = 允许自定义值
 overlay-user-input-reply-format = 回复格式：0=value;1=value1,value2
+overlay-user-input-wizard-page = 第
+overlay-user-input-wizard-keys = ←→ 切页 · ↑↓ 选项 · Enter 选中 · Esc 收起
+overlay-user-input-wizard-summary-title = 总回答
+overlay-user-input-wizard-unanswered = 未回答
 overlay-user-input-cancel-hint = Ctrl+X 取消此请求
 overlay-user-input-footer = Ctrl+X 取消
 composer-prompt-history-label = 历史> 

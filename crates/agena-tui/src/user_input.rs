@@ -6,8 +6,10 @@ use crossterm::event::KeyEvent;
 use ratatui::text::{Line, Span};
 
 use crate::keymap::{KeyAction, KeyContext, resolve};
-use agena_tui_components::{Editor, QuestionFlowScreen, QuestionFlowState};
+use agena_tui_components::{Editor, QuestionFlowState};
 use tui_markdown::from_str as markdown_to_text;
+
+pub use agena_tui_components::QuestionFlowScreen;
 
 /// A display-only option in an interactive question. Domain request mapping,
 /// validation, reply construction, and submission remain outside the TUI.
@@ -789,7 +791,7 @@ impl UserInputPresentation {
         self.state.clamp_options(row_count);
     }
 
-    fn move_option(&mut self, delta: isize) {
+    pub fn move_option(&mut self, delta: isize) {
         let Some(question) = self.questions.get(self.state.selected_question()) else {
             return;
         };
@@ -799,7 +801,7 @@ impl UserInputPresentation {
         }
     }
 
-    fn move_tab(&mut self, delta: isize) {
+    pub fn move_tab(&mut self, delta: isize) {
         if self.questions.is_empty() {
             self.state.clear();
             return;
@@ -830,38 +832,43 @@ impl UserInputPresentation {
         }
     }
 
-    /// Toggle option `option_index` of question `question_index` in the
-    /// ask-user flow, as if the overlay cursor were on that row. Public for
-    /// the native part's decision-row Enter, which derives the option from the
-    /// transcript cursor instead of a presentation cursor.
-    pub fn toggle_option_at(&mut self, question_index: usize, option_index: usize) {
-        let Some(question) = self.questions.get(question_index) else {
-            return;
-        };
-        if option_index >= question.options.len() {
+    /// Question-to-question page navigation for the ask-user wizard in the
+    /// transcript: like [`Self::move_tab`] but the Review/summary page is
+    /// always reachable, so even a single-question ask-user request (which
+    /// hides the review header) still reaches a submit surface.
+    pub fn move_wizard_tab(&mut self, delta: isize) {
+        if self.questions.is_empty() {
+            self.state.clear();
             return;
         }
-        self.state.focus_question(question_index, self.questions.len());
-        self.state.set_selected_option(option_index);
-        self.toggle_option();
-    }
-
-    /// Select option `option_index` of question `question_index` in the
-    /// ask-user flow, clearing any previously picked option/custom value of
-    /// that question (single-pick semantics).
-    pub fn select_option_at(&mut self, question_index: usize, option_index: usize) {
-        let Some(question) = self.questions.get(question_index) else {
-            return;
-        };
-        if option_index >= question.options.len() {
+        if self.state.screen() == QuestionFlowScreen::Review {
+            if delta < 0 {
+                self.focus_question(self.state.selected_question());
+            } else {
+                self.focus_question(0);
+            }
             return;
         }
-        self.state.focus_question(question_index, self.questions.len());
-        self.state.set_selected_option(option_index);
-        self.select_option();
+        let last_index = self.questions.len().saturating_sub(1);
+        if delta < 0 {
+            if self.state.selected_question() > 0 {
+                self.focus_question(self.state.selected_question() - 1);
+            } else {
+                self.state.focus_review(self.questions.len());
+            }
+        } else if self.state.selected_question() < last_index {
+            self.focus_question(self.state.selected_question() + 1);
+        } else {
+            self.state.focus_review(self.questions.len());
+        }
     }
 
-    fn toggle_option(&mut self) {
+    /// Toggle the option/custom row under the wizard's option cursor
+    /// (`selected_option`): a `multiple` question adds/removes that option;
+    /// a single-pick question selects it, or clears it when it is the option
+    /// already picked (Enter selects/unselects). The custom row (or a question
+    /// with no options) opens the inline custom editor.
+    pub fn toggle_option(&mut self) {
         let (is_custom, allow_custom, multiple, option_count) = {
             let Some(question) = self.questions.get(self.state.selected_question()) else {
                 return;
@@ -888,9 +895,16 @@ impl UserInputPresentation {
                 draft.option_indexes.remove(&self.state.selected_option());
             }
         } else {
-            draft.option_indexes.clear();
-            draft.option_indexes.insert(self.state.selected_option());
-            draft.custom_values.clear();
+            let picked = self.state.selected_option();
+            let already = draft.option_indexes.len() == 1
+                && draft.option_indexes.contains(&picked);
+            if already {
+                draft.option_indexes.clear();
+            } else {
+                draft.option_indexes.clear();
+                draft.option_indexes.insert(picked);
+                draft.custom_values.clear();
+            }
         }
     }
 

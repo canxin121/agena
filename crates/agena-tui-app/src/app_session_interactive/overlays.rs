@@ -78,7 +78,8 @@ impl App {
                 custom_draft: review.custom_input().text().to_owned(),
                 editing_custom: review.is_editing_custom(),
                 custom_cursor: review.custom_input().cursor(),
-                focused_question: None,
+                wizard_page: None,
+                wizard_option: 0,
                 answers: std::collections::BTreeMap::new(),
                 plan_body_lines,
                 plan_width: width,
@@ -97,13 +98,24 @@ impl App {
                     )
                 })
                 .collect();
+            // Ask-user is a paged wizard: the current page (`None` = the final
+            // summary page), the option cursor and any open custom editor come
+            // from the presentation, not the transcript cursor.
+            let wizard_page = if presentation.screen()
+                == agena_tui::user_input::QuestionFlowScreen::Review
+            {
+                None
+            } else {
+                Some(presentation.selected_question())
+            };
             agena_tui_transcript::PendingInteractionView {
                 selected_option: None,
                 custom_text: String::new(),
-                custom_draft: String::new(),
-                editing_custom: false,
-                custom_cursor: 0,
-                focused_question: Some(presentation.selected_question()),
+                custom_draft: presentation.custom_input().text().to_owned(),
+                editing_custom: presentation.is_editing_custom(),
+                custom_cursor: presentation.custom_input().cursor(),
+                wizard_page,
+                wizard_option: presentation.selected_option(),
                 answers,
                 plan_body_lines,
                 plan_width: width,
@@ -974,7 +986,8 @@ mod tests {
         assert!(!overlay.presentation.is_review_decision());
         let view = App::interaction_view_for(&request, &overlay.presentation, 80);
         assert!(view.answers.is_empty());
-        assert_eq!(view.focused_question, Some(0));
+        assert_eq!(view.wizard_page, Some(0));
+        assert_eq!(view.wizard_option, 0);
         assert_eq!(view.selected_option, None);
     }
 }

@@ -563,6 +563,7 @@ mod interaction_part_routing_tests {
 
     use super::super::{App, I18n, LaunchOptions};
     use crate::app_types::{RunActivityTarget, RunOperation};
+    use agena_tui::user_input::QuestionFlowScreen;
     use agena_tui_transcript::{TranscriptContentId, TranscriptEntryId, TranscriptNodeKey};
 
     const REQUEST_ID: &str = "host-input:1:2:0";
@@ -822,6 +823,175 @@ mod interaction_part_routing_tests {
         let start_line = interaction_node_start(app);
         app.transcript
             .move_cursor_to_visual_line_number(WIDTH, HEIGHT, Some(start_line + 2 + body_offset));
+    }
+
+    /// A two-question ask-user request: Q0 "Flavor" (single-pick, 2 options,
+    /// custom slot) and Q1 "Toppings" (multi-pick, 2 options, no custom). The
+    /// ask-user wizard owns the page + option cursor, so the option rows are
+    /// NOT cursor-driven — the `PendingInteractionView` only needs the headline
+    /// to be under the cursor for the wizard to activate.
+    fn ask_user_wire_request() -> agena_api::resource::UserInputRequest {
+        agena_api::resource::UserInputRequest {
+            request_id: REQUEST_ID.to_owned(),
+            session_id: Some(SESSION_ID),
+            title: "Flavor Survey".to_owned(),
+            body_markdown: "## Proposed Plan".to_owned(),
+            kind: "ask_user".to_owned(),
+            source: UserInputSource::Host,
+            auto_resolution_ms: None,
+            presented_at: Some(Utc::now()),
+            questions: vec![
+                agena_api::resource::UserInputQuestion {
+                    header: "Flavor".to_owned(),
+                    question: "Pick one.".to_owned(),
+                    options: vec![
+                        agena_api::resource::UserInputOption {
+                            label: "Vanilla".to_owned(),
+                            description: "Classic.".to_owned(),
+                        },
+                        agena_api::resource::UserInputOption {
+                            label: "Chocolate".to_owned(),
+                            description: "Rich.".to_owned(),
+                        },
+                    ],
+                    multiple: false,
+                    allow_custom: true,
+                },
+                agena_api::resource::UserInputQuestion {
+                    header: "Toppings".to_owned(),
+                    question: "Choose any.".to_owned(),
+                    options: vec![
+                        agena_api::resource::UserInputOption {
+                            label: "Sprinkles".to_owned(),
+                            description: String::new(),
+                        },
+                        agena_api::resource::UserInputOption {
+                            label: "Nuts".to_owned(),
+                            description: String::new(),
+                        },
+                    ],
+                    multiple: true,
+                    allow_custom: false,
+                },
+            ],
+            created_at: Utc::now(),
+        }
+    }
+
+    fn ask_user_domain_request() -> agena_domain::UserInputRequest {
+        agena_domain::UserInputRequest {
+            request_id: REQUEST_ID.to_owned(),
+            session_id: Some(SESSION_ID),
+            title: "Flavor Survey".to_owned(),
+            body_markdown: "## Proposed Plan".to_owned(),
+            kind: UserInputKind::AskUser,
+            source: UserInputSource::Host,
+            auto_resolution_ms: None,
+            presented_at: None,
+            questions: vec![
+                UserInputQuestion {
+                    header: "Flavor".to_owned(),
+                    question: "Pick one.".to_owned(),
+                    options: vec![
+                        agena_domain::UserInputOption {
+                            label: "Vanilla".to_owned(),
+                            description: "Classic.".to_owned(),
+                        },
+                        agena_domain::UserInputOption {
+                            label: "Chocolate".to_owned(),
+                            description: "Rich.".to_owned(),
+                        },
+                    ],
+                    multiple: false,
+                    allow_custom: true,
+                },
+                UserInputQuestion {
+                    header: "Toppings".to_owned(),
+                    question: "Choose any.".to_owned(),
+                    options: vec![
+                        agena_domain::UserInputOption {
+                            label: "Sprinkles".to_owned(),
+                            description: String::new(),
+                        },
+                        agena_domain::UserInputOption {
+                            label: "Nuts".to_owned(),
+                            description: String::new(),
+                        },
+                    ],
+                    multiple: true,
+                    allow_custom: false,
+                },
+            ],
+            created_at: Utc::now(),
+        }
+    }
+
+    fn ask_user_interaction_part() -> SessionTranscriptPart {
+        SessionTranscriptPart {
+            part_id: 5,
+            kind: "interaction".to_owned(),
+            role: "assistant".to_owned(),
+            state: "in_progress".to_owned(),
+            content: serde_json::to_value(RequestPartResource::UserInput {
+                request: ask_user_wire_request(),
+                reply: None,
+            })
+            .expect("request part serializes"),
+            summary: None,
+            created_at_ms: 50,
+            parent_part_id: None,
+            run_id: Some(3),
+        }
+    }
+
+    fn pending_ask_user_resource() -> PendingInteractiveRequestResource {
+        PendingInteractiveRequestResource {
+            session_id: SESSION_ID,
+            parent_session_id: None,
+            task_id: None,
+            request: PendingInteractiveRequest::UserInput {
+                request: ask_user_wire_request(),
+            },
+        }
+    }
+
+    fn seed_pending_ask_user(app: &mut App) {
+        app.transcript.apply_execution(execution_with(
+            vec![pending_ask_user_resource()],
+            vec![run_marker(), ask_user_interaction_part()],
+        ));
+        app.user_input_interactions.insert(
+            REQUEST_ID.to_owned(),
+            App::build_user_input_overlay(SESSION_ID, ask_user_domain_request()),
+        );
+        app.sync_interaction_documents();
+        app.transcript.node_expansions.insert(node_key(), true);
+        app.transcript.invalidate_render();
+    }
+
+    /// Position the transcript cursor on the interaction part's headline —
+    /// the wizard activation boundary ("展开即可交互"): an expanded part whose
+    /// headline is under the cursor is the active wizard, regardless of which
+    /// body row the cursor would otherwise sit on.
+    fn move_cursor_to_part_headline(app: &mut App) {
+        let start_line = interaction_node_start(app);
+        app.transcript
+            .move_cursor_to_visual_line_number(WIDTH, HEIGHT, Some(start_line + 1));
+    }
+
+    /// The live wizard dialog, for presentation-state assertions.
+    fn dialog<'a>(app: &'a App) -> &'a crate::app_types::UserInputOverlay {
+        app.user_input_interactions
+            .get(REQUEST_ID)
+            .expect("the ask-user dialog is pending")
+    }
+
+    /// The projected interaction view, for wizard-page assertions.
+    fn wizard_view<'a>(app: &'a App) -> &'a agena_tui_transcript::PendingInteractionView {
+        app.transcript
+            .interaction_views
+            .get(REQUEST_ID)
+            .expect("the ask-user view is projected")
     }
 
     #[tokio::test]
@@ -1155,6 +1325,215 @@ mod interaction_part_routing_tests {
             RunActivityTarget::Session(SESSION_ID),
             RunOperation::UserInputReply,
         ));
+    }
+
+    #[tokio::test]
+    async fn ask_user_arrow_keys_move_the_option_cursor_within_a_page() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        move_cursor_to_part_headline(&mut app);
+
+        assert_eq!(dialog(&app).presentation.screen(), QuestionFlowScreen::Question);
+        assert_eq!(dialog(&app).presentation.selected_question(), 0);
+        assert_eq!(wizard_view(&app).wizard_page, Some(0));
+        assert_eq!(wizard_view(&app).wizard_option, 0);
+
+        // Down moves the option cursor within the page; the page is untouched.
+        assert!(
+            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            "Down is owned while the wizard is active"
+        );
+        assert_eq!(dialog(&app).presentation.selected_option(), 1);
+        assert_eq!(wizard_view(&app).wizard_option, 1);
+        assert_eq!(wizard_view(&app).wizard_page, Some(0), "page unchanged");
+
+        // Up returns to the first option.
+        assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)));
+        assert_eq!(wizard_view(&app).wizard_option, 0);
+        assert_eq!(dialog(&app).presentation.selected_option(), 0);
+
+        // The dialog stays pending and no reply was sent.
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply,
+        ));
+    }
+
+    #[tokio::test]
+    async fn ask_user_left_right_switch_pages_and_invalidate() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        move_cursor_to_part_headline(&mut app);
+        // Materialize the render cache so we can observe invalidation.
+        app.transcript.rendered(WIDTH);
+
+        // Right moves to the second question page and invalidates the render.
+        assert!(
+            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            "Right is owned while the wizard is active"
+        );
+        assert_eq!(dialog(&app).presentation.selected_question(), 1);
+        assert_eq!(wizard_view(&app).wizard_page, Some(1));
+        assert!(app.transcript.rendered.is_none(), "page switch re-renders");
+
+        // Right again reaches the summary page (`wizard_page: None`).
+        assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)));
+        assert_eq!(dialog(&app).presentation.screen(), QuestionFlowScreen::Review);
+        assert_eq!(wizard_view(&app).wizard_page, None, "summary page");
+
+        // Left returns to the last question page.
+        assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)));
+        assert_eq!(wizard_view(&app).wizard_page, Some(1));
+        assert_eq!(dialog(&app).presentation.selected_question(), 1);
+    }
+
+    #[tokio::test]
+    async fn ask_user_enter_toggles_the_option_and_stays_on_the_page() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        move_cursor_to_part_headline(&mut app);
+
+        // Enter selects option 0 (single-pick) and stays on the page.
+        assert!(
+            app.handle_active_interaction_action(enter()),
+            "Enter is owned while the wizard is active"
+        );
+        assert_eq!(
+            dialog(&app)
+                .presentation
+                .answer(0)
+                .map(|answer| answer.option_indexes.iter().copied().collect::<Vec<_>>()),
+            Some(vec![0])
+        );
+        assert_eq!(wizard_view(&app).wizard_page, Some(0), "stays on the page");
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+
+        // Enter again (single-pick) unselects the option: select/unselect.
+        assert!(app.handle_active_interaction_action(enter()));
+        assert_eq!(
+            dialog(&app).presentation.answer(0).map(|answer| answer.option_indexes.len()),
+            Some(0),
+            "single-pick Enter unselects the already-picked option"
+        );
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply,
+        ));
+    }
+
+    #[tokio::test]
+    async fn ask_user_enter_on_summary_submits_and_validation_jumps_to_unanswered_page() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        move_cursor_to_part_headline(&mut app);
+        // Page into the summary page with both questions unanswered.
+        for _ in 0..2 {
+            assert!(app.handle_active_interaction_action(KeyEvent::new(
+                KeyCode::Right,
+                KeyModifiers::NONE
+            )));
+        }
+        assert_eq!(dialog(&app).presentation.screen(), QuestionFlowScreen::Review);
+
+        // Enter on the summary with an unanswered question: no reply is sent,
+        // and the wizard jumps to the first unanswered page (Q0).
+        assert!(app.handle_active_interaction_action(enter()));
+        assert_eq!(
+            dialog(&app).presentation.screen(),
+            QuestionFlowScreen::Question,
+            "validation jumps back to a question page"
+        );
+        assert_eq!(dialog(&app).presentation.selected_question(), 0);
+        assert_eq!(wizard_view(&app).wizard_page, Some(0));
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply,
+        ));
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+
+        // Answer both questions, return to the summary, and submit.
+        assert!(app.handle_active_interaction_action(enter())); // Q0 → Vanilla
+        assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)));
+        assert!(app.handle_active_interaction_action(enter())); // Q1 → Sprinkles
+        assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)));
+        assert_eq!(dialog(&app).presentation.screen(), QuestionFlowScreen::Review);
+
+        assert!(app.handle_active_interaction_action(enter()));
+        assert!(
+            !app.user_input_interactions.contains_key(REQUEST_ID),
+            "submitting drops the dialog"
+        );
+        assert!(
+            !app.transcript.interaction_views.contains_key(REQUEST_ID),
+            "the part stops rendering the stale summary page"
+        );
+        assert!(app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply,
+        ));
+    }
+
+    #[tokio::test]
+    async fn ask_user_esc_collapses_out_of_wizard_mode() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        move_cursor_to_part_headline(&mut app);
+
+        assert!(
+            app.handle_active_interaction_action(esc()),
+            "Esc with no pending motion prefix collapses the part"
+        );
+        assert_eq!(
+            app.transcript.node_expansions.get(&node_key()),
+            Some(&false),
+            "the expansion override is cleared so the part falls back to its configured default"
+        );
+        assert!(
+            app.user_input_interactions.contains_key(REQUEST_ID),
+            "the request stays reachable by re-expanding the part"
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_user_keys_are_not_intercepted_off_the_part() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        move_cursor_to_part_headline(&mut app);
+
+        // Park the cursor on the entry header (line 0), off the part.
+        app.transcript
+            .move_cursor_to_visual_line_number(WIDTH, HEIGHT, Some(1));
+        assert!(
+            app.active_user_input_interaction_request_id().is_none(),
+            "the cursor must be off the part for this test"
+        );
+
+        // No wizard key may be intercepted off the part; the chat keeps
+        // owning navigation (`h`/`l` move the transcript cursor).
+        for key in [
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            enter(),
+        ] {
+            assert!(
+                !app.handle_active_interaction_action(key),
+                "wizard key must not be intercepted off the part: {key:?}"
+            );
+        }
+        let before = app
+            .transcript
+            .cursor_text_position(WIDTH)
+            .map(|position| position.column);
+        app.handle_transcript_key(char_key('l'));
+        assert_ne!(
+            app.transcript.cursor_text_position(WIDTH).map(|position| position.column),
+            before,
+            "plain chat navigation still moves the cursor within the line"
+        );
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
     }
 }
 

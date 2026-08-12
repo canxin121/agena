@@ -1577,15 +1577,21 @@ pub(crate) fn render_part_node(
     }
 }
 
-/// Renders the expanded body of a pending interaction part natively: the plan
-/// body through the standard Markdown pipeline at the activity detail indent,
-/// a separator rule, and the decision rows (review options or the ask-user
-/// question blocks) whose markers track the live [`PendingInteractionView`].
-/// This is the single source of the body layout — the App's key routing derives
-/// row semantics from the same [`crate::interaction_view::classify_interaction_line`]
-/// arithmetic, so the transcript cursor IS the review cursor.
+/// Renders the expanded body of a pending interaction part natively. Plan
+/// review draws the plan body through the standard Markdown pipeline at the
+/// activity detail indent, a separator rule, and the decision rows whose
+/// markers track the live [`PendingInteractionView`] — the transcript cursor IS
+/// the review cursor, so the App derives row semantics from the same
+/// [`crate::interaction_view::classify_interaction_line`] arithmetic.
 ///
-/// Every decision row keeps a FIXED row budget (2 rows per option, 2 per
+/// Ask-user renders as a **paged wizard** (one question per page, ending in a
+/// summary page where Enter submits): the current page and the option cursor
+/// live in the presentation, and this renderer draws exactly one page from the
+/// projected [`PendingInteractionView`]. The page row counts are pinned by the
+/// single-source helpers [`crate::interaction_view::interaction_ask_user_page_body_rows`]
+/// and [`crate::interaction_view::interaction_ask_user_summary_body_rows`].
+///
+/// Review decision rows keep a FIXED row budget (2 rows per option, 2 per
 /// custom slot, plus header/text/preview) matching the classifier, so a
 /// rendered row always has a semantic kind and Enter/submit routing can never
 /// drift from what the user sees.
@@ -1596,15 +1602,15 @@ fn render_pending_interaction_body(
     width: u16,
     i18n: &I18n,
 ) {
-    // Plan body: the standard transcript Markdown pipeline with the same
-    // activity detail indent as every other expanded part.
-    push_markdown_document(out, "    ", request.body_markdown.as_str(), width);
-    push_markdown_rule(out, "    ", width);
-
     if crate::interaction_view::request_is_review_decision(request) {
+        // Plan body: the standard transcript Markdown pipeline with the same
+        // activity detail indent as every other expanded part.
+        push_markdown_document(out, "    ", request.body_markdown.as_str(), width);
+        push_markdown_rule(out, "    ", width);
         render_review_decision_rows(out, request, view, width, i18n);
     } else {
-        render_ask_user_question_rows(out, request, view, width, i18n);
+        // Ask-user wizard draws its own plan on the first page only.
+        render_ask_user_wizard(out, request, view, width, i18n);
     }
 }
 
@@ -1726,79 +1732,130 @@ fn push_interaction_editor_row(
     out.push(RenderedLine::rich(Line::from(spans)));
 }
 
-/// Ask-user question blocks: per question a header row, a muted question-text
-/// row, fixed 2 rows per option (marker + detail), 2 per custom slot, and an
-/// answered-preview row; then a separator and a Submit row. Markers
-/// `(x)`/`[x]`/`( )`/`[ ]` track `view.answers`.
-fn render_ask_user_question_rows(
+/// Ask-user paged wizard: draws exactly one page from the projected
+/// [`crate::interaction_view::PendingInteractionView`]. `wizard_page:
+/// Some(i)` is question page `i` (the plan body renders on page 0 only, then
+/// the question block, then a footer page-indicator row); `wizard_page: None`
+/// is the final summary page listing every answer with a Submit row. Markers
+/// `(x)`/`[x]`/`( )`/`[ ]` track `view.answers`; the option cursor
+/// (`view.wizard_option`) is highlighted with a `▸` marker.
+fn render_ask_user_wizard(
     out: &mut Vec<RenderedLine>,
     request: &agena_api::resource::UserInputRequest,
     view: &crate::interaction_view::PendingInteractionView,
     width: u16,
     i18n: &I18n,
 ) {
-    for (index, question) in request.questions.iter().enumerate() {
-        let answer = view.answers.get(&index);
-        let answered = answer.is_some_and(|answer| answer.is_answered());
-        let header = if question.header.trim().is_empty() {
-            format!("Q{}", index + 1)
+    use crate::interaction_view::interaction_ask_user_page_has_plan;
+    let Some(page) = view.wizard_page else {
+        return render_ask_user_summary_rows(out, request, view, width, i18n);
+    };
+    if interaction_ask_user_page_has_plan(page) {
+        push_markdown_document(out, "    ", request.body_markdown.as_str(), width);
+        push_markdown_rule(out, "    ", width);
+    }
+    render_single_question_block(out, request, page, view, width, i18n);
+    push_wizard_footer(out, page, request.questions.len(), i18n);
+}
+
+/// One ask-user question page block: header row, muted question-text row,
+/// fixed 2 rows per option (marker + detail), 2 per custom slot, and an
+/// answered-preview row — the exact budget
+/// [`crate::interaction_view::interaction_ask_user_question_block_rows`]
+/// counts. The option cursor row (`option_index == view.wizard_option`, or the
+/// custom row when the cursor is on it) is marked with a `▸` cursor.
+fn render_single_question_block(
+    out: &mut Vec<RenderedLine>,
+    request: &agena_api::resource::UserInputRequest,
+    page: usize,
+    view: &crate::interaction_view::PendingInteractionView,
+    width: u16,
+    i18n: &I18n,
+) {
+    let Some(question) = request.questions.get(page) else {
+        return;
+    };
+    let index = page;
+    let answer = view.answers.get(&index);
+    let answered = answer.is_some_and(|answer| answer.is_answered());
+    let header = if question.header.trim().is_empty() {
+        format!("Q{}", index + 1)
+    } else {
+        question.header.clone()
+    };
+    let header_marker = if answered { "[x]" } else { "[ ]" };
+    out.push(RenderedLine::rich(Line::from(vec![
+        Span::raw("    "),
+        Span::styled(format!("{header_marker} "), Style::default()),
+        Span::styled(header, Style::default().add_modifier(Modifier::BOLD)),
+    ])));
+    push_interaction_detail_row(out, question.question.as_str(), width);
+    for (option_index, option) in question.options.iter().enumerate() {
+        let picked = answer.is_some_and(|answer| answer.picked.contains(&option_index));
+        let marker = if question.multiple {
+            if picked {
+                "[x]"
+            } else {
+                "[ ]"
+            }
+        } else if picked {
+            "(x)"
         } else {
-            question.header.clone()
+            "( )"
         };
-        let header_marker = if answered { "[x]" } else { "[ ]" };
-        out.push(RenderedLine::rich(Line::from(vec![
-            Span::raw("    "),
-            Span::styled(format!("{header_marker} "), Style::default()),
-            Span::styled(header, Style::default().add_modifier(Modifier::BOLD)),
-        ])));
-        push_interaction_detail_row(out, question.question.as_str(), width);
-        for (option_index, option) in question.options.iter().enumerate() {
-            let picked = answer.is_some_and(|answer| answer.picked.contains(&option_index));
-            let marker = if question.multiple {
-                if picked {
-                    "[x]"
-                } else {
-                    "[ ]"
-                }
-            } else if picked {
-                "(x)"
+        let cursor = option_index == view.wizard_option;
+        let mut spans = option_row_indent(cursor);
+        spans.push(Span::styled(
+            format!("{marker} "),
+            if cursor {
+                agena_tui_components::theme::selection_style()
             } else {
-                "( )"
-            };
-            out.push(RenderedLine::rich(Line::from(vec![
-                Span::raw("        "),
-                Span::styled(format!("{marker} "), Style::default()),
-                Span::styled(
-                    option.label.clone(),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ])));
-            push_interaction_detail_row(out, option.description.as_str(), width);
-        }
-        if question.allow_custom {
-            let custom_values = answer
-                .map(|answer| answer.custom_values.as_slice())
-                .unwrap_or_default();
-            let picked = !custom_values.is_empty();
-            let marker = if question.multiple {
-                if picked {
-                    "[x]"
-                } else {
-                    "[ ]"
-                }
-            } else if picked {
-                "(x)"
+                Style::default()
+            },
+        ));
+        spans.push(Span::styled(
+            option.label.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        out.push(RenderedLine::rich(Line::from(spans)));
+        push_interaction_detail_row(out, option.description.as_str(), width);
+    }
+    if question.allow_custom {
+        let custom_values = answer
+            .map(|answer| answer.custom_values.as_slice())
+            .unwrap_or_default();
+        let picked = !custom_values.is_empty();
+        let marker = if question.multiple {
+            if picked {
+                "[x]"
             } else {
-                "( )"
-            };
-            out.push(RenderedLine::rich(Line::from(vec![
-                Span::raw("        "),
-                Span::styled(format!("{marker} "), Style::default()),
-                Span::styled(
-                    i18n.text("overlay-user-input-other"),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ])));
+                "[ ]"
+            }
+        } else if picked {
+            "(x)"
+        } else {
+            "( )"
+        };
+        let cursor = view.wizard_option == question.options.len();
+        let mut spans = option_row_indent(cursor);
+        spans.push(Span::styled(
+            format!("{marker} "),
+            if cursor {
+                agena_tui_components::theme::selection_style()
+            } else {
+                Style::default()
+            },
+        ));
+        spans.push(Span::styled(
+            i18n.text("overlay-user-input-other"),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        out.push(RenderedLine::rich(Line::from(spans)));
+        if view.editing_custom && cursor {
+            // The inline editor replaces the custom detail row, so the fixed
+            // 2-row custom budget is unchanged.
+            push_interaction_editor_row(out, &view.custom_draft, view.custom_cursor, width);
+        } else {
             let text = if custom_values.is_empty() {
                 i18n.text("overlay-user-input-custom-empty")
             } else {
@@ -1806,10 +1863,97 @@ fn render_ask_user_question_rows(
             };
             push_interaction_detail_row(out, &text, width);
         }
+    }
+    if answered {
+        // Answered-preview row keeps the fixed block budget.
+        push_interaction_detail_row(out, "answered", width);
+    }
+}
+
+/// The leading indent span(s) of an option/custom row: a `▸` cursor marker in
+/// the selection color on the option-cursor row, else the plain 8-space indent.
+/// Both variants occupy 8 columns, so the marker column never shifts.
+fn option_row_indent(cursor: bool) -> Vec<Span<'static>> {
+    if cursor {
+        vec![
+            Span::styled("▸", agena_tui_components::theme::selection_style()),
+            Span::raw("       "),
+        ]
+    } else {
+        vec![Span::raw("        ")]
+    }
+}
+
+/// One muted footer row under a question page: `Q 2/4 · ←→ 切页 · ↑↓ 选项 · …`.
+fn push_wizard_footer(
+    out: &mut Vec<RenderedLine>,
+    page: usize,
+    question_count: usize,
+    i18n: &I18n,
+) {
+    let text = format!(
+        "{} {}/{} · {}",
+        i18n.text("overlay-user-input-wizard-page"),
+        page + 1,
+        question_count,
+        i18n.text("overlay-user-input-wizard-keys")
+    );
+    out.push(RenderedLine::plain(
+        format!("    {text}"),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
+    ));
+}
+
+/// The final ask-user summary page: a title row, one row per question showing
+/// its marker and committed answer (or "unanswered"), a separator, and the
+/// Submit row — the exact budget
+/// [`crate::interaction_view::interaction_ask_user_summary_body_rows`]
+/// counts. Enter on this page submits.
+fn render_ask_user_summary_rows(
+    out: &mut Vec<RenderedLine>,
+    request: &agena_api::resource::UserInputRequest,
+    view: &crate::interaction_view::PendingInteractionView,
+    width: u16,
+    i18n: &I18n,
+) {
+    out.push(RenderedLine::rich(Line::from(vec![
+        Span::raw("    "),
+        Span::styled(
+            i18n.text("overlay-user-input-wizard-summary-title"),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ])));
+    for (index, question) in request.questions.iter().enumerate() {
+        let answer = view.answers.get(&index);
+        let answered = answer.is_some_and(|answer| answer.is_answered());
+        let marker = if answered { "[x]" } else { "[ ]" };
+        let header = if question.header.trim().is_empty() {
+            format!("Q{}", index + 1)
+        } else {
+            question.header.clone()
+        };
+        let mut spans = vec![
+            Span::raw("    "),
+            Span::styled(format!("{marker} "), Style::default()),
+            Span::styled(
+                format!("Q{}: {header}", index + 1),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ];
         if answered {
-            // Answered-preview row keeps the fixed block budget.
-            push_interaction_detail_row(out, "answered", width);
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                ask_user_answer_summary(request, index, answer.expect("answered has an answer")),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+            ));
+        } else {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                i18n.text("overlay-user-input-wizard-unanswered"),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+            ));
         }
+        out.push(RenderedLine::rich(Line::from(spans)));
     }
     push_markdown_rule(out, "    ", width);
     out.push(RenderedLine::rich(Line::from(vec![
@@ -1819,6 +1963,25 @@ fn render_ask_user_question_rows(
             Style::default().add_modifier(Modifier::BOLD),
         ),
     ])));
+}
+
+/// Joins one question's committed answer into a single summary string: the
+/// picked option labels followed by the custom values.
+fn ask_user_answer_summary(
+    request: &agena_api::resource::UserInputRequest,
+    index: usize,
+    answer: &crate::interaction_view::PendingInteractionAnswerView,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(question) = request.questions.get(index) {
+        for &picked in &answer.picked {
+            if let Some(option) = question.options.get(picked) {
+                parts.push(option.label.clone());
+            }
+        }
+    }
+    parts.extend(answer.custom_values.iter().cloned());
+    parts.join(", ")
 }
 
 /// Shared renderer for canonical Activity payloads. Tool-call operations,

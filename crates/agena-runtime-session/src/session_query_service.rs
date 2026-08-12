@@ -105,6 +105,7 @@ pub struct SessionProjectedOperationPart {
     pub call_id: i64,
     pub invocation: agena_domain::ToolInvocation,
     pub authorization: agena_domain::OperationAuthorization,
+    pub user_input: agena_domain::OperationUserInput,
     pub title: String,
     pub summary: String,
     pub model_output: SessionProjectedModelVisibleOutput,

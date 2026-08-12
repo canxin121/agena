@@ -141,9 +141,9 @@ pub use ids::{
 pub use interaction_notification::InteractionNotificationLevel;
 pub use json_path::{JsonPathError, format_json_path, get_json_path, parse_json_path};
 pub use message_activity::{
-    ArtifactRef, FileChangeKind, SearchResultItem, TableColumn, TodoItem, TodoPriority, TodoStatus,
-    UserInputOption, UserInputQuestion, UserInputReply, UserInputRequest,
-    deserialize_user_input_answers, user_input_answers_is_empty,
+    ArtifactRef, FileChangeKind, OperationUserInput, OperationUserInputRecord, SearchResultItem,
+    TableColumn, TodoItem, TodoPriority, TodoStatus, UserInputOption, UserInputQuestion,
+    UserInputReply, UserInputRequest, deserialize_user_input_answers, user_input_answers_is_empty,
 };
 pub use message_activity_values::{
     ErrorPart, FileChangeRecord, ReasoningPart, TextPart, WebSearchResult,

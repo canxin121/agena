@@ -1568,7 +1568,16 @@ fn derive_state(
         .collect();
     let interactions: Vec<PendingInteraction> = parts
         .iter()
-        .filter(|part| part.kind == "interaction" && part.state.is_in_flight())
+        .filter(|part| {
+            if !part.state.is_in_flight() {
+                return false;
+            }
+            // Legacy `interaction` parts, plus canonical in-flight tool_call
+            // parts whose operation is awaiting a user-input reply.
+            part.kind == "interaction"
+                || (part.kind == "tool_call"
+                    && super::state::tool_call_first_awaiting_user_input(&part.content).is_some())
+        })
         .map(|part| PendingInteraction {
             part_id: part.part_id,
             created_at_ms: part.created_at_ms,

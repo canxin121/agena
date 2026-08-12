@@ -34,7 +34,7 @@ use crate::session::manager::runs::run_visible_text_lossy;
 use crate::session::store::{
     OPERATION_ID_METADATA_KEY, ProcessorPartIdAllocator, interaction_from_request,
     new_part_from_content, parts_into_runs, run_marker_content, text_content,
-    tool_call_from_operation, typed_content_to_value,
+    tool_call_from_operation, typed_content_from_value, typed_content_to_value,
 };
 use crate::{
     ContextGovernor, RuntimeSessionManagerConfig, SessionExecutionReplyRequest,
@@ -45,7 +45,9 @@ use crate::{
     session::{Session, SessionProcessor},
     tool::ToolExecutor,
 };
-use agena_runtime_contracts::part_content::{InteractionContent, TypedContent};
+use agena_runtime_contracts::part_content::{
+    InteractionContent, TypedContent, operation_from_tool_call,
+};
 
 async fn test_manager() -> SessionManager {
     test_manager_with_database().await.0
@@ -1878,11 +1880,10 @@ async fn host_user_input_does_not_downgrade_an_in_progress_tool_part() {
         "an executing tool suspended on host input must stay InProgress, not be downgraded to Pending"
     );
     assert!(
-        persisted
-            .parts
-            .iter()
-            .any(|part| part.kind == "interaction" && part.state.is_in_flight()),
-        "the host ask_user request is recorded as a pending interaction part"
+        tool_part_first_user_input(tool)
+            .map(|record| record.request.request_id == "host-input:1:1:0")
+            .unwrap_or(false),
+        "the host ask_user request is recorded inside the tool operation's user_input bucket"
     );
 }
 
@@ -1945,32 +1946,22 @@ async fn host_ask_user_interaction_part_is_reply_resolvable() {
         .expect("request host user input");
 
     let persisted = store.load(session.id).await.expect("reload parts");
-    let interaction = persisted
+    let tool = persisted
         .parts
         .iter()
-        .find(|part| part.kind == "interaction")
-        .expect("interaction part exists");
-    let interaction_part_id = interaction.part_id;
-    // The canonical writer must also emit the flat keys the reply machinery
-    // correlates on, otherwise the TUI's reply dispatch reports "pending user
-    // input request not found" and no dialog option can be selected.
-    assert_eq!(
-        interaction.content.get("request_id").and_then(serde_json::Value::as_str),
-        Some("host-input:1:1:0"),
-        "flat request_id mirrors the canonical request id"
-    );
-    assert_eq!(
-        interaction
-            .content
-            .get("tool_part_id")
-            .and_then(serde_json::Value::as_i64),
-        Some(tool_part_id),
-        "tool_part_id correlates the interaction to its suspended tool part"
-    );
+        .find(|part| part.kind == "tool_call" && part.part_id == tool_part_id)
+        .expect("tool part exists");
     assert!(
-        interaction.content.get("operation_id").is_some(),
-        "operation_id is recorded for operation correlation"
+        persisted
+            .parts
+            .iter()
+            .all(|part| part.kind != "interaction"),
+        "one host ask produces exactly one activity: the tool_call operation, no interaction part"
     );
+    // The ask lives INSIDE the tool part's operation bucket; the reply
+    // machinery correlates on the operation's user_input records.
+    let record = tool_part_first_user_input(tool).expect("operation user_input record exists");
+    assert_eq!(record.request.request_id, "host-input:1:1:0");
 
     let session = manager
         .store
@@ -1981,9 +1972,12 @@ async fn host_ask_user_interaction_part_is_reply_resolvable() {
         &session,
         "host-input:1:1:0",
     )
-    .expect("reply lookup resolves the canonical interaction part");
+    .expect("reply lookup resolves the awaiting operation record");
     assert_eq!(pending.tool.part.part_id, tool_part_id);
-    assert_eq!(pending.request.part_id, interaction_part_id);
+    assert_eq!(
+        pending.request.part_id, tool_part_id,
+        "the request ref IS the tool_call operation activity in the single-activity shape"
+    );
     let resolved_request = super::replies::pending_user_input_request(&session, &pending)
         .expect("request payload is recoverable");
     assert_eq!(resolved_request.title, "Approve New Plan");
@@ -2095,20 +2089,23 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
         .load(session.id)
         .await
         .expect("reload parts after requesting");
-    let interaction = persisted
+    let tool = persisted
         .parts
         .iter()
-        .find(|part| part.kind == "interaction")
-        .expect("interaction part exists");
-    let interaction_part_id = interaction.part_id;
+        .find(|part| part.kind == "tool_call" && part.part_id == tool_part_id)
+        .expect("tool part exists");
     assert!(
-        interaction.state.is_in_flight(),
+        persisted.parts.iter().all(|part| part.kind != "interaction"),
+        "one ask produces exactly one activity: the tool_call operation, no interaction part"
+    );
+    assert!(
+        tool.state.is_in_flight(),
         "the request is pending (in flight) before the reply"
     );
-    let content = InteractionContent::try_from(&interaction.content)
-        .expect("interaction content is typed");
+    let record = tool_part_first_user_input(tool).expect("operation user_input record exists");
+    assert_eq!(record.request.request_id, "ask-1");
     assert_eq!(
-        content.source(),
+        record.request.source,
         UserInputSource::Plugin,
         "a non-host (tool) ask_user carries the typed Plugin source"
     );
@@ -2140,28 +2137,25 @@ async fn non_host_user_input_reply_persists_completed_interaction_part() {
     .expect("non-host reply must not hang")
     .expect("non-host reply completes");
 
-    // Reload from the durable store: the answered interaction must be
-    // Completed with the reply payload present, not resurrected as pending.
+    // Reload from the durable store: the tool part must be Completed and its
+    // operation record carry the reply payload, not resurrect as pending.
     let persisted = manager
         .session_store()
         .load(session.id)
         .await
         .expect("reload parts after reply");
-    let interaction = persisted
+    let tool = persisted
         .parts
         .iter()
-        .find(|part| part.part_id == interaction_part_id)
-        .expect("interaction part remains");
+        .find(|part| part.part_id == tool_part_id)
+        .expect("tool part remains");
     assert_eq!(
-        interaction.state,
+        tool.state,
         PartState::Completed,
-        "non-host reply must durably persist the interaction part as Completed"
+        "non-host reply must durably persist the tool operation as Completed"
     );
-    let content = InteractionContent::try_from(&interaction.content)
-        .expect("interaction content is typed");
-    let reply = content
-        .reply()
-        .expect("the replied payload is present on the persisted interaction");
+    let record = tool_part_first_user_input(tool).expect("operation user_input record remains");
+    let reply = record.reply.expect("the replied payload is present on the persisted record");
     assert_eq!(reply.request_id, "ask-1");
     assert_eq!(reply.kind, agena_domain::UserInputReplyKind::Submit);
     assert!(
@@ -2226,29 +2220,27 @@ async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
         host.request_host_user_input(session_id, 1, request).await
     });
 
-    // Wait until the interaction part is durable, then capture its state and
-    // the authoritative request id from the nested request object.
-    let (interaction_part_id, request_id, state) = {
+    // Wait until the tool part's operation carries a durable user-input
+    // request (one host ask == one operation activity), then capture its part
+    // id, its state, and the authoritative request id from the nested record.
+    let (tool_part_id, request_id, state) = {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             let persisted = store.load(session_id).await.expect("reload parts");
             if let Some(part) = persisted
                 .parts
                 .iter()
-                .find(|part| part.kind == "interaction")
+                .find(|part| tool_part_first_user_input(part).is_some())
             {
-                let request_id = part
-                    .content
-                    .get("request")
-                    .and_then(|value| value.get("request_id"))
-                    .and_then(serde_json::Value::as_str)
-                    .expect("interaction request carries a request id")
-                    .to_owned();
+                let request_id = tool_part_first_user_input(part)
+                    .expect("record present")
+                    .request
+                    .request_id;
                 break (part.part_id, request_id, part.state);
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "host ask_user interaction part was never created"
+                "host ask_user request was never recorded on the tool operation"
             );
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
@@ -2256,12 +2248,12 @@ async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
     assert_eq!(
         state,
         PartState::InProgress,
-        "the host ask_user interaction part is born InProgress, not Pending — only \
+        "the host ask_user tool part is born InProgress, not Pending — only \
          InProgress can complete through the legal in_progress -> completed edge"
     );
 
-    // The durable presentation acknowledgement stamps presented_at on the
-    // in-flight part (the guard is is_in_flight()).
+    // The durable presentation acknowledgement stamps presented_at into the
+    // operation's request record (the guard is is_in_flight()).
     manager
         .mark_interactive_request_presented(session_id, request_id.clone())
         .await
@@ -2270,16 +2262,15 @@ async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
     let presented = persisted
         .parts
         .iter()
-        .find(|part| part.part_id == interaction_part_id)
-        .expect("interaction part still present");
+        .find(|part| part.part_id == tool_part_id)
+        .expect("tool part still present");
     assert!(
-        presented
-            .content
-            .get("request")
-            .and_then(|value| value.get("presented_at"))
-            .and_then(serde_json::Value::as_str)
+        tool_part_first_user_input(presented)
+            .expect("record present")
+            .request
+            .presented_at
             .is_some(),
-        "mark_interactive_request_presented stamps presented_at on the InProgress interaction part"
+        "mark_interactive_request_presented stamps presented_at into the operation request record"
     );
 
     // Drive the reply. With the part born InProgress the completion is the
@@ -2309,7 +2300,7 @@ async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
     let _replied = manager
         .reply_user_input(reply_request)
         .await
-        .expect("reply completes the InProgress interaction part without an invalid part transition");
+        .expect("reply records into the operation without an invalid part transition");
 
     // The host call is woken through its waiter and resolves.
     let host_response = host_join
@@ -2320,16 +2311,44 @@ async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
     assert_eq!(host_response.answers.get("0").map(Vec::as_slice), Some(&["Approve".to_owned()][..]));
 
     let persisted = store.load(session_id).await.expect("reload parts");
-    let interaction = persisted
+    let tool = persisted
         .parts
         .iter()
-        .find(|part| part.part_id == interaction_part_id)
-        .expect("interaction part still present");
+        .find(|part| part.part_id == tool_part_id)
+        .expect("tool part still present");
     assert_eq!(
-        interaction.state,
-        PartState::Completed,
-        "the replied interaction part completes to PartState::Completed"
+        tool.state,
+        PartState::InProgress,
+        "a host ask suspends the tool; the reply records the answer without completing the tool"
     );
+    let record = tool_part_first_user_input(tool).expect("operation record still present");
+    assert!(
+        record.reply.is_some(),
+        "the replied operation record carries the answer"
+    );
+    assert_eq!(
+        record.reply.as_ref().expect("answered").answers.get("0"),
+        Some(&vec!["Approve".to_owned()]),
+        "the recorded reply matches the submitted answer"
+    );
+}
+
+/// The first user-input record on a `tool_call` part's operation bucket.
+fn tool_part_first_user_input(
+    part: &agena_storage::store::Part,
+) -> Option<agena_domain::OperationUserInputRecord> {
+    if part.kind != "tool_call" {
+        return None;
+    }
+    let content = typed_content_from_value(&part.kind, &part.content).ok()?;
+    let TypedContent::ToolCall(tool_call) = content else {
+        return None;
+    };
+    operation_from_tool_call(&tool_call)
+        .user_input
+        .requests
+        .into_iter()
+        .next()
 }
 
 /// Regression: two host `ask_user` calls from unrelated operations whose
@@ -2529,8 +2548,9 @@ async fn host_ask_user_from_unrelated_operations_with_empty_operation_id_do_not_
     );
 }
 
-/// Poll the store until the `interaction` part bound to `tool_part_id` is
-/// durable, returning its nested request id.
+/// Poll the store until the `tool_call` operation bound to `tool_part_id`
+/// carries a durable user-input request (one host ask == one operation
+/// activity), returning the record's request id.
 async fn wait_for_interaction_request_id(
     store: &Arc<dyn agena_storage::store::SessionStore>,
     session_id: i64,
@@ -2541,13 +2561,19 @@ async fn wait_for_interaction_request_id(
     loop {
         let persisted = store.load(session_id).await.expect("reload parts");
         if let Some(request_id) = persisted.parts.iter().find_map(|part| {
-            if part.kind != "interaction" {
+            if part.kind != "tool_call" || part.part_id != tool_part_id {
                 return None;
             }
-            let content = InteractionContent::try_from(&part.content)
-                .expect("interaction content is typed");
-            (content.tool_part_id() == Some(tool_part_id))
-                .then(|| content.request_id().expect("interaction carries a request id"))
+            let content = typed_content_from_value(&part.kind, &part.content).ok()?;
+            let TypedContent::ToolCall(tool_call) = content else {
+                return None;
+            };
+            let operation = operation_from_tool_call(&tool_call);
+            operation
+                .user_input
+                .requests
+                .first()
+                .map(|record| record.request.request_id.clone())
         }) {
             return request_id;
         }

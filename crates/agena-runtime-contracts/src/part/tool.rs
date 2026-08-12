@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use agena_domain::{
     ArtifactRef, ExecutionStatus, FilesystemEffects, InteractionNotificationLevel, NetworkEffect,
-    OperationAuthorization, OperationError, ProcessShell, ToolInvocation, ToolManagedOutput,
-    ToolOutput, ToolPresentationSection, ToolResultDisplay, ToolResultState, UserInputQuestion,
+    OperationAuthorization, OperationError, OperationUserInput, ProcessShell, ToolInvocation,
+    ToolManagedOutput, ToolOutput, ToolPresentationSection, ToolResultDisplay, ToolResultState,
+    UserInputQuestion,
 };
 use agena_tool::{ReadMode, TaskModelSelection, normalize_tool_summary, normalize_tool_title};
 
@@ -1084,6 +1085,8 @@ pub struct OperationPart {
     pub invocation: ToolInvocation,
     #[serde(default, skip_serializing_if = "OperationAuthorization::is_empty")]
     pub authorization: OperationAuthorization,
+    #[serde(default, skip_serializing_if = "OperationUserInput::is_empty")]
+    pub user_input: OperationUserInput,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1153,6 +1156,7 @@ impl OperationPart {
             call_id,
             invocation,
             authorization: OperationAuthorization::default(),
+            user_input: OperationUserInput::default(),
             title: normalize_tool_title(title.into()),
             summary: String::new(),
             artifacts: Vec::new(),
@@ -1193,6 +1197,7 @@ impl OperationPart {
             call_id,
             invocation,
             authorization: OperationAuthorization::default(),
+            user_input: OperationUserInput::default(),
             title,
             summary,
             artifacts: Vec::new(),
@@ -1225,6 +1230,7 @@ impl OperationPart {
             call_id,
             invocation,
             authorization: OperationAuthorization::default(),
+            user_input: OperationUserInput::default(),
             title: String::new(),
             summary: user_summary,
             artifacts: Vec::new(),
@@ -1328,6 +1334,7 @@ impl OperationPart {
             call_id,
             invocation,
             authorization: OperationAuthorization::default(),
+            user_input: OperationUserInput::default(),
             title: String::new(),
             summary: normalize_tool_summary(&output_text),
             artifacts: Vec::new(),

@@ -181,6 +181,79 @@ pub struct UserInputReply {
     pub reason: Option<String>,
 }
 
+/// Durable user-input history owned by one tool Operation.
+///
+/// Like permission, an interactive ask is not transcript content of its own:
+/// the request and its reply live beside the invocation and result they govern
+/// (inside the `tool_call` operation activity), so one host ask produces exactly
+/// one transcript activity — the operation. Interactive clients derive their
+/// pending user-input queue from unresolved records here.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OperationUserInput {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requests: Vec<OperationUserInputRecord>,
+}
+
+impl OperationUserInput {
+    pub fn is_empty(&self) -> bool {
+        self.requests.is_empty()
+    }
+
+    pub fn awaiting(&self) -> impl Iterator<Item = &OperationUserInputRecord> {
+        self.requests
+            .iter()
+            .filter(|record| record.reply.is_none())
+    }
+
+    pub fn find(&self, request_id: &str) -> Option<&OperationUserInputRecord> {
+        self.requests
+            .iter()
+            .find(|record| record.request.request_id == request_id)
+    }
+
+    pub fn find_mut(&mut self, request_id: &str) -> Option<&mut OperationUserInputRecord> {
+        self.requests
+            .iter_mut()
+            .find(|record| record.request.request_id == request_id)
+    }
+
+    pub fn push_pending(&mut self, request: UserInputRequest) -> bool {
+        if self.find(request.request_id.as_str()).is_some() {
+            return false;
+        }
+        self.requests.push(OperationUserInputRecord {
+            request,
+            reply: None,
+            replied_at_ms: None,
+        });
+        true
+    }
+
+    pub fn record_reply(&mut self, reply: UserInputReply, replied_at_ms: i64) -> bool {
+        let Some(record) = self.find_mut(reply.request_id.as_str()) else {
+            return false;
+        };
+        if record.reply.is_some() {
+            return false;
+        }
+        record.reply = Some(reply);
+        record.replied_at_ms = Some(replied_at_ms);
+        true
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+/// User-input request/reply pair attached to an operation activity.
+pub struct OperationUserInputRecord {
+    pub request: UserInputRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<UserInputReply>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replied_at_ms: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{FileChangeKind, TodoPriority, TodoStatus, UserInputReply};

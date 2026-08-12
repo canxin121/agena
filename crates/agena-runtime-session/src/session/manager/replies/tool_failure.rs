@@ -1,8 +1,8 @@
 use super::{
     AppError, Arc, ExecutionStatus, OperationPart, PersistedPermissionRule, SessionManager,
     SessionManagerState, SessionPendingTool, ToolError, completed_lifecycle,
-    operation_authorization, resolve_pending_tool, terminal_operation_title, text_result_blocks,
-    update_resolved_tool_message,
+    operation_authorization, operation_from_part, resolve_pending_tool, terminal_operation_title,
+    text_result_blocks, update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::store::{
@@ -406,6 +406,12 @@ impl SessionManager {
                 );
                 operation.authorization = authorization.clone();
                 operation.set_title(failure_title.clone());
+                // The failure payload replaces the operation, not its asks:
+                // preserve user-input records so an answered (or awaiting)
+                // question stays visible on the terminal activity.
+                if let Some(existing) = operation_from_part(tool_part) {
+                    operation.user_input = existing.user_input;
+                }
                 tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
                     tool_call_from_operation(&operation),
                 ))

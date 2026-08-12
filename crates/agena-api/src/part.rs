@@ -181,6 +181,11 @@ pub struct OperationPartResource {
         skip_serializing_if = "agena_domain::OperationAuthorization::is_empty"
     )]
     pub authorization: agena_domain::OperationAuthorization,
+    #[serde(
+        default,
+        skip_serializing_if = "agena_domain::OperationUserInput::is_empty"
+    )]
+    pub user_input: agena_domain::OperationUserInput,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]

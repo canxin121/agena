@@ -243,15 +243,21 @@ pub(super) fn operation_id_from_part(part: &Part) -> Option<String> {
     })
 }
 
-/// Re-encode a mutated v1 [`OperationPart`] back onto the tool part's content
-/// and return the part's changed state.
+/// Re-encode a mutated v1 [`OperationPart`] back onto the tool part's content.
+///
+/// The canonical tool_call content is the *flattened* [`ToolCallContent`]
+/// shape: `ToolCallContent` marks `extra` with `#[serde(flatten)]`, so the
+/// operation lives at the top-level `operation` key of the stored JSON (the
+/// same slot [`operation_from_tool_call`] reads back through the flatten
+/// bucket). Writing a nested `content["extra"]["operation"]` would leave the
+/// authoritative top-level copy stale and shadow it on the next decode.
 pub(super) fn apply_operation_mutation(part: &mut Part, mutation: impl FnOnce(&mut OperationPart)) {
     let Some(mut operation) = operation_from_part(part) else {
         return;
     };
     mutation(&mut operation);
     let mut content = part.content.clone();
-    content["extra"]["operation"] =
+    content["operation"] =
         serde_json::to_value(&operation).expect("operation payload is always JSON serializable");
     part.content = content;
 }
@@ -300,6 +306,30 @@ fn interaction_from_part(part: &Part) -> Option<InteractionContent> {
     InteractionContent::try_from(&part.content).ok()
 }
 
+/// Read the user-input request/reply pairs carried by a part through both
+/// sources: the canonical `operation.user_input` bucket on a `tool_call` part
+/// (one ask == one operation activity) or a legacy `kind == "interaction"`
+/// part that predates the single-activity refactor. Every correlation read
+/// below goes through this accessor so legacy rows keep projecting.
+fn user_input_records_from_part(
+    part: &Part,
+) -> Vec<(agena_domain::UserInputRequest, Option<agena_domain::UserInputReply>)> {
+    if let Some(operation) = operation_from_part(part) {
+        return operation
+            .user_input
+            .requests
+            .iter()
+            .map(|record| (record.request.clone(), record.reply.clone()))
+            .collect();
+    }
+    if let Some(interaction) = interaction_from_part(part)
+        && let Some(request) = interaction.request()
+    {
+        return vec![(request, interaction.reply())];
+    }
+    Vec::new()
+}
+
 fn matching_request_part_refs(
     session: &Session,
     request_id: &str,
@@ -310,15 +340,12 @@ fn matching_request_part_refs(
         .iter()
         .enumerate()
         .filter_map(|(part_index, part)| {
-            let Some(interaction) = interaction_from_part(part) else {
-                return None;
-            };
             if pending_only && !part.state.is_in_flight() {
                 return None;
             }
-            // Interaction parts are strictly user input (permissions live on
-            // the tool_call operation's authorization, never here).
-            let matches_request = interaction.request_id().as_deref() == Some(request_id);
+            let matches_request = user_input_records_from_part(part)
+                .iter()
+                .any(|(request, _)| request.request_id == request_id);
             matches_request.then_some(SessionPartRef {
                 part_index,
                 part_id: part.part_id,
@@ -327,46 +354,64 @@ fn matching_request_part_refs(
         .collect()
 }
 
-/// A request Activity is a child of exactly one tool operation. Once that
-/// operation reaches any terminal state, leaving an unanswered child request
-/// pending would create an unanswerable approval: the UI can still submit it,
-/// but there is no pending tool left to resume. Close such children in the
-/// same message checkpoint as the operation's terminal result.
+/// An operation's user-input asks live inside the operation activity itself,
+/// so once that operation reaches any terminal state, leaving an unanswered
+/// record pending would create an unanswerable approval: the UI can still
+/// submit it, but there is no pending tool left to resume. Drop the awaiting
+/// records (keeping answered ones) in the same message checkpoint as the
+/// operation's terminal result. Legacy `interaction` children are cancelled
+/// the way they always were.
 pub(super) fn cancel_unanswered_request_parts_for_operation(
     session: &mut Session,
     operation_id: &str,
 ) -> Result<Vec<i64>, AppError> {
-    let request_parts = session
-        .parts()
-        .iter()
-        .enumerate()
-        .filter_map(|(part_index, part)| {
-            if !part.state.is_in_flight() {
-                return None;
-            }
-            let interaction = interaction_from_part(part)?;
-            (interaction.operation_id() == Some(operation_id)).then_some(SessionPartRef {
-                part_index,
-                part_id: part.part_id,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let changed_part_ids = request_parts
-        .iter()
-        .map(|request_part| request_part.part_id)
-        .collect::<Vec<_>>();
-    for request_part in request_parts {
-        let part = session.part_mut(&request_part).ok_or_else(|| {
+    let mut changed_part_ids = Vec::new();
+    for part_index in 0..session.parts().len() {
+        let part_ref = SessionPartRef {
+            part_index,
+            part_id: session.parts()[part_index].part_id,
+        };
+        let part = session.part_mut(&part_ref).ok_or_else(|| {
             AppError::Internal(format!(
                 "pending interaction part not found while closing operation {operation_id}: part={}",
-                request_part.part_id
+                part_ref.part_id
             ))
         })?;
-        part.state = PartState::Cancelled;
-        part.summary = Some(
-            "Cancelled because the associated tool already reached a terminal result.".to_owned(),
-        );
+        if part.kind == "tool_call" {
+            // Canonical: clear the unanswered records on the operation bucket.
+            // The tool part is already terminal when this runs (the caller
+            // completed it in the same checkpoint), so no in-flight check.
+            if operation_id_from_part(part).as_deref() != Some(operation_id) {
+                continue;
+            }
+            let mut cleared = false;
+            apply_operation_mutation(part, |operation| {
+                let before = operation.user_input.requests.len();
+                operation.user_input.requests.retain(|record| record.reply.is_some());
+                cleared = before != operation.user_input.requests.len();
+            });
+            if cleared {
+                part.summary = Some(
+                    "Cancelled because the associated tool already reached a terminal result."
+                        .to_owned(),
+                );
+                changed_part_ids.push(part_ref.part_id);
+            }
+            continue;
+        }
+        // Legacy: cancel the still in-flight child interaction part.
+        if !part.state.is_in_flight() {
+            continue;
+        }
+        let interaction = interaction_from_part(part);
+        if interaction.as_ref().and_then(|i| i.operation_id()) == Some(operation_id) {
+            part.state = PartState::Cancelled;
+            part.summary = Some(
+                "Cancelled because the associated tool already reached a terminal result."
+                    .to_owned(),
+            );
+            changed_part_ids.push(part_ref.part_id);
+        }
     }
     Ok(changed_part_ids)
 }
@@ -494,10 +539,10 @@ pub(super) fn find_tool_part_by_id(session: &Session, part_id: i64) -> Option<(u
         .find(|(_, part)| part.part_id == part_id && part.kind == "tool_call")
 }
 
-/// Find the pending user-input request whose request id matches: an in-flight
-/// `interaction` part carrying `request_id`. The request ref is the
-/// interaction part; the tool ref resolves through the `tool_part_id` recorded
-/// when the request was created.
+/// Find the pending user-input request whose request id matches: an awaiting
+/// `user_input` record on an in-flight `tool_call` operation (canonical — the
+/// request ref and the tool ref are the same operation part), or an in-flight
+/// legacy `interaction` part carrying `request_id`.
 pub(super) fn find_pending_user_input_by_request_id(
     session: &Session,
     request_id: &str,
@@ -510,6 +555,22 @@ pub(super) fn find_pending_user_input_by_request_id(
             if !part.state.is_in_flight() {
                 return None;
             }
+            if part.kind == "tool_call" {
+                let operation = operation_from_part(part)?;
+                if operation.user_input.find(request_id)?.reply.is_some() {
+                    return None;
+                }
+                let request = SessionPartRef {
+                    part_index,
+                    part_id: part.part_id,
+                };
+                return Some(SessionPendingInteractiveRequest {
+                    request: request.clone(),
+                    tool: SessionPendingTool { part: request },
+                });
+            }
+            // Legacy: the request ref is the interaction part; the tool ref
+            // resolves through the `tool_part_id` recorded at creation.
             let interaction = interaction_from_part(part)?;
             if interaction.request_id().as_deref() != Some(request_id) {
                 return None;
@@ -535,10 +596,9 @@ pub(super) fn find_pending_user_input_by_request_id(
 
 pub(super) fn has_replied_user_input_request(session: &Session, request_id: &str) -> bool {
     session.parts().iter().any(|part| {
-        let Some(interaction) = interaction_from_part(part) else {
-            return false;
-        };
-        interaction.request_id().as_deref() == Some(request_id) && interaction.reply().is_some()
+        user_input_records_from_part(part).iter().any(|(request, reply)| {
+            request.request_id == request_id && reply.is_some()
+        })
     })
 }
 
@@ -547,6 +607,15 @@ pub(super) fn pending_user_input_request(
     pending: &SessionPendingInteractiveRequest,
 ) -> Option<agena_domain::UserInputRequest> {
     let part = session.part(&pending.request)?;
+    if let Some(operation) = operation_from_part(part) {
+        // The caller found the pending request by id; return its awaiting
+        // record's request (an operation may accumulate several asks).
+        return operation
+            .user_input
+            .awaiting()
+            .next()
+            .map(|record| record.request.clone());
+    }
     interaction_from_part(part)?.request()
 }
 
@@ -628,21 +697,40 @@ pub(super) fn user_input_request_for_tool_part(
         agena_domain::UserInputReply,
     >,
 > {
-    session
-        .parts()
-        .iter()
-        .filter_map(|part| {
-            let interaction = interaction_from_part(part)?;
-            if interaction.tool_part_id() != Some(tool_part_id) {
-                return None;
+    let mut seen = 0usize;
+    for part in session.parts() {
+        // Canonical: records live on the tool part's own operation bucket.
+        if part.kind == "tool_call" && part.part_id == tool_part_id {
+            if let Some(operation) = operation_from_part(part) {
+                for record in &operation.user_input.requests {
+                    if seen == sequence_index {
+                        return Some(crate::part::InteractiveRequestPart {
+                            request: record.request.clone(),
+                            reply: record.reply.clone(),
+                        });
+                    }
+                    seen += 1;
+                }
             }
-            let request = interaction.request()?;
-            Some(crate::part::InteractiveRequestPart {
+            continue;
+        }
+        // Legacy: interaction parts carrying the tool_part_id correlation key.
+        let Some(interaction) = interaction_from_part(part) else {
+            continue;
+        };
+        if interaction.tool_part_id() != Some(tool_part_id) {
+            continue;
+        }
+        let request = interaction.request()?;
+        if seen == sequence_index {
+            return Some(crate::part::InteractiveRequestPart {
                 request,
                 reply: interaction.reply(),
-            })
-        })
-        .nth(sequence_index)
+            });
+        }
+        seen += 1;
+    }
+    None
 }
 
 impl SessionManager {
@@ -685,30 +773,72 @@ impl SessionManager {
             .ok_or_else(|| pending_reply_payload_missing_error(request_kind, request_id))
     }
 
-    /// Complete every pending interaction part for `request_id` with the
-    /// replied canonical content and terminal `completed` state. Interaction
-    /// parts are strictly user input (permissions live on the tool_call
-    /// operation's authorization and never produce a part), so the label is
-    /// fixed.
-    fn complete_reply_request_parts(
+    /// Record `reply` for the pending user-input request identified by
+    /// `request_id` and return the id of the part that changed (the tool_call
+    /// operation activity in the canonical single-activity shape, or the
+    /// legacy `interaction` part it replaces). The reply is written into the
+    /// operation's `user_input` record on the tool part — the same activity
+    /// that asked — so the answered request renders read-only inside the
+    /// operation; legacy rows get the replied canonical content and terminal
+    /// `completed` state they always did.
+    fn record_user_input_reply(
         &self,
         session: &mut Session,
         request_id: &str,
-        content: serde_json::Value,
-    ) -> Result<(), AppError> {
-        let request_parts = matching_request_part_refs(session, request_id, true);
-        if request_parts.is_empty() {
-            return Err(pending_reply_part_missing_error("user input", request_id));
-        }
-
-        for request_part in request_parts {
+        user_input_request: &agena_domain::UserInputRequest,
+        reply: agena_domain::UserInputReply,
+    ) -> Result<i64, AppError> {
+        let request_part = matching_request_part_refs(session, request_id, true)
+            .into_iter()
+            .next()
+            .ok_or_else(|| pending_reply_part_missing_error("user input", request_id))?;
+        let replied_at_ms = Utc::now().timestamp_millis();
+        {
             let part = session.part_mut(&request_part).ok_or_else(|| {
                 pending_reply_part_missing_error("user input", request_id)
             })?;
-            part.content = content.clone();
+            if part.kind == "tool_call" {
+                apply_operation_mutation(part, |operation| {
+                    operation.user_input.record_reply(reply.clone(), replied_at_ms);
+                });
+                return Ok(request_part.part_id);
+            }
+            // Legacy interaction part: write the replied canonical content and
+            // the terminal `completed` state, with the `request_id` /
+            // `tool_part_id` / `operation_id` correlation keys mirrored at the
+            // top level so every reader still resolves it.
+            let interaction = interaction_from_part(part)
+                .ok_or_else(|| pending_reply_part_missing_error("user input", request_id))?;
+            let operation_id = interaction
+                .operation_id()
+                .map(ToOwned::to_owned)
+                .unwrap_or_default();
+            let tool_part_id = interaction.tool_part_id().unwrap_or(request_part.part_id);
+            let mut replied = crate::session::store::interaction_from_request(
+                &crate::part::RequestPart::UserInput(
+                    crate::part::InteractiveRequestPart::replied(
+                        user_input_request.clone(),
+                        reply.clone(),
+                    ),
+                ),
+            );
+            replied.extra.insert(
+                "request_id".to_owned(),
+                serde_json::to_value(request_id).expect("request id is always JSON serializable"),
+            );
+            replied.extra.insert(
+                "tool_part_id".to_owned(),
+                serde_json::to_value(tool_part_id).expect("part id is always JSON serializable"),
+            );
+            replied.extra.insert(
+                "operation_id".to_owned(),
+                serde_json::to_value(operation_id.as_str())
+                    .expect("operation id is always JSON serializable"),
+            );
+            part.content = replied.as_value();
             part.state = PartState::Completed;
         }
-        Ok(())
+        Ok(request_part.part_id)
     }
 
     async fn load_reply_session(
@@ -1288,6 +1418,29 @@ impl SessionManager {
                     let part = session.part_mut(request_part).ok_or_else(|| {
                         pending_reply_part_missing_error("user input", request_id.as_str())
                     })?;
+                    if part.kind == "tool_call" {
+                        // Canonical: stamp `presented_at` into the operation's
+                        // request record.
+                        if !part.state.is_in_flight() {
+                            continue;
+                        }
+                        let mut touched = false;
+                        apply_operation_mutation(part, |operation| {
+                            if let Some(record) = operation.user_input.find_mut(request_id.as_str())
+                                && record.reply.is_none()
+                                && record.request.presented_at.is_none()
+                            {
+                                record.request.presented_at = Some(Utc::now());
+                                touched = true;
+                            }
+                        });
+                        if touched {
+                            presented = true;
+                            changed_part_ids.push(request_part.part_id);
+                        }
+                        continue;
+                    }
+                    // Legacy interaction part: the request lives in the content.
                     let Some(mut request) = part.content.get("request").and_then(|value| {
                         serde_json::from_value::<agena_domain::UserInputRequest>(value.clone()).ok()
                     }) else {
@@ -1368,43 +1521,17 @@ impl SessionManager {
                     "user input",
                     pending_user_input_request,
                 )?;
-                // The replied part uses the single canonical `interaction`
-                // shape (same writer as request creation), with the
-                // `request_id`/`tool_part_id`/`operation_id` correlation keys
-                // mirrored at the top level so every reader still resolves it.
-                let interaction = session.part(&pending.request).and_then(interaction_from_part);
-                let operation_id = interaction
-                    .as_ref()
-                    .and_then(|interaction| interaction.operation_id().map(ToOwned::to_owned))
-                    .unwrap_or_default();
-                let mut replied = crate::session::store::interaction_from_request(
-                    &crate::part::RequestPart::UserInput(
-                        crate::part::InteractiveRequestPart::replied(
-                            user_input_request.clone(),
-                            request.reply.clone(),
-                        ),
-                    ),
-                );
-                replied.extra.insert(
-                    "request_id".to_owned(),
-                    serde_json::to_value(request_id.as_str())
-                        .expect("request id is always JSON serializable"),
-                );
-                replied.extra.insert(
-                    "tool_part_id".to_owned(),
-                    serde_json::to_value(pending.tool.part.part_id)
-                        .expect("part id is always JSON serializable"),
-                );
-                replied.extra.insert(
-                    "operation_id".to_owned(),
-                    serde_json::to_value(operation_id.as_str())
-                        .expect("operation id is always JSON serializable"),
-                );
-                let replied_content = replied.as_value();
-                self.complete_reply_request_parts(
+                // Record the reply into the operation's `user_input` bucket on
+                // the tool_call activity (canonical single-activity shape) or
+                // the legacy interaction part; returns the id of the changed
+                // part. For a tool (plugin) ask this must run BEFORE the
+                // terminal tool-success/user-declined transition, which
+                // preserves the answered record through the completion payload.
+                let changed_part_id = self.record_user_input_reply(
                     &mut session,
                     request_id.as_str(),
-                    replied_content,
+                    &user_input_request,
+                    request.reply.clone(),
                 )?;
 
                 // Origin is typed (not the request-id prefix): a request is a
@@ -1412,17 +1539,20 @@ impl SessionManager {
                 // Legacy rows without a stored source fall back to the typed
                 // inference inside `InteractionContent::source()` (host parts
                 // always wrote `request_id = host-input:...` ≠ `operation_id`).
-                let host_response = if interaction
-                    .as_ref()
-                    .map(InteractionContent::source)
-                    .unwrap_or_default()
+                let is_host = user_input_request.source
                     == agena_domain::UserInputSource::Host
-                {
+                    || session
+                        .part(&pending.request)
+                        .and_then(interaction_from_part)
+                        .map(|interaction| interaction.source())
+                        .unwrap_or_default()
+                        == agena_domain::UserInputSource::Host;
+                let host_response = if is_host {
                     let response = host_user_input_response(&user_input_request, &request.reply)?;
                     session = self
                         .persist_session_changes(
                             session,
-                            vec![pending.request.part_id],
+                            vec![changed_part_id],
                             None,
                             state.clone(),
                         )
@@ -1472,20 +1602,25 @@ impl SessionManager {
                                 .await?;
                         }
                     }
-                    // Persist the replied interaction part after the
-                    // tool-success/user-declined handling (which may persist or
-                    // cancel other parts). The interaction part is already
-                    // Completed in-memory, so this InProgress->Completed write
-                    // keeps an answered request from resurrecting as pending on
-                    // reload, mirroring the host-input branch above.
-                    session = self
-                        .persist_session_changes(
-                            session,
-                            vec![pending.request.part_id],
-                            None,
-                            state.clone(),
-                        )
-                        .await?;
+                    // The canonical tool part was already persisted by the
+                    // terminal tool-success/user-declined handling (which
+                    // preserved the answered record). Only a legacy
+                    // `interaction` part needs its own InProgress->Completed
+                    // write here so an answered request cannot resurrect as
+                    // pending on reload.
+                    let is_legacy_part = session.parts().iter().any(|part| {
+                        part.part_id == changed_part_id && part.kind == "interaction"
+                    });
+                    if is_legacy_part {
+                        session = self
+                            .persist_session_changes(
+                                session,
+                                vec![changed_part_id],
+                                None,
+                                state.clone(),
+                            )
+                            .await?;
+                    }
                     None
                 };
 

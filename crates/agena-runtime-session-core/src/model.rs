@@ -743,6 +743,19 @@ fn is_compaction_marker(part: &Part) -> bool {
     part.kind == "run" && part.content.get("run_kind") == Some(&serde_json::json!("compaction"))
 }
 
+/// Decode the [`OperationPart`] carried by a `tool_call` part's content: the
+/// canonical content is the flattened [`ToolCallContent`] shape, so the
+/// operation lives under the `extra["operation"]` bucket `operation_from_tool_call`
+/// reads back. Returns `None` for non-tool parts or undecodable payloads.
+fn operation_from_part(part: &Part) -> Option<agena_runtime_contracts::part::OperationPart> {
+    if part.kind != "tool_call" {
+        return None;
+    }
+    let tool_call =
+        agena_runtime_contracts::part_content::ToolCallContent::try_from(&part.content).ok()?;
+    Some(agena_runtime_contracts::part_content::operation_from_tool_call(&tool_call))
+}
+
 impl Session {
     pub fn new(id: i64, workspace_id: i64, title: impl Into<String>, now: DateTime<Utc>) -> Self {
         Self {
@@ -907,19 +920,37 @@ impl Session {
             .filter(|part| self.pending_tool_call(part))
     }
 
-    /// Pending interaction parts (`kind == "interaction"`, in-flight state).
+    /// Whether `part` carries an unanswered user-input ask: an in-flight
+    /// `tool_call` operation whose `user_input` bucket has an awaiting record
+    /// (canonical single-activity shape), or an in-flight legacy
+    /// `interaction` part.
+    fn pending_user_input_part(&self, part: &Part) -> bool {
+        if !part.state.is_in_flight() {
+            return false;
+        }
+        match part.kind.as_str() {
+            "interaction" => true,
+            "tool_call" => operation_from_part(part)
+                .map(|operation| operation.user_input.awaiting().next().is_some())
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
+    /// Pending user-input asks: in-flight `interaction` parts (legacy) plus
+    /// in-flight `tool_call` operations carrying an awaiting user-input record.
     pub fn pending_interactions(&self) -> impl Iterator<Item = &Part> {
         self.parts
             .iter()
-            .filter(|part| part.kind == "interaction" && part.state.is_in_flight())
+            .filter(|part| self.pending_user_input_part(part))
     }
 
-    /// The latest pending interaction part, if any.
+    /// The latest pending user-input ask, if any.
     pub fn pending_interaction(&self) -> Option<&Part> {
         self.parts
             .iter()
             .rev()
-            .find(|part| part.kind == "interaction" && part.state.is_in_flight())
+            .find(|part| self.pending_user_input_part(part))
     }
 
     /// Every `tool_result` part in the projection.
@@ -988,8 +1019,11 @@ impl Session {
     /// Derive the pending operations from the parts projection:
     ///
     /// - `tool_call` parts not yet `completed`/`cancelled` and without a
-    ///   paired `tool_result` become [`SessionPendingOperation::Tool`];
-    /// - `interaction` parts in flight become
+    ///   paired `tool_result` become [`SessionPendingOperation::Tool`]. A
+    ///   suspended tool whose operation carries an awaiting `user_input`
+    ///   record is also a [`SessionPendingOperation::UserInput`] — the
+    ///   single-activity shape, where the ask lives inside the operation;
+    /// - legacy `interaction` parts in flight become
     ///   [`SessionPendingOperation::UserInput`]. Permissions are never recorded
     ///   on interaction parts: they live on the `tool_call` part's operation
     ///   authorization.
@@ -998,11 +1032,23 @@ impl Session {
         for (index, part) in self.parts.iter().enumerate() {
             match part.kind.as_str() {
                 "tool_call" if self.pending_tool_call(part) => {
+                    let tool = SessionPendingTool {
+                        part: SessionPartRef::new(index, part),
+                    };
                     operations.push(SessionPendingOperation::Tool {
-                        tool: SessionPendingTool {
-                            part: SessionPartRef::new(index, part),
-                        },
+                        tool: tool.clone(),
                     });
+                    let awaiting_user_input = operation_from_part(part)
+                        .map(|operation| operation.user_input.awaiting().next().is_some())
+                        .unwrap_or(false);
+                    if awaiting_user_input {
+                        operations.push(SessionPendingOperation::UserInput {
+                            pending: SessionPendingInteractiveRequest {
+                                request: tool.part.clone(),
+                                tool: tool.clone(),
+                            },
+                        });
+                    }
                 }
                 "interaction" if part.state.is_in_flight() => {
                     let part_ref = SessionPartRef::new(index, part);
@@ -1295,22 +1341,58 @@ mod parts_projection_tests {
         assert_eq!(session.workflow_state(), WorkflowState::ToolPending);
     }
 
+    /// A `tool_call` part whose operation carries one user-input request,
+    /// awaiting (or answered when `answered` is set).
+    fn tool_call_with_ask(part_id: i64, request_id: &str, answered: bool) -> Part {
+        let mut operation = agena_runtime_contracts::part::OperationPart::pending(
+            part_id,
+            agena_domain::ToolInvocation::new(
+                "plan.set",
+                agena_domain::StructuredObject::default(),
+            ),
+            "Approve New Plan",
+            agena_domain::TimeRange {
+                start_ms: 1,
+                end_ms: None,
+            },
+        );
+        let request = agena_domain::UserInputRequest {
+            request_id: request_id.to_owned(),
+            session_id: Some(1),
+            title: "Approve New Plan".to_owned(),
+            body_markdown: String::new(),
+            kind: agena_domain::UserInputKind::Review,
+            source: agena_domain::UserInputSource::Host,
+            auto_resolution_ms: None,
+            presented_at: None,
+            questions: Vec::new(),
+            created_at: chrono::Utc::now(),
+        };
+        operation.user_input.push_pending(request);
+        if answered {
+            operation.user_input.record_reply(
+                agena_domain::UserInputReply {
+                    request_id: request_id.to_owned(),
+                    kind: agena_domain::UserInputReplyKind::Submit,
+                    answers: Default::default(),
+                    reason: None,
+                },
+                1234,
+            );
+        }
+        part(
+            part_id,
+            "tool_call",
+            PartRole::Assistant,
+            PartState::Pending,
+            json!({"name": "plan.set", "input": {}, "operation": serde_json::to_value(&operation).unwrap()}),
+        )
+    }
+
     #[test]
     fn pending_interactions_gate_the_session_until_answered() {
-        let ask = part(
-            20,
-            "interaction",
-            PartRole::Runtime,
-            PartState::Pending,
-            json!({"kind": "ask_user", "prompt": "?"}),
-        );
-        let answered = part(
-            21,
-            "interaction",
-            PartRole::Runtime,
-            PartState::Completed,
-            json!({"kind": "plan_review", "prompt": "x", "reply": "yes"}),
-        );
+        let ask = tool_call_with_ask(20, "host-input:1:1:0", false);
+        let answered = tool_call_with_ask(21, "host-input:1:1:1", true);
 
         let session = session_with(vec![ask, answered]);
         let pending: Vec<i64> = session.pending_interactions().map(|p| p.part_id).collect();
@@ -1320,7 +1402,7 @@ mod parts_projection_tests {
     }
 
     #[test]
-    fn derive_pending_operations_maps_tool_and_interaction_parts() {
+    fn derive_pending_operations_maps_tool_and_user_input_asks() {
         let tool = part(
             30,
             "tool_call",
@@ -1328,33 +1410,32 @@ mod parts_projection_tests {
             PartState::Pending,
             json!({"name": "fs.write", "input": {}}),
         );
-        let ask = part(
-            31,
+        // A suspended tool whose operation carries an awaiting user-input
+        // record is both a pending Tool and a pending UserInput (one tool_call
+        // activity == one ask in the single-activity shape).
+        let ask = tool_call_with_ask(31, "host-input:1:1:0", false);
+        // Legacy interaction parts stay UserInput, strictly user input.
+        let legacy = part(
+            32,
             "interaction",
             PartRole::Runtime,
             PartState::Pending,
             json!({"kind": "ask_user", "prompt": "proceed?"}),
         );
-        // Interaction parts are strictly user input: even a part whose content
-        // carries a "permission" kind maps to UserInput — permissions live on
-        // the tool_call operation's authorization, never on interaction parts.
-        let permission_ish = part(
-            32,
-            "interaction",
-            PartRole::Runtime,
-            PartState::Pending,
-            json!({"kind": "permission", "prompt": "allow?", "request_id": "req-1"}),
-        );
 
-        let session = session_with(vec![tool, ask, permission_ish]);
+        let session = session_with(vec![tool, ask, legacy]);
         let ops = &session.pending_operations;
 
-        assert_eq!(ops.len(), 3);
+        assert_eq!(ops.len(), 4);
         match &ops[0] {
             SessionPendingOperation::Tool { tool } => assert_eq!(tool.part.part_id, 30),
             _ => panic!("expected Tool op"),
         }
-        for (index, expected_part_id) in [(1, 31), (2, 32)] {
+        match &ops[1] {
+            SessionPendingOperation::Tool { tool } => assert_eq!(tool.part.part_id, 31),
+            _ => panic!("expected Tool op for the suspended ask tool"),
+        }
+        for (index, expected_part_id) in [(2, 31), (3, 32)] {
             match &ops[index] {
                 SessionPendingOperation::UserInput { pending } => {
                     assert_eq!(pending.request.part_id, expected_part_id);
@@ -1365,7 +1446,7 @@ mod parts_projection_tests {
         }
 
         let tool_refs = session.pending_tools();
-        assert_eq!(tool_refs.len(), 1);
+        assert_eq!(tool_refs.len(), 2);
         assert_eq!(
             session.next_pending_tool().map(|t| t.part.part_id),
             Some(30)

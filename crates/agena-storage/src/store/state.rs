@@ -42,10 +42,46 @@ pub struct StateInputs {
     pub last_error: Option<serde_json::Value>,
 }
 
+/// Decode the first still-awaiting user-input request from a `tool_call` part
+/// whose content carries the flattened tool operation (`content["operation"]`),
+/// when that operation has an unanswered `user_input` record. This is the
+/// canonical single-activity shape: the ask lives inside the tool activity.
+pub(crate) fn tool_call_first_awaiting_user_input(
+    content: &serde_json::Value,
+) -> Option<agena_domain::UserInputRequest> {
+    let operation = content.get("operation")?;
+    let user_input = operation.get("user_input")?;
+    let user_input: agena_domain::OperationUserInput =
+        serde_json::from_value(user_input.clone()).ok()?;
+    user_input
+        .awaiting()
+        .next()
+        .map(|record| record.request.clone())
+}
+
 impl StateInputs {
     /// Assemble from a loaded session view. Non-gating parts are ignored;
-    /// run markers and interaction parts drive the state (17.3).
+    /// run markers and interaction parts drive the state (17.3). Pending
+    /// interactions cover legacy in-flight `interaction` parts and, in the
+    /// canonical single-activity shape, in-flight `tool_call` parts whose
+    /// operation is awaiting a user-input reply.
     pub fn from_view(view: &super::SessionView) -> Self {
+        let mut pending_interactions = Vec::new();
+        for part in &view.parts {
+            if !part.state.is_in_flight() {
+                continue;
+            }
+            let gates_user_input = part.kind == "interaction"
+                || (part.kind == "tool_call"
+                    && tool_call_first_awaiting_user_input(&part.content).is_some());
+            if gates_user_input {
+                pending_interactions.push(PendingInteraction {
+                    part_id: part.part_id,
+                    created_at_ms: part.created_at_ms,
+                    content: part.content.clone(),
+                });
+            }
+        }
         Self {
             meta: Some(view.meta.clone()),
             in_flight_runs: view
@@ -57,16 +93,7 @@ impl StateInputs {
                     created_at_ms: part.created_at_ms,
                 })
                 .collect(),
-            pending_interactions: view
-                .parts
-                .iter()
-                .filter(|part| part.kind == "interaction" && part.state.is_in_flight())
-                .map(|part| PendingInteraction {
-                    part_id: part.part_id,
-                    created_at_ms: part.created_at_ms,
-                    content: part.content.clone(),
-                })
-                .collect(),
+            pending_interactions,
             last_error: view
                 .parts
                 .iter()
@@ -139,24 +166,36 @@ pub fn presentation(
         last_failure: last_error.cloned(),
     };
     if let Some(interaction) = pending_interactions.first() {
+        // Canonical shape: the ask rides on the tool activity's operation
+        // (`content["operation"]["user_input"]`); display kind/prompt come
+        // from the still-awaiting request. Legacy shape: the `interaction`
+        // part names the kind `type` (or flat `kind`) and a `prompt`; read
+        // both so display kind is stable across stored shapes.
+        let (kind, prompt) = if interaction.content.get("operation").is_some() {
+            tool_call_first_awaiting_user_input(&interaction.content)
+                .map(|request| (request.kind.as_str().to_owned(), request.title))
+                .unwrap_or_else(|| ("ask_user".to_owned(), String::new()))
+        } else {
+            (
+                interaction
+                    .content
+                    .get("type")
+                    .or_else(|| interaction.content.get("kind"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("ask_user")
+                    .to_owned(),
+                interaction
+                    .content
+                    .get("prompt")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        };
         presentation.pending_interaction = Some(InteractionRef {
             part_id: interaction.part_id,
-            // The canonical `interaction` shape names the kind `type`; the
-            // legacy flat shape uses `kind`. Read both so display kind is
-            // stable across stored shapes.
-            kind: interaction
-                .content
-                .get("type")
-                .or_else(|| interaction.content.get("kind"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("ask_user")
-                .to_owned(),
-            prompt: interaction
-                .content
-                .get("prompt")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
+            kind,
+            prompt,
             content: interaction.content.clone(),
         });
     }

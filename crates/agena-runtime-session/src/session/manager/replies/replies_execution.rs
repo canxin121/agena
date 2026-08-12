@@ -6,18 +6,17 @@ use super::{
     StreamingToolExecution, ToolError, ToolInvocationExecution, ToolPermissionCheck, Utc,
     ask_user_title, assistant_message_id, completed_lifecycle, execution_control_to_app_error,
     is_authorization_phase_title, operation_authorization, operation_blocks_from_tool_output,
-    operation_permission_approved_actions, pending_operation_for_resolved,
+    operation_from_part, operation_permission_approved_actions, pending_operation_for_resolved,
     pending_tool_part_not_found_error, permission_action_key, push_unique_permission_action,
     resolve_pending_tool, responses_api_request_metadata, run_abort_reason,
     should_execute_pending_tools_concurrently, terminal_operation_title, tool_name,
     update_resolved_tool_message,
 };
-use crate::part::{InteractiveRequestPart, RequestPart};
 use crate::session::Session;
 use crate::session::prompt_window;
 use crate::session::store::{
-    interaction_from_request, new_part_from_content, run_marker_content, text_content,
-    tool_call_from_operation, typed_content_from_value, typed_content_to_value,
+    new_part_from_content, run_marker_content, text_content, tool_call_from_operation,
+    typed_content_from_value, typed_content_to_value,
 };
 use crate::tool::ToolExecutor;
 use agena_domain::{UserInputKind, UserInputRequest, UserInputSource};
@@ -26,7 +25,7 @@ use agena_domain::{
     PermissionDecision, PermissionRequest, PermissionScope, PolicySourceKind,
     PromptCompactionTrigger, RunAbortReason,
 };
-use agena_runtime_contracts::part_content::{InteractionContent, TypedContent, operation_from_tool_call};
+use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
 use agena_storage::store::{Part, PartDelta, PartRole, PartState, RunOutcome};
 use tracing::Instrument;
 
@@ -2638,15 +2637,30 @@ impl SessionManager {
         };
         let authorization = operation_authorization(&session, &resolved);
 
+        // The ask lives INSIDE the operation activity (like permission): the
+        // request record is pushed onto the tool_call part's operation
+        // `user_input` bucket, so one host ask produces exactly one transcript
+        // activity — the operation itself. No separate `interaction` part is
+        // created. Legacy rows (kind == "interaction") are still read by the
+        // dual-source accessor in replies.rs.
         update_resolved_tool_message(&mut session, &resolved, |tool_part| {
+            let mut operation = pending_operation_for_resolved(
+                &resolved,
+                resolved.invocation.clone(),
+                ask_user_title(&request),
+                resolved.lifecycle.clone(),
+                authorization.clone(),
+            );
+            // Preserve any user-input records already recorded on this
+            // operation (a tool may ask more than once before completing) and
+            // add this pending request. `push_pending` is a no-op on a
+            // duplicate request id, mirroring the re-request dedup.
+            if let Some(existing) = operation_from_part(tool_part) {
+                operation.user_input = existing.user_input;
+            }
+            operation.user_input.push_pending(request.clone());
             tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
-                tool_call_from_operation(&pending_operation_for_resolved(
-                    &resolved,
-                    resolved.invocation.clone(),
-                    ask_user_title(&request),
-                    resolved.lifecycle.clone(),
-                    authorization.clone(),
-                )),
+                tool_call_from_operation(&operation),
             ))
             .expect("operation content is always JSON serializable");
             // Same forward-only lifecycle rule as permission requests: an
@@ -2661,91 +2675,13 @@ impl SessionManager {
                 count => format!("Waiting for {count} answers"),
             });
         })?;
-
-        // Present the request as an `interaction` part under the owning run
-        // marker (v2): update an already-pending request for the same id in
-        // place, otherwise append a fresh part through the facade. The part
-        // content is the canonical `interaction` shape (`type`/`prompt`/
-        // `options`/`request`). The reply machinery (`find_pending_user_
-        // input_by_request_id`, `matching_request_part_refs`) correlates on
-        // the flat `request_id`/`tool_part_id`/`operation_id` keys, so mirror
-        // them at the top level alongside the canonical keys; the nested
-        // request id stays authoritative for the TUI and re-request dedup.
-        let mut interaction = interaction_from_request(&RequestPart::UserInput(
-            InteractiveRequestPart::pending(request.clone()),
-        ));
-        interaction.extra.insert(
-            "request_id".to_owned(),
-            serde_json::to_value(request.request_id.as_str())
-                .expect("request id is always JSON serializable"),
-        );
-        interaction.extra.insert(
-            "tool_part_id".to_owned(),
-            serde_json::to_value(resolved.pending.part.part_id)
-                .expect("part id is always JSON serializable"),
-        );
-        interaction.extra.insert(
-            "operation_id".to_owned(),
-            serde_json::to_value(resolved.operation_id.as_str())
-                .expect("operation id is always JSON serializable"),
-        );
-        let interaction_content = interaction.as_value();
-        let existing_request_part = session
-            .parts()
-            .iter()
-            .enumerate()
-            .find(|(_, part)| {
-                part.kind == "interaction"
-                    && part.state.is_in_flight()
-                    && InteractionContent::try_from(&part.content)
-                        .ok()
-                        .and_then(|interaction| interaction.request_id())
-                        .as_deref()
-                        == Some(request.request_id.as_str())
-            })
-            .map(|(part_index, part)| (part_index, part.part_id));
-        let mut changed_part_ids = vec![resolved.pending.part.part_id];
-        if let Some((part_index, part_id)) = existing_request_part {
-            let part_ref = crate::session::model::SessionPartRef {
-                part_index,
-                part_id,
-            };
-            let part = session.part_mut(&part_ref).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending interaction part not found while requesting user input: part={}",
-                    part_id
-                ))
-            })?;
-            part.content = interaction_content;
-            // Same forward-only lifecycle rule as the tool downgrade above: a
-            // re-request must not downgrade an already-in-flight (InProgress)
-            // interaction part — the store rejects `in_progress -> pending`.
-            if !matches!(part.state, PartState::InProgress) {
-                part.state = PartState::Pending;
-            }
-            changed_part_ids.push(part_id);
-        } else {
-            let run_marker_id = assistant_message_id(&session, &resolved.pending.part)?;
-            // A live awaiting-user part is by definition in flight: born
-            // InProgress so the reply can complete via the legal
-            // `in_progress -> completed` edge (the store forbids
-            // `pending -> completed`).
-            let new_part = new_part_from_content(
-                "interaction",
-                PartRole::Assistant,
-                &TypedContent::Interaction(interaction),
-                PartState::InProgress,
-            )?;
-            let created = self
-                .store
-                .append_parts(session.id, run_marker_id, vec![new_part])
-                .await?;
-            let mut projected = session.parts().to_vec();
-            projected.extend(created);
-            session.install_projected_parts(projected);
-        }
-        self.persist_session_changes(session, changed_part_ids, None, state)
-            .await
+        self.persist_session_changes(
+            session,
+            vec![resolved.pending.part.part_id],
+            None,
+            state.clone(),
+        )
+        .await
     }
 
     pub(in crate::session::manager) async fn apply_streaming_tool_execution(
@@ -3234,6 +3170,12 @@ impl SessionManager {
                     .iter()
                     .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone()))),
             );
+            // The completion payload replaces the operation, not its asks:
+            // preserve user-input records so the answered question renders
+            // read-only inside this same terminal activity.
+            if let Some(existing) = operation_from_part(tool_part) {
+                operation.user_input = existing.user_input;
+            }
             tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
                 tool_call_from_operation(&operation),
             ))

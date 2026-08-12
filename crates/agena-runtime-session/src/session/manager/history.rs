@@ -823,10 +823,23 @@ fn pending_interactive_requests_from_session(
             }
         }
     }
-    // Pending user-input requests are in-flight `interaction` parts; the full
-    // typed request payload rides under the canonical content (either shape
-    // decodes into `InteractionContent`, which carries it losslessly).
+    // Pending user-input requests live on the in-flight tool-call part's
+    // operation user-input records (`operation.user_input.awaiting()`), and,
+    // for legacy data, as separate in-flight `interaction` parts.
     for part in session.pending_interactions() {
+        if part.kind == "tool_call" {
+            let Some(operation) = super::replies::operation_from_part(part) else {
+                continue;
+            };
+            for record in operation.user_input.awaiting() {
+                let request =
+                    agena_domain::PendingInteractiveRequest::from(record.request.clone());
+                if seen.insert(format!("{:?}:{}", request.kind(), request.request_id())) {
+                    requests.push(request);
+                }
+            }
+            continue;
+        }
         let Some(request) = agena_runtime_contracts::part_content::InteractionContent::try_from(
             &part.content,
         )
@@ -1413,6 +1426,7 @@ fn project_operation_part(
         call_id: value.call_id,
         invocation: value.invocation.clone(),
         authorization: value.authorization.clone(),
+        user_input: value.user_input.clone(),
         title: value.title.clone(),
         summary: value.summary.clone(),
         model_output: project_model_visible_output(&value.result.model_preview),

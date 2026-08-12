@@ -41,6 +41,21 @@ const request = computed<Record<string, unknown>>(() => {
 })
 
 const title = computed(() => readString(request.value.title) || readString(request.value.prompt) || 'User input')
+/** The called tool's name (the canonical single-activity shape: the ask lives
+ * on the `tool_call` operation, so the badge leads with the invoked tool —
+ * "plan.review" / "interaction.ask" — not an invented label). Legacy
+ * `interaction` parts carry no tool name and fall back to the kind label. */
+const toolName = computed(() => {
+  const operation = (props.part.content || {}).operation
+  if (operation && typeof operation === 'object' && !Array.isArray(operation)) {
+    const invocation = (operation as Record<string, unknown>).invocation
+    if (invocation && typeof invocation === 'object' && !Array.isArray(invocation)) {
+      const name = readString((invocation as Record<string, unknown>).name)
+      if (name) return name
+    }
+  }
+  return null
+})
 const bodyMarkdown = computed(() => readString(request.value.body_markdown) || '')
 const kind = computed(() => readString(request.value.kind) || (request.value.type as string) || 'ask_user')
 
@@ -65,7 +80,7 @@ const questions = computed<UserInputQuestion[]>(() => {
   // Fallback: a single question synthesized from the flattened shape.
   const options = Array.isArray(request.value.options)
     ? request.value.options.map((option) =>
-        typeof option === 'string' ? { label: option } : ((option as Record<string, unknown>) || {}),
+        typeof option === 'string' ? { label: option } : (option as Record<string, unknown>) || {},
       )
     : []
   const prompt = readString(request.value.prompt)
@@ -105,7 +120,7 @@ function onInput(event: Event, index: number) {
 <template>
   <details class="message-input-activity" :open="true">
     <summary class="message-input-activity-head">
-      <span class="badge">{{ kind === 'review' ? 'Plan review' : 'User input' }}</span>
+      <span class="badge">{{ toolName || (kind === 'review' ? 'Plan review' : 'User input') }}</span>
       <strong>{{ title }}</strong>
     </summary>
     <div class="stack" style="margin-top: 10px">
@@ -115,11 +130,7 @@ function onInput(event: Event, index: number) {
           {{ question.header || question.question }}
         </label>
         <div v-if="question.options && question.options.length" class="stack">
-          <label
-            v-for="option in question.options"
-            :key="option.label"
-            class="interaction-choice"
-          >
+          <label v-for="option in question.options" :key="option.label" class="interaction-choice">
             <input
               :type="question.multiple ? 'checkbox' : 'radio'"
               :name="`${requestId}-${questionIndex(index)}`"
@@ -161,18 +172,10 @@ function onInput(event: Event, index: number) {
         />
       </div>
       <div class="button-row" style="margin-top: 12px">
-        <button
-          class="button primary"
-          :disabled="props.isInteractiveRequestBusy(requestId)"
-          @click="submit"
-        >
+        <button class="button primary" :disabled="props.isInteractiveRequestBusy(requestId)" @click="submit">
           Submit
         </button>
-        <button
-          class="button danger"
-          :disabled="props.isInteractiveRequestBusy(requestId)"
-          @click="cancel"
-        >
+        <button class="button danger" :disabled="props.isInteractiveRequestBusy(requestId)" @click="cancel">
           Cancel
         </button>
       </div>

@@ -1649,10 +1649,20 @@ fn render_operation_user_input(
         return false;
     };
     let request = crate::parts::user_input_request_resource(record.request.clone());
-    let title = if request.kind == "review" {
-        "Plan review"
+    // The headline leads with the CALLED TOOL's name — "plan.review" or
+    // "interaction.ask" — not an invented label: the interaction IS this
+    // operation, so its title should be the tool the model invoked. The
+    // question text follows as the summary.
+    let title = tool.invocation.name.trim();
+    let title = if title.is_empty() {
+        // Malformed/legacy operation without an invocation name.
+        if request.kind == "review" {
+            "Plan review"
+        } else {
+            "User input"
+        }
     } else {
-        "User input"
+        title
     };
     let summary = request
         .questions

@@ -44,6 +44,7 @@ pub async fn dispatch_query(
             workspace_id,
             parent_id,
             roots,
+            exclude_subagents,
             search,
         }) => Ok(QueryResult::Sessions(
             http_page_result(state.service().list_sessions(SessionListQuery {
@@ -51,6 +52,7 @@ pub async fn dispatch_query(
                 workspace_id,
                 parent_id,
                 roots,
+                exclude_subagents,
             }))
             .await?,
         )),

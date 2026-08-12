@@ -372,6 +372,11 @@ pub struct SessionListQuery {
     pub parent_id: Option<i64>,
     /// Restrict to root sessions (`parent_id IS NULL`).
     pub roots_only: bool,
+    /// Hide task child sessions (`relation_kind = 'subagent'`). The session
+    /// switcher's default view shows only parent sessions, so it sets this
+    /// instead of forcing `roots_only` (which would also hide user forks and
+    /// rewinds).
+    pub exclude_subagents: bool,
     /// Case-insensitive `title LIKE %search%` filter.
     pub search: Option<String>,
     pub limit: Option<i64>,

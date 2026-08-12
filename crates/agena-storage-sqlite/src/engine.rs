@@ -873,6 +873,9 @@ impl PersistenceEngine for SqliteEngine {
         } else if query.roots_only {
             where_clauses.push("s.parent_id IS NULL".to_owned());
         }
+        if query.exclude_subagents {
+            where_clauses.push("s.is_subagent = 0".to_owned());
+        }
         if let Some(search) = query.search.as_deref()
             && !search.trim().is_empty()
         {

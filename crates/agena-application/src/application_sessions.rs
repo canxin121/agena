@@ -35,6 +35,7 @@ impl Application {
             workspace_id: Some(workspace_id),
             parent_id: Some(parent_id),
             roots: false,
+            exclude_subagents: false,
             search: None,
         })
         .await
@@ -72,6 +73,7 @@ impl Application {
                     workspace_id: Some(root.workspace_id),
                     parent_id: Some(parent_id),
                     roots: false,
+                    exclude_subagents: false,
                     search: None,
                 })
                 .await
@@ -369,6 +371,7 @@ impl Application {
             workspace_id: Some(workspace_id),
             parent_id: None,
             roots: roots_only,
+            exclude_subagents: true,
             search: None,
         })
         .await
@@ -483,6 +486,7 @@ impl Application {
                     workspace_id: query.workspace_id,
                     parent_id: query.parent_id,
                     roots: query.roots,
+                    exclude_subagents: query.exclude_subagents,
                 })
                 .await?;
             cursor = page.page.next_cursor.clone();

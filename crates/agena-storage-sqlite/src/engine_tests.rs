@@ -12,7 +12,7 @@ use agena_storage::{
     WorkspaceRepository,
     store::{
         LeaseAcquire, NewPart, NewSession, PartDelta, PartRole, PartState, PartVisibility,
-        PersistenceEngine, RunOutcome, SessionFacade, SessionStore, SessionView,
+        PersistenceEngine, RunOutcome, SessionFacade, SessionListQuery, SessionStore, SessionView,
     },
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
@@ -1765,5 +1765,75 @@ async fn subagent_helpers_find_create_and_update_subtask_state() {
                 | agena_storage::store::StoreError::InvalidState(_)
         ),
         "duplicate (parent, task) is rejected: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn list_exclude_subagents_filters_task_children_only() {
+    let db = in_memory_db().await;
+    let (engine, parent_id) = setup(db).await;
+    let workspace_id = engine
+        .session_meta(parent_id)
+        .await
+        .expect("parent meta")
+        .workspace_id;
+    // A task child (relation_kind = 'subagent').
+    engine
+        .create_subagent_session(parent_id, "task-9".to_owned(), "sub task".to_owned(), 1_000_000)
+        .await
+        .expect("create subagent");
+    // A regular user child must survive the filter.
+    engine
+        .create_session(NewSession {
+            workspace_id,
+            parent_id: Some(parent_id),
+            relation_kind: SessionRelationKind::Child,
+            cutoff_part_id: None,
+            title: "user child".to_owned(),
+            task_id: None,
+            config_json: None,
+            provider_anchors_json: None,
+        })
+        .await
+        .expect("create child");
+
+    let all = engine
+        .list_session_summaries(SessionListQuery {
+            workspace_id: Some(workspace_id),
+            parent_id: None,
+            roots_only: false,
+            exclude_subagents: false,
+            search: None,
+            limit: None,
+            before: None,
+        })
+        .await
+        .expect("list all");
+    assert_eq!(all.len(), 3, "without the filter every session is listed");
+
+    let parents_only = engine
+        .list_session_summaries(SessionListQuery {
+            workspace_id: Some(workspace_id),
+            parent_id: None,
+            roots_only: false,
+            exclude_subagents: true,
+            search: None,
+            limit: None,
+            before: None,
+        })
+        .await
+        .expect("list excluding subagents");
+    let titles: Vec<&str> = parents_only
+        .iter()
+        .map(|summary| summary.title.as_str())
+        .collect();
+    assert!(
+        !titles.iter().any(|title| *title == "sub task"),
+        "task child must be hidden: {titles:?}"
+    );
+    assert_eq!(
+        parents_only.len(),
+        2,
+        "root + user child remain, task child hidden: {titles:?}"
     );
 }

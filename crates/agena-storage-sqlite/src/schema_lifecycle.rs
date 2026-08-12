@@ -7,15 +7,18 @@
 
 /// Current SQLite schema version written to `PRAGMA user_version`.
 ///
-/// Version 7 removes the scheduler tables. This schema owns the nine chat
-/// tables — `agena_parts`, `agena_session_parts`, `agena_sessions`,
+/// Version 8 adds a stored generated `is_subagent` column to `agena_sessions`
+/// (derived from `relation_kind = 'subagent'`), so any session row reports in
+/// O(1) whether it is a task child — the session switcher filters on it to
+/// show only parent sessions. This schema owns the nine chat tables —
+/// `agena_parts`, `agena_session_parts`, `agena_sessions`,
 /// `agena_execution_leases`, `agena_sequences`, `agena_workspaces`,
 /// `agena_permission_rules`, `agena_usage`, `agena_idempotency` — plus the
 /// model-catalog infrastructure tables. Parts are the only chat-content
 /// entity; runs are `kind='run'` marker parts; session state is derived from
 /// parts + leases; there is no event log, no projection watermark, and no
 /// runtime-state JSON. v1 databases are NOT migrated: they are discarded
-/// (decision D3), so a database at any version other than 0 or 7 is rejected
+/// (decision D3), so a database at any version other than 0 or 8 is rejected
 /// outright.
 ///
 /// Version history:
@@ -28,7 +31,9 @@
 ///   now owns a dedicated SQLite database with its own schema and version
 ///   (`agena-scheduler::schema`), so this database no longer holds
 ///   `agena_scheduler_jobs` / `agena_scheduler_history`.
-pub const CURRENT_SCHEMA_VERSION: i64 = 7;
+/// - 8: `agena_sessions` gains the stored generated `is_subagent` column for
+///   O(1) task-child detection used by the `/session` switcher filter.
+pub const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 #[cfg(test)]
 mod tests {

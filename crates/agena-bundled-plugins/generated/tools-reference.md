@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **24 plugins and 142 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **24 plugins and 144 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, concurrency / streaming / strict runtime flags, examples, an input parameter table, and the full input / output JSON Schema.
 - The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
@@ -27,7 +27,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (9 tools)
 - [`agena.memory`](#agenamemory) — Persistent memory with searchable retrieval and write tools. (5 tools)
 - [`agena.notebook`](#agenanotebook) — Revision-safe Jupyter notebook cell editing. (1 tools)
-- [`agena.plan`](#agenaplan) — Plan orchestration and plan-autorun tools. (4 tools)
+- [`agena.plan`](#agenaplan) — Plan orchestration and plan-autorun tools. (6 tools)
 - [`agena.report`](#agenareport) — Structured review and verification findings. (1 tools)
 - [`agena.schema_lab`](#agenaschema_lab) — Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor. (2 tools)
 - [`agena.session`](#agenasession) — Runtime session tools. (2 tools)
@@ -6182,7 +6182,7 @@ Revision-safe Jupyter notebook cell editing.
 
 ## agena.plan
 
-**Version** `0.1.0` · **Tools** 4
+**Version** `0.1.0` · **Tools** 6
 
 Plan orchestration and plan-autorun tools.
 
@@ -6199,6 +6199,86 @@ Plan orchestration and plan-autorun tools.
 {
   "additionalProperties": false,
   "properties": {},
+  "type": "object"
+}
+```
+
+### edit
+
+`agena.plan.edit` · **Summary**: Edit the current plan's steps and checks.
+
+**Tags**: `mutate` `planning`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Address steps and checks by 1-based index: `step` + `status` (with an optional `note`) updates a step, `step` + `check` + `status` updates a check. This tool NEVER requests user approval and NEVER changes the plan phase — the plan stays in whatever phase it is in. Use `plan.phase` for plan-level phase transitions and `plan.review` to request approval.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `check` | `integer / null` | — | — | 1-based index of the check within the step to update (1 = first check). Requires `step`. |
+| `note` | `string / null` | — | — |  |
+| `status` | `WorkflowPlanStepStatus / null` | — | — |  |
+| `step` | `integer / null` | — | — | 1-based index of the step to update (1 = first step). |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "WorkflowPlanStepStatus": {
+      "enum": [
+        "pending",
+        "in_progress",
+        "blocked",
+        "completed",
+        "skipped"
+      ],
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Edit the current plan's steps and checks. Never requests user approval and never changes the plan phase. Address steps and checks by their 1-based index (step 1 is the first step; check 1 is the first check within the step): use `step` + `status` (with an optional `note`) to update a step, or `step` + `check` + `status` to update a check.",
+  "properties": {
+    "check": {
+      "description": "1-based index of the check within the step to update (1 = first check). Requires `step`.",
+      "format": "uint",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "note": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkflowPlanStepStatus"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000002"
+    },
+    "step": {
+      "description": "1-based index of the step to update (1 = first step).",
+      "format": "uint",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000000"
+    }
+  },
   "type": "object"
 }
 ```
@@ -6241,16 +6321,115 @@ Plan orchestration and plan-autorun tools.
 }
 ```
 
-### set
+### phase
 
-`agena.plan.set` · **Summary**: Create or replace the current plan.
+`agena.plan.phase` · **Summary**: Transition the current plan's phase.
 
 **Tags**: `mutate` `planning`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `tasks.run` exploration when the scope spans multiple areas), clarify with `ask`, and refine. By default the plan must be approved by the user before it becomes active: pass `request_approval: true` (or omit it) unless the user has already declared that the plan can be created directly without approval, in which case pass `request_approval: false`. Present the finished plan for approval through the plan phase transition; never ask whether the plan is acceptable via `ask`.
+> Plan-level phase transitions between `planning`, `active`, `blocked`, `completed`, and `cancelled`, with optional `autorun` and (for `completed`) `summary`. Transitions into `active`, `blocked`, or `completed` require user approval by default: pass `request_approval: true` (or omit it) to route them through the same review dialog as `plan.review`, or `request_approval: false` (only when the user has already declared the change needs no approval) to apply them directly. To complete a plan with steps, mark the required steps/checks `completed` via `plan.edit` first, then call this tool separately with `phase: completed`.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `autorun` | `boolean / null` | — | — | Whether an approved active plan should keep running automatically. |
+| `phase` | `WorkflowPlanPhase / null` | — | — | Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`. |
+| `request_approval` | `boolean / null` | — | — | Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval. |
+| `summary` | `string / null` | — | — | Optional completion summary. This is only applied when `phase` is `completed`. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "WorkflowPlanPhase": {
+      "enum": [
+        "planning",
+        "active",
+        "blocked",
+        "completed",
+        "cancelled"
+      ],
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Transition the current plan's phase. `phase` moves the plan between `planning`, `active`, `blocked`, `completed`, and `cancelled`; `autorun` and `summary` are optional modifiers. A transition into `active`, `blocked`, or `completed` requires user approval by default: pass `request_approval: true` (or omit it) to route it through the same review dialog as `plan.review`, or `request_approval: false` (only when the user has already declared the change needs no approval) to apply it directly. To complete a plan with steps, first mark the relevant steps or checks `completed` via `plan.edit`, then make a separate call with `phase: completed`.",
+  "properties": {
+    "autorun": {
+      "description": "Whether an approved active plan should keep running automatically.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "phase": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkflowPlanPhase"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`.",
+      "x-agena-order": "000000"
+    },
+    "request_approval": {
+      "description": "Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "summary": {
+      "description": "Optional completion summary. This is only applied when `phase` is `completed`.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    }
+  },
+  "type": "object"
+}
+```
+
+### review
+
+`agena.plan.review` · **Summary**: Request user approval of the current plan before it becomes active.
+
+**Tags**: `mutate` `planning`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> This is the only plan tool that requests user approval and may pause for the user. It reviews the current saved plan and, when the user approves, moves it from `planning` to `active`. Call it after creating or refining the plan with `plan.set` / `plan.edit`. If the user leaves feedback or rejects, the plan stays in `planning` so you can revise it and propose again.
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "description": "Request user approval of the current saved plan. This is the only plan tool that can pause for the user.",
+  "properties": {},
+  "type": "object"
+}
+```
+
+### set
+
+`agena.plan.set` · **Summary**: Create or replace the current plan without requesting approval.
+
+**Tags**: `mutate` `planning`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. This tool never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` only when the user has already declared that the plan can be created directly without approval — the plan then becomes active immediately. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `tasks.run` exploration when the scope spans multiple areas), clarify with `ask`, and refine with `plan.edit`. When the plan is complete, call `plan.review` to present it for approval; never ask whether the plan is acceptable via `ask`.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -6258,7 +6437,7 @@ Plan orchestration and plan-autorun tools.
 | `autorun` | `boolean / null` | — | — |  |
 | `document_markdown` | `string / null` | — | — |  |
 | `objective` | `string` | ✓ | — |  |
-| `request_approval` | `boolean / null` | — | — | Whether to request user approval before the plan becomes active. Defaults to true when omitted: request approval unless the user has already declared that the plan can be created directly without approval. |
+| `request_approval` | `boolean / null` | — | — | Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only when the user has already declared that the plan needs no approval; the plan then becomes active immediately. |
 | `steps` | `array<WorkflowPlanStepInput>` | — | — | Ordered plan steps. Each step item uses `title`; nested checks use `text`. |
 | `title` | `string / null` | — | — |  |
 
@@ -6352,7 +6531,7 @@ Plan orchestration and plan-autorun tools.
     }
   },
   "additionalProperties": false,
-  "description": "Create or overwrite the current active-session plan in planning. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. `request_approval` controls whether the user must approve the plan before it becomes active; it defaults to requesting approval unless the user has already declared the plan needs none.",
+  "description": "Create or overwrite the current active-session plan. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. This tool never blocks on the user: with `request_approval` true (the default) the plan is saved in the `planning` phase and you must call `plan.review` to request user approval before it becomes active; with `request_approval: false` it is applied directly and becomes active immediately, which you should only do when the user has already declared the plan needs no approval.",
   "properties": {
     "autorun": {
       "type": [
@@ -6373,7 +6552,7 @@ Plan orchestration and plan-autorun tools.
       "x-agena-order": "000000"
     },
     "request_approval": {
-      "description": "Whether to request user approval before the plan becomes active. Defaults to true when omitted: request approval unless the user has already declared that the plan can be created directly without approval.",
+      "description": "Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only when the user has already declared that the plan needs no approval; the plan then becomes active immediately.",
       "type": [
         "boolean",
         "null"
@@ -6399,136 +6578,6 @@ Plan orchestration and plan-autorun tools.
   "required": [
     "objective"
   ],
-  "type": "object"
-}
-```
-
-### update
-
-`agena.plan.update` · **Summary**: Update the current plan.
-
-**Tags**: `mutate` `planning`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Keep plan-level updates separate from step/check updates: do not send `phase` / `request_approval` together with `step`, `check`, `status`, or `note`. Address steps and checks by 1-based index (`step`, `check`). For plan-level phase changes, pass `request_approval: true` (or omit it) to ask the user to approve the transition, unless the user has already declared it needs no approval, in which case pass `request_approval: false`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `autorun` | `boolean / null` | — | — | Whether an approved active plan should keep running automatically. |
-| `check` | `integer / null` | — | — | 1-based index of the check within the step to update (1 = first check). Requires `step`. |
-| `note` | `string / null` | — | — |  |
-| `phase` | `WorkflowPlanPhase / null` | — | — | Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`. |
-| `request_approval` | `boolean / null` | — | — | Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval. |
-| `status` | `WorkflowPlanStepStatus / null` | — | — |  |
-| `step` | `integer / null` | — | — | 1-based index of the step to update (1 = first step). |
-| `summary` | `string / null` | — | — | Optional completion summary. This is only applied when `phase` is `completed`. |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "WorkflowPlanPhase": {
-      "enum": [
-        "planning",
-        "active",
-        "blocked",
-        "completed",
-        "cancelled"
-      ],
-      "type": "string"
-    },
-    "WorkflowPlanStepStatus": {
-      "enum": [
-        "pending",
-        "in_progress",
-        "blocked",
-        "completed",
-        "skipped"
-      ],
-      "type": "string"
-    }
-  },
-  "additionalProperties": false,
-  "description": "Update the current plan. Use `phase` / `autorun` / `request_approval` for plan-level state changes, `step` + `status` to update a step, or `step` + `check` + `status` to update a check. Steps and checks are addressed by their 1-based index (step 1 is the first step; check 1 is the first check within the step). Do not combine plan-level fields (`phase`, `autorun`, `summary`, `request_approval`) with step/check fields. To complete a plan with steps, first mark the relevant steps or checks `completed`, then make a separate plan-level update with `phase: completed`. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`.",
-  "properties": {
-    "autorun": {
-      "description": "Whether an approved active plan should keep running automatically.",
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "check": {
-      "description": "1-based index of the check within the step to update (1 = first check). Requires `step`.",
-      "format": "uint",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "note": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000007"
-    },
-    "phase": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/WorkflowPlanPhase"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`.",
-      "x-agena-order": "000000"
-    },
-    "request_approval": {
-      "description": "Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval.",
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "status": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/WorkflowPlanStepStatus"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "x-agena-order": "000006"
-    },
-    "step": {
-      "description": "1-based index of the step to update (1 = first step).",
-      "format": "uint",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "summary": {
-      "description": "Optional completion summary. This is only applied when `phase` is `completed`.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    }
-  },
   "type": "object"
 }
 ```

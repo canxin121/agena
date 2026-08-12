@@ -266,7 +266,7 @@ export function partBody(part: MessagePart): string {
   }
 
   if (part.kind === 'hook' || type === 'hook') {
-    return readString(content.detail) || readString(content.summary) || part.summary || 'Hook activity'
+    return readString(content.message) || readString(content.detail) || readString(content.summary) || part.summary || 'Hook activity'
   }
 
   if (part.kind === 'compaction' || type === 'compaction') {
@@ -440,7 +440,7 @@ export function partBlocks(part: MessagePart): RenderBlock[] {
     return [
       {
         title: readString(content?.hook) || 'Hook',
-        body: readString(content?.detail) || readString(content?.summary) || part.summary || 'Hook activity',
+        body: readString(content?.message) || readString(content?.detail) || readString(content?.summary) || part.summary || 'Hook activity',
         kind: 'input_activity' as const,
         activityLabel: 'Hook',
       },

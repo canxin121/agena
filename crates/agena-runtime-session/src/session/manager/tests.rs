@@ -2330,3 +2330,233 @@ async fn host_ask_user_interaction_part_born_in_progress_and_reply_completes() {
         "the replied interaction part completes to PartState::Completed"
     );
 }
+
+#[tokio::test]
+async fn continuation_appends_into_the_last_assistant_reply_without_a_user_run() {
+    let (manager, _database) = test_manager_with_database().await;
+    let session = create(&manager, "assistant continuation").await;
+
+    // A user message, then a real assistant reply (text part under an
+    // assistant `continue` run marker).
+    let session = append_message(
+        &manager,
+        session,
+        Role::User,
+        vec![TypedContent::Text(text_content("user question"))],
+    )
+    .await;
+    let reply_run_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            run_marker_content("continue", None, None, None, None),
+        )
+        .await
+        .expect("start assistant reply run");
+    manager
+        .store
+        .append_parts(
+            session.id,
+            reply_run_id,
+            vec![new_part_from_content(
+                "text",
+                PartRole::Assistant,
+                &TypedContent::Text(text_content("the answer")),
+                PartState::Completed,
+            )
+            .expect("build reply text part")],
+        )
+        .await
+        .expect("append reply text part");
+    // Reload so the projection carries the authoritative run marker.
+    let session = manager
+        .get_session(session.id)
+        .await
+        .expect("reload with reply marker");
+
+    let message_count_before = parts_into_runs(session.parts()).len();
+    // Inject a continuation: it must extend the assistant reply in place and
+    // return `None` (no fresh marker), never fabricate a user run.
+    let (continued, continuation_marker) = manager
+        .inject_continuation_message(session, "keep going".to_owned())
+        .await
+        .expect("inject continuation");
+    assert_eq!(continuation_marker, None, "reply extension reuses no run marker");
+
+    let runs = parts_into_runs(continued.parts());
+    assert_eq!(
+        runs.len(),
+        message_count_before,
+        "continuation must not add a run marker (no user-run inflation)"
+    );
+    let reply = runs
+        .iter()
+        .find(|run| run.first().is_some_and(|part| part.part_id == reply_run_id))
+        .expect("the assistant reply run is present");
+    let text_parts = reply
+        .iter()
+        .filter(|part| part.kind == "text")
+        .map(|part| {
+            part.content
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        text_parts
+            .iter()
+            .any(|text| text.contains("keep going")),
+        "the continuation text lands inside the assistant reply's text part: {text_parts:?}"
+    );
+    let last_user = continued
+        .parts()
+        .iter()
+        .rev()
+        .find(|part| part.is_run_marker() && part.role == PartRole::User);
+    assert_eq!(
+        last_user.map(|part| part.part_id),
+        runs.first().and_then(|run| run.first().map(|part| part.part_id)),
+        "the user message stays the session's last user message; the continuation is not a user turn"
+    );
+}
+
+#[tokio::test]
+async fn continuation_without_an_assistant_reply_opens_a_fresh_continue_marker() {
+    let (manager, _database) = test_manager_with_database().await;
+    let session = create(&manager, "failed-turn continuation").await;
+    let session = append_message(
+        &manager,
+        session,
+        Role::User,
+        vec![TypedContent::Text(text_content("user question"))],
+    )
+    .await;
+
+    // No assistant reply exists: the continuation must open a fresh assistant
+    // `continue` run and append the text under it.
+    let (continued, continuation_marker) = manager
+        .inject_continuation_message(session, "retry after failure".to_owned())
+        .await
+        .expect("inject continuation");
+    let marker_id = continuation_marker.expect("a fresh continue marker was opened");
+    let marker = continued
+        .parts()
+        .iter()
+        .find(|part| part.part_id == marker_id)
+        .expect("fresh marker present in projection");
+    assert_eq!(marker.role, PartRole::Assistant);
+    assert_eq!(
+        marker
+            .content
+            .get("run_kind")
+            .and_then(serde_json::Value::as_str),
+        Some("continue")
+    );
+    let text_parts = continued
+        .parts()
+        .iter()
+        .filter(|part| part.part_id != marker_id && part.role == PartRole::Assistant)
+        .collect::<Vec<_>>();
+    assert!(
+        text_parts.iter().any(|part| part
+            .content
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|text| text.contains("retry after failure"))),
+        "continuation text is recorded as an assistant part, not a user message"
+    );
+}
+
+#[tokio::test]
+async fn hook_run_marker_is_an_assistant_run_completed_not_running() {
+    use agena_plugin_host::{HookRunRecord, HookRunStatus};
+
+    let (manager, _database) = test_manager_with_database().await;
+    let session = create(&manager, "hook run").await;
+    let session_id = session.id;
+
+    let runs = vec![HookRunRecord::new(
+        "agent.stop",
+        "test-plugin",
+        Some(session_id),
+        HookRunStatus::Applied,
+        "stopped cleanly",
+        None,
+    )
+    .with_message(Some("continue with the next plan step".to_owned()))];
+    let recorded = manager
+        .record_hook_runs(session, runs, manager.execution_state())
+        .await
+        .expect("record hook runs");
+
+    let marker = recorded
+        .parts()
+        .iter()
+        .rev()
+        .find(|part| {
+            part.is_run_marker()
+                && part
+                    .content
+                    .get("run_kind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("execution")
+        })
+        .expect("an execution run marker was recorded");
+    assert_eq!(
+        marker.role,
+        PartRole::Assistant,
+        "hook runs are assistant activity, not a System identity"
+    );
+    assert_eq!(
+        marker.state,
+        PartState::Completed,
+        "a finished hook run must not leave the session in a Running/Interrupted state"
+    );
+    let hook_parts = recorded
+        .parts()
+        .iter()
+        .filter(|part| part.kind == "hook")
+        .collect::<Vec<_>>();
+    assert_eq!(hook_parts.len(), 1, "one hook part per recorded run");
+    assert_eq!(
+        hook_parts[0]
+            .content
+            .get("hook")
+            .and_then(serde_json::Value::as_str),
+        Some("agent.stop")
+    );
+    assert_eq!(
+        hook_parts[0]
+            .content
+            .get("message")
+            .and_then(serde_json::Value::as_str),
+        Some("continue with the next plan step"),
+        "the hook-sent continuation is carried by the hook part's message"
+    );
+    assert!(
+        recorded
+            .parts()
+            .iter()
+            .filter(|part| part.kind == "text" && part.role == PartRole::Assistant)
+            .all(|part| part
+                .content
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|text| !text.contains("continue with the next plan step"))),
+        "the continuation is not injected as a separate assistant text part"
+    );
+
+    let state = manager
+        .session_store()
+        .session_state(session_id)
+        .await
+        .expect("derive session state");
+    assert_eq!(
+        state.state,
+        SessionState::Ready,
+        "a completed hook run leaves the session Ready, not Running"
+    );
+}

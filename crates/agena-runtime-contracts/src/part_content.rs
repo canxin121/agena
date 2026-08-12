@@ -348,6 +348,11 @@ impl TryFrom<&Value> for NoticeContent {
 }
 
 /// `hook` — one observed plugin hook run. `plugin_id` is the 19.4 extension.
+///
+/// `message` is the hook-sent continuation (for example the workflow plan
+/// autorun's `agent.stop` continuation). It is carried by the hook activity
+/// itself — never injected as a separate assistant message — and is projected
+/// back into the model prompt as assistant text on the next run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct HookContent {
     #[serde(default)]
@@ -358,6 +363,10 @@ pub struct HookContent {
     pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The message the hook sent to keep the run going, when it blocked the
+    /// stop. Persisted on the hook part so the activity carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

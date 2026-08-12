@@ -206,6 +206,23 @@ describe('v2 part rendering (4.1.1 kinds)', () => {
     expect(notice[0]?.activityLabel).toBe('Notice')
     expect(notice[0]?.title).toBe('hook_started')
 
+    const hook = partBlocks({
+      id: 40,
+      message_id: 'run:1',
+      part_index: 0,
+      status: 'completed',
+      kind: 'hook',
+      created_at: '2026-07-13T00:00:00Z',
+      content: {
+        hook: 'agent.stop',
+        summary: 'agent.stop hook blocked stop: workflow plan autorun',
+        detail: '<plan_context>continue with the next plan step</plan_context>',
+        message: '<plan_context>continue with the next plan step</plan_context>',
+      },
+    })
+    expect(hook[0]?.activityLabel).toBe('Hook')
+    expect(hook[0]?.body).toContain('continue with the next plan step')
+
     const compaction = partBlocks({
       id: 5,
       message_id: 'run:1',

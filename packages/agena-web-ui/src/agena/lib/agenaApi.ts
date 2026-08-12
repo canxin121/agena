@@ -942,6 +942,10 @@ export type MessagePart = {
   operation_id?: string | null
   created_at: string
   content?: Record<string, unknown> | null
+  /** The typed user-input ask this part is awaiting (a `tool_call` operation
+   * with an unanswered `operation.user_input` record). Projected client-side
+   * from the part content; absent for answered or non-interactive parts. */
+  userInput?: UserInputRequest | null
 }
 
 export type AttachmentKind = 'image' | 'audio' | 'video' | 'pdf' | 'file'
@@ -1045,6 +1049,28 @@ export type UserInputRequest = {
   created_at: string
 }
 
+export type UserInputReply = {
+  request_id: string
+  kind?: string
+  answers?: Record<string, string[]>
+  reason?: string | null
+}
+
+/** One request/reply pair attached to a tool-call operation activity. */
+export type OperationUserInputRecord = {
+  request: UserInputRequest
+  reply?: UserInputReply | null
+  replied_at_ms?: number | null
+}
+
+/** Interactive ask history owned by one tool Operation. Mirrors the runtime's
+ * `OperationUserInput`: an ask is not transcript content of its own — the
+ * request and its reply live beside the invocation they govern inside the
+ * `tool_call` operation, so one host ask produces exactly one activity. */
+export type OperationUserInput = {
+  requests: OperationUserInputRecord[]
+}
+
 export type PendingInteractiveRequest =
   ({ kind: 'permission' } & PermissionRequest) | ({ kind: 'user_input' } & UserInputRequest)
 
@@ -1130,6 +1156,36 @@ export interface SessionPart {
   parent_part_id?: number | null
   run_id?: number | null
   revision?: number
+  /** The typed user-input ask this tool_call part is awaiting, projected
+   * client-side from `content.operation.user_input` (the first unanswered
+   * record). Not part of the wire payload; see [`readSessionPartAwaitingUserInput`]. */
+  userInput?: UserInputRequest | null
+}
+
+/**
+ * The user-input ask a `tool_call` part is awaiting, if any. Reads the first
+ * unanswered (`reply == null`) record inside `content.operation.user_input` —
+ * the single-activity shape where one host ask is ONE tool_call activity. Falls
+ * back to a pre-projected `part.userInput` when present.
+ */
+export function readSessionPartAwaitingUserInput(part: SessionPart): UserInputRequest | null {
+  if (part.userInput) return part.userInput
+  if (part.kind !== 'tool_call') return null
+  const operation = part.content?.operation
+  if (!operation || typeof operation !== 'object' || Array.isArray(operation)) return null
+  const userInput = (operation as Record<string, unknown>).user_input
+  if (!userInput || typeof userInput !== 'object' || Array.isArray(userInput)) return null
+  const requests = (userInput as { requests?: unknown }).requests
+  if (!Array.isArray(requests)) return null
+  for (const record of requests) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) continue
+    const { request, reply } = record as { request?: unknown; reply?: unknown }
+    if (reply != null) continue
+    if (request && typeof request === 'object' && !Array.isArray(request)) {
+      return request as UserInputRequest
+    }
+  }
+  return null
 }
 
 /**

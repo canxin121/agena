@@ -1,3 +1,4 @@
+import { readSessionPartAwaitingUserInput } from '@/agena/lib/agenaApi'
 import type { MessagePart, MessageResource, SessionPart } from '@/agena/lib/agenaApi'
 
 import { formatUsageCount, formatUsageUsd } from './chatUsageModel'
@@ -94,6 +95,10 @@ function sessionPartToMessagePart(part: SessionPart, messageId: string, partInde
     operation_id: part.kind === 'tool_call' ? String(part.part_id) : null,
     created_at: new Date(part.created_at_ms).toISOString(),
     content: part.content || null,
+    // The single-activity interaction surface: a tool_call awaiting a host
+    // ask carries its request here so the render pipeline can treat it as a
+    // pending interaction part without re-parsing `content.operation`.
+    userInput: readSessionPartAwaitingUserInput(part),
   }
 }
 
@@ -362,6 +367,9 @@ export function partBlocks(part: MessagePart): RenderBlock[] {
   }
 
   if (part.kind === 'tool_call' || content?.type === 'tool_call') {
+    // A tool_call awaiting a host ask is the pending-interaction surface, not
+    // a tool block: it renders as the foldable inline form instead.
+    if (part.userInput) return []
     const toolName = readString(content?.name) || readString(content?.plugin) || 'tool'
     const input = toolCallInputText(content)
     const blocks: RenderBlock[] = [
@@ -755,6 +763,9 @@ export function pendingInteractionParts(message: MessageResource): MessagePart[]
 
 function isPendingInteractionPart(part: MessagePart): boolean {
   if (part.status !== 'pending' && part.status !== 'in_progress') return false
+  // The single-activity shape: a `tool_call` operation with an unanswered
+  // `user_input` record IS the interaction surface (one ask = one activity).
+  if (part.userInput) return true
   const content = part.content || null
   return part.kind === 'interaction' || content?.type === 'interaction'
 }

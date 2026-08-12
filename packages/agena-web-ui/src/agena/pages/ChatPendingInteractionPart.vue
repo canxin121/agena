@@ -24,9 +24,15 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null
 }
 
-/** The full typed request when present (`content.request`), else the flattened
- * `prompt`/`options` shape older payloads carry. */
+/** The full typed request. Priority: the projected `userInput` (the
+ * single-activity shape — a `tool_call` operation's first unanswered
+ * `operation.user_input` record), then the legacy `content.request` of an
+ * `interaction` part, else the flattened `prompt`/`options` shape older
+ * payloads carry. */
 const request = computed<Record<string, unknown>>(() => {
+  if (props.part.userInput && typeof props.part.userInput === 'object') {
+    return props.part.userInput as Record<string, unknown>
+  }
   const content = (props.part.content || {}) as Record<string, unknown>
   if (content.request && typeof content.request === 'object') {
     return content.request as Record<string, unknown>

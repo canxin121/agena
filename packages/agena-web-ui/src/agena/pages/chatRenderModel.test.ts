@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import type { MessagePart, MessageResource, SessionPart } from '@/agena/lib/agenaApi'
+import type { MessagePart, MessageResource, SessionPart, UserInputRequest } from '@/agena/lib/agenaApi'
 
 import { partBlocks, partsToMessages, pendingInteractionParts, rewindMessageComposerText } from './chatRenderModel'
 
@@ -84,6 +84,36 @@ function runPart(partId: number, runKind = 'user_send', overrides: Partial<Sessi
   })
 }
 
+/** The single-activity ask shape: a tool_call part whose flattened content
+ * carries `operation.user_input` with one unanswered request. */
+function operationAskContent(requestOverrides: Partial<UserInputRequest> = {}): Record<string, unknown> {
+  return {
+    name: 'host.ask_user',
+    input: { question: '…' },
+    operation: {
+      user_input: {
+        requests: [
+          {
+            request: {
+              request_id: 'host-input:1:2:0',
+              session_id: 7,
+              title: 'Approve New Plan',
+              body_markdown: '## Proposed Plan',
+              kind: 'review',
+              source: 'host',
+              questions: [],
+              created_at: '2026-07-13T00:00:00Z',
+              ...requestOverrides,
+            },
+            reply: null,
+            replied_at_ms: null,
+          },
+        ],
+      },
+    },
+  }
+}
+
 describe('v2 parts projection (partsToMessages)', () => {
   test('groups content parts under their run marker, ordered by created_at_ms then part_id', () => {
     const parts: SessionPart[] = [
@@ -150,6 +180,27 @@ describe('v2 parts projection (partsToMessages)', () => {
     expect(messages[0]?.usage).toEqual({ requests: 1, input_tokens: 10 })
     expect(rewindMessageComposerText(messages[0]!)).toBe('')
   })
+
+  test('projects userInput from a tool_call awaiting an operation ask', () => {
+    const parts: SessionPart[] = [
+      runPart(600),
+      sessionPart({
+        part_id: 601,
+        kind: 'tool_call',
+        role: 'assistant',
+        run_id: 600,
+        state: 'in_progress',
+        content: operationAskContent(),
+        created_at_ms: 1_800_000_000_001,
+      }),
+    ]
+
+    const messages = partsToMessages(parts, 7)
+    const toolPart = messages[0]?.parts?.find((part) => part.kind === 'tool_call')
+    expect(toolPart?.userInput?.request_id).toBe('host-input:1:2:0')
+    expect(toolPart?.userInput?.kind).toBe('review')
+    expect(toolPart?.userInput?.body_markdown).toBe('## Proposed Plan')
+  })
 })
 
 describe('v2 part rendering (4.1.1 kinds)', () => {
@@ -191,6 +242,30 @@ describe('v2 part rendering (4.1.1 kinds)', () => {
     })
     expect(resultBlocks[0]?.title).toBe('Result')
     expect(resultBlocks[0]?.body).toBe('# README\n')
+  })
+
+  test('renders no tool block for a tool_call awaiting a host ask (it is the form)', () => {
+    const blocks = partBlocks({
+      id: 5,
+      message_id: 'run:1',
+      part_index: 1,
+      status: 'in_progress',
+      kind: 'tool_call',
+      created_at: '2026-07-13T00:00:00Z',
+      content: operationAskContent(),
+      userInput: {
+        request_id: 'host-input:1:2:0',
+        session_id: 7,
+        title: 'Approve New Plan',
+        body_markdown: '## Proposed Plan',
+        kind: 'review',
+        source: 'host',
+        questions: [],
+        created_at: '2026-07-13T00:00:00Z',
+      },
+    })
+
+    expect(blocks).toEqual([])
   })
 
   test('renders notice, compaction, and error parts as labelled blocks', () => {
@@ -333,6 +408,57 @@ describe('pendingInteractionParts', () => {
     const message = userMessage([part])
 
     expect(pendingInteractionParts(message).length).toBe(1)
+  })
+
+  test('treats a tool_call awaiting an operation user_input as the interaction part', () => {
+    const part: MessagePart = {
+      id: 91,
+      message_id: 42,
+      part_index: 0,
+      status: 'in_progress',
+      kind: 'tool_call',
+      created_at: '2026-07-13T00:00:00Z',
+      content: operationAskContent(),
+      userInput: {
+        request_id: 'host-input:1:2:0',
+        session_id: 7,
+        title: 'Approve New Plan',
+        body_markdown: '## Proposed Plan',
+        kind: 'review',
+        source: 'host',
+        questions: [],
+        created_at: '2026-07-13T00:00:00Z',
+      },
+    }
+    const answered: MessagePart = {
+      ...part,
+      id: 92,
+      userInput: null,
+      content: {
+        ...operationAskContent(),
+        operation: {
+          user_input: {
+            requests: [
+              {
+                request: {
+                  request_id: 'host-input:1:2:0',
+                  title: 'Approve New Plan',
+                  kind: 'review',
+                  source: 'host',
+                  questions: [],
+                  created_at: '2026-07-13T00:00:00Z',
+                },
+                reply: { request_id: 'host-input:1:2:0', kind: 'selection', answers: { '0': ['Approve'] } },
+                replied_at_ms: 1_800_000_000_500,
+              },
+            ],
+          },
+        },
+      },
+    }
+
+    const pending = pendingInteractionParts(userMessage([answered, part]))
+    expect(pending.map((item) => item.id)).toEqual([91])
   })
 })
 

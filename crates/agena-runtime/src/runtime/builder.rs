@@ -130,10 +130,24 @@ impl AgenaRuntime {
         let (activity_tx, activity_rx) =
             tokio::sync::mpsc::channel::<agena_domain::BackgroundActivityChangedEvent>(256);
         let activity_registry = crate::activity::ActivityRegistry::new(activity_tx);
+        // Background-completion bridge: correlates launched-in-background
+        // operations (monitored shells, delegated tasks) with their transcript
+        // parts. The manager may not exist yet on a control-only bootstrap;
+        // the bridge tolerates `None` and simply never terminalizes parts.
+        let background_completion =
+            crate::activity::BackgroundCompletionBridge::new(None, activity_registry.clone());
         let monitor_registry = tokio::runtime::Handle::try_current().ok().map(|handle| {
             let registry = crate::MonitorRegistry::from_handle(handle);
             let bridge = crate::activity::MonitorActivityBridge {
                 registry: activity_registry.clone(),
+                on_finished: std::sync::Arc::new(std::sync::Mutex::new(Some(
+                    std::sync::Arc::new({
+                        let completion = background_completion.clone();
+                        move |summary: &agena_domain::ProcessSummary| {
+                            completion.complete_shell(summary);
+                        }
+                    }),
+                ))),
             };
             registry.with_monitor_listener(Arc::new(bridge))
         });
@@ -156,6 +170,10 @@ impl AgenaRuntime {
             .await?,
         );
 
+        // Late-bind the session manager now that the snapshot exists; the
+        // monitor bridge was assembled before it and only holds the bridge.
+        background_completion.set_manager(initial_snapshot.session_manager());
+
         let runtime = AgenaRuntime {
             inner: Arc::new(agena_runtime::RuntimeProcessState::new(
                 loader,
@@ -171,6 +189,7 @@ impl AgenaRuntime {
             )),
             live_signals: Arc::new(agena_runtime::LiveSignalHub::new(256)),
             subtask_bridge: Arc::new(std::sync::Mutex::new(None)),
+            background_completion,
         };
 
         // Project runtime maintenance tasks (marketplace sync, catalog
@@ -233,10 +252,12 @@ impl AgenaRuntime {
         };
         let registry = self.activities.registry.clone();
         let store = manager.session_store();
+        let completion_observer = self.background_completion.observer();
         let subscription = store.subscribe_all(Arc::new(move |change| {
-            if let agena_storage::store::SessionChange::SessionMetaUpdated { meta, .. } = change {
-                crate::activity::upsert_task_activity_from_meta(&registry, &meta);
+            if let agena_storage::store::SessionChange::SessionMetaUpdated { meta, .. } = &change {
+                crate::activity::upsert_task_activity_from_meta(&registry, meta);
             }
+            completion_observer(change);
         }));
         // Retain the handle for the runtime's lifetime; dropping it would
         // unsubscribe (15.5).
@@ -1539,6 +1560,11 @@ pub(crate) struct AgenaRuntime {
     /// Holds the subtask→activity facade subscription for the runtime's
     /// lifetime. The handle must not be dropped or it unsubscribes (15.5).
     subtask_bridge: Arc<std::sync::Mutex<Option<agena_storage::store::GlobalSubscription>>>,
+    /// Correlates launched-in-background operations with their transcript
+    /// parts. The observer subscription it creates is held by
+    /// `subtask_bridge`; the completion signals reach it through the monitor
+    /// `on_finished` callback and the facade `SessionMetaUpdated` events.
+    background_completion: crate::activity::BackgroundCompletionBridge,
 }
 
 pub(crate) type AgenaRuntimeInner = agena_runtime::RuntimeProcessState<

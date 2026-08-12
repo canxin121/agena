@@ -567,6 +567,22 @@ impl From<&Failure> for UserProblem {
     }
 }
 
+impl From<UserProblem> for Failure {
+    fn from(problem: UserProblem) -> Self {
+        Self {
+            id: problem.id,
+            code: problem.code,
+            category: problem.category,
+            responsibility: problem.responsibility,
+            retry: problem.retry,
+            recovery: problem.recovery,
+            impact: problem.impact,
+            user: problem.user,
+            model: None,
+        }
+    }
+}
+
 /// Common codes. Subsystems may add typed constants in their own modules;
 /// callers must not branch on display strings.
 pub mod code {

@@ -14,6 +14,6 @@ pub(crate) mod state;
 pub(crate) use registry::ActivityRegistry;
 pub use service::{ActivityControlError, RuntimeActivityService};
 pub(crate) use state::{
-    ActivityRuntimeState, MonitorActivityBridge, RuntimeTaskActivityBridge, read_shell_logs,
-    read_task_logs, upsert_task_activity_from_meta,
+    ActivityRuntimeState, BackgroundCompletionBridge, MonitorActivityBridge,
+    RuntimeTaskActivityBridge, read_shell_logs, read_task_logs, upsert_task_activity_from_meta,
 };

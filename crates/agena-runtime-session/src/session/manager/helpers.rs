@@ -178,6 +178,56 @@ pub(super) fn custom_payload_value(details: &ToolOutput) -> Option<serde_json::V
     details.to_json_payload()
 }
 
+/// Whether a completed tool execution launched work that keeps running after
+/// the tool call returned (a monitored shell process or a delegated task).
+/// Such operations must keep rendering in-progress on their transcript part
+/// until the background work actually finishes; the returned marker correlates
+/// the part with the runtime completion signal.
+pub(super) fn background_operation_from_execution(
+    invocation: &ToolInvocation,
+    details: &ToolOutput,
+) -> Option<crate::part::BackgroundOperation> {
+    // Delegated task: `agena.tasks.create` returns immediately while the child
+    // session keeps running in the background. The generated task id lives in
+    // the output payload (`tasks[0].task_id`), not the input (the caller may
+    // omit `task_id` and let the tool generate one).
+    if matches!(
+        invocation.name.as_str(),
+        "agena.tasks.create" | "tasks.create" | "agena_tasks_create"
+    ) {
+        let task_id = custom_payload_value(details)
+            .and_then(|value| value.get("tasks").cloned())
+            .and_then(|value| value.as_array().cloned())
+            .and_then(|tasks| tasks.into_iter().next())
+            .and_then(|task| task.get("task_id").cloned())
+            .and_then(|task_id| task_id.as_str().map(str::to_owned));
+        return task_id.map(|task_id| crate::part::BackgroundOperation {
+            kind: "task".to_string(),
+            id: task_id,
+        });
+    }
+    // Monitored shell process: the payload carries `action: "run"`,
+    // `background: true`, and the process id.
+    let payload_tool_name = payload_tool_name_for_invocation(invocation);
+    if let Some(crate::tool::ToolPayloadOutput::Shell {
+        action,
+        background,
+        process_id,
+        ..
+    }) = crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name.as_str(), details)
+    {
+        if action == "run" && background {
+            if let Some(process_id) = process_id {
+                return Some(crate::part::BackgroundOperation {
+                    kind: "shell".to_string(),
+                    id: process_id,
+                });
+            }
+        }
+    }
+    None
+}
+
 /// Find the pending tool whose decoded operation carries `call_id`. v2 has no
 /// in-memory message record — the durable `tool_call` part is the record and
 /// the call id rides inside its operation payload, so this resolves by

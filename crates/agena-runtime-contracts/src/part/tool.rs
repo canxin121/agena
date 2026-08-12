@@ -1144,6 +1144,22 @@ impl OperationCompletion {
 const PROVIDER_ONLY_METADATA_KEY: &str = "provider_only";
 const LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY: &str = "provider_native_only";
 const ADVERTISED_TOOL_IDENTITY_METADATA_KEY: &str = "advertised_tool_identity";
+/// Marker that an operation was launched into the background (a monitored
+/// shell process or a delegated task) and must keep rendering as in-progress
+/// on the transcript part until the background work actually finishes. The
+/// value is a serialized [`BackgroundOperation`]; the session layer stamps it
+/// at tool-success time, and the runtime's completion bridge reads it back to
+/// terminalize the part when the process/task settles.
+pub(crate) const BACKGROUND_OPERATION_METADATA_KEY: &str = "agena.background";
+
+/// Which background work a launched-but-unfinished operation corresponds to,
+/// used to correlate the transcript part with the completion signal.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct BackgroundOperation {
+    pub kind: String,
+    pub id: String,
+}
 
 impl OperationPart {
     pub fn pending(
@@ -1398,6 +1414,26 @@ impl OperationPart {
         self.metadata
             .get(ADVERTISED_TOOL_IDENTITY_METADATA_KEY)
             .and_then(serde_json::Value::as_str)
+    }
+
+    /// Stamp the background-work correlation marker on this operation. The
+    /// storage part state stays `InProgress` (so the transcript keeps showing
+    /// the spinner) while `status()` still reports terminal via the lifecycle
+    /// end — the provider pairing and the running spinner are independent.
+    pub fn set_background_operation(&mut self, background: &BackgroundOperation) {
+        self.metadata.insert(
+            BACKGROUND_OPERATION_METADATA_KEY.to_string(),
+            serde_json::to_value(background).expect("background marker is always JSON serializable"),
+        );
+    }
+
+    /// The background-work correlation marker, when this operation was
+    /// launched into the background and has not been terminalized yet.
+    pub fn background_operation(&self) -> Option<BackgroundOperation> {
+        self.metadata
+            .get(BACKGROUND_OPERATION_METADATA_KEY)
+            .cloned()
+            .and_then(|value| serde_json::from_value::<BackgroundOperation>(value).ok())
     }
 
     pub fn call_id(&self) -> i64 {

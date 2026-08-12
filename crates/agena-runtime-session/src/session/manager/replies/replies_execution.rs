@@ -4,9 +4,10 @@ use super::{
     ProviderPromptAnchor, ResolvedPendingTool, SessionManager, SessionManagerState,
     SessionPendingTool, SessionRunOptions, SessionRunRequest, SessionRunTermination,
     StreamingToolExecution, ToolError, ToolInvocationExecution, ToolPermissionCheck, Utc,
-    ask_user_title, assistant_message_id, completed_lifecycle, execution_control_to_app_error,
-    is_authorization_phase_title, operation_authorization, operation_blocks_from_tool_output,
-    operation_from_part, operation_permission_approved_actions, pending_operation_for_resolved,
+    ask_user_title, assistant_message_id, background_operation_from_execution,
+    completed_lifecycle, execution_control_to_app_error, is_authorization_phase_title,
+    operation_authorization, operation_blocks_from_tool_output, operation_from_part,
+    operation_permission_approved_actions, pending_operation_for_resolved,
     pending_tool_part_not_found_error, permission_action_key, push_unique_permission_action,
     resolve_pending_tool, responses_api_request_metadata, run_abort_reason,
     should_execute_pending_tools_concurrently, terminal_operation_title, tool_name,
@@ -25,7 +26,7 @@ use agena_domain::{
     PermissionDecision, PermissionRequest, PermissionScope, PolicySourceKind,
     PromptCompactionTrigger, RunAbortReason,
 };
-use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
+use agena_runtime_contracts::part_content::{ToolResultContent, TypedContent, operation_from_tool_call};
 use agena_storage::store::{Part, PartDelta, PartRole, PartState, RunOutcome};
 use tracing::Instrument;
 
@@ -3147,7 +3148,15 @@ impl SessionManager {
         };
         self.apply_tool_success_execution_context(&mut session, &resolved.invocation, &execution);
 
-        update_resolved_tool_message(&mut session, &resolved, |tool_part| {
+        // A background launch (monitored shell process or delegated task) keeps
+        // running after the tool call returns. The operation content presents
+        // as a normal terminal completion (so the provider sees a paired
+        // tool_use + tool_result on the next turn), but the storage part state
+        // stays InProgress so the transcript part keeps spinning until the
+        // runtime completes the background work. The marker correlates the
+        // part with the runtime completion signal.
+        let background = background_operation_from_execution(&resolved.invocation, &tool_output);
+        let marker_id = update_resolved_tool_message(&mut session, &resolved, |tool_part| {
             let mut operation = OperationPart::completed(
                 resolved.call_id,
                 resolved.invocation.clone(),
@@ -3163,6 +3172,9 @@ impl SessionManager {
             );
             operation.authorization = authorization.clone();
             operation.set_presentation_sections(execution.view.sections.clone());
+            if let Some(background) = background.as_ref() {
+                operation.set_background_operation(background);
+            }
             operation.result.metadata.extend(
                 execution
                     .view
@@ -3180,8 +3192,40 @@ impl SessionManager {
                 tool_call_from_operation(&operation),
             ))
             .expect("operation content is always JSON serializable");
-            tool_part.state = PartState::Completed;
+            tool_part.state = if background.is_some() {
+                PartState::InProgress
+            } else {
+                PartState::Completed
+            };
         })?;
+
+        // Exclude the background operation from the pending-tool pass so the
+        // stable-run loop does not re-execute it: an empty-output `tool_result`
+        // guard part (invisible to the provider and the transcript) pairs with
+        // the still-in-flight tool part, exactly like a real result would. The
+        // guard has no `delete_part` API to remove it later, so it stays for
+        // the session's lifetime — empty output keeps it invisible everywhere.
+        if background.is_some() {
+            let tool_part_id = resolved.pending.part.part_id;
+            let mut guard = new_part_from_content(
+                "tool_result",
+                PartRole::Tool,
+                &TypedContent::ToolResult(ToolResultContent {
+                    output: String::new(),
+                    ok: true,
+                    extra: Default::default(),
+                }),
+                PartState::Completed,
+            )?;
+            guard.parent_part_id = Some(tool_part_id);
+            let created = self
+                .store
+                .append_parts(session.id, marker_id, vec![guard])
+                .await?;
+            let mut parts = session.parts().to_vec();
+            parts.extend(created);
+            session.install_projected_parts(parts);
+        }
         // Mirror the v1 message usage attribution into the owning run marker's
         // `content["usage"]` (the v2 projection `aggregate_usage()` sums it).
         // Flush the marker content directly: `persist_tool_completion` only

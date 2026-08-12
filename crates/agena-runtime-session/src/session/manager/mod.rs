@@ -24,18 +24,19 @@ use agena_domain::{
     PermissionReplyKind, PermissionScope, RunAbortReason, TimeRange, UserInputReplyKind,
 };
 pub(crate) use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
+use agena_failure::Failure;
 use agena_runtime_contracts::part_content::{TextContent, TypedContent};
 use agena_storage::PersistedPermissionRule;
+use agena_storage::store::{PartDelta, PartRole, PartState};
 use agena_tool::PreparedShellCommand;
 
-use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPendingTool};
+use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPartRef, SessionPendingTool};
 use super::processor::{SessionRunRequest, SessionRunTermination};
 use super::prompt_window::PromptRequestOptions;
-use super::store::StoreAdapter;
+use super::store::{StoreAdapter, tool_call_from_operation, typed_content_to_value};
 use super::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
 use crate::session::{Session, SessionProcessor};
 use agena_domain::{SessionListRequest, SessionSummary, UsageStats, UsageStatsQuery};
-use agena_storage::store::PartRole;
 
 use agena_runtime::RuntimeSessionManagerConfig;
 
@@ -369,6 +370,7 @@ mod stats;
 mod tests;
 
 use self::helpers::*;
+use self::replies::operation_from_part;
 
 impl SessionManagerState {
     fn new(
@@ -1688,5 +1690,125 @@ impl SessionManager {
     /// the runtime surface stays unchanged.
     pub fn cache_stats(&self) -> agena_domain::SessionCacheStats {
         agena_domain::SessionCacheStats::default()
+    }
+
+    /// Terminalize a launched-in-background operation (a monitored shell
+    /// process or a delegated task) on its transcript part once the underlying
+    /// work actually settles. The launch kept the storage part `InProgress`
+    /// (spinner) with a terminal-looking operation content (provider pairing);
+    /// this rewrites the content to the real final result and advances the part
+    /// to its terminal storage state, so the transcript stops spinning and the
+    /// durable row matches the presentation.
+    pub async fn complete_background_operation(
+        &self,
+        session_id: i64,
+        kind: &str,
+        id: &str,
+        terminal: PartState,
+        outcome: Result<String, Failure>,
+    ) -> Result<(), AppError> {
+        self.session_mutations
+            .run(session_id, async {
+                let mut session = self.store.load_session(session_id).await?;
+                let part_index = session
+                    .parts()
+                    .iter()
+                    .position(|part| {
+                        if part.kind != "tool_call" {
+                            return false;
+                        }
+                        operation_from_part(part).is_some_and(|operation| {
+                            operation.background_operation().is_some_and(|marker| {
+                                marker.kind == kind && marker.id == id
+                            })
+                        })
+                    })
+                    .ok_or_else(|| {
+                        AppError::Internal(format!(
+                            "background {kind} {id} has no in-progress tool part in session {session_id}"
+                        ))
+                    })?;
+                let part_id = session.parts()[part_index].part_id;
+                let part_ref = SessionPartRef {
+                    part_index,
+                    part_id,
+                };
+                let tool_part = session.part_mut(&part_ref).ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "background {kind} {id} tool part {part_id} vanished from session {session_id}"
+                    ))
+                })?;
+                let mut operation = operation_from_part(tool_part).ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "background {kind} {id} tool part {part_id} has no operation content"
+                    ))
+                })?;
+                let lifecycle = TimeRange {
+                    start_ms: operation.lifecycle().start_ms,
+                    end_ms: Some(Utc::now().timestamp_millis()),
+                };
+                let details = operation
+                    .result
+                    .structured
+                    .clone()
+                    .and_then(|payload| {
+                        agena_domain::ToolOutput::from_json_payload(Some(&payload)).ok()
+                    })
+                    .unwrap_or_default();
+                match outcome {
+                    Ok(output_text) => {
+                        let title = operation.title().unwrap_or(kind).to_owned();
+                        let summary = output_text.clone();
+                        let blocks = text_result_blocks(&output_text);
+                        operation = OperationPart::completed(
+                            operation.call_id(),
+                            operation.invocation().clone(),
+                            crate::part::OperationCompletion::new(
+                                title,
+                                summary,
+                                output_text.clone(),
+                                blocks,
+                                operation.result.attachments.clone(),
+                                details,
+                            ),
+                            lifecycle,
+                        );
+                    }
+                    Err(failure) => {
+                        let fallback = failure.user.fallback.clone();
+                        let blocks = text_result_blocks(&fallback);
+                        operation = OperationPart::failed(
+                            operation.call_id(),
+                            operation.invocation().clone(),
+                            failure,
+                            blocks,
+                            Vec::new(),
+                            details,
+                            lifecycle,
+                        );
+                    }
+                }
+                operation.set_background_operation(&crate::part::BackgroundOperation {
+                    kind: kind.to_string(),
+                    id: id.to_string(),
+                });
+                let content = typed_content_to_value(&TypedContent::ToolCall(
+                    tool_call_from_operation(&operation),
+                ))
+                .expect("background operation content is always JSON serializable");
+                self.store
+                    .update_part(
+                        session_id,
+                        part_id,
+                        PartDelta {
+                            state: Some(terminal),
+                            content: Some(content),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                Ok(())
+            })
+            .await
     }
 }

@@ -5,16 +5,22 @@
 //! unified registry; the application-facing [`RuntimeActivityService`]
 //! implementation reads the same state.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use agena_domain::{
     BackgroundActivity, BackgroundActivityKind, BackgroundActivityLogLine,
     BackgroundActivityLogRead, BackgroundActivityStatus, ProcessStatus, ProcessSummary,
     SubtaskStatus,
 };
+use agena_failure::{
+    Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
+    RecoveryDirective, RetryDirective, UserPresentation, UserProblem,
+};
 use agena_plugin_sdk::activity::ActivitySourceAdapter;
+use agena_runtime_contracts::part_content;
 use agena_runtime_session::SessionManager;
-use agena_storage::store::SessionMeta;
+use agena_storage::store::{Part, PartState, SessionMeta};
 
 use super::registry::ActivityRegistry;
 use crate::{
@@ -73,10 +79,22 @@ impl ActivityRuntimeState {
 }
 
 /// Monitor listener that projects every background shell process into the
-/// unified activity registry.
-#[derive(Debug)]
+/// unified activity registry and forwards terminal summaries to the runtime's
+/// background-completion bridge (which terminalizes the matching transcript
+/// part). The `on_finished` slot is populated after the runtime is assembled,
+/// because the bridge needs the session manager.
 pub(crate) struct MonitorActivityBridge {
     pub(crate) registry: ActivityRegistry,
+    pub(crate) on_finished:
+        Arc<std::sync::Mutex<Option<Arc<dyn Fn(&ProcessSummary) + Send + Sync + 'static>>>>,
+}
+
+impl std::fmt::Debug for MonitorActivityBridge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MonitorActivityBridge")
+            .field("registry", &self.registry)
+            .finish_non_exhaustive()
+    }
 }
 
 impl crate::MonitorListener for MonitorActivityBridge {
@@ -86,6 +104,14 @@ impl crate::MonitorListener for MonitorActivityBridge {
 
     fn on_finished(&self, summary: &ProcessSummary) {
         self.registry.upsert(shell_activity(summary));
+        if let Some(callback) = self
+            .on_finished
+            .lock()
+            .expect("monitor on_finished lock")
+            .as_ref()
+        {
+            callback(summary);
+        }
     }
 }
 
@@ -250,6 +276,313 @@ pub(crate) fn upsert_task_activity_from_meta(registry: &ActivityRegistry, meta: 
             serde_json::from_value::<agena_failure::UserProblem>(value.clone()).ok()
         }),
     ));
+}
+
+/// Correlates launched-in-background operations (a monitored shell process or
+/// a delegated task) with their owning session so the session layer can
+/// terminalize the transcript part when the work actually settles.
+///
+/// Two completion signals arrive here:
+/// - the facade's `SessionMetaUpdated` carries the child session id and its
+///   terminal subtask status → terminalize the parent's `task` part;
+/// - [`crate::MonitorListener::on_finished`] carries a `ProcessSummary` whose
+///   id was stamped on the parent's `shell` part at launch; the bridge's
+///   in-memory `(kind, id) → session_id` index (built from `PartAdded` /
+///   `PartUpdated` events carrying the `agena.background` marker) maps it back
+///   to the session.
+#[derive(Clone)]
+pub(crate) struct BackgroundCompletionBridge {
+    /// Late-bound: the session manager is assembled after the initial
+    /// snapshot, so the slot starts empty and is set once the runtime exists.
+    manager: Arc<Mutex<Option<Arc<SessionManager>>>>,
+    /// `(kind, id) → session_id` for launched-but-unfinished background ops.
+    index: Arc<Mutex<HashMap<(String, String), i64>>>,
+    /// Unified activity registry; part-backed operations are hidden from its
+    /// panel because they are already visible on their transcript part
+    /// ("everything is a part").
+    registry: ActivityRegistry,
+}
+
+impl BackgroundCompletionBridge {
+    pub(crate) fn new(manager: Option<Arc<SessionManager>>, registry: ActivityRegistry) -> Self {
+        Self {
+            manager: Arc::new(Mutex::new(manager)),
+            index: Arc::new(Mutex::new(HashMap::new())),
+            registry,
+        }
+    }
+
+    /// Late-bind the session manager (assembled after the initial snapshot).
+    pub(crate) fn set_manager(&self, manager: Option<Arc<SessionManager>>) {
+        *self.manager.lock().expect("background manager lock") = manager;
+    }
+
+    /// Facade observer subscription for this bridge: `PartAdded`/`PartUpdated`
+    /// events build the `(kind, id) → session_id` index (and prune it when a
+    /// part terminalizes), `SessionMetaUpdated` events terminalize task parts.
+    pub(crate) fn observer(&self) -> agena_storage::store::SessionObserver {
+        let bridge = self.clone();
+        Arc::new(move |change| match change {
+            agena_storage::store::SessionChange::PartAdded { session_id, part }
+            | agena_storage::store::SessionChange::PartUpdated { session_id, part } => {
+                if let Some(marker) = background_marker_from_part(&part) {
+                    let mut index = bridge.index.lock().expect("background index lock");
+                    if part.state == PartState::InProgress {
+                        index.insert(marker.clone(), session_id);
+                        // The operation is now a transcript part; stop showing
+                        // it in the background-activity panel.
+                        bridge.registry.hide(&activity_id_for_marker(&marker));
+                    } else {
+                        index.remove(&marker);
+                    }
+                }
+            }
+            agena_storage::store::SessionChange::SessionMetaUpdated { meta, .. } => {
+                terminalize_task_part(&bridge, meta);
+            }
+            agena_storage::store::SessionChange::PartRemoved { .. } => {}
+        })
+    }
+
+    /// Terminalize the `shell` transcript part for a monitored process that
+    /// just reached a terminal state. The session id is resolved through the
+    /// runtime-side index because a `ProcessSummary` carries no session id.
+    pub(crate) fn complete_shell(&self, summary: &ProcessSummary) {
+        let terminal = match summary.status {
+            ProcessStatus::Exited => PartState::Completed,
+            ProcessStatus::TimedOut | ProcessStatus::Stopped | ProcessStatus::Failed => {
+                PartState::Failed
+            }
+            // A completion signal must be terminal; a spurious running report
+            // has nothing to do here.
+            ProcessStatus::Running => return,
+        };
+        let outcome = if terminal == PartState::Completed {
+            Ok(summary
+                .exit_code
+                .map(|code| format!("Exit code {code}"))
+                .unwrap_or_default())
+        } else {
+            let fallback = match summary.status {
+                ProcessStatus::TimedOut => "The background process timed out.".to_string(),
+                ProcessStatus::Stopped => "The background process was stopped.".to_string(),
+                ProcessStatus::Failed => format!(
+                    "The background process failed (exit {}).",
+                    summary
+                        .exit_code
+                        .map_or_else(|| "unknown".to_string(), |code| code.to_string())
+                ),
+                _ => "The background process failed.".to_string(),
+            };
+            Err(background_failure(summary.status, fallback))
+        };
+        let bridge = self.clone();
+        let process_id = summary.process_id.clone();
+        tokio::spawn(async move {
+            // The tool part's marker update is buffered and only committed when
+            // the owning run terminalizes (turn end), so a shell finishing
+            // mid-turn can beat the index — resolve with a bounded retry.
+            let Some(session_id) = bridge.resolve_shell_session(&process_id).await else {
+                return;
+            };
+            let Some(manager) = bridge.manager.lock().expect("background manager lock").clone()
+            else {
+                return;
+            };
+            if let Err(error) = manager
+                .complete_background_operation(session_id, "shell", &process_id, terminal, outcome)
+                .await
+            {
+                tracing::warn!(
+                    target: "agena_background",
+                    %session_id, %process_id, %error,
+                    "failed to terminalize background shell part"
+                );
+            }
+        });
+    }
+
+    /// Resolve the session for a `shell` background marker, retrying briefly
+    /// so a part whose marker update is still buffered (committed only at its
+    /// run's terminalization) has time to land.
+    async fn resolve_shell_session(&self, process_id: &str) -> Option<i64> {
+        let key = ("shell".to_string(), process_id.to_string());
+        for _ in 0..60 {
+            if let Some(session_id) = self
+                .index
+                .lock()
+                .expect("background index lock")
+                .get(&key)
+                .copied()
+            {
+                return Some(session_id);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        tracing::warn!(
+            target: "agena_background",
+            %process_id,
+            "no transcript part indexed for finished background shell; leaving the part spinning"
+        );
+        None
+    }
+}
+
+fn background_failure(status: ProcessStatus, fallback: String) -> Failure {
+    Failure::new(
+        FailureCode::new(match status {
+            ProcessStatus::TimedOut => "background.timed_out",
+            ProcessStatus::Stopped => "background.stopped",
+            _ => "background.failed",
+        }),
+        FailureCategory::DependencyUnavailable,
+        FailureResponsibility::System,
+        RetryDirective::AfterUserAction,
+        RecoveryDirective::AskUser,
+        FailureImpact::BackgroundTaskFailed,
+        UserPresentation {
+            key: "background-failed".to_string(),
+            fallback,
+            detail_key: None,
+        },
+    )
+}
+
+/// Decode the `agena.background` marker from a `tool_call` part's operation.
+/// Returns `Some((kind, id))` when the operation is a launched-in-background
+/// launch.
+fn background_marker_from_part(part: &Part) -> Option<(String, String)> {
+    if part.kind != "tool_call" {
+        return None;
+    }
+    let content = part_content::decode(&part.kind, &part.content).ok()?;
+    let part_content::TypedContent::ToolCall(tool_call) = content else {
+        return None;
+    };
+    let operation = part_content::operation_from_tool_call(&tool_call);
+    operation
+        .background_operation()
+        .map(|marker| (marker.kind, marker.id))
+}
+
+/// The unified-activity id that a background-operation marker would project to,
+/// so the bridge can hide the panel row that duplicates the transcript part.
+/// Shells use the process id directly (`proc_…`); tasks are prefixed with
+/// `task_` (mirroring `shell_activity` / `subtask_activity`).
+fn activity_id_for_marker(marker: &(String, String)) -> String {
+    match marker.0.as_str() {
+        "shell" => marker.1.clone(),
+        "task" => format!("task_{}", marker.1),
+        _ => marker.1.clone(),
+    }
+}
+
+/// Terminalize the parent's `task` part once the child session settles. The
+/// child's terminal status and failure come from the persisted subtask columns
+/// on [`SessionMeta`]; the completed task's final text is loaded from the
+/// child session's own parts.
+fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta) {
+    let Some(task_id) = meta.task_id.clone() else {
+        return;
+    };
+    let Some(parent_id) = meta.parent_id else {
+        return;
+    };
+    let Some(status) = meta
+        .subtask_status
+        .as_deref()
+        .and_then(SubtaskStatus::parse)
+    else {
+        return;
+    };
+    if !status.is_terminal() {
+        return;
+    }
+    let (terminal, failure) = match status {
+        SubtaskStatus::Completed => (PartState::Completed, None),
+        SubtaskStatus::Failed => (
+            PartState::Failed,
+            Some(
+                meta.subtask_failure
+                    .as_ref()
+                    .and_then(|value| serde_json::from_value::<UserProblem>(value.clone()).ok())
+                    .map(Failure::from)
+                    .unwrap_or_else(|| {
+                        background_failure(
+                            ProcessStatus::Failed,
+                            "The delegated task failed.".to_string(),
+                        )
+                    }),
+            ),
+        ),
+        SubtaskStatus::Cancelled => (
+            PartState::Cancelled,
+            Some(background_failure(
+                ProcessStatus::Stopped,
+                "The delegated task was cancelled.".to_string(),
+            )),
+        ),
+        SubtaskStatus::TimedOut => (
+            PartState::Failed,
+            Some(background_failure(
+                ProcessStatus::TimedOut,
+                "The delegated task timed out.".to_string(),
+            )),
+        ),
+        SubtaskStatus::Interrupted => (
+            PartState::Cancelled,
+            Some(background_failure(
+                ProcessStatus::Stopped,
+                "The delegated task was interrupted.".to_string(),
+            )),
+        ),
+        SubtaskStatus::Created | SubtaskStatus::Running => return,
+    };
+    let Some(manager) = bridge.manager.lock().expect("background manager lock").clone() else {
+        return;
+    };
+    let child_session_id = meta.id;
+    tokio::spawn(async move {
+        let outcome = match terminal {
+            PartState::Completed => {
+                let final_text = manager
+                    .session_store()
+                    .load(child_session_id)
+                    .await
+                    .ok()
+                    .and_then(|view| final_child_text_from_parts(&view.parts))
+                    .unwrap_or_else(|| "Task completed.".to_string());
+                Ok(final_text)
+            }
+            _ => Err(failure.expect("non-completed task carries a failure")),
+        };
+        if let Err(error) = manager
+            .complete_background_operation(parent_id, "task", &task_id, terminal, outcome)
+            .await
+        {
+            tracing::warn!(
+                target: "agena_background",
+                %parent_id, %task_id, %error,
+                "failed to terminalize background task part"
+            );
+        }
+    });
+}
+
+/// The child session's freshest assistant text, used as the completed task
+/// part's terminal summary. Mirrors the subtask runner's final-text scan.
+fn final_child_text_from_parts(parts: &[Part]) -> Option<String> {
+    parts
+        .iter()
+        .rev()
+        .find_map(|part| {
+            part.content
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| part.summary.clone())
+        })
+        .filter(|text| !text.trim().is_empty())
 }
 
 /// Shell log reader: translates [`crate::MonitorRead`] into the unified

@@ -748,15 +748,17 @@ mod tests {
             .expect("the pending interaction node");
         // Headline occupies exactly one line; everything after it is the body.
         let body_rows = node.end_line - node.start_line - 1;
-        // Plan rows + one separator + 2 rows per option + 2 custom rows.
-        let predicted = plan_body_lines + 1 + 2 * 2 + 2 * 1;
+        // Plan rows + one separator + ONE row per option + one custom row +
+        // one footer-hint row (review dropped the per-option detail lines).
+        let decision_rows = crate::interaction_view::review_decision_rows_count(2, true);
+        let predicted = plan_body_lines + 1 + decision_rows + 1;
         assert_eq!(body_rows, predicted, "renderer body rows match classifier budget");
 
-        // Every DECISION row (separator and beyond) classifies to a concrete
-        // kind — never the default PlanBody fallback — so the App's key
-        // routing always sees a row kind there.
+        // Every DECISION row (separator and beyond, excluding the footer hint)
+        // classifies to a concrete kind — never the default PlanBody fallback —
+        // so the App's key routing always sees a row kind there.
         let question = layouts[0];
-        for body_offset in plan_body_lines..predicted {
+        for body_offset in plan_body_lines..(plan_body_lines + 1 + decision_rows) {
             let kind = classify_interaction_line(
                 &layouts,
                 plan_body_lines,

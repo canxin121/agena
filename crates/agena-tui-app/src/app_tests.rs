@@ -583,6 +583,9 @@ mod interaction_part_routing_tests {
     fn ctrl_x() -> KeyEvent {
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)
     }
+    fn space_key() -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)
+    }
     fn char_key(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
     }
@@ -591,9 +594,10 @@ mod interaction_part_routing_tests {
     }
 
     /// A single-option review decision with a custom slot and a one-line plan
-    /// body, so the body-offset layout is fully determined:
-    ///   0 plan row | 1 separator | 2 option label | 3 option detail
-    ///   4 custom label | 5 custom detail | (6 editor row while editing).
+    /// body, so the body-offset layout is fully determined (ONE row per option
+    /// since the layout-contract refactor):
+    ///   0 plan row | 1 separator | 2 option label
+    ///   3 custom label | 4 footer hint (PlanBody).
     fn wire_request() -> agena_api::resource::UserInputRequest {
         agena_api::resource::UserInputRequest {
             request_id: REQUEST_ID.to_owned(),
@@ -792,11 +796,21 @@ mod interaction_part_routing_tests {
     /// Seed the pending review part (parts + execution + live interaction
     /// view + expanded node + the request in the interaction map).
     fn seed_pending_review(app: &mut App) {
+        seed_pending_review_with_plan(app, "## Proposed Plan");
+    }
+
+    /// Same as [`seed_pending_review`] but with a caller-controlled plan body,
+    /// used to build a review page tall enough to exceed the viewport.
+    fn seed_pending_review_with_plan(app: &mut App, plan_markdown: &str) {
+        let request = agena_domain::UserInputRequest {
+            body_markdown: plan_markdown.to_owned(),
+            ..domain_request()
+        };
         app.transcript
             .apply_execution(execution_with(vec![pending_user_input_resource()], parts()));
         app.user_input_interactions.insert(
             REQUEST_ID.to_owned(),
-            App::build_user_input_overlay(SESSION_ID, domain_request()),
+            App::build_user_input_overlay(SESSION_ID, request),
         );
         app.sync_interaction_documents();
         app.transcript.node_expansions.insert(node_key(), true);
@@ -1093,7 +1107,7 @@ mod interaction_part_routing_tests {
     async fn e_on_the_custom_label_opens_the_inline_editor_and_esc_exits_it() {
         let mut app = seeded_app().await;
         seed_pending_review(&mut app);
-        move_cursor_to_body_offset(&mut app, 4);
+        move_cursor_to_body_offset(&mut app, 3);
 
         assert!(
             app.handle_active_interaction_action(edit()),
@@ -1180,6 +1194,49 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
+    async fn reveal_scrolls_so_the_whole_question_page_is_visible() {
+        let mut app = seeded_app().await;
+        // A plan body tall enough to overflow the 24-row viewport: the reveal
+        // must fit-scroll the ENTIRE expanded part, not just show its top.
+        let tall_plan = (0..40)
+            .map(|i| format!("- step {i} of the review plan"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        seed_pending_review_with_plan(&mut app, &tall_plan);
+
+        app.reveal_pending_user_input_interaction(REQUEST_ID);
+
+        let (start_line, end_line) = {
+            let node = app
+                .transcript
+                .rendered(WIDTH)
+                .nodes
+                .iter()
+                .find(|node| node.key == node_key())
+                .expect("the interaction part renders a node");
+            (node.start_line, node.end_line)
+        };
+        // The cursor lands on the part's headline (0-indexed `start_line`).
+        assert_eq!(
+            app.transcript.navigation_cursor_line(),
+            Some(start_line),
+            "the reveal lands the cursor on the part headline"
+        );
+        // The whole question page fits: the part's last body row is inside the
+        // viewport (bottom-anchored for a page taller than the screen), and
+        // the viewport never scrolls past the part's top.
+        let height = usize::from(HEIGHT);
+        assert!(
+            end_line <= app.transcript.viewport_top() + height,
+            "the entire expanded page must fit in the viewport"
+        );
+        assert!(
+            app.transcript.viewport_top() <= start_line,
+            "the fit-scroll must not push the part's top above the viewport"
+        );
+    }
+
+    #[tokio::test]
     async fn reveal_retries_once_the_part_populates() {
         let mut app = seeded_app().await;
         // The execution snapshot arrives before the transcript parts populate:
@@ -1260,11 +1317,12 @@ mod interaction_part_routing_tests {
             "no selection change on a plan row means no re-render"
         );
 
-        // Cursor onto the custom feedback label (body offset 4 = the custom
-        // label): the selection follows the cursor to the custom slot
-        // (options_len == 1), and the render cache is invalidated so the
+        // Cursor onto the custom feedback label (body offset 3 = the custom
+        // label, the option detail row was removed by the one-row-per-option
+        // layout contract): the selection follows the cursor to the custom
+        // slot (options_len == 1), and the render cache is invalidated so the
         // marker moves.
-        move_cursor_to_body_offset(&mut app, 4);
+        move_cursor_to_body_offset(&mut app, 3);
         app.refresh_interaction_selection(WIDTH);
         assert_eq!(
             app.transcript
@@ -1389,15 +1447,15 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn ask_user_enter_toggles_the_option_and_stays_on_the_page() {
+    async fn ask_user_space_toggles_the_option_and_stays_on_the_page() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
         move_cursor_to_part_headline(&mut app);
 
-        // Enter selects option 0 (single-pick) and stays on the page.
+        // Space selects option 0 (single-pick) and stays on the page.
         assert!(
-            app.handle_active_interaction_action(enter()),
-            "Enter is owned while the wizard is active"
+            app.handle_active_interaction_action(space_key()),
+            "Space is owned while the wizard is active"
         );
         assert_eq!(
             dialog(&app)
@@ -1409,12 +1467,12 @@ mod interaction_part_routing_tests {
         assert_eq!(wizard_view(&app).wizard_page, Some(0), "stays on the page");
         assert!(app.user_input_interactions.contains_key(REQUEST_ID));
 
-        // Enter again (single-pick) unselects the option: select/unselect.
-        assert!(app.handle_active_interaction_action(enter()));
+        // Space again (single-pick) unselects the option: select/unselect.
+        assert!(app.handle_active_interaction_action(space_key()));
         assert_eq!(
             dialog(&app).presentation.answer(0).map(|answer| answer.option_indexes.len()),
             Some(0),
-            "single-pick Enter unselects the already-picked option"
+            "single-pick Space unselects the already-picked option"
         );
         assert!(!app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
@@ -1452,11 +1510,13 @@ mod interaction_part_routing_tests {
         ));
         assert!(app.user_input_interactions.contains_key(REQUEST_ID));
 
-        // Answer both questions, return to the summary, and submit.
-        assert!(app.handle_active_interaction_action(enter())); // Q0 → Vanilla
-        assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)));
-        assert!(app.handle_active_interaction_action(enter())); // Q1 → Sprinkles
-        assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)));
+        // Answer both questions with Space (toggle), advance pages with Enter
+        // (submit current page AND advance), then submit from the summary.
+        assert!(app.handle_active_interaction_action(space_key())); // Q0 → Vanilla
+        assert!(app.handle_active_interaction_action(enter())); // Q0 → Q1
+        assert_eq!(dialog(&app).presentation.selected_question(), 1);
+        assert!(app.handle_active_interaction_action(space_key())); // Q1 → Sprinkles
+        assert!(app.handle_active_interaction_action(enter())); // Q1 → summary
         assert_eq!(dialog(&app).presentation.screen(), QuestionFlowScreen::Review);
 
         assert!(app.handle_active_interaction_action(enter()));
@@ -1475,23 +1535,26 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn ask_user_esc_collapses_out_of_wizard_mode() {
+    async fn ask_user_esc_falls_through_out_of_wizard_mode() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
         move_cursor_to_part_headline(&mut app);
 
+        // Esc is deliberately NOT owned by the ask-user wizard: it falls
+        // through to the normal transcript dispatch, so the part stays
+        // expanded, the wizard stays active, and the request stays pending.
         assert!(
-            app.handle_active_interaction_action(esc()),
-            "Esc with no pending motion prefix collapses the part"
+            !app.handle_active_interaction_action(esc()),
+            "Esc must not be intercepted by the ask-user wizard"
         );
-        assert_eq!(
+        assert_ne!(
             app.transcript.node_expansions.get(&node_key()),
             Some(&false),
-            "the expansion override is cleared so the part falls back to its configured default"
+            "Esc must not collapse the expanded part out from under the wizard"
         );
         assert!(
             app.user_input_interactions.contains_key(REQUEST_ID),
-            "the request stays reachable by re-expanding the part"
+            "the request stays pending"
         );
     }
 

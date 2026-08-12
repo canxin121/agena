@@ -141,17 +141,10 @@ impl App {
         self.transcript.invalidate_render();
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
-        let start_line = self
-            .transcript
-            .rendered(width)
-            .nodes
-            .iter()
-            .find(|node| node.key == key)
-            .map(|node| node.start_line);
-        if let Some(start_line) = start_line {
-            self.transcript
-                .move_cursor_to_visual_line_number(width, height, Some(start_line + 1));
-        }
+        // Fit-scroll so the ENTIRE expanded interaction part is visible (the
+        // whole ask-user question page with its footer keys, not just the
+        // headline) and land the cursor on the part.
+        self.transcript.reveal_node_fully(&key, width, height);
     }
 
     /// Retry the auto-reveal for every outstanding request whose part was not

@@ -108,7 +108,6 @@ impl App {
                 }
             }
             agena_tui_transcript::InteractionLineKind::ReviewCustomLabel
-            | agena_tui_transcript::InteractionLineKind::ReviewCustomDetail
             | agena_tui_transcript::InteractionLineKind::ReviewEditor => {
                 let custom_index = layouts
                     .first()
@@ -251,11 +250,13 @@ impl App {
 
     /// Route a key while the cursor is on an expanded pending ask-user part
     /// (the paged wizard). Up/Down move the option cursor within the current
-    /// question, Left/Right switch question pages (and reach the summary
-    /// page), Enter toggles the option or submits on the summary page, and
-    /// Esc collapses the part back to its configured state. Every other key —
-    /// including `h`/`l` on non-part text and all chat paging — falls through
-    /// to the normal transcript dispatch.
+    /// question, Left/Right switch question pages without committing (and
+    /// reach the summary page), Space toggles the option under the cursor,
+    /// and Enter submits the current page and advances (submitting the whole
+    /// request on the summary page). Esc is deliberately NOT owned: it falls
+    /// through to the normal transcript dispatch (the wizard never collapses
+    /// the part out from under the user). Every other key — including `h`/`l`
+    /// on non-part text and all chat paging — falls through too.
     fn handle_ask_user_wizard_key(&mut self, request_id: &str, key: KeyEvent) -> bool {
         if key.modifiers != KeyModifiers::NONE {
             return false;
@@ -277,17 +278,12 @@ impl App {
                 self.wizard_move_tab(request_id, 1);
                 true
             }
-            KeyCode::Enter => {
-                self.wizard_enter(request_id);
+            KeyCode::Char(' ') => {
+                self.wizard_toggle_option(request_id);
                 true
             }
-            KeyCode::Esc
-                if self.transcript_motion_prefix.is_none()
-                    && !self.transcript_yank_pending
-                    && !self.transcript_goto_pending
-                    && !self.transcript_viewport_pending =>
-            {
-                self.collapse_active_interaction(request_id);
+            KeyCode::Enter => {
+                self.wizard_enter(request_id);
                 true
             }
             _ => false,
@@ -315,9 +311,28 @@ impl App {
         self.sync_interaction_documents();
     }
 
-    /// Enter on a wizard page: toggles the option under the cursor (opening
-    /// the inline custom editor on the custom row), or submits on the summary
-    /// page — jumping to the unanswered question's page on a validation miss.
+    /// Space on a wizard question page: toggles the option/custom row under
+    /// the wizard's option cursor (opening the inline custom editor on the
+    /// custom row). The page stays put — selection never advances the flow.
+    fn wizard_toggle_option(&mut self, request_id: &str) {
+        let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
+            return;
+        };
+        dialog.presentation.toggle_option();
+        if dialog.presentation.is_editing_custom() {
+            // The presentation opened the inline custom editor; the app takes
+            // ownership of the key stream.
+            self.interaction_editing = Some(request_id.to_string());
+        }
+        self.user_input_interactions.insert(request_id.to_string(), dialog);
+        self.sync_interaction_documents();
+    }
+
+    /// Enter on a wizard page: on a question page, submits the current page's
+    /// answer and advances to the next page (or the summary); on the summary
+    /// page, submits the whole request — jumping to the unanswered question's
+    /// page on a validation miss. The summary page has no Submit row and no
+    /// locked cursor, so Enter anywhere on it submits.
     fn wizard_enter(&mut self, request_id: &str) {
         let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
             return;
@@ -342,12 +357,10 @@ impl App {
                 }
             }
         } else {
-            dialog.presentation.toggle_option();
-            if dialog.presentation.is_editing_custom() {
-                // The presentation opened the inline custom editor; the app
-                // takes ownership of the key stream.
-                self.interaction_editing = Some(request_id.to_string());
-            }
+            // Question page: commit the page (Space already wrote the draft)
+            // and advance to the next page — the summary is reached from the
+            // last question page, and it is the only submit surface.
+            dialog.presentation.move_wizard_tab(1);
         }
         self.user_input_interactions.insert(request_id.to_string(), dialog);
         self.sync_interaction_documents();

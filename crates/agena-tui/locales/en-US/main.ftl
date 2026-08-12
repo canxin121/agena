@@ -820,13 +820,14 @@ overlay-user-input-unanswered = unanswered
 overlay-user-input-custom-empty = Press Enter or e to type a custom answer
 overlay-user-input-review-feedback = Feedback to agent
 overlay-user-input-review-feedback-empty = Press Enter or e to type feedback, or pick a decision
+overlay-user-input-review-footer-hint = Enter on option = submit · Enter on title = collapse/expand
 overlay-user-input-missing-answer = missing answer for {$label}
 overlay-user-input-footer-review = j/k ↑/↓ move | Enter choose | e edit | Ctrl+Y/Ctrl+E line scroll | PgUp/PgDn pages | Ctrl+X cancel
 overlay-user-input-footer-question = Tab/Shift+Tab pages | Space toggle | Ctrl+D clear | Ctrl+Y/Ctrl+E line scroll | PgUp/PgDn pages | Ctrl+X cancel
 overlay-user-input-custom-allowed = custom value allowed
 overlay-user-input-reply-format = Reply format: 0=value;1=value1,value2
 overlay-user-input-wizard-page = Q
-overlay-user-input-wizard-keys = ←→ pages · ↑↓ options · Enter select · Esc collapse
+overlay-user-input-wizard-keys = ←→ pages · ↑↓ options · Space select · Enter submit
 overlay-user-input-wizard-summary-title = Your answers
 overlay-user-input-wizard-unanswered = not answered
 overlay-user-input-cancel-hint = Ctrl+X cancels the request

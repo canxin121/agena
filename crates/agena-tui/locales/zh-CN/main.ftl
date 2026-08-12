@@ -849,14 +849,15 @@ overlay-user-input-unanswered = 未回答
 overlay-user-input-custom-empty = 按 Enter 或 e 输入自定义回答
 overlay-user-input-review-feedback = 给 Agent 的反馈
 overlay-user-input-review-feedback-empty = 按 Enter 或 e 输入反馈，或选择一个决定
+overlay-user-input-review-footer-hint = 选项上 Enter 提交 · 标题上 Enter 收起/展开
 overlay-user-input-missing-answer = {$label} 还没有回答
 overlay-user-input-footer-review = j/k ↑/↓ 移动 | Enter 选择 | e 编辑 | Ctrl+Y/Ctrl+E 逐行滚动 | PgUp/PgDn 翻页 | Ctrl+X 取消
 overlay-user-input-footer-question = Tab/Shift+Tab 页面 | Space 切换 | Ctrl+D 清除 | Ctrl+Y/Ctrl+E 逐行滚动 | PgUp/PgDn 翻页 | Ctrl+X 取消
 overlay-user-input-custom-allowed = 允许自定义值
 overlay-user-input-reply-format = 回复格式：0=value;1=value1,value2
 overlay-user-input-wizard-page = 第
-overlay-user-input-wizard-keys = ←→ 切页 · ↑↓ 选项 · Enter 选中 · Esc 收起
-overlay-user-input-wizard-summary-title = 总回答
+overlay-user-input-wizard-keys = ←→ 切页 · ↑↓ 选项 · Space 选中 · Enter 提交
+overlay-user-input-wizard-summary-title = 作答汇总
 overlay-user-input-wizard-unanswered = 未回答
 overlay-user-input-cancel-hint = Ctrl+X 取消此请求
 overlay-user-input-footer = Ctrl+X 取消

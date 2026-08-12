@@ -16,8 +16,9 @@ use super::request_render::{preview_for_part, render_user_input_request};
 use crate::snapshot::activity_presentation;
 use crate::ui_text;
 use crate::{
-    RequestPartResource, TranscriptActivityContent, TranscriptActivitySection,
-    TranscriptAssistantReplyLifecycle, TranscriptEntryPart, TranscriptPartContent,
+    OperationPartResource, RequestPartResource, TranscriptActivityContent,
+    TranscriptActivitySection, TranscriptAssistantReplyLifecycle, TranscriptEntryPart,
+    TranscriptPartContent,
 };
 use agena_api::resource::{PartAttachment, PartAttachmentKind, PartAttachmentSource, RunResource};
 use ratatui::text::{Line, Span};
@@ -1265,7 +1266,18 @@ pub(crate) fn render_part_node(
             let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
                 defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_OPERATION))
             });
-            render_tool_execution(part, tool, out, width, i18n, expanded);
+            // Canonical single-activity shape: a tool operation carrying a
+            // user-input record IS the interaction part. Render the pending
+            // interaction body while awaiting a reply (live view), the
+            // read-only plan + questions + answers once answered; fall through
+            // to the plain tool execution renderer for operations without
+            // user input.
+            let user_input_rendered = render_operation_user_input(
+                part, tool, out, width, i18n, expanded, interactions,
+            );
+            if !user_input_rendered {
+                render_tool_execution(part, tool, out, width, i18n, expanded);
+            }
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
@@ -1614,8 +1626,215 @@ fn render_pending_interaction_body(
     }
 }
 
-/// Review decision rows: one label row + one muted detail row per option, then
-/// the custom feedback slot. Markers `(x)`/`( )` track `view.selected_option`.
+/// Renders the canonical single-activity user-input surface on a `tool_call`
+/// operation part: the pending interaction body while a request is awaiting a
+/// reply (live view), or the read-only plan + questions + answers once
+/// answered. Returns `false` (rendering nothing) when the operation carries no
+/// user-input record, so the caller falls through to the plain tool execution
+/// renderer.
+#[allow(clippy::too_many_arguments)]
+fn render_operation_user_input(
+    part: &TranscriptEntryPart,
+    tool: &OperationPartResource,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    expanded: bool,
+    interactions: &std::collections::BTreeMap<
+        String,
+        crate::interaction_view::PendingInteractionView,
+    >,
+) -> bool {
+    let Some(record) = tool.user_input.requests.first() else {
+        return false;
+    };
+    let request = crate::parts::user_input_request_resource(record.request.clone());
+    let title = if request.kind == "review" {
+        "Plan review"
+    } else {
+        "User input"
+    };
+    let summary = request
+        .questions
+        .first()
+        .map(|question| question.question.as_str())
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or(request.title.as_str());
+    push_activity_headline(out, part.status, expanded, true, title, summary, width);
+    if !expanded {
+        return true;
+    }
+    if record.reply.is_none()
+        && let Some(view) = interactions.get(&request.request_id)
+    {
+        render_pending_interaction_body(out, &request, view, width, i18n);
+    } else {
+        let reply = record
+            .reply
+            .clone()
+            .map(crate::parts::user_input_reply_resource);
+        render_answered_user_input_body(out, &request, reply.as_ref(), width, i18n);
+    }
+    true
+}
+
+/// Read-only body for an answered user-input request on a tool_call operation:
+/// the plan body + separator, then each question with its committed answer
+/// marked, and the custom feedback when provided. No interactive controls or
+/// key hints — the activity stays expandable but is no longer an interaction
+/// surface.
+fn render_answered_user_input_body(
+    out: &mut Vec<RenderedLine>,
+    request: &agena_api::resource::UserInputRequest,
+    reply: Option<&agena_api::resource::UserInputReply>,
+    width: u16,
+    i18n: &I18n,
+) {
+    if !request.body_markdown.trim().is_empty() {
+        push_markdown_document(out, "    ", request.body_markdown.as_str(), width);
+        push_markdown_rule(out, "    ", width);
+    }
+    let answers = reply.map(|reply| &reply.answers);
+    if crate::interaction_view::request_is_review_decision(request) {
+        render_answered_review_rows(out, request, answers, width, i18n);
+        return;
+    }
+    for (index, question) in request.questions.iter().enumerate() {
+        let values = answers
+            .and_then(|answers| answers.get(&index.to_string()))
+            .cloned()
+            .unwrap_or_default();
+        render_answered_question_block(out, index, question, &values, width, i18n);
+    }
+}
+
+/// Read-only review decision rows: each option on ONE row with `(x)` on the
+/// answered one, then the custom feedback when the answer is free text.
+fn render_answered_review_rows(
+    out: &mut Vec<RenderedLine>,
+    request: &agena_api::resource::UserInputRequest,
+    answers: Option<&std::collections::BTreeMap<String, Vec<String>>>,
+    width: u16,
+    i18n: &I18n,
+) {
+    let values = answers
+        .and_then(|answers| answers.get("0"))
+        .map(|values| values.as_slice())
+        .unwrap_or_default();
+    let Some(question) = request.questions.first() else {
+        return;
+    };
+    for (_index, option) in question.options.iter().enumerate() {
+        let answered = values.iter().any(|value| value == &option.label);
+        let marker = if answered { "(x)" } else { "( )" };
+        out.push(RenderedLine::rich(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(format!("{marker} "), Style::default()),
+            Span::styled(
+                option.label.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ])));
+    }
+    if question.allow_custom {
+        let custom: Vec<&String> = values
+            .iter()
+            .filter(|value| !question.options.iter().any(|option| &option.label == *value))
+            .collect();
+        if !custom.is_empty() {
+            let marker = "(x)";
+            out.push(RenderedLine::rich(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(format!("{marker} "), Style::default()),
+                Span::styled(
+                    i18n.text("overlay-user-input-review-feedback"),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ])));
+            push_interaction_detail_row(out, &join_answer_values(&custom), width);
+        }
+    }
+}
+
+/// Join committed answer values (which may be `&String`) into a comma list.
+fn join_answer_values(values: &[&String]) -> String {
+    values
+        .iter()
+        .map(|value| value.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Read-only ask-user question block: header with its answered marker, the
+/// question text, each option on its (label + detail) rows with picked
+/// options marked, and the custom values when present.
+fn render_answered_question_block(
+    out: &mut Vec<RenderedLine>,
+    index: usize,
+    question: &agena_api::resource::UserInputQuestion,
+    values: &[String],
+    width: u16,
+    i18n: &I18n,
+) {
+    let header = if question.header.trim().is_empty() {
+        format!("Q{}", index + 1)
+    } else {
+        question.header.clone()
+    };
+    let answered = !values.is_empty();
+    let header_marker = if answered { "[x]" } else { "[ ]" };
+    out.push(RenderedLine::rich(Line::from(vec![
+        Span::raw("    "),
+        Span::styled(format!("{header_marker} "), Style::default()),
+        Span::styled(header, Style::default().add_modifier(Modifier::BOLD)),
+    ])));
+    push_interaction_detail_row(out, question.question.as_str(), width);
+    for (_option_index, option) in question.options.iter().enumerate() {
+        let picked = values.iter().any(|value| value == &option.label);
+        let marker = if question.multiple {
+            if picked {
+                "[x]"
+            } else {
+                "[ ]"
+            }
+        } else if picked {
+            "(x)"
+        } else {
+            "( )"
+        };
+        out.push(RenderedLine::rich(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(format!("{marker} "), Style::default()),
+            Span::styled(
+                option.label.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ])));
+        push_interaction_detail_row(out, option.description.as_str(), width);
+    }
+    if question.allow_custom {
+        let custom: Vec<&String> = values
+            .iter()
+            .filter(|value| !question.options.iter().any(|option| &option.label == *value))
+            .collect();
+        if !custom.is_empty() {
+            out.push(RenderedLine::rich(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(
+                    i18n.text("overlay-user-input-other"),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ])));
+            push_interaction_detail_row(out, &join_answer_values(&custom), width);
+        }
+    }
+}
+
+/// Review decision rows: ONE row per option (marker + label — the description
+/// detail line is gone), then the custom feedback slot, then a muted localized
+/// footer hint. Markers `(x)`/`( )` track `view.selected_option`. The row
+/// budget matches [`crate::interaction_view::review_decision_rows_count`] plus
+/// the footer row.
 fn render_review_decision_rows(
     out: &mut Vec<RenderedLine>,
     request: &agena_api::resource::UserInputRequest,
@@ -1640,35 +1859,38 @@ fn render_review_decision_rows(
                 Style::default().add_modifier(Modifier::BOLD),
             ),
         ])));
-        push_interaction_detail_row(out, option.description.as_str(), width);
     }
     if question.allow_custom {
         let custom_index = question.options.len();
-        let marker = if view.selected_option == Some(custom_index) {
-            "(x)"
-        } else {
-            "( )"
-        };
-        out.push(RenderedLine::rich(Line::from(vec![
-            Span::raw("    "),
-            Span::styled(format!("{marker} "), Style::default()),
-            Span::styled(
-                i18n.text("overlay-user-input-review-feedback"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ])));
         if view.editing_custom {
+            // The inline editor replaces the custom label row (one row, so the
+            // fixed budget `review_decision_rows_count` counts it exactly).
             push_interaction_editor_row(out, &view.custom_draft, view.custom_cursor, width);
         } else {
-            let feedback = view.custom_text.as_str();
-            let text = if feedback.trim().is_empty() {
-                i18n.text("overlay-user-input-review-feedback-empty")
+            let marker = if view.selected_option == Some(custom_index) {
+                "(x)"
             } else {
-                feedback.to_owned()
+                "( )"
             };
-            push_interaction_detail_row(out, &text, width);
+            out.push(RenderedLine::rich(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(format!("{marker} "), Style::default()),
+                Span::styled(
+                    i18n.text("overlay-user-input-review-feedback"),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ])));
         }
     }
+    // Localized footer hint: Enter on an option submits, Enter on the title
+    // collapses/expands. This row is never a submit target.
+    out.push(RenderedLine::plain(
+        format!(
+            "    {}",
+            i18n.text("overlay-user-input-review-footer-hint")
+        ),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
+    ));
 }
 
 /// One muted detail row below a decision label. Always pushed (even when
@@ -1870,14 +2092,17 @@ fn render_single_question_block(
     }
 }
 
-/// The leading indent span(s) of an option/custom row: a `▸` cursor marker in
-/// the selection color on the option-cursor row, else the plain 8-space indent.
-/// Both variants occupy 8 columns, so the marker column never shifts.
+/// The leading indent span(s) of an option/custom row: the `▸` cursor marker
+/// in the selection color aligns to the PART BODY content start (column 4, the
+/// activity detail indent) — never the assistant-label column — on the
+/// option-cursor row, else the plain 8-space indent. Both variants occupy 8
+/// columns, so the `( )`/`[ ]` marker column never shifts.
 fn option_row_indent(cursor: bool) -> Vec<Span<'static>> {
     if cursor {
         vec![
+            Span::raw("    "),
             Span::styled("▸", agena_tui_components::theme::selection_style()),
-            Span::raw("       "),
+            Span::raw("   "),
         ]
     } else {
         vec![Span::raw("        ")]
@@ -1904,11 +2129,12 @@ fn push_wizard_footer(
     ));
 }
 
-/// The final ask-user summary page: a title row, one row per question showing
-/// its marker and committed answer (or "unanswered"), a separator, and the
-/// Submit row — the exact budget
-/// [`crate::interaction_view::interaction_ask_user_summary_body_rows`]
-/// counts. Enter on this page submits.
+/// The final ask-user summary page: a title row and one row per question
+/// showing its marker and committed answer (or "unanswered"), then a separator
+/// — no Submit row. The cursor is free and Enter anywhere on this page
+/// submits. The budget
+/// [`crate::interaction_view::interaction_ask_user_summary_body_rows`] counts
+/// exactly title + per-question rows + separator.
 fn render_ask_user_summary_rows(
     out: &mut Vec<RenderedLine>,
     request: &agena_api::resource::UserInputRequest,
@@ -1956,13 +2182,6 @@ fn render_ask_user_summary_rows(
         out.push(RenderedLine::rich(Line::from(spans)));
     }
     push_markdown_rule(out, "    ", width);
-    out.push(RenderedLine::rich(Line::from(vec![
-        Span::raw("    "),
-        Span::styled(
-            format!(" {} ", i18n.text("overlay-user-input-submit")),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-    ])));
 }
 
 /// Joins one question's committed answer into a single summary string: the

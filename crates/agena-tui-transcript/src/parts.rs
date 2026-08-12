@@ -515,8 +515,10 @@ fn interaction_reply_resource(interaction: &InteractionContent) -> Option<UserIn
 }
 
 /// Project a typed domain request onto the API presentation resource,
-/// canonicalizing the enum kind back to its wire string.
-fn user_input_request_resource(request: agena_domain::UserInputRequest) -> UserInputRequest {
+/// canonicalizing the enum kind back to its wire string. Shared with the
+/// renderer, which converts a tool operation's `user_input` record request to
+/// the resource it draws from.
+pub(crate) fn user_input_request_resource(request: agena_domain::UserInputRequest) -> UserInputRequest {
     UserInputRequest {
         request_id: request.request_id,
         session_id: request.session_id,
@@ -549,7 +551,7 @@ fn user_input_request_resource(request: agena_domain::UserInputRequest) -> UserI
 }
 
 /// Project a typed domain reply onto the API presentation resource.
-fn user_input_reply_resource(reply: agena_domain::UserInputReply) -> UserInputReply {
+pub(crate) fn user_input_reply_resource(reply: agena_domain::UserInputReply) -> UserInputReply {
     UserInputReply {
         request_id: reply.request_id,
         kind: match reply.kind {

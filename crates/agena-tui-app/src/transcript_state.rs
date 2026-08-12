@@ -2094,6 +2094,49 @@ impl TranscriptState {
         );
     }
 
+    /// Auto-scroll so the ENTIRE expanded node — the interaction part's
+    /// headline through its last body row (the whole ask-user question page,
+    /// or the review decision block) — is visible, and land the cursor on the
+    /// node's headline. The viewport is anchored to the node's first line when
+    /// it fits; when the node is taller than the viewport, its last line is
+    /// pinned to the viewport bottom so the interactive/footer rows stay on
+    /// screen instead of just showing the part's top. Unlike
+    /// [`Self::move_cursor_to_visual_line_number`] (minimal reveal), this
+    /// never lets the reveal step clobber the fit-scroll.
+    pub(crate) fn reveal_node_fully(
+        &mut self,
+        key: &TranscriptNodeKey,
+        width: u16,
+        height: u16,
+    ) {
+        let (start_line, end_line, total_lines) = {
+            let rendered = self.rendered(width);
+            let Some(node) = rendered.nodes.iter().find(|node| node.key == *key) else {
+                return;
+            };
+            (node.start_line, node.end_line, rendered.lines.len())
+        };
+        if total_lines == 0 {
+            return;
+        }
+        let visible = usize::from(height.max(1));
+        let max_scroll = self.max_scroll(width, height);
+        let target_top = start_line
+            .min(end_line.saturating_sub(visible))
+            .min(max_scroll);
+        self.viewport.top = target_top;
+        self.install_cursor_at_column(
+            width,
+            height,
+            start_line.min(total_lines.saturating_sub(1)),
+            0,
+            0,
+            None,
+            true,
+        );
+        self.sync_follow_tail(width, height);
+    }
+
     /// Vim's `H`, `M`, and `L`: move to the first nonblank character of the
     /// top, middle, or bottom selectable row in the current viewport.
     pub(crate) fn move_cursor_to_viewport_row(

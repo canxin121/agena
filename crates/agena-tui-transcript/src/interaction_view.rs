@@ -45,8 +45,27 @@ pub fn interaction_request_id_for_part<'a>(
                 }
             }
         }
+        // The canonical single-activity shape: the ask lives inside the tool
+        // operation's `user_input` records. Only a still-awaiting record makes
+        // the part interactive — an answered operation's record has a reply,
+        // so `awaiting()` is empty and the part is no longer an interaction
+        // surface (it stays expandable, read-only).
+        TranscriptPartContent::Activity(TranscriptActivityContent::Operation(operation)) => {
+            operation
+                .user_input
+                .awaiting()
+                .next()
+                .map(|record| record.request.request_id.as_str())
+        }
         _ => None,
     }
+}
+
+/// Whether a projected tool operation is currently awaiting a user-input
+/// reply. This is the canonical "pending interaction part" predicate for the
+/// single-activity shape (a tool_call activity IS the ask).
+pub fn operation_has_awaiting_user_input(operation: &agena_api::part::OperationPartResource) -> bool {
+    operation.user_input.awaiting().next().is_some()
 }
 
 /// The minimal request facts the layout helpers need. Implemented for both the
@@ -184,9 +203,7 @@ pub enum InteractionLineKind {
     PlanBody,
     Separator,
     ReviewOption { option_index: usize },
-    ReviewOptionDetail { option_index: usize },
     ReviewCustomLabel,
-    ReviewCustomDetail,
     ReviewEditor,
 }
 
@@ -210,23 +227,26 @@ pub fn review_decision_region_start(plan_body_lines: usize) -> usize {
     plan_body_lines.saturating_add(1)
 }
 
+/// Number of decision-block rows the review renders: one row per option plus
+/// the custom-feedback label row when allowed. The review keeps ONE row per
+/// option (marker + label, no description detail line) and no custom-detail
+/// row, so the classifier and the renderer share this exact budget.
+pub fn review_decision_rows_count(options_len: usize, allow_custom: bool) -> usize {
+    options_len + usize::from(allow_custom)
+}
+
 /// Maps an offset within a review decision block (0 = first option label row)
-/// to the selected option index: label rows at even offsets (index = offset/2);
-/// the custom label maps to `options_len` when `allow_custom`.
+/// to the selected option index: each offset IS one option row (index =
+/// decision_offset); the custom label maps to `options_len` when `allow_custom`.
 pub fn review_selected_option_for_offset(
     options_len: usize,
     allow_custom: bool,
     decision_offset: usize,
 ) -> Option<usize> {
-    if allow_custom && decision_offset == options_len * 2 {
+    if allow_custom && decision_offset == options_len {
         return Some(options_len);
     }
-    if decision_offset % 2 == 0 {
-        let index = decision_offset / 2;
-        (index < options_len).then_some(index)
-    } else {
-        None
-    }
+    (decision_offset < options_len).then_some(decision_offset)
 }
 
 /// Whether a decision-block offset is on the custom feedback label row.
@@ -235,7 +255,7 @@ pub fn review_offset_is_custom_label(
     allow_custom: bool,
     decision_offset: usize,
 ) -> bool {
-    allow_custom && decision_offset == options_len * 2
+    allow_custom && decision_offset == options_len
 }
 
 /// The per-question layout facts the classifier needs, derived from the
@@ -291,9 +311,11 @@ pub fn interaction_ask_user_page_body_rows(
 }
 
 /// Body rows of the final ask-user summary page: title row + one row per
-/// question + separator + submit row.
+/// question + separator. There is no Submit row — Enter anywhere on the page
+/// submits ("free cursor"), so the budget is exactly title + questions +
+/// separator.
 pub fn interaction_ask_user_summary_body_rows(question_count: usize) -> usize {
-    1 + question_count + 1 + 1
+    1 + question_count + 1
 }
 
 /// Full review classifier: given the per-question layout, plan row count and
@@ -318,26 +340,22 @@ pub fn classify_interaction_line(
         return InteractionLineKind::Separator;
     }
     let decision_offset = body_offset.saturating_sub(plan_body_lines).saturating_sub(1);
-    if question.allow_custom {
-        if decision_offset == question.options_len * 2 {
-            return InteractionLineKind::ReviewCustomLabel;
-        }
-        if decision_offset == question.options_len * 2 + 1 {
-            return InteractionLineKind::ReviewCustomDetail;
-        }
-        if decision_offset == question.options_len * 2 + 2 && editing_custom {
-            return InteractionLineKind::ReviewEditor;
-        }
+    // Review renders ONE row per option (marker + label) plus the custom
+    // label row; the trailing footer-hint row and anything beyond classify as
+    // PlanBody so Enter there never submits.
+    if question.allow_custom && decision_offset == question.options_len {
+        return if editing_custom {
+            InteractionLineKind::ReviewEditor
+        } else {
+            InteractionLineKind::ReviewCustomLabel
+        };
     }
-    let option_index = decision_offset / 2;
-    if option_index >= question.options_len {
-        return InteractionLineKind::PlanBody;
+    if decision_offset < question.options_len {
+        return InteractionLineKind::ReviewOption {
+            option_index: decision_offset,
+        };
     }
-    if decision_offset % 2 == 0 {
-        InteractionLineKind::ReviewOption { option_index }
-    } else {
-        InteractionLineKind::ReviewOptionDetail { option_index }
-    }
+    InteractionLineKind::PlanBody
 }
 
 impl InteractionLineKind {
@@ -360,7 +378,7 @@ mod tests {
         interaction_ask_user_page_body_rows, interaction_ask_user_page_has_plan,
         interaction_ask_user_question_block_rows, interaction_ask_user_summary_body_rows,
         interaction_plan_body_lines,
-        review_decision_region_start, review_offset_is_custom_label,
+        review_decision_region_start, review_decision_rows_count, review_offset_is_custom_label,
         review_selected_option_for_offset,
     };
 
@@ -380,19 +398,21 @@ mod tests {
     }
 
     #[test]
-    fn review_selected_option_maps_even_offsets_and_the_custom_slot() {
-        // 2 options + custom: label rows at 0, 2 (options), 4 (custom).
+    fn review_selected_option_maps_each_row_and_the_custom_slot() {
+        // One row per option: offsets 0, 1 are the options, 2 is custom.
         assert_eq!(review_selected_option_for_offset(2, true, 0), Some(0));
-        assert_eq!(review_selected_option_for_offset(2, true, 2), Some(1));
-        assert_eq!(review_selected_option_for_offset(2, true, 4), Some(2));
-        // Detail rows (odd offsets) are not selections.
-        assert_eq!(review_selected_option_for_offset(2, true, 1), None);
-        // Without custom, offset 4 is out of range.
-        assert_eq!(review_selected_option_for_offset(2, false, 4), None);
+        assert_eq!(review_selected_option_for_offset(2, true, 1), Some(1));
+        assert_eq!(review_selected_option_for_offset(2, true, 2), Some(2));
+        // Without custom, offset 2 is out of range.
+        assert_eq!(review_selected_option_for_offset(2, false, 2), None);
         assert_eq!(review_selected_option_for_offset(2, false, 3), None);
-        assert!(review_offset_is_custom_label(2, true, 4));
-        assert!(!review_offset_is_custom_label(2, true, 3));
-        assert!(!review_offset_is_custom_label(2, false, 4));
+        assert!(review_offset_is_custom_label(2, true, 2));
+        assert!(!review_offset_is_custom_label(2, true, 1));
+        assert!(!review_offset_is_custom_label(2, false, 2));
+        // The row budget is one per option plus the optional custom label.
+        assert_eq!(review_decision_rows_count(2, true), 3);
+        assert_eq!(review_decision_rows_count(2, false), 2);
+        assert_eq!(review_decision_rows_count(0, true), 1);
     }
 
     #[test]
@@ -408,36 +428,32 @@ mod tests {
             classify_interaction_line(&layouts, plan, plan, false),
             InteractionLineKind::Separator
         );
-        // Option 0: label at offset plan+1, detail at plan+2.
+        // One row per option: option 0 at plan+1, option 1 at plan+2.
         assert_eq!(
             classify_interaction_line(&layouts, plan, plan + 1, false),
             InteractionLineKind::ReviewOption { option_index: 0 }
         );
         assert_eq!(
             classify_interaction_line(&layouts, plan, plan + 2, false),
-            InteractionLineKind::ReviewOptionDetail { option_index: 0 }
-        );
-        // Option 1: label at plan+3, detail at plan+4.
-        assert_eq!(
-            classify_interaction_line(&layouts, plan, plan + 3, false),
             InteractionLineKind::ReviewOption { option_index: 1 }
         );
-        // Custom label at plan+5, detail at plan+6, editor at plan+7 when open.
+        // Custom label at plan+3 (editor while editing), then the footer hint
+        // row and beyond classify as PlanBody (never submit-eligible).
         assert_eq!(
-            classify_interaction_line(&layouts, plan, plan + 5, false),
+            classify_interaction_line(&layouts, plan, plan + 3, false),
             InteractionLineKind::ReviewCustomLabel
         );
         assert_eq!(
-            classify_interaction_line(&layouts, plan, plan + 6, false),
-            InteractionLineKind::ReviewCustomDetail
+            classify_interaction_line(&layouts, plan, plan + 3, true),
+            InteractionLineKind::ReviewEditor
         );
         assert_eq!(
-            classify_interaction_line(&layouts, plan, plan + 7, false),
+            classify_interaction_line(&layouts, plan, plan + 4, false),
             InteractionLineKind::PlanBody
         );
         assert_eq!(
-            classify_interaction_line(&layouts, plan, plan + 7, true),
-            InteractionLineKind::ReviewEditor
+            classify_interaction_line(&layouts, plan, plan + 5, false),
+            InteractionLineKind::PlanBody
         );
     }
 
@@ -469,9 +485,10 @@ mod tests {
 
     #[test]
     fn ask_user_summary_rows_are_title_plus_one_row_per_question() {
-        assert_eq!(interaction_ask_user_summary_body_rows(2), 1 + 2 + 1 + 1);
-        assert_eq!(interaction_ask_user_summary_body_rows(1), 4);
-        assert_eq!(interaction_ask_user_summary_body_rows(0), 3);
+        // No Submit row on the summary page: title + per-question + separator.
+        assert_eq!(interaction_ask_user_summary_body_rows(2), 1 + 2 + 1);
+        assert_eq!(interaction_ask_user_summary_body_rows(1), 3);
+        assert_eq!(interaction_ask_user_summary_body_rows(0), 2);
     }
 
     #[test]
@@ -481,8 +498,6 @@ mod tests {
         assert!(InteractionLineKind::ReviewEditor.is_submit_eligible());
         assert!(!InteractionLineKind::PlanBody.is_submit_eligible());
         assert!(!InteractionLineKind::Separator.is_submit_eligible());
-        assert!(!InteractionLineKind::ReviewOptionDetail { option_index: 0 }.is_submit_eligible());
-        assert!(!InteractionLineKind::ReviewCustomDetail.is_submit_eligible());
     }
 
     #[test]

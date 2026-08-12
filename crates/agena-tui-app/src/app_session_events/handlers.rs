@@ -99,6 +99,7 @@ impl App {
                 // expand/collapse state, then apply the refreshed execution
                 // (which carries the answered part).
                 self.user_input_interactions.remove(&request_id);
+                self.revealed_user_input_request_ids.remove(&request_id);
                 if let Some(key) = self.pending_interaction_part_node_key(&request_id) {
                     self.transcript.node_expansions.remove(&key);
                     self.transcript.invalidate_render();

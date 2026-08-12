@@ -56,7 +56,7 @@ impl TranscriptState {
             node_expansions: BTreeMap::new(),
             expanded_operation_activity_ids: BTreeSet::new(),
             v2_activities: BTreeMap::new(),
-            interaction_documents: BTreeMap::new(),
+            interaction_views: BTreeMap::new(),
             rendered: None,
         }
     }
@@ -86,7 +86,7 @@ impl TranscriptState {
         self.jump_history_index = 0;
         self.node_expansions.clear();
         self.v2_activities.clear();
-        self.interaction_documents.clear();
+        self.interaction_views.clear();
         self.invalidate_render();
     }
 
@@ -964,7 +964,7 @@ impl TranscriptState {
                 &self.i18n,
                 &self.detail_expanded_by_default,
                 &self.node_expansions,
-                &self.interaction_documents,
+                &self.interaction_views,
             );
             let base_line = lines.len();
             let base_node = nodes.len();

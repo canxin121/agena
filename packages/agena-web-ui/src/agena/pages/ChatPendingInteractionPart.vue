@@ -5,10 +5,10 @@ import { renderMarkdown } from '@/agena/lib/markdown'
 
 /**
  * "Everything is a part": a pending interaction part (plan review or ask-user)
- * renders as a foldable inline form inside the message, collapsed by default.
- * Expanding it makes it directly interactive — the part is the interaction
- * surface, not a separate card. After the reply lands the part returns to its
- * answered, non-interactive rendering.
+ * renders as a foldable inline form inside the message, auto-expanded on
+ * arrival so the approval is immediately actionable. The part is the
+ * interaction surface, not a separate card. After the reply lands the part
+ * returns to its answered, non-interactive rendering.
  */
 
 const props = defineProps<{
@@ -97,7 +97,7 @@ function onInput(event: Event, index: number) {
 </script>
 
 <template>
-  <details class="message-input-activity" :open="false">
+  <details class="message-input-activity" :open="true">
     <summary class="message-input-activity-head">
       <span class="badge">{{ kind === 'review' ? 'Plan review' : 'User input' }}</span>
       <strong>{{ title }}</strong>

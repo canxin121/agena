@@ -1,25 +1,12 @@
 //! Presentation state and reduction for interactive user-input overlays.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crossterm::event::KeyEvent;
-use ratatui::{
-    Frame,
-    layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{ListItem, Paragraph},
-};
+use ratatui::text::{Line, Span};
 
-use crate::i18n::I18n;
 use crate::keymap::{KeyAction, KeyContext, resolve};
-use agena_tui_components::{
-    Editor, FramedSurfaceSpec, QuestionFlowCustomInputSpec, QuestionFlowDialogMode,
-    QuestionFlowDialogSpec, QuestionFlowScreen, QuestionFlowState, SurfaceMode,
-    framed_overlay_height, render_framed_surface, render_question_flow_dialog_scrollable,
-    wrapped_text_height_for_text,
-};
+use agena_tui_components::{Editor, QuestionFlowScreen, QuestionFlowState};
 use tui_markdown::from_str as markdown_to_text;
 
 /// A display-only option in an interactive question. Domain request mapping,
@@ -101,12 +88,6 @@ impl UserInputReviewPresentation {
         self.scroll
     }
 
-    /// Number of pre-rendered plan rows (at least one placeholder so the
-    /// document always has content to scroll before the decision block).
-    pub fn plan_rows(&self) -> usize {
-        self.plan_lines.len().max(1)
-    }
-
     pub fn custom_input(&self) -> &Editor {
         &self.custom_input
     }
@@ -118,12 +99,6 @@ impl UserInputReviewPresentation {
     /// The trimmed free-text feedback the user typed, empty when none.
     pub fn custom_text(&self) -> String {
         self.custom_input.text().trim().to_string()
-    }
-
-    /// Width used to pre-render the plan rows; decision rows wrap at this
-    /// width too so cursor arithmetic stays consistent.
-    pub fn content_width(&self) -> u16 {
-        self.content_width
     }
 }
 
@@ -291,6 +266,19 @@ impl UserInputPresentation {
         }
         self.custom_input.insert_str(text);
         true
+    }
+
+    /// Route a key into the inline custom editor (native part path). The
+    /// editor is already open — the App routed the transcript key stream here
+    /// via `interaction_editing` — so every key drives the underlying editor
+    /// directly; Close/Submit are reported back for the App to manage the
+    /// editor lifecycle. Mirrors the overlay's `handle_review_custom_key` /
+    /// `handle_custom_input_key` arms without a page-size parameter.
+    pub fn handle_custom_edit_key(&mut self, key: KeyEvent) -> UserInputEffect {
+        if self.review_decision {
+            return self.handle_review_custom_key(key);
+        }
+        self.handle_custom_input_key(key)
     }
 
     pub fn handle_key(&mut self, key: KeyEvent, page_size: usize) -> UserInputEffect {
@@ -534,12 +522,16 @@ impl UserInputPresentation {
             .min(total.saturating_sub(body_height.max(1)));
     }
 
-    fn begin_review_custom_edit(&mut self) {
+    /// Open the review custom-feedback editor, positioning the review cursor
+    /// on the custom label row. Returns whether editing actually began (the
+    /// review question must allow custom feedback). Called by the overlay's
+    /// Enter-on-empty-custom path and by the native part's inline editor.
+    pub fn begin_review_custom_edit(&mut self) -> bool {
         let Some(question) = self.questions.first() else {
-            return;
+            return false;
         };
         if !question.allow_custom {
-            return;
+            return false;
         }
         self.review.selected_option = question.options.len();
         let custom_label_row = self
@@ -547,6 +539,7 @@ impl UserInputPresentation {
             .saturating_add(question.options.len().saturating_mul(2));
         self.review.cursor_line = custom_label_row;
         self.review.editing_custom = true;
+        true
     }
 
     fn review_snap_custom_cursor(&mut self) {
@@ -837,6 +830,37 @@ impl UserInputPresentation {
         }
     }
 
+    /// Toggle option `option_index` of question `question_index` in the
+    /// ask-user flow, as if the overlay cursor were on that row. Public for
+    /// the native part's decision-row Enter, which derives the option from the
+    /// transcript cursor instead of a presentation cursor.
+    pub fn toggle_option_at(&mut self, question_index: usize, option_index: usize) {
+        let Some(question) = self.questions.get(question_index) else {
+            return;
+        };
+        if option_index >= question.options.len() {
+            return;
+        }
+        self.state.focus_question(question_index, self.questions.len());
+        self.state.set_selected_option(option_index);
+        self.toggle_option();
+    }
+
+    /// Select option `option_index` of question `question_index` in the
+    /// ask-user flow, clearing any previously picked option/custom value of
+    /// that question (single-pick semantics).
+    pub fn select_option_at(&mut self, question_index: usize, option_index: usize) {
+        let Some(question) = self.questions.get(question_index) else {
+            return;
+        };
+        if option_index >= question.options.len() {
+            return;
+        }
+        self.state.focus_question(question_index, self.questions.len());
+        self.state.set_selected_option(option_index);
+        self.select_option();
+    }
+
     fn toggle_option(&mut self) {
         let (is_custom, allow_custom, multiple, option_count) = {
             let Some(question) = self.questions.get(self.state.selected_question()) else {
@@ -989,813 +1013,6 @@ fn preferred_option_row(
 /// Renders the full User Input overlay from its TUI-owned request projection
 /// and presentation state. Domain reply construction and Runtime effects stay
 /// in the App adapter.
-pub fn render_overlay(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    presentation: &UserInputPresentation,
-    i18n: &I18n,
-) {
-    if presentation.is_review_decision() {
-        render_review_decision(frame, area, presentation, i18n);
-        return;
-    }
-
-    let overlay = presentation.overlay();
-    let title = display_title(overlay, i18n);
-    if presentation.screen() == QuestionFlowScreen::Review {
-        let nav_body = navigation_body(presentation, i18n);
-        let mut review_lines: Vec<Line<'static>> = Vec::new();
-        review_lines.push(Line::from(Span::styled(
-            i18n.text("overlay-user-input-review-intro"),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        for (index, question) in presentation.questions().iter().enumerate() {
-            let values = answer_values(question, presentation.answer(index));
-            let answered = !values.is_empty();
-            let style = if index == presentation.selected_question() {
-                selection_style()
-            } else {
-                Style::default()
-            };
-            review_lines.push(Line::from(vec![
-                Span::styled(format!("{} ", if answered { "[x]" } else { "[ ]" }), style),
-                Span::styled(question_label(question), style.add_modifier(Modifier::BOLD)),
-            ]));
-            review_lines.push(Line::from(Span::styled(
-                format!("    {}", answer_preview(values.as_slice(), i18n)),
-                if answered {
-                    Style::default().fg(agena_tui_components::theme::info_color())
-                } else {
-                    Style::default().fg(agena_tui_components::theme::muted_color())
-                },
-            )));
-        }
-        let review_body = Text::from(review_lines);
-        let footer = Text::from(footer_text(
-            overlay,
-            i18n,
-            "overlay-user-input-footer-review",
-        ));
-        render_question_flow_dialog_scrollable(
-            frame,
-            area,
-            SurfaceMode::Overlay,
-            &QuestionFlowDialogSpec::new(
-                title.into(),
-                92,
-                i18n.text("overlay-user-input-questions").into(),
-                Some(&nav_body),
-                QuestionFlowDialogMode::review(
-                    i18n.text("overlay-user-input-summary").into(),
-                    &review_body,
-                    &footer,
-                ),
-            ),
-            presentation.flow_scroll,
-        );
-        return;
-    }
-
-    let Some(question) = presentation
-        .questions()
-        .get(presentation.selected_question())
-    else {
-        let body = Text::from(vec![Line::from(
-            i18n.text("overlay-user-input-no-questions"),
-        )]);
-        render_question_flow_dialog_scrollable(
-            frame,
-            area,
-            SurfaceMode::Overlay,
-            &QuestionFlowDialogSpec::new(
-                title.into(),
-                92,
-                i18n.text("overlay-user-input-questions").into(),
-                None,
-                QuestionFlowDialogMode::empty(
-                    i18n.text("overlay-user-input-detail").into(),
-                    &body,
-                    12,
-                ),
-            ),
-            presentation.flow_scroll,
-        );
-        return;
-    };
-
-    let nav_body = navigation_body(presentation, i18n);
-    let draft = presentation
-        .answer(presentation.selected_question())
-        .cloned()
-        .unwrap_or_default();
-    let prompt_lines = vec![Line::from(Span::styled(
-        sanitize_display_text(question.question.as_str()),
-        Style::default().add_modifier(Modifier::BOLD),
-    ))];
-    let prompt_body = Text::from(prompt_lines);
-    let choice_width = area.width.saturating_sub(8);
-    let mut choice_items = Vec::new();
-    let selected_row = presentation.selected_option();
-    for (index, option) in question.options.iter().enumerate() {
-        let picked = draft.option_indexes.contains(&index);
-        let marker = if question.multiple {
-            if picked { "[x]" } else { "[ ]" }
-        } else if picked {
-            "(x)"
-        } else {
-            "( )"
-        };
-        let mut lines = vec![Line::from(vec![
-            Span::styled(format!("{marker} "), Style::default()),
-            Span::styled(
-                sanitize_display_text(option.label.as_str()),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ])];
-        if !option.description.trim().is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "    {}",
-                    truncate_display_text(option.description.as_str(), choice_width)
-                ),
-                Style::default().fg(agena_tui_components::theme::muted_color()),
-            )));
-        }
-        choice_items.push(ListItem::new(lines));
-    }
-    if question.allow_custom {
-        let picked = !draft.custom_values.is_empty();
-        let marker = if question.multiple {
-            if picked { "[x]" } else { "[ ]" }
-        } else if picked {
-            "(x)"
-        } else {
-            "( )"
-        };
-        let mut lines = vec![Line::from(vec![
-            Span::styled(format!("{marker} "), Style::default()),
-            Span::styled(
-                i18n.text("overlay-user-input-other"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ])];
-        if !presentation.is_editing_custom() {
-            let values = if draft.custom_values.is_empty() {
-                i18n.text("overlay-user-input-custom-empty")
-            } else {
-                truncate_display_text(draft.custom_values.join(", ").as_str(), choice_width)
-            };
-            lines.push(Line::from(Span::styled(
-                format!("    {values}"),
-                if draft.custom_values.is_empty() {
-                    Style::default().fg(agena_tui_components::theme::muted_color())
-                } else {
-                    Style::default().fg(agena_tui_components::theme::info_color())
-                },
-            )));
-        }
-        choice_items.push(ListItem::new(lines));
-    }
-    let footer = Text::from(footer_text(
-        overlay,
-        i18n,
-        "overlay-user-input-footer-question",
-    ));
-    // The custom reply is typed inline inside the choices panel, directly under
-    // the custom option row, while the custom editor is active.
-    let custom_input = question
-        .allow_custom
-        .then_some(QuestionFlowCustomInputSpec::new(
-            i18n.text("overlay-user-input-custom-input").into(),
-            presentation.custom_input(),
-            presentation.is_editing_custom(),
-        ))
-        .filter(|_| presentation.is_editing_custom());
-    let result = render_question_flow_dialog_scrollable(
-        frame,
-        area,
-        SurfaceMode::Overlay,
-        &QuestionFlowDialogSpec::new(
-            title.into(),
-            92,
-            i18n.text("overlay-user-input-questions").into(),
-            Some(&nav_body),
-            QuestionFlowDialogMode::question(
-                format!(
-                    "{} ({})",
-                    i18n.text("overlay-user-input-prompt-panel"),
-                    i18n.text(if question.multiple {
-                        "overlay-user-input-choice-multiple-short"
-                    } else {
-                        "overlay-user-input-choice-single-short"
-                    })
-                )
-                .into(),
-                &prompt_body,
-                i18n.text("overlay-user-input-choices").into(),
-                choice_items.as_slice(),
-                Some(selected_row),
-                None,
-                None,
-                custom_input,
-                &footer,
-            ),
-        ),
-        presentation.flow_scroll,
-    );
-    if let Some(cursor) = result.cursor {
-        frame.set_cursor_position(cursor);
-    }
-}
-
-/// Target width (columns) for the review-decision overlay, comparable to the
-/// skill-studio detail dialog (104). Wide enough for plan documents to read
-/// comfortably; `adaptive_modal_width` still caps it to fit small terminals.
-const REVIEW_DECISION_TARGET_WIDTH: u16 = 108;
-
-/// Minimum dialog height for the review-decision overlay, so short plans still
-/// open as a substantial modal instead of hugging a handful of rows.
-const REVIEW_DECISION_MIN_HEIGHT: usize = 18;
-
-/// The width at which the review-decision document is laid out. The App
-/// pre-renders the plan body at this width so cursor arithmetic matches the
-/// rendered rows.
-pub fn user_input_review_content_width(area: Rect) -> u16 {
-    SurfaceMode::Overlay
-        .content_width(area, REVIEW_DECISION_TARGET_WIDTH)
-        .max(1)
-}
-
-/// Layout metrics of the review-decision overlay, shared by the renderer and
-/// the paging logic so PageUp/PageDown step by exactly one visible screen
-/// instead of a hard-coded number of lines.
-#[derive(Debug, Clone, Copy)]
-struct ReviewDecisionLayout {
-    natural_height: usize,
-    body_height: usize,
-}
-
-fn review_decision_layout(
-    presentation: &UserInputPresentation,
-    i18n: &I18n,
-    area: Rect,
-) -> ReviewDecisionLayout {
-    let overlay = presentation.overlay();
-    let content_width = presentation
-        .review()
-        .content_width
-        .max(user_input_review_content_width(area));
-    let footer = Text::from(review_footer_lines(overlay, i18n));
-    let footer_height =
-        usize::from(wrapped_text_height_for_text(&footer, content_width).clamp(1, 2));
-    let natural_height = presentation
-        .review_total_lines()
-        .max(REVIEW_DECISION_MIN_HEIGHT);
-    let target_height = framed_overlay_height(u16::try_from(natural_height).unwrap_or(u16::MAX));
-    let outer_height = SurfaceMode::Overlay
-        .outer_rect(area, content_width.saturating_add(2), target_height)
-        .height;
-    let inner_height = usize::from(outer_height.saturating_sub(2).max(1));
-    let body_height = inner_height.saturating_sub(footer_height).max(1);
-    ReviewDecisionLayout {
-        natural_height,
-        body_height,
-    }
-}
-
-/// The number of lines one PageUp/PageDown moves the review-decision cursor,
-/// matching the document's visible height.
-pub fn review_decision_page_size(
-    presentation: &UserInputPresentation,
-    i18n: &I18n,
-    area: Rect,
-) -> usize {
-    review_decision_layout(presentation, i18n, area)
-        .body_height
-        .max(1)
-}
-
-fn review_footer_lines(overlay: &UserInputOverlayPresentation, i18n: &I18n) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from(footer_text(
-        overlay,
-        i18n,
-        "overlay-user-input-footer-review",
-    ))];
-    if let Some(timeout) = timeout_text(overlay, i18n) {
-        lines.push(Line::from(Span::styled(
-            format!("◷ {timeout}"),
-            Style::default().fg(agena_tui_components::theme::warning_color()),
-        )));
-    }
-    lines
-}
-
-/// Builds the flat review document: chat-style plan rows, a separator, and the
-/// decision rows. The cursor row is highlighted; the selected decision shows a
-/// `(x)` marker on its label row.
-pub fn build_review_document(
-    presentation: &UserInputPresentation,
-    question: &UserInputQuestionPresentation,
-    i18n: &I18n,
-    content_width: u16,
-) -> Vec<Line<'static>> {
-    let mut document = Vec::new();
-    let plan = presentation.review().plan_lines.clone();
-    if plan.is_empty() {
-        document.push(Line::from(Span::styled(
-            i18n.text("overlay-user-input-no-questions"),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        )));
-    } else {
-        document.extend(plan);
-    }
-    document.push(Line::from(Span::styled(
-        "─".repeat(usize::from(content_width.max(1))),
-        Style::default().fg(agena_tui_components::theme::muted_color()),
-    )));
-
-    let decision_start = presentation.review_decision_start();
-    let cursor_line = presentation.review().cursor_line;
-    let selected_index = if cursor_line >= decision_start {
-        Some(cursor_line.saturating_sub(decision_start) / 2)
-    } else {
-        None
-    };
-    for (index, option) in question.options.iter().enumerate() {
-        let marker = if selected_index == Some(index) {
-            "(x)"
-        } else {
-            "( )"
-        };
-        document.push(Line::from(vec![
-            Span::styled(format!("{marker} "), Style::default()),
-            Span::styled(
-                truncate_display_text(option.label.as_str(), content_width.saturating_sub(4)),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ]));
-        document.push(Line::from(Span::styled(
-            if option.description.trim().is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "    {}",
-                    truncate_display_text(
-                        option.description.as_str(),
-                        content_width.saturating_sub(4)
-                    )
-                )
-            },
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        )));
-    }
-    if question.allow_custom {
-        let custom_index = question.options.len();
-        let marker = if selected_index == Some(custom_index) {
-            "(x)"
-        } else {
-            "( )"
-        };
-        document.push(Line::from(vec![
-            Span::styled(format!("{marker} "), Style::default()),
-            Span::styled(
-                i18n.text("overlay-user-input-review-feedback"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ]));
-        if presentation.review().is_editing_custom() {
-            document.push(Line::from(Span::styled(
-                format!(
-                    "    {}",
-                    truncate_display_text(
-                        presentation.review().custom_input().text(),
-                        content_width.saturating_sub(4)
-                    )
-                ),
-                Style::default(),
-            )));
-        } else {
-            let feedback = presentation.review().custom_text();
-            document.push(Line::from(Span::styled(
-                format!(
-                    "    {}",
-                    if feedback.is_empty() {
-                        i18n.text("overlay-user-input-review-feedback-empty")
-                    } else {
-                        truncate_display_text(feedback.as_str(), content_width.saturating_sub(4))
-                    }
-                ),
-                Style::default().fg(agena_tui_components::theme::muted_color()),
-            )));
-        }
-    }
-    let last = document.len().saturating_sub(1);
-    if let Some(row) = document.get_mut(cursor_line.min(last)) {
-        row.style = selection_style();
-    }
-    document
-}
-
-/// Builds the flat inline document shown inside an expanded interaction part
-/// in the transcript: the same layout as the overlay, but without any framed
-/// surface — plan rows, a separator, and the decision rows for a review; or
-/// the question list, choices, and answer previews for the question flow. The
-/// selected row is highlighted so the cursor position is visible in-place.
-pub fn build_inline_document(
-    presentation: &UserInputPresentation,
-    i18n: &I18n,
-    content_width: u16,
-) -> Vec<Line<'static>> {
-    if presentation.is_review_decision() {
-        let Some(question) = presentation.questions().first() else {
-            return Vec::new();
-        };
-        return build_review_document(presentation, question, i18n, content_width);
-    }
-
-    let mut document = Vec::new();
-    let on_review_screen = presentation.screen() == QuestionFlowScreen::Review;
-    for (index, question) in presentation.questions().iter().enumerate() {
-        let answered = !answer_values(question, presentation.answer(index)).is_empty();
-        let focused = !on_review_screen && index == presentation.selected_question();
-        let label = if question.header.trim().is_empty() {
-            format!("Q{}", index + 1)
-        } else {
-            question.header.clone()
-        };
-        document.push(Line::from(vec![
-            Span::styled(
-                format!("{} ", if answered { "[x]" } else { "[ ]" }),
-                if focused {
-                    selection_style()
-                } else {
-                    Style::default()
-                },
-            ),
-            Span::styled(
-                truncate_display_text(label.as_str(), content_width.saturating_sub(4)),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ]));
-        document.push(Line::from(Span::styled(
-            truncate_display_text(question.question.as_str(), content_width.saturating_sub(4)),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        )));
-
-        let draft = presentation.answer(index);
-        for (option_index, option) in question.options.iter().enumerate() {
-            let picked = draft
-                .map(|draft| draft.option_indexes.contains(&option_index))
-                .unwrap_or(false);
-            let marker = if question.multiple {
-                if picked {
-                    "[x]"
-                } else {
-                    "[ ]"
-                }
-            } else if picked {
-                "(x)"
-            } else {
-                "( )"
-            };
-            let selected = focused && presentation.selected_option() == option_index;
-            document.push(Line::from(vec![
-                Span::styled(format!("    {marker} "), Style::default()),
-                Span::styled(
-                    truncate_display_text(
-                        option.label.as_str(),
-                        content_width.saturating_sub(8),
-                    ),
-                    if selected {
-                        selection_style().add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().add_modifier(Modifier::BOLD)
-                    },
-                ),
-            ]));
-            if !option.description.trim().is_empty() {
-                document.push(Line::from(Span::styled(
-                    format!(
-                        "        {}",
-                        truncate_display_text(
-                            option.description.as_str(),
-                            content_width.saturating_sub(8)
-                        )
-                    ),
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                )));
-            }
-        }
-        if question.allow_custom {
-            let custom_values = draft
-                .map(|draft| draft.custom_values.as_slice())
-                .unwrap_or_default();
-            let picked = !custom_values.is_empty();
-            let marker = if question.multiple {
-                if picked {
-                    "[x]"
-                } else {
-                    "[ ]"
-                }
-            } else if picked {
-                "(x)"
-            } else {
-                "( )"
-            };
-            let selected = focused && presentation.selected_option() == question.options.len();
-            document.push(Line::from(vec![
-                Span::styled(format!("    {marker} "), Style::default()),
-                Span::styled(
-                    i18n.text("overlay-user-input-other"),
-                    if selected {
-                        selection_style().add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().add_modifier(Modifier::BOLD)
-                    },
-                ),
-            ]));
-            let values = if custom_values.is_empty() {
-                i18n.text("overlay-user-input-custom-empty")
-            } else {
-                truncate_display_text(custom_values.join(", ").as_str(), content_width.saturating_sub(8))
-            };
-            document.push(Line::from(Span::styled(
-                format!("        {values}"),
-                if custom_values.is_empty() {
-                    Style::default().fg(agena_tui_components::theme::muted_color())
-                } else {
-                    Style::default().fg(agena_tui_components::theme::info_color())
-                },
-            )));
-        }
-        if answered {
-            document.push(Line::from(Span::styled(
-                format!(
-                    "    {}",
-                    truncate_display_text(
-                        answer_preview(
-                            answer_values(question, draft).as_slice(),
-                            i18n
-                        )
-                        .as_str(),
-                        content_width.saturating_sub(4)
-                    )
-                ),
-                Style::default().fg(agena_tui_components::theme::info_color()),
-            )));
-        }
-    }
-    document.push(Line::from(Span::styled(
-        "─".repeat(usize::from(content_width.max(1))),
-        Style::default().fg(agena_tui_components::theme::muted_color()),
-    )));
-    if !presentation.review_is_hidden() {
-        document.push(Line::from(Span::styled(
-            format!(" {} ", i18n.text("overlay-user-input-submit")),
-            if on_review_screen {
-                selection_style()
-            } else {
-                Style::default()
-            },
-        )));
-    }
-    if let Some(timeout) = timeout_text(presentation.overlay(), i18n) {
-        document.push(Line::from(Span::styled(
-            format!("◷ {timeout}"),
-            Style::default().fg(agena_tui_components::theme::warning_color()),
-        )));
-    }
-    document
-}
-
-fn render_review_decision(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    presentation: &UserInputPresentation,
-    i18n: &I18n,
-) {
-    let overlay = presentation.overlay();
-    let Some(question) = presentation.questions().first() else {
-        return;
-    };
-    let content_width = presentation
-        .review()
-        .content_width
-        .max(user_input_review_content_width(area));
-    let layout = review_decision_layout(presentation, i18n, area);
-    let scroll = presentation
-        .review()
-        .scroll()
-        .min(layout.natural_height.saturating_sub(layout.body_height));
-    let footer = Text::from(review_footer_lines(overlay, i18n));
-    let frame_surface = render_framed_surface(
-        frame,
-        area,
-        SurfaceMode::Overlay,
-        &FramedSurfaceSpec {
-            title: display_title(overlay, i18n).into(),
-            target_width: content_width.saturating_add(2),
-            target_height: framed_overlay_height(
-                u16::try_from(layout.natural_height.max(1)).unwrap_or(u16::MAX),
-            ),
-        },
-    );
-    let inner = frame_surface.inner;
-    let footer_height =
-        usize::from(wrapped_text_height_for_text(&footer, content_width).clamp(1, 2));
-    let body_area = Rect {
-        x: inner.x,
-        y: inner.y,
-        width: inner.width,
-        height: inner.height.saturating_sub(footer_height as u16).max(1),
-    };
-
-    let document = build_review_document(presentation, question, i18n, content_width);
-    let total = document.len().max(1);
-    let start = scroll.min(total);
-    let end = total.min(start.saturating_add(usize::from(body_area.height)));
-    let visible = &document[start..end];
-    frame.render_widget(
-        Paragraph::new(Text::from(visible.to_vec())).wrap(ratatui::widgets::Wrap { trim: false }),
-        body_area,
-    );
-    frame.render_widget(
-        Paragraph::new(footer).wrap(ratatui::widgets::Wrap { trim: false }),
-        Rect {
-            x: inner.x,
-            y: inner.y.saturating_add(body_area.height),
-            width: inner.width,
-            height: inner.height.saturating_sub(body_area.height).max(1),
-        },
-    );
-
-    if presentation.review().is_editing_custom() {
-        let editor_row = presentation
-            .review_decision_start()
-            .saturating_add(question.options.len().saturating_mul(2))
-            .saturating_add(1);
-        if editor_row >= start && editor_row < end {
-            let text = presentation.review().custom_input().text();
-            let column = unicode_width::UnicodeWidthStr::width(
-                &text[..text.len().min(
-                    presentation
-                        .review()
-                        .custom_input()
-                        .cursor()
-                        .min(text.len()),
-                )],
-            );
-            let cursor_x = body_area
-                .x
-                .saturating_add(4)
-                .saturating_add(column as u16)
-                .min(
-                    body_area
-                        .x
-                        .saturating_add(body_area.width.saturating_sub(1)),
-                );
-            frame.set_cursor_position((
-                cursor_x,
-                body_area.y.saturating_add((editor_row - start) as u16),
-            ));
-        }
-    }
-}
-
-fn navigation_body(presentation: &UserInputPresentation, i18n: &I18n) -> Text<'static> {
-    let overlay = presentation.overlay();
-    let mut spans = Vec::new();
-    for (index, question) in presentation.questions().iter().enumerate() {
-        let answered = !answer_values(question, presentation.answer(index)).is_empty();
-        let label = if question.header.trim().is_empty() {
-            format!("Q{}", index + 1)
-        } else {
-            question.header.clone()
-        };
-        let style = if index == presentation.selected_question()
-            && presentation.screen() == QuestionFlowScreen::Question
-        {
-            selection_style()
-        } else if answered {
-            Style::default()
-                .fg(agena_tui_components::theme::info_color())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        spans.push(Span::styled(
-            format!(
-                " {} {} ",
-                if answered { "[x]" } else { "[ ]" },
-                truncate_display_text(label.as_str(), 12)
-            ),
-            style,
-        ));
-        spans.push(Span::raw(" "));
-    }
-    if !presentation.review_is_hidden() {
-        spans.push(Span::styled(
-            format!(" [>] {} ", i18n.text("overlay-user-input-submit")),
-            if presentation.screen() == QuestionFlowScreen::Review {
-                selection_style()
-            } else {
-                Style::default()
-            },
-        ));
-    }
-    let mut lines = vec![
-        Line::from(Span::styled(
-            i18n.text_args(
-                "overlay-user-input-request-id",
-                &crate::fl_args!("request_id" => overlay.request_id.clone()),
-            ),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        )),
-        Line::from(spans),
-    ];
-    if let Some(timeout) = timeout_text(overlay, i18n) {
-        lines.push(Line::from(Span::styled(
-            format!("◷ {timeout}"),
-            Style::default().fg(agena_tui_components::theme::warning_color()),
-        )));
-    }
-    Text::from(lines)
-}
-
-fn display_title(overlay: &UserInputOverlayPresentation, i18n: &I18n) -> String {
-    if !overlay.title.trim().is_empty() {
-        sanitize_display_text(overlay.title.as_str())
-    } else {
-        i18n.text("overlay-user-input-title")
-    }
-}
-
-fn footer_text(_overlay: &UserInputOverlayPresentation, i18n: &I18n, key: &str) -> String {
-    i18n.text(key)
-}
-
-fn timeout_text(overlay: &UserInputOverlayPresentation, i18n: &I18n) -> Option<String> {
-    let timeout = overlay.auto_resolution_ms?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_millis() as i64;
-    let remaining = overlay
-        .created_at_ms
-        .saturating_add(timeout as i64)
-        .saturating_sub(now)
-        .max(0) as u64;
-    let seconds = remaining.div_ceil(1000);
-    Some(i18n.text_args(
-        "overlay-user-input-auto-resolve",
-        &crate::fl_args!("remaining" => format!("{}:{:02}", seconds / 60, seconds % 60)),
-    ))
-}
-
-fn answer_values(
-    question: &UserInputQuestionPresentation,
-    draft: Option<&UserInputAnswerDraft>,
-) -> Vec<String> {
-    let Some(draft) = draft else {
-        return Vec::new();
-    };
-    let mut values = draft
-        .option_indexes
-        .iter()
-        .filter_map(|index| question.options.get(*index))
-        .map(|option| option.label.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    values.extend(
-        draft
-            .custom_values
-            .iter()
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty()),
-    );
-    if question.multiple {
-        values
-    } else {
-        values.into_iter().take(1).collect()
-    }
-}
-
-fn question_label(question: &UserInputQuestionPresentation) -> String {
-    if !question.header.trim().is_empty() {
-        sanitize_display_text(question.header.as_str())
-    } else {
-        sanitize_display_text(question.question.as_str())
-    }
-}
-
-fn answer_preview(values: &[String], i18n: &I18n) -> String {
-    if values.is_empty() {
-        i18n.text("overlay-user-input-unanswered")
-    } else {
-        truncate_display_text(values.join(", ").as_str(), 72)
-    }
-}
-
 pub(crate) fn markdown_lines(markdown: &str) -> Vec<Line<'static>> {
     let markdown = markdown.trim();
     if markdown.is_empty() {
@@ -1814,28 +1031,6 @@ pub(crate) fn markdown_lines(markdown: &str) -> Vec<Line<'static>> {
             )
         })
         .collect()
-}
-
-fn selection_style() -> Style {
-    agena_tui_components::theme::selection_style()
-}
-
-fn truncate_display_text(text: &str, max_width: u16) -> String {
-    let max_width = max_width as usize;
-    let mut width = 0_usize;
-    let mut out = String::new();
-    for ch in sanitize_display_text(text).chars() {
-        let char_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if width.saturating_add(char_width) > max_width {
-            break;
-        }
-        out.push(ch);
-        width = width.saturating_add(char_width);
-    }
-    if out.chars().count() < text.chars().count() && max_width > 0 {
-        out.push('…');
-    }
-    out
 }
 
 fn sanitize_display_text(text: &str) -> String {
@@ -1866,7 +1061,7 @@ fn sanitize_display_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        I18n, Line, Rect, UserInputEffect, UserInputOptionPresentation, UserInputPresentation,
+        Line, UserInputEffect, UserInputOptionPresentation, UserInputPresentation,
         UserInputQuestionPresentation,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -2142,29 +1337,5 @@ mod tests {
         presentation.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL), 10);
         presentation.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL), 10);
         assert_eq!(presentation.flow_scroll(), 0);
-    }
-
-    #[test]
-    fn review_overlay_opens_as_a_roomy_modal() {
-        // The review dialog is meant to read a whole plan document: it targets
-        // a wide column count and a minimum height even for short plans.
-        let width = super::user_input_review_content_width(Rect::new(0, 0, 220, 60));
-        assert!(
-            width >= 100,
-            "review width should be comfortably wide, got {width}"
-        );
-        assert_eq!(width, super::REVIEW_DECISION_TARGET_WIDTH - 2);
-
-        let mut presentation =
-            UserInputPresentation::new(overlay(true), vec![question(false, false)]);
-        presentation.set_review_plan(vec![Line::from("short plan")], width);
-        let layout =
-            super::review_decision_layout(&presentation, &I18n::default(), Rect::new(0, 0, 220, 60));
-        assert!(
-            layout.natural_height >= super::REVIEW_DECISION_MIN_HEIGHT,
-            "a short plan should still open at least {} rows tall, got {}",
-            super::REVIEW_DECISION_MIN_HEIGHT,
-            layout.natural_height
-        );
     }
 }

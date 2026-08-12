@@ -3,10 +3,12 @@ impl App {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
         self.transcript.ensure_visual_focus(width, height);
-        // An expanded pending interaction part is the interaction surface:
-        // its keys (j/k/Enter/Ctrl+X/e/Esc) drive the UserInputPresentation
-        // state machine before any normal transcript dispatch.
-        if self.handle_active_interaction_node_key(key) {
+        // An expanded pending interaction part is the interaction surface.
+        // The thin action layer only intercepts Enter-on-decision-row,
+        // Ctrl+X, `e`-on-custom, and Esc-to-collapse; every other key (j/k/
+        // h/l/space/PgUp/PgDn/Ctrl+U/D/B) falls through to normal dispatch so
+        // the chat keeps owning navigation ("everything is a part").
+        if self.handle_active_interaction_action(key) {
             return;
         }
         let action = resolve_tui_key(KeyContext::Transcript, key);

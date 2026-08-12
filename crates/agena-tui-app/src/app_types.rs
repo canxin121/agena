@@ -466,11 +466,19 @@ pub struct App {
     pub(super) context_help: Option<HelpOverlay>,
     pub(super) seen_permission_request_ids: BTreeSet<String>,
     pub(super) seen_user_input_request_ids: BTreeSet<String>,
+    /// Pending user-input request_ids whose part was already auto-revealed
+    /// (expanded + cursor moved onto it) on arrival. Guards the reveal retry
+    /// against re-yanking the cursor on every execution refresh: once revealed,
+    /// a request stays revealed until it resolves.
+    pub(super) revealed_user_input_request_ids: BTreeSet<String>,
     /// Live interaction state for pending user-input parts, keyed by
     /// `request_id`. This replaces the old `Overlay::UserInputReply` modal:
     /// the interaction lives on the expanded transcript part, so this map is
     /// the source of truth the inline renderer and the key router read from.
     pub(super) user_input_interactions: BTreeMap<String, UserInputOverlay>,
+    /// The `request_id` whose inline custom-feedback editor is open, when the
+    /// transcript key stream is owned by that editor. `None` otherwise.
+    pub(super) interaction_editing: Option<String>,
     pub(super) notifications: NotificationStore,
     pub(super) seen_failure_ids: HashSet<agena_failure::FailureId>,
     pub(super) sessions: SessionListPresentation,

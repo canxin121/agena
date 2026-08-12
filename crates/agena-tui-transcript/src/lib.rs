@@ -23,7 +23,7 @@ pub mod selection;
 pub mod snapshot;
 pub mod text;
 
-pub use interaction_view::interaction_request_id_for_part;
+pub use interaction_view::*;
 pub use markdown::*;
 pub use math::*;
 pub use navigation::*;

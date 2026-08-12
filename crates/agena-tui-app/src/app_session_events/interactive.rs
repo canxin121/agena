@@ -29,6 +29,7 @@ impl App {
         self.run_options.clear_model_stack();
         self.seen_permission_request_ids.clear();
         self.seen_user_input_request_ids.clear();
+        self.revealed_user_input_request_ids.clear();
         let _ = self.sessions.select_by_id(session_id);
         self.restore_draft_for_slot(DraftSlot::Session(session_id));
         self.persist_draft_store_with_feedback(true);
@@ -203,6 +204,8 @@ impl App {
             .unwrap_or_default();
         self.user_input_interactions
             .retain(|request_id, _| outstanding.contains(request_id));
+        self.revealed_user_input_request_ids
+            .retain(|request_id| outstanding.contains(request_id));
         self.sync_interaction_documents();
     }
 

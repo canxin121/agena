@@ -85,7 +85,9 @@ impl App {
             context_help: None,
             seen_permission_request_ids: BTreeSet::new(),
             seen_user_input_request_ids: BTreeSet::new(),
+            revealed_user_input_request_ids: BTreeSet::new(),
             user_input_interactions: BTreeMap::new(),
+            interaction_editing: None,
             notifications: crate::notifications::NotificationStore::new(),
             seen_failure_ids: HashSet::new(),
             sessions: SessionListPresentation::new(

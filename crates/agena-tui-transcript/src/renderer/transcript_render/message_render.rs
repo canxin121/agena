@@ -5,10 +5,11 @@ use super::super::{
     ToolOutputPreview, TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey,
     TranscriptNodeKind, UnicodeWidthStr, concise_text, format_occurred_time, format_timestamp,
     push_activity_headline, push_expanded_markdown, push_expanded_tool_text, push_label_value,
-    push_markdown_document, push_section_heading, push_wrapped_line, render_entry_detailed,
-    render_expanded_tool_text_block, strip_terminal_ansi_sequences, style_for_role,
-    tool_output_copy_text, transcript_message_parts, transcript_part_content,
-    transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
+    push_markdown_document, push_markdown_rule, push_section_heading, push_single_line,
+    push_wrapped_line, render_entry_detailed, render_expanded_tool_text_block,
+    strip_terminal_ansi_sequences, style_for_role, tool_output_copy_text,
+    transcript_message_parts, transcript_part_content, transcript_spinner_placeholder,
+    trim_empty_line_edges, truncate_display_width,
 };
 use super::operation_render::render_tool_execution;
 use super::request_render::{preview_for_part, render_user_input_request};
@@ -75,7 +76,7 @@ pub(crate) fn append_rendered_part_node(
     i18n: &I18n,
     defaults: &TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
-    interactions: &std::collections::BTreeMap<String, Vec<ratatui::text::Line<'static>>>,
+    interactions: &std::collections::BTreeMap<String, crate::interaction_view::PendingInteractionView>,
 ) {
     // Like Markdown blocks, non-text parts start after the message header so
     // selecting the first activity part never highlights `assistant`.
@@ -1151,7 +1152,7 @@ pub(crate) fn render_part_node(
     i18n: &I18n,
     defaults: &TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
-    interactions: &std::collections::BTreeMap<String, Vec<ratatui::text::Line<'static>>>,
+    interactions: &std::collections::BTreeMap<String, crate::interaction_view::PendingInteractionView>,
 ) -> RenderedNodeDraft {
     match transcript_part_content(part) {
         TranscriptPartContent::UserDocument(document) => {
@@ -1535,14 +1536,14 @@ pub(crate) fn render_part_node(
                         width,
                     );
                     if expanded {
-                        // A pending part with a live inline document (the app's
-                        // plan + decision rows) renders that document directly,
-                        // making the expanded part the interaction surface.
+                        // A pending part with a live interaction view renders
+                        // its plan body and decision rows natively (the part IS
+                        // the interaction surface, "everything is a part").
                         // Answered parts keep the plain replied/awaiting body.
                         if reply.is_none()
-                            && let Some(document) = interactions.get(&request.request_id)
+                            && let Some(view) = interactions.get(&request.request_id)
                         {
-                            push_interaction_document(out, document, width);
+                            render_pending_interaction_body(out, request, view, width, i18n);
                         } else {
                             render_user_input_request(request, reply.as_ref(), out, width, i18n);
                         }
@@ -1571,19 +1572,248 @@ pub(crate) fn render_part_node(
     }
 }
 
-/// Pushes the app-built inline interaction document (plan + decision rows)
-/// into the rendered transcript, preserving each row's styled spans. The
-/// document already carries the selected-row highlight and the separator, so
-/// the transcript treats it as opaque rich content and only indents it like
-/// other activity detail rows.
-fn push_interaction_document(
+/// Renders the expanded body of a pending interaction part natively: the plan
+/// body through the standard Markdown pipeline at the activity detail indent,
+/// a separator rule, and the decision rows (review options or the ask-user
+/// question blocks) whose markers track the live [`PendingInteractionView`].
+/// This is the single source of the body layout — the App's key routing derives
+/// row semantics from the same [`crate::interaction_view::classify_interaction_line`]
+/// arithmetic, so the transcript cursor IS the review cursor.
+///
+/// Every decision row keeps a FIXED row budget (2 rows per option, 2 per
+/// custom slot, plus header/text/preview) matching the classifier, so a
+/// rendered row always has a semantic kind and Enter/submit routing can never
+/// drift from what the user sees.
+fn render_pending_interaction_body(
     out: &mut Vec<RenderedLine>,
-    document: &[Line<'static>],
-    _width: u16,
+    request: &agena_api::resource::UserInputRequest,
+    view: &crate::interaction_view::PendingInteractionView,
+    width: u16,
+    i18n: &I18n,
 ) {
-    for line in document {
-        out.push(RenderedLine::rich(line.clone()));
+    // Plan body: the standard transcript Markdown pipeline with the same
+    // activity detail indent as every other expanded part.
+    push_markdown_document(out, "    ", request.body_markdown.as_str(), width);
+    push_markdown_rule(out, "    ", width);
+
+    if crate::interaction_view::request_is_review_decision(request) {
+        render_review_decision_rows(out, request, view, width, i18n);
+    } else {
+        render_ask_user_question_rows(out, request, view, width, i18n);
     }
+}
+
+/// Review decision rows: one label row + one muted detail row per option, then
+/// the custom feedback slot. Markers `(x)`/`( )` track `view.selected_option`.
+fn render_review_decision_rows(
+    out: &mut Vec<RenderedLine>,
+    request: &agena_api::resource::UserInputRequest,
+    view: &crate::interaction_view::PendingInteractionView,
+    width: u16,
+    i18n: &I18n,
+) {
+    let Some(question) = request.questions.first() else {
+        return;
+    };
+    for (index, option) in question.options.iter().enumerate() {
+        let marker = if view.selected_option == Some(index) {
+            "(x)"
+        } else {
+            "( )"
+        };
+        out.push(RenderedLine::rich(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(format!("{marker} "), Style::default()),
+            Span::styled(
+                option.label.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ])));
+        push_interaction_detail_row(out, option.description.as_str(), width);
+    }
+    if question.allow_custom {
+        let custom_index = question.options.len();
+        let marker = if view.selected_option == Some(custom_index) {
+            "(x)"
+        } else {
+            "( )"
+        };
+        out.push(RenderedLine::rich(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(format!("{marker} "), Style::default()),
+            Span::styled(
+                i18n.text("overlay-user-input-review-feedback"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ])));
+        if view.editing_custom {
+            push_interaction_editor_row(out, &view.custom_draft, view.custom_cursor, width);
+        } else {
+            let feedback = view.custom_text.as_str();
+            let text = if feedback.trim().is_empty() {
+                i18n.text("overlay-user-input-review-feedback-empty")
+            } else {
+                feedback.to_owned()
+            };
+            push_interaction_detail_row(out, &text, width);
+        }
+    }
+}
+
+/// One muted detail row below a decision label. Always pushed (even when
+/// empty) so the fixed 2-rows-per-option budget the classifier uses holds.
+fn push_interaction_detail_row(out: &mut Vec<RenderedLine>, text: &str, width: u16) {
+    if text.trim().is_empty() {
+        out.push(RenderedLine::plain("        ", Style::default()));
+        return;
+    }
+    push_single_line(
+        out,
+        "        ",
+        text,
+        Style::default().fg(agena_tui_components::theme::muted_color()),
+        width,
+    );
+}
+
+/// The inline custom-feedback editor row: the live draft with a visible caret
+/// at `cursor` (a byte offset into `draft`).
+fn push_interaction_editor_row(
+    out: &mut Vec<RenderedLine>,
+    draft: &str,
+    cursor: usize,
+    width: u16,
+) {
+    let available = (width.max(1) as usize).saturating_sub(8);
+    // Visible draft clamped to the row width.
+    let visible: String = draft.chars().take(available).collect();
+    // Cursor position measured in visible chars, clamped to the visible range.
+    let caret_column = visible
+        .char_indices()
+        .take_while(|(offset, _)| *offset < cursor)
+        .count()
+        .min(visible.chars().count());
+    let caret_at_end = caret_column == visible.chars().count();
+    let mut spans = vec![Span::raw("        ")];
+    for (index, ch) in visible.chars().enumerate() {
+        if index == caret_column {
+            if caret_at_end {
+                spans.push(Span::styled(
+                    "▏",
+                    agena_tui_components::theme::selection_style(),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    ch.to_string(),
+                    agena_tui_components::theme::selection_style(),
+                ));
+                continue;
+            }
+        }
+        spans.push(Span::raw(ch.to_string()));
+    }
+    if caret_at_end {
+        spans.push(Span::styled(
+            "▏",
+            agena_tui_components::theme::selection_style(),
+        ));
+    }
+    out.push(RenderedLine::rich(Line::from(spans)));
+}
+
+/// Ask-user question blocks: per question a header row, a muted question-text
+/// row, fixed 2 rows per option (marker + detail), 2 per custom slot, and an
+/// answered-preview row; then a separator and a Submit row. Markers
+/// `(x)`/`[x]`/`( )`/`[ ]` track `view.answers`.
+fn render_ask_user_question_rows(
+    out: &mut Vec<RenderedLine>,
+    request: &agena_api::resource::UserInputRequest,
+    view: &crate::interaction_view::PendingInteractionView,
+    width: u16,
+    i18n: &I18n,
+) {
+    for (index, question) in request.questions.iter().enumerate() {
+        let answer = view.answers.get(&index);
+        let answered = answer.is_some_and(|answer| answer.is_answered());
+        let header = if question.header.trim().is_empty() {
+            format!("Q{}", index + 1)
+        } else {
+            question.header.clone()
+        };
+        let header_marker = if answered { "[x]" } else { "[ ]" };
+        out.push(RenderedLine::rich(Line::from(vec![
+            Span::raw("    "),
+            Span::styled(format!("{header_marker} "), Style::default()),
+            Span::styled(header, Style::default().add_modifier(Modifier::BOLD)),
+        ])));
+        push_interaction_detail_row(out, question.question.as_str(), width);
+        for (option_index, option) in question.options.iter().enumerate() {
+            let picked = answer.is_some_and(|answer| answer.picked.contains(&option_index));
+            let marker = if question.multiple {
+                if picked {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+            } else if picked {
+                "(x)"
+            } else {
+                "( )"
+            };
+            out.push(RenderedLine::rich(Line::from(vec![
+                Span::raw("        "),
+                Span::styled(format!("{marker} "), Style::default()),
+                Span::styled(
+                    option.label.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ])));
+            push_interaction_detail_row(out, option.description.as_str(), width);
+        }
+        if question.allow_custom {
+            let custom_values = answer
+                .map(|answer| answer.custom_values.as_slice())
+                .unwrap_or_default();
+            let picked = !custom_values.is_empty();
+            let marker = if question.multiple {
+                if picked {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+            } else if picked {
+                "(x)"
+            } else {
+                "( )"
+            };
+            out.push(RenderedLine::rich(Line::from(vec![
+                Span::raw("        "),
+                Span::styled(format!("{marker} "), Style::default()),
+                Span::styled(
+                    i18n.text("overlay-user-input-other"),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ])));
+            let text = if custom_values.is_empty() {
+                i18n.text("overlay-user-input-custom-empty")
+            } else {
+                custom_values.join(", ")
+            };
+            push_interaction_detail_row(out, &text, width);
+        }
+        if answered {
+            // Answered-preview row keeps the fixed block budget.
+            push_interaction_detail_row(out, "answered", width);
+        }
+    }
+    push_markdown_rule(out, "    ", width);
+    out.push(RenderedLine::rich(Line::from(vec![
+        Span::raw("    "),
+        Span::styled(
+            format!(" {} ", i18n.text("overlay-user-input-submit")),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ])));
 }
 
 /// Shared renderer for canonical Activity payloads. Tool-call operations,

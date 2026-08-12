@@ -428,7 +428,7 @@ mod interaction_reply_building_tests {
 
     #[test]
     fn review_decision_submit_maps_to_answers_zero_option_label() {
-        let mut dialog = App::build_user_input_overlay(7, review_request(), 80);
+        let mut dialog = App::build_user_input_overlay(7, review_request());
         assert!(dialog.presentation.is_review_decision());
 
         // Empty plan body → one placeholder row, then the separator, then the
@@ -449,26 +449,26 @@ mod interaction_reply_building_tests {
             UserInputEffect::Submit
         );
 
-        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog)
+        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog, None)
             .expect("review decision builds a reply");
         assert_eq!(reply.answers["0"], ["Approve"]);
     }
 
     #[test]
     fn review_custom_feedback_routes_into_the_review_editor_and_submits() {
-        let mut dialog = App::build_user_input_overlay(7, review_request(), 80);
+        let mut dialog = App::build_user_input_overlay(7, review_request());
 
         // Pasting onto an expanded review part must land in the review custom
         // editor, so a later submit reads it back through `review().custom_text()`.
         assert!(dialog.presentation.insert_custom_text("looks good"));
-        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog)
+        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog, None)
             .expect("custom feedback builds a reply");
         assert_eq!(reply.answers["0"], ["looks good"]);
     }
 
     #[test]
     fn ask_user_option_submit_maps_to_answers_zero() {
-        let mut dialog = App::build_user_input_overlay(7, ask_user_request(false), 80);
+        let mut dialog = App::build_user_input_overlay(7, ask_user_request(false));
         assert!(!dialog.presentation.is_review_decision());
 
         // A single non-multiple question hides the review header, so Enter
@@ -478,16 +478,16 @@ mod interaction_reply_building_tests {
             UserInputEffect::Submit
         );
 
-        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog)
+        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog, None)
             .expect("ask_user option builds a reply");
         assert_eq!(reply.answers["0"], ["yes"]);
     }
 
     #[test]
     fn ask_user_missing_answer_is_rejected_and_focuses_the_question() {
-        let mut dialog = App::build_user_input_overlay(7, ask_user_request(false), 80);
+        let mut dialog = App::build_user_input_overlay(7, ask_user_request(false));
 
-        let error = App::build_structured_user_input_reply(&I18n::english(), &mut dialog)
+        let error = App::build_structured_user_input_reply(&I18n::english(), &mut dialog, None)
             .expect_err("an unanswered ask_user must not submit");
         assert!(!error.is_empty());
         assert_eq!(dialog.presentation.selected_question(), 0);
@@ -495,7 +495,7 @@ mod interaction_reply_building_tests {
 
     #[test]
     fn ask_user_custom_text_commits_on_enter_and_maps_by_index() {
-        let mut dialog = App::build_user_input_overlay(7, ask_user_request(true), 80);
+        let mut dialog = App::build_user_input_overlay(7, ask_user_request(true));
 
         // `e` opens the question-flow custom editor, paste fills it, Enter
         // commits the draft and (single question) submits.
@@ -509,7 +509,7 @@ mod interaction_reply_building_tests {
             UserInputEffect::Submit
         );
 
-        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog)
+        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog, None)
             .expect("ask_user custom text builds a reply");
         assert_eq!(reply.answers["0"], ["custom answer"]);
     }
@@ -533,6 +533,629 @@ macro_rules! api_message_part {
             text_part.synthetic,
         )
     }};
+}
+
+/// The "everything is a part" interaction routing tests: the transcript cursor
+/// IS the review cursor, and a thin context-aware action layer owns only
+/// Enter-on-decision-row / Ctrl+X / `e`-on-custom / Esc-to-collapse while every
+/// other key falls through to normal chat navigation. These tests pin the
+/// plan's contract end-to-end through the real `App` (bootstrapped against an
+/// in-memory runtime): key routing, decision-row submit/cancel, the inline
+/// custom editor, auto-expand + focus with the revealed guard, selection sync,
+/// and the reply handler's cleanup.
+#[cfg(test)]
+mod interaction_part_routing_tests {
+    use agena_api::{
+        part::RequestPartResource,
+        resource::{
+            ExecutionAccess, PendingInteractiveRequest, PendingInteractiveRequestResource,
+            SessionExecutionResource, SessionExecutionContextResource, SessionLifecycleState,
+            SessionRelationKind, SessionResource, SessionTranscriptPart, SessionUsageResource,
+            WorkflowState,
+        },
+    };
+    use agena_application::Application;
+    use agena_domain::{UserInputKind, UserInputQuestion, UserInputSource};
+    use agena_runtime::{RuntimeBootstrapRequest, bootstrap_application_services};
+    use chrono::Utc;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::layout::Rect;
+
+    use super::super::{App, I18n, LaunchOptions};
+    use crate::app_types::{RunActivityTarget, RunOperation};
+    use agena_tui_transcript::{TranscriptContentId, TranscriptEntryId, TranscriptNodeKey};
+
+    const REQUEST_ID: &str = "host-input:1:2:0";
+    const SESSION_ID: i64 = 7;
+    const WIDTH: u16 = 80;
+    const HEIGHT: u16 = 24;
+
+    fn enter() -> KeyEvent {
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+    }
+    fn edit() -> KeyEvent {
+        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)
+    }
+    fn esc() -> KeyEvent {
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+    }
+    fn ctrl_x() -> KeyEvent {
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)
+    }
+    fn char_key(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+    fn page_down() -> KeyEvent {
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)
+    }
+
+    /// A single-option review decision with a custom slot and a one-line plan
+    /// body, so the body-offset layout is fully determined:
+    ///   0 plan row | 1 separator | 2 option label | 3 option detail
+    ///   4 custom label | 5 custom detail | (6 editor row while editing).
+    fn wire_request() -> agena_api::resource::UserInputRequest {
+        agena_api::resource::UserInputRequest {
+            request_id: REQUEST_ID.to_owned(),
+            session_id: Some(SESSION_ID),
+            title: "Approve New Plan".to_owned(),
+            body_markdown: "## Proposed Plan".to_owned(),
+            kind: "review".to_owned(),
+            source: UserInputSource::Host,
+            auto_resolution_ms: None,
+            presented_at: Some(Utc::now()),
+            questions: vec![agena_api::resource::UserInputQuestion {
+                header: "Decision".to_owned(),
+                question: "Choose whether this plan should move to active.".to_owned(),
+                options: vec![agena_api::resource::UserInputOption {
+                    label: "Approve".to_owned(),
+                    description: "Move it to active.".to_owned(),
+                }],
+                multiple: false,
+                allow_custom: true,
+            }],
+            created_at: Utc::now(),
+        }
+    }
+
+    fn domain_request() -> agena_domain::UserInputRequest {
+        agena_domain::UserInputRequest {
+            request_id: REQUEST_ID.to_owned(),
+            session_id: Some(SESSION_ID),
+            title: "Approve New Plan".to_owned(),
+            body_markdown: "## Proposed Plan".to_owned(),
+            kind: UserInputKind::Review,
+            source: UserInputSource::Host,
+            auto_resolution_ms: None,
+            presented_at: None,
+            questions: vec![UserInputQuestion {
+                header: "Decision".to_owned(),
+                question: "Choose whether this plan should move to active.".to_owned(),
+                options: vec![agena_domain::UserInputOption {
+                    label: "Approve".to_owned(),
+                    description: "Move it to active.".to_owned(),
+                }],
+                multiple: false,
+                allow_custom: true,
+            }],
+            created_at: Utc::now(),
+        }
+    }
+
+    fn run_marker() -> SessionTranscriptPart {
+        SessionTranscriptPart {
+            part_id: 3,
+            kind: "run".to_owned(),
+            role: "assistant".to_owned(),
+            state: "in_progress".to_owned(),
+            content: serde_json::json!({ "run_kind": "user_send" }),
+            summary: None,
+            created_at_ms: 30,
+            parent_part_id: None,
+            run_id: Some(3),
+        }
+    }
+
+    fn interaction_part() -> SessionTranscriptPart {
+        SessionTranscriptPart {
+            part_id: 5,
+            kind: "interaction".to_owned(),
+            role: "assistant".to_owned(),
+            state: "in_progress".to_owned(),
+            content: serde_json::to_value(RequestPartResource::UserInput {
+                request: wire_request(),
+                reply: None,
+            })
+            .expect("request part serializes"),
+            summary: None,
+            created_at_ms: 50,
+            parent_part_id: None,
+            run_id: Some(3),
+        }
+    }
+
+    fn parts() -> Vec<SessionTranscriptPart> {
+        vec![run_marker(), interaction_part()]
+    }
+
+    fn node_key() -> TranscriptNodeKey {
+        TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::StoredMessage(3),
+            content_id: TranscriptContentId::StoredPart(5),
+        }
+    }
+
+    fn session_resource() -> SessionResource {
+        SessionResource {
+            id: SESSION_ID,
+            parent_id: None,
+            depth: 0,
+            root_id: SESSION_ID,
+            workspace_id: 1,
+            title: "Test session".to_owned(),
+            version: 1,
+            relation_kind: SessionRelationKind::Root,
+            lifecycle_state: SessionLifecycleState::Ready,
+            source_cutoff_seq_global: None,
+            source_message_id: None,
+            is_subagent: false,
+            task_id: None,
+            subtask_access: None,
+            subtask_status: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            message_count: 1,
+            child_session_count: 0,
+            last_message_at: None,
+        }
+    }
+
+    fn execution_with(
+        pending: Vec<PendingInteractiveRequestResource>,
+        parts: Vec<SessionTranscriptPart>,
+    ) -> SessionExecutionResource {
+        SessionExecutionResource {
+            session: session_resource(),
+            parts,
+            workflow_state: WorkflowState::Quiescent,
+            active_execution: None,
+            latest_event_seq: Some(2),
+            automation: None,
+            execution: SessionExecutionContextResource {
+                agent_id: "test".to_owned(),
+                execution_access: ExecutionAccess::Inherit,
+                selected_permission: Default::default(),
+                effective_permission: Default::default(),
+                permission_ceiling: Default::default(),
+                model_provider_id: None,
+                model_adapter_id: None,
+                model_id: None,
+                model_thinking_mode: None,
+                model_speed_mode: None,
+                model_verbosity: None,
+                model_parallel_tool_calls: None,
+                effective_workspace_root: None,
+                task_id: None,
+                subtask_status: None,
+                subtask_started_at: None,
+                subtask_finished_at: None,
+                subtask_failure: None,
+            },
+            pending_interactive_requests: pending,
+            usage: SessionUsageResource {
+                measured_prompt_tokens: None,
+                current_tokens: 0,
+                projected_tokens: None,
+                limit_tokens: None,
+                limit_basis: None,
+                reserved_tokens: None,
+                model_context_window_tokens: None,
+                model_max_input_tokens: None,
+                model_max_output_tokens: None,
+            },
+        }
+    }
+
+    fn pending_user_input_resource() -> PendingInteractiveRequestResource {
+        PendingInteractiveRequestResource {
+            session_id: SESSION_ID,
+            parent_session_id: None,
+            task_id: None,
+            request: PendingInteractiveRequest::UserInput {
+                request: wire_request(),
+            },
+        }
+    }
+
+    /// Bootstrap a real `App` against an in-memory runtime, sized to an 80x24
+    /// transcript viewport. The runtime is required because the reply path
+    /// spawns real backend tasks; those fail against the empty in-memory
+    /// database, which is fine for these tests (they assert the synchronous
+    /// routing/state effects, not the backend round-trip).
+    async fn seeded_app() -> App {
+        let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
+            workspace_root: Some(std::env::temp_dir()),
+            database_url: Some("sqlite::memory:".to_owned()),
+            initialize_schema: true,
+            ..RuntimeBootstrapRequest::default()
+        })
+        .await
+        .expect("build test runtime");
+        let application = Application::from_composed_runtime_services(runtime.application_services())
+            .expect("compose test application");
+        let mut app = App::new(application, LaunchOptions::default(), I18n::english());
+        app.layout.transcript_body = Rect::new(0, 0, WIDTH, HEIGHT);
+        app.transcript.session_id = Some(SESSION_ID);
+        app
+    }
+
+    /// Seed the pending review part (parts + execution + live interaction
+    /// view + expanded node + the request in the interaction map).
+    fn seed_pending_review(app: &mut App) {
+        app.transcript
+            .apply_execution(execution_with(vec![pending_user_input_resource()], parts()));
+        app.user_input_interactions.insert(
+            REQUEST_ID.to_owned(),
+            App::build_user_input_overlay(SESSION_ID, domain_request()),
+        );
+        app.sync_interaction_documents();
+        app.transcript.node_expansions.insert(node_key(), true);
+        app.transcript.invalidate_render();
+    }
+
+    /// The rendered start line of the interaction part node (absolute line in
+    /// the rendered transcript).
+    fn interaction_node_start(app: &mut App) -> usize {
+        app.transcript
+            .rendered(WIDTH)
+            .nodes
+            .iter()
+            .find(|node| node.key == node_key())
+            .expect("the interaction part renders a node")
+            .start_line
+    }
+
+    /// Position the transcript cursor on the body line at `body_offset`
+    /// (0 = first line after the activity headline). The activity headline is
+    /// the node's 0-indexed `start_line`; `move_cursor_to_visual_line_number`
+    /// is 1-indexed, so the target line number is `start_line + 2 + body_offset`.
+    fn move_cursor_to_body_offset(app: &mut App, body_offset: usize) {
+        let start_line = interaction_node_start(app);
+        app.transcript
+            .move_cursor_to_visual_line_number(WIDTH, HEIGHT, Some(start_line + 2 + body_offset));
+    }
+
+    #[tokio::test]
+    async fn chat_navigation_keys_fall_through_the_thin_action_layer() {
+        let mut app = seeded_app().await;
+        seed_pending_review(&mut app);
+        // Sit on a decision row (body offset 2 = the option label).
+        move_cursor_to_body_offset(&mut app, 2);
+
+        // Every plain navigation key must NOT be intercepted: the chat keeps
+        // owning paging and motion ("everything is a part", no injected review
+        // component). `g`/`G` are the motion/end prefixes; `Space` pages.
+        for key in [
+            char_key('j'),
+            char_key('k'),
+            char_key('h'),
+            char_key('l'),
+            page_down(),
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            char_key('g'),
+            char_key('G'),
+        ] {
+            assert!(
+                !app.handle_active_interaction_action(key),
+                "navigation key must fall through to normal transcript dispatch: {key:?}"
+            );
+        }
+        // The interaction stays pending and editable after all those keys.
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+        assert_eq!(app.interaction_editing, None);
+    }
+
+    #[tokio::test]
+    async fn enter_on_a_plan_row_collapses_instead_of_submitting() {
+        let mut app = seeded_app().await;
+        seed_pending_review(&mut app);
+        move_cursor_to_body_offset(&mut app, 0);
+
+        // Enter on the plan body is a plain Toggle: the thin layer declines it
+        // (returns false), so the normal dispatch collapses the part. No
+        // decision was taken.
+        assert!(
+            !app.handle_active_interaction_action(enter()),
+            "Enter on a plan row must not be intercepted"
+        );
+        assert!(
+            app.user_input_interactions.contains_key(REQUEST_ID),
+            "no reply may be sent from the plan body"
+        );
+        app.handle_transcript_key(enter());
+        assert_eq!(
+            app.transcript.node_expansions.get(&node_key()),
+            Some(&false),
+            "Enter on a plan row toggles the part collapsed (normal chat behavior)"
+        );
+    }
+
+    #[tokio::test]
+    async fn enter_on_a_decision_row_submits_that_option() {
+        let mut app = seeded_app().await;
+        seed_pending_review(&mut app);
+        move_cursor_to_body_offset(&mut app, 2);
+
+        assert!(
+            app.handle_active_interaction_action(enter()),
+            "Enter on the option row submits"
+        );
+        // The reply was sent: the interaction map is cleared (keep = false on
+        // success) and the reply operation is in flight.
+        assert!(!app.user_input_interactions.contains_key(REQUEST_ID));
+        assert!(!app.transcript.interaction_views.contains_key(REQUEST_ID));
+        assert!(app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply,
+        ));
+    }
+
+    #[tokio::test]
+    async fn ctrl_x_cancels_and_keeps_the_part_pending() {
+        let mut app = seeded_app().await;
+        seed_pending_review(&mut app);
+        move_cursor_to_body_offset(&mut app, 2);
+
+        assert!(
+            app.handle_active_interaction_action(ctrl_x()),
+            "Ctrl+X cancels the pending interaction"
+        );
+        // Cancel sends the reply but the dialog stays in the map until the
+        // reply is acknowledged, so the part keeps rendering as pending.
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+        assert!(app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply,
+        ));
+    }
+
+    #[tokio::test]
+    async fn e_on_the_custom_label_opens_the_inline_editor_and_esc_exits_it() {
+        let mut app = seeded_app().await;
+        seed_pending_review(&mut app);
+        move_cursor_to_body_offset(&mut app, 4);
+
+        assert!(
+            app.handle_active_interaction_action(edit()),
+            "`e` on the custom feedback label begins the inline edit"
+        );
+        assert_eq!(
+            app.interaction_editing.as_deref(),
+            Some(REQUEST_ID),
+            "the inline editor owns the key stream"
+        );
+        assert!(
+            app.user_input_interactions
+                .get(REQUEST_ID)
+                .is_some_and(|dialog| dialog.presentation.review().is_editing_custom())
+        );
+
+        // Esc exits editing back to the part; the request stays pending.
+        assert!(
+            app.handle_active_interaction_action(esc()),
+            "Esc is owned while the editor is open"
+        );
+        assert_eq!(app.interaction_editing, None);
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+        assert!(
+            app.user_input_interactions
+                .get(REQUEST_ID)
+                .is_some_and(|dialog| !dialog.presentation.review().is_editing_custom())
+        );
+    }
+
+    #[tokio::test]
+    async fn esc_on_the_part_collapses_it_back_to_the_configured_state() {
+        let mut app = seeded_app().await;
+        seed_pending_review(&mut app);
+        move_cursor_to_body_offset(&mut app, 2);
+
+        assert!(
+            app.handle_active_interaction_action(esc()),
+            "Esc with no pending motion prefix collapses the part"
+        );
+        assert_eq!(
+            app.transcript.node_expansions.get(&node_key()),
+            Some(&false),
+            "the expansion override is cleared so the part falls back to its configured default"
+        );
+        assert!(
+            app.user_input_interactions.contains_key(REQUEST_ID),
+            "the request stays reachable by re-expanding the part"
+        );
+    }
+
+    #[tokio::test]
+    async fn reveal_pending_user_input_interaction_expands_and_focuses_on_arrival() {
+        let mut app = seeded_app().await;
+        app.transcript
+            .apply_execution(execution_with(vec![pending_user_input_resource()], parts()));
+        app.user_input_interactions.insert(
+            REQUEST_ID.to_owned(),
+            App::build_user_input_overlay(SESSION_ID, domain_request()),
+        );
+        app.sync_interaction_documents();
+
+        // Not expanded yet: the reveal is what forces expansion + focus,
+        // regardless of the configured default.
+        assert!(!app.transcript.node_expansions.contains_key(&node_key()));
+
+        app.reveal_pending_user_input_interaction(REQUEST_ID);
+
+        assert_eq!(
+            app.transcript.node_expansions.get(&node_key()),
+            Some(&true),
+            "a pending interaction part always auto-expands on arrival"
+        );
+        assert!(app.revealed_user_input_request_ids.contains(REQUEST_ID));
+        let start_line = interaction_node_start(&mut app);
+        // `move_cursor_to_visual_line_number` is 1-indexed; the reveal targets
+        // `start_line + 1` (1-indexed), which is the part's headline row
+        // (0-indexed `start_line`).
+        assert_eq!(
+            app.transcript.navigation_cursor_line(),
+            Some(start_line),
+            "the transcript cursor lands on the revealed part"
+        );
+    }
+
+    #[tokio::test]
+    async fn reveal_retries_once_the_part_populates() {
+        let mut app = seeded_app().await;
+        // The execution snapshot arrives before the transcript parts populate:
+        // the reveal no-ops because there is no part node yet.
+        app.transcript
+            .apply_execution(execution_with(vec![pending_user_input_resource()], vec![]));
+
+        app.reveal_outstanding_pending_user_input_interactions();
+        assert!(
+            app.revealed_user_input_request_ids.is_empty(),
+            "a missing part must not be recorded as revealed"
+        );
+        assert!(!app.transcript.node_expansions.contains_key(&node_key()));
+
+        // Once the parts are present (and the live interaction is staged), the
+        // outstanding retry reveals exactly once and never re-yanks.
+        app.transcript.merge_parts(parts());
+        app.user_input_interactions.insert(
+            REQUEST_ID.to_owned(),
+            App::build_user_input_overlay(SESSION_ID, domain_request()),
+        );
+        app.sync_interaction_documents();
+
+        app.reveal_outstanding_pending_user_input_interactions();
+        app.reveal_outstanding_pending_user_input_interactions();
+
+        assert!(app.revealed_user_input_request_ids.contains(REQUEST_ID));
+        assert_eq!(
+            app.transcript.node_expansions.get(&node_key()),
+            Some(&true),
+            "the deferred reveal expands the part"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_user_input_replied_clears_map_override_and_revealed_guard() {
+        let mut app = seeded_app().await;
+        seed_pending_review(&mut app);
+        app.revealed_user_input_request_ids
+            .insert(REQUEST_ID.to_owned());
+        assert_eq!(app.transcript.node_expansions.get(&node_key()), Some(&true));
+
+        // The replied execution is terminal and no longer carries the request.
+        app.handle_user_input_replied(
+            SESSION_ID,
+            REQUEST_ID.to_owned(),
+            Ok(execution_with(vec![], parts())),
+        );
+
+        assert!(!app.user_input_interactions.contains_key(REQUEST_ID));
+        assert!(!app.revealed_user_input_request_ids.contains(REQUEST_ID));
+        assert!(
+            !app.transcript.node_expansions.contains_key(&node_key()),
+            "the part returns to its configured expand/collapse default"
+        );
+    }
+
+    #[tokio::test]
+    async fn moving_the_cursor_onto_decision_rows_syncs_the_selection() {
+        let mut app = seeded_app().await;
+        seed_pending_review(&mut app);
+
+        // Cursor on the plan body: plan rows are inert (Enter collapses, not
+        // submits — covered by the routing test), so the selection keeps the
+        // presentation's default rather than deriving a new decision.
+        move_cursor_to_body_offset(&mut app, 0);
+        app.refresh_interaction_selection(WIDTH);
+        assert_eq!(
+            app.transcript
+                .interaction_views
+                .get(REQUEST_ID)
+                .and_then(|view| view.selected_option),
+            Some(0),
+            "plan rows are not decision rows; the seeded default is untouched"
+        );
+        assert!(
+            app.transcript.rendered.is_some(),
+            "no selection change on a plan row means no re-render"
+        );
+
+        // Cursor onto the custom feedback label (body offset 4 = the custom
+        // label): the selection follows the cursor to the custom slot
+        // (options_len == 1), and the render cache is invalidated so the
+        // marker moves.
+        move_cursor_to_body_offset(&mut app, 4);
+        app.refresh_interaction_selection(WIDTH);
+        assert_eq!(
+            app.transcript
+                .interaction_views
+                .get(REQUEST_ID)
+                .and_then(|view| view.selected_option),
+            Some(1)
+        );
+        assert!(
+            app.transcript.rendered.is_none(),
+            "selection change invalidates the render cache"
+        );
+
+        // Moving back onto the option label (body offset 2) follows the cursor
+        // back to the first option and invalidates again.
+        move_cursor_to_body_offset(&mut app, 2);
+        app.refresh_interaction_selection(WIDTH);
+        assert_eq!(
+            app.transcript
+                .interaction_views
+                .get(REQUEST_ID)
+                .and_then(|view| view.selected_option),
+            Some(0)
+        );
+        assert!(
+            app.transcript.rendered.is_none(),
+            "selection change invalidates the render cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn paste_into_the_part_begins_the_inline_edit_and_owns_the_stream() {
+        let mut app = seeded_app().await;
+        seed_pending_review(&mut app);
+        move_cursor_to_body_offset(&mut app, 2);
+
+        assert!(app.paste_into_active_interaction("looks good"));
+        assert_eq!(
+            app.interaction_editing.as_deref(),
+            Some(REQUEST_ID),
+            "pasting auto-begins the inline edit"
+        );
+        assert_eq!(
+            app.user_input_interactions
+                .get(REQUEST_ID)
+                .map(|dialog| dialog.presentation.review().custom_text()),
+            Some("looks good".to_owned())
+        );
+
+        // The editor owns the stream: Enter commits the non-empty feedback and
+        // submits the reply.
+        assert!(
+            app.handle_active_interaction_action(enter()),
+            "Enter in the inline editor submits"
+        );
+        assert!(!app.user_input_interactions.contains_key(REQUEST_ID));
+        assert!(app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply,
+        ));
+    }
 }
 
 #[cfg(test)]

@@ -287,12 +287,14 @@ pub(crate) struct TranscriptState {
     /// state-node fields plus merged live `ViewBlock`s for expanded
     /// rendering (07 §5.2).
     pub(crate) v2_activities: BTreeMap<agena_domain::ActivityId, V2LiveActivity>,
-    /// Live inline documents for pending user-input interaction parts, keyed
-    /// by `request_id`. The App builds these from its `UserInputPresentation`
-    /// state (plan + decision rows); the renderer draws them inside expanded
-    /// pending interaction parts ("everything is a part").
-    pub(crate) interaction_documents:
-        BTreeMap<String, Vec<ratatui::text::Line<'static>>>,
+    /// Live selection snapshots for pending user-input interaction parts,
+    /// keyed by `request_id`. The App projects these from its
+    /// `UserInputPresentation` state (selected option, custom draft, answer
+    /// markers) while the plan body and decision labels come from the wire
+    /// `request`; the renderer draws them natively inside expanded pending
+    /// interaction parts ("everything is a part").
+    pub(crate) interaction_views:
+        BTreeMap<String, agena_tui_transcript::PendingInteractionView>,
     pub(crate) rendered: Option<RenderedTranscript>,
 }
 

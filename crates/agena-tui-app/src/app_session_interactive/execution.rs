@@ -284,6 +284,10 @@ impl App {
 
     pub(crate) fn sync_pending_interactive_after_execution(&mut self, _session_id: i64) {
         self.maybe_auto_open_pending_interactive_overlay();
+        // A request that arrived before its part existed (execution snapshot
+        // landed first) auto-reveals here, once `apply_transcript_execution`
+        // has populated the transcript parts.
+        self.reveal_outstanding_pending_user_input_interactions();
     }
 }
 use crate::{

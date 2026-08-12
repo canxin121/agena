@@ -224,6 +224,10 @@ impl App {
             let search_query = self.transcript.search_query.clone();
             let cursor_cell = self.transcript.cursor_cell_range(layout.body.width);
             let selection_ranges = self.transcript.selection_cell_ranges(layout.body.width);
+            // The transcript cursor IS the interaction review cursor: derive
+            // the pending-interaction selection from wherever the cursor sits
+            // before the renderer draws the decision markers.
+            self.refresh_interaction_selection(layout.body.width);
             let rendered = self.transcript.rendered(layout.body.width);
             transcript_line_count = rendered.lines.len();
             let active_match =

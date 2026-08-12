@@ -10,12 +10,10 @@ impl App {
         // forced open again after a restart or on another client; it stays
         // reachable through the awaiting-input hint.
         self.present_pending_interactive_request(session_id, request.request_id.clone());
-        let review_content_width =
-            agena_tui::user_input::user_input_review_content_width(self.layout.transcript_body);
         let request_id = request.request_id.clone();
         self.user_input_interactions.insert(
             request_id.clone(),
-            Self::build_user_input_overlay(session_id, request, review_content_width),
+            Self::build_user_input_overlay(session_id, request),
         );
         self.sync_interaction_documents();
         // Reveal-and-expand the pending interaction part instead of opening a
@@ -23,43 +21,110 @@ impl App {
         self.reveal_pending_user_input_interaction(&request_id);
     }
 
-    /// Rebuild the inline interaction documents from the live presentations
-    /// and stage them on the transcript. The renderer draws these inside
-    /// expanded pending interaction parts; rebuilding on every presentation
+    /// Rebuild the inline interaction views from the live presentations and
+    /// stage them on the transcript. The renderer draws these inside expanded
+    /// pending interaction parts (the plan body + decision rows come from the
+    /// wire request, which the renderer already has in scope; the view carries
+    /// only the live selection state). Rebuilding on every presentation
     /// mutation keeps selection, highlight, and custom-feedback state in sync
     /// ("everything is a part").
     pub(crate) fn sync_interaction_documents(&mut self) {
-        let fallback_width = self.layout.transcript_body.width.saturating_sub(2).max(1);
-        let documents = self
+        let width = self.layout.transcript_body.width.max(1);
+        let views = self
             .user_input_interactions
             .iter()
             .map(|(request_id, dialog)| {
-                let content_width = dialog
-                    .presentation
-                    .review()
-                    .content_width()
-                    .max(fallback_width);
-                let document = agena_tui::user_input::build_inline_document(
-                    &dialog.presentation,
-                    &self.i18n,
-                    content_width,
-                );
-                (request_id.clone(), document)
+                (
+                    request_id.clone(),
+                    Self::interaction_view_for(&dialog.request, &dialog.presentation, width),
+                )
             })
             .collect();
-        self.transcript.interaction_documents = documents;
+        self.transcript.interaction_views = views;
         self.transcript.invalidate_render();
+    }
+
+    /// Projects one live presentation into the [`PendingInteractionView`] the
+    /// renderer draws. `plan_body_lines` is measured with the EXACT renderer
+    /// path at `width`, so the App's key routing and the rendered body can
+    /// never drift. Selection is a starting point derived from the
+    /// presentation; [`App::refresh_interaction_selection`] overwrites it from
+    /// the transcript cursor on every draw (the cursor IS the review cursor).
+    pub(crate) fn interaction_view_for(
+        request: &UserInputRequest,
+        presentation: &agena_tui::user_input::UserInputPresentation,
+        width: u16,
+    ) -> agena_tui_transcript::PendingInteractionView {
+        let plan_body_lines =
+            agena_tui_transcript::interaction_plan_body_lines(&request.body_markdown, width);
+        if Self::user_input_review_question(request).is_some() {
+            let review = presentation.review();
+            let custom_index = request
+                .questions
+                .first()
+                .map(|question| question.options.len())
+                .unwrap_or(0);
+            let selected_option = if review.is_editing_custom() {
+                Some(custom_index)
+            } else {
+                // The presentation's selected_option is the last decision row
+                // the old cursor sat on; the transcript cursor corrects it on
+                // the next draw via refresh_interaction_selection.
+                Some(review.selected_option().min(custom_index))
+            };
+            agena_tui_transcript::PendingInteractionView {
+                selected_option,
+                custom_text: review.custom_text(),
+                custom_draft: review.custom_input().text().to_owned(),
+                editing_custom: review.is_editing_custom(),
+                custom_cursor: review.custom_input().cursor(),
+                focused_question: None,
+                answers: std::collections::BTreeMap::new(),
+                plan_body_lines,
+                plan_width: width,
+            }
+        } else {
+            let answers = presentation
+                .answers()
+                .iter()
+                .map(|(index, draft)| {
+                    (
+                        *index,
+                        agena_tui_transcript::PendingInteractionAnswerView {
+                            picked: draft.option_indexes.iter().copied().collect(),
+                            custom_values: draft.custom_values.clone(),
+                        },
+                    )
+                })
+                .collect();
+            agena_tui_transcript::PendingInteractionView {
+                selected_option: None,
+                custom_text: String::new(),
+                custom_draft: String::new(),
+                editing_custom: false,
+                custom_cursor: 0,
+                focused_question: Some(presentation.selected_question()),
+                answers,
+                plan_body_lines,
+                plan_width: width,
+            }
+        }
     }
 
     /// Move the transcript cursor onto the pending interaction part for
     /// `request_id` and force it expanded, so the expanded part is the
-    /// interaction surface ("everything is a part"). No-op when the part has
-    /// not been rendered yet (for example the execution snapshot arrived
-    /// before the transcript was populated).
+    /// interaction surface ("everything is a part"). The part always
+    /// auto-expands on arrival regardless of the configured default, then
+    /// falls back to that default once the interaction completes. No-op when
+    /// the part has not been rendered yet (for example the execution snapshot
+    /// arrived before the transcript was populated); the outstanding retry
+    /// covers that case.
     pub(crate) fn reveal_pending_user_input_interaction(&mut self, request_id: &str) {
         let Some(key) = self.pending_interaction_part_node_key(request_id) else {
             return;
         };
+        self.revealed_user_input_request_ids
+            .insert(request_id.to_string());
         self.transcript.node_expansions.insert(key.clone(), true);
         self.transcript.invalidate_render();
         let width = self.layout.transcript_body.width;
@@ -74,6 +139,32 @@ impl App {
         if let Some(start_line) = start_line {
             self.transcript
                 .move_cursor_to_visual_line_number(width, height, Some(start_line + 1));
+        }
+    }
+
+    /// Retry the auto-reveal for every outstanding request whose part was not
+    /// present when the request arrived (the execution snapshot can land before
+    /// the transcript parts populate). Each request is revealed at most once:
+    /// the `revealed_user_input_request_ids` guard records a successful reveal
+    /// so a later execution refresh cannot re-yank the cursor.
+    pub(crate) fn reveal_outstanding_pending_user_input_interactions(&mut self) {
+        let outstanding: BTreeSet<String> = self
+            .transcript
+            .execution
+            .as_ref()
+            .map(|execution| {
+                execution
+                    .pending_interactive_requests
+                    .iter()
+                    .filter_map(|request| request.request.as_user_input())
+                    .map(|request| request.request_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for request_id in outstanding {
+            if !self.revealed_user_input_request_ids.contains(&request_id) {
+                self.reveal_pending_user_input_interaction(&request_id);
+            }
         }
     }
 
@@ -130,10 +221,9 @@ impl App {
     pub(crate) fn build_user_input_overlay(
         session_id: i64,
         request: UserInputRequest,
-        review_content_width: u16,
     ) -> UserInputOverlay {
         let review_decision = Self::user_input_review_question(&request).is_some();
-        let mut presentation = agena_tui::user_input::UserInputPresentation::new(
+        let presentation = agena_tui::user_input::UserInputPresentation::new(
             agena_tui::user_input::UserInputOverlayPresentation {
                 request_id: request.request_id.clone(),
                 title: request.title.clone(),
@@ -164,28 +254,6 @@ impl App {
                 )
                 .collect(),
         );
-        if review_decision {
-            // Pre-render the plan body with the exact chat/transcript Markdown
-            // pipeline so the approval window looks like assistant prose and
-            // shares the line-based cursor model with the main interface.
-            let rendered = agena_tui_media::with_text_math_rendering(|| {
-                agena_tui_transcript::render_markdown_document(
-                    request.body_markdown.as_str(),
-                    review_content_width,
-                )
-            });
-            let plan_lines = rendered
-                .into_iter()
-                .map(|line| {
-                    line.rich_line.unwrap_or_else(|| {
-                        ratatui::text::Line::from(ratatui::text::Span::styled(
-                            line.text, line.style,
-                        ))
-                    })
-                })
-                .collect::<Vec<_>>();
-            presentation.set_review_plan(plan_lines, review_content_width);
-        }
         UserInputOverlay {
             session_id,
             request,
@@ -341,21 +409,21 @@ impl App {
                 session_id,
                 request,
             }) => {
-                self.seen_user_input_request_ids
-                    .insert(request.request_id.clone());
-                self.present_pending_interactive_request(session_id, request.request_id.clone());
-                let review_content_width = agena_tui::user_input::user_input_review_content_width(
-                    self.layout.transcript_body,
-                );
+                let request_id = request.request_id.clone();
+                self.seen_user_input_request_ids.insert(request_id.clone());
+                self.present_pending_interactive_request(session_id, request_id.clone());
                 // A pending user-input request lives in the per-request
                 // interaction map instead of a modal: the transcript part is
                 // the interaction surface, and expanding it renders the live
-                // inline document built from this presentation.
+                // native body (plan + decision rows) built from this view.
                 self.user_input_interactions.insert(
-                    request.request_id.clone(),
-                    Self::build_user_input_overlay(session_id, *request, review_content_width),
+                    request_id.clone(),
+                    Self::build_user_input_overlay(session_id, *request),
                 );
                 self.sync_interaction_documents();
+                // Auto-expand the part and focus the cursor on it on arrival,
+                // regardless of the configured default expand/collapse setting.
+                self.reveal_pending_user_input_interaction(&request_id);
                 self.queue_user_input_notification();
             }
             None => {}
@@ -822,19 +890,20 @@ const fn permission_scope_from_wire(
     }
 }
 use crate::{
-    App, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction, ConfirmDialogState,
-    ConfirmOverlay, Editor, LineInputOverlay, Overlay, Path, PathBrowserMode, PathBrowserOverlay,
-    PathBrowserTarget, PendingInteractiveKind, PendingInteractiveOverlayTarget,
-    PendingInteractiveRequest, PermissionOverlay, PermissionPromptPresentation, PermissionRequest,
-    PermissionScope, SearchPickerClearAction, SearchPickerConfig, SearchPickerPreviewMode,
-    SearchPickerSearchMode, SelectionPickerOverlay, SelectionPickerQuery,
-    SessionModelChooserOverlay, SessionModelChooserPurpose, SessionNavigationOverlay,
-    SessionNavigationQuery, SessionSearchOverlay, TimelineOverlay, TimelinePresentation,
-    TranscriptNodeKey, UserInputOverlay, UserInputQuestion, UserInputRequest,
-    choice_overlay_clear_detail, execution_pending_flash_key,
-    first_auto_open_pending_interactive_request, first_pending_interactive_request_by_kind,
-    path_browser_directory_input, pending_interactive_kind_for_execution,
-    permission_prompt_content, settings_clear_label, ui_text,
+    App, BTreeSet, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction,
+    ConfirmDialogState, ConfirmOverlay, Editor, LineInputOverlay, Overlay, Path,
+    PathBrowserMode, PathBrowserOverlay, PathBrowserTarget, PendingInteractiveKind,
+    PendingInteractiveOverlayTarget, PendingInteractiveRequest, PermissionOverlay,
+    PermissionPromptPresentation, PermissionRequest, PermissionScope, SearchPickerClearAction,
+    SearchPickerConfig, SearchPickerPreviewMode, SearchPickerSearchMode,
+    SelectionPickerOverlay, SelectionPickerQuery, SessionModelChooserOverlay,
+    SessionModelChooserPurpose, SessionNavigationOverlay, SessionNavigationQuery,
+    SessionSearchOverlay, TimelineOverlay, TimelinePresentation, TranscriptNodeKey,
+    UserInputOverlay, UserInputQuestion, UserInputRequest, choice_overlay_clear_detail,
+    execution_pending_flash_key, first_auto_open_pending_interactive_request,
+    first_pending_interactive_request_by_kind, path_browser_directory_input,
+    pending_interactive_kind_for_execution, permission_prompt_content, settings_clear_label,
+    ui_text,
 };
 use agena_tui_session::{session_search::SessionSearchPresentation, session_view::SessionViewMode};
 
@@ -874,30 +943,38 @@ mod tests {
     }
 
     #[test]
-    fn review_overlay_pre_renders_the_plan_body_into_the_document() {
+    fn review_overlay_projects_selection_state_into_the_interaction_view() {
         let request = review_request("## Proposed Plan\n\n1. Step one\n2. Step two");
-        let overlay = App::build_user_input_overlay(1, request, 80);
+        let overlay = App::build_user_input_overlay(1, request.clone());
         assert!(
             overlay.presentation.is_review_decision(),
             "a single-option review request is a review decision"
         );
-        // The plan markdown renders to more than the single placeholder row,
-        // so the decision block starts below the plan content.
+        // The plan body is NOT pre-rendered into the presentation anymore —
+        // the renderer draws it natively — but the view still measures its
+        // row count with the exact renderer path at the given width.
+        let view = App::interaction_view_for(&request, &overlay.presentation, 80);
         assert!(
-            overlay.presentation.review().plan_rows() > 1,
-            "plan body must pre-render into plan rows, got {}",
-            overlay.presentation.review().plan_rows()
+            view.plan_body_lines > 1,
+            "plan body must measure more than one row, got {}",
+            view.plan_body_lines
         );
-        assert_eq!(overlay.presentation.review().cursor_line(), 0);
+        assert_eq!(view.plan_width, 80);
+        assert!(!view.editing_custom);
+        assert!(view.custom_text.is_empty());
+        assert!(view.custom_draft.is_empty());
     }
 
     #[test]
-    fn non_review_overlay_keeps_the_placeholder_document() {
+    fn non_review_overlay_projects_an_empty_ask_user_view() {
         let mut request = review_request("");
         request.kind = UserInputKind::AskUser;
         request.body_markdown.clear();
-        let overlay = App::build_user_input_overlay(1, request, 80);
+        let overlay = App::build_user_input_overlay(1, request.clone());
         assert!(!overlay.presentation.is_review_decision());
-        assert_eq!(overlay.presentation.review().plan_rows(), 1);
+        let view = App::interaction_view_for(&request, &overlay.presentation, 80);
+        assert!(view.answers.is_empty());
+        assert_eq!(view.focused_question, Some(0));
+        assert_eq!(view.selected_option, None);
     }
 }

@@ -356,6 +356,165 @@ mod interactive_request_visibility_tests {
     }
 }
 
+/// The reply-builder shared by the overlay path and the new inline
+/// interaction-node routing ("everything is a part"). These tests pin the
+/// contract the key router relies on: review decisions map to `answers["0"]`,
+/// ask-user questions map by positional index, and custom feedback routes into
+/// the right editor field for each flow.
+#[cfg(test)]
+mod interaction_reply_building_tests {
+    use agena_domain::{UserInputKind, UserInputQuestion, UserInputSource};
+    use chrono::Utc;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::super::{App, I18n};
+    use agena_tui::user_input::UserInputEffect;
+
+    fn enter() -> KeyEvent {
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+    }
+
+    fn edit() -> KeyEvent {
+        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)
+    }
+
+    fn review_request() -> agena_domain::UserInputRequest {
+        agena_domain::UserInputRequest {
+            request_id: "host-input:1:2:0".to_owned(),
+            session_id: Some(7),
+            title: "Approve New Plan".to_owned(),
+            body_markdown: String::new(),
+            kind: UserInputKind::Review,
+            source: UserInputSource::Host,
+            auto_resolution_ms: None,
+            presented_at: None,
+            questions: vec![UserInputQuestion {
+                header: "Decision".to_owned(),
+                question: "Choose whether this plan should move to active.".to_owned(),
+                options: vec![agena_domain::UserInputOption {
+                    label: "Approve".to_owned(),
+                    description: "Move it to active.".to_owned(),
+                }],
+                multiple: false,
+                allow_custom: true,
+            }],
+            created_at: Utc::now(),
+        }
+    }
+
+    fn ask_user_request(allow_custom: bool) -> agena_domain::UserInputRequest {
+        agena_domain::UserInputRequest {
+            request_id: "host-input:1:2:0".to_owned(),
+            session_id: Some(7),
+            title: "Choose".to_owned(),
+            body_markdown: String::new(),
+            kind: UserInputKind::AskUser,
+            source: UserInputSource::Plugin,
+            auto_resolution_ms: None,
+            presented_at: None,
+            questions: vec![UserInputQuestion {
+                header: "Choice".to_owned(),
+                question: "Pick one.".to_owned(),
+                options: vec![agena_domain::UserInputOption {
+                    label: "yes".to_owned(),
+                    description: String::new(),
+                }],
+                multiple: false,
+                allow_custom,
+            }],
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn review_decision_submit_maps_to_answers_zero_option_label() {
+        let mut dialog = App::build_user_input_overlay(7, review_request(), 80);
+        assert!(dialog.presentation.is_review_decision());
+
+        // Empty plan body → one placeholder row, then the separator, then the
+        // decision rows. Walk the cursor through them: Enter on the plan row
+        // and the separator are inert, Enter on the decision row submits.
+        assert_eq!(
+            dialog.presentation.handle_key(enter(), 10),
+            UserInputEffect::KeepOpen,
+            "Enter on the plan placeholder must not submit"
+        );
+        assert_eq!(
+            dialog.presentation.handle_key(enter(), 10),
+            UserInputEffect::KeepOpen,
+            "Enter on the separator must not submit"
+        );
+        assert_eq!(
+            dialog.presentation.handle_key(enter(), 10),
+            UserInputEffect::Submit
+        );
+
+        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog)
+            .expect("review decision builds a reply");
+        assert_eq!(reply.answers["0"], ["Approve"]);
+    }
+
+    #[test]
+    fn review_custom_feedback_routes_into_the_review_editor_and_submits() {
+        let mut dialog = App::build_user_input_overlay(7, review_request(), 80);
+
+        // Pasting onto an expanded review part must land in the review custom
+        // editor, so a later submit reads it back through `review().custom_text()`.
+        assert!(dialog.presentation.insert_custom_text("looks good"));
+        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog)
+            .expect("custom feedback builds a reply");
+        assert_eq!(reply.answers["0"], ["looks good"]);
+    }
+
+    #[test]
+    fn ask_user_option_submit_maps_to_answers_zero() {
+        let mut dialog = App::build_user_input_overlay(7, ask_user_request(false), 80);
+        assert!(!dialog.presentation.is_review_decision());
+
+        // A single non-multiple question hides the review header, so Enter
+        // selects the first option and submits in one step.
+        assert_eq!(
+            dialog.presentation.handle_key(enter(), 10),
+            UserInputEffect::Submit
+        );
+
+        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog)
+            .expect("ask_user option builds a reply");
+        assert_eq!(reply.answers["0"], ["yes"]);
+    }
+
+    #[test]
+    fn ask_user_missing_answer_is_rejected_and_focuses_the_question() {
+        let mut dialog = App::build_user_input_overlay(7, ask_user_request(false), 80);
+
+        let error = App::build_structured_user_input_reply(&I18n::english(), &mut dialog)
+            .expect_err("an unanswered ask_user must not submit");
+        assert!(!error.is_empty());
+        assert_eq!(dialog.presentation.selected_question(), 0);
+    }
+
+    #[test]
+    fn ask_user_custom_text_commits_on_enter_and_maps_by_index() {
+        let mut dialog = App::build_user_input_overlay(7, ask_user_request(true), 80);
+
+        // `e` opens the question-flow custom editor, paste fills it, Enter
+        // commits the draft and (single question) submits.
+        assert_eq!(
+            dialog.presentation.handle_key(edit(), 10),
+            UserInputEffect::KeepOpen
+        );
+        assert!(dialog.presentation.insert_custom_text("custom answer"));
+        assert_eq!(
+            dialog.presentation.handle_key(enter(), 10),
+            UserInputEffect::Submit
+        );
+
+        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut dialog)
+            .expect("ask_user custom text builds a reply");
+        assert_eq!(reply.answers["0"], ["custom answer"]);
+    }
+}
+
 macro_rules! api_message_part {
     ($id:expr, $message_id:expr, $created_at:expr, $status:expr, FixturePart::text($text:expr $(,)?) $(,)?) => {
         crate::TranscriptFixture::text_part($id, $message_id, $created_at, $status, $text)

@@ -75,11 +75,12 @@ pub(crate) fn append_rendered_part_node(
     i18n: &I18n,
     defaults: &TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+    interactions: &std::collections::BTreeMap<String, Vec<ratatui::text::Line<'static>>>,
 ) {
     // Like Markdown blocks, non-text parts start after the message header so
     // selecting the first activity part never highlights `assistant`.
     let start_line = lines.len();
-    let node = render_part_node(message, part, width, lines, i18n, defaults, expansions);
+    let node = render_part_node(message, part, width, lines, i18n, defaults, expansions, interactions);
     if lines.len() > start_line {
         let end_line = node.end_line.unwrap_or(lines.len());
         let atomic = node.kind.uses_atomic_navigation()
@@ -1150,6 +1151,7 @@ pub(crate) fn render_part_node(
     i18n: &I18n,
     defaults: &TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+    interactions: &std::collections::BTreeMap<String, Vec<ratatui::text::Line<'static>>>,
 ) -> RenderedNodeDraft {
     match transcript_part_content(part) {
         TranscriptPartContent::UserDocument(document) => {
@@ -1533,7 +1535,17 @@ pub(crate) fn render_part_node(
                         width,
                     );
                     if expanded {
-                        render_user_input_request(request, reply.as_ref(), out, width, i18n);
+                        // A pending part with a live inline document (the app's
+                        // plan + decision rows) renders that document directly,
+                        // making the expanded part the interaction surface.
+                        // Answered parts keep the plain replied/awaiting body.
+                        if reply.is_none()
+                            && let Some(document) = interactions.get(&request.request_id)
+                        {
+                            push_interaction_document(out, document, width);
+                        } else {
+                            render_user_input_request(request, reply.as_ref(), out, width, i18n);
+                        }
                     }
                     RenderedNodeDraft {
                         key,
@@ -1556,6 +1568,21 @@ pub(crate) fn render_part_node(
                 }
             }
         }
+    }
+}
+
+/// Pushes the app-built inline interaction document (plan + decision rows)
+/// into the rendered transcript, preserving each row's styled spans. The
+/// document already carries the selected-row highlight and the separator, so
+/// the transcript treats it as opaque rich content and only indents it like
+/// other activity detail rows.
+fn push_interaction_document(
+    out: &mut Vec<RenderedLine>,
+    document: &[Line<'static>],
+    _width: u16,
+) {
+    for line in document {
+        out.push(RenderedLine::rich(line.clone()));
     }
 }
 

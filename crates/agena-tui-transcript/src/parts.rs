@@ -730,6 +730,7 @@ fn assistant_reply_lifecycle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interaction_request_id_for_part;
     use agena_api::resource::SessionTranscriptPart;
 
     fn run(part_id: i64, role: &str, state: &str) -> SessionTranscriptPart {
@@ -1251,5 +1252,68 @@ mod tests {
         assert_eq!(request.kind, "review");
         let reply = reply.as_ref().expect("reply is recovered from the reply object");
         assert_eq!(reply.answers["decision"], ["approve"]);
+    }
+
+    #[test]
+    fn interaction_request_id_is_only_exposed_for_pending_parts() {
+        // `interaction_request_id_for_part` is the correlation key the app
+        // uses to attach a live `UserInputPresentation` to an expanded pending
+        // interaction part. It must return the request_id only while the part
+        // is unanswered; once a reply lands the part is no longer interactive
+        // and the id must be withheld so key routing can never target it.
+        let pending = content_part(
+            2,
+            "interaction",
+            "assistant",
+            serde_json::json!({
+                "type": "review",
+                "prompt": "Approve New Plan",
+                "request": {
+                    "request_id": "host-input:1:2:0",
+                    "session_id": 1,
+                    "title": "Approve New Plan",
+                    "kind": "review",
+                    "questions": [],
+                    "created_at": "2026-08-11T00:00:00Z"
+                }
+            }),
+        );
+        let entries = parts_entries(&[pending]);
+        let part = &entries[0].parts[0];
+        assert_eq!(
+            interaction_request_id_for_part(part),
+            Some("host-input:1:2:0")
+        );
+
+        let answered = content_part(
+            3,
+            "interaction",
+            "assistant",
+            serde_json::json!({
+                "type": "review",
+                "prompt": "Approve New Plan",
+                "request": {
+                    "request_id": "host-input:1:2:0",
+                    "session_id": 1,
+                    "title": "Approve New Plan",
+                    "kind": "review",
+                    "questions": [],
+                    "created_at": "2026-08-11T00:00:00Z"
+                },
+                "reply": {
+                    "request_id": "host-input:1:2:0",
+                    "kind": "submit",
+                    "answers": { "decision": ["approve"] }
+                }
+            }),
+        );
+        let entries = parts_entries(&[answered]);
+        let part = &entries[0].parts[0];
+        assert_eq!(interaction_request_id_for_part(part), None);
+
+        // Non-interaction parts never expose a request id.
+        let text = content_part(4, "text", "assistant", serde_json::json!({ "text": "hi" }));
+        let entries = parts_entries(&[text]);
+        assert_eq!(interaction_request_id_for_part(&entries[0].parts[0]), None);
     }
 }

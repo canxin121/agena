@@ -53,14 +53,6 @@ impl App {
                     &self.i18n,
                 );
             }
-            Overlay::UserInputReply(dialog) => {
-                agena_tui::user_input::render_overlay(
-                    frame,
-                    area,
-                    &dialog.presentation,
-                    &self.i18n,
-                );
-            }
             Overlay::Confirm(dialog) => {
                 self.render_confirm_overlay(frame, area, dialog);
             }

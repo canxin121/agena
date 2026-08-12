@@ -94,6 +94,16 @@ impl App {
         );
         match result {
             Ok(execution) => {
+                // The interaction resolved: drop the live presentation and the
+                // expansion override so the part returns to its configured
+                // expand/collapse state, then apply the refreshed execution
+                // (which carries the answered part).
+                self.user_input_interactions.remove(&request_id);
+                if let Some(key) = self.pending_interaction_part_node_key(&request_id) {
+                    self.transcript.node_expansions.remove(&key);
+                    self.transcript.invalidate_render();
+                }
+                self.sync_interaction_documents();
                 let transcript_contains_target =
                     self.transcript.execution.as_ref().is_some_and(|execution| {
                         execution

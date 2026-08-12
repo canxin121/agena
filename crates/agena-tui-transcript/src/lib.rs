@@ -12,6 +12,7 @@ pub use agena_api::part::{
 };
 use ratatui::layout::Rect;
 
+pub mod interaction_view;
 pub mod markdown;
 pub mod math;
 pub mod navigation;
@@ -22,6 +23,7 @@ pub mod selection;
 pub mod snapshot;
 pub mod text;
 
+pub use interaction_view::interaction_request_id_for_part;
 pub use markdown::*;
 pub use math::*;
 pub use navigation::*;
@@ -31,9 +33,9 @@ pub use parts::{
 };
 pub use render_model::*;
 pub use renderer::{
-    render_entry_detailed, render_entry_export, render_markdown_document,
-    render_parts_export_markdown, render_transcript_snapshot_export_markdown,
-    rewind_message_preview,
+    render_entry_detailed, render_entry_detailed_with_interactions, render_entry_export,
+    render_markdown_document, render_parts_export_markdown,
+    render_transcript_snapshot_export_markdown, rewind_message_preview,
 };
 pub use selection::{normalize_transcript_text_selection, transcript_text_selection_text};
 pub use snapshot::{pending_user_entry, transcript_entries};

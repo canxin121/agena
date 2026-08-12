@@ -79,6 +79,29 @@ pub fn render_entry_detailed(
     defaults: &TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
 ) -> RenderedMessageBlock {
+    render_entry_detailed_with_interactions(
+        message,
+        width,
+        i18n,
+        defaults,
+        expansions,
+        &std::collections::BTreeMap::new(),
+    )
+}
+
+/// Like [`render_entry_detailed`], but with inline interaction documents for
+/// pending user-input parts. The map is keyed by `request_id`; when an
+/// expanded pending interaction part has an entry, the renderer draws that
+/// document (plan + decision rows) instead of the plain awaiting summary.
+#[allow(clippy::too_many_arguments)]
+pub fn render_entry_detailed_with_interactions(
+    message: &TranscriptEntry,
+    width: u16,
+    i18n: &I18n,
+    defaults: &TranscriptDetailDefaults,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+    interactions: &std::collections::BTreeMap<String, Vec<ratatui::text::Line<'static>>>,
+) -> RenderedMessageBlock {
     let mut lines = Vec::new();
     let mut nodes = Vec::new();
     let header_start = lines.len();
@@ -193,14 +216,14 @@ pub fn render_entry_detailed(
                         }
                         append_rendered_part_node(
                             message, part, width, &mut lines, &mut nodes, i18n, defaults,
-                            expansions,
+                            expansions, interactions,
                         );
                     }
                 } else {
                     for part in activities {
                         append_rendered_part_node(
                             message, part, width, &mut lines, &mut nodes, i18n, defaults,
-                            expansions,
+                            expansions, interactions,
                         );
                     }
                 }
@@ -265,6 +288,7 @@ pub fn render_entry_detailed(
 
             append_rendered_part_node(
                 message, part, width, &mut lines, &mut nodes, i18n, defaults, expansions,
+                interactions,
             );
             part_index += 1;
         }
@@ -280,7 +304,8 @@ mod tests {
         I18n, Line, RunStatus, TRANSCRIPT_EXPORT_WIDTH, TranscriptDetailDefaults, TranscriptEntry,
         TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr, activity_status_icon,
         bounded_title_summary, markdown_blocks, refresh_spinner_line, render_entry_detailed,
-        render_entry_export, render_markdown_block, render_tool_execution,
+        render_entry_detailed_with_interactions, render_entry_export, render_markdown_block,
+        render_tool_execution,
         render_transcript_entries_export_markdown, should_suppress_markdown_block, spinner_frame,
         thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
         transcript_spinner_placeholder,
@@ -432,6 +457,179 @@ mod tests {
 
         assert!(text.contains("reasoning line 63"), "{text}");
         assert!(!text.contains("more lines"), "{text}");
+    }
+
+    #[test]
+    fn pending_interaction_part_renders_the_inline_document_when_expanded() {
+        use crate::{
+            RequestPartResource, TranscriptActivityContent, TranscriptPartContent,
+        };
+        let now = Utc::now();
+        let part = TranscriptEntryPart {
+            id: TranscriptContentId::StoredPart(5),
+            status: PartExecutionStatusResource::InProgress,
+            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(
+                Box::new(RequestPartResource::UserInput {
+                    request: agena_api::resource::UserInputRequest {
+                        request_id: "host-input:1:2:0".to_owned(),
+                        session_id: Some(1),
+                        title: "Approve New Plan".to_owned(),
+                        body_markdown: "## Proposed Plan".to_owned(),
+                        kind: "review".to_owned(),
+                        source: agena_domain::UserInputSource::Host,
+                        auto_resolution_ms: None,
+                        presented_at: Some(now),
+                        questions: vec![agena_api::resource::UserInputQuestion {
+                            header: "Decision".to_owned(),
+                            question: "Choose whether this plan should move to active.".to_owned(),
+                            options: vec![agena_api::resource::UserInputOption {
+                                label: "Approve".to_owned(),
+                                description: "Move it to active.".to_owned(),
+                            }],
+                            multiple: false,
+                            allow_custom: true,
+                        }],
+                        created_at: now,
+                    },
+                    reply: None,
+                }),
+            )),
+        };
+        let message = entry(
+            3,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::InProgress,
+            now,
+            vec![part],
+        );
+        let node_key = TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::StoredMessage(3),
+            content_id: TranscriptContentId::StoredPart(5),
+        };
+        // A collapsed pending part must not draw the inline document even when
+        // one is provided for its request_id.
+        let collapsed = render_entry_detailed_with_interactions(
+            &message,
+            80,
+            &I18n::english(),
+            &TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
+            },
+            &Default::default(),
+            &std::collections::BTreeMap::from([(
+                "host-input:1:2:0".to_owned(),
+                vec![Line::from("  (x) Approve")],
+            )]),
+        );
+        let collapsed_text = collapsed
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!collapsed_text.contains("(x) Approve"), "{collapsed_text}");
+
+        // Expanded + pending + an inline document: the decision rows render
+        // directly, making the part the interaction surface.
+        let expanded = render_entry_detailed_with_interactions(
+            &message,
+            80,
+            &I18n::english(),
+            &TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
+            },
+            &std::collections::BTreeMap::from([(node_key.clone(), true)]),
+            &std::collections::BTreeMap::from([(
+                "host-input:1:2:0".to_owned(),
+                vec![
+                    Line::from("## Proposed Plan"),
+                    Line::from("─".repeat(78)),
+                    Line::from("(x) Approve"),
+                ],
+            )]),
+        );
+        let expanded_text = expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(expanded_text.contains("## Proposed Plan"), "{expanded_text}");
+        assert!(expanded_text.contains("(x) Approve"), "{expanded_text}");
+        assert!(
+            expanded
+                .nodes
+                .iter()
+                .any(|node| node.key == node_key && node.expanded),
+            "the pending interaction node stays the expanded Activity node"
+        );
+
+        // Answered parts never draw the inline document, only the plain body.
+        let answered = TranscriptEntryPart {
+            id: TranscriptContentId::StoredPart(5),
+            status: PartExecutionStatusResource::Completed,
+            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(
+                Box::new(RequestPartResource::UserInput {
+                    request: agena_api::resource::UserInputRequest {
+                        request_id: "host-input:1:2:0".to_owned(),
+                        session_id: Some(1),
+                        title: "Approve New Plan".to_owned(),
+                        body_markdown: String::new(),
+                        kind: "review".to_owned(),
+                        source: agena_domain::UserInputSource::Host,
+                        auto_resolution_ms: None,
+                        presented_at: Some(now),
+                        questions: vec![agena_api::resource::UserInputQuestion {
+                            header: "Decision".to_owned(),
+                            question: "Choose whether this plan should move to active.".to_owned(),
+                            options: vec![agena_api::resource::UserInputOption {
+                                label: "Approve".to_owned(),
+                                description: String::new(),
+                            }],
+                            multiple: false,
+                            allow_custom: true,
+                        }],
+                        created_at: now,
+                    },
+                    reply: Some(agena_api::resource::UserInputReply {
+                        request_id: "host-input:1:2:0".to_owned(),
+                        kind: agena_api::resource::UserInputReplyKind::Submit,
+                        answers: std::collections::BTreeMap::new(),
+                        reason: None,
+                    }),
+                }),
+            )),
+        };
+        let message = entry(
+            3,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
+            now,
+            vec![answered],
+        );
+        let answered_rendered = render_entry_detailed_with_interactions(
+            &message,
+            80,
+            &I18n::english(),
+            &TranscriptDetailDefaults {
+                activity_default_expanded: true,
+                kind_defaults: std::collections::BTreeMap::new(),
+            },
+            &Default::default(),
+            &std::collections::BTreeMap::from([(
+                "host-input:1:2:0".to_owned(),
+                vec![Line::from("(x) Approve")],
+            )]),
+        );
+        let answered_text = answered_rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!answered_text.contains("(x) Approve"), "{answered_text}");
     }
 
     #[test]

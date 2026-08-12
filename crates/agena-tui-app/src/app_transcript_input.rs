@@ -3,6 +3,12 @@ impl App {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
         self.transcript.ensure_visual_focus(width, height);
+        // An expanded pending interaction part is the interaction surface:
+        // its keys (j/k/Enter/Ctrl+X/e/Esc) drive the UserInputPresentation
+        // state machine before any normal transcript dispatch.
+        if self.handle_active_interaction_node_key(key) {
+            return;
+        }
         let action = resolve_tui_key(KeyContext::Transcript, key);
         if self.handle_pending_transcript_key(key, action, width, height) {
             return;

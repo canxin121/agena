@@ -11,12 +11,98 @@ impl App {
         // reachable through the awaiting-input hint.
         self.present_pending_interactive_request(session_id, request.request_id.clone());
         let review_content_width =
-            agena_tui::user_input::user_input_review_content_width(self.layout.overlay_area);
-        self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
-            session_id,
-            request,
-            review_content_width,
-        )));
+            agena_tui::user_input::user_input_review_content_width(self.layout.transcript_body);
+        let request_id = request.request_id.clone();
+        self.user_input_interactions.insert(
+            request_id.clone(),
+            Self::build_user_input_overlay(session_id, request, review_content_width),
+        );
+        self.sync_interaction_documents();
+        // Reveal-and-expand the pending interaction part instead of opening a
+        // modal: the expanded part is the interaction surface.
+        self.reveal_pending_user_input_interaction(&request_id);
+    }
+
+    /// Rebuild the inline interaction documents from the live presentations
+    /// and stage them on the transcript. The renderer draws these inside
+    /// expanded pending interaction parts; rebuilding on every presentation
+    /// mutation keeps selection, highlight, and custom-feedback state in sync
+    /// ("everything is a part").
+    pub(crate) fn sync_interaction_documents(&mut self) {
+        let fallback_width = self.layout.transcript_body.width.saturating_sub(2).max(1);
+        let documents = self
+            .user_input_interactions
+            .iter()
+            .map(|(request_id, dialog)| {
+                let content_width = dialog
+                    .presentation
+                    .review()
+                    .content_width()
+                    .max(fallback_width);
+                let document = agena_tui::user_input::build_inline_document(
+                    &dialog.presentation,
+                    &self.i18n,
+                    content_width,
+                );
+                (request_id.clone(), document)
+            })
+            .collect();
+        self.transcript.interaction_documents = documents;
+        self.transcript.invalidate_render();
+    }
+
+    /// Move the transcript cursor onto the pending interaction part for
+    /// `request_id` and force it expanded, so the expanded part is the
+    /// interaction surface ("everything is a part"). No-op when the part has
+    /// not been rendered yet (for example the execution snapshot arrived
+    /// before the transcript was populated).
+    pub(crate) fn reveal_pending_user_input_interaction(&mut self, request_id: &str) {
+        let Some(key) = self.pending_interaction_part_node_key(request_id) else {
+            return;
+        };
+        self.transcript.node_expansions.insert(key.clone(), true);
+        self.transcript.invalidate_render();
+        let width = self.layout.transcript_body.width;
+        let height = self.layout.transcript_body.height;
+        let start_line = self
+            .transcript
+            .rendered(width)
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .map(|node| node.start_line);
+        if let Some(start_line) = start_line {
+            self.transcript
+                .move_cursor_to_visual_line_number(width, height, Some(start_line + 1));
+        }
+    }
+
+    /// The transcript node key of the pending user-input interaction part
+    /// matching `request_id`, if the part is present in the transcript parts.
+    pub(crate) fn pending_interaction_part_node_key(
+        &self,
+        request_id: &str,
+    ) -> Option<TranscriptNodeKey> {
+        use agena_tui_transcript::{
+            RequestPartResource, TranscriptActivityContent, TranscriptPartContent,
+        };
+        agena_tui_transcript::parts_entries(&self.transcript.parts).iter().find_map(|entry| {
+            entry.parts.iter().find_map(|part| {
+                let pending = matches!(
+                    &part.content,
+                    TranscriptPartContent::Activity(TranscriptActivityContent::Request(request))
+                        if matches!(
+                            request.as_ref(),
+                            RequestPartResource::UserInput { request, reply }
+                                if reply.is_none() && request.request_id == request_id
+                        )
+                );
+                pending.then(|| TranscriptNodeKey::Activity {
+                    entry_id: entry.id,
+                    content_id: part.id,
+                })
+            })
+        })
     }
 
     pub(crate) fn pending_user_input_overlay_target(&self) -> Option<(i64, UserInputRequest)> {
@@ -118,10 +204,6 @@ impl App {
             return None;
         }
         (!question.options.is_empty()).then_some(question)
-    }
-
-    pub(crate) fn user_input_overlay_is_review(dialog: &UserInputOverlay) -> bool {
-        dialog.presentation.is_review_decision()
     }
 
     pub(crate) fn build_permission_overlay(
@@ -263,13 +345,17 @@ impl App {
                     .insert(request.request_id.clone());
                 self.present_pending_interactive_request(session_id, request.request_id.clone());
                 let review_content_width = agena_tui::user_input::user_input_review_content_width(
-                    self.layout.overlay_area,
+                    self.layout.transcript_body,
                 );
-                self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
-                    session_id,
-                    *request,
-                    review_content_width,
-                )));
+                // A pending user-input request lives in the per-request
+                // interaction map instead of a modal: the transcript part is
+                // the interaction surface, and expanding it renders the live
+                // inline document built from this presentation.
+                self.user_input_interactions.insert(
+                    request.request_id.clone(),
+                    Self::build_user_input_overlay(session_id, *request, review_content_width),
+                );
+                self.sync_interaction_documents();
                 self.queue_user_input_notification();
             }
             None => {}
@@ -744,11 +830,11 @@ use crate::{
     SearchPickerSearchMode, SelectionPickerOverlay, SelectionPickerQuery,
     SessionModelChooserOverlay, SessionModelChooserPurpose, SessionNavigationOverlay,
     SessionNavigationQuery, SessionSearchOverlay, TimelineOverlay, TimelinePresentation,
-    UserInputOverlay, UserInputQuestion, UserInputRequest, choice_overlay_clear_detail,
-    execution_pending_flash_key, first_auto_open_pending_interactive_request,
-    first_pending_interactive_request_by_kind, path_browser_directory_input,
-    pending_interactive_kind_for_execution, permission_prompt_content, settings_clear_label,
-    ui_text,
+    TranscriptNodeKey, UserInputOverlay, UserInputQuestion, UserInputRequest,
+    choice_overlay_clear_detail, execution_pending_flash_key,
+    first_auto_open_pending_interactive_request, first_pending_interactive_request_by_kind,
+    path_browser_directory_input, pending_interactive_kind_for_execution,
+    permission_prompt_content, settings_clear_label, ui_text,
 };
 use agena_tui_session::{session_search::SessionSearchPresentation, session_view::SessionViewMode};
 

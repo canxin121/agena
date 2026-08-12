@@ -36,58 +36,122 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_user_input_overlay_key(
-        &mut self,
-        key: KeyEvent,
-        dialog: &mut UserInputOverlay,
-    ) -> bool {
+    /// The `request_id` of the pending user-input interaction the transcript
+    /// cursor currently sits on, when that node is an expanded pending
+    /// interaction part. This is the "展开即可交互" boundary: expanded pending
+    /// parts are the interaction surface.
+    pub(crate) fn active_user_input_interaction_request_id(&mut self) -> Option<String> {
+        let width = self.layout.transcript_body.width;
+        let node = self.transcript.current_cursor_node_cloned(width)?;
+        if !node.expanded {
+            return None;
+        }
+        let content_id = match &node.key {
+            TranscriptNodeKey::Activity { content_id, .. } => content_id,
+            _ => return None,
+        };
+        let TranscriptContentId::StoredPart(part_id) = content_id else {
+            return None;
+        };
+        agena_tui_transcript::parts_entries(&self.transcript.parts)
+            .into_iter()
+            .flat_map(|entry| entry.parts.into_iter())
+            .find_map(|part| {
+                (part.id == TranscriptContentId::StoredPart(*part_id))
+                    .then(|| {
+                        agena_tui_transcript::interaction_request_id_for_part(&part)
+                            .map(str::to_owned)
+                    })
+                    .flatten()
+            })
+    }
+
+    /// Route a transcript key into the active pending user-input interaction,
+    /// driving the same `UserInputPresentation` state machine the overlay
+    /// used. Runs before normal transcript dispatch; returns whether the key
+    /// was consumed by the interaction.
+    pub(crate) fn handle_active_interaction_node_key(&mut self, key: KeyEvent) -> bool {
+        if self.overlay.is_some()
+            || self.focus != Focus::Transcript
+            || !self.current_route_is_main()
+        {
+            return false;
+        }
+        let Some(request_id) = self.active_user_input_interaction_request_id() else {
+            return false;
+        };
+        // Resolve the node key up front: the mutable dialog borrow below
+        // would otherwise conflict with the shared borrow this call needs.
+        let node_key = self.pending_interaction_part_node_key(&request_id);
+        // Take the dialog out of the map so the arms can drive `&mut self`
+        // effects (sending the reply) without a live borrow on the map.
+        let Some(mut dialog) = self.user_input_interactions.remove(&request_id) else {
+            return false;
+        };
         let page_size = agena_tui::user_input::review_decision_page_size(
             &dialog.presentation,
             &self.i18n,
-            self.layout.overlay_area,
+            self.layout.transcript_body,
         );
         match dialog.presentation.handle_key(key, page_size) {
             agena_tui::user_input::UserInputEffect::Close => {
-                // ESC Close must not permanently lose the request: drop the
-                // local guard so a presented-but-unanswered request stays
-                // reachable through the awaiting-input hint and can be
-                // reopened, and so an unpresented request auto-popups again.
-                self.seen_user_input_request_ids
-                    .remove(&dialog.request.request_id);
-                true
+                // ESC collapses the part back to its configured state; the
+                // request stays reachable by re-expanding the part.
+                if let Some(node_key) = node_key {
+                    self.transcript.node_expansions.insert(node_key, false);
+                }
+                self.transcript.invalidate_render();
+                self.user_input_interactions.insert(request_id, dialog);
             }
             agena_tui::user_input::UserInputEffect::Submit => {
-                self.submit_user_input_overlay(dialog)
+                match Self::build_structured_user_input_reply(&self.i18n, &mut dialog) {
+                    Ok(reply) => {
+                        let session_id = dialog.session_id;
+                        self.request_user_input_reply(session_id, reply);
+                    }
+                    Err(error) => {
+                        // Keep the dialog so the user can correct the missing
+                        // answer; `focus_question` moved the cursor there.
+                        self.user_input_interactions.insert(request_id, dialog);
+                        self.flash_warning(error);
+                    }
+                }
             }
             agena_tui::user_input::UserInputEffect::Cancel => {
-                self.cancel_user_input_overlay(dialog)
+                let session_id = dialog.session_id;
+                let reply = UserInputReply {
+                    request_id: dialog.request.request_id.clone(),
+                    kind: UserInputReplyKind::Cancel,
+                    answers: BTreeMap::new(),
+                    reason: None,
+                };
+                self.request_user_input_reply(session_id, reply);
             }
-            agena_tui::user_input::UserInputEffect::KeepOpen => false,
+            agena_tui::user_input::UserInputEffect::KeepOpen => {
+                self.user_input_interactions.insert(request_id, dialog);
+            }
         }
-    }
-
-    pub(crate) fn cancel_user_input_overlay(&mut self, dialog: &UserInputOverlay) -> bool {
-        let reply = UserInputReply {
-            request_id: dialog.request.request_id.clone(),
-            kind: UserInputReplyKind::Cancel,
-            answers: BTreeMap::new(),
-            reason: None,
-        };
-        self.request_user_input_reply(dialog.session_id, reply);
+        // Any keystroke can move the selection or start/stop custom editing;
+        // rebuild the inline document so the transcript reflects the new
+        // cursor position and markers.
+        self.sync_interaction_documents();
         true
     }
 
-    pub(crate) fn submit_user_input_overlay(&mut self, dialog: &mut UserInputOverlay) -> bool {
-        match Self::build_structured_user_input_reply(&self.i18n, dialog) {
-            Ok(reply) => {
-                self.request_user_input_reply(dialog.session_id, reply);
-                true
-            }
-            Err(error) => {
-                self.flash_warning(error);
-                false
-            }
+    /// Insert pasted text into the custom-feedback field of the active
+    /// expanded pending user-input interaction, if any.
+    pub(crate) fn paste_into_active_interaction(&mut self, text: &str) -> bool {
+        let Some(request_id) = self.active_user_input_interaction_request_id() else {
+            return false;
+        };
+        let Some(dialog) = self.user_input_interactions.get_mut(&request_id) else {
+            return false;
+        };
+        if !dialog.presentation.insert_custom_text(text) {
+            return false;
         }
+        self.sync_interaction_documents();
+        true
     }
 
     pub(crate) fn build_structured_user_input_reply(
@@ -147,7 +211,9 @@ impl App {
 }
 use crate::{
     App, BTreeMap, ConfirmOverlay, I18n, InputDialogKeyResult, KeyEvent, LineInputOverlay,
-    OverlayCommit, UserInputOverlay, UserInputReply, UserInputReplyKind, drive_input_dialog_key,
-    ui_text, user_input_answer_values, user_input_question_label,
+    OverlayCommit, TranscriptContentId, TranscriptNodeKey, UserInputOverlay, UserInputReply,
+    UserInputReplyKind, drive_input_dialog_key, ui_text, user_input_answer_values,
+    user_input_question_label,
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
+use agena_tui::main_focus::Focus;

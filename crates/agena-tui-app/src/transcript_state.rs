@@ -56,6 +56,7 @@ impl TranscriptState {
             node_expansions: BTreeMap::new(),
             expanded_operation_activity_ids: BTreeSet::new(),
             v2_activities: BTreeMap::new(),
+            interaction_documents: BTreeMap::new(),
             rendered: None,
         }
     }
@@ -85,6 +86,7 @@ impl TranscriptState {
         self.jump_history_index = 0;
         self.node_expansions.clear();
         self.v2_activities.clear();
+        self.interaction_documents.clear();
         self.invalidate_render();
     }
 
@@ -956,12 +958,13 @@ impl TranscriptState {
         }
 
         for entry in &entries {
-            let rendered = render_entry_detailed(
+            let rendered = render_entry_detailed_with_interactions(
                 entry,
                 width,
                 &self.i18n,
                 &self.detail_expanded_by_default,
                 &self.node_expansions,
+                &self.interaction_documents,
             );
             let base_line = lines.len();
             let base_node = nodes.len();
@@ -3261,9 +3264,10 @@ use crate::{
     TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,
     TranscriptViewport, TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,
     V2LiveActivity, contains_case_insensitive, initial_search_match_index, min,
-    normalize_transcript_text_selection, render_entry_detailed, transcript_node_highlight_range,
+    normalize_transcript_text_selection, transcript_node_highlight_range,
     transcript_selection_scroll_position, transcript_text_selection_text, ui_text,
 };
+use agena_tui_transcript::render_entry_detailed_with_interactions;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 

@@ -119,6 +119,12 @@ impl UserInputReviewPresentation {
     pub fn custom_text(&self) -> String {
         self.custom_input.text().trim().to_string()
     }
+
+    /// Width used to pre-render the plan rows; decision rows wrap at this
+    /// width too so cursor arithmetic stays consistent.
+    pub fn content_width(&self) -> u16 {
+        self.content_width
+    }
 }
 
 /// The complete TUI state for a user-input overlay. It intentionally owns no
@@ -261,6 +267,22 @@ impl UserInputPresentation {
     }
 
     pub fn insert_custom_text(&mut self, text: &str) -> bool {
+        if self.review_decision {
+            // Plan-review custom feedback lives in the review editor, not the
+            // question-flow one; route pasted text there directly so a
+            // subsequent submit picks it up via `review().custom_text()`.
+            let Some(question) = self.questions.first() else {
+                return false;
+            };
+            if !question.allow_custom {
+                return false;
+            }
+            if !self.review.editing_custom {
+                self.begin_review_custom_edit();
+            }
+            self.review.custom_input.insert_str(text);
+            return true;
+        }
         if self.state.screen() == QuestionFlowScreen::Review {
             self.focus_question(self.state.selected_question());
         }
@@ -1258,7 +1280,7 @@ fn review_footer_lines(overlay: &UserInputOverlayPresentation, i18n: &I18n) -> V
 /// Builds the flat review document: chat-style plan rows, a separator, and the
 /// decision rows. The cursor row is highlighted; the selected decision shows a
 /// `(x)` marker on its label row.
-fn build_review_document(
+pub fn build_review_document(
     presentation: &UserInputPresentation,
     question: &UserInputQuestionPresentation,
     i18n: &I18n,
@@ -1357,6 +1379,178 @@ fn build_review_document(
     let last = document.len().saturating_sub(1);
     if let Some(row) = document.get_mut(cursor_line.min(last)) {
         row.style = selection_style();
+    }
+    document
+}
+
+/// Builds the flat inline document shown inside an expanded interaction part
+/// in the transcript: the same layout as the overlay, but without any framed
+/// surface — plan rows, a separator, and the decision rows for a review; or
+/// the question list, choices, and answer previews for the question flow. The
+/// selected row is highlighted so the cursor position is visible in-place.
+pub fn build_inline_document(
+    presentation: &UserInputPresentation,
+    i18n: &I18n,
+    content_width: u16,
+) -> Vec<Line<'static>> {
+    if presentation.is_review_decision() {
+        let Some(question) = presentation.questions().first() else {
+            return Vec::new();
+        };
+        return build_review_document(presentation, question, i18n, content_width);
+    }
+
+    let mut document = Vec::new();
+    let on_review_screen = presentation.screen() == QuestionFlowScreen::Review;
+    for (index, question) in presentation.questions().iter().enumerate() {
+        let answered = !answer_values(question, presentation.answer(index)).is_empty();
+        let focused = !on_review_screen && index == presentation.selected_question();
+        let label = if question.header.trim().is_empty() {
+            format!("Q{}", index + 1)
+        } else {
+            question.header.clone()
+        };
+        document.push(Line::from(vec![
+            Span::styled(
+                format!("{} ", if answered { "[x]" } else { "[ ]" }),
+                if focused {
+                    selection_style()
+                } else {
+                    Style::default()
+                },
+            ),
+            Span::styled(
+                truncate_display_text(label.as_str(), content_width.saturating_sub(4)),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        document.push(Line::from(Span::styled(
+            truncate_display_text(question.question.as_str(), content_width.saturating_sub(4)),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        )));
+
+        let draft = presentation.answer(index);
+        for (option_index, option) in question.options.iter().enumerate() {
+            let picked = draft
+                .map(|draft| draft.option_indexes.contains(&option_index))
+                .unwrap_or(false);
+            let marker = if question.multiple {
+                if picked {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+            } else if picked {
+                "(x)"
+            } else {
+                "( )"
+            };
+            let selected = focused && presentation.selected_option() == option_index;
+            document.push(Line::from(vec![
+                Span::styled(format!("    {marker} "), Style::default()),
+                Span::styled(
+                    truncate_display_text(
+                        option.label.as_str(),
+                        content_width.saturating_sub(8),
+                    ),
+                    if selected {
+                        selection_style().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    },
+                ),
+            ]));
+            if !option.description.trim().is_empty() {
+                document.push(Line::from(Span::styled(
+                    format!(
+                        "        {}",
+                        truncate_display_text(
+                            option.description.as_str(),
+                            content_width.saturating_sub(8)
+                        )
+                    ),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
+                )));
+            }
+        }
+        if question.allow_custom {
+            let custom_values = draft
+                .map(|draft| draft.custom_values.as_slice())
+                .unwrap_or_default();
+            let picked = !custom_values.is_empty();
+            let marker = if question.multiple {
+                if picked {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+            } else if picked {
+                "(x)"
+            } else {
+                "( )"
+            };
+            let selected = focused && presentation.selected_option() == question.options.len();
+            document.push(Line::from(vec![
+                Span::styled(format!("    {marker} "), Style::default()),
+                Span::styled(
+                    i18n.text("overlay-user-input-other"),
+                    if selected {
+                        selection_style().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    },
+                ),
+            ]));
+            let values = if custom_values.is_empty() {
+                i18n.text("overlay-user-input-custom-empty")
+            } else {
+                truncate_display_text(custom_values.join(", ").as_str(), content_width.saturating_sub(8))
+            };
+            document.push(Line::from(Span::styled(
+                format!("        {values}"),
+                if custom_values.is_empty() {
+                    Style::default().fg(agena_tui_components::theme::muted_color())
+                } else {
+                    Style::default().fg(agena_tui_components::theme::info_color())
+                },
+            )));
+        }
+        if answered {
+            document.push(Line::from(Span::styled(
+                format!(
+                    "    {}",
+                    truncate_display_text(
+                        answer_preview(
+                            answer_values(question, draft).as_slice(),
+                            i18n
+                        )
+                        .as_str(),
+                        content_width.saturating_sub(4)
+                    )
+                ),
+                Style::default().fg(agena_tui_components::theme::info_color()),
+            )));
+        }
+    }
+    document.push(Line::from(Span::styled(
+        "─".repeat(usize::from(content_width.max(1))),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
+    )));
+    if !presentation.review_is_hidden() {
+        document.push(Line::from(Span::styled(
+            format!(" {} ", i18n.text("overlay-user-input-submit")),
+            if on_review_screen {
+                selection_style()
+            } else {
+                Style::default()
+            },
+        )));
+    }
+    if let Some(timeout) = timeout_text(presentation.overlay(), i18n) {
+        document.push(Line::from(Span::styled(
+            format!("◷ {timeout}"),
+            Style::default().fg(agena_tui_components::theme::warning_color()),
+        )));
     }
     document
 }
@@ -1717,6 +1911,33 @@ mod tests {
             presentation.answer(0).expect("custom answer").custom_values,
             vec!["custom value".to_string()]
         );
+    }
+
+    #[test]
+    fn review_paste_lands_in_the_review_editor_and_submits() {
+        // The review-decision flow keeps its custom feedback in the review
+        // editor, not the question-flow one. Pasting onto an expanded review
+        // part must populate `review().custom_text()` so a later submit reads
+        // it back. (Regression: paste wrote to the question-flow editor and
+        // the feedback was silently dropped.)
+        let mut presentation =
+            UserInputPresentation::new(overlay(true), vec![question(false, true)]);
+
+        assert!(presentation.insert_custom_text("looks good"));
+        assert_eq!(presentation.review().custom_text(), "looks good");
+        assert_eq!(
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
+            UserInputEffect::Submit
+        );
+    }
+
+    #[test]
+    fn review_paste_is_rejected_when_custom_feedback_is_not_allowed() {
+        let mut presentation =
+            UserInputPresentation::new(overlay(true), vec![question(false, false)]);
+
+        assert!(!presentation.insert_custom_text("nope"));
+        assert!(presentation.review().custom_text().is_empty());
     }
 
     #[test]

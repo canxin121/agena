@@ -36,6 +36,11 @@ impl App {
         let mut pending_session_search_request: Option<(SessionViewMode, Option<i64>, String)> =
             None;
         if self.overlay.is_none() {
+            // Pasting onto an expanded pending interaction part inserts the
+            // text into its custom-feedback field ("everything is a part").
+            if self.focus == Focus::Transcript && self.paste_into_active_interaction(&text) {
+                return;
+            }
             let mut handled_route = false;
             match &mut self.current_route {
                 Route::Main => {}
@@ -177,9 +182,6 @@ impl App {
                         self.application.workspace_root(),
                         dialog,
                     );
-                }
-                Overlay::UserInputReply(dialog) => {
-                    let _ = dialog.presentation.insert_custom_text(text.as_str());
                 }
                 Overlay::SessionSearch(dialog) => {
                     let before = dialog.input.text().trim().to_string();

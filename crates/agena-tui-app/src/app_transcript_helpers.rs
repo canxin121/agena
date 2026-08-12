@@ -151,21 +151,6 @@ pub(crate) fn permission_overlay_matches_pending_request(
     })
 }
 
-pub(crate) fn user_input_overlay_matches_pending_request(
-    overlay: &UserInputOverlay,
-    _session_id: Option<i64>,
-    execution: Option<&SessionExecutionResource>,
-) -> bool {
-    execution.is_some_and(|execution| {
-        execution
-            .pending_interactive_requests
-            .iter()
-            .filter(|request| request.session_id == overlay.session_id)
-            .filter_map(|request| request.request.as_user_input())
-            .any(|request| request.request_id == overlay.request.request_id)
-    })
-}
-
 pub(crate) fn execution_pending_flash_key(
     execution: &SessionExecutionResource,
 ) -> Option<&'static str> {
@@ -374,7 +359,7 @@ use crate::{
     BTreeSet, I18n, PendingInteractiveKind, PendingInteractiveRequest,
     PendingInteractiveRequestResource, PermissionAction, PermissionOverlay,
     PermissionOverlayChoice, PermissionPromptDecision, PermissionPromptPage, PermissionReplyKind,
-    PermissionScope, SessionExecutionResource, SessionResource, UserInputOverlay, ui_text,
+    PermissionScope, SessionExecutionResource, SessionResource, ui_text,
 };
 
 #[cfg(test)]

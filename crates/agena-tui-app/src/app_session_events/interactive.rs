@@ -177,17 +177,33 @@ impl App {
                 self.transcript.session_id,
                 self.transcript.execution.as_ref(),
             ),
-            Some(Overlay::UserInputReply(dialog)) => user_input_overlay_matches_pending_request(
-                dialog,
-                self.transcript.session_id,
-                self.transcript.execution.as_ref(),
-            ),
             _ => true,
         };
 
         if !keep_overlay {
             self.overlay = None;
         }
+
+        // Pending user-input interactions are keyed by `request_id`; drop any
+        // whose request is no longer outstanding (replied, cancelled, or
+        // expired server-side). The transcript part renders the answered state
+        // from its own content, so nothing else needs to be torn down.
+        let outstanding = self
+            .transcript
+            .execution
+            .as_ref()
+            .map(|execution| {
+                execution
+                    .pending_interactive_requests
+                    .iter()
+                    .filter_map(|request| request.request.as_user_input())
+                    .map(|request| request.request_id.clone())
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        self.user_input_interactions
+            .retain(|request_id, _| outstanding.contains(request_id));
+        self.sync_interaction_documents();
     }
 
     pub(crate) fn sync_seen_pending_request_ids(&mut self) {
@@ -246,10 +262,10 @@ impl App {
     }
 }
 use crate::{
-    App, AppMessage, DraftSlot, LiveEvent, ModelRef, Overlay, PendingInteractiveKind,
+    App, AppMessage, BTreeSet, DraftSlot, LiveEvent, ModelRef, Overlay, PendingInteractiveKind,
     SessionExecutionResource, execution_update_is_stale_with_terminal,
     pending_interactive_request_id, pending_interactive_request_matches_kind,
-    permission_overlay_matches_pending_request, user_input_overlay_matches_pending_request,
+    permission_overlay_matches_pending_request,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;

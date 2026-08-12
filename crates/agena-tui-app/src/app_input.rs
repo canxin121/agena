@@ -236,7 +236,6 @@ impl App {
             Overlay::Choice(dialog) => self.handle_choice_overlay_key(key, dialog),
             Overlay::PathBrowser(dialog) => self.handle_path_browser_overlay_key(key, dialog),
             Overlay::Permission(dialog) => self.handle_permission_overlay_key(key, dialog),
-            Overlay::UserInputReply(dialog) => self.handle_user_input_overlay_key(key, dialog),
             Overlay::Confirm(dialog) => self.handle_confirm_overlay_key(key, dialog),
             Overlay::SessionSearch(dialog) => self.handle_session_search_overlay_key(key, dialog),
             Overlay::Timeline(dialog) => self.handle_timeline_overlay_key(key, dialog),

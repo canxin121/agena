@@ -466,6 +466,11 @@ pub struct App {
     pub(super) context_help: Option<HelpOverlay>,
     pub(super) seen_permission_request_ids: BTreeSet<String>,
     pub(super) seen_user_input_request_ids: BTreeSet<String>,
+    /// Live interaction state for pending user-input parts, keyed by
+    /// `request_id`. This replaces the old `Overlay::UserInputReply` modal:
+    /// the interaction lives on the expanded transcript part, so this map is
+    /// the source of truth the inline renderer and the key router read from.
+    pub(super) user_input_interactions: BTreeMap<String, UserInputOverlay>,
     pub(super) notifications: NotificationStore,
     pub(super) seen_failure_ids: HashSet<agena_failure::FailureId>,
     pub(super) sessions: SessionListPresentation,
@@ -909,7 +914,6 @@ pub(super) enum Overlay {
     Choice(ChoiceOverlay),
     PathBrowser(PathBrowserOverlay),
     Permission(PermissionOverlay),
-    UserInputReply(UserInputOverlay),
     Confirm(ConfirmOverlay),
     SessionSearch(SessionSearchOverlay),
     Timeline(TimelineOverlay),

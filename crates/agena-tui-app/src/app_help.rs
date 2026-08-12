@@ -175,21 +175,6 @@ impl App {
                     ui_text::t(&self.i18n, "overlay-permission-title")
                 },
             ),
-            Overlay::UserInputReply(dialog) => {
-                let preset = if dialog.presentation.is_editing_custom() {
-                    HelpPreset::UserInputEditor
-                } else if Self::user_input_overlay_is_review(dialog) {
-                    HelpPreset::UserInputDecisionReview
-                } else if dialog.presentation.screen() == QuestionFlowScreen::Review {
-                    HelpPreset::UserInputReview
-                } else {
-                    HelpPreset::UserInputQuestion
-                };
-                self.help_for(
-                    preset,
-                    ui_text::t(&self.i18n, "context-help-context-user-input"),
-                )
-            }
             Overlay::Confirm(dialog) => self.help_for(HelpPreset::Confirm, dialog.title.clone()),
             Overlay::SessionSearch(dialog) => {
                 self.help_for(HelpPreset::SearchPicker, dialog.title.clone())
@@ -771,7 +756,6 @@ use crate::{
 use agena_tui::help::ContextHelpPreset as HelpPreset;
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
-use agena_tui_components::QuestionFlowScreen;
 use agena_tui_components::ScrollState;
 use agena_tui_plugin_workbench::{PluginDetailTab, PluginWorkbenchMode};
 use crossterm::event::KeyCode;

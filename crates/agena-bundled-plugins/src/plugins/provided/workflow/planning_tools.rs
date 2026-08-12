@@ -115,7 +115,7 @@ pub(crate) struct WorkflowPlanStepInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 #[schemars(
-    description = "Create or overwrite the current active-session plan in planning. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. `request_approval` controls whether the user must approve the plan before it becomes active; it defaults to requesting approval unless the user has already declared the plan needs none."
+    description = "Create or overwrite the current active-session plan. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. This tool never blocks on the user: with `request_approval` true (the default) the plan is saved in the `planning` phase and you must call `plan.review` to request user approval before it becomes active; with `request_approval: false` it is applied directly and becomes active immediately, which you should only do when the user has already declared the plan needs no approval."
 )]
 pub(crate) struct PlanSetInput {
     pub(crate) objective: String,
@@ -131,7 +131,7 @@ pub(crate) struct PlanSetInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) autorun: Option<bool>,
     #[schemars(
-        description = "Whether to request user approval before the plan becomes active. Defaults to true when omitted: request approval unless the user has already declared that the plan can be created directly without approval."
+        description = "Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only when the user has already declared that the plan needs no approval; the plan then becomes active immediately."
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) request_approval: Option<bool>,
@@ -156,12 +156,33 @@ pub(crate) struct PlanGetInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput, Default)]
-#[input(trim("summary", "note"))]
+#[input(trim("note"))]
 #[serde(default, deny_unknown_fields)]
 #[schemars(
-    description = "Update the current plan. Use `phase` / `autorun` / `request_approval` for plan-level state changes, `step` + `status` to update a step, or `step` + `check` + `status` to update a check. Steps and checks are addressed by their 1-based index (step 1 is the first step; check 1 is the first check within the step). Do not combine plan-level fields (`phase`, `autorun`, `summary`, `request_approval`) with step/check fields. To complete a plan with steps, first mark the relevant steps or checks `completed`, then make a separate plan-level update with `phase: completed`. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`."
+    description = "Edit the current plan's steps and checks. Never requests user approval and never changes the plan phase. Address steps and checks by their 1-based index (step 1 is the first step; check 1 is the first check within the step): use `step` + `status` (with an optional `note`) to update a step, or `step` + `check` + `status` to update a check."
 )]
-pub(crate) struct PlanUpdateInput {
+pub(crate) struct PlanEditInput {
+    #[schemars(description = "1-based index of the step to update (1 = first step).")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) step: Option<usize>,
+    #[schemars(
+        description = "1-based index of the check within the step to update (1 = first check). Requires `step`."
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) check: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) status: Option<WorkflowPlanStepStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput, Default)]
+#[input(trim("summary"))]
+#[serde(default, deny_unknown_fields)]
+#[schemars(
+    description = "Transition the current plan's phase. `phase` moves the plan between `planning`, `active`, `blocked`, `completed`, and `cancelled`; `autorun` and `summary` are optional modifiers. A transition into `active`, `blocked`, or `completed` requires user approval by default: pass `request_approval: true` (or omit it) to route it through the same review dialog as `plan.review`, or `request_approval: false` (only when the user has already declared the change needs no approval) to apply it directly. To complete a plan with steps, first mark the relevant steps or checks `completed` via `plan.edit`, then make a separate call with `phase: completed`."
+)]
+pub(crate) struct PlanPhaseInput {
     #[schemars(
         description = "Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`."
     )]
@@ -180,17 +201,14 @@ pub(crate) struct PlanUpdateInput {
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) summary: Option<String>,
-    #[schemars(description = "1-based index of the step to update (1 = first step).")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) step: Option<usize>,
-    #[schemars(
-        description = "1-based index of the check within the step to update (1 = first check). Requires `step`."
-    )]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) check: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) status: Option<WorkflowPlanStepStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) note: Option<String>,
 }
+
+/// Empty input: `plan.review` requests approval of the current saved plan so it
+/// can become active.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput, Default)]
+#[serde(default, deny_unknown_fields)]
+#[schemars(
+    description = "Request user approval of the current saved plan. This is the only plan tool that can pause for the user."
+)]
+pub(crate) struct PlanReviewInput {}
 use super::{Deserialize, JsonSchema, Serialize};

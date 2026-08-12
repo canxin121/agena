@@ -1382,7 +1382,7 @@ impl PersistenceEngine for SqliteEngine {
                 ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
                 let role = match run_kind.as_str() {
                     "user_send" => PartRole::User,
-                    "continue" | "compaction" | "steer" => PartRole::Assistant,
+                    "continue" | "compaction" | "steer" | "execution" => PartRole::Assistant,
                     _ => PartRole::Runtime,
                 };
                 let mut marker_content = content;

@@ -173,6 +173,18 @@ impl AnthropicAdapter {
             previous.content.append(&mut message.content);
             return;
         }
+        // A continuation can leave two assistant runs adjacent (an in-place
+        // continuation extended the reply, then the next model turn opens a
+        // fresh assistant run). Anthropic requires strictly alternating roles,
+        // so fold consecutive assistant messages — same coalescing Gemini
+        // applies to same-role contents.
+        if message.role == "assistant"
+            && let Some(previous) = messages.last_mut()
+            && previous.role == "assistant"
+        {
+            previous.content.append(&mut message.content);
+            return;
+        }
         messages.push(message);
     }
 

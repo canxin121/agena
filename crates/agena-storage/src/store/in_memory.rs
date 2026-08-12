@@ -1170,7 +1170,7 @@ impl PersistenceEngine for InMemoryEngine {
         self.ensure_lease(session_id, owner_id, now_ms)?;
         let role = match run_kind {
             "user_send" => PartRole::User,
-            "continue" | "compaction" | "steer" => PartRole::Assistant,
+            "continue" | "compaction" | "steer" | "execution" => PartRole::Assistant,
             _ => PartRole::Runtime,
         };
         let mut marker_content = content;

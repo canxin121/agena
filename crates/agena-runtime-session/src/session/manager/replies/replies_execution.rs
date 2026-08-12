@@ -27,7 +27,7 @@ use agena_domain::{
     PromptCompactionTrigger, RunAbortReason,
 };
 use agena_runtime_contracts::part_content::{InteractionContent, TypedContent, operation_from_tool_call};
-use agena_storage::store::{Part, PartRole, PartState};
+use agena_storage::store::{Part, PartDelta, PartRole, PartState, RunOutcome};
 use tracing::Instrument;
 
 use super::super::StableRunContext;
@@ -422,14 +422,17 @@ impl SessionManager {
                         max_recoveries = MAX_DOOM_LOOP_RECOVERIES,
                         "doom-loop detected; injecting recovery feedback and continuing"
                     );
-                    session = self
+                    let (continued, continuation_marker) = self
                         .inject_continuation_message(
                             session,
-                            &current_options,
                             DOOM_LOOP_RECOVERY_PROMPT.to_owned(),
-                            state.clone(),
                         )
                         .await?;
+                    session = continued;
+                    // The continuation is a fresh assistant run (or an in-place
+                    // extension of the reply); never reuse the completed reply
+                    // marker for the next model turn.
+                    turn_run_id = continuation_marker;
                     model_requested = true;
                     continue;
                 }
@@ -553,14 +556,11 @@ impl SessionManager {
                         if dispatch.patch.continue_with_message.is_some() {
                             let follow_up =
                                 dispatch.patch.continue_with_message.unwrap_or_default();
-                            session = self
-                                .inject_continuation_message(
-                                    session,
-                                    &current_options,
-                                    follow_up,
-                                    state.clone(),
-                                )
+                            let (continued, continuation_marker) = self
+                                .inject_continuation_message(session, follow_up)
                                 .await?;
+                            session = continued;
+                            turn_run_id = continuation_marker;
                             model_requested = true;
                             continue;
                         }
@@ -613,10 +613,9 @@ impl SessionManager {
                 // hook continues, the run is granted a fresh turn budget
                 // (`model_turns_taken` resets) so it keeps working instead of
                 // immediately re-triggering the budget check.
-                if let Some(continued) = self
+                if let Some((continued, continuation_marker)) = self
                     .dispatch_run_failure_continuation(
                         session,
-                        &current_options,
                         state.clone(),
                         control.clone(),
                         &budget_error,
@@ -625,6 +624,7 @@ impl SessionManager {
                     .await?
                 {
                     session = continued;
+                    turn_run_id = continuation_marker;
                     model_turns_taken = 0;
                     model_requested = true;
                     continue;
@@ -759,14 +759,14 @@ impl SessionManager {
                         TurnContinuation::Truncated => {
                             // The reply was cut off by the output limit; ask the
                             // model to resume from where it stopped.
-                            session = self
+                            let (continued, continuation_marker) = self
                                 .inject_continuation_message(
                                     session,
-                                    &current_options,
                                     TRUNCATED_CONTINUATION_PROMPT.to_owned(),
-                                    state.clone(),
                                 )
                                 .await?;
+                            session = continued;
+                            turn_run_id = continuation_marker;
                             model_requested = true;
                         }
                         TurnContinuation::Stop => {
@@ -844,10 +844,9 @@ impl SessionManager {
                         return Err(AppError::Cancelled);
                     }
                     session = self.store.load_session(session_id).await?;
-                    if let Some(continued) = self
+                    if let Some((continued, continuation_marker)) = self
                         .dispatch_run_failure_continuation(
                             session,
-                            &current_options,
                             state.clone(),
                             control.clone(),
                             &err,
@@ -856,6 +855,7 @@ impl SessionManager {
                         .await?
                     {
                         session = continued;
+                        turn_run_id = continuation_marker;
                         model_requested = true;
                         continue;
                     }
@@ -867,8 +867,11 @@ impl SessionManager {
 
     /// Surface a run failure to agent.stop hooks and, if a hook asks to
     /// continue (for example the workflow plan autorun), inject the
-    /// continuation message. Returns `Some(session)` when the run should
-    /// continue after backoff; `None` when the run should fail with `error`.
+    /// continuation message. Returns `Some((session, continuation_marker))`
+    /// when the run should continue after backoff — the marker is the
+    /// continuation's run marker (`None` when it extended the reply in place)
+    /// and the caller must install it as the next model turn's marker;
+    /// `None` when the run should fail with `error`.
     ///
     /// Shared by the model-turn error path and the model-turn budget
     /// exhaustion path so both treat run errors uniformly: the error is
@@ -877,12 +880,11 @@ impl SessionManager {
     async fn dispatch_run_failure_continuation(
         &self,
         mut session: Session,
-        options: &SessionRunOptions,
         state: Arc<SessionManagerState>,
         control: Arc<ExecutionControl>,
         error: &AppError,
         retry_backoff_ms: &mut u64,
-    ) -> Result<Option<Session>, AppError> {
+    ) -> Result<Option<(Session, Option<i64>)>, AppError> {
         let run_error = error.public_message();
         let stop_input = agena_plugin_host::AgentStopInput {
             session_id: session.id,
@@ -908,13 +910,13 @@ impl SessionManager {
                         .await?;
                 }
                 if let Some(follow_up) = dispatch.patch.continue_with_message {
-                    session = self
-                        .inject_continuation_message(session, options, follow_up, state.clone())
+                    let (continued, continuation_marker) = self
+                        .inject_continuation_message(session, follow_up)
                         .await?;
                     let delay = *retry_backoff_ms;
                     *retry_backoff_ms = (*retry_backoff_ms * 2).min(5_000);
                     tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                    Ok(Some(session))
+                    Ok(Some((continued, continuation_marker)))
                 } else {
                     Ok(None)
                 }
@@ -941,36 +943,100 @@ impl SessionManager {
         }
     }
 
-    /// Inject a system-originated user message that asks the model to keep
-    /// working. Used by agent.stop continuation patches and by the truncation
-    /// continuation path; the message is persisted so a process restart can
-    /// resume from the same state.
-    async fn inject_continuation_message(
+    /// Inject a continuation that asks the model to keep working, without
+    /// fabricating a user message. Used by agent.stop continuation patches,
+    /// truncation continuations, doom-loop recovery, and the run-failure
+    /// retry path.
+    ///
+    /// The continuation is appended into the last real assistant reply's text
+    /// part as an assistant-identity part (the user's own turn already
+    /// supplies the User identity), so it neither inflates `message_count`
+    /// nor fabricates a user turn. A completed reply marker cannot accept
+    /// `append_parts` (the in-flight guard, design 17.3) and the state
+    /// machine forbids reopening it, so the text is committed directly via
+    /// `update_part` (whole-content replacement: a `content_text_delta`
+    /// alone would sit in the streaming buffer with no flush trigger).
+    ///
+    /// Returns the run marker id to keep for the next model turn: the
+    /// freshly-opened `continue` marker when the last real assistant reply
+    /// had no text part to extend (failed / tool-only turns), otherwise
+    /// `None` so the next model turn opens its own `continue` marker — a
+    /// continuation is a fresh assistant run, never a reopened reply.
+    pub(in crate::session::manager) async fn inject_continuation_message(
         &self,
         mut session: Session,
-        _options: &SessionRunOptions,
         text: String,
-        _state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        // v2 (design 4.1): a system-originated continuation is a User run
-        // (marker + text part) submitted through the facade, exactly like a
-        // steer input. v1 carried no idempotency key, so none is used here.
-        let new_parts = vec![new_part_from_content(
-            "text",
-            PartRole::User,
-            &TypedContent::Text(text_content(text)),
-            PartState::Completed,
-        )?];
-        let outcome = self
-            .store
-            .submit_user_run(session.id, new_parts, None)
-            .await?;
-        if outcome.created {
+    ) -> Result<(Session, Option<i64>), AppError> {
+        // The last assistant reply's terminal text part is the anchor for the
+        // continuation: extend it in place so the whole reply reads as one
+        // assistant message. Skip System-originated hook runs — they carry no
+        // reply body to extend.
+        let last_assistant_text_part = session
+            .parts()
+            .iter()
+            .rev()
+            .find(|part| {
+                part.kind == "text"
+                    && part.role == PartRole::Assistant
+                    && !part
+                        .content
+                        .get("synthetic")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+            })
+            .cloned();
+        if let Some(part) = last_assistant_text_part {
+            // Appending `"\n\n" + text` keeps the continuation visually
+            // separated from the reply body; the flat content replacement
+            // commits on the direct path (never buffered, never lost).
+            let mut content = part.content.clone();
+            let existing = content
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            content["text"] = serde_json::Value::String(format!("{existing}\n\n{text}"));
+            let updated = self
+                .store
+                .update_part(session.id, part.part_id, PartDelta { content: Some(content), ..PartDelta::default() })
+                .await?;
             let mut projected = session.parts().to_vec();
-            projected.extend(outcome.parts);
+            if let Some(existing) = projected
+                .iter_mut()
+                .find(|projected| projected.part_id == updated.part_id)
+            {
+                *existing = updated;
+            }
             session.install_projected_parts(projected);
+            return Ok((session, None));
         }
-        Ok(session)
+
+        // No assistant reply body to extend (a failed or tool-only turn). Open
+        // a fresh assistant `continue` marker and append the continuation text
+        // under it, exactly like the loop's normal model-turn marker. Reload so
+        // the projection carries the authoritative run marker plus its content
+        // part.
+        let run_id = self
+            .store
+            .start_run(
+                session.id,
+                "continue",
+                run_marker_content("continue", None, None, None, None),
+            )
+            .await?;
+        self.store
+            .append_parts(
+                session.id,
+                run_id,
+                vec![new_part_from_content(
+                    "text",
+                    PartRole::Assistant,
+                    &TypedContent::Text(text_content(text)),
+                    PartState::Completed,
+                )?],
+            )
+            .await?;
+        let session = self.store.load_session(session.id).await?;
+        Ok((session, Some(run_id)))
     }
 
     /// Record one System-originated Assistant message with a `Hook` part per
@@ -1019,16 +1085,38 @@ impl SessionManager {
             .store
             .append_parts(session.id, run_id, new_parts)
             .await?;
-        // `start_run` returns only the marker id; rebuild the marker in the
-        // projection exactly as the engine created it (facade `start_run`
-        // maps `run_kind == "execution"` to the Runtime role, pending state).
+        // The hook run is finished as soon as its parts are recorded; terminalize
+        // the marker so a finished hook run does not leave the session stuck in
+        // the Running/Interrupted state (any in-flight run marker forces it).
+        // `complete_run` preserves the marker content (stamping `abort_reason:
+        // null`) and the facade's `start_run` role map maps `run_kind ==
+        // "execution"` to the Assistant role, so the hook run is an assistant
+        // run like any other activity.
+        self.store
+            .complete_run(
+                session.id,
+                run_id,
+                RunOutcome {
+                    status: PartState::Completed,
+                    abort_reason: None,
+                    content: None,
+                    provider_state: None,
+                },
+            )
+            .await?;
+        // `start_run`/`complete_run` return only the marker id; rebuild the
+        // terminal marker in the projection exactly as the engine finalized it.
         let now_ms = Utc::now().timestamp_millis();
+        let mut marker_content_value = run_marker_content_value;
+        if let serde_json::Value::Object(map) = &mut marker_content_value {
+            map.insert("abort_reason".to_owned(), serde_json::Value::Null);
+        }
         let marker = Part {
             part_id: run_id,
             kind: "run".to_owned(),
-            role: PartRole::Runtime,
-            state: PartState::Pending,
-            content: run_marker_content_value,
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: marker_content_value,
             summary: None,
             visibility: agena_storage::store::PartVisibility::Both,
             rendered_markdown: None,
@@ -1037,7 +1125,7 @@ impl SessionManager {
             origin_session_id: session.id,
             revision: 1,
             started_at_ms: now_ms,
-            finished_at_ms: None,
+            finished_at_ms: Some(now_ms),
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
             provider_state: None,

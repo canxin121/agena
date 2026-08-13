@@ -341,7 +341,7 @@ agena 落地方案(全部复用 §2-§5 的既有机制,零新通道;唯一新�
    - `replies_execution.rs` `run_until_stable` 加 `newest_notification_part_id` 游标,新通知重触发 fresh model turn;
    - `runs.rs` `notification_run_inner`(idle 唤醒用,load 即见已落库通知)。
 5. **接线**:`activity/state.rs` `complete_shell`(:350-431)与 `terminalize_task_part`(:536-647)各自调用 `settle_background_operation`(替换旧的 `complete_background_operation` + `notify_settled`);dedup 由入口的 `part_records_notification` 承担。
-6. **提示词**:`session_prompt.rs` 加 `render_background_section()`,按背景工具门控注入(:69-91)。(文案里"system message"措辞改为"通知消息"——通知在投影里以 assistant 角色呈现,见 §3。)
+6. **提示词**:`session_prompt.rs` 加 `render_background_section()`,按背景工具门控注入(:69-91);门控覆盖 `shell.run`/`tasks.run` 与 §7.3 的 `monitor.start`,并明确 monitor 是**持续监听、每个事件各一条通知**(`do not poll or sleep`)。(文案里"system message"措辞改为"通知消息"——通知在投影里以 assistant 角色呈现,见 §3。)
 7. **工具文案**:`tasks.rs:287-294` 与 `shell.run` background 返回改 "You will be notified… Do not poll";**新增 Monitor 工具**(§7.3,`BackgroundOperationKind::Monitor` + 输入/输出 schema + 子 session 事件桥)。
 8. **TUI 输入区(§11)**:
    - `app_backend/live_events.rs:192-208` 在 `ActivityChanged` 分支更新 `background_activity_summary`(事件驱动,替代 10s 轮询 —— 这是 Claude `background_tasks_changed` 的 level-signal 对位);

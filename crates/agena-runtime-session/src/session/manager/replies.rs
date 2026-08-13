@@ -896,9 +896,9 @@ impl SessionManager {
             .await?;
         let continuation_model_turn_id = matching_model_turn_id(&session, model_turn_id, &options);
         if self.apply_run_selection_to_session(&mut session, &options) {
-            session = self
-                .persist_session_changes(session, Vec::new(), None, state.clone())
-                .await?;
+            // Persist the selection durably (`persist_session_changes` with
+            // no changed parts is a no-op) so a later reload keeps it.
+            session = self.store.persist_execution_config(session).await?;
         }
 
         let operation = move |manager: SessionManager, control: Arc<ExecutionControl>, steer_rx| async move {
@@ -970,8 +970,9 @@ impl SessionManager {
             None
         };
         if continue_model && self.apply_run_selection_to_session(&mut session, &options) {
-            self.persist_session_changes(session, Vec::new(), None, state.clone())
-                .await?;
+            // Persist the selection durably (`persist_session_changes` with
+            // no changed parts is a no-op) so a later reload keeps it.
+            self.store.persist_execution_config(session).await?;
         }
 
         let operation = move |manager: SessionManager, control: Arc<ExecutionControl>, steer_rx| async move {

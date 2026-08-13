@@ -268,6 +268,11 @@ impl SessionManager {
             .apply_execution_context_to_run_options_async(&session, request.run.options)
             .await?;
         self.apply_run_selection_to_session(&mut session, &options);
+        // Make the run's model selection durable so a reload (post-send
+        // refresh, next turn, new session first submit) resolves the same
+        // model instead of the default. `persist_session_changes` is a no-op
+        // without changed parts, so write the execution config directly.
+        session = self.store.persist_execution_config(session).await?;
         let input_parts = request.parts;
         // The user's message is persisted as a `user_send` run: one run
         // marker plus one `text` content part per submitted payload (the same
@@ -445,9 +450,9 @@ impl SessionManager {
             .apply_execution_context_to_run_options_async(&session, request.options)
             .await?;
         if self.apply_run_selection_to_session(&mut session, &options) {
-            session = self
-                .persist_session_changes(session, Vec::new(), None, state.clone())
-                .await?;
+            // Persist the selection durably (`persist_session_changes` with
+            // no changed parts is a no-op) so a later reload keeps it.
+            session = self.store.persist_execution_config(session).await?;
         }
         self.run_until_stable(
             session,

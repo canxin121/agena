@@ -5436,3 +5436,112 @@ mod live_transcript_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod new_session_model_stack_tests {
+    use agena_api::resource::{SessionLifecycleState, SessionRelationKind, SessionResource};
+    use agena_application::Application;
+    use agena_runtime::{RuntimeBootstrapRequest, bootstrap_application_services};
+    use chrono::Utc;
+    use ratatui::layout::Rect;
+
+    use super::super::{App, ComposerDraft, I18n, LaunchOptions};
+
+    fn session_resource() -> SessionResource {
+        SessionResource {
+            id: 7,
+            parent_id: None,
+            depth: 0,
+            root_id: 7,
+            workspace_id: 1,
+            title: "Test session".to_owned(),
+            version: 1,
+            relation_kind: SessionRelationKind::Root,
+            lifecycle_state: SessionLifecycleState::Ready,
+            source_cutoff_seq_global: None,
+            source_message_id: None,
+            is_subagent: false,
+            task_id: None,
+            subtask_access: None,
+            subtask_status: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            message_count: 1,
+            child_session_count: 0,
+            last_message_at: None,
+        }
+    }
+
+    async fn app_without_session() -> App {
+        let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
+            workspace_root: Some(std::env::temp_dir()),
+            database_url: Some("sqlite::memory:".to_owned()),
+            initialize_schema: true,
+            ..RuntimeBootstrapRequest::default()
+        })
+        .await
+        .expect("build test runtime");
+        let application = Application::from_composed_runtime_services(runtime.application_services())
+            .expect("compose test application");
+        let mut app = App::new(application, LaunchOptions::default(), I18n::english());
+        app.layout.transcript_body = Rect::new(0, 0, 80, 24);
+        app
+    }
+
+    #[tokio::test]
+    async fn auto_created_session_first_run_keeps_the_switched_model() {
+        let mut app = app_without_session().await;
+        // The user switched the model with no session open: the stack is only
+        // in-memory (nothing to persist to). The send then auto-creates a
+        // session; `open_session` would clear this stack before the first
+        // submit reads it, so `create_session` carries it through
+        // `AppMessage::SessionCreated` and this handler restores it.
+        app.run_options.replace_model_stack(
+            Some(agena_domain::ModelRef::new("acme", "acme-fast")),
+            Some("high".to_owned()),
+            Some("fast".to_owned()),
+            Some("verbose".to_owned()),
+            Some(true),
+        );
+        let model_stack = app.run_options.clone();
+        let draft = ComposerDraft {
+            document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                text: "hello".to_owned(),
+            }]),
+        };
+
+        app.handle_session_created(Some(draft), None, Some(model_stack), Ok(session_resource()));
+
+        assert_eq!(
+            app.run_options.model.as_ref().map(|model| model.model_id.to_string()),
+            Some("acme-fast".to_owned()),
+            "the first submit of the auto-created session must use the switched model, not the default"
+        );
+        assert_eq!(app.run_options.thinking_mode.as_deref(), Some("high"));
+        assert_eq!(app.run_options.speed_mode.as_deref(), Some("fast"));
+        assert_eq!(app.run_options.verbosity.as_deref(), Some("verbose"));
+        assert_eq!(app.run_options.parallel_tool_calls, Some(true));
+    }
+
+    #[tokio::test]
+    async fn manual_new_session_does_not_restore_a_stale_model_stack() {
+        let mut app = app_without_session().await;
+        // A stale stack from a previous session must still be cleared when a
+        // new session is created explicitly (no submit draft) — the fix only
+        // restores the stack captured for an auto-created send.
+        app.run_options.replace_model_stack(
+            Some(agena_domain::ModelRef::new("old-provider", "old-model")),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        app.handle_session_created(None, None, None, Ok(session_resource()));
+
+        assert!(
+            app.run_options.model.is_none(),
+            "an explicit new-session must not inherit a stale model stack"
+        );
+    }
+}

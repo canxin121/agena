@@ -63,8 +63,9 @@ impl App {
             AppMessage::SessionCreated {
                 submit_draft,
                 pending_message_id,
+                model_stack,
                 result,
-            } => self.handle_session_created(submit_draft, pending_message_id, result),
+            } => self.handle_session_created(submit_draft, pending_message_id, model_stack, result),
             AppMessage::SessionStateLoaded { session_id, result } => {
                 self.handle_session_state_loaded(session_id, result)
             }
@@ -268,6 +269,7 @@ impl App {
         &mut self,
         submit_draft: Option<ComposerDraft>,
         pending_message_id: Option<u64>,
+        model_stack: Option<RunOptionsState>,
         result: UiResult<SessionResource>,
     ) {
         if submit_draft.is_some() {
@@ -280,6 +282,22 @@ impl App {
                     self.clear_draft_for_slot(DraftSlot::NewSession);
                 }
                 self.open_session(session.id, session.title.clone());
+                // `open_session` clears the model stack because a selection
+                // belongs to the session that produced it. When this session
+                // was auto-created from a send with no session open, restore
+                // the stack captured at create time so the first submit (and
+                // the post-send sync) uses the switched model, not the
+                // default. A subsequent session reload still reconciles to
+                // the persisted execution selection.
+                if let Some(model_stack) = model_stack {
+                    self.run_options.replace_model_stack(
+                        model_stack.model,
+                        model_stack.thinking_mode,
+                        model_stack.speed_mode,
+                        model_stack.verbosity,
+                        model_stack.parallel_tool_calls,
+                    );
+                }
                 self.focus = Focus::Composer;
 
                 if let Some(draft) = submit_draft {
@@ -617,7 +635,7 @@ impl App {
 }
 use crate::{
     App, AppMessage, ComposerDraft, DraftSlot, PendingUserMessage, RunActivityTarget, RunOperation,
-    SessionExecutionResource, SessionLoadScope, SessionRefresh, SessionResource, UiResult,
-    execution_update_is_stale, ui_text,
+    RunOptionsState, SessionExecutionResource, SessionLoadScope, SessionRefresh, SessionResource,
+    UiResult, execution_update_is_stale, ui_text,
 };
 use agena_tui::main_focus::Focus;

@@ -196,6 +196,7 @@ impl App {
                         .send(AppMessage::SessionCreated {
                             submit_draft: None,
                             pending_message_id: None,
+                            model_stack: None,
                             result: Ok(state.session),
                         })
                         .await;
@@ -205,6 +206,7 @@ impl App {
                         .send(AppMessage::SessionCreated {
                             submit_draft: None,
                             pending_message_id: None,
+                            model_stack: None,
                             result: Err(crate::UiFailure::internal(err)),
                         })
                         .await;

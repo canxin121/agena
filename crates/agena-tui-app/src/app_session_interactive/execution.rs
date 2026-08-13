@@ -35,6 +35,11 @@ impl App {
 
         let application = self.application.clone();
         let tx = self.tx.clone();
+        // When this create-and-submit path is entered with no session open,
+        // the run-options model stack holds the model the user switched to.
+        // `open_session` clears it before the first submit reads it, so carry
+        // it along and restore it in `handle_session_created`.
+        let model_stack = submit_draft.as_ref().map(|_| self.run_options.clone());
         tokio::spawn(async move {
             let result = application.create_session(title, None).await
                 .map_err(|error| crate::UiFailure::from_backend(anyhow::Error::new(error)));
@@ -42,6 +47,7 @@ impl App {
                 .send(AppMessage::SessionCreated {
                     submit_draft,
                     pending_message_id,
+                    model_stack,
                     result,
                 })
                 .await;

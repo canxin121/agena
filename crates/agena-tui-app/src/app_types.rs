@@ -650,6 +650,12 @@ pub(super) enum AppMessage {
         submit_draft: Option<ComposerDraft>,
         pending_message_id: Option<u64>,
         result: UiResult<SessionResource>,
+        /// The run-options model stack in effect when the session was
+        /// created without an open session. `open_session` clears the stack
+        /// before the first submit would read it; carrying it here lets the
+        /// created session's first run keep the switched model instead of
+        /// falling back to the default.
+        model_stack: Option<RunOptionsState>,
     },
     SessionStateLoaded {
         session_id: i64,

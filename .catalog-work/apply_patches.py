@@ -12,7 +12,7 @@ PATCH_DIR = os.path.join(D, "patches")
 ALLOWED_TOP = {
     "thinking_modes", "speed_modes", "max_input_tokens", "context_window_tokens",
     "max_output_tokens", "knowledge_cutoff", "description", "pricing", "release_date",
-    "open_weights", "display_name",
+    "last_updated", "open_weights", "display_name",
 }
 THINK_STRATS = {"disabled", "effort", "budget", "adaptive", "request_only"}
 

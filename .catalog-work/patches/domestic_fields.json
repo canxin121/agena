@@ -1,0 +1,11 @@
+{
+  "models": {
+    "kimi-k3.256k": {
+      "open_weights": true,
+      "last_updated": "2026-07-16"
+    },
+    "deepseek-coder-6.7b-instruct": {
+      "last_updated": "2023-10-29"
+    }
+  }
+}

@@ -1,0 +1,577 @@
+{
+  "models": {
+    "codellama-7b": {
+      "description": "Code Llama 7B base model for code completion and infilling across popular programming languages"
+    },
+    "codellama-7b-hf": {
+      "description": "Code Llama 7B base model for code completion and infilling across popular programming languages"
+    },
+    "codellama-7b-instruct": {
+      "description": "Code Llama 7B instruction model fine-tuned for code generation, comprehension, and completion tasks"
+    },
+    "codellama-7b-instruct-hf": {
+      "description": "Code Llama 7B instruction model fine-tuned for code generation, comprehension, and completion tasks"
+    },
+    "codellama-7b-python": {
+      "description": "Code Llama 7B specialized for Python code generation and completion"
+    },
+    "codellama-7b-python-hf": {
+      "description": "Code Llama 7B specialized for Python code generation and completion"
+    },
+    "codellama-13b": {
+      "description": "Code Llama 13B base model for code completion and infilling across popular programming languages"
+    },
+    "codellama-13b-hf": {
+      "description": "Code Llama 13B base model for code completion and infilling across popular programming languages"
+    },
+    "codellama-13b-instruct": {
+      "description": "Code Llama 13B instruction model fine-tuned for code generation, comprehension, and completion tasks"
+    },
+    "codellama-13b-instruct-hf": {
+      "description": "Code Llama 13B instruction model fine-tuned for code generation, comprehension, and completion tasks"
+    },
+    "codellama-13b-python": {
+      "description": "Code Llama 13B specialized for Python code generation and completion"
+    },
+    "codellama-13b-python-hf": {
+      "description": "Code Llama 13B specialized for Python code generation and completion"
+    },
+    "codellama-34b": {
+      "description": "Code Llama 34B base model for code completion and infilling across popular programming languages"
+    },
+    "codellama-34b-hf": {
+      "description": "Code Llama 34B base model for code completion and infilling across popular programming languages"
+    },
+    "codellama-34b-instruct": {
+      "description": "Code Llama 34B instruction model fine-tuned for code generation, comprehension, and completion tasks"
+    },
+    "codellama-34b-instruct-hf": {
+      "description": "Code Llama 34B instruction model fine-tuned for code generation, comprehension, and completion tasks"
+    },
+    "codellama-34b-python": {
+      "description": "Code Llama 34B specialized for Python code generation and completion"
+    },
+    "codellama-34b-python-hf": {
+      "description": "Code Llama 34B specialized for Python code generation and completion"
+    },
+    "codellama-70b": {
+      "description": "Code Llama 70B base model for code completion and infilling across popular programming languages"
+    },
+    "codellama-70b-hf": {
+      "description": "Code Llama 70B base model for code completion and infilling across popular programming languages"
+    },
+    "codellama-70b-instruct": {
+      "description": "Code Llama 70B instruction model fine-tuned for code generation, comprehension, and completion tasks"
+    },
+    "codellama-70b-instruct-hf": {
+      "description": "Code Llama 70B instruction model fine-tuned for code generation, comprehension, and completion tasks"
+    },
+    "codellama-70b-python": {
+      "description": "Code Llama 70B specialized for Python code generation and completion"
+    },
+    "codellama-70b-python-hf": {
+      "description": "Code Llama 70B specialized for Python code generation and completion"
+    },
+    "gemma-2b": {
+      "description": "Google Gemma 2B base model for efficient text generation and lightweight deployments"
+    },
+    "gemma-7b": {
+      "description": "Google Gemma 7B base model for text generation and fine-tuning"
+    },
+    "gemma-2-9b-it": {
+      "description": "Google Gemma 2 9B instruction-tuned model for chat and reasoning"
+    },
+    "gemma-3-1b-it": {
+      "description": "Google Gemma 3 1B instruction-tuned model with 32K context for efficient chat"
+    },
+    "codegemma-2b": {
+      "description": "Google CodeGemma 2B base model for code completion"
+    },
+    "codegemma-7b": {
+      "description": "Google CodeGemma 7B base model for code completion"
+    },
+    "codegemma-7b-it": {
+      "description": "Google CodeGemma 7B instruction-tuned model for code generation and chat"
+    },
+    "codegemma-1.1-7b": {
+      "description": "Google CodeGemma 1.1 7B instruction-tuned model for code generation and completion"
+    },
+    "recurrentgemma-2b": {
+      "description": "Google RecurrentGemma 2B base model with recurrent architecture for long sequences"
+    },
+    "recurrentgemma-2b-it": {
+      "description": "Google RecurrentGemma 2B instruction-tuned model for efficient long-context chat"
+    },
+    "recurrentgemma-9b": {
+      "description": "Google RecurrentGemma 9B base model with recurrent architecture for long sequences"
+    },
+    "recurrentgemma-9b-it": {
+      "description": "Google RecurrentGemma 9B instruction-tuned model for efficient long-context chat"
+    },
+    "jamba-1.5-large-instruct": {
+      "description": "AI21 Jamba 1.5 Large instruction model with 256K context and hybrid SSM-transformer architecture"
+    },
+    "jamba-1.5-mini-instruct": {
+      "description": "AI21 Jamba 1.5 Mini instruction model with 256K context and hybrid SSM-transformer architecture"
+    },
+    "jamba-1.6-large-instruct": {
+      "description": "AI21 Jamba 1.6 Large instruction model with long-context hybrid architecture"
+    },
+    "jamba-1.6-mini-instruct": {
+      "description": "AI21 Jamba 1.6 Mini instruction model with long-context hybrid architecture"
+    },
+    "jamba-1.7-large-instruct": {
+      "description": "AI21 Jamba 1.7 Large instruction model with long-context hybrid architecture"
+    },
+    "jamba-1.7-mini-instruct": {
+      "description": "AI21 Jamba 1.7 Mini instruction model with long-context hybrid architecture"
+    },
+    "jamba-large-1.5": {
+      "description": "AI21 Jamba 1.5 Large instruction model (alias) with 256K context"
+    },
+    "jamba-mini-1.5": {
+      "description": "AI21 Jamba 1.5 Mini instruction model (alias) with 256K context"
+    },
+    "jamba-3b-reasoning-instruct": {
+      "description": "AI21 Jamba 3B reasoning instruction model with hybrid SSM-transformer architecture"
+    },
+    "jamba-reasoning-3b": {
+      "description": "AI21 Jamba 3B reasoning model with hybrid SSM-transformer architecture"
+    },
+    "jamba-tiny-dev": {
+      "description": "AI21 Jamba tiny development model for testing the hybrid architecture"
+    },
+    "jamba-v0.1": {
+      "description": "AI21 Jamba v0.1 base model with hybrid SSM-transformer architecture"
+    },
+    "codestral-22b-instruct-v0.1": {
+      "description": "Mistral Codestral 22B instruction model specialized for code generation and completion"
+    },
+    "mamba-codestral-7b-v0.1": {
+      "description": "Mistral Mamba-Codestral 7B state-space model for code generation with 32K context"
+    },
+    "mistral-large-2-instruct": {
+      "description": "Mistral Large 2 instruction model with 128K context for reasoning and agentic tasks"
+    },
+    "mistral-large-instruct-2407": {
+      "description": "Mistral Large 2 instruction model (2407 release) with 128K context"
+    },
+    "mixtral-8x7b-v0.1": {
+      "description": "Mistral Mixtral 8x7B base model with sparse mixture-of-experts architecture"
+    },
+    "mixtral-8x22b-v0.1": {
+      "description": "Mistral Mixtral 8x22B base model with sparse mixture-of-experts architecture"
+    },
+    "mistral-nemo-minitron-8b-instruct": {
+      "description": "NVIDIA Mistral NeMo Minitron 8B instruction model distilled from Mistral NeMo"
+    },
+    "mistral-nemo-minitron-8b-8k-instruct": {
+      "description": "NVIDIA Mistral NeMo Minitron 8B instruction model with 8K context"
+    },
+    "llama2-7b": {
+      "description": "Meta Llama 2 7B base model for text generation and fine-tuning"
+    },
+    "llama2-7b-chat": {
+      "description": "Meta Llama 2 7B chat model optimized for dialogue"
+    },
+    "llama2-7b-chat-hf": {
+      "description": "Meta Llama 2 7B chat model optimized for dialogue"
+    },
+    "llama2-7b-hf": {
+      "description": "Meta Llama 2 7B base model for text generation and fine-tuning"
+    },
+    "llama2-13b": {
+      "description": "Meta Llama 2 13B base model for text generation and fine-tuning"
+    },
+    "llama2-13b-chat": {
+      "description": "Meta Llama 2 13B chat model optimized for dialogue"
+    },
+    "llama2-13b-chat-hf": {
+      "description": "Meta Llama 2 13B chat model optimized for dialogue"
+    },
+    "llama2-13b-hf": {
+      "description": "Meta Llama 2 13B base model for text generation and fine-tuning"
+    },
+    "llama2-70b": {
+      "description": "Meta Llama 2 70B base model for text generation and fine-tuning"
+    },
+    "llama2-70b-chat": {
+      "description": "Meta Llama 2 70B chat model optimized for dialogue"
+    },
+    "llama2-70b-chat-hf": {
+      "description": "Meta Llama 2 70B chat model optimized for dialogue"
+    },
+    "llama2-70b-hf": {
+      "description": "Meta Llama 2 70B base model for text generation and fine-tuning"
+    },
+    "meta-llama-guard-2-8b": {
+      "description": "Meta Llama Guard 2 8B content-safety classifier for input/output moderation"
+    },
+    "llama3-chatqa-1.5-70b": {
+      "description": "Meta Llama 3 ChatQA 1.5 70B model fine-tuned for conversational QA and retrieval"
+    },
+    "nemotron-4-340b-instruct": {
+      "description": "NVIDIA Nemotron-4 340B instruction model for synthetic data generation and chat"
+    },
+    "llama-3.1-nemotron-51b-instruct": {
+      "description": "NVIDIA Llama 3.1 Nemotron 51B instruction model with 128K context"
+    },
+    "llama-3.1-nemotron-ultra-253b-cpt-v1": {
+      "description": "NVIDIA Llama 3.1 Nemotron Ultra 253B continual-pretrained model"
+    },
+    "llama-3.1-nemotron-nano-vl-8b-v1-mcore": {
+      "description": "NVIDIA Llama 3.1 Nemotron Nano 8B vision-language model"
+    },
+    "llama-3.1-nemotron-nano-4b-v1.1": {
+      "description": "NVIDIA Llama 3.1 Nemotron Nano 4B efficient instruction model"
+    },
+    "llama-3.1-nemotron-8b-ultralong-1m-instruct": {
+      "description": "NVIDIA Llama 3.1 Nemotron 8B Ultralong instruction model with 1M context"
+    },
+    "llama-3.1-nemoguard-8b-content-safety": {
+      "description": "NVIDIA Llama 3.1 Nemoguard 8B content-safety classifier"
+    },
+    "llama-3.1-nemoguard-8b-topic-control": {
+      "description": "NVIDIA Llama 3.1 Nemoguard 8B topic-control classifier"
+    },
+    "nemoguard-jailbreakdetect": {
+      "description": "NVIDIA Nemoguard jailbreak-detection classifier"
+    },
+    "llama-3.2-nv-embedqa-1b-v1": {
+      "description": "NVIDIA Llama 3.2 NV-EmbedQA 1B embedding model for retrieval"
+    },
+    "llama-3.2-nv-embedqa-1b-v2": {
+      "description": "NVIDIA Llama 3.2 NV-EmbedQA 1B v2 embedding model for retrieval"
+    },
+    "llama-3.2-nemoretriever-1b-vlm-embed-v1": {
+      "description": "NVIDIA Llama 3.2 Nemoretriever 1B VLM embedding model for multimodal retrieval"
+    },
+    "llama-nemotron-embed-1b-v2": {
+      "description": "NVIDIA Llama Nemotron Embed 1B v2 embedding model with 131K context"
+    },
+    "nv-embedqa-e5-v5": {
+      "description": "NVIDIA NV-EmbedQA E5 v5 embedding model for retrieval and RAG"
+    },
+    "nemoretriever-parse": {
+      "description": "NVIDIA Nemoretriever Parse document embedding model for retrieval"
+    },
+    "nemotron-parse": {
+      "description": "NVIDIA Nemotron Parse model for document parsing and conversion"
+    },
+    "nvidia-nemotron-parse-2.0": {
+      "description": "NVIDIA Nemotron Parse 2.0 document parsing and layout model"
+    },
+    "nvidia-nemotron-parse-v1.1": {
+      "description": "NVIDIA Nemotron Parse v1.1 document parsing model"
+    },
+    "nvidia-nemotron-parse-v1.1-tc": {
+      "description": "NVIDIA Nemotron Parse v1.1 table-content variant"
+    },
+    "nvidia-nemotron-parse-v1.2": {
+      "description": "NVIDIA Nemotron Parse v1.2 document parsing model"
+    },
+    "nemotron-nano-3-30b-a3b": {
+      "description": "NVIDIA Nemotron Nano 3 30B-A3B sparse model for efficient chat"
+    },
+    "nvclip": {
+      "description": "NVIDIA NVCLIP ViT-B-16 vision-language contrastive model for image understanding"
+    },
+    "palmyra-creative": {
+      "description": "Writer Palmyra Creative model for long-form creative writing with 128K context"
+    },
+    "palmyra-creative-122b": {
+      "description": "Writer Palmyra Creative 122B model for long-form creative writing"
+    },
+    "palmyra-fin-70b-32k": {
+      "description": "Writer Palmyra Fin 70B finance-specialized model with 32K context"
+    },
+    "palmyra-med-70b": {
+      "description": "Writer Palmyra Med 70B medical-specialized model with 8K context"
+    },
+    "palmyra-med-70b-32k": {
+      "description": "Writer Palmyra Med 70B medical-specialized model with 32K context"
+    },
+    "stockmark-2-100b-instruct": {
+      "description": "Stockmark 2 100B Japanese instruction model for text generation"
+    },
+    "stockmark-2-100b-instruct-beta": {
+      "description": "Stockmark 2 100B Japanese instruction model (beta release)"
+    },
+    "zamba2-7b-instruct": {
+      "description": "Zyphra Zamba2 7B instruction model with hybrid Mamba-transformer architecture"
+    },
+    "zamba2-7b-instruct-v2": {
+      "description": "Zyphra Zamba2 7B instruction model v2 with hybrid Mamba-transformer architecture"
+    },
+    "arctic-embed-l": {
+      "description": "Snowflake Arctic Embed L retrieval embedding model"
+    },
+    "snowflake-arctic-embed-l": {
+      "description": "Snowflake Arctic Embed L retrieval embedding model"
+    },
+    "snowflake-arctic-embed-l-v2.0": {
+      "description": "Snowflake Arctic Embed L v2 retrieval embedding model"
+    },
+    "snowflake-arctic-embed-m-long": {
+      "description": "Snowflake Arctic Embed M long-context retrieval embedding model"
+    },
+    "starcoder2-3b": {
+      "description": "BigCode StarCoder2 3B code generation and completion model"
+    },
+    "starcoder2-7b": {
+      "description": "BigCode StarCoder2 7B code generation and completion model"
+    },
+    "starcoder2-15b": {
+      "description": "BigCode StarCoder2 15B code generation and completion model"
+    },
+    "starcoder2-15b-instruct-v0.1": {
+      "description": "BigCode StarCoder2 15B instruction model for code generation"
+    },
+    "starcoder2-tokenizer": {
+      "description": "BigCode StarCoder2 tokenizer model (no generation)"
+    },
+    "sea-lion-7b-instruct": {
+      "description": "AI Singapore SEA-LION 7B instruction model for Southeast Asian languages"
+    },
+    "sea-lion-v1-7b-it": {
+      "description": "AI Singapore SEA-LION v1 7B instruction model for Southeast Asian languages"
+    },
+    "sea-lion-v1-7b-it-research": {
+      "description": "AI Singapore SEA-LION v1 7B research instruction model"
+    },
+    "fuyu-8b": {
+      "description": "Adept Fuyu-8B multimodal model for image and text understanding"
+    },
+    "phi-3-vision-128k-instruct": {
+      "description": "Microsoft Phi-3 Vision 128K instruction model for image and text reasoning"
+    },
+    "kosmos-2": {
+      "description": "Microsoft Kosmos-2 multimodal model for grounded visual understanding"
+    },
+    "kosmos-2-patch14-224": {
+      "description": "Microsoft Kosmos-2 patch-14 224 model for grounded visual understanding"
+    },
+    "kosmos-2.5": {
+      "description": "Microsoft Kosmos-2.5 multimodal model for image-text understanding"
+    },
+    "kosmos-2.5-chat": {
+      "description": "Microsoft Kosmos-2.5 chat model for multimodal dialogue"
+    },
+    "vila": {
+      "description": "NVIDIA VILA vision-language model for multimodal reasoning"
+    },
+    "deplot": {
+      "description": "Google DePlot chart-to-table vision-language model"
+    },
+    "riva-translate-4b-instruct": {
+      "description": "NVIDIA Riva Translate 4B instruction model for speech translation"
+    },
+    "riva-translate-4b-instruct-v2": {
+      "description": "NVIDIA Riva Translate 4B instruction model v2 for speech translation"
+    },
+    "ai-synthetic-video-detector": {
+      "description": "Synthetic video detection model for AI-generated content classification"
+    },
+    "embed-qa-4": {
+      "description": "Embedding model for question-answering retrieval"
+    },
+    "granite-20b-code-instruct-8k": {
+      "description": "IBM Granite 20B code instruction model with 8K context"
+    },
+    "granite-20b-code-instruct-r1.1": {
+      "description": "IBM Granite 20B code instruction model r1.1"
+    },
+    "granite-20b-functioncalling": {
+      "description": "IBM Granite 20B function-calling model"
+    },
+    "granite-3.0-1b-a400m-instruct": {
+      "description": "IBM Granite 3.0 1B-A400M instruction model for efficient chat"
+    },
+    "granite-3.0-2b-instruct": {
+      "description": "IBM Granite 3.0 2B instruction model"
+    },
+    "granite-3.0-3b-a800m-instruct": {
+      "description": "IBM Granite 3.0 3B-A800M instruction model"
+    },
+    "granite-3.0-8b-instruct": {
+      "description": "IBM Granite 3.0 8B instruction model"
+    },
+    "granite-3.0-8b-lora-intrinsics-v0.1": {
+      "description": "IBM Granite 3.0 8B LoRA intrinsics research model"
+    },
+    "granite-3.1-1b-a400m-instruct": {
+      "description": "IBM Granite 3.1 1B-A400M instruction model"
+    },
+    "granite-3.1-2b-instruct": {
+      "description": "IBM Granite 3.1 2B instruction model"
+    },
+    "granite-3.1-3b-a800m-instruct": {
+      "description": "IBM Granite 3.1 3B-A800M instruction model"
+    },
+    "granite-3.1-8b-instruct": {
+      "description": "IBM Granite 3.1 8B instruction model with 128K context"
+    },
+    "granite-3.1-8b-lora-intrinsics-v0.1": {
+      "description": "IBM Granite 3.1 8B LoRA intrinsics research model"
+    },
+    "granite-34b-code-instruct": {
+      "description": "IBM Granite 34B code instruction model"
+    },
+    "granite-34b-code-instruct-8k": {
+      "description": "IBM Granite 34B code instruction model with 8K context"
+    },
+    "granite-3b-code-instruct-128k": {
+      "description": "IBM Granite 3B code instruction model with 128K context"
+    },
+    "granite-3b-code-instruct-2k": {
+      "description": "IBM Granite 3B code instruction model with 2K context"
+    },
+    "granite-4.0-h-350m": {
+      "description": "IBM Granite 4.0 H 350M compact instruction model"
+    },
+    "granite-4.0-micro": {
+      "description": "IBM Granite 4.0 Micro compact instruction model"
+    },
+    "granite-4.1-30b": {
+      "description": "IBM Granite 4.1 30B instruction model"
+    },
+    "granite-4.1-3b": {
+      "description": "IBM Granite 4.1 3B instruction model"
+    },
+    "granite-7b-instruct": {
+      "description": "IBM Granite 7B instruction model"
+    },
+    "granite-8b-code-instruct": {
+      "description": "IBM Granite 8B code instruction model"
+    },
+    "granite-8b-code-instruct-128k": {
+      "description": "IBM Granite 8B code instruction model with 128K context"
+    },
+    "granite-8b-code-instruct-4k": {
+      "description": "IBM Granite 8B code instruction model with 4K context"
+    },
+    "granite-docling-258m": {
+      "description": "IBM Granite Docling 258M document parsing and layout model"
+    },
+    "granite-embedding-107m-multilingual": {
+      "description": "IBM Granite Embedding 107M multilingual retrieval model"
+    },
+    "granite-embedding-125m-english": {
+      "description": "IBM Granite Embedding 125M English retrieval model"
+    },
+    "granite-embedding-278m-multilingual": {
+      "description": "IBM Granite Embedding 278M multilingual retrieval model"
+    },
+    "granite-embedding-30m-english": {
+      "description": "IBM Granite Embedding 30M English retrieval model"
+    },
+    "granite-embedding-30m-sparse": {
+      "description": "IBM Granite Embedding 30M sparse retrieval model"
+    },
+    "granite-embedding-311m-multilingual-r2": {
+      "description": "IBM Granite Embedding 311M multilingual retrieval model r2"
+    },
+    "granite-embedding-97m-multilingual-r2": {
+      "description": "IBM Granite Embedding 97M multilingual retrieval model r2"
+    },
+    "granite-embedding-english-r2": {
+      "description": "IBM Granite Embedding English retrieval model r2"
+    },
+    "granite-geospatial-biomass": {
+      "description": "IBM Granite Geospatial biomass estimation model"
+    },
+    "granite-geospatial-canopyheight": {
+      "description": "IBM Granite Geospatial canopy-height estimation model"
+    },
+    "granite-geospatial-land-surface-temperature": {
+      "description": "IBM Granite Geospatial land-surface-temperature model"
+    },
+    "granite-geospatial-uki": {
+      "description": "IBM Granite Geospatial UKI land-cover model"
+    },
+    "granite-geospatial-uki-flooddetection": {
+      "description": "IBM Granite Geospatial UKI flood-detection model"
+    },
+    "granite-geospatial-wxc-downscaling": {
+      "description": "IBM Granite Geospatial weather downscaling model"
+    },
+    "granite-guardian-3.0-2b": {
+      "description": "IBM Granite Guardian 3.0 2B safety and risk detection model"
+    },
+    "granite-guardian-3.0-8b": {
+      "description": "IBM Granite Guardian 3.0 8B safety and risk detection model"
+    },
+    "granite-guardian-3.1-2b": {
+      "description": "IBM Granite Guardian 3.1 2B safety and risk detection model"
+    },
+    "granite-guardian-3.1-8b": {
+      "description": "IBM Granite Guardian 3.1 8B safety and risk detection model"
+    },
+    "granite-guardian-3.2-3b-a800m": {
+      "description": "IBM Granite Guardian 3.2 3B-A800M safety and risk detection model"
+    },
+    "granite-guardian-3.2-5b": {
+      "description": "IBM Granite Guardian 3.2 5B safety and risk detection model"
+    },
+    "granite-guardian-4.1-8b": {
+      "description": "IBM Granite Guardian 4.1 8B safety and risk detection model"
+    },
+    "granite-guardian-hap-125m": {
+      "description": "IBM Granite Guardian HAP 125M harmful-content detection model"
+    },
+    "granite-guardian-hap-38m": {
+      "description": "IBM Granite Guardian HAP 38M harmful-content detection model"
+    },
+    "granite-rag-3.0-8b-lora": {
+      "description": "IBM Granite RAG 3.0 8B LoRA retrieval-augmented generation model"
+    },
+    "granite-speech-4.1-2b": {
+      "description": "IBM Granite Speech 4.1 2B speech synthesis model"
+    },
+    "granite-speech-4.1-2b-plus": {
+      "description": "IBM Granite Speech 4.1 2B Plus speech synthesis model"
+    },
+    "granite-swash-3b-a600m": {
+      "description": "IBM Granite Swash 3B-A600M sparse model for efficient inference"
+    },
+    "granite-switch-4.1-30b-preview": {
+      "description": "IBM Granite Switch 4.1 30B preview routing model"
+    },
+    "granite-switch-4.1-3b-preview": {
+      "description": "IBM Granite Switch 4.1 3B preview routing model"
+    },
+    "granite-switch-4.1-8b-preview": {
+      "description": "IBM Granite Switch 4.1 8B preview routing model"
+    },
+    "granite-timeseries-patchtsmixer": {
+      "description": "IBM Granite Timeseries PatchTSMixer forecasting model"
+    },
+    "granite-timeseries-patchtst": {
+      "description": "IBM Granite Timeseries PatchTST forecasting model"
+    },
+    "granite-timeseries-ttm-r1": {
+      "description": "IBM Granite Timeseries TTM r1 tiny time mixers forecasting model"
+    },
+    "granite-timeseries-ttm-r2": {
+      "description": "IBM Granite Timeseries TTM r2 tiny time mixers forecasting model"
+    },
+    "granite-uncertainty-3.0-8b-lora": {
+      "description": "IBM Granite Uncertainty 3.0 8B LoRA uncertainty-quantification model"
+    },
+    "granite-vision-3.1-2b-preview": {
+      "description": "IBM Granite Vision 3.1 2B preview vision-language model"
+    },
+    "granite-vision-3.3-2b-embedding": {
+      "description": "IBM Granite Vision 3.3 2B embedding model for multimodal retrieval"
+    },
+    "granite-vision-4.1-4b": {
+      "description": "IBM Granite Vision 4.1 4B vision-language model"
+    },
+    "granitelib-rag-gpt-oss-r1.0": {
+      "description": "IBM GraniteLib RAG GPT-OSS r1.0 retrieval model"
+    },
+    "granitelib-rag-r1.0": {
+      "description": "IBM GraniteLib RAG r1.0 retrieval model"
+    }
+  }
+}

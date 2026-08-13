@@ -282,6 +282,17 @@ pub enum SessionProjectedPartDetail {
         summary: String,
         detail: Option<String>,
     },
+    /// A background-operation completion/event notification (the agena analog
+    /// of Claude's `<task-notification>`).
+    SystemNotification {
+        operation_id: String,
+        operation_kind: String,
+        status: String,
+        summary: String,
+        detail: Option<String>,
+        body: String,
+        event_seq: Option<u64>,
+    },
     Opaque(serde_json::Value),
 }
 

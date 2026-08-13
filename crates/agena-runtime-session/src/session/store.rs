@@ -220,6 +220,25 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
+    /// Submit a system-notification run (marker + content parts), written with
+    /// the System role so the content projects as a system message.
+    /// Atomically settle a background operation against its launching run:
+    /// steal-safe lease refresh, tool-part terminalization, and appending the
+    /// result parts (`PartRole::Assistant`) onto the launching run — no new
+    /// run marker.
+    pub(crate) async fn settle_background_run(
+        &self,
+        session_id: i64,
+        run_id: i64,
+        tool_part: Option<(i64, PartState, Value)>,
+        parts: Vec<NewPart>,
+    ) -> Result<Vec<Part>, AppError> {
+        self.facade
+            .settle_background_run(session_id, &self.owner_id, run_id, tool_part, parts)
+            .await
+            .map_err(store_error)
+    }
+
     /// Start a non-user run (continue / compaction / subtask) and return the
     /// new run marker part id.
     pub(crate) async fn start_run(
@@ -667,6 +686,7 @@ pub(crate) fn typed_content_to_value(content: &TypedContent) -> Result<Value, Ap
         TypedContent::SkillRef(part) => part.as_value(),
         TypedContent::Notice(part) => part.as_value(),
         TypedContent::Hook(part) => part.as_value(),
+        TypedContent::SystemNotification(part) => part.as_value(),
         TypedContent::Compaction(part) => {
             serde_json::to_value(part).expect("compaction content is always JSON serializable")
         }
@@ -721,6 +741,7 @@ fn part_summary(content: &TypedContent) -> Option<String> {
         }
         TypedContent::Hook(hook) => truncate(&hook.summary),
         TypedContent::Notice(notice) => truncate(&notice.summary),
+        TypedContent::SystemNotification(notification) => truncate(&notification.summary),
         TypedContent::FileRef(attachment) => {
             let attachment = part_content::attachment_from_file_ref(attachment);
             if attachment.attachments.is_empty() {

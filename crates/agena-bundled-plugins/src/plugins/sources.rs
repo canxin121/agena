@@ -178,6 +178,10 @@ pub fn static_plugin_registrations(
             crate::tool::new_shell_plugin(),
         ),
         StaticPluginRegistration::new(
+            plugin_key(crate::tool::monitor_plugin_id()),
+            crate::tool::new_monitor_plugin(),
+        ),
+        StaticPluginRegistration::new(
             plugin_key(crate::tool::tool_api_plugin_id()),
             crate::tool::new_tool_api_plugin(),
         ),

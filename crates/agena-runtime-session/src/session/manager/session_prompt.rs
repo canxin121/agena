@@ -65,6 +65,20 @@ Do small tasks yourself instead of delegating them; do not fan out a single task
         .to_string()
 }
 
+/// Background-execution discipline injected when any tool that can launch
+/// background work is available (`shell.run` and friends, `tasks.run`): a
+/// background launch returns immediately, the session is *notified* when the
+/// work settles (the `system_notification` part), and the model must never
+/// poll — mirroring Claude Code's Monitor/task-notification contract.
+pub(crate) fn render_background_section() -> String {
+    r#"# Background execution
+
+`shell.run` with `background: true` and `tasks.run` start work that continues while the session moves on. The tool returns immediately with a handle; the work keeps running in the background. When the operation settles — completes, fails, times out, is cancelled, or emits a monitored event — you are notified with a `system_notification` message describing the outcome. The result is also written onto the operation's own transcript part.
+
+Never poll: do not repeatedly call `shell.run`/`tasks.run` status or read logs just to wait for completion. After launching background work, continue with other useful work (or end your turn) and wait for the `system_notification`. When a `system_notification` arrives mid-task, act on it: incorporate the outcome into your ongoing work and report it when relevant. When it arrives after you finished a turn, pick up where you left off."#
+        .to_string()
+}
+
 impl SessionManager {
     fn assemble_system_prompt_for_tool_names(
         &self,
@@ -74,6 +88,12 @@ impl SessionManager {
         let has_plan = tool_names.iter().any(|name| name == "plan.set");
         let has_ask = tool_names.iter().any(|name| name == "interaction.ask");
         let has_tasks = tool_names.iter().any(|name| name == "tasks.run");
+        let has_shell = tool_names.iter().any(|name| {
+            matches!(
+                name.as_str(),
+                "shell.run" | "powershell.run" | "process.run"
+            )
+        });
 
         let mut sections = Vec::new();
         if has_plan {
@@ -84,6 +104,9 @@ impl SessionManager {
         }
         if has_tasks {
             sections.push(render_delegating_section());
+        }
+        if has_shell || has_tasks {
+            sections.push(render_background_section());
         }
 
         let base = crate::identity::system_prompt_with_sections(&sections);
@@ -164,5 +187,15 @@ mod tests {
         assert!(section.contains("wait for the result"));
         assert!(section.contains("Do small tasks yourself"));
         assert!(section.contains("Never delegate understanding"));
+    }
+
+    #[test]
+    fn background_section_forbids_polling_and_announces_notification() {
+        let section = render_background_section();
+        assert!(section.contains("# Background execution"));
+        assert!(section.contains("background: true"));
+        assert!(section.contains("system_notification"));
+        assert!(section.contains("Never poll"));
+        assert!(section.contains("wait for the `system_notification`"));
     }
 }

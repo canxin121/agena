@@ -784,6 +784,22 @@ fn activity_payload_from_part(
             occurred_at_ms: None,
             title: notice.title.clone(),
         })),
+        // A background-operation notification surfaces in the activities
+        // panel as a notice, exactly like a hook/notice row.
+        Some(TypedContent::SystemNotification(notification)) => Some(ActivityPayload::Notice(
+            NoticeActivity {
+                kind: "system_notification".to_owned(),
+                summary: notification.summary.clone(),
+                detail: notification.detail.clone().or_else(|| {
+                    (!notification.body.is_empty()).then(|| notification.body.clone())
+                }),
+                occurred_at_ms: None,
+                title: Some(format!(
+                    "{} {}",
+                    notification.operation_kind, notification.operation_id
+                )),
+            },
+        )),
         Some(
             TypedContent::Run(_)
             | TypedContent::ToolResult(_)
@@ -1312,6 +1328,10 @@ fn part_name_from_content(content: &TypedContent) -> Option<String> {
         },
         TypedContent::Hook(hook) => Some(format!("hook:{}", hook.hook)),
         TypedContent::Notice(_) => Some("notice".to_string()),
+        TypedContent::SystemNotification(notification) => Some(format!(
+            "{}:{}:{}",
+            notification.operation_kind, notification.operation_id, notification.status
+        )),
         TypedContent::Run(_)
         | TypedContent::PasteRef(_)
         | TypedContent::ToolResult(_)
@@ -1396,6 +1416,17 @@ fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjecte
             summary: value.summary.clone(),
             detail: value.detail.clone(),
         },
+        TypedContent::SystemNotification(value) => {
+            agena_runtime::SessionProjectedPartDetail::SystemNotification {
+                operation_id: value.operation_id.clone(),
+                operation_kind: value.operation_kind.clone(),
+                status: value.status.clone(),
+                summary: value.summary.clone(),
+                detail: value.detail.clone(),
+                body: value.body.clone(),
+                event_seq: value.event_seq,
+            }
+        }
         // These kinds have no v1 rich projection; degrade to a text detail
         // exactly as the v1 typed fold did (Run → empty, PasteRef/ToolResult/
         // Compaction → their text).

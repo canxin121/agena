@@ -7,6 +7,7 @@ pub mod image;
 pub mod interaction;
 pub mod lsp;
 pub mod mcp;
+pub mod monitor;
 pub mod notebook;
 pub mod planning;
 pub mod repo;

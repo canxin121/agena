@@ -469,6 +469,39 @@ impl SessionManager {
         .await
     }
 
+    /// The wake execution driven by `settle_background_operation` when the
+    /// session is idle: the settle already appended the Assistant-role
+    /// `system_notification` part onto the launching run, so this only
+    /// refreshes the session and takes a fresh model turn over the appended
+    /// parts. Modeled on `continue_session_inner` minus the Continue identity.
+    pub(in crate::session::manager) async fn notification_run_inner(
+        &self,
+        session_id: i64,
+        control: Arc<ExecutionControl>,
+        steer_rx: mpsc::Receiver<Vec<TypedContent>>,
+    ) -> Result<Session, AppError> {
+        let state = self.execution_state();
+        let mut session = self.store.load_session(session_id).await?;
+        self.refresh_execution_policy(&mut session, &state);
+        let options = self.run_options_from_session_async(&session, state.clone()).await?;
+        if self.apply_run_selection_to_session(&mut session, &options) {
+            session = self.store.persist_execution_config(session).await?;
+        }
+        self.run_until_stable(
+            session,
+            &options,
+            StableRunContext {
+                base_run_source: ExecutionSource::User,
+                active_model_turn_id: None,
+                state,
+                control,
+                steer_rx,
+                usage_budget: None,
+            },
+        )
+        .await
+    }
+
     pub async fn run_subtask(
         &self,
         request: SessionSubtaskRequest,

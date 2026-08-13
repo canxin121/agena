@@ -10,7 +10,7 @@ use crate::part::{
     CronUpdateToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput, GlobToolInput,
     GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput,
     LspReferencesToolInput, ReadToolInput, ScheduleWakeupToolInput, ShellToolInput,
-    ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
+    ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput, MonitorToolInput,
 };
 use agena_domain::{
     FileChangeRecord, StructuredObject, ToolInvocation, ToolOutput, WebSearchResult,
@@ -33,6 +33,7 @@ fn is_zero_u64(value: &u64) -> bool {
 pub enum ToolPayloadInput {
     #[serde(alias = "process")]
     Shell(ShellToolInput),
+    Monitor(MonitorToolInput),
     Read(ReadToolInput),
     ApplyPatch(ApplyPatchToolInput),
     Glob(GlobToolInput),
@@ -64,6 +65,7 @@ impl ToolPayloadInput {
     pub fn tool_name(&self) -> &'static str {
         match self {
             Self::Shell(_) => "shell",
+            Self::Monitor(_) => "monitor",
             Self::Read(_) => "read",
             Self::ApplyPatch(_) => "apply_patch",
             Self::Glob(_) => "glob",
@@ -149,6 +151,9 @@ impl ToolPayloadInput {
             ("agena", "fs", "apply_patch") => ("apply_patch", None),
             ("agena", "shell", action @ ("run" | "list" | "logs" | "stop")) => {
                 ("shell", Some(action))
+            }
+            ("agena", "monitor", action @ ("start" | "stop")) => {
+                ("monitor", Some(action))
             }
             ("agena", "cron", "create") => ("cron_create", None),
             ("agena", "cron", "list") => ("cron_list", None),
@@ -324,6 +329,26 @@ pub enum ToolPayloadOutput {
         dropped_lines: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         exit_code: Option<i32>,
+    },
+    /// `monitor.start` / `monitor.stop` output. The monitor keeps running after
+    /// `start` returns; its tool part stays `InProgress` until the monitor
+    /// settles, with every event projected as a `system_notification` part.
+    Monitor {
+        action: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        monitor_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<ProcessStatus>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        processes: Vec<ProcessSummary>,
+        #[serde(default)]
+        last_seq: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        completion_reason: Option<String>,
     },
     WebFetch {
         url: String,
@@ -594,6 +619,7 @@ fn is_payload_variant_tag(name: &str) -> bool {
         name,
         "read"
             | "glob"
+            | "monitor"
             | "grep"
             | "apply_patch"
             | "task"
@@ -659,6 +685,13 @@ fn invocation_name_for_payload_tool(
                 .and_then(|value| value.as_str().map(str::to_string))
                 .unwrap_or_else(|| "list".to_string());
             canonical_registry_tool_name("agena.shell", action.as_str())
+        }
+        "monitor" => {
+            let action = input
+                .remove("action")
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_else(|| "start".to_string());
+            canonical_registry_tool_name("agena.monitor", action.as_str())
         }
         "cron_create" => canonical_registry_tool_name("agena.cron", "create"),
         "cron_list" => canonical_registry_tool_name("agena.cron", "list"),
@@ -761,6 +794,20 @@ fn payload_name_for_invocation(
             );
             return Some("shell".to_string());
         }
+        "monitor.start" | "agena_monitor_start" | "agena.monitor.start" => {
+            input.insert(
+                "action".to_string(),
+                serde_json::Value::String("start".to_string()),
+            );
+            return Some("monitor".to_string());
+        }
+        "monitor.stop" | "agena_monitor_stop" | "agena.monitor.stop" => {
+            input.insert(
+                "action".to_string(),
+                serde_json::Value::String("stop".to_string()),
+            );
+            return Some("monitor".to_string());
+        }
         _ => {}
     }
     // Every other typed payload reuses the output-tag mapping, which
@@ -772,6 +819,20 @@ fn payload_name_for_invocation(
 fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
     // Shell/process tools share one `shell` payload variant; the subcommand
     // (`run`/`list`/`logs`/`stop`) lives in `action`, not in the variant tag.
+    // Monitor tools share one `monitor` payload variant; the subcommand
+    // (`start`/`stop`) lives in `action`, not in the variant tag.
+    if matches!(
+        tool_name,
+        "monitor"
+            | "monitor.start"
+            | "monitor.stop"
+            | "agena.monitor.start"
+            | "agena.monitor.stop"
+            | "agena_monitor_start"
+            | "agena_monitor_stop"
+    ) {
+        return Some("monitor".to_string());
+    }
     if matches!(
         tool_name,
         "shell"
@@ -841,6 +902,8 @@ mod tests {
             ("agena.shell", "list"),
             ("agena.shell", "logs"),
             ("agena.shell", "stop"),
+            ("agena.monitor", "start"),
+            ("agena.monitor", "stop"),
             ("agena.cron", "create"),
             ("agena.cron", "list"),
             ("agena.cron", "delete"),
@@ -1013,6 +1076,14 @@ mod tests {
             ("agena_shell_run", "shell"),
             ("agena.process.list", "shell"),
             ("agena_process_stop", "shell"),
+            // monitor family
+            ("monitor", "monitor"),
+            ("monitor.start", "monitor"),
+            ("monitor.stop", "monitor"),
+            ("agena.monitor.start", "monitor"),
+            ("agena.monitor.stop", "monitor"),
+            ("agena_monitor_start", "monitor"),
+            ("agena_monitor_stop", "monitor"),
             // tasks / tools / interaction family
             ("tasks.run", "task"),
             ("agena.tasks.run", "task"),
@@ -1105,6 +1176,8 @@ mod tests {
             ("shell.list", "shell"),
             ("shell.logs", "shell"),
             ("shell.stop", "shell"),
+            ("monitor.start", "monitor"),
+            ("monitor.stop", "monitor"),
         ];
         for (name, expected) in cases {
             let mut input = serde_json::Map::new();

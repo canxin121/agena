@@ -368,6 +368,9 @@ impl ToolExecutor {
                 ToolPayloadInput::Shell(input) => {
                     crate::tool::process_tool::execute_async(self, &input, context).await?
                 }
+                ToolPayloadInput::Monitor(input) => {
+                    crate::tool::monitor_tool::execute_async(self, &input, context).await?
+                }
                 ToolPayloadInput::CronCreate(input) => {
                     crate::tool::cron::execute_create_async(self, &input, context.session_id)
                         .await?

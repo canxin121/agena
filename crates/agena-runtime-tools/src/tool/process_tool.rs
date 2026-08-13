@@ -260,6 +260,7 @@ fn execute_background_run_prepared(
     let started = registry
         .start(StartParams {
             command: final_command,
+            ws: None,
             description: command.description.clone(),
             workdir: final_cwd,
             timeout_ms: monitor
@@ -344,7 +345,7 @@ fn render_run(
     let summary = started.summary;
     let title = process_run_title(command);
     let body = format!(
-        "Started {} process {} (status={}). Use shell.logs to read output and shell.stop to terminate it.",
+        "Started {} process {} (status={}). You will be notified with a `system_notification` when it settles — do not poll shell.list/shell.logs waiting for it. Use shell.stop to terminate it.",
         if monitored { "monitored" } else { "background" },
         summary.process_id,
         summary.status

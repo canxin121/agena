@@ -962,6 +962,7 @@ impl HostClient for RuntimeHostClient {
             .start(MonitorStartParams {
                 description: req.label.unwrap_or_else(|| command.clone()),
                 command,
+                ws: None,
                 workdir: cwd,
                 timeout_ms: req.timeout_ms,
                 persistent: req.persistent,

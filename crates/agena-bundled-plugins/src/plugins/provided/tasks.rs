@@ -203,7 +203,7 @@ impl TasksPlugin {
     #[tool(
         tags(subtask, mutate),
         summary = "Create a delegated subagent task in the background. Attach Skill names in `skills` so the child session applies them as task guidance.",
-        help = "Creates a delegated background task. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.",
+        help = "Creates a delegated background task. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills. The task runs in the background and returns immediately; you will be notified with a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.",
         task,
         subtask,
         concurrency_safe
@@ -287,7 +287,7 @@ impl TasksPlugin {
         Ok(task_output(
             "Start task",
             format!(
-                "Started delegated task '{task_id}' in the background. Use tasks.get, tasks.output, or tasks.wait to inspect it."
+                "Started delegated task '{task_id}' in the background. You will be notified with a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it."
             ),
             vec![entry_state(&self.tasks, task_id.as_str())?],
             false,

@@ -225,6 +225,24 @@ pub(super) fn background_operation_from_execution(
             }
         }
     }
+    // Monitor tool: `monitor.start` returns immediately while the monitor
+    // keeps streaming; its `monitor_id` stamps the background marker so the
+    // runtime can correlate every event part back to this tool part.
+    if let Some(crate::tool::ToolPayloadOutput::Monitor {
+        action,
+        monitor_id,
+        ..
+    }) = crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name.as_str(), details)
+    {
+        if action == "start" {
+            if let Some(monitor_id) = monitor_id {
+                return Some(crate::part::BackgroundOperation {
+                    kind: "monitor".to_string(),
+                    id: monitor_id,
+                });
+            }
+        }
+    }
     None
 }
 
@@ -545,9 +563,46 @@ mod tests {
     }
 
     #[test]
+    fn monitor_start_marks_the_operation_as_a_monitor_background_operation() {
+        let invocation = invocation_named("agena.monitor.start");
+        let details = output(ToolPayloadOutput::Monitor {
+            action: "start".to_owned(),
+            monitor_id: Some("monitor_abc".to_owned()),
+            status: Some(agena_domain::ProcessStatus::Running),
+            output: None,
+            processes: Vec::new(),
+            last_seq: 0,
+            exit_code: None,
+            completion_reason: None,
+        });
+        let background =
+            background_operation_from_execution(&invocation, &details).expect("monitor marker");
+        assert_eq!(background.kind, "monitor");
+        assert_eq!(background.id, "monitor_abc");
+    }
+
+    #[test]
+    fn monitor_stop_does_not_mark_a_background_operation() {
+        let invocation = invocation_named("agena.monitor.stop");
+        let details = output(ToolPayloadOutput::Monitor {
+            action: "stop".to_owned(),
+            monitor_id: Some("monitor_abc".to_owned()),
+            status: Some(agena_domain::ProcessStatus::Stopped),
+            output: None,
+            processes: Vec::new(),
+            last_seq: 0,
+            exit_code: None,
+            completion_reason: None,
+        });
+        assert!(
+            background_operation_from_execution(&invocation, &details).is_none(),
+            "stopping a monitor is a terminal tool call, not a background launch"
+        );
+    }
+
+    #[test]
     fn glob_produces_a_human_markdown_list_not_a_flat_blob() {
-        let invocation = invocation_named("glob");
-        let details = output(ToolPayloadOutput::Glob {
+        let invocation = invocation_named("glob");        let details = output(ToolPayloadOutput::Glob {
             count: Some(2),
             paths: vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()],
             truncated: false,

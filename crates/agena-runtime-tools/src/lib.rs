@@ -26,7 +26,7 @@ pub use atomic_file::{
 };
 pub use monitor::{
     MonitorError, MonitorListener, MonitorRead, MonitorRegistry, MonitorService, MonitorStart,
-    MonitorStopOutcome, default_monitor_registry,
+    MonitorStopOutcome, MonitorWsParams, default_monitor_registry,
 };
 pub use monitor::{ReadParams as MonitorReadParams, StartParams as MonitorStartParams};
 pub use project_paths::{

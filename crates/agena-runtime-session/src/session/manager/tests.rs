@@ -46,7 +46,7 @@ use crate::{
     tool::ToolExecutor,
 };
 use agena_runtime_contracts::part_content::{
-    InteractionContent, TypedContent, operation_from_tool_call,
+    SystemNotificationContent, ToolResultContent, TypedContent, operation_from_tool_call,
 };
 
 async fn test_manager() -> SessionManager {
@@ -2859,5 +2859,371 @@ async fn hook_run_marker_is_an_assistant_run_completed_not_running() {
         state.state,
         SessionState::Ready,
         "a completed hook run leaves the session Ready, not Running"
+    );
+}
+
+#[tokio::test]
+async fn background_completion_notification_is_committed_once_per_operation() {
+    let provider = Arc::new(FakeProvider {
+        provider_id: "fake",
+        model: ModelId::new("fake-model"),
+        deltas: vec!["acknowledged the finished background operation".to_owned()],
+        thinking_deltas: Vec::new(),
+        finish_reason: Some(CompletionFinishReason::Stop),
+    });
+    let manager = manager_with_provider(provider).await;
+    let session = create(&manager, "background notification").await;
+    let session_id = session.id;
+
+    // A launching assistant run with a background `shell` tool part in-flight
+    // (the launch kept the part `InProgress`).
+    let run_id = manager
+        .store
+        .start_run(
+            session_id,
+            "continue",
+            run_marker_content("continue", Some("fake"), Some("fake-model"), None, None),
+        )
+        .await
+        .expect("start launching run marker");
+    let mut operation = agena_runtime_contracts::part::OperationPart::pending(
+        1,
+        ToolInvocation::new("shell.run", StructuredObject::default()),
+        "Background shell",
+        TimeRange {
+            start_ms: 1,
+            end_ms: None,
+        },
+    );
+    operation.set_background_operation(&agena_runtime_contracts::part::BackgroundOperation {
+        kind: "shell".to_owned(),
+        id: "proc_test".to_owned(),
+    });
+    let tool_part = new_part_from_content(
+        "tool_call",
+        PartRole::Assistant,
+        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        PartState::InProgress,
+    )
+    .expect("build background tool part");
+    let created = manager
+        .store
+        .append_parts(session_id, run_id, vec![tool_part])
+        .await
+        .expect("append background tool part");
+    let tool_part_id = created[0].part_id;
+
+    let notification = SystemNotificationContent {
+        operation_id: "proc_test".to_string(),
+        operation_kind: "shell".to_string(),
+        status: "completed".to_string(),
+        summary: "exit 0".to_string(),
+        body: "exit 0".to_string(),
+        ..Default::default()
+    };
+
+    // First delivery settles the operation: terminalizes the launching tool
+    // part and appends the Assistant-role notification onto the launching run
+    // — no new run marker (the durable claim, mirroring Claude's atomic
+    // `notified` flag).
+    manager
+        .settle_background_operation(
+            session_id,
+            "shell",
+            "proc_test",
+            PartState::Completed,
+            Ok("exit 0".to_owned()),
+            notification.clone(),
+        )
+        .await
+        .expect("settle background operation");
+
+    let reloaded = manager
+        .get_session(session_id)
+        .await
+        .expect("reload session");
+    let parts = reloaded.parts();
+    let notified = parts
+        .iter()
+        .filter(|part| part.kind == "system_notification")
+        .collect::<Vec<_>>();
+    assert_eq!(notified.len(), 1, "exactly one notification part");
+    assert_eq!(
+        notified[0].role,
+        PartRole::Assistant,
+        "the notification is an Assistant part (the model launched the operation)"
+    );
+    assert_eq!(
+        notified[0].run_id,
+        Some(run_id),
+        "the notification appends onto the launching run"
+    );
+    assert!(super::part_records_notification(notified[0], "shell", "proc_test"));
+
+    // No marker was created for the notification itself: it lives under the
+    // launching run. (The wake execution then opens a fresh assistant marker
+    // for the model's response, which is expected — the response is a new
+    // turn, the notification is not.)
+    let launching_marker = parts
+        .iter()
+        .find(|part| part.is_run_marker() && part.part_id == run_id)
+        .expect("launching run marker");
+    assert!(
+        launching_marker.state.is_terminal(),
+        "settle terminalizes the launching run marker once the operation settles"
+    );
+
+    // The launching tool part was terminalized by the settle.
+    let tool = parts
+        .iter()
+        .find(|part| part.part_id == tool_part_id)
+        .expect("tool part");
+    assert!(
+        tool.state.is_terminal(),
+        "launching tool part terminalized by the settle"
+    );
+
+    // A re-delivered completion signal is a no-op: the durable part is the claim.
+    manager
+        .settle_background_operation(
+            session_id,
+            "shell",
+            "proc_test",
+            PartState::Completed,
+            Ok("exit 0".to_owned()),
+            notification.clone(),
+        )
+        .await
+        .expect("re-settle background operation");
+    let reloaded = manager
+        .get_session(session_id)
+        .await
+        .expect("reload session after dedup");
+    assert_eq!(
+        reloaded
+            .parts()
+            .iter()
+            .filter(|part| part.kind == "system_notification")
+            .count(),
+        1,
+        "dedup keeps a single notification part"
+    );
+}
+
+#[tokio::test]
+async fn monitor_events_append_as_assistant_parts_without_terminalizing() {
+    let provider = Arc::new(FakeProvider {
+        provider_id: "fake",
+        model: ModelId::new("fake-model"),
+        deltas: vec!["acknowledged the monitor event".to_owned()],
+        thinking_deltas: Vec::new(),
+        finish_reason: Some(CompletionFinishReason::Stop),
+    });
+    let manager = manager_with_provider(provider).await;
+    let session = create(&manager, "monitor event notification").await;
+    let session_id = session.id;
+
+    // A launching assistant run with a `monitor` tool part in-flight (the
+    // launch kept the part `InProgress`).
+    let run_id = manager
+        .store
+        .start_run(
+            session_id,
+            "continue",
+            run_marker_content("continue", Some("fake"), Some("fake-model"), None, None),
+        )
+        .await
+        .expect("start launching run marker");
+    let mut operation = agena_runtime_contracts::part::OperationPart::pending(
+        1,
+        ToolInvocation::new("monitor.start", StructuredObject::default()),
+        "Background monitor",
+        TimeRange {
+            start_ms: 1,
+            end_ms: None,
+        },
+    );
+    operation.set_background_operation(&agena_runtime_contracts::part::BackgroundOperation {
+        kind: "monitor".to_owned(),
+        id: "monitor_test".to_owned(),
+    });
+    let tool_part = new_part_from_content(
+        "tool_call",
+        PartRole::Assistant,
+        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        PartState::InProgress,
+    )
+    .expect("build monitor tool part");
+    let created = manager
+        .store
+        .append_parts(session_id, run_id, vec![tool_part])
+        .await
+        .expect("append monitor tool part");
+    let tool_part_id = created[0].part_id;
+
+    // The real launch path pairs the still-in-flight background tool part with
+    // an empty `tool_result` guard (`apply_tool_success_with_rules`), so the
+    // stable-run loop's pending-tool pass excludes it and never re-executes
+    // `monitor.start`. Mirror that here — without it the wake would treat the
+    // monitor as a pending tool and re-run it.
+    let mut guard = new_part_from_content(
+        "tool_result",
+        PartRole::Tool,
+        &TypedContent::ToolResult(ToolResultContent {
+            output: String::new(),
+            ok: true,
+            extra: Default::default(),
+        }),
+        PartState::Completed,
+    )
+    .expect("build monitor tool_result guard");
+    guard.parent_part_id = Some(tool_part_id);
+    manager
+        .store
+        .append_parts(session_id, run_id, vec![guard])
+        .await
+        .expect("append monitor tool_result guard");
+
+    let event = |seq: u64| SystemNotificationContent {
+        operation_id: "monitor_test".to_string(),
+        operation_kind: "monitor".to_string(),
+        status: "event".to_string(),
+        summary: format!("#{seq:>5} out line-{seq}"),
+        body: format!("#{seq:>5} out line-{seq}"),
+        event_seq: Some(seq),
+        ..Default::default()
+    };
+
+    // First event: appended as an Assistant-role part onto the launching run,
+    // but the monitor stays InProgress and the run marker stays in-flight —
+    // "settle but don't terminalize" (§7.3).
+    manager
+        .settle_background_event(session_id, "monitor", "monitor_test", 1, event(1))
+        .await
+        .expect("settle monitor event 1");
+    let reloaded = manager.get_session(session_id).await.expect("reload session");
+    let notified = reloaded
+        .parts()
+        .iter()
+        .filter(|part| part.kind == "system_notification")
+        .collect::<Vec<_>>();
+    assert_eq!(notified.len(), 1, "exactly one event part");
+    assert_eq!(notified[0].role, PartRole::Assistant);
+    assert_eq!(
+        notified[0].run_id,
+        Some(run_id),
+        "the event appends onto the launching run — no new run"
+    );
+    assert!(super::part_records_event(notified[0], "monitor", "monitor_test", 1));
+    assert!(
+        !super::part_records_notification(notified[0], "monitor", "monitor_test"),
+        "an event part must not claim the terminal (event_seq is Some)"
+    );
+    let tool = reloaded
+        .parts()
+        .iter()
+        .find(|part| part.part_id == tool_part_id)
+        .expect("monitor tool part");
+    assert_eq!(
+        tool.state,
+        PartState::InProgress,
+        "the monitor stays InProgress after an event"
+    );
+    let launching_marker = reloaded
+        .parts()
+        .iter()
+        .find(|part| part.is_run_marker() && part.part_id == run_id)
+        .expect("launching run marker");
+    assert!(
+        !launching_marker.state.is_terminal(),
+        "an event leaves the launching run marker in-flight"
+    );
+
+    // Each event is independently notified (per-event claim, monotonic seq).
+    manager
+        .settle_background_event(session_id, "monitor", "monitor_test", 2, event(2))
+        .await
+        .expect("settle monitor event 2");
+    manager
+        .settle_background_event(session_id, "monitor", "monitor_test", 2, event(2))
+        .await
+        .expect("re-delivered event 2");
+    let reloaded = manager.get_session(session_id).await.expect("reload session");
+    let event_count = reloaded
+        .parts()
+        .iter()
+        .filter(|part| part.kind == "system_notification")
+        .count();
+    assert_eq!(event_count, 2, "each event committed once, dedup by seq");
+
+    // The terminal settle is NOT swallowed by the event parts: it terminalizes
+    // the tool part + run marker and appends the terminal notification.
+    let terminal = SystemNotificationContent {
+        operation_id: "monitor_test".to_string(),
+        operation_kind: "monitor".to_string(),
+        status: "completed".to_string(),
+        summary: "Monitor finished".to_string(),
+        body: "Monitor finished".to_string(),
+        ..Default::default()
+    };
+    manager
+        .settle_background_operation(
+            session_id,
+            "monitor",
+            "monitor_test",
+            PartState::Completed,
+            Ok("Monitor finished".to_owned()),
+            terminal,
+        )
+        .await
+        .expect("settle monitor terminal");
+    let reloaded = manager.get_session(session_id).await.expect("reload session");
+    let notifications = reloaded
+        .parts()
+        .iter()
+        .filter(|part| part.kind == "system_notification")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notifications.len(),
+        3,
+        "two events plus the terminal completion"
+    );
+    assert!(
+        super::part_records_notification(
+            *notifications
+                .iter()
+                .find(|part| part.role == PartRole::Assistant
+                    && typed_content_from_value(&part.kind, &part.content)
+                        .ok()
+                        .and_then(|content| match content {
+                            TypedContent::SystemNotification(notification) => {
+                                notification.event_seq.is_none().then_some(())
+                            }
+                            _ => None,
+                        })
+                        .is_some())
+                .expect("terminal notification part"),
+            "monitor",
+            "monitor_test"
+        ),
+        "the terminal claim matches the terminal (event_seq-less) part"
+    );
+    let tool = reloaded
+        .parts()
+        .iter()
+        .find(|part| part.part_id == tool_part_id)
+        .expect("monitor tool part");
+    assert!(
+        tool.state.is_terminal(),
+        "the terminal settle terminalizes the monitor tool part"
+    );
+    let launching_marker = reloaded
+        .parts()
+        .iter()
+        .find(|part| part.is_run_marker() && part.part_id == run_id)
+        .expect("launching run marker");
+    assert!(
+        launching_marker.state.is_terminal(),
+        "the terminal settle terminalizes the launching run marker"
     );
 }

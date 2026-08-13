@@ -129,14 +129,36 @@ fn should_continue_turn(
     TurnContinuation::Stop
 }
 
-/// The id (run-marker part_id) of the most recent user-authored message in
-/// the session, if any. Used to detect new steer input across model turns.
-fn last_user_message_id(parts: &[Part]) -> Option<i64> {
+/// The id (run-marker part_id) of the most recent input message in the
+/// session, if any. "Input" is any marker carrying an external arrival into
+/// the conversation: a user-authored run (`PartRole::User`) or a
+/// background-completion notification run (`PartRole::System`). Used to detect
+/// new steer input across model turns.
+fn last_input_message_id(parts: &[Part]) -> Option<i64> {
     parts
         .iter()
         .rev()
-        .find(|part| part.is_run_marker() && part.role == PartRole::User)
+        .find(|part| {
+            part.is_run_marker()
+                && (part.role == PartRole::User || part.role == PartRole::System)
+        })
         .map(|marker| marker.part_id)
+}
+
+/// The part id of the newest `system_notification` content part, if any. A
+/// settled background operation appends its notification — an Assistant-role
+/// `system_notification` part — onto the launching assistant run (no new run
+/// marker), so the newest notification part is the durable cursor for "a new
+/// background operation settled". The stable-run loop watches this cursor and
+/// re-triggers a fresh model turn when it moves, exactly like a new user input
+/// (the agena analog of Claude Code's `<task-notification>` waking the
+/// launching turn).
+fn newest_notification_part_id(parts: &[Part]) -> Option<i64> {
+    parts
+        .iter()
+        .rev()
+        .find(|part| part.kind == "system_notification")
+        .map(|part| part.part_id)
 }
 
 /// True for tools whose operation is scoped to concrete paths (filesystem
@@ -294,7 +316,12 @@ impl SessionManager {
         // This flag becomes true only at command entry, after the entire
         // pending tool batch reaches a barrier, or after new steer input.
         let mut model_requested = true;
-        let mut observed_user_message_id = last_user_message_id(session.parts());
+        let mut observed_user_message_id = last_input_message_id(session.parts());
+        // Durable cursor for "the newest settled background-operation
+        // notification the model has seen". A notification appended mid-turn
+        // (by `settle_background_operation`) moves this cursor; the loop then
+        // re-triggers a fresh model turn over it.
+        let mut observed_notification_id = newest_notification_part_id(session.parts());
         // The assistant run marker for the current turn (one user message ==
         // one run marker). Created on the turn's first model turn and reused by
         // every subsequent model turn (tool results, follow-ups, truncations)
@@ -360,7 +387,7 @@ impl SessionManager {
                 .drain_steer_input(session, &mut steer_rx, &current_options, state.clone())
                 .await?;
 
-            let latest_user = last_user_message_id(session.parts());
+            let latest_user = last_input_message_id(session.parts());
             if latest_user != observed_user_message_id {
                 active_model_turn_id = latest_user;
                 observed_user_message_id = latest_user;
@@ -368,6 +395,22 @@ impl SessionManager {
                 // New steer input starts a new turn: the next model turn opens a
                 // fresh assistant run marker instead of continuing the previous
                 // turn's marker.
+                turn_run_id = None;
+            }
+
+            let latest_notification = newest_notification_part_id(session.parts());
+            if latest_notification != observed_notification_id {
+                // A background operation settled and its Assistant-role
+                // `system_notification` part was appended onto the launching
+                // run (`settle_background_operation`, possibly delivered
+                // through a steer). The model must take a fresh turn over the
+                // settled result — the agena analog of Claude Code's
+                // `<task-notification>` waking the launching turn. The
+                // notification part itself already lives under the launching
+                // run (no new run); the model's response opens a fresh
+                // assistant marker like any new input.
+                observed_notification_id = latest_notification;
+                model_requested = true;
                 turn_run_id = None;
             }
 

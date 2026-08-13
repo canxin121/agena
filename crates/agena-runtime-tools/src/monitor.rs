@@ -1,26 +1,25 @@
-//! Runtime background-process registry.
+//! Runtime background-process / monitor registry.
 //!
 //! A background process runs a long-lived shell command and captures every
-//! stdout/stderr line as a numbered event. The public model-visible tool
-//! surface is `shell` with four actions:
-//!
-//! * `run`       — spawn a child with `background = true`, return a stable `process_id`
-//! * `list`      — enumerate active and recently-finished background processes
-//! * `logs`      — pull events with `seq > since_seq`, optionally blocking
-//!   up to `wait_ms` for fresh output
-//! * `stop`      — kill a running child
+//! stdout/stderr line as a numbered event; a monitor may alternatively watch a
+//! WebSocket feed whose text frames become events. The public model-visible
+//! tool surface is `shell` (run/list/logs/stop) plus the `monitor` tool
+//! (start/stop), both backed by this registry.
 //!
 //! Captured events live in a ring buffer (default 1000 lines) so the model can
 //! walk forward through history without losing recent activity. Lines that get
 //! evicted are counted in `dropped_lines` so the model knows it missed
-//! something.
+//! something. A [`MonitorListener`] receives start/finish transitions and
+//! **every** event as it arrives — the runtime's activity layer projects the
+//! events into the transcript as `system_notification` parts (everything-is-a-
+//! part), while the ring buffer stays the ephemeral "live projection".
 //!
 //! # Concurrency model
 //!
-//! The process runner, pipe readers, timeout, cancellation, and child wait all
-//! run on the caller's Tokio runtime. The registry retains a synchronous
-//! compatibility surface for non-async consumers; those reads sleep on a
-//! condition variable and async callers isolate them with `spawn_blocking`.
+//! The process runner, pipe readers, WebSocket reader, timeout, cancellation,
+//! and child wait all run on the caller's Tokio runtime. The registry retains a
+//! synchronous compatibility surface for non-async consumers; those reads sleep
+//! on a condition variable and async callers isolate them with `spawn_blocking`.
 
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
@@ -36,6 +35,7 @@ use regex::Regex;
 use thiserror::Error;
 use tokio::process::Command;
 use tokio::runtime::Handle;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use uuid::Uuid;
 
@@ -67,7 +67,12 @@ pub enum MonitorError {
 #[derive(Debug, Clone)]
 /// Parameters for starting a monitored process.
 pub struct StartParams {
+    /// Shell command to run. Exactly one of `command` / `ws` must be set
+    /// (`command` empty + `ws` `None` is invalid, both set is invalid).
     pub command: String,
+    /// WebSocket endpoint to watch instead of a command; text frames become
+    /// events.
+    pub ws: Option<MonitorWsParams>,
     pub description: String,
     pub workdir: std::path::PathBuf,
     pub timeout_ms: Option<u64>,
@@ -80,6 +85,13 @@ pub struct StartParams {
     pub max_buffered_lines: Option<u32>,
     pub capture_stderr: bool,
     pub env: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+/// WebSocket endpoint parameters for a monitor.
+pub struct MonitorWsParams {
+    pub url: String,
+    pub protocols: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,12 +122,20 @@ pub struct MonitorStart {
     pub summary: ProcessSummary,
 }
 
-/// Observer hook called when a background process starts or reaches a
-/// terminal state. Lets the runtime surface shell processes through the
-/// unified background-activity registry without coupling the monitor to it.
+/// Observer hook called when a background process starts, emits an event, or
+/// reaches a terminal state. Lets the runtime surface shell processes through
+/// the unified background-activity registry — and forward each captured event
+/// to the transcript as a `system_notification` part — without coupling the
+/// monitor to the storage layer. Everything-is-a-part: the durable truth is
+/// the parts the listener projects; the ring buffer here is only the live
+/// projection.
 #[allow(unused_variables)]
 pub trait MonitorListener: Send + Sync + std::fmt::Debug {
     fn on_started(&self, summary: &ProcessSummary) {}
+    /// Called for every captured event (`include_pattern`-filtered), with the
+    /// monitor's live summary for correlation. The runtime's activity bridge
+    /// forwards these as per-event `system_notification` parts.
+    fn on_event(&self, event: &ProcessEvent, summary: &ProcessSummary) {}
     fn on_finished(&self, summary: &ProcessSummary) {}
 }
 
@@ -135,6 +155,8 @@ pub trait MonitorService: Send + Sync + std::fmt::Debug {
 #[derive(Debug)]
 struct MonitorState {
     monitor_id: String,
+    /// The source line shown in the transcript / activity panel: the command,
+    /// or `ws <url>` for a WebSocket monitor.
     command: String,
     description: String,
     started_at_ms: i64,
@@ -239,10 +261,21 @@ pub fn default_monitor_registry() -> Option<Arc<dyn MonitorService>> {
 
 impl MonitorService for MonitorRegistry {
     fn start(&self, params: StartParams) -> Result<MonitorStart, MonitorError> {
-        if params.command.trim().is_empty() {
-            return Err(MonitorError::Invalid(
-                "monitor command must not be empty".into(),
-            ));
+        // Exactly one of `command` / `ws` must be provided.
+        let has_command = !params.command.trim().is_empty();
+        let has_ws = params.ws.is_some();
+        match (has_command, has_ws) {
+            (false, false) => {
+                return Err(MonitorError::Invalid(
+                    "monitor requires exactly one of `command` or `ws`".into(),
+                ));
+            }
+            (true, true) => {
+                return Err(MonitorError::Invalid(
+                    "monitor accepts only one of `command` or `ws`, not both".into(),
+                ));
+            }
+            _ => {}
         }
         let timeout_ms = params
             .timeout_ms
@@ -272,9 +305,16 @@ impl MonitorService for MonitorRegistry {
         let (abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
 
         let started_at_ms = Utc::now().timestamp_millis();
+        // A WebSocket monitor displays its endpoint as the "command" line so
+        // the transcript and activity panel identify the source.
+        let source = params
+            .ws
+            .as_ref()
+            .map(|ws| format!("ws {}", ws.url))
+            .unwrap_or_else(|| params.command.clone());
         let state = Arc::new(MonitorState {
             monitor_id: format!("proc_{}", Uuid::new_v4().simple()),
-            command: params.command.clone(),
+            command: source,
             description: params.description.clone(),
             started_at_ms,
             monitored,
@@ -296,29 +336,44 @@ impl MonitorService for MonitorRegistry {
         });
 
         let runner_state = Arc::clone(&state);
-        let runner_workdir = params.workdir.clone();
-        let runner_env = params.env.clone();
-        let runner_command = params.command.clone();
-        let runner_capture_stderr = params.capture_stderr;
-        let runner_persistent = params.persistent;
-        let runner_quiet_period_ms = params.quiet_period_ms;
-        let worker = handle.spawn(async move {
-            run_monitor(
-                runner_state,
-                runner_command,
-                runner_workdir,
-                runner_env,
-                runner_capture_stderr,
-                runner_persistent,
-                timeout_ms,
-                include,
-                success,
-                failure,
-                runner_quiet_period_ms,
-                abort_rx,
-            )
-            .await;
-        });
+        let worker = if let Some(ws) = params.ws.clone() {
+            let runner_ws = ws;
+            let runner_quiet_period_ms = params.quiet_period_ms;
+            handle.spawn(async move {
+                run_ws_monitor(
+                    runner_state,
+                    runner_ws,
+                    runner_quiet_period_ms,
+                    timeout_ms,
+                    abort_rx,
+                )
+                .await;
+            })
+        } else {
+            let runner_workdir = params.workdir.clone();
+            let runner_env = params.env.clone();
+            let runner_command = params.command.clone();
+            let runner_capture_stderr = params.capture_stderr;
+            let runner_persistent = params.persistent;
+            let runner_quiet_period_ms = params.quiet_period_ms;
+            handle.spawn(async move {
+                run_monitor(
+                    runner_state,
+                    runner_command,
+                    runner_workdir,
+                    runner_env,
+                    runner_capture_stderr,
+                    runner_persistent,
+                    timeout_ms,
+                    include,
+                    success,
+                    failure,
+                    runner_quiet_period_ms,
+                    abort_rx,
+                )
+                .await;
+            })
+        };
         {
             let mut inner = state.inner.lock().unwrap();
             if inner.status == ProcessStatus::Running {
@@ -650,6 +705,142 @@ async fn run_monitor(
     }
 }
 
+/// Run a WebSocket monitor: each text frame becomes an event. The connection
+/// stays open until stopped (abort), the timeout elapses, or the peer closes.
+async fn run_ws_monitor(
+    state: Arc<MonitorState>,
+    ws: MonitorWsParams,
+    quiet_period_ms: Option<u64>,
+    timeout_ms: u64,
+    abort_rx: tokio::sync::oneshot::Receiver<()>,
+) {
+    let mut abort_rx = abort_rx;
+    let connect = async {
+        let mut request = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
+            ws.url.clone(),
+        )
+        .map_err(|error| format!("invalid websocket url: {error}"))?;
+        if !ws.protocols.is_empty() {
+            request.headers_mut().insert(
+                tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL,
+                ws.protocols.join(", ").parse().expect("valid header value"),
+            );
+        }
+        tokio_tungstenite::connect_async(request)
+            .await
+            .map(|(stream, _)| stream)
+            .map_err(|error| format!("websocket connect failed: {error}"))
+    };
+    tokio::pin!(connect);
+    let timeout_sleep = tokio::time::sleep(Duration::from_millis(timeout_ms));
+    tokio::pin!(timeout_sleep);
+    let stream = tokio::select! {
+        biased;
+        _ = &mut abort_rx => {
+            mark_ws_finished(&state, ProcessStatus::Stopped, "explicit_stop".to_string());
+            return;
+        }
+        result = &mut connect => match result {
+            Ok(stream) => stream,
+            Err(error) => {
+                push_event(&state, ProcessStream::Stderr, error);
+                mark_ws_finished(&state, ProcessStatus::Failed, "ws_connect_failed".to_string());
+                return;
+            }
+        },
+        _ = &mut timeout_sleep => {
+            mark_ws_finished(&state, ProcessStatus::TimedOut, "timeout".to_string());
+            return;
+        }
+    };
+
+    let quiet_wait = async {
+        let Some(quiet_period_ms) = quiet_period_ms else {
+            std::future::pending::<()>().await;
+            return;
+        };
+        wait_for_quiet(&state, quiet_period_ms).await;
+    };
+    tokio::pin!(quiet_wait);
+
+    // The timeout now covers the whole feed lifetime, not just the connect.
+    let lifetime = async {
+        let mut stream = stream;
+        loop {
+            match stream.next().await {
+                Some(Ok(WsMessage::Text(text))) => {
+                    push_event(&state, ProcessStream::Stdout, text.to_string());
+                }
+                Some(Ok(WsMessage::Binary(data))) => {
+                    // Text frames are the event contract; binary frames are
+                    // surfaced as an opaque marker so nothing is silently lost.
+                    push_event(
+                        &state,
+                        ProcessStream::Stderr,
+                        format!("[binary frame, {} bytes]", data.len()),
+                    );
+                }
+                Some(Ok(WsMessage::Close(frame))) => {
+                    let reason = frame
+                        .map(|frame| frame.reason.to_string())
+                        .unwrap_or_default();
+                    push_event(&state, ProcessStream::Stderr, format!("[ws closed {reason}]"));
+                    return TerminationCause::Exited(None);
+                }
+                Some(Ok(WsMessage::Ping(payload))) => {
+                    let _ = payload;
+                    continue;
+                }
+                Some(Ok(WsMessage::Pong(_))) | Some(Ok(WsMessage::Frame(_))) => continue,
+                Some(Err(error)) => {
+                    push_event(&state, ProcessStream::Stderr, format!("[ws error: {error}]"));
+                    return TerminationCause::WaitError(error.to_string());
+                }
+                None => {
+                    push_event(&state, ProcessStream::Stderr, "[ws closed]".to_string());
+                    return TerminationCause::Exited(None);
+                }
+            }
+        }
+    };
+    tokio::pin!(lifetime);
+
+    let outcome = tokio::select! {
+        biased;
+        _ = &mut abort_rx => TerminationCause::Stopped,
+        _ = &mut quiet_wait => TerminationCause::Quiet,
+        _ = &mut timeout_sleep => TerminationCause::TimedOut,
+        result = &mut lifetime => result,
+    };
+    let (final_status, completion_reason) = match outcome {
+        TerminationCause::Stopped => (ProcessStatus::Stopped, "explicit_stop".to_string()),
+        TerminationCause::TimedOut => (ProcessStatus::TimedOut, "timeout".to_string()),
+        TerminationCause::Quiet => (ProcessStatus::Exited, "quiet_period".to_string()),
+        TerminationCause::Exited(_) => (ProcessStatus::Exited, "ws_closed".to_string()),
+        TerminationCause::WaitError(reason) => (ProcessStatus::Failed, reason),
+        TerminationCause::Condition(_) => unreachable!("ws monitor has no success/failure patterns"),
+    };
+    mark_ws_finished(&state, final_status, completion_reason);
+}
+
+/// Terminalize a ws monitor's state and notify the listener once.
+fn mark_ws_finished(state: &MonitorState, status: ProcessStatus, completion_reason: String) {
+    {
+        let mut inner = state.inner.lock().unwrap();
+        if inner.status == ProcessStatus::Running {
+            inner.status = status;
+            inner.completion_reason = Some(completion_reason);
+            inner.ended_at_ms = Some(Utc::now().timestamp_millis());
+            inner.abort = None;
+            inner.worker = None;
+        }
+    }
+    state.changed.notify_all();
+    if let Some(listener) = state.listener.as_ref() {
+        listener.on_finished(&state.snapshot());
+    }
+}
+
 async fn kill_child(child: &mut ManagedChild) {
     let _ = child.terminate(Duration::from_millis(150)).await;
 }
@@ -813,9 +1004,14 @@ fn push_event(state: &MonitorState, stream: ProcessStream, line: String) {
             inner.buffer.pop_front();
             state.dropped_lines.fetch_add(1, Ordering::AcqRel);
         }
-        inner.buffer.push_back(event);
+        inner.buffer.push_back(event.clone());
     }
     state.changed.notify_all();
+    // Forward the event to the observer so the runtime can project it into the
+    // transcript as a `system_notification` part (everything-is-a-part).
+    if let Some(listener) = state.listener.as_ref() {
+        listener.on_event(&event, &state.snapshot());
+    }
 }
 
 fn build_command(command: &str) -> Command {
@@ -843,6 +1039,7 @@ mod tests {
     fn start_params(command: &str) -> StartParams {
         StartParams {
             command: command.to_string(),
+            ws: None,
             description: "monitor test".to_string(),
             workdir: std::env::current_dir().expect("current dir"),
             timeout_ms: Some(2_000),

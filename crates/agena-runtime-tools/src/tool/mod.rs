@@ -17,6 +17,7 @@ pub(crate) mod orchestrator;
 mod output_helpers;
 pub mod payload;
 pub(crate) mod powershell;
+pub(crate) mod monitor_tool;
 pub(crate) mod process_tool;
 pub(crate) mod read;
 pub mod render;

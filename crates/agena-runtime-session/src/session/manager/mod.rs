@@ -25,15 +25,20 @@ use agena_domain::{
 };
 pub(crate) use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
 use agena_failure::Failure;
-use agena_runtime_contracts::part_content::{TextContent, TypedContent};
+use agena_runtime_contracts::part_content::{
+    SystemNotificationContent, TextContent, TypedContent,
+};
 use agena_storage::PersistedPermissionRule;
-use agena_storage::store::{PartDelta, PartRole, PartState};
+use agena_storage::store::{Part, PartRole, PartState};
 use agena_tool::PreparedShellCommand;
 
 use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPartRef, SessionPendingTool};
 use super::processor::{SessionRunRequest, SessionRunTermination};
 use super::prompt_window::PromptRequestOptions;
-use super::store::{StoreAdapter, tool_call_from_operation, typed_content_to_value};
+use super::store::{
+    StoreAdapter, new_part_from_content, tool_call_from_operation, typed_content_to_value,
+    typed_content_from_value,
+};
 use super::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
 use crate::session::{Session, SessionProcessor};
 use agena_domain::{SessionListRequest, SessionSummary, UsageStats, UsageStatsQuery};
@@ -1692,24 +1697,47 @@ impl SessionManager {
         agena_domain::SessionCacheStats::default()
     }
 
-    /// Terminalize a launched-in-background operation (a monitored shell
-    /// process or a delegated task) on its transcript part once the underlying
-    /// work actually settles. The launch kept the storage part `InProgress`
-    /// (spinner) with a terminal-looking operation content (provider pairing);
-    /// this rewrites the content to the real final result and advances the part
-    /// to its terminal storage state, so the transcript stops spinning and the
-    /// durable row matches the presentation.
-    pub async fn complete_background_operation(
+    /// Settle a launched-in-background operation (a monitored shell process
+    /// or a delegated task) once the underlying work actually settles. In one
+    /// session-exclusive mutation this terminalizes the launching tool part
+    /// (spinner → real final result) and appends the completion notification
+    /// as an **Assistant-role** `system_notification` part **onto the
+    /// launching run** — no new run marker. The operation was launched by the
+    /// model, so its result belongs to the model's own turn: this is the agena
+    /// analog of Claude Code's `<task-notification>` arriving back on the
+    /// launching turn.
+    ///
+    /// The durable `system_notification` part is the claim (mirroring Claude's
+    /// atomic `notified` flag `I4e`), so a re-delivered completion signal is a
+    /// no-op.
+    ///
+    /// The model is then woken over the settled result: mid-turn, the running
+    /// execution is steered (a pure re-trigger — the parts are already
+    /// appended); idle, a fresh execution is started that picks the appended
+    /// result up as its first input.
+    pub async fn settle_background_operation(
         &self,
         session_id: i64,
         kind: &str,
         id: &str,
         terminal: PartState,
         outcome: Result<String, Failure>,
+        notification: SystemNotificationContent,
     ) -> Result<(), AppError> {
-        self.session_mutations
+        let committed = self
+            .session_mutations
             .run(session_id, async {
                 let mut session = self.store.load_session(session_id).await?;
+                if session
+                    .parts()
+                    .iter()
+                    .any(|part| part_records_notification(part, kind, id))
+                {
+                    // The durable part is the claim; a re-delivered completion
+                    // signal is a no-op. The operation was already settled and
+                    // notified on first delivery.
+                    return Ok(false);
+                }
                 let part_index = session
                     .parts()
                     .iter()
@@ -1796,19 +1824,262 @@ impl SessionManager {
                     tool_call_from_operation(&operation),
                 ))
                 .expect("background operation content is always JSON serializable");
+                // The launching run is the assistant run that called the tool
+                // (the tool part's `run_id`). The notification result belongs
+                // to that run: append it as an Assistant-role part under the
+                // SAME marker — no new run.
+                let run_id = session
+                    .parts()
+                    .iter()
+                    .find(|part| part.part_id == part_id)
+                    .and_then(|part| part.run_id)
+                    .unwrap_or(part_id);
+                let new_part = new_part_from_content(
+                    "system_notification",
+                    PartRole::Assistant,
+                    &TypedContent::SystemNotification(notification.clone()),
+                    PartState::Completed,
+                )?;
                 self.store
-                    .update_part(
+                    .settle_background_run(
                         session_id,
-                        part_id,
-                        PartDelta {
-                            state: Some(terminal),
-                            content: Some(content),
-                            ..Default::default()
-                        },
+                        run_id,
+                        Some((part_id, terminal, content)),
+                        vec![new_part],
                     )
                     .await?;
-                Ok(())
+                Ok(true)
             })
-            .await
+            .await?;
+        if !committed {
+            return Ok(());
+        }
+        // Wake the model over the settled result (the agena analog of Claude
+        // Code's `<task-notification>` waking the launching turn).
+        if self.execution_registry.is_active(session_id).await {
+            // Mid-turn: the running execution must take a fresh model turn over
+            // the appended notification. Steer it; `drain_steer_input` reloads
+            // the session and the stable-run loop's notification detection
+            // re-triggers. If the execution already returned (a narrow race
+            // between the steer send and the loop's final drain), fall back to
+            // an idle wake execution.
+            if let Err(error) = self
+                .steer_input(
+                    session_id,
+                    vec![TypedContent::SystemNotification(notification.clone())],
+                )
+                .await
+            {
+                tracing::debug!(
+                    target: "agena_background",
+                    %session_id, operation_kind = %kind, operation_id = %id, %error,
+                    "mid-turn notification steer missed the active execution; waking idle"
+                );
+                self.execute_registered(
+                    session_id,
+                    ExecutionSource::User,
+                    ExecutionConversationTarget::NewTurn,
+                    "notification execution",
+                    move |manager, control, steer_rx| async move {
+                        manager
+                            .notification_run_inner(session_id, control, steer_rx)
+                            .await
+                    },
+                )
+                .await?;
+            }
+            return Ok(());
+        }
+        // Idle: start a fresh execution that picks the appended result up as
+        // its first input.
+        self.execute_registered(
+            session_id,
+            ExecutionSource::User,
+            ExecutionConversationTarget::NewTurn,
+            "notification execution",
+            move |manager, control, steer_rx| async move {
+                manager
+                    .notification_run_inner(session_id, control, steer_rx)
+                    .await
+            },
+        )
+        .await?;
+        Ok(())
     }
+
+    /// Append one monitor event as a `system_notification` part onto the
+    /// launching run and wake the model — the everything-is-a-part Monitor's
+    /// "settle but don't terminalize" step (§7.3).
+    ///
+    /// Unlike a terminal completion, an event leaves the monitor's tool part
+    /// `InProgress` and the launching run marker in-flight. The event part is
+    /// appended via `settle_background_run` with `tool_part: None`: its lease
+    /// block refreshes on stale/own/None exactly like the terminal settle, and
+    /// the still-in-flight monitor part keeps the marker open.
+    ///
+    /// The durable claim is per-event: a `system_notification` part recording
+    /// `(kind, id, event_seq)` — each event is notified once, independently.
+    /// A re-delivered event signal for an already-recorded seq is a no-op.
+    pub async fn settle_background_event(
+        &self,
+        session_id: i64,
+        kind: &str,
+        id: &str,
+        event_seq: u64,
+        notification: SystemNotificationContent,
+    ) -> Result<(), AppError> {
+        let committed = self
+            .session_mutations
+            .run(session_id, async {
+                let session = self.store.load_session(session_id).await?;
+                if session
+                    .parts()
+                    .iter()
+                    .any(|part| part_records_event(part, kind, id, event_seq))
+                {
+                    // The durable part is the claim; a re-delivered event
+                    // signal for an already-recorded seq is a no-op.
+                    return Ok(false);
+                }
+                let part_index = session
+                    .parts()
+                    .iter()
+                    .position(|part| {
+                        if part.kind != "tool_call" {
+                            return false;
+                        }
+                        operation_from_part(part).is_some_and(|operation| {
+                            operation.background_operation().is_some_and(|marker| {
+                                marker.kind == kind && marker.id == id
+                            })
+                        })
+                    })
+                    .ok_or_else(|| {
+                        AppError::Internal(format!(
+                            "monitor {kind} {id} has no in-progress tool part in session {session_id}"
+                        ))
+                    })?;
+                let part_id = session.parts()[part_index].part_id;
+                // The launching run is the assistant run that started the
+                // monitor (the tool part's `run_id`). The event belongs to
+                // that run: append it as an Assistant-role part under the
+                // SAME marker — no new run.
+                let run_id = session
+                    .parts()
+                    .iter()
+                    .find(|part| part.part_id == part_id)
+                    .and_then(|part| part.run_id)
+                    .unwrap_or(part_id);
+                let new_part = new_part_from_content(
+                    "system_notification",
+                    PartRole::Assistant,
+                    &TypedContent::SystemNotification(notification.clone()),
+                    PartState::Completed,
+                )?;
+                // `tool_part: None`: the monitor stays InProgress and its run
+                // marker stays in-flight — settle, don't terminalize.
+                self.store
+                    .settle_background_run(session_id, run_id, None, vec![new_part])
+                    .await?;
+                Ok(true)
+            })
+            .await?;
+        if !committed {
+            return Ok(());
+        }
+        // Wake the model over the settled event (the agena analog of Claude
+        // Code's `<task-notification>` waking the launching turn).
+        if self.execution_registry.is_active(session_id).await {
+            // Mid-turn: the running execution must take a fresh model turn over
+            // the appended event. Steer it; `drain_steer_input` reloads the
+            // session and the stable-run loop's notification detection
+            // re-triggers. If the execution already returned (a narrow race
+            // between the steer send and the loop's final drain), fall back to
+            // an idle wake execution.
+            if let Err(error) = self
+                .steer_input(
+                    session_id,
+                    vec![TypedContent::SystemNotification(notification.clone())],
+                )
+                .await
+            {
+                tracing::debug!(
+                    target: "agena_background",
+                    %session_id, operation_kind = %kind, operation_id = %id, event_seq, %error,
+                    "mid-turn event steer missed the active execution; waking idle"
+                );
+                self.execute_registered(
+                    session_id,
+                    ExecutionSource::User,
+                    ExecutionConversationTarget::NewTurn,
+                    "notification execution",
+                    move |manager, control, steer_rx| async move {
+                        manager
+                            .notification_run_inner(session_id, control, steer_rx)
+                            .await
+                    },
+                )
+                .await?;
+            }
+            return Ok(());
+        }
+        // Idle: start a fresh execution that picks the appended event up as
+        // its first input.
+        self.execute_registered(
+            session_id,
+            ExecutionSource::User,
+            ExecutionConversationTarget::NewTurn,
+            "notification execution",
+            move |manager, control, steer_rx| async move {
+                manager
+                    .notification_run_inner(session_id, control, steer_rx)
+                    .await
+            },
+        )
+        .await?;
+        Ok(())
+    }
+}
+
+/// True when a `system_notification` part records the given operation's
+/// completion — the durable claim that the operation has been notified to the
+/// model (the agena analog of Claude Code's atomic `notified` flag).
+///
+/// Terminal only: a part recording a per-event notification
+/// (`event_seq: Some(_)`, see [`part_records_event`]) does **not** claim the
+/// terminal — a monitor's events must never swallow its completion.
+pub(crate) fn part_records_notification(part: &Part, kind: &str, id: &str) -> bool {
+    part.kind == "system_notification"
+        && typed_content_from_value(&part.kind, &part.content)
+            .ok()
+            .and_then(|content| match content {
+                TypedContent::SystemNotification(notification) => {
+                    (notification.operation_kind == kind
+                        && notification.operation_id == id
+                        && notification.event_seq.is_none())
+                        .then_some(())
+                }
+                _ => None,
+            })
+            .is_some()
+}
+
+/// True when a `system_notification` part records the given monitor event —
+/// the durable per-event claim (`kind + id + event_seq`, monotonic). Each
+/// event is notified once, independently; re-delivered signals for an
+/// already-recorded seq are no-ops.
+pub(crate) fn part_records_event(part: &Part, kind: &str, id: &str, event_seq: u64) -> bool {
+    part.kind == "system_notification"
+        && typed_content_from_value(&part.kind, &part.content)
+            .ok()
+            .and_then(|content| match content {
+                TypedContent::SystemNotification(notification) => {
+                    (notification.operation_kind == kind
+                        && notification.operation_id == id
+                        && notification.event_seq == Some(event_seq))
+                        .then_some(())
+                }
+                _ => None,
+            })
+            .is_some()
 }

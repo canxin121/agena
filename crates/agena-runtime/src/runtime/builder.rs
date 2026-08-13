@@ -148,6 +148,15 @@ impl AgenaRuntime {
                         }
                     }),
                 ))),
+                on_event: std::sync::Arc::new(std::sync::Mutex::new(Some(
+                    std::sync::Arc::new({
+                        let completion = background_completion.clone();
+                        move |event: &agena_domain::ProcessEvent,
+                              summary: &agena_domain::ProcessSummary| {
+                            completion.settle_monitor_event(event, summary);
+                        }
+                    }),
+                ))),
             };
             registry.with_monitor_listener(Arc::new(bridge))
         });

@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **24 plugins and 144 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **25 plugins and 146 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, concurrency / streaming / strict runtime flags, examples, an input parameter table, and the full input / output JSON Schema.
 - The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
@@ -26,6 +26,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
 - [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (9 tools)
 - [`agena.memory`](#agenamemory) — Persistent memory with searchable retrieval and write tools. (5 tools)
+- [`agena.monitor`](#agenamonitor) — Continuous-stream background monitoring tools. (2 tools)
 - [`agena.notebook`](#agenanotebook) — Revision-safe Jupyter notebook cell editing. (1 tools)
 - [`agena.plan`](#agenaplan) — Plan orchestration and plan-autorun tools. (6 tools)
 - [`agena.report`](#agenareport) — Structured review and verification findings. (1 tools)
@@ -6079,6 +6080,130 @@ Persistent memory with searchable retrieval and write tools.
 }
 ```
 
+## agena.monitor
+
+**Version** `0.1.0` · **Tools** 2
+
+Continuous-stream background monitoring tools.
+
+### start
+
+`agena.monitor.start` · **Summary**: Start a continuous background monitor.
+
+**Tags**: `execute`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Use monitor.stop to terminate it.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `command` | `string / null` | — | — |  |
+| `description` | `string` | — | `` |  |
+| `persistent` | `boolean` | — | `false` |  |
+| `timeout_ms` | `integer / null` | — | — |  |
+| `ws` | `MonitorWsInput / null` | — | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "MonitorWsInput": {
+      "description": "WebSocket endpoint monitored by the monitor tool.",
+      "properties": {
+        "protocols": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
+    },
+    "description": {
+      "default": "",
+      "type": "string",
+      "x-agena-order": "000004"
+    },
+    "persistent": {
+      "default": false,
+      "type": "boolean",
+      "x-agena-order": "000003"
+    },
+    "timeout_ms": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "ws": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MonitorWsInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000001"
+    }
+  },
+  "type": "object"
+}
+```
+
+### stop
+
+`agena.monitor.stop` · **Summary**: Stop one background monitor.
+
+**Tags**: `mutate` `execute`
+
+**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `monitor_id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "monitor_id": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    }
+  },
+  "required": [
+    "monitor_id"
+  ],
+  "type": "object"
+}
+```
+
 ## agena.notebook
 
 **Version** `0.1.0` · **Tools** 1
@@ -7452,7 +7577,7 @@ Shell command execution and background process tools.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Run one shell process. Always pass the required `reads` and `writes` path arrays declaring every file or directory the command reads or modifies - empty arrays `[]` when the command touches only its executables (never list the executables). Pass the `network` array of outbound targets (host names, `host:port`, or URLs) the command may connect to - empty array `[]` when none. Set `background = true` to keep the process attached to the session. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop.
+> Run one shell process. Always pass the required `reads` and `writes` path arrays declaring every file or directory the command reads or modifies - empty arrays `[]` when the command touches only its executables (never list the executables). Pass the `network` array of outbound targets (host names, `host:port`, or URLs) the command may connect to - empty array `[]` when none. Set `background = true` to keep the process attached to the session. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop. Background launches return immediately; you will be notified with a `system_notification` when the process settles — do not poll shell.list/logs waiting for it.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8139,7 +8264,7 @@ Delegated subtask orchestration tools.
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Creates a delegated background task. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.
+> Creates a delegated background task. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills. The task runs in the background and returns immediately; you will be notified with a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |

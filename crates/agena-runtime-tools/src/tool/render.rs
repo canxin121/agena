@@ -361,6 +361,36 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                     }
                 }
             }
+            P::Monitor {
+                action,
+                monitor_id,
+                status,
+                exit_code,
+                completion_reason,
+                ..
+            } => {
+                w.heading(format!("`monitor` · {action}"));
+                let mut params: Vec<(String, String)> = Vec::new();
+                if let Some(monitor_id) = monitor_id {
+                    params.push(("monitor".to_owned(), monitor_id.clone()));
+                }
+                if let Some(status) = status {
+                    params.push(("status".to_owned(), status.to_string()));
+                }
+                if let Some(exit_code) = exit_code {
+                    params.push(("exit".to_owned(), exit_code.to_string()));
+                }
+                if let Some(reason) = completion_reason {
+                    params.push(("reason".to_owned(), reason.clone()));
+                }
+                if *action == "start" {
+                    params.push((
+                        "hint".to_owned(),
+                        "events arrive as `system_notification` parts — do not poll".to_owned(),
+                    ));
+                }
+                w.table(&params);
+            }
             P::WebFetch {
                 url,
                 markdown,

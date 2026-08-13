@@ -104,6 +104,7 @@ pub(crate) fn bundled_plugin_manifests() -> Vec<(PluginManifest, Option<String>)
         "runtime:mcp-manager"
     );
     add!(crate::tool::new_memory_plugin());
+    add!(crate::tool::new_monitor_plugin());
     add!(crate::tool::new_notebook_plugin());
     add!(crate::tool::new_plan_plugin());
     add!(crate::tool::new_report_plugin());

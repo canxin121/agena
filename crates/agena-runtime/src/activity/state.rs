@@ -10,15 +10,15 @@ use std::sync::{Arc, Mutex};
 
 use agena_domain::{
     BackgroundActivity, BackgroundActivityKind, BackgroundActivityLogLine,
-    BackgroundActivityLogRead, BackgroundActivityStatus, ProcessStatus, ProcessSummary,
-    SubtaskStatus,
+    BackgroundActivityLogRead, BackgroundActivityStatus, ProcessEvent, ProcessStatus,
+    ProcessStream, ProcessSummary, SubtaskStatus,
 };
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
     RecoveryDirective, RetryDirective, UserPresentation, UserProblem,
 };
 use agena_plugin_sdk::activity::ActivitySourceAdapter;
-use agena_runtime_contracts::part_content;
+use agena_runtime_contracts::part_content::{self, SystemNotificationContent};
 use agena_runtime_session::SessionManager;
 use agena_storage::store::{Part, PartState, SessionMeta};
 
@@ -87,6 +87,11 @@ pub(crate) struct MonitorActivityBridge {
     pub(crate) registry: ActivityRegistry,
     pub(crate) on_finished:
         Arc<std::sync::Mutex<Option<Arc<dyn Fn(&ProcessSummary) + Send + Sync + 'static>>>>,
+    /// Projected per-event (everything-is-a-part Monitor: every event is a
+    /// `system_notification` part). Populated after the runtime is assembled,
+    /// like `on_finished`.
+    pub(crate) on_event:
+        Arc<std::sync::Mutex<Option<Arc<dyn Fn(&ProcessEvent, &ProcessSummary) + Send + Sync + 'static>>>>,
 }
 
 impl std::fmt::Debug for MonitorActivityBridge {
@@ -100,6 +105,18 @@ impl std::fmt::Debug for MonitorActivityBridge {
 impl crate::MonitorListener for MonitorActivityBridge {
     fn on_started(&self, summary: &ProcessSummary) {
         self.registry.upsert(shell_activity(summary));
+    }
+
+    fn on_event(&self, event: &ProcessEvent, summary: &ProcessSummary) {
+        self.registry.upsert(shell_activity(summary));
+        if let Some(callback) = self
+            .on_event
+            .lock()
+            .expect("monitor on_event lock")
+            .as_ref()
+        {
+            callback(event, summary);
+        }
     }
 
     fn on_finished(&self, summary: &ProcessSummary) {
@@ -378,35 +395,116 @@ impl BackgroundCompletionBridge {
         };
         let bridge = self.clone();
         let process_id = summary.process_id.clone();
+        let status = match summary.status {
+            ProcessStatus::Exited => "completed",
+            ProcessStatus::TimedOut => "timed_out",
+            ProcessStatus::Stopped => "stopped",
+            ProcessStatus::Failed => "failed",
+            ProcessStatus::Running => unreachable!("complete_shell filters Running above"),
+        };
+        let summary_line = outcome
+            .as_ref()
+            .map(String::as_str)
+            .unwrap_or_else(|failure| failure.user.fallback.as_str())
+            .to_string();
         tokio::spawn(async move {
             // The tool part's marker update is buffered and only committed when
             // the owning run terminalizes (turn end), so a shell finishing
             // mid-turn can beat the index — resolve with a bounded retry.
-            let Some(session_id) = bridge.resolve_shell_session(&process_id).await else {
+            let Some(session_id) = bridge.resolve_background_session("shell", &process_id).await else {
                 return;
             };
             let Some(manager) = bridge.manager.lock().expect("background manager lock").clone()
             else {
                 return;
             };
-            if let Err(error) = manager
-                .complete_background_operation(session_id, "shell", &process_id, terminal, outcome)
-                .await
-            {
+            // The operation settled: terminalize the tool part, append the
+            // Assistant-role completion notification onto the launching run,
+            // and wake the model — all in one atomic settle.
+            let result = manager
+                .settle_background_operation(
+                    session_id,
+                    "shell",
+                    &process_id,
+                    terminal,
+                    outcome,
+                    SystemNotificationContent {
+                        operation_id: process_id.clone(),
+                        operation_kind: "shell".to_string(),
+                        status: status.to_string(),
+                        summary: summary_line.clone(),
+                        body: summary_line,
+                        ..Default::default()
+                    },
+                )
+                .await;
+            if let Err(error) = &result {
                 tracing::warn!(
                     target: "agena_background",
                     %session_id, %process_id, %error,
-                    "failed to terminalize background shell part"
+                    "failed to settle background shell operation"
                 );
             }
         });
     }
 
-    /// Resolve the session for a `shell` background marker, retrying briefly
+    /// Project one monitor event as a `system_notification` part onto the
+    /// launching run — the everything-is-a-part Monitor's per-event path
+    /// (§7.3). Only `kind:"monitor"` markers (the Monitor tool) project
+    /// events; plain/monitored shells keep their logs in the streaming buffer
+    /// (queryable via `shell.logs`).
+    pub(crate) fn settle_monitor_event(&self, event: &ProcessEvent, summary: &ProcessSummary) {
+        let bridge = self.clone();
+        let process_id = summary.process_id.clone();
+        let event_seq = event.seq;
+        let stream = match event.stream {
+            ProcessStream::Stdout => "out",
+            ProcessStream::Stderr => "err",
+        };
+        let summary_line = format!("#{:>5} {} {}", event_seq, stream, event.line);
+        tokio::spawn(async move {
+            let Some(session_id) = bridge
+                .resolve_background_session("monitor", &process_id)
+                .await
+            else {
+                return;
+            };
+            let Some(manager) = bridge.manager.lock().expect("background manager lock").clone()
+            else {
+                return;
+            };
+            let result = manager
+                .settle_background_event(
+                    session_id,
+                    "monitor",
+                    &process_id,
+                    event_seq,
+                    SystemNotificationContent {
+                        operation_id: process_id.clone(),
+                        operation_kind: "monitor".to_string(),
+                        status: "event".to_string(),
+                        summary: summary_line.clone(),
+                        body: summary_line,
+                        event_seq: Some(event_seq),
+                        ..Default::default()
+                    },
+                )
+                .await;
+            if let Err(error) = &result {
+                tracing::warn!(
+                    target: "agena_background",
+                    %session_id, %process_id, event_seq, %error,
+                    "failed to settle monitor event"
+                );
+            }
+        });
+    }
+
+    /// Resolve the session for a background marker, retrying briefly
     /// so a part whose marker update is still buffered (committed only at its
     /// run's terminalization) has time to land.
-    async fn resolve_shell_session(&self, process_id: &str) -> Option<i64> {
-        let key = ("shell".to_string(), process_id.to_string());
+    async fn resolve_background_session(&self, kind: &str, id: &str) -> Option<i64> {
+        let key = (kind.to_string(), id.to_string());
         for _ in 0..60 {
             if let Some(session_id) = self
                 .index
@@ -421,8 +519,8 @@ impl BackgroundCompletionBridge {
         }
         tracing::warn!(
             target: "agena_background",
-            %process_id,
-            "no transcript part indexed for finished background shell; leaving the part spinning"
+            %kind, %id,
+            "no transcript part indexed for background operation; leaving the part spinning"
         );
         None
     }
@@ -556,14 +654,46 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
             }
             _ => Err(failure.expect("non-completed task carries a failure")),
         };
+        // Wake the model with a completion notification (the agena analog of
+        // Claude Code's `<task-notification>`); the task's final text is
+        // wrapped in `<result>` so the model can distinguish it from its own
+        // turn output. The settle terminalizes the tool part, appends the
+        // notification onto the launching run, and wakes the model in one
+        // atomic step.
+        let notification = SystemNotificationContent {
+            operation_id: task_id.clone(),
+            operation_kind: "task".to_string(),
+            status: if terminal == PartState::Completed {
+                "completed".to_string()
+            } else {
+                "failed".to_string()
+            },
+            summary: outcome
+                .as_ref()
+                .map(String::as_str)
+                .unwrap_or_else(|failure| failure.user.fallback.as_str())
+                .to_string(),
+            body: match &outcome {
+                Ok(text) => format!("<result>{text}</result>"),
+                Err(failure) => failure.user.fallback.clone(),
+            },
+            ..Default::default()
+        };
         if let Err(error) = manager
-            .complete_background_operation(parent_id, "task", &task_id, terminal, outcome)
+            .settle_background_operation(
+                parent_id,
+                "task",
+                &task_id,
+                terminal,
+                outcome,
+                notification,
+            )
             .await
         {
             tracing::warn!(
                 target: "agena_background",
                 %parent_id, %task_id, %error,
-                "failed to terminalize background task part"
+                "failed to settle background task operation"
             );
         }
     });

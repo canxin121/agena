@@ -521,8 +521,14 @@ impl SessionManager {
     }
 
     /// Drain every pending steer message (non-blocking) and append each as
-    /// a User run (marker + content parts) before the next model run. A user
-    /// steer becomes the next input the model sees.
+    /// a run before the next model run. Ordinary inputs become a User run
+    /// (marker + content parts). A background-operation notification steer is
+    /// a pure re-trigger: `settle_background_operation` already appended the
+    /// Assistant-role `system_notification` part onto the launching run, so
+    /// this only reloads the session (picking the appended part up into the
+    /// projection); the stable-run loop's notification detection then takes a
+    /// fresh model turn over it. A steer becomes the next input the model
+    /// sees.
     pub(in crate::session::manager) async fn drain_steer_input(
         &self,
         mut session: Session,
@@ -537,22 +543,37 @@ impl SessionManager {
                     return Ok(session);
                 }
             };
-            let new_parts = parts
+            let user_parts = parts
                 .iter()
+                .filter(|content| !matches!(content, TypedContent::SystemNotification(_)))
                 .map(|content| {
                     new_part_from_content("text", PartRole::User, content, PartState::Completed)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let outcome = self
-                .store
-                .submit_user_run(session.id, new_parts, None)
-                .await?;
-            if !outcome.created {
-                continue;
+            if !user_parts.is_empty() {
+                let outcome = self
+                    .store
+                    .submit_user_run(session.id, user_parts, None)
+                    .await?;
+                if outcome.created {
+                    let mut projected = session.parts().to_vec();
+                    projected.extend(outcome.parts);
+                    session.install_projected_parts(projected);
+                }
             }
-            let mut projected = session.parts().to_vec();
-            projected.extend(outcome.parts);
-            session.install_projected_parts(projected);
+            if parts
+                .iter()
+                .any(|content| matches!(content, TypedContent::SystemNotification(_)))
+            {
+                // The settle committed the notification (and terminalized the
+                // launching tool part + run marker) before this steer was
+                // sent. Reload so the appended Assistant-role
+                // `system_notification` part is in the projection; the loop's
+                // notification detection (`newest_notification_part_id`)
+                // re-triggers the next model turn over it. Nothing is
+                // committed here.
+                session = self.store.load_session(session.id).await?;
+            }
         }
     }
 }

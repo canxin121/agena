@@ -1,28 +1,14 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
-use agena_domain::{ModelInputModality, ModelLifecycle, ModelSpeedModeRequestOverride};
-use agena_provider::{
-    CatalogDefinitionSourcePriority, CatalogModelDefinition, ModelCatalogDocument,
-    merge_catalog_definition,
-};
-use futures_util::stream;
-use regex::Regex;
-use serde::Deserialize;
-use std::sync::OnceLock;
+use agena_provider::ModelCatalogDocument;
+use futures_util::StreamExt;
 use thiserror::Error;
 
 use crate::{
     ModelCatalogConfiguredPublicSource, ModelCatalogPublicSource,
-    ModelCatalogRemoteDocumentFetcher, ModelCatalogRemoteSource, ModelCatalogRemoteSourceKind,
+    ModelCatalogRemoteDocumentFetcher, ModelCatalogRemoteSource,
 };
 use crate::{default_public_model_catalog_sources, public_model_catalog_sources_enabled};
-use agena_provider::normalized_catalog_model_id as canonical_model_catalog_id;
-
-mod sources_enrichment;
-mod sources_fetch;
-
-use sources_enrichment::*;
-pub(crate) use sources_fetch::fetch_source_document;
 
 #[derive(Debug, Error)]
 /// Error from the model catalog HTTP source.
@@ -34,6 +20,8 @@ pub enum ModelCatalogHttpError {
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }
+
+const MAX_MODEL_CATALOG_SOURCE_BYTES: usize = 8 * 1024 * 1024;
 
 pub fn build_model_catalog_public_source(
     user_agent: impl Into<String>,
@@ -73,377 +61,133 @@ impl ModelCatalogRemoteDocumentFetcher for HttpModelCatalogDocumentFetcher {
         &self,
         source: &ModelCatalogRemoteSource,
     ) -> Result<ModelCatalogDocument, String> {
-        fetch_source_document(&self.client, source)
-            .await
-            .map_err(|error| error.to_string())
+        let mut last_error = None;
+
+        for url in &source.urls {
+            match self.fetch_and_parse_source_document(url).await {
+                Ok(document) => return Ok(document),
+                Err(error) => last_error = Some(format!("{url}: {error}")),
+            }
+        }
+
+        Err(ModelCatalogHttpError::Source(format!(
+            "all source URLs failed for {}: {}",
+            source.name,
+            last_error.unwrap_or_else(|| "no URLs configured".to_owned())
+        ))
+        .to_string())
     }
 }
 
-fn merge_document_entry(
-    models: &mut BTreeMap<String, CatalogModelDefinition>,
-    model_id: String,
-    definition: CatalogModelDefinition,
-) {
-    models
-        .entry(model_id)
-        .and_modify(|existing| merge_catalog_definition(existing, &definition))
-        .or_insert(definition);
+impl HttpModelCatalogDocumentFetcher {
+    async fn fetch_and_parse_source_document(
+        &self,
+        url: &str,
+    ) -> Result<ModelCatalogDocument, ModelCatalogHttpError> {
+        let response = self.client.get(url).send().await?.error_for_status()?;
+        let body = response_text_bounded(response).await?;
+        let document: ModelCatalogDocument = serde_json::from_str(body.as_str())?;
+        if document.models.is_empty() {
+            return Err(ModelCatalogHttpError::Source(
+                "catalog document contains no models".to_owned(),
+            ));
+        }
+        Ok(document)
+    }
 }
 
-fn models_dev_provider_rank(provider_key: &str, provider: &ModelsDevProvider) -> i32 {
-    if models_dev_origin(provider_key, provider).is_some() {
-        200
-    } else if provider
-        .name
-        .as_deref()
-        .is_some_and(|name| name.to_ascii_lowercase().contains("gateway"))
+async fn response_text_bounded(
+    response: reqwest::Response,
+) -> Result<String, ModelCatalogHttpError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_MODEL_CATALOG_SOURCE_BYTES as u64)
     {
-        10
-    } else {
-        0
+        return Err(ModelCatalogHttpError::Source(
+            "model catalog source exceeds the 8 MiB limit".to_owned(),
+        ));
     }
-}
-
-fn models_dev_origin(provider_key: &str, provider: &ModelsDevProvider) -> Option<String> {
-    let normalized = provider
-        .id
-        .as_deref()
-        .unwrap_or(provider_key)
-        .trim()
-        .to_ascii_lowercase();
-    match normalized.as_str() {
-        "openai" => Some("OpenAI".to_owned()),
-        "anthropic" => Some("Anthropic".to_owned()),
-        "google" => Some("Google".to_owned()),
-        "deepseek" => Some("DeepSeek".to_owned()),
-        "xai" => Some("xAI".to_owned()),
-        "cohere" => Some("Cohere".to_owned()),
-        "mistral" => Some("Mistral AI".to_owned()),
-        "moonshotai" | "kimi-for-coding" => Some("Moonshot AI".to_owned()),
-        "alibaba" | "alibaba-cn" => Some("Alibaba".to_owned()),
-        "nvidia" => Some("NVIDIA".to_owned()),
-        "minimax" | "minimax-cn" => Some("MiniMax".to_owned()),
-        "perplexity" | "perplexity-agent" => Some("Perplexity".to_owned()),
-        "upstage" => Some("Upstage".to_owned()),
-        "xiaomi" => Some("Xiaomi".to_owned()),
-        "sarvam" => Some("Sarvam AI".to_owned()),
-        "stepfun" => Some("StepFun".to_owned()),
-        "databricks" => Some("Databricks".to_owned()),
-        "llama" => Some("Meta".to_owned()),
-        _ => None,
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelsDevProvider {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    models: BTreeMap<String, ModelsDevModel>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelsDevModel {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    knowledge: Option<String>,
-    #[serde(default)]
-    release_date: Option<String>,
-    #[serde(default)]
-    last_updated: Option<String>,
-    #[serde(default)]
-    open_weights: Option<bool>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    reasoning: Option<bool>,
-    #[serde(default, rename = "tool_call")]
-    tool_call: Option<bool>,
-    #[serde(default)]
-    structured_output: Option<bool>,
-    #[serde(default)]
-    temperature: Option<bool>,
-    #[serde(default)]
-    attachment: Option<bool>,
-    #[serde(default)]
-    modalities: Option<ModelsDevModalities>,
-    #[serde(default)]
-    limit: Option<ModelsDevLimits>,
-    #[serde(default)]
-    cost: Option<ModelsDevCost>,
-    #[serde(default)]
-    interleaved: Option<ModelsDevInterleaved>,
-    #[serde(default)]
-    experimental: Option<ModelsDevExperimental>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelsDevModalities {
-    #[serde(default)]
-    input: Vec<String>,
-    #[serde(default)]
-    output: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelsDevCost {
-    #[serde(default)]
-    input: Option<serde_json::Value>,
-    #[serde(default)]
-    output: Option<serde_json::Value>,
-    #[serde(default)]
-    cache_read: Option<serde_json::Value>,
-    #[serde(default)]
-    cache_write: Option<serde_json::Value>,
-    #[serde(default)]
-    context_over_200k: Option<ModelsDevCostTierContext>,
-    #[serde(default)]
-    tiers: Vec<ModelsDevCostTier>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelsDevCostTierContext {
-    #[serde(default)]
-    input: Option<serde_json::Value>,
-    #[serde(default)]
-    output: Option<serde_json::Value>,
-    #[serde(default)]
-    cache_read: Option<serde_json::Value>,
-    #[serde(default)]
-    cache_write: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelsDevCostTier {
-    #[serde(default, rename = "type")]
-    tier_type: Option<String>,
-    #[serde(default)]
-    size: Option<u64>,
-    #[serde(default)]
-    input: Option<serde_json::Value>,
-    #[serde(default)]
-    output: Option<serde_json::Value>,
-    #[serde(default)]
-    cache_read: Option<serde_json::Value>,
-    #[serde(default)]
-    cache_write: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelsDevLimits {
-    #[serde(default)]
-    context: Option<u64>,
-    #[serde(default)]
-    input: Option<u64>,
-    #[serde(default)]
-    output: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelsDevExperimental {
-    #[serde(default)]
-    modes: BTreeMap<String, ModelsDevMode>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum ModelsDevInterleaved {
-    Enabled(bool),
-    Field(ModelsDevInterleavedField),
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelsDevInterleavedField {
-    #[serde(default)]
-    field: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct ModelsDevMode {
-    #[serde(default)]
-    provider: Option<ModelsDevModeProvider>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct ModelsDevModeProvider {
-    #[serde(default)]
-    body: Option<BTreeMap<String, serde_json::Value>>,
-    #[serde(default)]
-    headers: Option<BTreeMap<String, String>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RouterModel {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    owned_by: Option<String>,
-    #[serde(default)]
-    display_name: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    context_length: Option<u64>,
-    #[serde(default, rename = "max_completion_tokens")]
-    max_completion_tokens: Option<u64>,
-    #[serde(default, rename = "inputTokenLimit")]
-    input_token_limit: Option<u64>,
-    #[serde(default, rename = "outputTokenLimit")]
-    output_token_limit: Option<u64>,
-    #[serde(default, rename = "supportedInputModalities")]
-    supported_input_modalities: Option<Vec<String>>,
-    #[serde(default, rename = "supported_parameters")]
-    supported_parameters: Option<Vec<String>>,
-    #[serde(default)]
-    thinking: Option<RouterThinking>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RouterThinking {
-    #[serde(default, rename = "min")]
-    min: Option<u64>,
-    #[serde(default, rename = "max")]
-    max: Option<u64>,
-    #[serde(default)]
-    zero_allowed: Option<bool>,
-    #[serde(default, rename = "dynamic_allowed")]
-    _dynamic_allowed: Option<bool>,
-    #[serde(default)]
-    levels: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiCodexModelsDocument {
-    #[serde(default)]
-    models: Vec<OpenAiCodexModel>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiCodexModel {
-    #[serde(default)]
-    slug: Option<String>,
-    #[serde(default)]
-    display_name: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    default_reasoning_level: Option<String>,
-    #[serde(default)]
-    supports_parallel_tool_calls: Option<bool>,
-    #[serde(default)]
-    support_verbosity: Option<bool>,
-    #[serde(default)]
-    default_verbosity: Option<String>,
-    #[serde(default)]
-    input_modalities: Option<Vec<String>>,
-    #[serde(default)]
-    context_window: Option<u64>,
-    #[serde(default)]
-    max_context_window: Option<u64>,
-    #[serde(default)]
-    supported_reasoning_levels: Option<Vec<OpenAiCodexReasoningLevel>>,
-    #[serde(default)]
-    service_tiers: Option<Vec<OpenAiCodexServiceTier>>,
-    #[serde(default)]
-    additional_speed_tiers: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiCodexReasoningLevel {
-    effort: String,
-    #[serde(default)]
-    description: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiCodexServiceTier {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct OfficialHtmlReferencePage {
-    title: String,
-    slug: String,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct OfficialHtmlSsrProps {
-    #[serde(default)]
-    sidebars: OfficialHtmlSsrSidebars,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct OfficialHtmlSsrSidebars {
-    #[serde(default)]
-    refs: Vec<OfficialHtmlSsrSection>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct OfficialHtmlSsrSection {
-    #[serde(default)]
-    pages: Vec<OfficialHtmlSsrPage>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct OfficialHtmlSsrPage {
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    slug: Option<String>,
-    #[serde(default)]
-    hidden: bool,
-    #[serde(default)]
-    children: Vec<OfficialHtmlSsrPage>,
-}
-
-impl OfficialHtmlSsrPage {
-    fn as_reference_page(&self) -> Option<OfficialHtmlReferencePage> {
-        if self.hidden {
-            return None;
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if bytes.len().saturating_add(chunk.len()) > MAX_MODEL_CATALOG_SOURCE_BYTES {
+            return Err(ModelCatalogHttpError::Source(
+                "model catalog source exceeds the 8 MiB limit".to_owned(),
+            ));
         }
-
-        let title = normalize_optional_string(self.title.clone())?;
-        let slug = normalize_optional_string(self.slug.clone())?;
-        if !title.contains(" / ") || slug.ends_with("-infer") {
-            return None;
-        }
-
-        Some(OfficialHtmlReferencePage { title, slug })
+        bytes.extend_from_slice(&chunk);
     }
+    String::from_utf8(bytes).map_err(|_| {
+        ModelCatalogHttpError::Source("model catalog source is not UTF-8 text".to_owned())
+    })
 }
 
-#[derive(Debug, Clone, Copy)]
-struct OfficialHtmlTokenLimits {
-    context_window_tokens: u32,
-    max_input_tokens: Option<u32>,
-}
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
 
-#[derive(Debug, Deserialize)]
-struct HuggingFaceHubModel {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default, rename = "modelId")]
-    model_id: Option<String>,
-    #[serde(default)]
-    pipeline_tag: Option<String>,
-    #[serde(default)]
-    tags: Option<Vec<String>>,
-    #[serde(default, rename = "createdAt")]
-    created_at: Option<String>,
-    #[serde(default)]
-    private: bool,
+    use agena_provider::ModelCatalogDocument;
+
+    use crate::{
+        ModelCatalogConfiguredPublicSource, ModelCatalogPublicSource,
+        ModelCatalogRemoteDocumentFetcher, ModelCatalogRemoteSource,
+        ModelCatalogRemoteSourceKind, default_public_model_catalog_sources,
+        public_model_catalog_sources_enabled,
+    };
+
+
+    #[test]
+    fn default_sources_point_at_the_github_catalog() {
+        let sources = default_public_model_catalog_sources();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].kind, ModelCatalogRemoteSourceKind::GithubCatalog);
+        assert!(
+            sources[0]
+                .urls
+                .iter()
+                .any(|url| url.contains("raw.githubusercontent.com/canxin121"))
+        );
+    }
+
+    #[test]
+    fn public_source_toggle_defaults_to_enabled() {
+        if std::env::var_os("AGENA_DISABLE_PUBLIC_MODEL_CATALOG_SOURCES").is_none() {
+            assert!(public_model_catalog_sources_enabled());
+        }
+    }
+
+    struct FixtureFetcher;
+
+    #[async_trait::async_trait]
+    impl ModelCatalogRemoteDocumentFetcher for FixtureFetcher {
+        async fn fetch_document(
+            &self,
+            source: &ModelCatalogRemoteSource,
+        ) -> Result<ModelCatalogDocument, String> {
+            if source.name == "unavailable" {
+                return Err("offline".to_owned());
+            }
+            let document: ModelCatalogDocument = serde_json::from_str(
+                r#"{"models":{"gpt-4o":{"origin":"OpenAI"}}}"#,
+            )
+            .expect("fixture catalog");
+            Ok(document)
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_public_source_composes_the_concrete_fetcher() {
+        let source = ModelCatalogConfiguredPublicSource::new(
+            Arc::new(FixtureFetcher),
+            vec![ModelCatalogRemoteSource::new(
+                "available",
+                ModelCatalogRemoteSourceKind::GithubCatalog,
+                ["https://example.invalid/available".to_owned()],
+            )],
+        );
+        let result = source.fetch().await;
+        assert_eq!(result.succeeded, 1);
+        assert!(result.models.contains_key("gpt-4o"));
+    }
 }

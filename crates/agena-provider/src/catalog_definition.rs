@@ -189,7 +189,7 @@ impl CatalogModelDefinition {
 
 /// In-memory merge/curation sidecar. It is never serialized into catalog
 /// records and is provider-contract data rather than a core runtime value.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CatalogDefinitionSourcePriority {
     pub sort_priority: i32,
     pub descriptive_priority: i32,

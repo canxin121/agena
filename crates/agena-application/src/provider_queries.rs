@@ -375,6 +375,64 @@ pub(crate) fn provider_adapter_models_response(
     }
 }
 
+/// Configured (saved) adapter models for a provider, enriched from the model
+/// catalog. The Provider Studio opens and re-opens after save with this view,
+/// so its rows carry the same complete display data as a live listing rather
+/// than bare routes.
+pub fn configured_provider_adapter_models_response(
+    app: &Application,
+    provider_id: Option<&str>,
+) -> Vec<ProviderAdapterModelsResource> {
+    let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+    let Some(routing) = app
+        .provider_catalog()
+        .configured_routing(&ProviderId::new(provider_id))
+    else {
+        return Vec::new();
+    };
+    let lookup_ids = routing
+        .adapters
+        .iter()
+        .flat_map(|adapter| adapter.model_ids.iter())
+        .flat_map(|model_id| {
+            let mut ids = vec![model_id.to_string()];
+            let normalized = catalog_lookup_id_for_model_id(model_id);
+            if !normalized.is_empty() && normalized != model_id.as_str() {
+                ids.push(normalized);
+            }
+            ids
+        })
+        .collect::<Vec<_>>();
+    let catalog_entries = app.lookup_model_catalog_models(&lookup_ids);
+    routing
+        .adapters
+        .into_iter()
+        .map(|adapter| {
+            let adapter_id = adapter.adapter_id.clone();
+            ProviderAdapterModelsResource {
+                adapter_id: adapter_id.clone(),
+                enabled: adapter.enabled,
+                resolved_base_url: None,
+                models: adapter
+                    .model_ids
+                    .into_iter()
+                    .map(|model_id| {
+                        let mut model = agena_domain::Model::new(provider_id, model_id);
+                        model.adapter_id = Some(agena_domain::AdapterId::new(adapter_id.as_str()));
+                        provider_model_resource_from_domain(enrich_listing_model_from_catalog(
+                            model,
+                            &catalog_entries,
+                        ))
+                    })
+                    .collect(),
+                failure: None,
+            }
+        })
+        .collect()
+}
+
 /// Enrich a raw listing model with its preferred catalog entry. Returns the
 /// model unchanged when no catalog entry matches. The adapter-merged listing
 /// model's own capabilities/metadata act as the fallback, so existing

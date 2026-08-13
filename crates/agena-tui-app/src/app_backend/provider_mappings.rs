@@ -1,7 +1,7 @@
 //! Provider/model presentation mappings: routing views, local model lists,
 //! catalog lookups, and the inspector rows for think/speed/verbosity choices.
 
-use agena_api::resource::{ProviderAdapterModelsResource, ProviderModelResource};
+use agena_api::resource::ProviderAdapterModelsResource;
 use agena_application::{Application, dto::ModelCatalogListResponse};
 use agena_domain::Model as ProviderModel;
 use agena_domain::{ModelRef, ProviderId};
@@ -33,33 +33,17 @@ pub(crate) fn configured_provider_model_routes(
         .collect()
 }
 
-/// Configured adapter model resources for `provider_id`.
+/// Configured adapter model resources for `provider_id`, enriched from the
+/// model catalog so the Provider Studio draft shows complete display data on
+/// open and after save — matching the live-listing enrich path.
 pub(crate) fn configured_provider_adapter_models(
     application: &Application,
     provider_id: Option<&str>,
 ) -> Vec<ProviderAdapterModelsResource> {
-    let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Vec::new();
-    };
-    application
-        .provider_catalog()
-        .configured_routing(&ProviderId::new(provider_id))
-        .into_iter()
-        .flat_map(|provider| provider.adapters)
-        .map(|adapter| ProviderAdapterModelsResource {
-            adapter_id: adapter.adapter_id.clone(),
-            enabled: adapter.enabled,
-            resolved_base_url: None,
-            models: adapter
-                .model_ids
-                .into_iter()
-                .map(|model_id| {
-                    ProviderModelResource::configured(adapter.adapter_id.as_str(), model_id)
-                })
-                .collect(),
-            failure: None,
-        })
-        .collect()
+    agena_application::provider_queries::configured_provider_adapter_models_response(
+        application,
+        provider_id,
+    )
 }
 
 pub(crate) fn list_local_provider_models(

@@ -2269,7 +2269,10 @@
       "release_date": "2024-04-12",
       "open_weights": true,
       "display_name": "snowflake-arctic-embed-l",
-      "origin": "Snowflake"
+      "origin": "Snowflake",
+      "context_window_tokens": 512,
+      "max_input_tokens": 512,
+      "max_output_tokens": 1024
     },
     "arrow-1.1": {
       "context_window_tokens": 131072,
@@ -10013,7 +10016,10 @@
         "text"
       ],
       "display_name": "codegemma-1.1-7b-it",
-      "origin": "Google"
+      "origin": "Google",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "codegemma-2b": {
       "release_date": "2024-03-21",
@@ -10022,7 +10028,10 @@
         "text"
       ],
       "display_name": "codegemma-2b",
-      "origin": "Google"
+      "origin": "Google",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "codegemma-7b": {
       "release_date": "2024-03-21",
@@ -10031,7 +10040,10 @@
         "text"
       ],
       "display_name": "codegemma-7b",
-      "origin": "Google"
+      "origin": "Google",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "codegemma-7b-it": {
       "release_date": "2024-03-21",
@@ -10040,7 +10052,10 @@
         "text"
       ],
       "display_name": "codegemma-7b-it",
-      "origin": "Google"
+      "origin": "Google",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "codellama-13b": {
       "release_date": "2023-08-24",
@@ -10049,7 +10064,10 @@
         "text"
       ],
       "display_name": "CodeLlama-13b-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-13b-hf": {
       "release_date": "2023-08-24",
@@ -10058,7 +10076,10 @@
         "text"
       ],
       "display_name": "CodeLlama-13b-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-13b-instruct": {
       "release_date": "2023-08-24",
@@ -10067,7 +10088,10 @@
         "text"
       ],
       "display_name": "CodeLlama-13b-Instruct-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-13b-instruct-hf": {
       "release_date": "2023-08-24",
@@ -10076,7 +10100,10 @@
         "text"
       ],
       "display_name": "CodeLlama-13b-Instruct-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-13b-python": {
       "release_date": "2023-08-24",
@@ -10085,7 +10112,10 @@
         "text"
       ],
       "display_name": "CodeLlama-13b-Python-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-13b-python-hf": {
       "release_date": "2023-08-24",
@@ -10094,7 +10124,10 @@
         "text"
       ],
       "display_name": "CodeLlama-13b-Python-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-34b": {
       "release_date": "2023-08-24",
@@ -10103,7 +10136,10 @@
         "text"
       ],
       "display_name": "CodeLlama-34b-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-34b-hf": {
       "release_date": "2023-08-24",
@@ -10112,7 +10148,10 @@
         "text"
       ],
       "display_name": "CodeLlama-34b-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-34b-instruct": {
       "release_date": "2023-08-24",
@@ -10121,7 +10160,10 @@
         "text"
       ],
       "display_name": "CodeLlama-34b-Instruct-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-34b-instruct-hf": {
       "release_date": "2023-08-24",
@@ -10130,7 +10172,10 @@
         "text"
       ],
       "display_name": "CodeLlama-34b-Instruct-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-34b-python": {
       "release_date": "2023-08-24",
@@ -10139,7 +10184,10 @@
         "text"
       ],
       "display_name": "CodeLlama-34b-Python-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-34b-python-hf": {
       "release_date": "2023-08-24",
@@ -10148,7 +10196,10 @@
         "text"
       ],
       "display_name": "CodeLlama-34b-Python-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-70b": {
       "release_date": "2024-01-29",
@@ -10157,7 +10208,10 @@
         "text"
       ],
       "display_name": "CodeLlama-70b-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-70b-hf": {
       "release_date": "2024-01-29",
@@ -10166,7 +10220,10 @@
         "text"
       ],
       "display_name": "CodeLlama-70b-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-70b-instruct": {
       "release_date": "2024-01-29",
@@ -10175,7 +10232,10 @@
         "text"
       ],
       "display_name": "CodeLlama-70b-Instruct-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-70b-instruct-hf": {
       "release_date": "2024-01-29",
@@ -10184,7 +10244,10 @@
         "text"
       ],
       "display_name": "CodeLlama-70b-Instruct-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-70b-python": {
       "release_date": "2024-01-29",
@@ -10193,7 +10256,10 @@
         "text"
       ],
       "display_name": "CodeLlama-70b-Python-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-70b-python-hf": {
       "release_date": "2024-01-29",
@@ -10202,7 +10268,10 @@
         "text"
       ],
       "display_name": "CodeLlama-70b-Python-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-7b": {
       "release_date": "2023-08-24",
@@ -10211,7 +10280,10 @@
         "text"
       ],
       "display_name": "CodeLlama-7b-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-7b-hf": {
       "release_date": "2023-08-24",
@@ -10220,7 +10292,10 @@
         "text"
       ],
       "display_name": "CodeLlama-7b-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-7b-instruct": {
       "release_date": "2023-08-24",
@@ -10229,7 +10304,10 @@
         "text"
       ],
       "display_name": "CodeLlama-7b-Instruct-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-7b-instruct-hf": {
       "release_date": "2023-08-24",
@@ -10238,7 +10316,10 @@
         "text"
       ],
       "display_name": "CodeLlama-7b-Instruct-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-7b-python": {
       "release_date": "2023-08-24",
@@ -10247,7 +10328,10 @@
         "text"
       ],
       "display_name": "CodeLlama-7b-Python-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codellama-7b-python-hf": {
       "release_date": "2023-08-24",
@@ -10256,7 +10340,10 @@
         "text"
       ],
       "display_name": "CodeLlama-7b-Python-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "codestral": {
       "context_window_tokens": 256000,
@@ -10290,7 +10377,10 @@
       "release_date": "2024-05-29",
       "open_weights": true,
       "display_name": "Codestral-22B-v0.1",
-      "origin": "Mistral AI"
+      "origin": "Mistral AI",
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
     },
     "codestral-22b-v0.1": {
       "context_window_tokens": 128000,
@@ -19333,7 +19423,10 @@
       "origin": "Adept",
       "input": [
         "image"
-      ]
+      ],
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "gelab-zero-4b-preview": {
       "context_window_tokens": 8192,
@@ -23219,7 +23312,10 @@
         "text"
       ],
       "display_name": "gemma-2-9b-it",
-      "origin": "Google"
+      "origin": "Google",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "gemma-2b": {
       "release_date": "2024-02-08",
@@ -23228,7 +23324,10 @@
         "text"
       ],
       "display_name": "gemma-2b",
-      "origin": "Google"
+      "origin": "Google",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "gemma-3": {
       "context_window_tokens": 125000,
@@ -23307,7 +23406,10 @@
         "text"
       ],
       "display_name": "gemma-3-1b-it",
-      "origin": "Google"
+      "origin": "Google",
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
     },
     "gemma-3-27b-it": {
       "context_window_tokens": 131000,
@@ -23569,7 +23671,10 @@
         "text"
       ],
       "display_name": "gemma-7b",
-      "origin": "Google"
+      "origin": "Google",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "gemma2-9b-it": {
       "context_window_tokens": 8192,
@@ -33932,7 +34037,10 @@
         "text"
       ],
       "display_name": "granite-20b-code-instruct-8k",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "granite-20b-code-instruct-r1.1": {
       "release_date": "2024-07-09",
@@ -33941,7 +34049,10 @@
         "text"
       ],
       "display_name": "granite-20b-code-instruct-r1.1",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "granite-20b-functioncalling": {
       "release_date": "2024-07-09",
@@ -33950,7 +34061,10 @@
         "text"
       ],
       "display_name": "granite-20b-functioncalling",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "granite-3.0-1b-a400m-instruct": {
       "release_date": "2024-10-03",
@@ -33959,7 +34073,10 @@
         "text"
       ],
       "display_name": "granite-3.0-1b-a400m-instruct",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "granite-3.0-2b-instruct": {
       "release_date": "2024-10-02",
@@ -33968,7 +34085,10 @@
         "text"
       ],
       "display_name": "granite-3.0-2b-instruct",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "granite-3.0-3b-a800m-instruct": {
       "release_date": "2024-10-03",
@@ -33977,7 +34097,10 @@
         "text"
       ],
       "display_name": "granite-3.0-3b-a800m-instruct",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "granite-3.0-8b-instruct": {
       "release_date": "2024-10-02",
@@ -33986,7 +34109,10 @@
         "text"
       ],
       "display_name": "granite-3.0-8b-instruct",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "granite-3.0-8b-lora-intrinsics-v0.1": {
       "release_date": "2024-12-07",
@@ -33995,7 +34121,10 @@
         "text"
       ],
       "display_name": "granite-3.0-8b-lora-intrinsics-v0.1",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "granite-3.1-1b-a400m-instruct": {
       "release_date": "2024-12-06",
@@ -34004,7 +34133,10 @@
         "text"
       ],
       "display_name": "granite-3.1-1b-a400m-instruct",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-3.1-2b-instruct": {
       "release_date": "2024-12-06",
@@ -34013,7 +34145,10 @@
         "text"
       ],
       "display_name": "granite-3.1-2b-instruct",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-3.1-3b-a800m-instruct": {
       "release_date": "2024-12-06",
@@ -34022,7 +34157,10 @@
         "text"
       ],
       "display_name": "granite-3.1-3b-a800m-instruct",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-3.1-8b-instruct": {
       "release_date": "2024-12-06",
@@ -34031,7 +34169,10 @@
         "text"
       ],
       "display_name": "granite-3.1-8b-instruct",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-3.1-8b-lora-intrinsics-v0.1": {
       "release_date": "2024-12-17",
@@ -34040,7 +34181,10 @@
         "text"
       ],
       "display_name": "granite-3.1-8b-lora-intrinsics-v0.1",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-34b-code-instruct": {
       "release_date": "2024-04-26",
@@ -34049,7 +34193,10 @@
         "text"
       ],
       "display_name": "granite-34b-code-instruct-8k",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "granite-34b-code-instruct-8k": {
       "release_date": "2024-04-26",
@@ -34058,7 +34205,10 @@
         "text"
       ],
       "display_name": "granite-34b-code-instruct-8k",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "granite-3b-code-instruct-128k": {
       "release_date": "2024-07-12",
@@ -34067,7 +34217,10 @@
         "text"
       ],
       "display_name": "granite-3b-code-instruct-128k",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 128000,
+      "max_input_tokens": 128000,
+      "max_output_tokens": 128000
     },
     "granite-3b-code-instruct-2k": {
       "release_date": "2024-04-26",
@@ -34076,7 +34229,10 @@
         "text"
       ],
       "display_name": "granite-3b-code-instruct-2k",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 2048,
+      "max_input_tokens": 2048,
+      "max_output_tokens": 2048
     },
     "granite-4-h-small": {
       "context_window_tokens": 131072,
@@ -34113,7 +34269,10 @@
         "text"
       ],
       "display_name": "granite-4.0-h-350m",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
     },
     "granite-4.0-h-micro": {
       "context_window_tokens": 131000,
@@ -34151,7 +34310,10 @@
         "text"
       ],
       "display_name": "granite-4.0-micro",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-4.1-30b": {
       "release_date": "2026-04-06",
@@ -34160,7 +34322,10 @@
         "text"
       ],
       "display_name": "granite-4.1-30b",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-4.1-3b": {
       "release_date": "2026-04-06",
@@ -34169,7 +34334,10 @@
         "text"
       ],
       "display_name": "granite-4.1-3b",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-4.1-8b": {
       "context_window_tokens": 131072,
@@ -34207,7 +34375,10 @@
         "text"
       ],
       "display_name": "granite-7b-instruct",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "granite-8b-code-instruct": {
       "release_date": "2024-04-26",
@@ -34216,7 +34387,10 @@
         "text"
       ],
       "display_name": "granite-8b-code-instruct-4k",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "granite-8b-code-instruct-128k": {
       "release_date": "2024-07-12",
@@ -34225,7 +34399,10 @@
         "text"
       ],
       "display_name": "granite-8b-code-instruct-128k",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 128000,
+      "max_input_tokens": 128000,
+      "max_output_tokens": 128000
     },
     "granite-8b-code-instruct-4k": {
       "release_date": "2024-04-26",
@@ -34234,7 +34411,10 @@
         "text"
       ],
       "display_name": "granite-8b-code-instruct-4k",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "granite-docling-258m": {
       "release_date": "2025-05-19",
@@ -34252,49 +34432,73 @@
       "release_date": "2024-12-04",
       "open_weights": true,
       "display_name": "granite-embedding-107m-multilingual",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 384
     },
     "granite-embedding-125m-english": {
       "release_date": "2024-12-04",
       "open_weights": true,
       "display_name": "granite-embedding-125m-english",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 768
     },
     "granite-embedding-278m-multilingual": {
       "release_date": "2024-12-04",
       "open_weights": true,
       "display_name": "granite-embedding-278m-multilingual",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 768
     },
     "granite-embedding-30m-english": {
       "release_date": "2024-12-04",
       "open_weights": true,
       "display_name": "granite-embedding-30m-english",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 384
     },
     "granite-embedding-30m-sparse": {
       "release_date": "2025-02-17",
       "open_weights": true,
       "display_name": "granite-embedding-30m-sparse",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 384
     },
     "granite-embedding-311m-multilingual-r2": {
       "release_date": "2026-04-20",
       "open_weights": true,
       "display_name": "granite-embedding-311m-multilingual-r2",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 768
     },
     "granite-embedding-97m-multilingual-r2": {
       "release_date": "2026-04-20",
       "open_weights": true,
       "display_name": "granite-embedding-97m-multilingual-r2",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 384
     },
     "granite-embedding-english-r2": {
       "release_date": "2025-07-17",
       "open_weights": true,
       "display_name": "granite-embedding-english-r2",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 768
     },
     "granite-geospatial-biomass": {
       "release_date": "2024-06-27",
@@ -34345,7 +34549,10 @@
         "text"
       ],
       "display_name": "granite-guardian-3.0-2b",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "granite-guardian-3.0-8b": {
       "release_date": "2024-10-15",
@@ -34354,7 +34561,10 @@
         "text"
       ],
       "display_name": "granite-guardian-3.0-8b",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "granite-guardian-3.1-2b": {
       "release_date": "2024-12-17",
@@ -34363,7 +34573,10 @@
         "text"
       ],
       "display_name": "granite-guardian-3.1-2b",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-guardian-3.1-8b": {
       "release_date": "2024-12-17",
@@ -34372,7 +34585,10 @@
         "text"
       ],
       "display_name": "granite-guardian-3.1-8b",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-guardian-3.2-3b-a800m": {
       "release_date": "2025-02-03",
@@ -34381,7 +34597,10 @@
         "text"
       ],
       "display_name": "granite-guardian-3.2-3b-a800m",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-guardian-3.2-5b": {
       "release_date": "2025-01-23",
@@ -34390,7 +34609,10 @@
         "text"
       ],
       "display_name": "granite-guardian-3.2-5b",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-guardian-4.1-8b": {
       "release_date": "2026-04-16",
@@ -34399,19 +34621,28 @@
         "text"
       ],
       "display_name": "granite-guardian-4.1-8b",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-guardian-hap-125m": {
       "release_date": "2024-09-05",
       "open_weights": true,
       "display_name": "granite-guardian-hap-125m",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 514
     },
     "granite-guardian-hap-38m": {
       "release_date": "2024-09-05",
       "open_weights": true,
       "display_name": "granite-guardian-hap-38m",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 514
     },
     "granite-rag-3.0-8b-lora": {
       "release_date": "2024-11-01",
@@ -34420,7 +34651,10 @@
         "text"
       ],
       "display_name": "granite-rag-3.0-8b-lora",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "granite-speech-4.1-2b": {
       "release_date": "2026-04-16",
@@ -34453,7 +34687,10 @@
         "text"
       ],
       "display_name": "granite-swash-3b-a600m",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "granite-switch-4.1-30b-preview": {
       "release_date": "2026-05-01",
@@ -34462,7 +34699,10 @@
         "text"
       ],
       "display_name": "granite-switch-4.1-30b-preview",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-switch-4.1-3b-preview": {
       "release_date": "2026-05-01",
@@ -34471,7 +34711,10 @@
         "text"
       ],
       "display_name": "granite-switch-4.1-3b-preview",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-switch-4.1-8b-preview": {
       "release_date": "2026-05-01",
@@ -34480,7 +34723,10 @@
         "text"
       ],
       "display_name": "granite-switch-4.1-8b-preview",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "granite-timeseries-patchtsmixer": {
       "release_date": "2023-09-15",
@@ -34513,7 +34759,10 @@
         "text"
       ],
       "display_name": "granite-uncertainty-3.0-8b-lora",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "granite-vision-3.1-2b-preview": {
       "release_date": "2025-01-27",
@@ -34555,13 +34804,19 @@
       "release_date": "2026-02-12",
       "open_weights": true,
       "display_name": "granitelib-rag-gpt-oss-r1.0",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "granitelib-rag-r1.0": {
       "release_date": "2025-12-08",
       "open_weights": true,
       "display_name": "granitelib-rag-r1.0",
-      "origin": "IBM"
+      "origin": "IBM",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "grayline-qwen3-8b": {
       "context_window_tokens": 16384,
@@ -38945,7 +39200,10 @@
         "text"
       ],
       "display_name": "AI21-Jamba-Large-1.5",
-      "origin": "AI21 Labs"
+      "origin": "AI21 Labs",
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
     },
     "jamba-1.5-mini-instruct": {
       "release_date": "2024-08-19",
@@ -38954,7 +39212,10 @@
         "text"
       ],
       "display_name": "AI21-Jamba-Mini-1.5",
-      "origin": "AI21 Labs"
+      "origin": "AI21 Labs",
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
     },
     "jamba-1.6-large-instruct": {
       "release_date": "2025-02-27",
@@ -38963,7 +39224,10 @@
         "text"
       ],
       "display_name": "AI21-Jamba-Large-1.6",
-      "origin": "AI21 Labs"
+      "origin": "AI21 Labs",
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
     },
     "jamba-1.6-mini-instruct": {
       "release_date": "2025-02-27",
@@ -38972,19 +39236,28 @@
         "text"
       ],
       "display_name": "AI21-Jamba-Mini-1.6",
-      "origin": "AI21 Labs"
+      "origin": "AI21 Labs",
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
     },
     "jamba-1.7-large-instruct": {
       "release_date": "2025-07-02",
       "open_weights": true,
       "display_name": "AI21-Jamba-Large-1.7",
-      "origin": "AI21 Labs"
+      "origin": "AI21 Labs",
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
     },
     "jamba-1.7-mini-instruct": {
       "release_date": "2025-07-01",
       "open_weights": true,
       "display_name": "AI21-Jamba-Mini-1.7",
-      "origin": "AI21 Labs"
+      "origin": "AI21 Labs",
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
     },
     "jamba-3b-reasoning-instruct": {
       "release_date": "2025-10-05",
@@ -38993,7 +39266,10 @@
         "text"
       ],
       "display_name": "AI21-Jamba-Reasoning-3B",
-      "origin": "AI21 Labs"
+      "origin": "AI21 Labs",
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
     },
     "jamba-large": {
       "context_window_tokens": 256000,
@@ -39033,7 +39309,10 @@
         "text"
       ],
       "display_name": "AI21-Jamba-Large-1.5",
-      "origin": "AI21 Labs"
+      "origin": "AI21 Labs",
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
     },
     "jamba-large-1.6": {
       "context_window_tokens": 256000,
@@ -39139,7 +39418,10 @@
         "text"
       ],
       "display_name": "AI21-Jamba-Mini-1.5",
-      "origin": "AI21 Labs"
+      "origin": "AI21 Labs",
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
     },
     "jamba-mini-1.6": {
       "context_window_tokens": 256000,
@@ -39210,13 +39492,19 @@
         "text"
       ],
       "display_name": "AI21-Jamba-Reasoning-3B",
-      "origin": "AI21 Labs"
+      "origin": "AI21 Labs",
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
     },
     "jamba-tiny-dev": {
       "release_date": "2024-09-03",
       "open_weights": true,
       "display_name": "Jamba-tiny-dev",
-      "origin": "AI21 Labs"
+      "origin": "AI21 Labs",
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
     },
     "jamba-v0.1": {
       "release_date": "2024-03-28",
@@ -39225,7 +39513,10 @@
         "text"
       ],
       "display_name": "Jamba-v0.1",
-      "origin": "AI21 Labs"
+      "origin": "AI21 Labs",
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
     },
     "k2-think": {
       "context_window_tokens": 128000,
@@ -42227,13 +42518,19 @@
       "release_date": "2025-01-15",
       "open_weights": true,
       "display_name": "llama-3.1-nemoguard-8b-content-safety",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "llama-3.1-nemoguard-8b-topic-control": {
       "release_date": "2025-01-15",
       "open_weights": true,
       "display_name": "llama-3.1-nemoguard-8b-topic-control",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "llama-3.1-nemotron-51b-instruct": {
       "release_date": "2024-09-22",
@@ -42242,7 +42539,10 @@
         "text"
       ],
       "display_name": "Llama-3_1-Nemotron-51B-Instruct",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "llama-3.1-nemotron-70b-instruct": {
       "context_window_tokens": 128000,
@@ -42307,7 +42607,10 @@
         "text"
       ],
       "display_name": "Llama-3.1-Nemotron-8B-UltraLong-1M-Instruct",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 1073152,
+      "max_input_tokens": 1073152,
+      "max_output_tokens": 1073152
     },
     "llama-3.1-nemotron-nano-4b-v1.1": {
       "release_date": "2025-05-03",
@@ -42316,7 +42619,10 @@
         "text"
       ],
       "display_name": "Llama-3.1-Nemotron-Nano-4B-v1.1",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "llama-3.1-nemotron-nano-8b-v1": {
       "context_window_tokens": 131072,
@@ -42378,7 +42684,10 @@
       "origin": "NVIDIA",
       "input": [
         "image"
-      ]
+      ],
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "llama-3.1-nemotron-safety-guard-8b-v3": {
       "context_window_tokens": 128000,
@@ -42445,7 +42754,10 @@
         "text"
       ],
       "display_name": "Llama-3_1-Nemotron-Ultra-253B-CPT-v1",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "llama-3.1-nemotron-ultra-253b-v1": {
       "context_window_tokens": 128000,
@@ -42627,7 +42939,10 @@
     },
     "llama-3.2-nemoretriever-1b-vlm-embed-v1": {
       "display_name": "llama-3.2-nemoretriever-1b-vlm-embed-v1",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 2048
     },
     "llama-3.2-nemoretriever-300m-embed-v1": {
       "context_window_tokens": 32768,
@@ -42656,11 +42971,17 @@
     },
     "llama-3.2-nv-embedqa-1b-v1": {
       "display_name": "llama-3.2-nv-embedqa-1b-v1",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 2048
     },
     "llama-3.2-nv-embedqa-1b-v2": {
       "display_name": "llama-3.2-nv-embedqa-1b-v2",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 2048
     },
     "llama-3.3-70b-instruct": {
       "lifecycle": "deprecated",
@@ -43061,7 +43382,10 @@
       "release_date": "2025-10-16",
       "open_weights": true,
       "display_name": "llama-nemotron-embed-1b-v2",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 2048
     },
     "llama-nemotron-embed-vl-1b-v2": {
       "context_window_tokens": 32768,
@@ -43128,7 +43452,10 @@
         "text"
       ],
       "display_name": "Llama-2-13b",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "llama2-13b-chat": {
       "release_date": "2023-07-09",
@@ -43137,7 +43464,10 @@
         "text"
       ],
       "display_name": "Llama-2-13b-chat",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "llama2-13b-chat-hf": {
       "release_date": "2023-07-13",
@@ -43146,7 +43476,10 @@
         "text"
       ],
       "display_name": "Llama-2-13b-chat-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "llama2-13b-hf": {
       "release_date": "2023-07-13",
@@ -43155,7 +43488,10 @@
         "text"
       ],
       "display_name": "Llama-2-13b-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "llama2-70b": {
       "release_date": "2023-07-09",
@@ -43164,7 +43500,10 @@
         "text"
       ],
       "display_name": "Llama-2-70b",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "llama2-70b-chat": {
       "release_date": "2023-07-14",
@@ -43173,7 +43512,10 @@
         "text"
       ],
       "display_name": "Llama-2-70b-chat",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "llama2-70b-chat-hf": {
       "release_date": "2023-07-14",
@@ -43182,7 +43524,10 @@
         "text"
       ],
       "display_name": "Llama-2-70b-chat-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "llama2-70b-hf": {
       "release_date": "2023-07-11",
@@ -43191,7 +43536,10 @@
         "text"
       ],
       "display_name": "Llama-2-70b-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "llama2-7b": {
       "release_date": "2023-07-09",
@@ -43200,7 +43548,10 @@
         "text"
       ],
       "display_name": "Llama-2-7b",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "llama2-7b-chat": {
       "release_date": "2023-07-09",
@@ -43209,7 +43560,10 @@
         "text"
       ],
       "display_name": "Llama-2-7b-chat",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "llama2-7b-chat-hf": {
       "release_date": "2023-07-13",
@@ -43218,7 +43572,10 @@
         "text"
       ],
       "display_name": "Llama-2-7b-chat-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "llama2-7b-hf": {
       "release_date": "2023-07-13",
@@ -43227,7 +43584,10 @@
         "text"
       ],
       "display_name": "Llama-2-7b-hf",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "llama3-chatqa-1.5-70b": {
       "release_date": "2024-04-28",
@@ -43236,7 +43596,10 @@
         "text"
       ],
       "display_name": "Llama3-ChatQA-1.5-70B",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "lucid-origin": {
       "context_window_tokens": 4096,
@@ -43929,7 +44292,10 @@
       "release_date": "2024-07-16",
       "open_weights": true,
       "display_name": "Mamba-Codestral-7B-v0.1",
-      "origin": "Mistral AI"
+      "origin": "Mistral AI",
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
     },
     "manta-flash-1.0": {
       "context_window_tokens": 16384,
@@ -44414,7 +44780,10 @@
         "text"
       ],
       "display_name": "Meta-Llama-Guard-2-8B",
-      "origin": "Meta"
+      "origin": "Meta",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "mimo-v2-5": {
       "context_window_tokens": 1000000,
@@ -47134,7 +47503,10 @@
       "release_date": "2024-07-24",
       "open_weights": true,
       "display_name": "Mistral-Large-Instruct-2407",
-      "origin": "Mistral AI"
+      "origin": "Mistral AI",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 32768
     },
     "mistral-large-2402": {
       "context_window_tokens": 32000,
@@ -47409,7 +47781,10 @@
       "release_date": "2024-07-24",
       "open_weights": true,
       "display_name": "Mistral-Large-Instruct-2407",
-      "origin": "Mistral AI"
+      "origin": "Mistral AI",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 32768
     },
     "mistral-large-instruct-2411": {
       "context_window_tokens": 128000,
@@ -48101,7 +48476,10 @@
         "text"
       ],
       "display_name": "Mistral-NeMo-Minitron-8B-Instruct",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "mistral-nemo-minitron-8b-instruct": {
       "release_date": "2024-10-02",
@@ -48110,7 +48488,10 @@
         "text"
       ],
       "display_name": "Mistral-NeMo-Minitron-8B-Instruct",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "mistral-nemotron": {
       "context_window_tokens": 128000,
@@ -48906,7 +49287,10 @@
       "release_date": "2024-04-16",
       "open_weights": true,
       "display_name": "Mixtral-8x22B-v0.1",
-      "origin": "Mistral AI"
+      "origin": "Mistral AI",
+      "context_window_tokens": 65536,
+      "max_input_tokens": 65536,
+      "max_output_tokens": 65536
     },
     "mixtral-8x7b-instruct": {
       "context_window_tokens": 32768,
@@ -48968,7 +49352,10 @@
       "release_date": "2023-12-01",
       "open_weights": true,
       "display_name": "Mixtral-8x7B-v0.1",
-      "origin": "Mistral AI"
+      "origin": "Mistral AI",
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
     },
     "mm-poly-8b": {
       "context_window_tokens": 32768,
@@ -49682,7 +50069,10 @@
       "release_date": "2025-01-14",
       "open_weights": true,
       "display_name": "NemoGuard-JailbreakDetect",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "nemomix-unleashed-12b": {
       "context_window_tokens": 32768,
@@ -49712,7 +50102,10 @@
     },
     "nemoretriever-parse": {
       "display_name": "nemoretriever-parse",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 2048
     },
     "nemotron-120b-a12b": {
       "context_window_tokens": 202800,
@@ -50637,7 +51030,10 @@
       "release_date": "2024-06-13",
       "open_weights": true,
       "display_name": "Nemotron-4-340B-Instruct",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "nemotron-cascade-2-30b-a3b": {
       "context_window_tokens": 262144,
@@ -50861,7 +51257,10 @@
         "text"
       ],
       "display_name": "NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 4096
     },
     "nemotron-nano-9b-v2": {
       "context_window_tokens": 128000,
@@ -50940,7 +51339,10 @@
       "origin": "NVIDIA",
       "input": [
         "image"
-      ]
+      ],
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "nemotron-super-3-120b": {
       "context_window_tokens": 262144,
@@ -51573,7 +51975,10 @@
     },
     "nv-embedqa-e5-v5": {
       "display_name": "nv-embedqa-e5-v5",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 4096
     },
     "nvclip": {
       "display_name": "nvclip",
@@ -52059,7 +52464,10 @@
       "origin": "NVIDIA",
       "input": [
         "image"
-      ]
+      ],
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "nvidia-nemotron-parse-v1.1": {
       "release_date": "2025-11-15",
@@ -52071,7 +52479,10 @@
       "origin": "NVIDIA",
       "input": [
         "image"
-      ]
+      ],
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "nvidia-nemotron-parse-v1.1-tc": {
       "release_date": "2025-11-15",
@@ -52083,7 +52494,10 @@
       "origin": "NVIDIA",
       "input": [
         "image"
-      ]
+      ],
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "nvidia-nemotron-parse-v1.2": {
       "release_date": "2026-02-18",
@@ -52095,7 +52509,10 @@
       "origin": "NVIDIA",
       "input": [
         "image"
-      ]
+      ],
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "o1": {
       "lifecycle": "deprecated",
@@ -55922,13 +56339,19 @@
       "release_date": "2024-08-28",
       "open_weights": true,
       "display_name": "Palmyra-Creative",
-      "origin": "Writer"
+      "origin": "Writer",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "palmyra-creative-122b": {
       "release_date": "2024-08-28",
       "open_weights": true,
       "display_name": "Palmyra-Creative",
-      "origin": "Writer"
+      "origin": "Writer",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "palmyra-fin-70b-32k": {
       "release_date": "2024-07-02",
@@ -55937,7 +56360,10 @@
         "text"
       ],
       "display_name": "Palmyra-Fin-70B-32K",
-      "origin": "Writer"
+      "origin": "Writer",
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "palmyra-med-70b": {
       "release_date": "2024-05-05",
@@ -55946,7 +56372,10 @@
         "text"
       ],
       "display_name": "Palmyra-Med-70B",
-      "origin": "Writer"
+      "origin": "Writer",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "palmyra-med-70b-32k": {
       "release_date": "2024-06-03",
@@ -55955,7 +56384,10 @@
         "text"
       ],
       "display_name": "Palmyra-Med-70B-32K",
-      "origin": "Writer"
+      "origin": "Writer",
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
     },
     "palmyra-x4": {
       "context_window_tokens": 128000,
@@ -56123,7 +56555,10 @@
       "origin": "Microsoft",
       "input": [
         "image"
-      ]
+      ],
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
     },
     "phi-4": {
       "context_window_tokens": 128000,
@@ -64548,7 +64983,10 @@
         "text"
       ],
       "display_name": "recurrentgemma-2b",
-      "origin": "Google"
+      "origin": "Google",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "recurrentgemma-2b-it": {
       "release_date": "2024-04-08",
@@ -64557,7 +64995,10 @@
         "text"
       ],
       "display_name": "recurrentgemma-2b-it",
-      "origin": "Google"
+      "origin": "Google",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "recurrentgemma-9b": {
       "release_date": "2024-06-07",
@@ -64566,7 +65007,10 @@
         "text"
       ],
       "display_name": "recurrentgemma-9b",
-      "origin": "Google"
+      "origin": "Google",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "recurrentgemma-9b-it": {
       "release_date": "2024-06-07",
@@ -64575,7 +65019,10 @@
         "text"
       ],
       "display_name": "recurrentgemma-9b-it",
-      "origin": "Google"
+      "origin": "Google",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "reka-edge": {
       "context_window_tokens": 16384,
@@ -64913,7 +65360,10 @@
         "text"
       ],
       "display_name": "Riva-Translate-4B-Instruct",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "riva-translate-4b-instruct-v1.1": {
       "context_window_tokens": 128000,
@@ -64947,7 +65397,10 @@
         "text"
       ],
       "display_name": "Riva-Translate-4B-Instruct-v2",
-      "origin": "NVIDIA"
+      "origin": "NVIDIA",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "rnj-1-instruct": {
       "lifecycle": "deprecated",
@@ -65418,7 +65871,10 @@
         "text"
       ],
       "display_name": "SEA-LION-v1-7B-IT",
-      "origin": "AI Singapore"
+      "origin": "AI Singapore",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "sea-lion-v1-7b-it": {
       "release_date": "2024-02-01",
@@ -65427,7 +65883,10 @@
         "text"
       ],
       "display_name": "SEA-LION-v1-7B-IT",
-      "origin": "AI Singapore"
+      "origin": "AI Singapore",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "sea-lion-v1-7b-it-research": {
       "release_date": "2023-11-06",
@@ -65436,7 +65895,10 @@
         "text"
       ],
       "display_name": "SEA-LION-v1-7B-IT-Research",
-      "origin": "AI Singapore"
+      "origin": "AI Singapore",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
     },
     "seed-1-6-250615": {
       "context_window_tokens": 256000,
@@ -66643,19 +67105,28 @@
       "release_date": "2024-04-12",
       "open_weights": true,
       "display_name": "snowflake-arctic-embed-l",
-      "origin": "Snowflake"
+      "origin": "Snowflake",
+      "context_window_tokens": 512,
+      "max_input_tokens": 512,
+      "max_output_tokens": 1024
     },
     "snowflake-arctic-embed-l-v2.0": {
       "release_date": "2024-11-08",
       "open_weights": true,
       "display_name": "snowflake-arctic-embed-l-v2.0",
-      "origin": "Snowflake"
+      "origin": "Snowflake",
+      "context_window_tokens": 8194,
+      "max_input_tokens": 8194,
+      "max_output_tokens": 1024
     },
     "snowflake-arctic-embed-m-long": {
       "release_date": "2024-04-12",
       "open_weights": true,
       "display_name": "snowflake-arctic-embed-m-long",
-      "origin": "Snowflake"
+      "origin": "Snowflake",
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 1024
     },
     "snowflake-llama3.3-70b": {
       "context_window_tokens": 128000,
@@ -67411,7 +67882,10 @@
         "text"
       ],
       "display_name": "starcoder2-15b",
-      "origin": "BigCode"
+      "origin": "BigCode",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "starcoder2-15b-instruct-v0.1": {
       "release_date": "2024-04-23",
@@ -67420,7 +67894,10 @@
         "text"
       ],
       "display_name": "starcoder2-15b-instruct-v0.1",
-      "origin": "BigCode"
+      "origin": "BigCode",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "starcoder2-3b": {
       "release_date": "2023-11-29",
@@ -67429,7 +67906,10 @@
         "text"
       ],
       "display_name": "starcoder2-3b",
-      "origin": "BigCode"
+      "origin": "BigCode",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "starcoder2-7b": {
       "release_date": "2024-02-20",
@@ -67438,7 +67918,10 @@
         "text"
       ],
       "display_name": "starcoder2-7b",
-      "origin": "BigCode"
+      "origin": "BigCode",
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
     },
     "starcoder2-tokenizer": {
       "release_date": "2023-11-24",
@@ -68101,7 +68584,10 @@
         "text"
       ],
       "display_name": "Stockmark-2-100B-Instruct",
-      "origin": "Stockmark"
+      "origin": "Stockmark",
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
     },
     "stockmark-2-100b-instruct-beta": {
       "release_date": "2025-03-05",
@@ -68110,7 +68596,10 @@
         "text"
       ],
       "display_name": "Stockmark-2-100B-Instruct-beta",
-      "origin": "Stockmark"
+      "origin": "Stockmark",
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
     },
     "streampetr": {
       "context_window_tokens": 128000,
@@ -72117,7 +72606,10 @@
         "text"
       ],
       "display_name": "Zamba2-7B-Instruct",
-      "origin": "Zyphra"
+      "origin": "Zyphra",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     },
     "zamba2-7b-instruct-v2": {
       "release_date": "2025-02-11",
@@ -72126,7 +72618,10 @@
         "text"
       ],
       "display_name": "Zamba2-7B-Instruct-v2",
-      "origin": "Zyphra"
+      "origin": "Zyphra",
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
     }
   }
 }

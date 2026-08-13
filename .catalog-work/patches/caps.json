@@ -1,0 +1,829 @@
+{
+  "models": {
+    "arctic-embed-l": {
+      "context_window_tokens": 512,
+      "max_input_tokens": 512,
+      "max_output_tokens": 1024
+    },
+    "granite-20b-code-instruct-8k": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "granite-3.1-2b-instruct": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-3.1-8b-instruct": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "palmyra-fin-70b-32k": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "palmyra-med-70b-32k": {
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
+    },
+    "phi-3-vision-128k-instruct": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "snowflake-arctic-embed-l": {
+      "context_window_tokens": 512,
+      "max_input_tokens": 512,
+      "max_output_tokens": 1024
+    },
+    "snowflake-arctic-embed-m-long": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 1024
+    },
+    "starcoder2-15b": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "starcoder2-3b": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "starcoder2-7b": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codegemma-7b": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "codellama-13b-hf": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-13b-instruct": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-13b-python": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-13b-python-hf": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-34b": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-34b-hf": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-34b-instruct": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-34b-python": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-34b-python-hf": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-70b": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-70b-hf": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-70b-instruct-hf": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-70b-python": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-70b-python-hf": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-7b": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-7b-hf": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-7b-python": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-7b-python-hf": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "fuyu-8b": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "granite-20b-code-instruct-r1.1": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "granite-20b-functioncalling": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "granite-3.0-1b-a400m-instruct": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "granite-3.0-2b-instruct": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "granite-3.0-3b-a800m-instruct": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "granite-3.0-8b-instruct": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "granite-3.0-8b-lora-intrinsics-v0.1": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "granite-3.1-1b-a400m-instruct": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-3.1-3b-a800m-instruct": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-3.1-8b-lora-intrinsics-v0.1": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-34b-code-instruct": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "granite-34b-code-instruct-8k": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "granite-3b-code-instruct-128k": {
+      "context_window_tokens": 128000,
+      "max_input_tokens": 128000,
+      "max_output_tokens": 128000
+    },
+    "granite-3b-code-instruct-2k": {
+      "context_window_tokens": 2048,
+      "max_input_tokens": 2048,
+      "max_output_tokens": 2048
+    },
+    "granite-4.0-h-350m": {
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
+    },
+    "granite-4.0-micro": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-4.1-30b": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-4.1-3b": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-7b-instruct": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "granite-8b-code-instruct": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "granite-8b-code-instruct-128k": {
+      "context_window_tokens": 128000,
+      "max_input_tokens": 128000,
+      "max_output_tokens": 128000
+    },
+    "granite-8b-code-instruct-4k": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "granite-embedding-107m-multilingual": {
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 384
+    },
+    "granite-embedding-125m-english": {
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 768
+    },
+    "granite-embedding-278m-multilingual": {
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 768
+    },
+    "granite-embedding-30m-english": {
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 384
+    },
+    "granite-embedding-30m-sparse": {
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 384
+    },
+    "granite-embedding-311m-multilingual-r2": {
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 768
+    },
+    "granite-embedding-97m-multilingual-r2": {
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 384
+    },
+    "granite-embedding-english-r2": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 768
+    },
+    "granite-guardian-3.0-2b": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "granite-guardian-3.0-8b": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "granite-guardian-3.1-2b": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-guardian-3.1-8b": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-guardian-3.2-3b-a800m": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-guardian-3.2-5b": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-guardian-4.1-8b": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-guardian-hap-125m": {
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 514
+    },
+    "granite-guardian-hap-38m": {
+      "context_window_tokens": 514,
+      "max_input_tokens": 514,
+      "max_output_tokens": 514
+    },
+    "granite-swash-3b-a600m": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "granite-switch-4.1-30b-preview": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-switch-4.1-3b-preview": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "granite-switch-4.1-8b-preview": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "jamba-reasoning-3b": {
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
+    },
+    "jamba-tiny-dev": {
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
+    },
+    "jamba-v0.1": {
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
+    },
+    "llama-3.1-nemotron-8b-ultralong-1m-instruct": {
+      "context_window_tokens": 1073152,
+      "max_input_tokens": 1073152,
+      "max_output_tokens": 1073152
+    },
+    "llama-3.1-nemotron-nano-4b-v1.1": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "llama-3.2-nv-embedqa-1b-v2": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 2048
+    },
+    "llama2-70b-chat-hf": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama2-7b-chat": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama2-7b-chat-hf": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama3-chatqa-1.5-70b": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "mistral-nemo-minitron-8b-instruct": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "mixtral-8x22b-v0.1": {
+      "context_window_tokens": 65536,
+      "max_input_tokens": 65536,
+      "max_output_tokens": 65536
+    },
+    "mixtral-8x7b-v0.1": {
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
+    },
+    "palmyra-creative": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "riva-translate-4b-instruct": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "riva-translate-4b-instruct-v2": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "snowflake-arctic-embed-l-v2.0": {
+      "context_window_tokens": 8194,
+      "max_input_tokens": 8194,
+      "max_output_tokens": 1024
+    },
+    "starcoder2-15b-instruct-v0.1": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "stockmark-2-100b-instruct": {
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
+    },
+    "stockmark-2-100b-instruct-beta": {
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
+    },
+    "zamba2-7b-instruct": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "zamba2-7b-instruct-v2": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "codellama-13b": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-13b-instruct-hf": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-34b-instruct-hf": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-70b-instruct": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-7b-instruct": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codellama-7b-instruct-hf": {
+      "context_window_tokens": 16384,
+      "max_input_tokens": 16384,
+      "max_output_tokens": 16384
+    },
+    "codestral-22b-instruct-v0.1": {
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
+    },
+    "llama-nemotron-embed-1b-v2": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 2048
+    },
+    "llama2-7b": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama2-7b-hf": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama2-13b": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama2-13b-hf": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama2-13b-chat": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama2-13b-chat-hf": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama2-70b": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama2-70b-hf": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama2-70b-chat": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "codegemma-2b": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "codegemma-1.1-7b": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "codegemma-7b-it": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "gemma-2b": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "gemma-7b": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "gemma-2-9b-it": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "gemma-3-1b-it": {
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
+    },
+    "recurrentgemma-2b": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "recurrentgemma-2b-it": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "recurrentgemma-9b": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "recurrentgemma-9b-it": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "sea-lion-7b-instruct": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "sea-lion-v1-7b-it": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "sea-lion-v1-7b-it-research": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "mamba-codestral-7b-v0.1": {
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 32768
+    },
+    "mistral-nemo-minitron-8b-8k-instruct": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "nemotron-4-340b-instruct": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama-3.1-nemotron-51b-instruct": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "llama-3.1-nemotron-ultra-253b-cpt-v1": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "llama-3.1-nemotron-nano-vl-8b-v1-mcore": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "nemotron-parse": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "nvidia-nemotron-parse-2.0": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "nvidia-nemotron-parse-v1.1": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "nvidia-nemotron-parse-v1.1-tc": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "nvidia-nemotron-parse-v1.2": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "palmyra-creative-122b": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "palmyra-med-70b": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 8192
+    },
+    "jamba-1.5-large-instruct": {
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
+    },
+    "jamba-1.5-mini-instruct": {
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
+    },
+    "jamba-1.6-large-instruct": {
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
+    },
+    "jamba-1.6-mini-instruct": {
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
+    },
+    "jamba-1.7-large-instruct": {
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
+    },
+    "jamba-1.7-mini-instruct": {
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
+    },
+    "jamba-large-1.5": {
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
+    },
+    "jamba-mini-1.5": {
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
+    },
+    "jamba-3b-reasoning-instruct": {
+      "context_window_tokens": 262144,
+      "max_input_tokens": 262144,
+      "max_output_tokens": 4096
+    },
+    "mistral-large-2-instruct": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 32768
+    },
+    "mistral-large-instruct-2407": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 32768
+    },
+    "nemotron-nano-3-30b-a3b": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 4096
+    },
+    "meta-llama-guard-2-8b": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama-3.1-nemoguard-8b-content-safety": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "llama-3.1-nemoguard-8b-topic-control": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 131072
+    },
+    "nemoguard-jailbreakdetect": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "granite-rag-3.0-8b-lora": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "granite-uncertainty-3.0-8b-lora": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "granitelib-rag-gpt-oss-r1.0": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "granitelib-rag-r1.0": {
+      "context_window_tokens": 4096,
+      "max_input_tokens": 4096,
+      "max_output_tokens": 4096
+    },
+    "llama-3.2-nv-embedqa-1b-v1": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 2048
+    },
+    "llama-3.2-nemoretriever-1b-vlm-embed-v1": {
+      "context_window_tokens": 131072,
+      "max_input_tokens": 131072,
+      "max_output_tokens": 2048
+    },
+    "nv-embedqa-e5-v5": {
+      "context_window_tokens": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 4096
+    },
+    "nemoretriever-parse": {
+      "context_window_tokens": 32768,
+      "max_input_tokens": 32768,
+      "max_output_tokens": 2048
+    }
+  }
+}

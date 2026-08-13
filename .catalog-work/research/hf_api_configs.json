@@ -1,0 +1,304 @@
+{
+  "gemma-3-1b-it": {
+    "repo": "google/gemma-3-1b-it",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "gemma-2b": {
+    "repo": "google/gemma-2b",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "gemma-7b": {
+    "repo": "google/gemma-7b",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "gemma-2-9b-it": {
+    "repo": "google/gemma-2-9b-it",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "recurrentgemma-2b": {
+    "repo": "google/recurrentgemma-2b",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "recurrentgemma-9b-it": {
+    "repo": "google/recurrentgemma-9b-it",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "jamba-1.5-large-instruct": {
+    "repo": "ai21labs/Jamba-1.5-Large",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": []
+  },
+  "jamba-1.6-mini-instruct": {
+    "repo": "ai21labs/Jamba-1.6-Mini",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": []
+  },
+  "jamba-1.7-large-instruct": {
+    "repo": "ai21labs/Jamba-1.7-Large",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": []
+  },
+  "jamba-3b-reasoning-instruct": {
+    "repo": "ai21labs/Jamba-3B-Instruct",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": []
+  },
+  "mistral-large-2-instruct": {
+    "repo": "mistralai/Mistral-Large-Instruct-2407",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "mistral-large-instruct-2407": {
+    "repo": "mistralai/Mistral-Large-Instruct-2407",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "mamba-codestral-7b-v0.1": {
+    "repo": "mistralai/Mamba-Codestral-7B-v0.1",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "tokenizer_config"
+    ]
+  },
+  "mistral-nemo-minitron-8b-8k-instruct": {
+    "repo": "nvidia/Mistral-NeMo-Minitron-8B-8K-Instruct",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": []
+  },
+  "llama2-7b": {
+    "repo": "meta-llama/Llama-2-7b-hf",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "llama2-70b-chat": {
+    "repo": "meta-llama/Llama-2-70b-chat-hf",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "meta-llama-guard-2-8b": {
+    "repo": "meta-llama/Meta-Llama-Guard-2-8B",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "llama-3.1-nemotron-51b-instruct": {
+    "repo": "nvidia/Llama-3.1-Nemotron-51B-Instruct-HF",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": []
+  },
+  "llama-3.1-nemotron-ultra-253b-cpt-v1": {
+    "repo": "nvidia/Llama-3.1-Nemotron-Ultra-253B-CPT-v1",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": []
+  },
+  "nemotron-nano-3-30b-a3b": {
+    "repo": "nvidia/Nemotron-Nano-3-30B-A3B-Instruct",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": []
+  },
+  "llama-3.1-nemoguard-8b-content-safety": {
+    "repo": "nvidia/Llama-3.1-Nemoguard-8B-Content-Safety",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "peft"
+    ]
+  },
+  "llama-3.2-nemoretriever-1b-vlm-embed-v1": {
+    "repo": "nvidia/Llama-3.2-Nemoretriever-1B-VLM-Embed-v1",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": []
+  },
+  "llama-nemotron-embed-1b-v2": {
+    "repo": "nvidia/Llama-Nemotron-Embed-1B-v2",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "auto_map",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "nv-embedqa-e5-v5": {
+    "repo": "nvidia/NV-EmbedQA-E5-V5",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": []
+  },
+  "sea-lion-7b-instruct": {
+    "repo": "aisingapore/sea-lion-7b-instruct",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "auto_map",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "zamba2-7b-instruct": {
+    "repo": "Zyphra/Zamba2-7B-Instruct",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "codegemma-2b": {
+    "repo": "google/codegemma-2b",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  },
+  "codegemma-1.1-7b": {
+    "repo": "google/codegemma-1.1-7b",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": []
+  },
+  "palmyra-med-70b": {
+    "repo": "Writer/Palmyra-Med-70B",
+    "gated": null,
+    "ctx": null,
+    "sliding_window": null,
+    "hidden_size": null,
+    "config_keys": [
+      "architectures",
+      "model_type",
+      "tokenizer_config"
+    ]
+  }
+}

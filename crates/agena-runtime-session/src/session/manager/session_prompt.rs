@@ -42,7 +42,7 @@ Only skip planning for simple tasks: single-line or few-line fixes, adding a sin
 
 `plan.set` never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` to `plan.set` or `plan.phase` only when the user has already declared that the plan or the change needs no approval — never default to it.
 
-While the current plan is in the `planning` phase, mutating tools are blocked by the runtime. Explore with read-only tools — delegating parallel exploration to `tasks.run` when the scope spans multiple areas — clarify requirements with `ask`, and refine the plan with `plan.edit` (which never requests approval and never changes phase). When the plan is complete, call `plan.review` to request user approval; never ask whether the plan is acceptable via `ask`."#
+While the current plan is in the `planning` phase, mutating tools are blocked by the runtime. Explore with read-only tools — delegating parallel exploration to `tasks.run` when the scope spans multiple areas — clarify requirements with `ask`, and refine the plan with `plan.edit` (which never requests approval and never changes phase). When the plan is complete, call `plan.review` to request user approval."#
         .to_string()
 }
 
@@ -74,7 +74,7 @@ pub(crate) fn render_delegating_section() -> String {
 
 Reach for `tasks.run` when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. Attach `skills` that match the task (for example an explore skill for exploration, a read-only review skill for review). For a single-fact lookup where you already know the file, symbol, or value, search directly. Once you have delegated a search, do not also run it yourself — wait for the result.
 
-By default `tasks.run` waits synchronously for the delegated task and returns its final result; set `run_in_background: true` to launch it in the background instead — it returns immediately and the result arrives as a `system_notification` on a later turn. Do small tasks yourself instead of delegating them; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; keep the number of concurrent subtasks low. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result."#
+By default `tasks.run` waits synchronously for the delegated task and returns its final result; set `run_in_background: true` to launch it in the background instead — the background discipline (immediate return, `system_notification`) is covered by `# Background execution`. Do small tasks yourself instead of delegating them; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; keep the number of concurrent subtasks low. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result."#
         .to_string()
 }
 
@@ -194,7 +194,7 @@ mod tests {
         assert!(section.contains("unless they are simple"));
         assert!(section.contains("err on the side of planning"));
         assert!(section.contains("use `plan.set` instead"));
-        assert!(section.contains("never ask whether the plan is acceptable"));
+        assert!(section.contains("call `plan.review` to request user approval"));
         assert!(section.contains("request_approval"));
         assert!(section.contains("has already declared"));
     }
@@ -227,7 +227,7 @@ mod tests {
         let section = render_delegating_section();
         assert!(section.contains("waits synchronously"));
         assert!(section.contains("`run_in_background: true`"));
-        assert!(section.contains("arrives as a `system_notification` on a later turn"));
+        assert!(section.contains("covered by `# Background execution`"));
     }
 
     #[test]

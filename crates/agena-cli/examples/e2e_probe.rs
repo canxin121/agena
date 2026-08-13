@@ -59,6 +59,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("no default model configured")?;
     eprintln!("probe: model = {model:?}");
 
+    // Optional deterministic mode: AGENA_PROBE_TEMPERATURE=0 pins sampling to
+    // the model's lowest temperature, which suppresses sampling variance and
+    // lets a few runs distinguish prompt behavior from model flakiness.
+    let temperature = std::env::var("AGENA_PROBE_TEMPERATURE")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok());
+    eprintln!("probe: temperature = {temperature:?}");
+
     let options = SessionRunOptions {
         model,
         thinking_mode: None,
@@ -67,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         thinking: None,
         request_override: Default::default(),
         system: None,
-        temperature: None,
+        temperature,
         max_output_tokens: None,
     };
 

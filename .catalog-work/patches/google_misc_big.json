@@ -1,0 +1,576 @@
+{
+  "models": {
+    "amazon-nova-lite": {
+      "thinking_modes": {
+        "default": "off",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "databricks-gemini-2-5-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1048576
+    },
+    "databricks-gemini-2-5-pro": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 1048576
+    },
+    "databricks-glm-5-2": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "databricks-gpt-oss-120b": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "databricks-gpt-oss-20b": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "databricks-kimi-k2-7-code": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 262144
+    },
+    "deep-research-max-preview-04-2026": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "deep-research-preview-04-2026": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "ernie-4.5-21b-a3b-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "ernie-4.5-vl-28b-a3b": {
+      "max_input_tokens": 30000
+    },
+    "ernie-4.5-vl-28b-a3b-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "ernie-4.5-vl-424b-a47b": {
+      "max_input_tokens": 123000
+    },
+    "ernie-5.0-thinking-preview": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "ernie-5.1:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "gemini-2.5-flash-lite-preview-09-2025": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      }
+    },
+    "gemini-2.5-flash-preview-09-2025": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      }
+    },
+    "gemini-deep-research": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 1048576
+    },
+    "gemini-omni-flash-preview": {
+      "max_input_tokens": 131072
+    },
+    "gemini-robotics-er-1.6-preview": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "gemma-4-26b-a4b-it": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      }
+    },
+    "gemma-4-31b-it": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      }
+    },
+    "google-gemma-4-26b-a4b-it": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 256000
+    },
+    "google-gemma-4-31b-it": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 256000
+    },
+    "hunyuan-2.0-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "hunyuan-a13b-instruct": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "hunyuan-t1": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "perplexity-academic-researcher": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "phi-4-mini-reasoning": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 128000
+    },
+    "phi-4-reasoning": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 32000
+    },
+    "phi-4-reasoning-plus": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 32000
+    },
+    "sarvam-105b": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "sarvam-30b": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "solar-pro2": {
+      "thinking_modes": {
+        "minimal": {
+          "display_name": "Think Minimal",
+          "strategy": "effort",
+          "effort": "minimal"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 65536
+    },
+    "solar-pro3": {
+      "thinking_modes": {
+        "default": "medium",
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "solar-pro4": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "solar-pro4:thinking": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "sonar-pro-search": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 200000
+    },
+    "sonar-reasoning": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 127000
+    },
+    "sonar-reasoning-pro": {
+      "thinking_modes": {
+        "default": "medium",
+        "minimal": {
+          "display_name": "Think Minimal",
+          "strategy": "effort",
+          "effort": "minimal"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    }
+  },
+  "notes": "Sources: models.dev/api.json (local models-dev.json snapshot) for limits/costs/reasoning_options; AWS Bedrock Nova 2 extended-thinking docs (reasoningConfig type enabled/disabled + maxReasoningEffort low/medium/high); Sarvam docs (reasoning_effort low/medium/high/null, default medium); Upstage docs (reasoning_effort low/medium/high, reasoning ON by default at medium); Perplexity docs (sonar-reasoning-pro reasoning_effort low/medium/high, default medium; minimal normalizes to low).\n\nThinking modes added for 37 of 44 models. Request-toggle (off+on, body_patch thinking:true) for: gemini-2.5-flash-preview-09-2025, gemini-2.5-flash-lite-preview-09-2025, databricks-gemini-2-5-flash (all Gemini 2.5 flash use the `thinking` request param per task rule), gemini-robotics-er-1.6-preview (models.dev lists toggle), and all four gemma-4-* entries (models.dev lists toggle; hosted Gemma 4 uses thinkingConfig.thinkingLevel MINIMAL/HIGH but modeled with generic thinking:true toggle).\n\nAlways-on single high for no-toggle reasoning models: gemini-2.5-pro base (databricks-gemini-2-5-pro; thinking cannot be turned off on 2.5 Pro), deep-research-preview/max + gemini-deep-research (research agents, no user toggle), phi-4-reasoning/mini/plus (reasoning always on; no documented user toggle - the thinking_mode hybrid/think/nothink param belongs to Phi-4-Reasoning-Vision, not these), ernie-4.5-21b-a3b-thinking, ernie-4.5-vl-28b-a3b-thinking, ernie-5.0-thinking-preview, ernie-5.1:thinking (Baidu thinking variants), hunyuan-2.0-thinking, hunyuan-t1 (Tencent thinking variants), databricks-kimi-k2-7-code (always-on reasoning code model), sonar-reasoning, sonar-pro-search, perplexity-academic-researcher.\n\nEffort-based with off: amazon-nova-lite (Nova 2 reasoningConfig toggle + maxReasoningEffort low/medium/high; disabled by default), sarvam-105b/30b (reasoning_effort low/medium/high/null, default medium), hunyuan-a13b-instruct (off+high per models.dev [none,high]), solar-pro4 and solar-pro4:thinking (models.dev lists none..max; modeled off+low/medium/high default medium). Effort-based without off: databricks-glm-5-2, databricks-gpt-oss-120b/20b (gpt-oss reasoning_effort low/medium/high), solar-pro3 (low/medium/high default medium), solar-pro2 (minimal/high per models.dev), sonar-reasoning-pro (minimal/low/medium/high default medium).\n\nmax_input_tokens added for 27 models where the bundle field was missing, from models.dev limit.input or limit.context. Not added: ernie-4.5-21b-a3b-thinking (sources conflict: 128000 vs 131072). No knowledge_cutoff additions possible - all bundle-missing ones are also absent from models.dev/official docs. No speed_modes added - none of these vendors document a speed/service tier for these model ids (kimi-k2.7-code-highspeed and glm-5.2-highspeed are separate model ids, not speed tiers).\n\nThinking modes OMITTED (no toggle documented, not a thinking variant): nova-lite-v1, nova-micro-v1, nova-pro-v1 (original Nova v1 models have no reasoning support; reasoning arrived with Nova 2), ernie-4.5-vl-28b-a3b and ernie-4.5-vl-424b-a47b (non-thinking VL variants, no toggle), solar-pro-3 (non-reasoning variant; reasoning_effort not exposed), gemini-omni-flash-preview (video-gen model, no toggle documented). All other fields (context_window_tokens, max_output_tokens, description, pricing) were already present in the bundle and left untouched to avoid clobbering."
+}

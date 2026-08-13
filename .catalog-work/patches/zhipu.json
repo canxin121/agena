@@ -1,0 +1,1020 @@
+{
+  "models": {
+    "alicloud-glm-5.1": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "glm-4-5-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4-7-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.5": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.5-air": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.5-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.5-x": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.5v": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.6": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.6-turbo:thinking": {
+      "knowledge_cutoff": "2025-04"
+    },
+    "glm-4.6v": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.6v-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.6v-flashx": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      },
+      "knowledge_cutoff": "2025-04"
+    },
+    "glm-4.7": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.7-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.7-flashx": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.7-n": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      },
+      "knowledge_cutoff": "2025-04"
+    },
+    "glm-5-1": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-5-2": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1000000
+    },
+    "glm-5-turbo": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-5.2-caveman": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1000000
+    },
+    "glm-5.2-caveman-lite": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1000000
+    },
+    "glm-5.2-caveman-ultra": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1000000
+    },
+    "glm-5.2-flex": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11"
+    },
+    "glm-5.2-highspeed": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1000000
+    },
+    "glm-5.2-honey": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1000000
+    },
+    "glm-5.2-honey-lite": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1000000
+    },
+    "glm-5.2-honey-ultra": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1000000
+    },
+    "glm-5.2-nitro": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11"
+    },
+    "glm-5.2-nvfp4": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11"
+    },
+    "glm-5.2-ponytail": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1000000
+    },
+    "glm-5.2-ponytail-lite": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1000000
+    },
+    "glm-5.2-ponytail-ultra": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1000000
+    },
+    "glm-5.2-short": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11"
+    },
+    "glm-5.2-short-flex": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11"
+    },
+    "glm-5.2:thinking": {
+      "knowledge_cutoff": "2025-11"
+    },
+    "glm-5.2@eu": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1048576
+    },
+    "glm-5p2": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1048575
+    },
+    "glm-5p2-fast": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1048575
+    },
+    "glm-5v-turbo": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-for-coding": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-latest": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11"
+    },
+    "glm5.2": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11"
+    },
+    "glm5.2-fast": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1048576
+    },
+    "olafangensan-glm-4.7-flash-heretic": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      },
+      "knowledge_cutoff": "2025-04"
+    },
+    "zai-glm-4.7": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "zai-glm-5.1": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "zai-org-glm-4.6": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "zai-org-glm-4.7": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "zai-org-glm-4.7-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "zai-org-glm-5": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "zai-org-glm-5-1": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "zai-org-glm-5-2": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "knowledge_cutoff": "2025-11",
+      "max_input_tokens": 1000000
+    }
+  },
+  "notes": "All GLM-4.5+ models expose thinking via request body param `thinking: {\"type\": \"enabled\"}` (default enabled) on bigmodel.cn / z.ai; modeled as request_only toggle with off disabled. GLM-5.2 adds documented effort levels high/max (`reasoning_effort`, default max, models.dev) -> effort strategy. Alibaba DashScope (alicloud-glm-5.1) uses `enable_thinking` (default true) instead of thinking.type. NO speed_modes added: models.dev shows no service-tier / speed param for any zhipu model; turbo/fast/highspeed/nitro are separate model ids, not modes of a base model. 12 ':thinking' variants are always-on-thinking model ids (cannot be toggled off) -> no thinking_modes set. knowledge_cutoff 2025-11 for GLM-5.2 family (official Zhipu HKEX announcement); 2025-04 for GLM-4.x family (models.dev); GLM-5/5.1 cutoffs not published -> omitted. max_input_tokens set to context window for 1M-context GLM-5.2-base models (sibling glm-5.2:thinking documents 1048576); other models' max input not separately published -> omitted. glm-latest is a rolling alias currently resolving to GLM-5.2 (1M ctx, pricing matches glm-5.2 thinking); effort modes applied. glm-for-coding is a coding-plan routing id (routes among GLM-4.7/5-turbo/5.2); toggle applied from shared thinking.type mechanism. glm-4.7-n is a third-party (Novita/Poe) GLM-4.7 variant; pricing provider-specific, not verified -> pricing omitted. glm-4.6v-flash / glm-4.6v-flashx thinking inferred from GLM-4.6V family (not explicitly documented)."
+}

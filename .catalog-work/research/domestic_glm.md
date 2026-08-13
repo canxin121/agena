@@ -1,0 +1,358 @@
+### glm domestic models (78 models)
+
+- **glm-4**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "14.994", "output_usd_per_million_tokens": "14.994", "cache_read_usd_per_million_tokens": "7.497"}
+  - models.dev: release=2024-01-01
+- **glm-4-32b-0414**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.2", "cache_read_usd_per_million_tokens": "0.1"}
+  - models.dev: ABSENT
+- **glm-4-32b-0414-128k**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.1"}
+  - models.dev: release=2025-04-14
+- **glm-4-5-flash**  MISSING: speed?
+  - current: ctx=200000 maxin=200000 maxout=98304
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-07-28
+- **glm-4-7-flash**  MISSING: speed?
+  - current: ctx=200000 maxin=200000 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-01-19
+- **glm-4-9b-0414**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=8000
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.2", "cache_read_usd_per_million_tokens": "0.1"}
+  - models.dev: ABSENT
+- **glm-4-air**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0.2006", "output_usd_per_million_tokens": "0.2006", "cache_read_usd_per_million_tokens": "0.1003"}
+  - models.dev: release=2024-01-01
+- **glm-4-air-0111**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0.1394", "output_usd_per_million_tokens": "0.1394", "cache_read_usd_per_million_tokens": "0.0697"}
+  - models.dev: release=2025-01-11
+- **glm-4-airx**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=8000 maxin=8000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "2.006", "output_usd_per_million_tokens": "2.006", "cache_read_usd_per_million_tokens": "1.003"}
+  - models.dev: release=2024-01-01
+- **glm-4-flash**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0.1003", "output_usd_per_million_tokens": "0.1003", "cache_read_usd_per_million_tokens": "0.05015"}
+  - models.dev: release=2024-01-01
+- **glm-4-long**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0.2006", "output_usd_per_million_tokens": "0.2006", "cache_read_usd_per_million_tokens": "0.1003"}
+  - models.dev: release=2024-01-01
+- **glm-4-plus**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "7.497", "output_usd_per_million_tokens": "7.497", "cache_read_usd_per_million_tokens": "3.7485"}
+  - models.dev: release=2024-09-20
+- **glm-4-plus-0111**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "9.996", "output_usd_per_million_tokens": "9.996", "cache_read_usd_per_million_tokens": "4.998"}
+  - models.dev: release=2025-02-19
+- **glm-4.1v-thinking-flash**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=64000 maxin=64000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "0.3", "cache_read_usd_per_million_tokens": "0.15"}
+  - models.dev: release=2025-07-09
+- **glm-4.1v-thinking-flashx**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=64000 maxin=64000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "0.3", "cache_read_usd_per_million_tokens": "0.15"}
+  - models.dev: release=2025-07-09
+- **glm-4.5**  MISSING: speed?
+  - current: ctx=131000 maxin=128000 maxout=98304
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "2.2", "cache_read_usd_per_million_tokens": "0.11", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-07-28
+- **glm-4.5-air**  MISSING: speed?
+  - current: ctx=131000 maxin=128000 maxout=98304
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.13", "output_usd_per_million_tokens": "0.85", "cache_read_usd_per_million_tokens": "0.025", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-07-28
+- **glm-4.5-air:thinking**  MISSING: input?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=98304
+  - current pricing: {"input_usd_per_million_tokens": "0.12", "output_usd_per_million_tokens": "0.8", "cache_read_usd_per_million_tokens": "0.06"}
+  - models.dev: ABSENT
+- **glm-4.5-airx**  MISSING: think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "1.1", "output_usd_per_million_tokens": "4.5", "cache_read_usd_per_million_tokens": "0.22"}
+  - models.dev: release=2025-07-28
+- **glm-4.5-flash**  MISSING: speed?
+  - current: ctx=131072 maxin=131072 maxout=98304
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-07-28
+- **glm-4.5-x**  MISSING: speed?
+  - current: ctx=128000 maxin=128000 maxout=16384
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "2.2", "output_usd_per_million_tokens": "8.9", "cache_read_usd_per_million_tokens": "0.45"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-07-28
+- **glm-4.5:thinking**  MISSING: input?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "1.3", "cache_read_usd_per_million_tokens": "0.15"}
+  - models.dev: ABSENT
+- **glm-4.5v**  MISSING: speed?
+  - current: ctx=128000 maxin=64000 maxout=16384
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "1.8", "cache_read_usd_per_million_tokens": "0.11", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-08-11
+- **glm-4.5v:thinking**  MISSING: think?, speed?
+  - current: ctx=64000 maxin=64000 maxout=96000
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "1.8", "cache_read_usd_per_million_tokens": "0.3"}
+  - models.dev: ABSENT
+- **glm-4.6**  MISSING: speed?
+  - current: ctx=204800 maxin=200000 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.55", "output_usd_per_million_tokens": "2.2", "cache_read_usd_per_million_tokens": "0.11", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-09-30
+- **glm-4.6-turbo**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=200000 maxin=200000 maxout=204800
+  - current pricing: {"input_usd_per_million_tokens": "1", "output_usd_per_million_tokens": "3", "cache_read_usd_per_million_tokens": "0.5"}
+  - models.dev: ABSENT
+- **glm-4.6-turbo:thinking**  MISSING: input?, think?, speed?
+  - current: ctx=200000 maxin=200000 maxout=204800
+  - current pricing: {"input_usd_per_million_tokens": "1", "output_usd_per_million_tokens": "3", "cache_read_usd_per_million_tokens": "0.5"}
+  - models.dev: ABSENT
+- **glm-4.6:thinking**  MISSING: input?, think?, speed?
+  - current: ctx=200000 maxin=200000 maxout=65535
+  - current pricing: {"input_usd_per_million_tokens": "0.35", "output_usd_per_million_tokens": "1.4", "cache_read_usd_per_million_tokens": "0.175"}
+  - models.dev: ABSENT
+- **glm-4.6v**  MISSING: speed?
+  - current: ctx=131072 maxin=128000 maxout=32768
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "0.9", "cache_read_usd_per_million_tokens": "0.05"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-12-08
+- **glm-4.6v-flash**  MISSING: speed?
+  - current: ctx=200000 maxin=200000 maxout=64000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.02", "output_usd_per_million_tokens": "0.21", "cache_read_usd_per_million_tokens": "0.0043"}
+  - models.dev: ABSENT
+- **glm-4.6v-flashx**  MISSING: speed?
+  - current: ctx=128000 maxin=128000 maxout=16000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.04", "output_usd_per_million_tokens": "0.4", "cache_read_usd_per_million_tokens": "0.004"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-12-08
+- **glm-4.7**  MISSING: speed?
+  - current: ctx=204800 maxin=131000 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.38", "output_usd_per_million_tokens": "1.98", "cache_read_usd_per_million_tokens": "0.19", "cache_write_usd_per_million_tokens": "0", "tiers": [{"input_usd_per_million_tokens": "0.62", "output_usd_per_million_tokens": "2.47", "cache_read_usd_per_million_tokens": "0.13", "cache_write_usd_per_million_tokens": "0.62"}]}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-12-22
+- **glm-4.7-flash**  MISSING: speed?
+  - current: ctx=200000 maxin=200000 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.06", "output_usd_per_million_tokens": "0.4", "cache_read_usd_per_million_tokens": "0.01", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-01-19
+- **glm-4.7-flash:thinking**  MISSING: input?, think?, speed?
+  - current: ctx=200000 maxin=200000 maxout=128000
+  - current pricing: {"input_usd_per_million_tokens": "0.07", "output_usd_per_million_tokens": "0.4", "cache_read_usd_per_million_tokens": "0.035"}
+  - models.dev: ABSENT
+- **glm-4.7-flashx**  MISSING: speed?
+  - current: ctx=200000 maxin=200000 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.07", "output_usd_per_million_tokens": "0.4", "cache_read_usd_per_million_tokens": "0.01", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-01-19
+- **glm-4.7-n**  MISSING: price?, speed?
+  - current: ctx=205000 maxin=205000 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - models.dev: ABSENT
+- **glm-4.7:thinking**  MISSING: input?, think?, speed?
+  - current: ctx=200000 maxin=200000 maxout=65535
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.8", "cache_read_usd_per_million_tokens": "0.1"}
+  - models.dev: ABSENT
+- **glm-5**  MISSING: speed?
+  - current: ctx=202752 maxin=200000 maxout=16384
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.86", "output_usd_per_million_tokens": "3.15", "cache_read_usd_per_million_tokens": "0.144", "cache_write_usd_per_million_tokens": "0", "tiers": [{"input_usd_per_million_tokens": "0.8", "output_usd_per_million_tokens": "3.4", "cache_read_usd_per_million_tokens": "0.2", "cache_write_usd_per_million_tokens": "0.8"}]}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-02-11
+- **glm-5-1**  MISSING: kcutoff?, speed?
+  - current: ctx=202000 maxin=202000 maxout=128000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.825", "output_usd_per_million_tokens": "3.301", "cache_read_usd_per_million_tokens": "0.165", "tiers": [{"input_usd_per_million_tokens": "1.1", "output_usd_per_million_tokens": "3.851", "cache_read_usd_per_million_tokens": "0.22"}]}
+  - models.dev: release=2026-04-07
+- **glm-5-2**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.4", "output_usd_per_million_tokens": "4.4", "cache_read_usd_per_million_tokens": "1.4"}
+  - models.dev: ropts=[{"type": "effort", "values": ["high", "xhigh"]}] | release=2026-06-13
+- **glm-5-turbo**  MISSING: speed?
+  - current: ctx=200000 maxin=202800 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.72", "output_usd_per_million_tokens": "3.2", "cache_read_usd_per_million_tokens": "0.296", "cache_write_usd_per_million_tokens": "1.544", "tiers": [{"input_usd_per_million_tokens": "1.1", "output_usd_per_million_tokens": "4.3", "cache_read_usd_per_million_tokens": "0.27", "cache_write_usd_per_million_tokens": "1.1"}]}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-03-16
+- **glm-5.1**  MISSING: speed?
+  - current: ctx=202752 maxin=202752 maxout=128000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.87", "output_usd_per_million_tokens": "3.48", "cache_read_usd_per_million_tokens": "0.17", "cache_write_usd_per_million_tokens": "0", "tiers": [{"input_usd_per_million_tokens": "1.2", "output_usd_per_million_tokens": "4.4", "cache_read_usd_per_million_tokens": "0.3", "cache_write_usd_per_million_tokens": "1.2"}]}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-03-27
+- **glm-5.1-thinking**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=202752 maxin=202752 maxout=65535
+  - current pricing: {"input_usd_per_million_tokens": "1.5", "output_usd_per_million_tokens": "5.25", "cache_read_usd_per_million_tokens": "0.3"}
+  - models.dev: ABSENT
+- **glm-5.1:thinking**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=200000 maxin=200000 maxout=131072
+  - current pricing: {"input_usd_per_million_tokens": "0.75", "output_usd_per_million_tokens": "2.6", "cache_read_usd_per_million_tokens": "0.15"}
+  - models.dev: ABSENT
+- **glm-5.2**  MISSING: kcutoff?, speed?
+  - current: ctx=1000000 maxin=1048576 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.4", "output_usd_per_million_tokens": "4.4", "cache_read_usd_per_million_tokens": "0.28", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "effort", "values": ["high", "max"]}] | release=2026-06-13
+- **glm-5.2-caveman**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.254", "output_usd_per_million_tokens": "5.016", "cache_read_usd_per_million_tokens": "0.3135"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-06-13
+- **glm-5.2-caveman-lite**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.254", "output_usd_per_million_tokens": "5.016", "cache_read_usd_per_million_tokens": "0.3135"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-06-13
+- **glm-5.2-caveman-ultra**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.254", "output_usd_per_million_tokens": "5.016", "cache_read_usd_per_million_tokens": "0.3135"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-06-13
+- **glm-5.2-fast**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=1048560 maxin=1048560 maxout=1048560
+  - current pricing: {"input_usd_per_million_tokens": "1.45", "output_usd_per_million_tokens": "4.5", "cache_read_usd_per_million_tokens": "0.3625"}
+  - models.dev: release=2026-06-17
+- **glm-5.2-flex**  MISSING: speed?
+  - current: ctx=1048560 maxin=1048560 maxout=1048560
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "0.725", "output_usd_per_million_tokens": "2.25", "cache_read_usd_per_million_tokens": "0.18125"}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "effort", "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]}, {"type": "budget_tokens"}] | release=2026-06-17
+- **glm-5.2-highspeed**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "effort", "values": ["high", "max"]}] | release=2026-06-13
+- **glm-5.2-honey**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.254", "output_usd_per_million_tokens": "5.016", "cache_read_usd_per_million_tokens": "0.3135"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-06-13
+- **glm-5.2-honey-lite**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.254", "output_usd_per_million_tokens": "5.016", "cache_read_usd_per_million_tokens": "0.3135"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-06-13
+- **glm-5.2-honey-ultra**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.254", "output_usd_per_million_tokens": "5.016", "cache_read_usd_per_million_tokens": "0.3135"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-06-13
+- **glm-5.2-nitro**  MISSING: speed?
+  - current: ctx=200000 maxin=200000 maxout=32000
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "0.8", "output_usd_per_million_tokens": "2.4"}
+  - models.dev: release=2026-06-13
+- **glm-5.2-nvfp4**  MISSING: input?, speed?
+  - current: ctx=512000 maxin=512000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **glm-5.2-ponytail**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.254", "output_usd_per_million_tokens": "5.016", "cache_read_usd_per_million_tokens": "0.3135"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-06-13
+- **glm-5.2-ponytail-lite**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.254", "output_usd_per_million_tokens": "5.016", "cache_read_usd_per_million_tokens": "0.3135"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-06-13
+- **glm-5.2-ponytail-ultra**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.254", "output_usd_per_million_tokens": "5.016", "cache_read_usd_per_million_tokens": "0.3135"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-06-13
+- **glm-5.2-short**  MISSING: speed?
+  - current: ctx=199984 maxin=199984 maxout=199984
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.45", "output_usd_per_million_tokens": "4.5", "cache_read_usd_per_million_tokens": "0.3625"}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "effort", "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]}, {"type": "budget_tokens"}] | release=2026-06-17
+- **glm-5.2-short-fast**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=199984 maxin=199984 maxout=199984
+  - current pricing: {"input_usd_per_million_tokens": "1.45", "output_usd_per_million_tokens": "4.5", "cache_read_usd_per_million_tokens": "0.3625"}
+  - models.dev: release=2026-06-17
+- **glm-5.2-short-fast-flex**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=199984 maxin=199984 maxout=199984
+  - current pricing: {"input_usd_per_million_tokens": "0.725", "output_usd_per_million_tokens": "2.25", "cache_read_usd_per_million_tokens": "0.18125"}
+  - models.dev: release=2026-06-17
+- **glm-5.2-short-flex**  MISSING: speed?
+  - current: ctx=199984 maxin=199984 maxout=199984
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "0.725", "output_usd_per_million_tokens": "2.25", "cache_read_usd_per_million_tokens": "0.18125"}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "effort", "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]}, {"type": "budget_tokens"}] | release=2026-06-17
+- **glm-5.2:thinking**  MISSING: input?, think?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=131072
+  - current pricing: {"input_usd_per_million_tokens": "0.42", "output_usd_per_million_tokens": "1.32", "cache_read_usd_per_million_tokens": "0.078"}
+  - models.dev: ABSENT
+- **glm-5.2@eu**  MISSING: speed?
+  - current: ctx=1048576 maxin=1048576 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.2", "output_usd_per_million_tokens": "4.2", "cache_read_usd_per_million_tokens": "0.26"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "medium", "high", "max"]}, {"type": "budget_tokens"}] | release=2026-06-13
+- **glm-5:thinking**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=200000 maxin=200000 maxout=128000
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "2.55", "cache_read_usd_per_million_tokens": "0.13"}
+  - models.dev: ABSENT
+- **glm-5p2**  MISSING: input?, speed?
+  - current: ctx=1048575 maxin=1048575 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "1.4", "output_usd_per_million_tokens": "4.4", "cache_read_usd_per_million_tokens": "0.14"}
+  - models.dev: ABSENT
+- **glm-5p2-fast**  MISSING: input?, speed?
+  - current: ctx=1048575 maxin=1048575 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "2.1", "output_usd_per_million_tokens": "6.6", "cache_read_usd_per_million_tokens": "0.21"}
+  - models.dev: ABSENT
+- **glm-5v-turbo**  MISSING: kcutoff?, speed?
+  - current: ctx=200000 maxin=202800 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.72", "output_usd_per_million_tokens": "3.2", "cache_read_usd_per_million_tokens": "0.169008", "cache_write_usd_per_million_tokens": "1.544"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-04-01
+- **glm-5v-turbo:thinking**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=202800 maxin=202800 maxout=131072
+  - current pricing: {"input_usd_per_million_tokens": "1.2", "output_usd_per_million_tokens": "4", "cache_read_usd_per_million_tokens": "0.24"}
+  - models.dev: ABSENT
+- **glm-for-coding**  MISSING: kcutoff?, speed?
+  - current: ctx=200000 maxin=200000 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.086", "output_usd_per_million_tokens": "0.343"}
+  - models.dev: release=2025-09-30
+- **glm-latest**  MISSING: input?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "0.42", "output_usd_per_million_tokens": "1.32", "cache_read_usd_per_million_tokens": "0.078"}
+  - models.dev: ABSENT
+- **glm-z1-9b-0414**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=8000
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.2", "cache_read_usd_per_million_tokens": "0.1"}
+  - models.dev: ABSENT
+- **glm-z1-air**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.07", "output_usd_per_million_tokens": "0.07", "cache_read_usd_per_million_tokens": "0.035"}
+  - models.dev: release=2025-04-15
+- **glm-z1-airx**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.7", "output_usd_per_million_tokens": "0.7", "cache_read_usd_per_million_tokens": "0.35"}
+  - models.dev: release=2025-04-15
+- **glm-zero-preview**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=8000 maxin=8000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "1.802", "output_usd_per_million_tokens": "1.802", "cache_read_usd_per_million_tokens": "0.901"}
+  - models.dev: release=2024-12-20
+- **glm5.2**  MISSING: speed?
+  - current: ctx=96000 maxin=96000 maxout=96000
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "2.31", "output_usd_per_million_tokens": "6"}
+  - models.dev: ropts=[{"type": "effort", "values": ["high", "max"]}] | release=2026-06-13
+- **glm5.2-fast**  MISSING: speed?
+  - current: ctx=1048576 maxin=1048576 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "3", "output_usd_per_million_tokens": "10.25", "cache_read_usd_per_million_tokens": "0.5", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "effort", "values": ["none", "low", "medium", "high", "max"]}] | release=2026-06-13
+

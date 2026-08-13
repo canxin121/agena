@@ -1,0 +1,2 @@
+shisa-v2-llama3.3-70b
+shisa-v2.1-llama3.3-70b

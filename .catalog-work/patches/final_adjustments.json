@@ -1,0 +1,22 @@
+{
+  "models": {
+    "qwen3-vl-30b-a3b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    }
+  },
+  "notes": "Qwen3-VL family (same as qwen3-vl-235b-a22b, verified enable_thinking toggle). Alibaba agent missed this reasoning-capable Qwen3-VL variant. qwen3-coder-30b-a3b / qwen3-coder-next intentionally left unpatched: Qwen3-Coder is non-thinking-only per official README (enable_thinking=False no longer required)."
+}

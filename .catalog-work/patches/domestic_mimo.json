@@ -1,0 +1,51 @@
+{
+  "models": {
+    "minimax-m2-her": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "description": "MiniMax dialogue-first model specialized for immersive roleplay and AI-companion chat, powering Talkie and Xingye"
+    },
+    "minimax-m3": {
+      "speed_modes": {
+        "priority": {
+          "display_name": "Priority",
+          "request_override": {
+            "body_patch": {
+              "service_tier": "priority"
+            }
+          }
+        }
+      }
+    },
+    "minimax-m2.5-230b": {
+      "knowledge_cutoff": "2025-08"
+    },
+    "minimax-m2.5-highspeed": {
+      "knowledge_cutoff": "2025-08"
+    },
+    "minimax-m2.7-turbo": {
+      "knowledge_cutoff": "2025-01"
+    },
+    "minimax-m25": {
+      "knowledge_cutoff": "2025-08"
+    },
+    "minimax-m27": {
+      "knowledge_cutoff": "2025-01"
+    },
+    "minimax-m2p7": {
+      "knowledge_cutoff": "2025-01"
+    },
+    "minimax-m3-preview": {
+      "knowledge_cutoff": "2025-01"
+    },
+    "minimax-m3:thinking": {
+      "knowledge_cutoff": "2025-01"
+    }
+  },
+  "notes": "Researched MiniMax/Mimo models that were still missing metadata after the other subagent patches (xiaomi_xai_openai.json covers Mimo thinking toggles; mistral_minimax.json covers MiniMax M1/M2.x/M3 thinking modes). SOURCES: platform.minimax.io/docs (official API reference for text-chat, OpenAI-compatible endpoint, pricing-paygo page), minimaxi.com/blog/minimax-m2-her (official M2-her announcement), huggingface.co/MiniMaxAI model cards (MiniMax-M2, MiniMax-M1), models.dev local snapshot (modelsdev.json), and the PATCH_SPEC brief. ADDED: (1) minimax-m2-her always-on thinking high mode -- M2-her is an M2-family model (official name MiniMax-M2-her, per minimaxi.com blog) and the official MiniMax API reference states 'For M2.x models, thinking cannot be disabled' / 'thinking remains on', so it reasons always-on like the rest of the M2 series (single 'high' effort mode, matching the catalog's existing minimax-m2 pattern). Also corrected its description: it is NOT a general chat/coding model but MiniMax's roleplay/companion specialist powering Talkie and Xingye (previous description was a generic template). (2) minimax-m3 speed_modes: MiniMax DOES expose a real request-level tier parameter, service_tier (standard/priority), documented under the official 'MiniMax-M3 Request Parameters' table; priority = 1.5x price with priority admission and faster responses (platform.minimax.io pricing-paygo + text-openai-api docs). Added only to minimax-m3 because official docs scope service_tier to MiniMax-M3; m3-preview / m3:thinking left without speed_modes (no doc that they accept it). No speed_modes added to any M2.x/Mimo model -- their speed tiers (-highspeed/-lightning/-turbo/-ultraspeed/-fast) are separate model IDs, and no request-level speed param is documented for them. (3) knowledge_cutoff for same-weights variants, derived from the base model's existing catalog cutoff (MiniMax does not publish per-variant cutoffs): minimax-m2.5-230b, minimax-m2.5-highspeed, minimax-m25 inherit M2.5's 2025-08; minimax-m2.7-turbo, minimax-m27, minimax-m2p7 inherit M2.7's 2025-01; minimax-m3-preview and minimax-m3:thinking inherit M3's 2025-01. DELIBERATELY LEFT UNCHANGED: mimo TTS models (v2/v2.5/voiceclone/voicedesign) -- TTS, not reasoning (models.dev reasoning=False), no thinking modes and no meaningful knowledge cutoff; minimax-01, minimax-text-01 -- non-reasoning general models, no documented thinking toggle; minimax-h3 -- a mid-2026 omni-modal VIDEO generation model (H3-Omni-Transformer 33B + Qwen3-VL-32B encoder, launched 2026-07, open weights 2026-08), not a token-based LLM: billed per output second (768p ~$0.08/s, 2K ~$0.13/s; Context-IR ~$0.90/$3.60 per M tokens), so per-token context/max-token/pricing fields are structurally inapplicable and left as-is (ctx/maxout already 0 in catalog); no knowledge cutoff published for a video model; its existing description (video model for prompt-guided generation/editing/motion workflows) is accurate and kept; open_weights left false since only the H3-Base generator is open while Context-IR and Regenerate-2K stay hosted. minimax-latest (alias to an unspecified current MiniMax model) and minimax-m1.80k left without knowledge_cutoff -- MiniMax publishes no cutoff dates for these (M1 card states none; models.dev has no cutoff fields). max_input_tokens, context, output tokens, pricing, release dates, and descriptions for all other 40 models were already present in the merged catalog and were not re-emitted."
+}

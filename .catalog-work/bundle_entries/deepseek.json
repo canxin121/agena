@@ -1,0 +1,1303 @@
+{
+ "alicloud-deepseek-v4-flash": {
+  "context_window_tokens": 1000000,
+  "max_output_tokens": 384000,
+  "description": "Fast DeepSeek model for efficient chat, coding help, and agent loops",
+  "knowledge_cutoff": "2025-05",
+  "release_date": "2026-04-24",
+  "last_updated": "2026-04-24",
+  "open_weights": true,
+  "assistant_reasoning_interleaved": true,
+  "assistant_reasoning_field": "reasoning_content",
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.14",
+   "output_usd_per_million_tokens": "0.28",
+   "cache_read_usd_per_million_tokens": "0.028"
+  },
+  "display_name": "DeepSeek V4 Flash (Alibaba Cloud)",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "structured_output",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "alicloud-deepseek-v4-pro": {
+  "context_window_tokens": 1000000,
+  "max_output_tokens": 384000,
+  "description": "Flagship DeepSeek model for coding, reasoning, and agentic work",
+  "knowledge_cutoff": "2025-05",
+  "release_date": "2026-04-24",
+  "last_updated": "2026-04-24",
+  "open_weights": true,
+  "assistant_reasoning_interleaved": true,
+  "assistant_reasoning_field": "reasoning_content",
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "1.69",
+   "output_usd_per_million_tokens": "3.38",
+   "cache_read_usd_per_million_tokens": "0.13"
+  },
+  "display_name": "DeepSeek V4 Pro (Alibaba Cloud)",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "structured_output",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "deep-deepseek-v4-flash": {
+  "context_window_tokens": 1000000,
+  "max_output_tokens": 384000,
+  "description": "Fast DeepSeek model for efficient chat, coding help, and agent loops",
+  "knowledge_cutoff": "2025-05",
+  "release_date": "2026-04-24",
+  "last_updated": "2026-04-24",
+  "open_weights": true,
+  "assistant_reasoning_interleaved": true,
+  "assistant_reasoning_field": "reasoning_content",
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.154",
+   "output_usd_per_million_tokens": "0.308",
+   "cache_read_usd_per_million_tokens": "0.0308"
+  },
+  "display_name": "DeepSeek V4 Flash (DeepSeek)",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "structured_output",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "deep-deepseek-v4-pro": {
+  "context_window_tokens": 1000000,
+  "max_output_tokens": 384000,
+  "description": "Flagship DeepSeek model for coding, reasoning, and agentic work",
+  "knowledge_cutoff": "2025-05",
+  "release_date": "2026-04-24",
+  "last_updated": "2026-04-24",
+  "open_weights": true,
+  "assistant_reasoning_interleaved": true,
+  "assistant_reasoning_field": "reasoning_content",
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.478",
+   "output_usd_per_million_tokens": "0.956",
+   "cache_read_usd_per_million_tokens": "0.004302"
+  },
+  "display_name": "DeepSeek V4 Pro (DeepSeek)",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "structured_output",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "deepseek-3.2": {
+  "context_window_tokens": 163840,
+  "max_output_tokens": 163840,
+  "description": "DeepSeek chat model for instruction following, coding, and analysis",
+  "knowledge_cutoff": "2024-12",
+  "release_date": "2025-12-02",
+  "last_updated": "2026-04-30",
+  "open_weights": true,
+  "assistant_reasoning_interleaved": true,
+  "assistant_reasoning_field": "reasoning_content",
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.25",
+   "output_usd_per_million_tokens": "0.8",
+   "cache_read_usd_per_million_tokens": "0.075"
+  },
+  "display_name": "Deepseek 3.2",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "deepseek-chat-v3.1": {
+  "context_window_tokens": 163840,
+  "max_output_tokens": 32768,
+  "description": "DeepSeek chat model for instruction following, coding, and analysis",
+  "knowledge_cutoff": "2025-03-31",
+  "release_date": "2025-08-21",
+  "last_updated": "2025-08-21",
+  "open_weights": false,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.27",
+   "output_usd_per_million_tokens": "1",
+   "cache_read_usd_per_million_tokens": "0.135",
+   "cache_write_usd_per_million_tokens": "0.25"
+  },
+  "display_name": "DeepSeek: DeepSeek V3.1",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ]
+ },
+ "deepseek-latest": {
+  "context_window_tokens": 1048576,
+  "max_input_tokens": 1048576,
+  "max_output_tokens": 384000,
+  "description": "DeepSeek chat model for instruction following, coding, and analysis",
+  "release_date": "2026-05-03",
+  "last_updated": "2026-05-03",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.435",
+   "output_usd_per_million_tokens": "0.87",
+   "cache_read_usd_per_million_tokens": "0.003625"
+  },
+  "display_name": "DeepSeek Latest",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output"
+  ]
+ },
+ "deepseek-math-v2": {
+  "context_window_tokens": 160000,
+  "max_output_tokens": 160000,
+  "description": "DeepSeek chat model for instruction following, coding, and analysis",
+  "release_date": "2025-12-04",
+  "last_updated": "2025-12-04",
+  "open_weights": false,
+  "output_modalities": [
+   "text"
+  ],
+  "display_name": "Deepseek/Deepseek-Math-V2",
+  "origin": "DeepSeek",
+  "features": {
+   "supported": [
+    "reasoning",
+    "temperature"
+   ],
+   "unsupported": [
+    "tool_calling",
+    "structured_output"
+   ]
+  }
+ },
+ "deepseek-r1-0528-qwen3-8b": {
+  "context_window_tokens": 128000,
+  "max_output_tokens": 32000,
+  "description": "DeepSeek reasoning model for multi-step analysis, math, coding, and tools",
+  "release_date": "2025-05-29",
+  "last_updated": "2025-05-29",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.06",
+   "output_usd_per_million_tokens": "0.09"
+  },
+  "display_name": "DeepSeek R1 0528 Qwen3 8B",
+  "origin": "DeepSeek",
+  "features": {
+   "supported": [
+    "reasoning",
+    "temperature"
+   ],
+   "unsupported": [
+    "tool_calling"
+   ]
+  }
+ },
+ "deepseek-r1-turbo": {
+  "context_window_tokens": 64000,
+  "max_output_tokens": 16000,
+  "description": "DeepSeek reasoning model for multi-step analysis, math, coding, and tools",
+  "release_date": "2025-03-05",
+  "last_updated": "2025-03-05",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.7",
+   "output_usd_per_million_tokens": "2.5"
+  },
+  "display_name": "DeepSeek R1 (Turbo)",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "temperature"
+  ]
+ },
+ "deepseek-v3.1-terminus": {
+  "context_window_tokens": 128000,
+  "max_input_tokens": 128000,
+  "max_output_tokens": 16384,
+  "description": "DeepSeek chat model for instruction following, coding, and analysis",
+  "knowledge_cutoff": "2025-09",
+  "release_date": "2025-09-22",
+  "last_updated": "2025-09-22",
+  "open_weights": false,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.27",
+   "output_usd_per_million_tokens": "1",
+   "cache_read_usd_per_million_tokens": "0.21600000000000005"
+  },
+  "display_name": "DeepSeek V3.1 Terminus",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "temperature",
+   "structured_output"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "deepseek-v3.2-251201": {
+  "context_window_tokens": 128000,
+  "max_output_tokens": 32000,
+  "description": "DeepSeek chat model for instruction following, coding, and analysis",
+  "release_date": "2025-12-01",
+  "last_updated": "2025-12-01",
+  "open_weights": false,
+  "output_modalities": [
+   "text"
+  ],
+  "display_name": "Deepseek/DeepSeek-V3.2",
+  "origin": "DeepSeek",
+  "features": {
+   "supported": [
+    "reasoning",
+    "tool_calling",
+    "temperature"
+   ],
+   "unsupported": [
+    "structured_output"
+   ]
+  }
+ },
+ "deepseek-v3.2-exp-thinking": {
+  "context_window_tokens": 128000,
+  "max_input_tokens": 163840,
+  "max_output_tokens": 32000,
+  "description": "DeepSeek chat model for instruction following, coding, and analysis",
+  "release_date": "2025-09-29",
+  "last_updated": "2025-09-29",
+  "open_weights": false,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.28",
+   "output_usd_per_million_tokens": "0.42",
+   "cache_read_usd_per_million_tokens": "0.14"
+  },
+  "display_name": "DeepSeek/DeepSeek-V3.2-Exp-Thinking",
+  "origin": "DeepSeek",
+  "features": {
+   "supported": [
+    "reasoning",
+    "temperature"
+   ],
+   "unsupported": [
+    "tool_calling",
+    "structured_output"
+   ]
+  }
+ },
+ "deepseek-v3.2-fast": {
+  "lifecycle": "deprecated",
+  "context_window_tokens": 8000,
+  "max_input_tokens": 7000,
+  "max_output_tokens": 8192,
+  "description": "Legacy model retained for compatibility with older integrations",
+  "knowledge_cutoff": "2025-01",
+  "release_date": "2025-01-27",
+  "last_updated": "2026-05-07",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.4",
+   "output_usd_per_million_tokens": "2",
+   "cache_read_usd_per_million_tokens": "0.04",
+   "cache_write_usd_per_million_tokens": "0.5"
+  },
+  "display_name": "DeepSeek-V3.2-fast",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ]
+ },
+ "deepseek-v3.2-nvfp4": {
+  "context_window_tokens": 131072,
+  "max_output_tokens": 131072,
+  "description": "DeepSeek chat model for instruction following, coding, and analysis",
+  "knowledge_cutoff": "2024-07",
+  "release_date": "2025-12-01",
+  "last_updated": "2025-12-01",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.55",
+   "output_usd_per_million_tokens": "1.65"
+  },
+  "display_name": "DeepSeek V3.2",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "temperature"
+  ]
+ },
+ "deepseek-v3.2-thinking": {
+  "context_window_tokens": 128000,
+  "max_output_tokens": 128000,
+  "description": "DeepSeek chat model for instruction following, coding, and analysis",
+  "knowledge_cutoff": "2024-12",
+  "release_date": "2025-12-01",
+  "last_updated": "2025-12-01",
+  "open_weights": false,
+  "assistant_reasoning_interleaved": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.29",
+   "output_usd_per_million_tokens": "0.43"
+  },
+  "display_name": "DeepSeek-V3.2-Thinking",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "deepseek-v3.2:thinking": {
+  "context_window_tokens": 163000,
+  "max_input_tokens": 163000,
+  "max_output_tokens": 65536,
+  "description": "Hybrid-reasoning DeepSeek model with thinking and non-thinking modes, sparse attention, and tool-use",
+  "knowledge_cutoff": "2024-07",
+  "release_date": "2025-12-01",
+  "last_updated": "2025-12-01",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.28",
+   "output_usd_per_million_tokens": "0.42",
+   "cache_read_usd_per_million_tokens": "0.14"
+  },
+  "display_name": "DeepSeek V3.2 Thinking",
+  "origin": "DeepSeek",
+  "input": [
+   "document",
+   "file"
+  ],
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ]
+ },
+ "deepseek-v4-flash-0731-fast": {
+  "context_window_tokens": 1000000,
+  "max_output_tokens": 32768,
+  "description": "Fast DeepSeek model for efficient chat, coding help, and agent loops",
+  "knowledge_cutoff": "2025-05",
+  "release_date": "2026-08-09",
+  "last_updated": "2026-08-11",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.35",
+   "output_usd_per_million_tokens": "0.7",
+   "cache_read_usd_per_million_tokens": "0.0875"
+  },
+  "display_name": "DeepSeek V4 Flash 0731 Fast",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "structured_output",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "deepseek-v4-flash-0731:thinking": {
+  "context_window_tokens": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 131072,
+  "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+  "knowledge_cutoff": "2025-05",
+  "release_date": "2026-07-31",
+  "last_updated": "2026-07-31",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.14",
+   "output_usd_per_million_tokens": "0.28",
+   "cache_read_usd_per_million_tokens": "0.014"
+  },
+  "display_name": "DeepSeek V4 Flash 0731 (Thinking)",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ]
+ },
+ "deepseek-v4-flash-0731@eu": {
+  "context_window_tokens": 1048576,
+  "max_output_tokens": 131072,
+  "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+  "knowledge_cutoff": "2025-05",
+  "release_date": "2026-07-31",
+  "last_updated": "2026-07-31",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.14",
+   "output_usd_per_million_tokens": "0.28",
+   "cache_read_usd_per_million_tokens": "0.07"
+  },
+  "display_name": "DeepSeek V4 Flash 0731 (EU)",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "structured_output",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "deepseek-v4-flash-el": {
+  "context_window_tokens": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 384000,
+  "description": "Fast DeepSeek model for efficient chat, coding help, and agent loops",
+  "release_date": "2026-04-24",
+  "last_updated": "2026-05-02",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.14",
+   "output_usd_per_million_tokens": "0.28"
+  },
+  "display_name": "DeepSeek-V4-Flash-EL",
+  "origin": "DeepSeek",
+  "input": [
+   "file"
+  ],
+  "features": [
+   "reasoning",
+   "tool_calling"
+  ]
+ },
+ "deepseek-v4-flash-latest": {
+  "context_window_tokens": 1048576,
+  "max_input_tokens": 1048576,
+  "max_output_tokens": 262144,
+  "description": "This model always redirects to the latest model in the DeepSeek V4 Flash family.",
+  "release_date": "2026-08-01",
+  "last_updated": "2026-08-01",
+  "open_weights": false,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.079996",
+   "output_usd_per_million_tokens": "0.252",
+   "cache_read_usd_per_million_tokens": "0.0252"
+  },
+  "display_name": "DeepSeek V4 Flash Latest",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ]
+ },
+ "deepseek-v4-flash:0731": {
+  "context_window_tokens": 1048576,
+  "max_output_tokens": 1048576,
+  "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+  "knowledge_cutoff": "2025-05",
+  "release_date": "2026-07-31",
+  "last_updated": "2026-07-31",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "display_name": "DeepSeek V4 Flash 0731",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "structured_output",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "deepseek-v4-flash:discounted": {
+  "context_window_tokens": 1048576,
+  "max_output_tokens": 384000,
+  "description": "This DeepSeek V4 Flash endpoint provides the lowest cost for multi-turn conversations for this model. This is accomplished with an exceptionally low cache read price. By using this endpoint you agree prompts and completions may be retained by DeepSeek and used to train future models.",
+  "release_date": "2025-08-26",
+  "last_updated": "2025-08-26",
+  "open_weights": false,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.14",
+   "output_usd_per_million_tokens": "0.28",
+   "cache_read_usd_per_million_tokens": "0.0028"
+  },
+  "display_name": "DeepSeek: DeepSeek V4 Flash (lowest price)",
+  "origin": "DeepSeek",
+  "features": {
+   "supported": [
+    "reasoning",
+    "tool_calling",
+    "temperature"
+   ],
+   "unsupported": [
+    "structured_output"
+   ]
+  }
+ },
+ "deepseek-v4-flash:thinking": {
+  "context_window_tokens": 1048576,
+  "max_input_tokens": 1048576,
+  "max_output_tokens": 384000,
+  "description": "Fast DeepSeek V4 lane for economical reasoning, coding, and long-context work",
+  "knowledge_cutoff": "2025-05",
+  "release_date": "2026-04-24",
+  "last_updated": "2026-04-24",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.07",
+   "output_usd_per_million_tokens": "0.14",
+   "cache_read_usd_per_million_tokens": "0.014"
+  },
+  "display_name": "DeepSeek V4 Flash (Thinking)",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ]
+ },
+ "deepseek-v4-pro-0813": {
+  "context_window_tokens": 1048576,
+  "max_input_tokens": 1048576,
+  "max_output_tokens": 384000,
+  "description": "DeepSeek V4 Pro 0813 is a large-scale mixture-of-experts model from DeepSeek. This is the GA release of DeepSeek V4 Pro.",
+  "release_date": "2026-08-12",
+  "last_updated": "2026-08-12",
+  "open_weights": false,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.435",
+   "output_usd_per_million_tokens": "0.87",
+   "cache_read_usd_per_million_tokens": "0.003625"
+  },
+  "display_name": "DeepSeek V4 Pro 0813",
+  "origin": "DeepSeek",
+  "features": {
+   "supported": [
+    "reasoning",
+    "tool_calling",
+    "temperature"
+   ],
+   "unsupported": [
+    "structured_output"
+   ]
+  }
+ },
+ "deepseek-v4-pro-0813:thinking": {
+  "context_window_tokens": 1048576,
+  "max_input_tokens": 1048576,
+  "max_output_tokens": 384000,
+  "description": "DeepSeek V4 Pro snapshot with million-token context and support for thinking and non-thinking modes",
+  "release_date": "2026-08-12",
+  "last_updated": "2026-08-12",
+  "open_weights": false,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.435",
+   "output_usd_per_million_tokens": "0.87",
+   "cache_read_usd_per_million_tokens": "0.003625"
+  },
+  "display_name": "DeepSeek V4 Pro 0813 Thinking",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ]
+ },
+ "deepseek-v4-pro-el": {
+  "context_window_tokens": 1000000,
+  "max_input_tokens": 1000000,
+  "max_output_tokens": 384000,
+  "description": "Flagship DeepSeek model for coding, reasoning, and agentic work",
+  "release_date": "2026-04-24",
+  "last_updated": "2026-05-02",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "1.67",
+   "output_usd_per_million_tokens": "3.33"
+  },
+  "display_name": "DeepSeek-V4-Pro-EL",
+  "origin": "DeepSeek",
+  "input": [
+   "file"
+  ],
+  "features": [
+   "reasoning",
+   "tool_calling"
+  ]
+ },
+ "deepseek-v4-pro-lightning": {
+  "context_window_tokens": 1000000,
+  "max_output_tokens": 131072,
+  "description": "Open MoE flagship with million-token context for coding and long agent runs",
+  "knowledge_cutoff": "2025-05",
+  "release_date": "2026-04-24",
+  "last_updated": "2026-04-24",
+  "open_weights": true,
+  "assistant_reasoning_interleaved": true,
+  "assistant_reasoning_field": "reasoning_content",
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.8",
+   "output_usd_per_million_tokens": "1.6",
+   "cache_read_usd_per_million_tokens": "0.02"
+  },
+  "display_name": "DeepSeek V4 Pro Lightning",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "structured_output",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "deepseek-v4-pro:discounted": {
+  "context_window_tokens": 1048576,
+  "max_output_tokens": 384000,
+  "description": "This DeepSeek V4 Pro endpoint provides the lowest cost for multi-turn conversations for this model. This is accomplished with an exceptionally low cache read price. By using this endpoint you agree prompts and completions may be retained by DeepSeek and used to train future models.",
+  "release_date": "2025-08-26",
+  "last_updated": "2025-08-26",
+  "open_weights": false,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.435",
+   "output_usd_per_million_tokens": "0.87",
+   "cache_read_usd_per_million_tokens": "0.003625"
+  },
+  "display_name": "DeepSeek: DeepSeek V4 Pro (lowest price)",
+  "origin": "DeepSeek",
+  "features": {
+   "supported": [
+    "reasoning",
+    "tool_calling",
+    "temperature"
+   ],
+   "unsupported": [
+    "structured_output"
+   ]
+  }
+ },
+ "deepseek-v4-pro:thinking": {
+  "context_window_tokens": 1048576,
+  "max_input_tokens": 1048576,
+  "max_output_tokens": 384000,
+  "description": "Open MoE flagship with million-token context for coding and long agent runs",
+  "knowledge_cutoff": "2025-05",
+  "release_date": "2026-04-24",
+  "last_updated": "2026-04-24",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "1.1",
+   "output_usd_per_million_tokens": "2.2",
+   "cache_read_usd_per_million_tokens": "0.11"
+  },
+  "display_name": "DeepSeek V4 Pro (Thinking)",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ]
+ },
+ "step-3-5-flash": {
+  "context_window_tokens": 256000,
+  "max_input_tokens": 256000,
+  "max_output_tokens": 131072,
+  "description": "StepFun flash lane for quick multimodal reasoning and coding assistance",
+  "knowledge_cutoff": "2025-01",
+  "release_date": "2026-01-29",
+  "last_updated": "2026-02-13",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.1",
+   "output_usd_per_million_tokens": "0.3",
+   "cache_read_usd_per_million_tokens": "0.02"
+  },
+  "display_name": "Step 3.5 Flash",
+  "origin": "StepFun",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "structured_output",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "step-3-5-flash-2603": {
+  "context_window_tokens": 256000,
+  "max_input_tokens": 256000,
+  "max_output_tokens": 131072,
+  "description": "StepFun flash model for efficient multimodal reasoning, coding, and tool use",
+  "knowledge_cutoff": "2025-01",
+  "release_date": "2026-04-02",
+  "last_updated": "2026-04-02",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.1",
+   "output_usd_per_million_tokens": "0.3",
+   "cache_read_usd_per_million_tokens": "0.02"
+  },
+  "display_name": "Step 3.5 Flash 2603",
+  "origin": "StepFun",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "structured_output",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "step-3-7-flash": {
+  "context_window_tokens": 256000,
+  "max_input_tokens": 256000,
+  "max_output_tokens": 131072,
+  "description": "Newer StepFun flash model for faster agents, coding, and multimodal prompts",
+  "knowledge_cutoff": "2026-03-01",
+  "release_date": "2026-05-29",
+  "last_updated": "2026-05-29",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.2",
+   "output_usd_per_million_tokens": "1.15",
+   "cache_read_usd_per_million_tokens": "0.04"
+  },
+  "display_name": "Step 3.7 Flash",
+  "origin": "StepFun",
+  "input": [
+   "image",
+   "video",
+   "file"
+  ],
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text",
+     "image",
+     "video"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "structured_output",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "step-3.5-flash": {
+  "context_window_tokens": 256000,
+  "max_input_tokens": 256000,
+  "max_output_tokens": 256000,
+  "description": "StepFun flash lane for quick multimodal reasoning and coding assistance",
+  "knowledge_cutoff": "2025-01",
+  "release_date": "2026-01-29",
+  "last_updated": "2026-06-15",
+  "open_weights": true,
+  "assistant_reasoning_interleaved": true,
+  "assistant_reasoning_field": "reasoning_content",
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.1",
+   "output_usd_per_million_tokens": "0.3",
+   "cache_read_usd_per_million_tokens": "0.02"
+  },
+  "display_name": "Step 3.5 Flash",
+  "origin": "StepFun",
+  "input": [
+   "image",
+   "file"
+  ],
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "temperature",
+   "structured_output"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "step-3.5-flash-2603": {
+  "context_window_tokens": 256000,
+  "max_input_tokens": 256000,
+  "max_output_tokens": 256000,
+  "description": "StepFun flash model for efficient multimodal reasoning, coding, and tool use",
+  "knowledge_cutoff": "2025-01",
+  "release_date": "2026-04-02",
+  "last_updated": "2026-04-02",
+  "open_weights": true,
+  "assistant_reasoning_interleaved": true,
+  "assistant_reasoning_field": "reasoning_content",
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.1",
+   "output_usd_per_million_tokens": "0.3",
+   "cache_read_usd_per_million_tokens": "0.02"
+  },
+  "display_name": "Step 3.5 Flash 2603",
+  "origin": "StepFun",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "step-3.7-flash": {
+  "context_window_tokens": 256000,
+  "max_input_tokens": 256000,
+  "max_output_tokens": 256000,
+  "description": "Newer StepFun flash model for faster agents, coding, and multimodal prompts",
+  "knowledge_cutoff": "2026-03-01",
+  "release_date": "2026-05-29",
+  "last_updated": "2026-06-29",
+  "open_weights": true,
+  "assistant_reasoning_interleaved": true,
+  "assistant_reasoning_field": "reasoning_content",
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.185",
+   "output_usd_per_million_tokens": "1.11",
+   "cache_read_usd_per_million_tokens": "0.037",
+   "cache_write_usd_per_million_tokens": "0"
+  },
+  "display_name": "Step 3.7 Flash",
+  "origin": "StepFun",
+  "input": [
+   "image",
+   "video",
+   "file"
+  ],
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "temperature",
+   "structured_output"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text",
+     "image",
+     "video"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "temperature"
+    ]
+   }
+  }
+ },
+ "step-3.7-flash:thinking": {
+  "context_window_tokens": 262144,
+  "max_input_tokens": 262144,
+  "max_output_tokens": 256000,
+  "description": "Newer StepFun flash model for faster agents, coding, and multimodal prompts",
+  "knowledge_cutoff": "2026-03-01",
+  "release_date": "2026-05-29",
+  "last_updated": "2026-05-29",
+  "open_weights": true,
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.2",
+   "output_usd_per_million_tokens": "1.15",
+   "cache_read_usd_per_million_tokens": "0.04"
+  },
+  "display_name": "Step 3.7 Flash Thinking",
+  "origin": "StepFun",
+  "input": [
+   "image",
+   "video",
+   "file"
+  ],
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ]
+ },
+ "umans-deepseek-v4-flash-0731": {
+  "context_window_tokens": 1048576,
+  "max_output_tokens": 393215,
+  "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+  "knowledge_cutoff": "2025-05",
+  "release_date": "2026-07-31",
+  "last_updated": "2026-07-31",
+  "open_weights": true,
+  "assistant_reasoning_interleaved": true,
+  "assistant_reasoning_field": "reasoning_content",
+  "output_modalities": [
+   "text"
+  ],
+  "pricing": {
+   "input_usd_per_million_tokens": "0.14",
+   "output_usd_per_million_tokens": "0.28",
+   "cache_read_usd_per_million_tokens": "0.028",
+   "cache_write_usd_per_million_tokens": "0"
+  },
+  "display_name": "DeepSeek V4 Flash",
+  "origin": "DeepSeek",
+  "features": [
+   "reasoning",
+   "tool_calling",
+   "structured_output",
+   "temperature"
+  ],
+  "capabilities": {
+   "input": {
+    "supported": [
+     "text"
+    ]
+   },
+   "features": {
+    "supported": [
+     "reasoning",
+     "tool_calling",
+     "structured_output",
+     "temperature"
+    ]
+   }
+  }
+ }
+}

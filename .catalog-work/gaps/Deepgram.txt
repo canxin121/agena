@@ -1,0 +1,6 @@
+aura-2-en
+aura-2-es
+nova-2-lite
+nova-2-lite-v1
+nova-2-pro-v1
+nova-3

@@ -1,0 +1,595 @@
+{
+  "models": {
+    "alicloud-deepseek-v4-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "alicloud-deepseek-v4-pro": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "deep-deepseek-v4-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "deep-deepseek-v4-pro": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "deepseek-3.2": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 163840
+    },
+    "deepseek-chat-v3.1": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 163840
+    },
+    "deepseek-latest": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      }
+    },
+    "deepseek-math-v2": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only"
+        }
+      },
+      "max_input_tokens": 160000
+    },
+    "deepseek-r1-0528-qwen3-8b": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only"
+        }
+      },
+      "max_input_tokens": 128000
+    },
+    "deepseek-r1-turbo": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only"
+        }
+      },
+      "max_input_tokens": 64000
+    },
+    "deepseek-v3.1-terminus": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      }
+    },
+    "deepseek-v3.2-251201": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 128000
+    },
+    "deepseek-v3.2-exp-thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only"
+        }
+      }
+    },
+    "deepseek-v3.2-fast": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      }
+    },
+    "deepseek-v3.2-nvfp4": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "deepseek-v3.2-thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only"
+        }
+      },
+      "max_input_tokens": 128000
+    },
+    "deepseek-v3.2:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only"
+        }
+      }
+    },
+    "deepseek-v4-flash-0731-fast": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "deepseek-v4-flash-0731:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only"
+        }
+      }
+    },
+    "deepseek-v4-flash-0731@eu": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1048576
+    },
+    "deepseek-v4-flash-el": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "knowledge_cutoff": "2025-05"
+    },
+    "deepseek-v4-flash-latest": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "knowledge_cutoff": "2025-05"
+    },
+    "deepseek-v4-flash:0731": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1048576,
+      "pricing": {
+        "input_usd_per_million_tokens": "0.14",
+        "output_usd_per_million_tokens": "0.28",
+        "cache_read_usd_per_million_tokens": "0.0028"
+      }
+    },
+    "deepseek-v4-flash:discounted": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1048576,
+      "knowledge_cutoff": "2025-05"
+    },
+    "deepseek-v4-flash:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only"
+        }
+      }
+    },
+    "deepseek-v4-pro-0813": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "knowledge_cutoff": "2025-05"
+    },
+    "deepseek-v4-pro-0813:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only"
+        }
+      },
+      "knowledge_cutoff": "2025-05"
+    },
+    "deepseek-v4-pro-el": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "knowledge_cutoff": "2025-05"
+    },
+    "deepseek-v4-pro-lightning": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000,
+      "knowledge_cutoff": "2025-05"
+    },
+    "deepseek-v4-pro:discounted": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1048576,
+      "knowledge_cutoff": "2025-05"
+    },
+    "deepseek-v4-pro:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only"
+        }
+      }
+    },
+    "step-3-5-flash": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "step-3-5-flash-2603": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "step-3-7-flash": {
+      "thinking_modes": {
+        "default": "medium",
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "step-3.5-flash": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "step-3.5-flash-2603": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "step-3.7-flash": {
+      "thinking_modes": {
+        "default": "medium",
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "step-3.7-flash:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only"
+        }
+      }
+    },
+    "umans-deepseek-v4-flash-0731": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1048576
+    }
+  },
+  "notes": "DeepSeek thinking: official api-docs.deepseek.com thinking-mode guide + pricing page confirm deepseek-v4-flash/v4-pro (and the V4/3.2 hybrid families) support thinking and non-thinking modes via a request-time `thinking` param (thinking on by default); modeled as request_only 'on' with off disabled. Reasoning-only lanes (deepseek-r1 variants, deepseek-math-v2, the exp-thinking / :thinking / -thinking variants of V3.2 and V4) are always-on reasoning, modeled with no off toggle. StepFun (step-3.5/3.7-flash) reasoning is always-on with reasoning_effort low/medium/high (default medium per platform.stepfun.com docs), modeled as effort modes with no off. NO speed_modes added: neither DeepSeek nor StepFun documents a speed/service-tier toggle (the '-fast'/'el' suffixes are distinct model ids, not per-request speed modes). max_input_tokens set = verified context window where the bundle lacked it. knowledge_cutoff set via base-model mapping for hosted/alias V4 models (base V4 knowledge 2025-05 per models.dev). Could NOT verify: knowledge_cutoff for deepseek-latest, deepseek-math-v2, deepseek-r1-0528-qwen3-8b, deepseek-r1-turbo, deepseek-v3.2-251201, deepseek-v3.2-exp-thinking (no source value); pricing for deepseek-math-v2 and deepseek-v3.2-251201 (no provider lists cost)."
+}

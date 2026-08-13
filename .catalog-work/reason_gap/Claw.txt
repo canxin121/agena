@@ -1,0 +1,3 @@
+claw-high
+claw-low
+claw-medium

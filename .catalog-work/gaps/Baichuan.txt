@@ -1,0 +1,2 @@
+baichuan-m2
+baichuan-m2-32b

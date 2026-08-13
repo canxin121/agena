@@ -1,0 +1,4 @@
+seedream-4.0
+seedream-4.5
+seedream-5.0-lite
+seedream-5.0-pro

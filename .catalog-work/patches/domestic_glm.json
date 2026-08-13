@@ -1,0 +1,353 @@
+{
+  "models": {
+    "glm-4.1v-thinking-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.1v-thinking-flashx": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.5-airx": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.5-air:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.5:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.5v:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.6-turbo": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      },
+      "knowledge_cutoff": "2025-04"
+    },
+    "glm-4.6-turbo:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.6:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.7-flash:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-4.7:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-5.1-thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      },
+      "knowledge_cutoff": "2025-04"
+    },
+    "glm-5.1:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      },
+      "knowledge_cutoff": "2025-04"
+    },
+    "glm-5.2": {
+      "knowledge_cutoff": "2025-11"
+    },
+    "glm-5.2-fast": {
+      "knowledge_cutoff": "2025-11"
+    },
+    "glm-5.2-short-fast": {
+      "knowledge_cutoff": "2025-11"
+    },
+    "glm-5.2-short-fast-flex": {
+      "knowledge_cutoff": "2025-11"
+    },
+    "glm-5.2:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-5:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      },
+      "knowledge_cutoff": "2025-04"
+    },
+    "glm-5v-turbo:thinking": {
+      "thinking_modes": {
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-z1-9b-0414": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-z1-air": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-z1-airx": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "glm-zero-preview": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "notes": "GLM thinking_modes: Z.ai / bigmodel.cn GLM reasoning models use the request body param `thinking: {\"type\": \"enabled\"}` (enabled by default; docs.z.ai/guides/capabilities/thinking-mode confirms GLM-4.5/4.6/4.7/5/5.1/5.2 series). Reasoning models missing thinking_modes got the standard request-toggle (off disabled / on thinking.type=enabled), matching the catalog's existing GLM pattern. Verified reasoning: GLM-4.1V-Thinking-Flash/FlashX (built-in deep thinking, docs.bigmodel.cn vlm/glm-4.1v-thinking), GLM-4.5-AirX (hybrid reasoning, docs.z.ai glm-4.5 family), GLM-4.6-Turbo (fast reasoning derivative of GLM-4.6, models.dev zai-org listing), GLM-Z1-9B-0414 / GLM-Z1-Air / GLM-Z1-AirX (docs.bigmodel.cn glm-z1: '推理模型...内置深度思考'; series since offline), GLM-Zero-Preview (Zhipu's first reasoning model, Dec 2024). `:thinking` suffixed variants and glm-5.1-thinking are always-on-thinking model IDs; per task instruction each got a single always-on mode with the same thinking.type=enabled override. NOT touched: GLM-4 / 4-Air / 4-Flash / 4-Plus / 4-Long / 4-32B-0414 (incl -128k) / 4-9B-0414 are pre-GLM-4.5 non-reasoning models -> thinking_modes left absent. glm-5.2-fast / glm-5.2-short-fast / glm-5.2-short-fast-flex left absent: models.dev shows no reasoning_options, catalog features exclude reasoning, and Neuralwatt lists short-fast/short-fast-flex with reasoning disabled (Vercel gateway doc claims glm-5.2-fast supports thinking on/off - unresolved conflict, omitted per prefer-omission). glm-4.7-n is NOT an official Zhipu id (absent from docs.z.ai/guides/overview/pricing, which was fetched directly, and from docs.bigmodel.cn); it is a third-party (Novita/Poe) non-reasoning GLM-4.7 variant whose promotional pricing is provider-specific -> pricing omitted. NO speed_modes added: Z.ai expresses speed via separate model ids (-fast/-flash/-turbo), no request-level speed param documented. knowledge_cutoff: docs.z.ai and docs.bigmodel.cn publish no knowledge cutoffs for any GLM model; the brief's suggested values (GLM-4.5 2024-11, GLM-4.6 2025-06, GLM-4.7 2025-10, GLM-5.x 2026-*) could not be verified from any accessible official source and conflict with the aggregator consensus (2025-04), so existing values were left untouched; only family-consistent values were propagated to same-family siblings that were missing them (glm-4.6-turbo 2025-04 matching glm-4.6/glm-4.6-turbo:thinking; glm-5.1-thinking/glm-5.1:thinking/glm-5:thinking 2025-04 matching glm-5.1/glm-5; glm-5.2/glm-5.2-fast/glm-5.2-short-fast/glm-5.2-short-fast-flex 2025-11 matching the GLM-5.2 family). kcutoff omitted (unverifiable) for: GLM-4-era base models, GLM-4.1V-Thinking, GLM-Z1 family, GLM-Zero-Preview, glm-5v-turbo(:thinking), glm-for-coding. descriptions/context/max tokens/release_date/open_weights were already present for all 78 models; open_weights verified True for glm-4-32b-0414 / glm-4-9b-0414 / glm-z1-9b-0414 (MIT, zai-org HF). The brief's 'input?' flags refer to the input-modalities field, which is not in the patch spec's allowed top-level keys, so those were left to a separate pass."
+}

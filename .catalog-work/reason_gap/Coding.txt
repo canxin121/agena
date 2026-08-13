@@ -1,0 +1,8 @@
+coding-glm-5.1
+coding-minimax-m2.7
+coding-minimax-m2.7-highspeed
+coding-router
+coding-router:high
+coding-router:low
+coding-router:max
+coding-router:medium

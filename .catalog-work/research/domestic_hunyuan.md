@@ -1,0 +1,34 @@
+### hunyuan domestic models (7 models)
+
+- **hunyuan-2.0-instruct**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-03-08
+- **hunyuan-2.0-thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=131072 maxin=131072 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-03-08
+- **hunyuan-a13b-instruct**  MISSING: input?, speed?
+  - current: ctx=131072 maxin=131072 maxout=131072
+  - current thinking_modes keys: ['off', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.57"}
+  - models.dev: ABSENT
+- **hunyuan-mt-7b**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=8192 maxin=8192 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "10", "output_usd_per_million_tokens": "20", "cache_read_usd_per_million_tokens": "5"}
+  - models.dev: ABSENT
+- **hunyuan-t1**  MISSING: kcutoff?, speed?
+  - current: ctx=131072 maxin=131072 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-03-08
+- **hunyuan-turbos**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-03-08
+- **hunyuan-turbos-20250226**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=24000 maxin=24000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.187", "output_usd_per_million_tokens": "0.374", "cache_read_usd_per_million_tokens": "0.0935"}
+  - models.dev: release=2025-02-27
+

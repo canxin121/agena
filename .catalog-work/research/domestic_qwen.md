@@ -1,0 +1,792 @@
+### qwen domestic models (179 models)
+
+- **alibaba-qwen3-32b**  MISSING: kcutoff?, speed?
+  - current: ctx=32768 maxin=32768 maxout=32768
+  - current thinking_modes keys: ['off', 'low', 'medium', 'high', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "0.55"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "medium", "high", "max"]}] | release=2025-04-30
+- **qwen-2.5-14b-instruct**  MISSING: price?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=131072
+  - models.dev: release=2024-09-19
+- **qwen-2.5-72b-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=32768 maxin=131072 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.36", "output_usd_per_million_tokens": "0.4", "cache_read_usd_per_million_tokens": "0.1785"}
+  - models.dev: ABSENT
+- **qwen-2.5-7b-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.2"}
+  - models.dev: ABSENT
+- **qwen-2.5-7b-vision-instruct**  MISSING: think?, speed?
+  - current: ctx=125000 maxin=125000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.2"}
+  - models.dev: ABSENT
+- **qwen-2.5-coder-32b**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.79", "output_usd_per_million_tokens": "0.79"}
+  - models.dev: release=2024-11-11
+- **qwen-2.5-coder-32b-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.66", "output_usd_per_million_tokens": "1"}
+  - models.dev: ABSENT
+- **qwen-3-14b**  MISSING: input?, speed?
+  - current: ctx=40960 maxin=40960 maxout=16384
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.12", "output_usd_per_million_tokens": "0.24"}
+  - models.dev: ABSENT
+- **qwen-3-235b**  MISSING: input?, speed?
+  - current: ctx=262144 maxin=262144 maxout=16384
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.22", "output_usd_per_million_tokens": "0.88"}
+  - models.dev: ABSENT
+- **qwen-3-30b**  MISSING: input?, speed?
+  - current: ctx=40960 maxin=40960 maxout=16384
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.12", "output_usd_per_million_tokens": "0.5"}
+  - models.dev: ABSENT
+- **qwen-3-32b**  MISSING: input?, speed?
+  - current: ctx=128000 maxin=128000 maxout=8192
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.16", "output_usd_per_million_tokens": "0.64"}
+  - models.dev: ABSENT
+- **qwen-3-6-plus**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=64000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "3", "cache_read_usd_per_million_tokens": "0.1", "cache_write_usd_per_million_tokens": "0.78", "tiers": [{"input_usd_per_million_tokens": "2.5", "output_usd_per_million_tokens": "7.5", "cache_read_usd_per_million_tokens": "0.0625", "cache_write_usd_per_million_tokens": "0.78"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "2.5", "output_usd_per_million_tokens": "7.5", "cache_read_usd_per_million_tokens": "0.0625", "cache_write_usd_per_million_tokens": "0.78"}]}
+  - models.dev: release=2026-04-02
+- **qwen-3-7-max**  MISSING: kcutoff?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "2.7", "output_usd_per_million_tokens": "8.05", "cache_read_usd_per_million_tokens": "0.27", "cache_write_usd_per_million_tokens": "3.35"}
+  - models.dev: release=2026-05-22
+- **qwen-3-7-plus**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "2", "cache_read_usd_per_million_tokens": "0.05", "cache_write_usd_per_million_tokens": "0.625", "tiers": [{"input_usd_per_million_tokens": "1.5", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.15", "cache_write_usd_per_million_tokens": "1.875"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "1.5", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.15", "cache_write_usd_per_million_tokens": "1.875"}]}
+  - models.dev: release=2026-06-02
+- **qwen-3-8-max**  MISSING: kcutoff?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'low', 'medium', 'xhigh']
+  - current pricing: {"input_usd_per_million_tokens": "2.5", "output_usd_per_million_tokens": "7.5", "cache_read_usd_per_million_tokens": "0.3125", "cache_write_usd_per_million_tokens": "3.125"}
+  - models.dev: release=2026-07-22
+- **qwen-3.6-max-preview**  MISSING: kcutoff?, speed?
+  - current: ctx=240000 maxin=240000 maxout=64000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "1.3", "output_usd_per_million_tokens": "7.8", "cache_read_usd_per_million_tokens": "0.26", "cache_write_usd_per_million_tokens": "1.625"}
+  - models.dev: ABSENT
+- **qwen-3.6-plus**  MISSING: speed?
+  - current: ctx=1000000 maxin=991808 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "3", "cache_read_usd_per_million_tokens": "0.1", "cache_write_usd_per_million_tokens": "0.40625", "tiers": [{"input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.2", "cache_write_usd_per_million_tokens": "2.5"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.2", "cache_write_usd_per_million_tokens": "2.5"}]}
+  - models.dev: release=2026-04-02
+- **qwen-coder-plus**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.502", "output_usd_per_million_tokens": "1.004"}
+  - models.dev: release=2024-09-18
+- **qwen-deep-research**  MISSING: think?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "7.742", "output_usd_per_million_tokens": "23.367"}
+  - models.dev: release=2024-01
+- **qwen-doc-turbo**  MISSING: think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.087", "output_usd_per_million_tokens": "0.144"}
+  - models.dev: release=2024-01
+- **qwen-flash**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=32768
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.05", "output_usd_per_million_tokens": "0.4", "cache_read_usd_per_million_tokens": "0.01", "cache_write_usd_per_million_tokens": "0.0625"}
+  - models.dev: release=2025-07-28
+- **qwen-image**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=8192 maxin=8192 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "2"}
+  - models.dev: release=2026-03-01
+- **qwen-image-2.0**  MISSING: kcutoff?, maxout?, think?, speed?
+  - current: ctx=8192 maxin=8192 maxout=0
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-03-03
+- **qwen-image-2.0-pro**  MISSING: kcutoff?, maxout?, think?, speed?
+  - current: ctx=8192 maxin=8192 maxout=0
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-03-03
+- **qwen-image-edit**  MISSING: kcutoff?, ctx?, maxin?, maxout?, think?, speed?
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **qwen-long**  MISSING: think?, speed?
+  - current: ctx=10000000 maxin=10000000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.072", "output_usd_per_million_tokens": "0.287", "cache_read_usd_per_million_tokens": "0.05015"}
+  - models.dev: release=2024-08-01
+- **qwen-math-plus**  MISSING: think?, speed?
+  - current: ctx=4096 maxin=4096 maxout=3072
+  - current pricing: {"input_usd_per_million_tokens": "0.574", "output_usd_per_million_tokens": "1.721"}
+  - models.dev: release=2024-08-16
+- **qwen-math-turbo**  MISSING: think?, speed?
+  - current: ctx=4096 maxin=4096 maxout=3072
+  - current pricing: {"input_usd_per_million_tokens": "0.287", "output_usd_per_million_tokens": "0.861"}
+  - models.dev: release=2024-09-19
+- **qwen-max**  MISSING: think?, speed?
+  - current: ctx=32768 maxin=32000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "1.6", "output_usd_per_million_tokens": "6.4", "cache_read_usd_per_million_tokens": "0.79985"}
+  - models.dev: release=2024-04-03
+- **qwen-max-2025-01-25**  MISSING: kcutoff?, price?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=4096
+  - models.dev: release=2025-08-05
+- **qwen-max-latest**  MISSING: think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.343", "output_usd_per_million_tokens": "1.372"}
+  - models.dev: release=2024-04-03
+- **qwen-mt-plus**  MISSING: think?, speed?
+  - current: ctx=16384 maxin=16384 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "2.46", "output_usd_per_million_tokens": "7.37"}
+  - models.dev: release=2025-01
+- **qwen-mt-turbo**  MISSING: think?, speed?
+  - current: ctx=16384 maxin=16384 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.16", "output_usd_per_million_tokens": "0.49"}
+  - models.dev: release=2025-01
+- **qwen-omni-turbo**  MISSING: think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=2048
+  - current pricing: {"input_usd_per_million_tokens": "0.07", "output_usd_per_million_tokens": "0.27"}
+  - models.dev: release=2025-01-19
+- **qwen-omni-turbo-realtime**  MISSING: think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=2048
+  - current pricing: {"input_usd_per_million_tokens": "0.27", "output_usd_per_million_tokens": "1.07"}
+  - models.dev: release=2025-05-08
+- **qwen-plus**  MISSING: speed?
+  - current: ctx=1000000 maxin=995904 maxout=32768
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "1.2", "cache_read_usd_per_million_tokens": "0.08", "cache_write_usd_per_million_tokens": "0.5", "tiers": [{"input_usd_per_million_tokens": "0.78", "output_usd_per_million_tokens": "2.34", "cache_read_usd_per_million_tokens": "0.156", "cache_write_usd_per_million_tokens": "0.975"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "0.78", "output_usd_per_million_tokens": "2.34", "cache_read_usd_per_million_tokens": "0.156", "cache_write_usd_per_million_tokens": "0.975"}]}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "budget_tokens", "min": 1024, "max": 81920}] | release=2024-01-25
+- **qwen-plus-2025-07-28**  MISSING: input?, think?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.26", "output_usd_per_million_tokens": "0.78", "tiers": [{"input_usd_per_million_tokens": "0.78", "output_usd_per_million_tokens": "2.34"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "0.78", "output_usd_per_million_tokens": "2.34"}]}
+  - models.dev: ABSENT
+- **qwen-plus-2025-07-28:thinking**  MISSING: input?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=32768
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "1.2", "cache_write_usd_per_million_tokens": "0.5", "tiers": [{"input_usd_per_million_tokens": "1.2", "output_usd_per_million_tokens": "3.6", "cache_write_usd_per_million_tokens": "1.5"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "1.2", "output_usd_per_million_tokens": "3.6", "cache_write_usd_per_million_tokens": "1.5"}]}
+  - models.dev: ABSENT
+- **qwen-plus-character**  MISSING: think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0.115", "output_usd_per_million_tokens": "0.287"}
+  - models.dev: release=2024-01
+- **qwen-plus-character-ja**  MISSING: think?, speed?
+  - current: ctx=8192 maxin=8192 maxout=512
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "1.4"}
+  - models.dev: release=2024-01
+- **qwen-plus-latest**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "1.2", "cache_read_usd_per_million_tokens": "0.08", "cache_write_usd_per_million_tokens": "0.5"}
+  - models.dev: release=2025-01-25
+- **qwen-turbo**  MISSING: think?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.05", "output_usd_per_million_tokens": "0.2", "cache_read_usd_per_million_tokens": "0.02499"}
+  - models.dev: release=2024-11-01
+- **qwen-vl-max**  MISSING: think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.8", "output_usd_per_million_tokens": "3.2", "cache_read_usd_per_million_tokens": "0.046"}
+  - models.dev: release=2024-04-08
+- **qwen-vl-max-2025-01-25**  MISSING: kcutoff?, price?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=4096
+  - models.dev: release=2025-08-05
+- **qwen-vl-ocr**  MISSING: think?, speed?
+  - current: ctx=34096 maxin=34096 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0.72", "output_usd_per_million_tokens": "0.72"}
+  - models.dev: release=2024-10-28
+- **qwen-vl-plus**  MISSING: think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.21", "output_usd_per_million_tokens": "0.63"}
+  - models.dev: release=2024-01-25
+- **qwen2.5-14b-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.35", "output_usd_per_million_tokens": "1.4"}
+  - models.dev: ABSENT
+- **qwen2.5-32b-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.7", "output_usd_per_million_tokens": "2.8"}
+  - models.dev: ABSENT
+- **qwen2.5-72b-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "1.4", "output_usd_per_million_tokens": "5.6"}
+  - models.dev: ABSENT
+- **qwen2.5-7b-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0.07", "output_usd_per_million_tokens": "0.07"}
+  - models.dev: ABSENT
+- **qwen2.5-7b-instruct-turbo**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "0.3"}
+  - models.dev: ABSENT
+- **qwen2.5-coder-0.5b**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.1", "cache_read_usd_per_million_tokens": "0.1", "cache_write_usd_per_million_tokens": "0.1"}
+  - models.dev: ABSENT
+- **qwen2.5-coder-32b-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=128000 maxin=32000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0.1003"}
+  - models.dev: ABSENT
+- **qwen2.5-coder-7b-fast**  MISSING: think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.03", "output_usd_per_million_tokens": "0.09"}
+  - models.dev: release=2024-09-15
+- **qwen2.5-coder-7b-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.144", "output_usd_per_million_tokens": "0.287"}
+  - models.dev: ABSENT
+- **qwen2.5-math-72b-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=4096 maxin=4096 maxout=3072
+  - current pricing: {"input_usd_per_million_tokens": "0.574", "output_usd_per_million_tokens": "1.721"}
+  - models.dev: ABSENT
+- **qwen2.5-math-7b-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=4096 maxin=4096 maxout=3072
+  - current pricing: {"input_usd_per_million_tokens": "0.144", "output_usd_per_million_tokens": "0.287"}
+  - models.dev: ABSENT
+- **qwen2.5-omni-7b**  MISSING: think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=2048
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.4"}
+  - models.dev: ABSENT
+- **qwen2.5-vl-32b-instruct**  MISSING: think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0.05", "output_usd_per_million_tokens": "0.22", "cache_read_usd_per_million_tokens": "0.025", "cache_write_usd_per_million_tokens": "0.1"}
+  - models.dev: ABSENT
+- **qwen2.5-vl-72b-instruct**  MISSING: think?, speed?
+  - current: ctx=32000 maxin=120000 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "0.747", "cache_read_usd_per_million_tokens": "0.025", "cache_write_usd_per_million_tokens": "0.31"}
+  - models.dev: release=2025-03-31
+- **qwen2.5-vl-7b-instruct**  MISSING: think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.35", "output_usd_per_million_tokens": "1.05"}
+  - models.dev: release=2025-08-05
+- **qwen25-vl-72b-instruct**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.69989", "output_usd_per_million_tokens": "0.69989", "cache_read_usd_per_million_tokens": "0.349945"}
+  - models.dev: release=2025-05-10
+- **qwen3-asr-flash**  MISSING: think?, speed?
+  - current: ctx=53248 maxin=53248 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0.035", "output_usd_per_million_tokens": "0.035"}
+  - models.dev: release=2025-09-08
+- **qwen3-coder**  MISSING: think?, speed?
+  - current: ctx=262144 maxin=262000 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.22", "output_usd_per_million_tokens": "0.95", "cache_read_usd_per_million_tokens": "0.3"}
+  - models.dev: release=2025-07-23
+- **qwen3-coder-30b**  MISSING: input?, think?, speed?
+  - current: ctx=262144 maxin=262144 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **qwen3-coder-30b-a3b**  MISSING: input?, think?, speed?
+  - current: ctx=262144 maxin=262144 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.15", "output_usd_per_million_tokens": "0.6"}
+  - models.dev: ABSENT
+- **qwen3-coder-30b-a3b-instruct**  MISSING: think?, speed?
+  - current: ctx=262144 maxin=128000 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "0.45", "output_usd_per_million_tokens": "2.25", "cache_read_usd_per_million_tokens": "0.014", "cache_write_usd_per_million_tokens": "0.075"}
+  - models.dev: release=2025-04
+- **qwen3-coder-480b-a35b-instruct**  MISSING: think?, speed?
+  - current: ctx=262144 maxin=262144 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "1.5", "output_usd_per_million_tokens": "7.5", "cache_read_usd_per_million_tokens": "1"}
+  - models.dev: release=2025-04
+- **qwen3-coder-480b-a35b-instruct-turbo**  MISSING: think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "0.35", "output_usd_per_million_tokens": "1.5", "cache_read_usd_per_million_tokens": "0.04"}
+  - models.dev: release=2026-01-27
+- **qwen3-coder-flash**  MISSING: think?, speed?
+  - current: ctx=1000000 maxin=128000 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "1.5", "cache_read_usd_per_million_tokens": "0.06", "cache_write_usd_per_million_tokens": "0.375", "tiers": [{"input_usd_per_million_tokens": "0.325", "output_usd_per_million_tokens": "1.625", "cache_read_usd_per_million_tokens": "0.065", "cache_write_usd_per_million_tokens": "0.40625"}]}
+  - models.dev: release=2025-07-28
+- **qwen3-coder-next**  MISSING: think?, speed?
+  - current: ctx=262144 maxin=262144 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "0.108", "output_usd_per_million_tokens": "0.675", "cache_read_usd_per_million_tokens": "0.06", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-02-03
+- **qwen3-coder-plus**  MISSING: think?, speed?
+  - current: ctx=1048576 maxin=128000 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "1", "output_usd_per_million_tokens": "5", "cache_read_usd_per_million_tokens": "1.2", "cache_write_usd_per_million_tokens": "7.5", "tiers": [{"input_usd_per_million_tokens": "1.17", "output_usd_per_million_tokens": "5.85", "cache_read_usd_per_million_tokens": "0.234", "cache_write_usd_per_million_tokens": "1.4625"}]}
+  - models.dev: release=2025-07-23
+- **qwen3-embedding-0.6b**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=8000 maxin=8000 maxout=1024
+  - current pricing: {"input_usd_per_million_tokens": "0.04", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2025-06-03
+- **qwen3-embedding-4b**  MISSING: think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=2560
+  - current pricing: {"input_usd_per_million_tokens": "0.1502", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2025-06-06
+- **qwen3-embedding-8b**  MISSING: think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.1"}
+  - models.dev: release=2026-02-01
+- **qwen3-livetranslate-flash-realtime**  MISSING: think?, speed?
+  - current: ctx=53248 maxin=53248 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "10", "output_usd_per_million_tokens": "10"}
+  - models.dev: release=2025-09-22
+- **qwen3-max**  MISSING: think?, speed?
+  - current: ctx=262144 maxin=256000 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "1.2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.6", "cache_write_usd_per_million_tokens": "3.75", "tiers": [{"input_usd_per_million_tokens": "2.16", "output_usd_per_million_tokens": "11.04", "cache_read_usd_per_million_tokens": "2.16"}, {"input_usd_per_million_tokens": "2.4", "output_usd_per_million_tokens": "12", "cache_read_usd_per_million_tokens": "0.48"}, {"input_usd_per_million_tokens": "3", "output_usd_per_million_tokens": "15", "cache_read_usd_per_million_tokens": "0.6"}, {"input_usd_per_million_tokens": "1.56", "output_usd_per_million_tokens": "7.8", "cache_read_usd_per_million_tokens": "0.312", "cache_write_usd_per_million_tokens": "1.95"}]}
+  - models.dev: release=2025-09-23
+- **qwen3-max-2025-09-23**  MISSING: think?, speed?
+  - current: ctx=258048 maxin=258048 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "0.86", "output_usd_per_million_tokens": "3.43"}
+  - models.dev: release=2025-09-24
+- **qwen3-max-2026-01-23**  MISSING: think?, speed?
+  - current: ctx=262144 maxin=256000 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-01-26
+- **qwen3-max-preview**  MISSING: think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0.24"}
+  - models.dev: release=2025-01-01
+- **qwen3-max-thinking**  MISSING: input?, speed?
+  - current: ctx=262144 maxin=262144 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.78", "output_usd_per_million_tokens": "3.9", "cache_read_usd_per_million_tokens": "0.24", "tiers": [{"input_usd_per_million_tokens": "1.56", "output_usd_per_million_tokens": "7.8"}]}
+  - models.dev: ABSENT
+- **qwen3-next-80b**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.35", "output_usd_per_million_tokens": "1.9"}
+  - models.dev: release=2025-04-29
+- **qwen3-next-80b-a3b-instruct**  MISSING: think?, speed?
+  - current: ctx=131072 maxin=256000 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "2", "cache_read_usd_per_million_tokens": "0.05", "cache_write_usd_per_million_tokens": "0.05875"}
+  - models.dev: release=2025-09
+- **qwen3-next-80b-a3b-thinking**  MISSING: speed?
+  - current: ctx=131072 maxin=256000 maxout=32768
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.075", "cache_write_usd_per_million_tokens": "0.18"}
+  - models.dev: release=2025-09
+- **qwen3-next-80b-a3b-thinking-fast**  MISSING: input?, speed?
+  - current: ctx=8000 maxin=7000 maxout=8192
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.15", "output_usd_per_million_tokens": "1.2", "cache_read_usd_per_million_tokens": "0.015", "cache_write_usd_per_million_tokens": "0.1875"}
+  - models.dev: ABSENT
+- **qwen3-omni-30b-a3b-instruct**  MISSING: think?, speed?
+  - current: ctx=65536 maxin=65536 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "0.97"}
+  - models.dev: ABSENT
+- **qwen3-omni-30b-a3b-thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=65536 maxin=65536 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "0.97"}
+  - models.dev: ABSENT
+- **qwen3-omni-flash**  MISSING: speed?
+  - current: ctx=65536 maxin=65536 maxout=16384
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.43", "output_usd_per_million_tokens": "1.66"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-09-15
+- **qwen3-omni-flash-realtime**  MISSING: think?, speed?
+  - current: ctx=65536 maxin=65536 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.52", "output_usd_per_million_tokens": "1.99"}
+  - models.dev: release=2025-09-15
+- **qwen3-reranker-0.6b**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=40960 maxin=40960 maxout=1024
+  - current pricing: {"input_usd_per_million_tokens": "0.01", "output_usd_per_million_tokens": "0.01"}
+  - models.dev: ABSENT
+- **qwen3-reranker-4b**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.12", "output_usd_per_million_tokens": "0.12"}
+  - models.dev: release=2026-02-01
+- **qwen3-tts-voicedesign**  MISSING: kcutoff?, price?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=1
+  - models.dev: release=2026-04-21
+- **qwen3-vl-235b-a22b**  MISSING: speed?
+  - current: ctx=131072 maxin=131072 maxout=32768
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.7", "output_usd_per_million_tokens": "2.8", "cache_read_usd_per_million_tokens": "0.052"}
+  - models.dev: release=2026-01-16
+- **qwen3-vl-235b-a22b-instruct**  MISSING: think?, speed?
+  - current: ctx=262144 maxin=128000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.88", "cache_read_usd_per_million_tokens": "0.11", "cache_write_usd_per_million_tokens": "0.2625"}
+  - models.dev: release=2025-09-15
+- **qwen3-vl-235b-a22b-thinking**  MISSING: speed?
+  - current: ctx=131072 maxin=32768 maxout=8192
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.98", "output_usd_per_million_tokens": "3.95", "cache_read_usd_per_million_tokens": "0.25"}
+  - models.dev: ropts=[{"type": "budget_tokens", "min": 1024, "max": 81920}] | release=2025-08-26
+- **qwen3-vl-30b-a3b**  MISSING: speed?
+  - current: ctx=131072 maxin=131072 maxout=32768
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.8"}
+  - models.dev: ropts=[{"type": "budget_tokens"}] | release=2025-04
+- **qwen3-vl-30b-a3b-instruct**  MISSING: think?, speed?
+  - current: ctx=262144 maxin=262144 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.15", "output_usd_per_million_tokens": "0.6"}
+  - models.dev: release=2025-10-02
+- **qwen3-vl-30b-a3b-thinking**  MISSING: think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "2.4"}
+  - models.dev: release=2026-02-09
+- **qwen3-vl-32b-instruct**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.104", "output_usd_per_million_tokens": "0.416"}
+  - models.dev: ABSENT
+- **qwen3-vl-32b-thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=262000 maxin=262000 maxout=262000
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "1.5"}
+  - models.dev: ABSENT
+- **qwen3-vl-8b-instruct**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.117", "output_usd_per_million_tokens": "0.455"}
+  - models.dev: ABSENT
+- **qwen3-vl-8b-thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=131072 maxin=131072 maxout=32768
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.18", "output_usd_per_million_tokens": "2.1"}
+  - models.dev: ABSENT
+- **qwen3-vl-embedding-8b**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0.09", "output_usd_per_million_tokens": "0.09"}
+  - models.dev: ABSENT
+- **qwen3-vl-flash**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=262144 maxin=262144 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0.05", "output_usd_per_million_tokens": "0.4", "cache_read_usd_per_million_tokens": "0.01"}
+  - models.dev: release=2025-10-09
+- **qwen3-vl-instruct**  MISSING: think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=129024
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "1.6"}
+  - models.dev: ABSENT
+- **qwen3-vl-plus**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=32768
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "1.6", "cache_read_usd_per_million_tokens": "0.04", "cache_write_usd_per_million_tokens": "0.25"}
+  - models.dev: release=2025-09-23
+- **qwen3-vl-thinking**  MISSING: speed?
+  - current: ctx=131072 maxin=131072 maxout=32768
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "4"}
+  - models.dev: ABSENT
+- **qwen3.1.7b-base**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.1", "cache_read_usd_per_million_tokens": "0.1", "cache_write_usd_per_million_tokens": "0.1"}
+  - models.dev: ABSENT
+- **qwen3.14b**  MISSING: input?, speed?
+  - current: ctx=40960 maxin=41000 maxout=16384
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.2275", "output_usd_per_million_tokens": "0.91", "cache_read_usd_per_million_tokens": "0.04"}
+  - models.dev: ABSENT
+- **qwen3.14b-instruct**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.05", "output_usd_per_million_tokens": "0.22", "cache_read_usd_per_million_tokens": "0.05"}
+  - models.dev: ABSENT
+- **qwen3.235b**  MISSING: input?, speed?
+  - current: ctx=128000 maxin=128000 maxout=32000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **qwen3.235b-a22b**  MISSING: speed?
+  - current: ctx=131072 maxin=41000 maxout=8192
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.455", "output_usd_per_million_tokens": "1.82", "cache_read_usd_per_million_tokens": "0.0574"}
+  - models.dev: ABSENT
+- **qwen3.235b-a22b-2507**  MISSING: input?, think?, speed?
+  - current: ctx=262144 maxin=262144 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.1495", "output_usd_per_million_tokens": "0.598", "cache_read_usd_per_million_tokens": "0.018", "cache_write_usd_per_million_tokens": "0.09"}
+  - models.dev: ABSENT
+- **qwen3.235b-a22b-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=64000
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **qwen3.235b-a22b-instruct-2507**  MISSING: input?, think?, speed?
+  - current: ctx=262144 maxin=256000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.09", "output_usd_per_million_tokens": "0.58", "cache_read_usd_per_million_tokens": "0.018", "cache_write_usd_per_million_tokens": "1.2"}
+  - models.dev: ABSENT
+- **qwen3.235b-a22b-thinking**  MISSING: speed?
+  - current: ctx=131072 maxin=131072 maxout=32768
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "4"}
+  - models.dev: ABSENT
+- **qwen3.235b-a22b-thinking-2507**  MISSING: input?, speed?
+  - current: ctx=262000 maxin=256000 maxout=8192
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "3", "cache_read_usd_per_million_tokens": "0.055", "cache_write_usd_per_million_tokens": "0.22"}
+  - models.dev: ABSENT
+- **qwen3.235b-a22b-thinking-2507-fast**  MISSING: input?, speed?
+  - current: ctx=8000 maxin=7000 maxout=8192
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "2", "cache_read_usd_per_million_tokens": "0.05", "cache_write_usd_per_million_tokens": "0.625"}
+  - models.dev: ABSENT
+- **qwen3.30b-a3b**  MISSING: speed?
+  - current: ctx=40960 maxin=41000 maxout=16384
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.13", "output_usd_per_million_tokens": "0.52", "cache_read_usd_per_million_tokens": "0.05"}
+  - models.dev: ABSENT
+- **qwen3.30b-a3b-2507**  MISSING: input?, think?, speed?
+  - current: ctx=262144 maxin=262144 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **qwen3.30b-a3b-instruct-2507**  MISSING: input?, think?, speed?
+  - current: ctx=128000 maxin=120000 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0.13", "output_usd_per_million_tokens": "0.52", "cache_read_usd_per_million_tokens": "0.01", "cache_write_usd_per_million_tokens": "0.125"}
+  - models.dev: ABSENT
+- **qwen3.30b-a3b-thinking-2507**  MISSING: input?, speed?
+  - current: ctx=81920 maxin=81920 maxout=32768
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "2.4"}
+  - models.dev: ABSENT
+- **qwen3.32b**  MISSING: speed?
+  - current: ctx=40960 maxin=41000 maxout=16384
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.08", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.05", "cache_write_usd_per_million_tokens": "0.125"}
+  - models.dev: ABSENT
+- **qwen3.4b-base**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.15", "output_usd_per_million_tokens": "0.15", "cache_read_usd_per_million_tokens": "0.15", "cache_write_usd_per_million_tokens": "0.15"}
+  - models.dev: ABSENT
+- **qwen3.4b-instruct-2507**  MISSING: kcutoff?, input?, speed?
+  - current: ctx=262144 maxin=262144 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.2", "cache_read_usd_per_million_tokens": "0.2", "cache_write_usd_per_million_tokens": "0.2"}
+  - models.dev: ABSENT
+- **qwen3.5-0.8b**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2025-11-01
+- **qwen3.5-122b**  MISSING: kcutoff?, speed?
+  - current: ctx=262144 maxin=262144 maxout=16384
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.9", "output_usd_per_million_tokens": "3.6"}
+  - models.dev: release=2026-02-01
+- **qwen3.5-122b-a10b**  MISSING: speed?
+  - current: ctx=262144 maxin=131072 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "3.2", "cache_read_usd_per_million_tokens": "0.124", "cache_write_usd_per_million_tokens": "0.625", "tiers": [{"input_usd_per_million_tokens": "0.287", "output_usd_per_million_tokens": "2.294", "cache_read_usd_per_million_tokens": "0.287"}]}
+  - models.dev: release=2026-02-23
+- **qwen3.5-122b-a10b-nvfp4**  MISSING: kcutoff?, speed?
+  - current: ctx=256144 maxin=256144 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **qwen3.5-122b-a10b:thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=131072 maxin=131072 maxout=32768
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.437", "output_usd_per_million_tokens": "3.496", "cache_read_usd_per_million_tokens": "0.103788"}
+  - models.dev: ropts=[{"type": "budget_tokens", "min": 1024, "max": 81920}] | release=2026-02-23
+- **qwen3.5-27b**  MISSING: speed?
+  - current: ctx=262144 maxin=260096 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "2.4", "cache_read_usd_per_million_tokens": "0.135", "tiers": [{"input_usd_per_million_tokens": "0.258", "output_usd_per_million_tokens": "2.064", "cache_read_usd_per_million_tokens": "0.258"}]}
+  - models.dev: release=2026-02-23
+- **qwen3.5-27b:thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=260096 maxin=260096 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.27", "output_usd_per_million_tokens": "2.16", "cache_read_usd_per_million_tokens": "0.135"}
+  - models.dev: ropts=[{"type": "budget_tokens", "min": 1024, "max": 81920}] | release=2026-02-23
+- **qwen3.5-2b**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2025-11-01
+- **qwen3.5-35b-a3b**  MISSING: speed?
+  - current: ctx=262144 maxin=260096 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "2", "cache_read_usd_per_million_tokens": "0.1125", "tiers": [{"input_usd_per_million_tokens": "0.229", "output_usd_per_million_tokens": "1.835", "cache_read_usd_per_million_tokens": "0.229"}]}
+  - models.dev: release=2026-02-23
+- **qwen3.5-35b-a3b:thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=260096 maxin=260096 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.225", "output_usd_per_million_tokens": "1.8", "cache_read_usd_per_million_tokens": "0.1125"}
+  - models.dev: ropts=[{"type": "budget_tokens", "min": 1024, "max": 81920}] | release=2026-02-23
+- **qwen3.5-397b-a17b**  MISSING: speed?
+  - current: ctx=262144 maxin=250000 maxout=65536
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "3.6", "cache_read_usd_per_million_tokens": "0.07", "cache_write_usd_per_million_tokens": "0.75", "tiers": [{"input_usd_per_million_tokens": "0.43", "output_usd_per_million_tokens": "2.58", "cache_read_usd_per_million_tokens": "0.43"}]}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-02-15
+- **qwen3.5-397b-a17b-fast**  MISSING: input?, speed?
+  - current: ctx=8000 maxin=7000 maxout=8192
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "3.6", "cache_read_usd_per_million_tokens": "0.06", "cache_write_usd_per_million_tokens": "0.75"}
+  - models.dev: ABSENT
+- **qwen3.5-397b-a17b-thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=258048 maxin=258048 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "3.6", "cache_read_usd_per_million_tokens": "0.3"}
+  - models.dev: ABSENT
+- **qwen3.5-397b-fast**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=262128 maxin=262128 maxout=262128
+  - current pricing: {"input_usd_per_million_tokens": "0.69", "output_usd_per_million_tokens": "4.14", "cache_read_usd_per_million_tokens": "0.1725"}
+  - models.dev: release=2026-02-01
+- **qwen3.5-4b**  MISSING: think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0.02"}
+  - models.dev: release=2025-11-01
+- **qwen3.5-9b**  MISSING: speed?
+  - current: ctx=262144 maxin=256000 maxout=65536
+  - current thinking_modes keys: ['off', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.15", "cache_read_usd_per_million_tokens": "0.008", "cache_write_usd_per_million_tokens": "0.1875"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "medium", "high"]}] | release=2026-03-13
+- **qwen3.5-9b-mlx-4bit**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **qwen3.5-9b-q4.k.m**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **qwen3.5-flash**  MISSING: speed?
+  - current: ctx=1000000 maxin=991808 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.172", "output_usd_per_million_tokens": "1.72", "cache_read_usd_per_million_tokens": "0.05", "cache_write_usd_per_million_tokens": "0.125"}
+  - models.dev: release=2026-02-23
+- **qwen3.5-flash-02-23**  MISSING: kcutoff?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.065", "output_usd_per_million_tokens": "0.26"}
+  - models.dev: ABSENT
+- **qwen3.5-flash:thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=991808 maxin=991808 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.4", "cache_read_usd_per_million_tokens": "0.05"}
+  - models.dev: ropts=[{"type": "budget_tokens", "min": 1024, "max": 81920}] | release=2026-02-23
+- **qwen3.5-omni-flash**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=49152 maxin=49152 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-03-30
+- **qwen3.5-omni-plus**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=983616 maxin=983616 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-03-30
+- **qwen3.5-plus**  MISSING: speed?
+  - current: ctx=1000000 maxin=983616 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "2.4", "cache_read_usd_per_million_tokens": "0", "cache_write_usd_per_million_tokens": "0", "tiers": [{"input_usd_per_million_tokens": "1.08", "output_usd_per_million_tokens": "6.62", "cache_read_usd_per_million_tokens": "1.08"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "1.08", "output_usd_per_million_tokens": "6.62", "cache_read_usd_per_million_tokens": "1.08"}]}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "budget_tokens", "max": 81920}] | release=2026-02-16
+- **qwen3.5-plus-02-15**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.26", "output_usd_per_million_tokens": "1.56", "tiers": [{"input_usd_per_million_tokens": "0.325", "output_usd_per_million_tokens": "1.95"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "0.325", "output_usd_per_million_tokens": "1.95"}]}
+  - models.dev: ABSENT
+- **qwen3.5-plus-20260420**  MISSING: kcutoff?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "1.8", "cache_write_usd_per_million_tokens": "0.375", "tiers": [{"input_usd_per_million_tokens": "0.375", "output_usd_per_million_tokens": "2.25", "cache_write_usd_per_million_tokens": "0.46875"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "0.375", "output_usd_per_million_tokens": "2.25", "cache_write_usd_per_million_tokens": "0.46875"}]}
+  - models.dev: ABSENT
+- **qwen3.5-plus-thinking**  MISSING: speed?
+  - current: ctx=983616 maxin=983616 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "2.4", "cache_read_usd_per_million_tokens": "0.04"}
+  - models.dev: ABSENT
+- **qwen3.6-27b**  MISSING: kcutoff?, speed?
+  - current: ctx=262144 maxin=262144 maxout=65536
+  - current thinking_modes keys: ['off', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "3.6", "cache_read_usd_per_million_tokens": "0.04", "cache_write_usd_per_million_tokens": "0.6"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "medium", "high"]}] | release=2026-04-22
+- **qwen3.6-27b:thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=260096 maxin=260096 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.203", "output_usd_per_million_tokens": "2.24", "cache_read_usd_per_million_tokens": "0.1015"}
+  - models.dev: ABSENT
+- **qwen3.6-35b**  MISSING: kcutoff?, speed?
+  - current: ctx=256000 maxin=256000 maxout=32768
+  - current thinking_modes keys: ['off', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.15", "output_usd_per_million_tokens": "0.5"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "high"]}] | release=2026-04-17
+- **qwen3.6-35b-a3b**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=65536
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.248", "output_usd_per_million_tokens": "1.485", "cache_read_usd_per_million_tokens": "0.0725", "cache_write_usd_per_million_tokens": "0.175"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-04-17
+- **qwen3.6-35b-a3b:thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=262144 maxin=262144 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.112", "output_usd_per_million_tokens": "0.8", "cache_read_usd_per_million_tokens": "0.056"}
+  - models.dev: ABSENT
+- **qwen3.6-35b-fast**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=131056 maxin=131056 maxout=131056
+  - current pricing: {"input_usd_per_million_tokens": "0.29", "output_usd_per_million_tokens": "1.15", "cache_read_usd_per_million_tokens": "0.0725"}
+  - models.dev: release=2026-04-01
+- **qwen3.6-flash**  MISSING: speed?
+  - current: ctx=1000000 maxin=991808 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.1875", "output_usd_per_million_tokens": "1.125", "cache_read_usd_per_million_tokens": "0.05", "cache_write_usd_per_million_tokens": "0.234375", "tiers": [{"input_usd_per_million_tokens": "0.68", "output_usd_per_million_tokens": "4.06", "cache_read_usd_per_million_tokens": "0.0676", "cache_write_usd_per_million_tokens": "0.845"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "0.68", "output_usd_per_million_tokens": "4.06", "cache_read_usd_per_million_tokens": "0.0676", "cache_write_usd_per_million_tokens": "0.845"}, {"input_usd_per_million_tokens": "0.75", "output_usd_per_million_tokens": "4.5", "cache_read_usd_per_million_tokens": "0.075", "cache_write_usd_per_million_tokens": "0.94"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "0.75", "output_usd_per_million_tokens": "4.5", "cache_read_usd_per_million_tokens": "0.075", "cache_write_usd_per_million_tokens": "0.94"}, {"input_usd_per_million_tokens": "1", "output_usd_per_million_tokens": "4", "cache_read_usd_per_million_tokens": "1"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "1", "output_usd_per_million_tokens": "4", "cache_read_usd_per_million_tokens": "1"}]}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-04-27
+- **qwen3.6-max**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=64000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "12", "cache_read_usd_per_million_tokens": "0.2", "cache_write_usd_per_million_tokens": "2.5"}
+  - models.dev: release=2026-05-20
+- **qwen3.6-max-preview**  MISSING: speed?
+  - current: ctx=262144 maxin=245760 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "1.3", "output_usd_per_million_tokens": "7.8", "cache_read_usd_per_million_tokens": "0.13", "cache_write_usd_per_million_tokens": "1.625", "tiers": [{"input_usd_per_million_tokens": "2.11", "output_usd_per_million_tokens": "12.67", "cache_read_usd_per_million_tokens": "0.2112", "cache_write_usd_per_million_tokens": "2.64"}, {"input_usd_per_million_tokens": "1.58", "output_usd_per_million_tokens": "9.48", "cache_write_usd_per_million_tokens": "1.975"}, {"input_usd_per_million_tokens": "1.97", "output_usd_per_million_tokens": "11.82", "cache_read_usd_per_million_tokens": "1.97"}]}
+  - models.dev: release=2026-04-20
+- **qwen3.6-plus**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "3", "cache_read_usd_per_million_tokens": "0.05", "cache_write_usd_per_million_tokens": "0.625", "tiers": [{"input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.2", "cache_write_usd_per_million_tokens": "2.5"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.2", "cache_write_usd_per_million_tokens": "2.5"}, {"input_usd_per_million_tokens": "1.25", "output_usd_per_million_tokens": "7.5", "cache_read_usd_per_million_tokens": "0.124", "cache_write_usd_per_million_tokens": "1.57"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "1.25", "output_usd_per_million_tokens": "7.5", "cache_read_usd_per_million_tokens": "0.124", "cache_write_usd_per_million_tokens": "1.57"}, {"input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "2"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "2"}]}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "budget_tokens", "max": 81920}] | release=2026-04-02
+- **qwen3.7-flash**  MISSING: kcutoff?, speed?
+  - current: ctx=1000000 maxin=991000 maxout=65536
+  - current thinking_modes keys: ['off', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.02962", "output_usd_per_million_tokens": "0.1185", "cache_read_usd_per_million_tokens": "0.002962", "cache_write_usd_per_million_tokens": "0.03703", "tiers": [{"input_usd_per_million_tokens": "0.08887", "output_usd_per_million_tokens": "0.35549", "cache_read_usd_per_million_tokens": "0.008887", "cache_write_usd_per_million_tokens": "0.11109"}, {"input_usd_per_million_tokens": "0.17774", "output_usd_per_million_tokens": "0.71098", "cache_read_usd_per_million_tokens": "0.017774", "cache_write_usd_per_million_tokens": "0.22218"}, {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.37", "cache_read_usd_per_million_tokens": "0.02", "cache_write_usd_per_million_tokens": "0.12"}, {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.4", "cache_read_usd_per_million_tokens": "0.02"}, {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.8", "cache_read_usd_per_million_tokens": "0.04"}]}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "high"]}] | release=2026-07-15
+- **qwen3.7-flash:thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=983616 maxin=983616 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.03", "output_usd_per_million_tokens": "0.13", "cache_read_usd_per_million_tokens": "0.006", "cache_write_usd_per_million_tokens": "0.038"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "high"]}] | release=2026-07-15
+- **qwen3.7-max**  MISSING: kcutoff?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "2.5", "output_usd_per_million_tokens": "7.5", "cache_read_usd_per_million_tokens": "0.5", "cache_write_usd_per_million_tokens": "3.125", "tiers": [{"input_usd_per_million_tokens": "5", "output_usd_per_million_tokens": "15", "cache_read_usd_per_million_tokens": "1"}, {"input_usd_per_million_tokens": "6.25", "output_usd_per_million_tokens": "18.5", "cache_read_usd_per_million_tokens": "1.25"}]}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "budget_tokens", "max": 262144}] | release=2026-05-21
+- **qwen3.7-max:thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "2.5", "output_usd_per_million_tokens": "7.5", "cache_read_usd_per_million_tokens": "0.5", "cache_write_usd_per_million_tokens": "3.125"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "high"]}] | release=2026-05-21
+- **qwen3.7-plus**  MISSING: speed?
+  - current: ctx=1000000 maxin=991808 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "3", "cache_read_usd_per_million_tokens": "0.05", "cache_write_usd_per_million_tokens": "0.625", "tiers": [{"input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.2", "cache_write_usd_per_million_tokens": "2.5"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.2", "cache_write_usd_per_million_tokens": "2.5"}, {"input_usd_per_million_tokens": "1.2", "output_usd_per_million_tokens": "4.8", "cache_read_usd_per_million_tokens": "0.12", "cache_write_usd_per_million_tokens": "1.5"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "1.2", "output_usd_per_million_tokens": "4.8", "cache_read_usd_per_million_tokens": "0.12", "cache_write_usd_per_million_tokens": "1.5"}, {"input_usd_per_million_tokens": "0.864", "output_usd_per_million_tokens": "3.375", "cache_read_usd_per_million_tokens": "0.0864", "cache_write_usd_per_million_tokens": "1.08"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "0.864", "output_usd_per_million_tokens": "3.375", "cache_read_usd_per_million_tokens": "0.0864", "cache_write_usd_per_million_tokens": "1.08"}, {"input_usd_per_million_tokens": "1.2", "output_usd_per_million_tokens": "4.8", "cache_read_usd_per_million_tokens": "1.2"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "1.2", "output_usd_per_million_tokens": "4.8", "cache_read_usd_per_million_tokens": "1.2"}]}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "budget_tokens", "max": 262144}] | release=2026-06-02
+- **qwen3.7-plus:thinking**  MISSING: speed?
+  - current: ctx=983616 maxin=983616 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "1.6", "cache_read_usd_per_million_tokens": "0.08", "cache_write_usd_per_million_tokens": "0.5"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "high"]}] | release=2026-06-02
+- **qwen3.8-2.4t-a95b**  MISSING: kcutoff?, input?, speed?
+  - current: ctx=262144 maxin=262144 maxout=52429
+  - current thinking_modes keys: ['default', 'off', 'low', 'medium', 'xhigh']
+  - current pricing: {"input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.2"}
+  - models.dev: ABSENT
+- **qwen3.8-max**  MISSING: kcutoff?, speed?
+  - current: ctx=1000000 maxin=991000 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.25", "cache_write_usd_per_million_tokens": "2.5"}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "budget_tokens", "max": 262144}] | release=2026-08-03
+- **qwen3.8-max-preview**  MISSING: kcutoff?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['default', 'off', 'low', 'medium', 'xhigh']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "effort", "values": ["low", "medium", "xhigh"]}, {"type": "budget_tokens", "min": 0, "max": 262144}] | release=2026-07-19
+- **qwen3.8-max:thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=991000 maxin=991000 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.25", "cache_write_usd_per_million_tokens": "2.5"}
+  - models.dev: ropts=[{"type": "effort", "values": ["low", "medium", "high", "max"]}] | release=2026-08-03
+- **qwen3.8b**  MISSING: input?, speed?
+  - current: ctx=131072 maxin=41000 maxout=8192
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.117", "output_usd_per_million_tokens": "0.455", "cache_read_usd_per_million_tokens": "0.2", "cache_write_usd_per_million_tokens": "0.2"}
+  - models.dev: ABSENT
+- **qwen35.122b-a10b**  MISSING: kcutoff?, input?, speed?
+  - current: ctx=262144 maxin=131072 maxout=25000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.22", "output_usd_per_million_tokens": "2.2"}
+  - models.dev: ABSENT
+- **qwen35.397b-a17b**  MISSING: kcutoff?, speed?
+  - current: ctx=262144 maxin=262144 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "3.6"}
+  - models.dev: ABSENT
+- **qwen3guard-gen-0.6b**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-01-22
+- **qwen3guard-gen-8b**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-01-22
+- **qwen3p7-plus**  MISSING: kcutoff?, speed?
+  - current: ctx=262144 maxin=262144 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "1.6", "cache_read_usd_per_million_tokens": "0.08"}
+  - models.dev: ABSENT
+- **qwenlong-l1-32b**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=40960
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.6", "cache_read_usd_per_million_tokens": "0.07"}
+  - models.dev: ABSENT
+

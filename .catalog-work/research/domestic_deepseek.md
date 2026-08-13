@@ -1,0 +1,250 @@
+### deepseek domestic models (53 models)
+
+- **deepseek-3.2**  MISSING: speed?
+  - current: ctx=163840 maxin=163840 maxout=163840
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "0.8", "cache_read_usd_per_million_tokens": "0.075"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "medium", "high"]}] | release=2025-12-02
+- **deepseek-4-flash**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=384000
+  - current pricing: {"input_usd_per_million_tokens": "0.0679", "output_usd_per_million_tokens": "0.168", "cache_read_usd_per_million_tokens": "0.0168"}
+  - models.dev: release=2026-05-27
+- **deepseek-chat**  MISSING: think?, speed?
+  - current: ctx=1000000 maxin=128000 maxout=384000
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.0028"}
+  - models.dev: release=2025-12-01
+- **deepseek-chat-v3-0324**  MISSING: input?, think?, speed?
+  - current: ctx=163840 maxin=163840 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "0.27", "output_usd_per_million_tokens": "1.12", "cache_read_usd_per_million_tokens": "0.135"}
+  - models.dev: ABSENT
+- **deepseek-chat-v3.1**  MISSING: input?, speed?
+  - current: ctx=163840 maxin=163840 maxout=32768
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.27", "output_usd_per_million_tokens": "1", "cache_read_usd_per_million_tokens": "0.135", "cache_write_usd_per_million_tokens": "0.25"}
+  - models.dev: ABSENT
+- **deepseek-coder-6.7b-instruct**  MISSING: desc?, kcutoff?, ctx?, maxin?, maxout?, price?, input?, features?, think?, speed?
+  - models.dev: ABSENT
+- **deepseek-latest**  MISSING: kcutoff?, input?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=384000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.435", "output_usd_per_million_tokens": "0.87", "cache_read_usd_per_million_tokens": "0.003625"}
+  - models.dev: ABSENT
+- **deepseek-math-v2**  MISSING: kcutoff?, price?, input?, speed?
+  - current: ctx=160000 maxin=160000 maxout=160000
+  - current thinking_modes keys: ['on']
+  - models.dev: ABSENT
+- **deepseek-ocr**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=8192 maxin=8192 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.03", "output_usd_per_million_tokens": "0.03"}
+  - models.dev: ABSENT
+- **deepseek-ocr-2**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=8192 maxin=8192 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.8897", "output_usd_per_million_tokens": "1.4675", "cache_read_usd_per_million_tokens": "0.0924"}
+  - models.dev: release=2026-01-27
+- **deepseek-prover-v2-671b**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=160000 maxin=160000 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "1", "output_usd_per_million_tokens": "2.5", "cache_read_usd_per_million_tokens": "0.5"}
+  - models.dev: ABSENT
+- **deepseek-r1**  MISSING: speed?
+  - current: ctx=131072 maxin=128000 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.574", "output_usd_per_million_tokens": "2.294", "cache_read_usd_per_million_tokens": "0.2"}
+  - models.dev: release=2025-01-20
+- **deepseek-r1-0528**  MISSING: speed?
+  - current: ctx=131072 maxin=128000 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.574", "output_usd_per_million_tokens": "2.294", "cache_read_usd_per_million_tokens": "0.163", "cache_write_usd_per_million_tokens": "4"}
+  - models.dev: release=2025-05-28
+- **deepseek-r1-0528-qwen3-8b**  MISSING: kcutoff?, input?, speed?
+  - current: ctx=128000 maxin=128000 maxout=32000
+  - current thinking_modes keys: ['on']
+  - current pricing: {"input_usd_per_million_tokens": "0.06", "output_usd_per_million_tokens": "0.09"}
+  - models.dev: ABSENT
+- **deepseek-r1-distill-llama-70b**  MISSING: speed?
+  - current: ctx=32768 maxin=32768 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.287", "output_usd_per_million_tokens": "0.861"}
+  - models.dev: release=2025-01-20
+- **deepseek-r1-distill-llama-8b**  MISSING: kcutoff?, speed?
+  - current: ctx=32768 maxin=32768 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2025-01-01
+- **deepseek-r1-distill-qwen-1-5b**  MISSING: kcutoff?, speed?
+  - current: ctx=32768 maxin=32768 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2025-01-01
+- **deepseek-r1-distill-qwen-14b**  MISSING: kcutoff?, speed?
+  - current: ctx=32768 maxin=32768 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.144", "output_usd_per_million_tokens": "0.431"}
+  - models.dev: release=2025-01-01
+- **deepseek-r1-distill-qwen-32b**  MISSING: speed?
+  - current: ctx=32768 maxin=32768 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.287", "output_usd_per_million_tokens": "0.861"}
+  - models.dev: release=2025-01-01
+- **deepseek-r1-distill-qwen-7b**  MISSING: kcutoff?, speed?
+  - current: ctx=32768 maxin=32768 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.072", "output_usd_per_million_tokens": "0.144"}
+  - models.dev: release=2025-01-01
+- **deepseek-r1-turbo**  MISSING: kcutoff?, input?, speed?
+  - current: ctx=64000 maxin=64000 maxout=16000
+  - current thinking_modes keys: ['on']
+  - current pricing: {"input_usd_per_million_tokens": "0.7", "output_usd_per_million_tokens": "2.5"}
+  - models.dev: ABSENT
+- **deepseek-reasoner**  MISSING: speed?
+  - current: ctx=1000000 maxin=64000 maxout=384000
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.0028"}
+  - models.dev: release=2025-12-01
+- **deepseek-v3**  MISSING: think?, speed?
+  - current: ctx=65536 maxin=65536 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.287", "output_usd_per_million_tokens": "1.147", "cache_read_usd_per_million_tokens": "0.07", "cache_write_usd_per_million_tokens": "0.27"}
+  - models.dev: release=2024-12-26
+- **deepseek-v3-turbo**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=64000 maxin=64000 maxout=16000
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "1.3"}
+  - models.dev: ABSENT
+- **deepseek-v3.0324**  MISSING: input?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.77", "cache_read_usd_per_million_tokens": "0.135"}
+  - models.dev: ABSENT
+- **deepseek-v3.1**  MISSING: speed?
+  - current: ctx=128000 maxin=128000 maxout=32000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.574", "output_usd_per_million_tokens": "1.721", "cache_read_usd_per_million_tokens": "0.13", "cache_write_usd_per_million_tokens": "0.56"}
+  - models.dev: release=2025-08-19
+- **deepseek-v3.1-terminus**  MISSING: speed?
+  - current: ctx=128000 maxin=128000 maxout=16384
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.27", "output_usd_per_million_tokens": "1", "cache_read_usd_per_million_tokens": "0.21600000000000005"}
+  - models.dev: release=2025-09-22
+- **deepseek-v3.1:thinking**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.7", "cache_read_usd_per_million_tokens": "0.1"}
+  - models.dev: ABSENT
+- **deepseek-v3.2**  MISSING: speed?
+  - current: ctx=163840 maxin=164000 maxout=16384
+  - current thinking_modes keys: ['off', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.26", "output_usd_per_million_tokens": "0.38", "cache_read_usd_per_million_tokens": "0.13", "cache_write_usd_per_million_tokens": "0.375"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "medium", "high"]}] | release=2025-12-01
+- **deepseek-v3.2-251201**  MISSING: kcutoff?, price?, input?, speed?
+  - current: ctx=128000 maxin=128000 maxout=32000
+  - current thinking_modes keys: ['off', 'on']
+  - models.dev: ABSENT
+- **deepseek-v3.2-exp**  MISSING: input?, speed?
+  - current: ctx=163840 maxin=163840 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.27", "output_usd_per_million_tokens": "0.41", "cache_read_usd_per_million_tokens": "0.14"}
+  - models.dev: ABSENT
+- **deepseek-v3.2-exp-thinking**  MISSING: kcutoff?, input?, speed?
+  - current: ctx=128000 maxin=163840 maxout=32000
+  - current thinking_modes keys: ['on']
+  - current pricing: {"input_usd_per_million_tokens": "0.28", "output_usd_per_million_tokens": "0.42", "cache_read_usd_per_million_tokens": "0.14"}
+  - models.dev: ABSENT
+- **deepseek-v3.2-fast**  MISSING: input?, speed?
+  - current: ctx=8000 maxin=7000 maxout=8192
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "2", "cache_read_usd_per_million_tokens": "0.04", "cache_write_usd_per_million_tokens": "0.5"}
+  - models.dev: ABSENT
+- **deepseek-v3.2-nvfp4**  MISSING: input?, speed?
+  - current: ctx=131072 maxin=131072 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.55", "output_usd_per_million_tokens": "1.65"}
+  - models.dev: ABSENT
+- **deepseek-v3.2-thinking**  MISSING: speed?
+  - current: ctx=128000 maxin=128000 maxout=128000
+  - current thinking_modes keys: ['on']
+  - current pricing: {"input_usd_per_million_tokens": "0.29", "output_usd_per_million_tokens": "0.43"}
+  - models.dev: release=2025-12-01
+- **deepseek-v3.2:thinking**  MISSING: speed?
+  - current: ctx=163000 maxin=163000 maxout=65536
+  - current thinking_modes keys: ['on']
+  - current pricing: {"input_usd_per_million_tokens": "0.28", "output_usd_per_million_tokens": "0.42", "cache_read_usd_per_million_tokens": "0.14"}
+  - models.dev: ABSENT
+- **deepseek-v4-flash**  MISSING: think?, speed?
+  - current: ctx=1000000 maxin=1048576 maxout=384000
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.0028", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "effort", "values": ["low", "high", "max"]}] | release=2026-07-31
+- **deepseek-v4-flash-0731**  MISSING: think?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=384000
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.4", "cache_read_usd_per_million_tokens": "0.04", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-07-31
+- **deepseek-v4-flash-0731-fast**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=32768
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.35", "output_usd_per_million_tokens": "0.7", "cache_read_usd_per_million_tokens": "0.0875"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "high", "max"]}] | release=2026-08-09
+- **deepseek-v4-flash-0731:thinking**  MISSING: input?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['on']
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.014"}
+  - models.dev: ABSENT
+- **deepseek-v4-flash-0731@eu**  MISSING: speed?
+  - current: ctx=1048576 maxin=1048576 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.07"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "medium", "high", "max"]}, {"type": "budget_tokens"}] | release=2026-07-31
+- **deepseek-v4-flash-el**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=384000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.28"}
+  - models.dev: ABSENT
+- **deepseek-v4-flash-latest**  MISSING: input?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=262144
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.079996", "output_usd_per_million_tokens": "0.252", "cache_read_usd_per_million_tokens": "0.0252"}
+  - models.dev: ABSENT
+- **deepseek-v4-flash:0731**  MISSING: speed?
+  - current: ctx=1048576 maxin=1048576 maxout=1048576
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.0028"}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "effort", "values": ["high", "max"]}] | release=2026-07-31
+- **deepseek-v4-flash:discounted**  MISSING: input?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=384000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.0028"}
+  - models.dev: ABSENT
+- **deepseek-v4-flash:thinking**  MISSING: input?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=384000
+  - current thinking_modes keys: ['on']
+  - current pricing: {"input_usd_per_million_tokens": "0.07", "output_usd_per_million_tokens": "0.14", "cache_read_usd_per_million_tokens": "0.014"}
+  - models.dev: ABSENT
+- **deepseek-v4-pro**  MISSING: think?, speed?
+  - current: ctx=1000000 maxin=1048576 maxout=384000
+  - current pricing: {"input_usd_per_million_tokens": "0.435", "output_usd_per_million_tokens": "0.87", "cache_read_usd_per_million_tokens": "0.003625", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "effort", "values": ["high", "max"]}] | release=2026-04-24
+- **deepseek-v4-pro-0813**  MISSING: input?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=384000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.435", "output_usd_per_million_tokens": "0.87", "cache_read_usd_per_million_tokens": "0.003625"}
+  - models.dev: ABSENT
+- **deepseek-v4-pro-0813:thinking**  MISSING: input?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=384000
+  - current thinking_modes keys: ['on']
+  - current pricing: {"input_usd_per_million_tokens": "0.435", "output_usd_per_million_tokens": "0.87", "cache_read_usd_per_million_tokens": "0.003625"}
+  - models.dev: ABSENT
+- **deepseek-v4-pro-el**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=384000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "1.67", "output_usd_per_million_tokens": "3.33"}
+  - models.dev: ABSENT
+- **deepseek-v4-pro-lightning**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.8", "output_usd_per_million_tokens": "1.6", "cache_read_usd_per_million_tokens": "0.02"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "medium", "high"]}] | release=2026-04-24
+- **deepseek-v4-pro:discounted**  MISSING: input?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=384000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.435", "output_usd_per_million_tokens": "0.87", "cache_read_usd_per_million_tokens": "0.003625"}
+  - models.dev: ABSENT
+- **deepseek-v4-pro:thinking**  MISSING: input?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=384000
+  - current thinking_modes keys: ['on']
+  - current pricing: {"input_usd_per_million_tokens": "1.1", "output_usd_per_million_tokens": "2.2", "cache_read_usd_per_million_tokens": "0.11"}
+  - models.dev: ABSENT
+

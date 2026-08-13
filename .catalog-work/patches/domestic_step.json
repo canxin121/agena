@@ -1,0 +1,27 @@
+{
+  "models": {
+    "step-3": {
+      "thinking_modes": {
+        "on": { "display_name": "Thinking", "strategy": "request_only" }
+      },
+      "description": "StepFun's open-source multimodal reasoning flagship (321B total / 38B active MoE) with always-on chain-of-thought."
+    },
+    "step-r1-v-mini": {
+      "thinking_modes": {
+        "on": { "display_name": "Thinking", "strategy": "request_only" }
+      },
+      "description": "StepFun's compact R1-style multimodal vision reasoning model that surfaces visible chain-of-thought for image understanding.",
+      "release_date": "2025-04-08"
+    }
+  },
+  "notes": "Researched StepFun's official platform (platform.stepfun.com), models.dev snapshot (stepfun-ai section, authoritative), and HuggingFace stepfun-ai assets. STEP-3: verified via the HF Step3 model card ('cutting-edge multimodal reasoning model', 321B/38B MoE) and the official HF demo (spaces/stepfun-ai/Step3/app.py) that the step-3 Chat Completions request uses only standard OpenAI params (model/messages/temperature/max_tokens/top_p/stream) with no thinking/reasoning request field -- CoT is always produced and streamed in delta.reasoning (deepwiki.com/stepfun-ai/Step3 request format lists no thinking param). Step-3's thinking is therefore always-on, represented with the catalog's always-on pattern ({on: request_only}), matching step-3.7-flash:thinking and other R1-style entries; there is no verified off/on toggle to encode. Corrected step-3's misleading 'Compact GPT model' description. STEP-R1-V-MINI: verified from StepFun's official April 8 2025 launch announcement (WeChat/IT之家, 2025-04-09) that it is a multimodal (image+text -> text) R1-style reasoning model exposing visible chain-of-thought; the same HF demo treats it like step-3 (CoT streamed), so thinking is always-on. Added the always-on thinking_modes, corrected the 'Compact GPT model' description, and corrected release_date from the placeholder 2024-01-01 (models.dev nano-gpt) to the verified 2025-04-08 launch. LEFT UNCHANGED (deliberately): step-1-32k and step-2-16k are non-reasoning Step-1/Step-2 models (models.dev reasoning=false; knowledge 2024-06 already present) -- no thinking, no speed. step-2-16k-exp and step-2-mini are non-reasoning (models.dev reasoning=false); their knowledge_cutoff is not published in any accessible official source (StepFun HF cards are gated/401; models.dev has no knowledge for them), so the field was OMITTED rather than guessed. All -flash variants (step-3-5-flash, step-3-5-flash-2603, step-3-7-flash, step-3.5-flash, step-3.5-flash-2603, step-3.7-flash) already carry correct thinking_modes matching official docs (platform.stepfun.com/docs/zh/guides/models/step-3.7-flash: reasoning_effort low/medium/high, default medium; 3.5-flash variants low/high), and step-3.7-flash:thinking already has its always-on mode -- no changes. step-router-v1 is a routing layer, NOT a reasoning model (official step-router docs confirm no standalone per-token price; it is billed by whichever underlying engine serves the request via Step Plan, so pricing cannot be expressed in the USD-per-million-token schema and was omitted); its knowledge_cutoff 2025-01 is already present. step-tts-2, stepaudio-2.5-asr, stepaudio-2.5-tts are non-reasoning TTS/ASR models with no token context (models.dev context=0); their official pricing is per-character/hour in yuan (step-tts-2 2.8 yuan/10k chars, stepaudio-2.5-tts 5.8 yuan/10k chars, stepaudio-2.5-asr 0.15 yuan/hour per pricing/details) and does not map to the token-based USD schema, so pricing was omitted; no knowledge_cutoff is published. SPEED MODES: StepFun expresses speed through separate model IDs (-flash/-mini variants), not a request-level speed parameter -- no speed_modes were added to any model, per the spec (verified against official docs which only expose reasoning_effort/output_config.effort).",
+  "sources": [
+    "https://platform.stepfun.com/docs/zh/guides/models/step-3.7-flash",
+    "https://platform.stepfun.com/docs/zh/guides/models/reasoning",
+    "https://platform.stepfun.com/docs/zh/guides/pricing/details",
+    "https://platform.stepfun.com/docs/zh/guides/models/step-router",
+    "https://huggingface.co/stepfun-ai/Step3",
+    "https://huggingface.co/spaces/stepfun-ai/Step3/raw/main/app.py",
+    "https://deepwiki.com/stepfun-ai/Step3/5.2-request-and-response-format"
+  ]
+}

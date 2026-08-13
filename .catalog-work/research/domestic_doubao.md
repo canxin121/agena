@@ -1,0 +1,222 @@
+### doubao domestic models (55 models)
+
+- **doubao-1.5-pro-256k**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.799", "output_usd_per_million_tokens": "1.445", "cache_read_usd_per_million_tokens": "0.3995"}
+  - models.dev: release=2025-03-12
+- **doubao-1.5-pro-32k**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.1343", "output_usd_per_million_tokens": "0.3349", "cache_read_usd_per_million_tokens": "0.06715"}
+  - models.dev: release=2024-11-20
+- **doubao-1.5-thinking-pro**  MISSING: kcutoff?, price?, speed?
+  - current: ctx=128000 maxin=128000 maxout=16000
+  - current thinking_modes keys: ['high']
+  - models.dev: release=2025-08-05
+- **doubao-1.5-vision-pro**  MISSING: kcutoff?, price?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=16000
+  - models.dev: release=2025-08-05
+- **doubao-1.5-vision-pro-32k**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=32000 maxin=32000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.459", "output_usd_per_million_tokens": "1.377", "cache_read_usd_per_million_tokens": "0.2295"}
+  - models.dev: release=2024-11-20
+- **doubao-seed-1-6-250615**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.204", "output_usd_per_million_tokens": "0.51", "cache_read_usd_per_million_tokens": "0.102"}
+  - models.dev: release=2024-01-01
+- **doubao-seed-1-6-flash-250615**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.0374", "output_usd_per_million_tokens": "0.374", "cache_read_usd_per_million_tokens": "0.0187"}
+  - models.dev: release=2024-01-01
+- **doubao-seed-1-6-thinking-250715**  MISSING: kcutoff?, speed?
+  - current: ctx=256000 maxin=256000 maxout=16000
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.121", "output_usd_per_million_tokens": "1.21"}
+  - models.dev: release=2025-07-15
+- **doubao-seed-1-6-vision-250815**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0.114", "output_usd_per_million_tokens": "1.143"}
+  - models.dev: release=2025-09-30
+- **doubao-seed-1-8-251215**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=224000 maxin=128000 maxout=64000
+  - current pricing: {"input_usd_per_million_tokens": "0.114", "output_usd_per_million_tokens": "0.286", "cache_read_usd_per_million_tokens": "0.306"}
+  - models.dev: release=2024-01-01
+- **doubao-seed-1.6**  MISSING: kcutoff?, price?, speed?
+  - current: ctx=256000 maxin=256000 maxout=32000
+  - current thinking_modes keys: ['off', 'on']
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-08-15
+- **doubao-seed-1.6-flash**  MISSING: kcutoff?, price?, speed?
+  - current: ctx=256000 maxin=256000 maxout=32000
+  - current thinking_modes keys: ['off', 'on']
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-08-15
+- **doubao-seed-1.6-thinking**  MISSING: kcutoff?, price?, speed?
+  - current: ctx=256000 maxin=256000 maxout=32000
+  - current thinking_modes keys: ['high']
+  - models.dev: release=2025-08-15
+- **doubao-seed-1.8**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=64000
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.11", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.02", "cache_write_usd_per_million_tokens": "0.0024"}
+  - models.dev: ABSENT
+- **doubao-seed-2-0-code-preview**  MISSING: kcutoff?, speed?
+  - current: ctx=256000 maxin=256000 maxout=128000
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.48", "output_usd_per_million_tokens": "2.41", "cache_read_usd_per_million_tokens": "0.09644", "tiers": [{"input_usd_per_million_tokens": "0.72", "output_usd_per_million_tokens": "3.62", "cache_read_usd_per_million_tokens": "0.144656"}, {"input_usd_per_million_tokens": "1.45", "output_usd_per_million_tokens": "7.23", "cache_read_usd_per_million_tokens": "0.28932"}]}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "effort", "values": ["minimal", "low", "medium", "high"]}] | release=2026-02-14
+- **doubao-seed-2-0-code-preview-260215**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=128000
+  - current pricing: {"input_usd_per_million_tokens": "0.782", "output_usd_per_million_tokens": "3.893", "cache_read_usd_per_million_tokens": "0.391"}
+  - models.dev: release=2026-02-14
+- **doubao-seed-2-0-lite-260215**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0.1462", "output_usd_per_million_tokens": "0.8738", "cache_read_usd_per_million_tokens": "0.0731"}
+  - models.dev: release=2026-02-14
+- **doubao-seed-2-0-lite-260428**  MISSING: kcutoff?, speed?
+  - current: ctx=256000 maxin=256000 maxout=128000
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.08", "output_usd_per_million_tokens": "0.51", "cache_read_usd_per_million_tokens": "0.01692", "tiers": [{"input_usd_per_million_tokens": "0.13", "output_usd_per_million_tokens": "0.76", "cache_read_usd_per_million_tokens": "0.02536"}, {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "1.52", "cache_read_usd_per_million_tokens": "0.05072"}]}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "effort", "values": ["minimal", "low", "medium", "high"]}] | release=2026-04-28
+- **doubao-seed-2-0-mini-260215**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0.0493", "output_usd_per_million_tokens": "0.4845", "cache_read_usd_per_million_tokens": "0.02465"}
+  - models.dev: release=2026-02-14
+- **doubao-seed-2-0-mini-260428**  MISSING: kcutoff?, speed?
+  - current: ctx=256000 maxin=256000 maxout=128000
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.03", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.00564", "tiers": [{"input_usd_per_million_tokens": "0.06", "output_usd_per_million_tokens": "0.56", "cache_read_usd_per_million_tokens": "0.01128"}, {"input_usd_per_million_tokens": "0.11", "output_usd_per_million_tokens": "1.13", "cache_read_usd_per_million_tokens": "0.02256"}]}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "effort", "values": ["minimal", "low", "medium", "high"]}] | release=2026-04-28
+- **doubao-seed-2-0-pro**  MISSING: kcutoff?, speed?
+  - current: ctx=256000 maxin=256000 maxout=128000
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.48", "output_usd_per_million_tokens": "2.41", "cache_read_usd_per_million_tokens": "0.09644", "tiers": [{"input_usd_per_million_tokens": "0.72", "output_usd_per_million_tokens": "3.62", "cache_read_usd_per_million_tokens": "0.144656"}, {"input_usd_per_million_tokens": "1.45", "output_usd_per_million_tokens": "7.23", "cache_read_usd_per_million_tokens": "0.28932"}]}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "effort", "values": ["minimal", "low", "medium", "high"]}] | release=2026-02-14
+- **doubao-seed-2-0-pro-260215**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=128000
+  - current pricing: {"input_usd_per_million_tokens": "0.782", "output_usd_per_million_tokens": "3.876", "cache_read_usd_per_million_tokens": "0.391"}
+  - models.dev: release=2026-02-14
+- **doubao-seed-2.0-code**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=128000
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.9", "output_usd_per_million_tokens": "4.48"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-02-14
+- **doubao-seed-2.0-lite**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=32000
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.09", "output_usd_per_million_tokens": "0.51", "cache_read_usd_per_million_tokens": "0.02", "cache_write_usd_per_million_tokens": "0.0024"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-02-14
+- **doubao-seed-2.0-mini**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=32000
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.03", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.01", "cache_write_usd_per_million_tokens": "0.0024"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-02-14
+- **doubao-seed-2.0-pro**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=128000
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.45", "output_usd_per_million_tokens": "2.24", "cache_read_usd_per_million_tokens": "0.09", "cache_write_usd_per_million_tokens": "0.0024"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-02-14
+- **doubao-seed-2.1-pro**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=128000
+  - current pricing: {"input_usd_per_million_tokens": "1", "output_usd_per_million_tokens": "5", "cache_read_usd_per_million_tokens": "0.5"}
+  - models.dev: ABSENT
+- **doubao-seed-2.1-turbo**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=128000
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "2.5", "cache_read_usd_per_million_tokens": "0.25"}
+  - models.dev: ABSENT
+- **doubao-seed-character**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "0.1179", "output_usd_per_million_tokens": "0.2947", "cache_read_usd_per_million_tokens": "0.0236", "cache_write_usd_per_million_tokens": "0.0025"}
+  - models.dev: ABSENT
+- **doubao-seed-code**  MISSING: think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=64000
+  - current pricing: {"input_usd_per_million_tokens": "0.17", "output_usd_per_million_tokens": "1.12", "cache_read_usd_per_million_tokens": "0.03"}
+  - models.dev: ABSENT
+- **doubao-seed-code-preview-251028**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0.17", "output_usd_per_million_tokens": "1.14"}
+  - models.dev: release=2025-11-11
+- **seed-1-6-250615**  MISSING: kcutoff?, speed?
+  - current: ctx=256000 maxin=256000 maxout=8192
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "2", "cache_read_usd_per_million_tokens": "0.05"}
+  - models.dev: ropts=[{"type": "effort", "values": ["minimal", "low", "medium", "high"]}] | release=2025-06-25
+- **seed-1-6-250915**  MISSING: kcutoff?, speed?
+  - current: ctx=256000 maxin=256000 maxout=8192
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "2", "cache_read_usd_per_million_tokens": "0.05"}
+  - models.dev: ropts=[{"type": "effort", "values": ["minimal", "low", "medium", "high"]}] | release=2025-09-15
+- **seed-1-6-flash-250715**  MISSING: kcutoff?, speed?
+  - current: ctx=256000 maxin=256000 maxout=8192
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.07", "output_usd_per_million_tokens": "0.3", "cache_read_usd_per_million_tokens": "0.015"}
+  - models.dev: ropts=[{"type": "effort", "values": ["minimal", "low", "medium", "high"]}] | release=2025-07-26
+- **seed-1-8-251228**  MISSING: kcutoff?, speed?
+  - current: ctx=256000 maxin=256000 maxout=8192
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "2", "cache_read_usd_per_million_tokens": "0.05"}
+  - models.dev: ropts=[{"type": "effort", "values": ["minimal", "low", "medium", "high"]}] | release=2025-12-18
+- **seed-1.6**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=32768
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "2", "cache_read_usd_per_million_tokens": "0.05", "tiers": [{"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "4"}]}
+  - models.dev: ABSENT
+- **seed-1.6-flash**  MISSING: kcutoff?, speed?
+  - current: ctx=262144 maxin=262144 maxout=32768
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.075", "output_usd_per_million_tokens": "0.3", "tiers": [{"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.8"}]}
+  - models.dev: ABSENT
+- **seed-1.8**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=64000
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "2", "cache_read_usd_per_million_tokens": "0.05"}
+  - models.dev: ABSENT
+- **seed-2-0-code**  MISSING: kcutoff?, speed?
+  - current: ctx=256000 maxin=256000 maxout=128000
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "2.4", "cache_read_usd_per_million_tokens": "0.4", "tiers": [{"input_usd_per_million_tokens": "0.8", "output_usd_per_million_tokens": "4.8", "cache_read_usd_per_million_tokens": "0.8"}]}
+  - models.dev: ropts=[{"type": "toggle"}, {"type": "effort", "values": ["low", "medium", "high"]}] | release=2026-02-14
+- **seed-2-1-turbo**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=256000 maxin=262144 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "0.625", "output_usd_per_million_tokens": "3.125", "cache_read_usd_per_million_tokens": "0.125"}
+  - models.dev: release=2026-06-28
+- **seed-2.0-code**  MISSING: kcutoff?, speed?
+  - current: ctx=262144 maxin=262144 maxout=131072
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "3", "cache_read_usd_per_million_tokens": "0.25", "tiers": [{"input_usd_per_million_tokens": "1", "output_usd_per_million_tokens": "6"}, {"input_usd_per_million_tokens": "1", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.2"}]}
+  - models.dev: ABSENT
+- **seed-2.0-lite**  MISSING: kcutoff?, speed?
+  - current: ctx=262144 maxin=262144 maxout=131072
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "2", "cache_read_usd_per_million_tokens": "0.125", "tiers": [{"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "4"}]}
+  - models.dev: ABSENT
+- **seed-2.0-mini**  MISSING: kcutoff?, speed?
+  - current: ctx=262144 maxin=262144 maxout=131072
+  - current thinking_modes keys: ['off', 'minimal', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.4", "tiers": [{"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "0.8"}]}
+  - models.dev: ABSENT
+- **seed-oss-36b-instruct**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=262000 maxin=262000 maxout=262000
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **seedance-2**  MISSING: kcutoff?, maxout?, price?, think?, speed?
+  - current: ctx=4096 maxin=4096 maxout=0
+  - models.dev: ABSENT
+- **seedance-2.0**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, think?, speed?
+  - models.dev: ABSENT
+- **seedance-2.0-fast**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, think?, speed?
+  - models.dev: ABSENT
+- **seedance-2.5**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, input?, think?, speed?
+  - models.dev: ABSENT
+- **seedance-v1.0-pro**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, input?, think?, speed?
+  - models.dev: ABSENT
+- **seedance-v1.0-pro-fast**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, input?, think?, speed?
+  - models.dev: ABSENT
+- **seedance-v1.5-pro**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, input?, think?, speed?
+  - models.dev: ABSENT
+- **seedream-4.0**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, input?, think?, speed?
+  - models.dev: ABSENT
+- **seedream-4.5**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, input?, think?, speed?
+  - models.dev: ABSENT
+- **seedream-5.0-lite**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, input?, think?, speed?
+  - models.dev: ABSENT
+- **seedream-5.0-pro**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, input?, think?, speed?
+  - models.dev: ABSENT
+

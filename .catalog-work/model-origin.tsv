@@ -1,0 +1,1886 @@
+active-speaker-detection	NVIDIA
+agent-max	Agent
+agent-prime	Agent
+agent-standard	Agent
+agnes-1.5-lite	Agnes
+agnes-1.5-pro	Agnes
+ai-synthetic-video-detector	NVIDIA
+aion-2.0	AionLabs
+aion-2.5	AionLabs
+aion-3.0	AionLabs
+aion-3.0-mini	AionLabs
+aion-labs-aion-3-0	AionLabs
+aion-labs-aion-3-0-mini	AionLabs
+alibaba-qwen3-32b	Alibaba
+alicloud-deepseek-v4-flash	DeepSeek
+alicloud-deepseek-v4-pro	DeepSeek
+alicloud-glm-5.1	Alicloud
+all-mini-lm-l6-v2	Sentence Transformers
+allam-2-7b	SDAIA
+amazon-nova-lite	Amazon
+amazon-nova-micro	Amazon
+amazon-nova-pro	Amazon
+amazon-titan-embed-text	Amazon
+amoral-gemma3-27b-v2	Amoral
+anthropic-claude-3-haiku	Anthropic
+anthropic-claude-3-opus	Anthropic
+anthropic-claude-3-sonnet	Anthropic
+anthropic-claude-3.5-haiku	Anthropic
+anthropic-claude-3.5-sonnet	Anthropic
+anthropic-claude-3.7-sonnet	Anthropic
+anthropic-claude-4-opus	Anthropic
+anthropic-claude-4-sonnet	Anthropic
+anthropic-claude-4.1-opus	Anthropic
+anthropic-claude-4.5-haiku	Anthropic
+anthropic-claude-4.5-opus	Anthropic
+anthropic-claude-4.5-sonnet	Anthropic
+anthropic-claude-4.6-opus	Anthropic
+anthropic-claude-4.6-sonnet	Anthropic
+anthropic-claude-4.7-opus	Anthropic
+anthropic-claude-4.8-opus	Anthropic
+anthropic-claude-5-sonnet	Anthropic
+anthropic-claude-fable-5	Anthropic
+anthropic-claude-haiku-4.5	Anthropic
+anthropic-claude-opus-4	Anthropic
+anthropic-claude-opus-4.5	Anthropic
+anthropic-claude-opus-4.6	Anthropic
+anthropic-claude-opus-4.7	Anthropic
+anthropic-claude-opus-4.8	Anthropic
+anthropic-claude-opus-5	Anthropic
+anthropic-claude-sonnet-4	Anthropic
+apertus-70b	Apertus
+apertus-v1.5-70b	Apertus
+arcee-trinity-large-thinking	Arcee
+arctic-embed-l	Snowflake
+arrow-1.1	Arrow
+asi1-mini	Asi1
+aura-2-en	Deepgram
+aura-2-es	Deepgram
+auto-model	Auto
+auto-model-basic	Auto
+auto-model-premium	Auto
+auto-model-standard	Auto
+autoglm-phone-9b	Zhipu AI
+autoglm-phone-9b-multilingual	Zhipu AI
+baichuan-m2	Baichuan
+baichuan-m2-32b	Baichuan
+baichuan4-air	Baichuan4
+baichuan4-turbo	Baichuan4
+balanced	Balanced
+bart-large-cnn	Bart
+bevformer	NVIDIA
+bge-base-en-v1.5	BAAI
+bge-large-en-v1.5	BAAI
+bge-m3	NVIDIA
+bge-multilingual-gemma2	BAAI
+bge-reranker-base	BAAI
+bge-reranker-v2-m3	BAAI
+bge-small-en-v1.5	BAAI
+bge.multilingual.gemma2	BAAI
+bielik-11b-v2.6-instruct	Bielik
+bielik-11b-v3.0-instruct	Bielik
+big-pickle	Big
+bodybuilder	Bodybuilder
+brave	Brave
+brave-pro	Brave
+brave-research	Brave
+brick-complexity-pro	Brick
+brick-v1-beta	Brick
+c4ai-aya-expanse-32b	Cohere
+c4ai-aya-expanse-8b	Cohere
+c4ai-aya-vision-32b	Cohere
+c4ai-aya-vision-8b	Cohere
+celeris-1	Celeris
+cerebras-llama-4-maverick-17b-128e-instruct	Meta
+cerebras-llama-4-scout-17b-16e-instruct	Meta
+chatgpt-4o-latest	OpenAI
+chatgpt-image-latest	OpenAI
+cheap	Cheap
+claude-3-5-haiku	Anthropic
+claude-3-5-haiku-20241022	Anthropic
+claude-3-5-haiku-latest	Anthropic
+claude-3-7-sonnet-20250219	Anthropic
+claude-3-7-sonnet-latest	Anthropic
+claude-3-haiku	Anthropic
+claude-3-haiku-20240307	Anthropic
+claude-3-opus	Anthropic
+claude-3-sonnet	Anthropic
+claude-3.5-haiku	Anthropic
+claude-3.5-sonnet	Anthropic
+claude-3.5-sonnet-v2	Anthropic
+claude-3.7-sonnet	Anthropic
+claude-4-5-sonnet	Anthropic
+claude-4-6-sonnet	Anthropic
+claude-4.0-opus	Anthropic
+claude-4.0-sonnet	Anthropic
+claude-4.1-opus	Anthropic
+claude-4.5-haiku	Anthropic
+claude-4.5-opus	Anthropic
+claude-4.5-sonnet	Anthropic
+claude-code	Anthropic
+claude-fable-5	Anthropic
+claude-fable-latest	Anthropic
+claude-haiku-3	Anthropic
+claude-haiku-3.5	Anthropic
+claude-haiku-4-5	Anthropic
+claude-haiku-4-5-20251001	Anthropic
+claude-haiku-4-5-20251001-thinking	Anthropic
+claude-haiku-4-5@20251001	Anthropic
+claude-haiku-4-5@eu	Anthropic
+claude-haiku-4.5	Anthropic
+claude-haiku-latest	Anthropic
+claude-mythos-5	Anthropic
+claude-opus-4	Anthropic
+claude-opus-4-1	Anthropic
+claude-opus-4-1-20250805	Anthropic
+claude-opus-4-1-20250805-thinking	Anthropic
+claude-opus-4-1-thinking	Anthropic
+claude-opus-4-1-thinking:1024	Anthropic
+claude-opus-4-1-thinking:32000	Anthropic
+claude-opus-4-1-thinking:32768	Anthropic
+claude-opus-4-1-thinking:8192	Anthropic
+claude-opus-4-1@20250805	Anthropic
+claude-opus-4-20250514	Anthropic
+claude-opus-4-5	Anthropic
+claude-opus-4-5-20251101	Anthropic
+claude-opus-4-5-20251101-thinking	Anthropic
+claude-opus-4-5-20251101:thinking	Anthropic
+claude-opus-4-5@20251101	Anthropic
+claude-opus-4-5@eu	Anthropic
+claude-opus-4-6	Anthropic
+claude-opus-4-6-think	Anthropic
+claude-opus-4-6-thinking	Antigravity
+claude-opus-4-6@eu	Anthropic
+claude-opus-4-7	Anthropic
+claude-opus-4-7-think	Anthropic
+claude-opus-4-7@eu	Anthropic
+claude-opus-4-8	Anthropic
+claude-opus-4-8-fast	Anthropic
+claude-opus-4-8-think	Anthropic
+claude-opus-4-8@eu	Anthropic
+claude-opus-4-thinking	Anthropic
+claude-opus-4-thinking:1024	Anthropic
+claude-opus-4-thinking:32000	Anthropic
+claude-opus-4-thinking:32768	Anthropic
+claude-opus-4-thinking:8192	Anthropic
+claude-opus-4.1	Anthropic
+claude-opus-4.5	Anthropic
+claude-opus-4.6	Anthropic
+claude-opus-4.6:thinking	Anthropic
+claude-opus-4.6:thinking:low	Anthropic
+claude-opus-4.6:thinking:max	Anthropic
+claude-opus-4.6:thinking:medium	Anthropic
+claude-opus-4.7	Anthropic
+claude-opus-4.7-fast	Anthropic
+claude-opus-4.7:thinking	Anthropic
+claude-opus-4.8	Anthropic
+claude-opus-4.8-fast	Anthropic
+claude-opus-4.8:thinking	Anthropic
+claude-opus-4@20250514	Anthropic
+claude-opus-5	Anthropic
+claude-opus-5-fast	Anthropic
+claude-opus-5@eu	Anthropic
+claude-opus-latest	Anthropic
+claude-opus4-5	Anthropic
+claude-opus4-6	Anthropic
+claude-opus4-7	Anthropic
+claude-opus4-8	Anthropic
+claude-sonnet-3.5	Anthropic
+claude-sonnet-3.5-june	Anthropic
+claude-sonnet-3.7	Anthropic
+claude-sonnet-4	Anthropic
+claude-sonnet-4-20250514	Anthropic
+claude-sonnet-4-5	Anthropic
+claude-sonnet-4-5-20250929	Anthropic
+claude-sonnet-4-5-20250929-thinking	Anthropic
+claude-sonnet-4-5@20250929	Anthropic
+claude-sonnet-4-5@eu	Anthropic
+claude-sonnet-4-6	Anthropic
+claude-sonnet-4-6-think	Anthropic
+claude-sonnet-4-6-thinking	Anthropic
+claude-sonnet-4-6@eu	Anthropic
+claude-sonnet-4-thinking	Anthropic
+claude-sonnet-4-thinking:1024	Anthropic
+claude-sonnet-4-thinking:32768	Anthropic
+claude-sonnet-4-thinking:64000	Anthropic
+claude-sonnet-4-thinking:8192	Anthropic
+claude-sonnet-4.5	Anthropic
+claude-sonnet-4.6	Anthropic
+claude-sonnet-4.6:thinking	Anthropic
+claude-sonnet-4@20250514	Anthropic
+claude-sonnet-4@eu	Anthropic
+claude-sonnet-5	Anthropic
+claude-sonnet-5:thinking	Anthropic
+claude-sonnet-5@eu	Anthropic
+claude-sonnet-latest	Anthropic
+claudinio	Claudinio
+claudius	Claudius
+claw-high	Claw
+claw-low	Claw
+claw-medium	Claw
+code-max	Code
+code-prime	Code
+code-standard	Code
+codegemma-1.1-7b	Google
+codegemma-2b	Google
+codegemma-7b	Google
+codegemma-7b-it	Google
+codellama-13b	Meta
+codellama-13b-hf	Meta
+codellama-13b-instruct	Meta
+codellama-13b-instruct-hf	Meta
+codellama-13b-python	Meta
+codellama-13b-python-hf	Meta
+codellama-34b	Meta
+codellama-34b-hf	Meta
+codellama-34b-instruct	Meta
+codellama-34b-instruct-hf	Meta
+codellama-34b-python	Meta
+codellama-34b-python-hf	Meta
+codellama-70b	Meta
+codellama-70b-hf	Meta
+codellama-70b-instruct	Meta
+codellama-70b-instruct-hf	Meta
+codellama-70b-python	Meta
+codellama-70b-python-hf	Meta
+codellama-7b	Meta
+codellama-7b-hf	Meta
+codellama-7b-instruct	Meta
+codellama-7b-instruct-hf	Meta
+codellama-7b-python	Meta
+codellama-7b-python-hf	Meta
+codestral	Mistral AI
+codestral-22b-instruct-v0.1	Mistral AI
+codestral-22b-v0.1	Mistral AI
+codestral-2501	Mistral AI
+codestral-2508	Mistral AI
+codestral-embed	Mistral AI
+codestral-latest	Mistral AI
+codex-auto-review	OpenAI
+codex-mini	OpenAI
+coding-glm-5.1	Coding
+coding-minimax-m2.7	Coding
+coding-minimax-m2.7-highspeed	Coding
+coding-router	Coding
+coding-router:high	Coding
+coding-router:low	Coding
+coding-router:max	Coding
+coding-router:medium	Coding
+coding-xiaomi-mimo-v2.5	Xiaomi
+coding-xiaomi-mimo-v2.5-pro	Xiaomi
+cogito-v1-preview-qwen-32b	Cogito
+cogito-v2-1-671b	Cogito
+cogito-v2.1-671b	Cogito
+command-a	Cohere
+command-a-03-2025	Cohere
+command-a-plus-05-2026	Cohere
+command-a-reasoning-08-2025	Cohere
+command-a-translate-08-2025	Cohere
+command-a-vision-07-2025	Cohere
+command-r-08-2024	Cohere
+command-r-plus-08-2024	Cohere
+command-r7b-12-2024	Cohere
+command-r7b-arabic-02-2025	Cohere
+compound	Compound
+compound-mini	Compound
+cosmos-predict1-5b	NVIDIA
+cosmos-reason2-8b	NVIDIA
+cosmos-transfer1-7b	NVIDIA
+cosmos-transfer2.5-2b	NVIDIA
+cosmos3-super-reasoner	Cosmos3
+custom	Custom
+dall-e-3	OpenAI
+databricks-claude-haiku-4-5	Databricks
+databricks-claude-opus-4-1	Databricks
+databricks-claude-opus-4-5	Databricks
+databricks-claude-opus-4-6	Databricks
+databricks-claude-opus-4-7	Databricks
+databricks-claude-sonnet-4	Databricks
+databricks-claude-sonnet-4-5	Databricks
+databricks-claude-sonnet-4-6	Databricks
+databricks-gemini-2-5-flash	Databricks
+databricks-gemini-2-5-pro	Databricks
+databricks-gemini-3-1-flash-lite	Databricks
+databricks-gemini-3-1-pro	Databricks
+databricks-gemini-3-flash	Databricks
+databricks-gemini-3-pro	Databricks
+databricks-glm-5-2	Databricks
+databricks-gpt-5	Databricks
+databricks-gpt-5-1	Databricks
+databricks-gpt-5-2	Databricks
+databricks-gpt-5-4	Databricks
+databricks-gpt-5-4-mini	Databricks
+databricks-gpt-5-4-nano	Databricks
+databricks-gpt-5-5	Databricks
+databricks-gpt-5-6-luna	Databricks
+databricks-gpt-5-6-sol	Databricks
+databricks-gpt-5-6-terra	Databricks
+databricks-gpt-5-mini	Databricks
+databricks-gpt-5-nano	Databricks
+databricks-gpt-oss-120b	Databricks
+databricks-gpt-oss-20b	Databricks
+databricks-kimi-k2-7-code	Databricks
+deep-deepseek-v4-flash	DeepSeek
+deep-deepseek-v4-pro	DeepSeek
+deep-research-max-preview-04-2026	Google
+deep-research-preview-04-2026	Google
+deepclaude	Deepclaude
+deepseek-3.2	DeepSeek
+deepseek-4-flash	DeepSeek
+deepseek-chat	DeepSeek
+deepseek-chat-v3-0324	DeepSeek
+deepseek-chat-v3.1	DeepSeek
+deepseek-coder-6.7b-instruct	DeepSeek
+deepseek-latest	DeepSeek
+deepseek-math-v2	DeepSeek
+deepseek-ocr	DeepSeek
+deepseek-ocr-2	DeepSeek
+deepseek-prover-v2-671b	DeepSeek
+deepseek-r1	Alibaba
+deepseek-r1-0528	Alibaba
+deepseek-r1-0528-qwen3-8b	DeepSeek
+deepseek-r1-distill-llama-70b	Alibaba
+deepseek-r1-distill-llama-8b	Alibaba
+deepseek-r1-distill-qwen-1-5b	Alibaba
+deepseek-r1-distill-qwen-14b	Alibaba
+deepseek-r1-distill-qwen-32b	Alibaba
+deepseek-r1-distill-qwen-7b	Alibaba
+deepseek-r1-turbo	DeepSeek
+deepseek-reasoner	DeepSeek
+deepseek-v3	Alibaba
+deepseek-v3-turbo	DeepSeek
+deepseek-v3.0324	Alibaba
+deepseek-v3.1	Alibaba
+deepseek-v3.1-terminus	DeepSeek
+deepseek-v3.1:thinking	DeepSeek
+deepseek-v3.2	Alibaba
+deepseek-v3.2-251201	DeepSeek
+deepseek-v3.2-exp	Alibaba
+deepseek-v3.2-exp-thinking	DeepSeek
+deepseek-v3.2-fast	DeepSeek
+deepseek-v3.2-nvfp4	DeepSeek
+deepseek-v3.2-thinking	DeepSeek
+deepseek-v3.2:thinking	DeepSeek
+deepseek-v4-flash	Alibaba
+deepseek-v4-flash-0731	Alibaba
+deepseek-v4-flash-0731-fast	DeepSeek
+deepseek-v4-flash-0731:thinking	DeepSeek
+deepseek-v4-flash-0731@eu	DeepSeek
+deepseek-v4-flash-el	DeepSeek
+deepseek-v4-flash-latest	DeepSeek
+deepseek-v4-flash:0731	DeepSeek
+deepseek-v4-flash:discounted	DeepSeek
+deepseek-v4-flash:thinking	DeepSeek
+deepseek-v4-pro	Alibaba
+deepseek-v4-pro-0813	DeepSeek
+deepseek-v4-pro-0813:thinking	DeepSeek
+deepseek-v4-pro-el	DeepSeek
+deepseek-v4-pro-lightning	DeepSeek
+deepseek-v4-pro:discounted	DeepSeek
+deepseek-v4-pro:thinking	DeepSeek
+deplot	Google
+devstral-2	Mistral AI
+devstral-2-123b	Mistral AI
+devstral-2-123b-instruct-2512	Mistral AI
+devstral-2512	Mistral AI
+devstral-latest	Mistral AI
+devstral-medium-2507	Mistral AI
+devstral-medium-latest	Mistral AI
+devstral-small-2	Mistral AI
+devstral-small-2505	Mistral AI
+devstral-small-2507	Mistral AI
+diffusiongemma-26b-a4b-it	Diffusiongemma
+distilbert-sst-2-int8	Distilbert
+dmind-1-mini	Dmind
+dola-seed-2.0-code	Dola
+dola-seed-2.0-code-preview	Dola
+dola-seed-2.0-lite	Dola
+dola-seed-2.0-mini	Dola
+dola-seed-2.0-pro	Dola
+doubao-1.5-pro-256k	ByteDance
+doubao-1.5-pro-32k	ByteDance
+doubao-1.5-thinking-pro	ByteDance
+doubao-1.5-vision-pro	ByteDance
+doubao-1.5-vision-pro-32k	ByteDance
+doubao-seed-1-6-250615	ByteDance
+doubao-seed-1-6-flash-250615	ByteDance
+doubao-seed-1-6-thinking-250715	ByteDance
+doubao-seed-1-6-vision-250815	ByteDance
+doubao-seed-1-8-251215	ByteDance
+doubao-seed-1.6	ByteDance
+doubao-seed-1.6-flash	ByteDance
+doubao-seed-1.6-thinking	ByteDance
+doubao-seed-1.8	ByteDance
+doubao-seed-2-0-code-preview	ByteDance
+doubao-seed-2-0-code-preview-260215	ByteDance
+doubao-seed-2-0-lite-260215	ByteDance
+doubao-seed-2-0-lite-260428	ByteDance
+doubao-seed-2-0-mini-260215	ByteDance
+doubao-seed-2-0-mini-260428	ByteDance
+doubao-seed-2-0-pro	ByteDance
+doubao-seed-2-0-pro-260215	ByteDance
+doubao-seed-2.0-code	ByteDance
+doubao-seed-2.0-lite	ByteDance
+doubao-seed-2.0-mini	ByteDance
+doubao-seed-2.0-pro	ByteDance
+doubao-seed-2.1-pro	ByteDance
+doubao-seed-2.1-turbo	ByteDance
+doubao-seed-character	ByteDance
+doubao-seed-code	ByteDance
+doubao-seed-code-preview-251028	ByteDance
+dracarys-72b-instruct	Dracarys
+dracarys-llama-3.1-70b-instruct	NVIDIA
+e2e	E2e
+e5-large-v2	Microsoft
+e5-mistral-7b-instruct	Microsoft
+efficient	Efficient
+elevenlabs-music	ElevenLabs
+elevenlabs-v2.5-turbo	ElevenLabs
+elevenlabs-v3	ElevenLabs
+embed-qa-4	NVIDIA
+embed-v3-english	Cohere
+embed-v3-multilingual	Cohere
+embed-v4.0	Cohere
+ernie-4.5-21b-a3b	Baidu
+ernie-4.5-21b-a3b-thinking	Baidu
+ernie-4.5-300b-a47b	Baidu
+ernie-4.5-300b-a47b-paddle	Baidu
+ernie-4.5-vl-28b-a3b	Baidu
+ernie-4.5-vl-28b-a3b-thinking	Baidu
+ernie-4.5-vl-424b-a47b	Baidu
+ernie-5.0-thinking-preview	Baidu
+ernie-5.1	Baidu
+ernie-5.1:thinking	Baidu
+ernie-x1.1-preview	Baidu
+esm2-650m	NVIDIA
+esmfold	NVIDIA
+exa-answer	Exa
+fast-sdxl	Fast
+faster-whisper-large-v3	Faster
+fastgpt	Fastgpt
+flux-2-flex	Black Forest Labs
+flux-2-klein-4b	Black Forest Labs
+flux-2-klein-9b	Black Forest Labs
+flux-2-max	Black Forest Labs
+flux-2-pro	Black Forest Labs
+flux-3-video	Black Forest Labs
+flux-fast-schnell	Black Forest Labs
+flux-kontext-max	Black Forest Labs
+flux-kontext-pro	Black Forest Labs
+flux-pro-1.0-fill	Black Forest Labs
+flux-pro-1.1	Black Forest Labs
+flux-pro-1.1-ultra	Black Forest Labs
+flux.1-dev	NVIDIA
+flux.1-kontext-dev	NVIDIA
+flux.1-schnell	NVIDIA
+flux.2-klein-4b	NVIDIA
+frontier	Frontier
+fugu-ultra	Fugu
+fugu-ultra-20260615	Fugu
+fugu-ultra-v1.1	Fugu
+fusion	Fusion
+fuyu-8b	Adept
+gelab-zero-4b-preview	Gelab
+gemini-2.0-flash	Google
+gemini-2.0-flash-lite	Google
+gemini-2.0-pro-exp-02-05	Google
+gemini-2.0-pro-reasoner	Google
+gemini-2.5-computer-use-preview-10-2025	Google
+gemini-2.5-flash	Google
+gemini-2.5-flash-image	Google
+gemini-2.5-flash-lite	Google
+gemini-2.5-flash-lite-preview-06-17	Google
+gemini-2.5-flash-lite-preview-09-2025	Google
+gemini-2.5-flash-lite-preview-09-2025-thinking	Google
+gemini-2.5-flash-nothink	Google
+gemini-2.5-flash-nothinking	Google
+gemini-2.5-flash-preview-04-17	Google
+gemini-2.5-flash-preview-04-17:thinking	Google
+gemini-2.5-flash-preview-05-20	Google
+gemini-2.5-flash-preview-05-20:thinking	Google
+gemini-2.5-flash-preview-09-2025	Google
+gemini-2.5-flash-preview-09-2025-thinking	Google
+gemini-2.5-flash-preview-tts	Google
+gemini-2.5-flash-tts	Google
+gemini-2.5-flash@eu	Google
+gemini-2.5-pro	Google
+gemini-2.5-pro-exp-03-25	Google
+gemini-2.5-pro-preview	Google
+gemini-2.5-pro-preview-03-25	Google
+gemini-2.5-pro-preview-05-06	Google
+gemini-2.5-pro-preview-06-05	Google
+gemini-2.5-pro-preview-tts	Google
+gemini-2.5-pro-tts	Google
+gemini-3-flash	Antigravity
+gemini-3-flash-agent	Antigravity
+gemini-3-flash-preview	Google
+gemini-3-flash-preview-thinking	Google
+gemini-3-pro	Google
+gemini-3-pro-image	Google
+gemini-3-pro-image-preview	Google
+gemini-3-pro-preview	Google
+gemini-3.0-flash-preview	Google
+gemini-3.0-pro-image-preview	Google
+gemini-3.0-pro-preview	Google
+gemini-3.1-flash-image	Google
+gemini-3.1-flash-image-preview	Google
+gemini-3.1-flash-lite	Google
+gemini-3.1-flash-lite-image	Google
+gemini-3.1-flash-lite-preview	Google
+gemini-3.1-flash-lite@eu	Google
+gemini-3.1-flash-live-preview	Google
+gemini-3.1-flash-tts-preview	Google
+gemini-3.1-pro	Google
+gemini-3.1-pro-low	Antigravity
+gemini-3.1-pro-preview	Google
+gemini-3.1-pro-preview-customtools	Google
+gemini-3.1-pro-preview-high	Google
+gemini-3.1-pro-preview-low	Google
+gemini-3.5-flash	Google
+gemini-3.5-flash-extra-low	Antigravity
+gemini-3.5-flash-lite	Google
+gemini-3.5-flash-low	Antigravity
+gemini-3.5-flash-thinking	Google
+gemini-3.5-flash@eu	Google
+gemini-3.5-live-translate-preview	Google
+gemini-3.6-flash	Google
+gemini-3.6-flash-high	Antigravity
+gemini-3.6-flash@eu	Google
+gemini-deep-research	Google
+gemini-embedding	Google
+gemini-embedding-001	Google
+gemini-embedding-2	Google
+gemini-exp-1206	Google
+gemini-flash-latest	Google
+gemini-flash-lite-latest	Google
+gemini-omni-flash-preview	Google
+gemini-pro-agent	Antigravity
+gemini-pro-latest	Google
+gemini-robotics-er-1.6-preview	Google
+gemma-2-27b-it	Google
+gemma-2-2b-it	NVIDIA
+gemma-2-9b-it	Google
+gemma-2b	Google
+gemma-3	Google
+gemma-3-12b-it	Google
+gemma-3-1b-it	Google
+gemma-3-27b-it	Google
+gemma-3-4b-it	NVIDIA
+gemma-3n-e2b-it	NVIDIA
+gemma-3n-e4b-it	NVIDIA
+gemma-4-26b-a4b-it	Google
+gemma-4-31b-it	Google
+gemma-7b	Google
+gemma2-9b-it	Google
+gemma4	Gemma4
+gemma4-26b	Gemma4
+gemma4-31b	Gemma4
+gemma4-31b:thinking	Gemma4
+gemma4:31b	Gemma4
+gliguard-llmguardrails-300m	Gliguard
+gliner-pii	NVIDIA
+gliner2-base-v1	Gliner2
+gliner2-large-v1	Gliner2
+gliner2-multi-large-v1	Gliner2
+gliner2-multi-v1	Gliner2
+gliner2-privacy-filter-pii-multi	Gliner2
+glm-4	Zhipu AI
+glm-4-32b-0414	Zhipu AI
+glm-4-32b-0414-128k	Zhipu AI
+glm-4-5-flash	Zhipu AI
+glm-4-7-flash	Zhipu AI
+glm-4-9b-0414	Zhipu AI
+glm-4-air	Zhipu AI
+glm-4-air-0111	Zhipu AI
+glm-4-airx	Zhipu AI
+glm-4-flash	Zhipu AI
+glm-4-long	Zhipu AI
+glm-4-plus	Zhipu AI
+glm-4-plus-0111	Zhipu AI
+glm-4.1v-thinking-flash	Zhipu AI
+glm-4.1v-thinking-flashx	Zhipu AI
+glm-4.5	Zhipu AI
+glm-4.5-air	Zhipu AI
+glm-4.5-air:thinking	Zhipu AI
+glm-4.5-airx	Zhipu AI
+glm-4.5-flash	Zhipu AI
+glm-4.5-x	Zhipu AI
+glm-4.5:thinking	Zhipu AI
+glm-4.5v	Zhipu AI
+glm-4.5v:thinking	Zhipu AI
+glm-4.6	Zhipu AI
+glm-4.6-turbo	Zhipu AI
+glm-4.6-turbo:thinking	Zhipu AI
+glm-4.6:thinking	Zhipu AI
+glm-4.6v	Zhipu AI
+glm-4.6v-flash	Zhipu AI
+glm-4.6v-flashx	Zhipu AI
+glm-4.7	Zhipu AI
+glm-4.7-flash	Zhipu AI
+glm-4.7-flash:thinking	Zhipu AI
+glm-4.7-flashx	Zhipu AI
+glm-4.7-n	Zhipu AI
+glm-4.7:thinking	Zhipu AI
+glm-5	Alibaba
+glm-5-1	Zhipu AI
+glm-5-2	Zhipu AI
+glm-5-turbo	Zhipu AI
+glm-5.1	Alibaba
+glm-5.1-thinking	Zhipu AI
+glm-5.1:thinking	Zhipu AI
+glm-5.2	Alibaba
+glm-5.2-caveman	Zhipu AI
+glm-5.2-caveman-lite	Zhipu AI
+glm-5.2-caveman-ultra	Zhipu AI
+glm-5.2-fast	Zhipu AI
+glm-5.2-flex	Zhipu AI
+glm-5.2-highspeed	Zhipu AI
+glm-5.2-honey	Zhipu AI
+glm-5.2-honey-lite	Zhipu AI
+glm-5.2-honey-ultra	Zhipu AI
+glm-5.2-nitro	Zhipu AI
+glm-5.2-nvfp4	Zhipu AI
+glm-5.2-ponytail	Zhipu AI
+glm-5.2-ponytail-lite	Zhipu AI
+glm-5.2-ponytail-ultra	Zhipu AI
+glm-5.2-short	Zhipu AI
+glm-5.2-short-fast	Zhipu AI
+glm-5.2-short-fast-flex	Zhipu AI
+glm-5.2-short-flex	Zhipu AI
+glm-5.2:thinking	Zhipu AI
+glm-5.2@eu	Zhipu AI
+glm-5:thinking	Zhipu AI
+glm-5p2	Zhipu AI
+glm-5p2-fast	Zhipu AI
+glm-5v-turbo	Zhipu AI
+glm-5v-turbo:thinking	Zhipu AI
+glm-for-coding	Zhipu AI
+glm-latest	Zhipu AI
+glm-z1-9b-0414	Zhipu AI
+glm-z1-air	Zhipu AI
+glm-z1-airx	Zhipu AI
+glm-zero-preview	Zhipu AI
+glm5.2	Glm5
+glm5.2-fast	Glm5
+google-gemma-3-27b-it	Google
+google-gemma-4-26b-a4b-it	Google
+google-gemma-4-31b-it	Google
+google-paligemma	NVIDIA
+gpt-3.5-turbo	OpenAI
+gpt-3.5-turbo-0125	OpenAI
+gpt-3.5-turbo-0613	OpenAI
+gpt-3.5-turbo-1106	OpenAI
+gpt-3.5-turbo-16k	OpenAI
+gpt-3.5-turbo-instruct	OpenAI
+gpt-4	OpenAI
+gpt-4-classic	OpenAI
+gpt-4-classic-0314	OpenAI
+gpt-4-turbo	OpenAI
+gpt-4-turbo-preview	OpenAI
+gpt-4-turbo-vision	OpenAI
+gpt-4.1	OpenAI
+gpt-4.1-mini	OpenAI
+gpt-4.1-mini-2025-04-14	OpenAI
+gpt-4.1-mini@eu	OpenAI
+gpt-4.1-nano	OpenAI
+gpt-4.1-nano@eu	OpenAI
+gpt-4.1@eu	OpenAI
+gpt-4o	OpenAI
+gpt-4o-2024-05-13	OpenAI
+gpt-4o-2024-08-06	OpenAI
+gpt-4o-2024-11-20	OpenAI
+gpt-4o-aug	OpenAI
+gpt-4o-mini	OpenAI
+gpt-4o-mini-2024-07-18	OpenAI
+gpt-4o-mini-search	OpenAI
+gpt-4o-mini-search-preview	OpenAI
+gpt-4o-mini-transcribe	OpenAI
+gpt-4o-mini@eu	OpenAI
+gpt-4o-search	OpenAI
+gpt-4o-search-preview	OpenAI
+gpt-4o-transcribe	OpenAI
+gpt-5	OpenAI
+gpt-5-chat	OpenAI
+gpt-5-chat-latest	OpenAI
+gpt-5-codex	OpenAI
+gpt-5-image	OpenAI
+gpt-5-image-mini	OpenAI
+gpt-5-mini	OpenAI
+gpt-5-mini@eu	OpenAI
+gpt-5-nano	OpenAI
+gpt-5-nano@eu	OpenAI
+gpt-5-pro	OpenAI
+gpt-5-thinking	OpenAI
+gpt-5.1	OpenAI
+gpt-5.1-2025-11-13	OpenAI
+gpt-5.1-chat	OpenAI
+gpt-5.1-chat-latest	OpenAI
+gpt-5.1-codex	OpenAI
+gpt-5.1-codex-max	OpenAI
+gpt-5.1-codex-mini	OpenAI
+gpt-5.1-instant	OpenAI
+gpt-5.1-thinking	OpenAI
+gpt-5.1@eu	OpenAI
+gpt-5.2	OpenAI
+gpt-5.2-chat	OpenAI
+gpt-5.2-chat-latest	OpenAI
+gpt-5.2-codex	OpenAI
+gpt-5.2-instant	OpenAI
+gpt-5.2-pro	OpenAI
+gpt-5.3-chat	OpenAI
+gpt-5.3-chat-latest	OpenAI
+gpt-5.3-codex	OpenAI
+gpt-5.3-codex-spark	OpenAI
+gpt-5.3-codex-xhigh	OpenAI
+gpt-5.3-instant	OpenAI
+gpt-5.4	OpenAI
+gpt-5.4-image-2	OpenAI
+gpt-5.4-mini	OpenAI
+gpt-5.4-mini-2026-03-17	OpenAI
+gpt-5.4-nano	OpenAI
+gpt-5.4-nano-2026-03-17	OpenAI
+gpt-5.4-pro	OpenAI
+gpt-5.4@eu	OpenAI
+gpt-5.5	OpenAI
+gpt-5.5-instant	OpenAI
+gpt-5.5-pro	OpenAI
+gpt-5.5@eu	OpenAI
+gpt-5.6	OpenAI
+gpt-5.6-luna	OpenAI
+gpt-5.6-luna-pro	OpenAI
+gpt-5.6-luna@eu	OpenAI
+gpt-5.6-sol	OpenAI
+gpt-5.6-sol-pro	OpenAI
+gpt-5.6-sol@eu	OpenAI
+gpt-5.6-terra	OpenAI
+gpt-5.6-terra-pro	OpenAI
+gpt-5.6-terra@eu	OpenAI
+gpt-5@eu	OpenAI
+gpt-audio	OpenAI
+gpt-audio-mini	OpenAI
+gpt-chat-latest	OpenAI
+gpt-image-1	OpenAI
+gpt-image-1-mini	OpenAI
+gpt-image-1.5	OpenAI
+gpt-image-2	OpenAI
+gpt-latest	OpenAI
+gpt-mini-latest	OpenAI
+gpt-oss-120b	NVIDIA
+gpt-oss-120b-fast	OpenAI
+gpt-oss-120b-medium	Antigravity
+gpt-oss-20b	NVIDIA
+gpt-oss-safeguard-120b	OpenAI
+gpt-oss-safeguard-20b	OpenAI
+gpt-realtime-1.5	OpenAI
+gpt-realtime-2	OpenAI
+gpt-realtime-2.1	OpenAI
+gpt-realtime-mini	OpenAI
+gpt-realtime-whisper	OpenAI
+granite-20b-code-instruct-8k	IBM
+granite-20b-code-instruct-r1.1	IBM
+granite-20b-functioncalling	IBM
+granite-3.0-1b-a400m-instruct	IBM
+granite-3.0-2b-instruct	IBM
+granite-3.0-3b-a800m-instruct	IBM
+granite-3.0-8b-instruct	IBM
+granite-3.0-8b-lora-intrinsics-v0.1	IBM
+granite-3.1-1b-a400m-instruct	IBM
+granite-3.1-2b-instruct	IBM
+granite-3.1-3b-a800m-instruct	IBM
+granite-3.1-8b-instruct	IBM
+granite-3.1-8b-lora-intrinsics-v0.1	IBM
+granite-34b-code-instruct	IBM
+granite-34b-code-instruct-8k	IBM
+granite-3b-code-instruct-128k	IBM
+granite-3b-code-instruct-2k	IBM
+granite-4-h-small	IBM
+granite-4.0-h-350m	IBM
+granite-4.0-h-micro	IBM
+granite-4.0-micro	IBM
+granite-4.1-30b	IBM
+granite-4.1-3b	IBM
+granite-4.1-8b	IBM
+granite-7b-instruct	IBM
+granite-8b-code-instruct	IBM
+granite-8b-code-instruct-128k	IBM
+granite-8b-code-instruct-4k	IBM
+granite-docling-258m	IBM
+granite-embedding-107m-multilingual	IBM
+granite-embedding-125m-english	IBM
+granite-embedding-278m-multilingual	IBM
+granite-embedding-30m-english	IBM
+granite-embedding-30m-sparse	IBM
+granite-embedding-311m-multilingual-r2	IBM
+granite-embedding-97m-multilingual-r2	IBM
+granite-embedding-english-r2	IBM
+granite-geospatial-biomass	IBM
+granite-geospatial-canopyheight	IBM
+granite-geospatial-land-surface-temperature	IBM
+granite-geospatial-uki	IBM
+granite-geospatial-uki-flooddetection	IBM
+granite-geospatial-wxc-downscaling	IBM
+granite-guardian-3.0-2b	IBM
+granite-guardian-3.0-8b	IBM
+granite-guardian-3.1-2b	IBM
+granite-guardian-3.1-8b	IBM
+granite-guardian-3.2-3b-a800m	IBM
+granite-guardian-3.2-5b	IBM
+granite-guardian-4.1-8b	IBM
+granite-guardian-hap-125m	IBM
+granite-guardian-hap-38m	IBM
+granite-rag-3.0-8b-lora	IBM
+granite-speech-4.1-2b	IBM
+granite-speech-4.1-2b-plus	IBM
+granite-swash-3b-a600m	IBM
+granite-switch-4.1-30b-preview	IBM
+granite-switch-4.1-3b-preview	IBM
+granite-switch-4.1-8b-preview	IBM
+granite-timeseries-patchtsmixer	IBM
+granite-timeseries-patchtst	IBM
+granite-timeseries-ttm-r1	IBM
+granite-timeseries-ttm-r2	IBM
+granite-uncertainty-3.0-8b-lora	IBM
+granite-vision-3.1-2b-preview	IBM
+granite-vision-3.3-2b-embedding	IBM
+granite-vision-4.1-4b	IBM
+granitelib-rag-gpt-oss-r1.0	IBM
+granitelib-rag-r1.0	IBM
+grayline-qwen3-8b	Grayline
+green-l	Green
+green-r	Green
+green-s	Green
+green-s-pro	Green
+greg-1-mini	Greg
+greg-2-super	Greg
+greg-2-ultra	Greg
+grok-3	xAI
+grok-3-mini	xAI
+grok-3-mini-fast	xAI
+grok-4	xAI
+grok-4-fast	xAI
+grok-4-fast-non-reasoning	xAI
+grok-4-fast-reasoning	xAI
+grok-4.0709	xAI
+grok-4.1	xAI
+grok-4.1-fast	xAI
+grok-4.1-fast-non-reasoning	Perplexity
+grok-4.1-fast-reasoning	xAI
+grok-4.2-fast	xAI
+grok-4.2-fast-non-reasoning	xAI
+grok-4.20	xAI
+grok-4.20-0309-non-reasoning	xAI
+grok-4.20-0309-reasoning	xAI
+grok-4.20-beta-0309-non-reasoning	xAI
+grok-4.20-beta-0309-reasoning	xAI
+grok-4.20-multi-agent	xAI
+grok-4.20-multi-agent-0309	xAI
+grok-4.20-multi-agent-beta	xAI
+grok-4.20-multi-agent-beta-0309	xAI
+grok-4.20-non-reasoning	xAI
+grok-4.20-non-reasoning-beta	xAI
+grok-4.20-reasoning	xAI
+grok-4.20-reasoning-beta	xAI
+grok-4.3	xAI
+grok-4.5	xAI
+grok-4.6	xAI
+grok-build-0-1	xAI
+grok-build-0.1	xAI
+grok-code	xAI
+grok-code-fast-1	xAI
+grok-composer-2.5-fast	xAI
+grok-imagine-image	xAI
+grok-imagine-image-2.0	xAI
+grok-imagine-image-quality	xAI
+grok-imagine-video	xAI
+grok-imagine-video-1.5	xAI
+grok-imagine-video-1.5-preview	xAI
+grok-latest	xAI
+grok-stt	xAI
+grok-tts	xAI
+grok-voice-think-fast-1.0	xAI
+grok-voice-think-fast-2.0	xAI
+groq-llama-4-maverick-17b-128e-instruct	Meta
+gte-large-en-v1.5	Alibaba
+happyhorse-1.1-i2v	Happyhorse
+happyhorse-1.1-r2v	Happyhorse
+happyhorse-1.1-t2v	Happyhorse
+hermes-2-pro-llama-3-8b	Hermes
+hermes-3-llama-3.1-405b	Hermes
+hermes-3-llama-3.1-70b	Hermes
+hermes-4-405b	Hermes
+hermes-4-405b:thinking	Hermes
+hermes-4-70b	Hermes
+hermes-4-70b:thinking	Hermes
+hermes-high	Hermes
+hermes-low	Hermes
+hermes-medium	Hermes
+holo2-30b-a3b	Holo2
+holo3-35b-a3b	Holo3
+holo3-35b-a3b:thinking	Holo3
+hunyuan-2.0-instruct	Tencent
+hunyuan-2.0-thinking	Tencent
+hunyuan-a13b-instruct	Tencent
+hunyuan-mt-7b	Tencent
+hunyuan-t1	Tencent
+hunyuan-turbos	Tencent
+hunyuan-turbos-20250226	Tencent
+hy3	Hy3
+hy3-preview	Hy3
+ideogram	Ideogram
+ideogram-v2	Ideogram
+ideogram-v2a	Ideogram
+ideogram-v2a-turbo	Ideogram
+imagen-3	Google
+imagen-3-fast	Google
+imagen-3.0-fast-generate-001	Google
+imagen-3.0-generate-002	Google
+imagen-4	Google
+imagen-4-fast	Google
+imagen-4-ultra	Google
+imagen-4.0-fast	Google
+imagen-4.0-fast-generate-001	Google
+imagen-4.0-generate-001	Google
+imagen-4.0-ultra	Google
+imagen-4.0-ultra-generate-001	Google
+indictrans2-en-indic-1b	Indictrans2
+inflection-3-pi	Inflection AI
+inflection-3-productivity	Inflection AI
+inkling	NVIDIA
+inkling-nvfp4	Inkling
+inkling-small	Inkling
+inkling-small:thinking	Inkling
+inkling:peft:262144	Inkling
+inkling:thinking	Inkling
+intellect-3	Intellect
+interfaze-beta	Interfaze
+jamba-1.5-large-instruct	AI21 Labs
+jamba-1.5-mini-instruct	AI21 Labs
+jamba-1.6-large-instruct	AI21 Labs
+jamba-1.6-mini-instruct	AI21 Labs
+jamba-1.7-large-instruct	AI21 Labs
+jamba-1.7-mini-instruct	AI21 Labs
+jamba-3b-reasoning-instruct	AI21 Labs
+jamba-large	AI21 Labs
+jamba-large-1.5	AI21 Labs
+jamba-large-1.6	AI21 Labs
+jamba-large-1.7	AI21 Labs
+jamba-mini	AI21 Labs
+jamba-mini-1.5	AI21 Labs
+jamba-mini-1.6	AI21 Labs
+jamba-mini-1.7	AI21 Labs
+jamba-reasoning-3b	AI21 Labs
+jamba-tiny-dev	AI21 Labs
+jamba-v0.1	AI21 Labs
+k2-think	K2
+k3	Moonshot AI
+k3-256k	Moonshot AI
+kat-coder-air-v2.5	Kat
+kat-coder-pro	Kat
+kat-coder-pro-v1	Kat
+kat-coder-pro-v2	Kat
+kat-coder-pro-v2.5	Kat
+kb-whisper-large	Kb
+kimi-for-coding	Moonshot AI
+kimi-for-coding-highspeed	Moonshot AI
+kimi-k2	Moonshot AI
+kimi-k2-instruct	Alibaba
+kimi-k2-instruct-0711	Moonshot AI
+kimi-k2-instruct-0905	NVIDIA
+kimi-k2-instruct-fast	Moonshot AI
+kimi-k2-thinking	Alibaba
+kimi-k2-thinking-turbo	Moonshot AI
+kimi-k2-turbo-preview	Moonshot AI
+kimi-k2.0711	Moonshot AI
+kimi-k2.0711-preview	Moonshot AI
+kimi-k2.0905	Moonshot AI
+kimi-k2.0905-preview	Moonshot AI
+kimi-k2.5	Alibaba
+kimi-k2.5-fast	Moonshot AI
+kimi-k2.5-fw	Moonshot AI
+kimi-k2.5-lightning	Moonshot AI
+kimi-k2.5:thinking	Moonshot AI
+kimi-k2.6	Alibaba
+kimi-k2.6-fast	Moonshot AI
+kimi-k2.6-flex	Moonshot AI
+kimi-k2.6-nitro	Moonshot AI
+kimi-k2.6:thinking	Moonshot AI
+kimi-k2.7-code	Moonshot AI
+kimi-k2.7-code-1100b	Moonshot AI
+kimi-k2.7-code-flex	Moonshot AI
+kimi-k2.7-code-highspeed	Moonshot AI
+kimi-k2.7-code-nitro	Moonshot AI
+kimi-k2p6	Moonshot AI
+kimi-k2p6-fast	Moonshot AI
+kimi-k2p6-turbo	Moonshot AI
+kimi-k2p7-code	Moonshot AI
+kimi-k2p7-code-fast	Moonshot AI
+kimi-k3	Moonshot AI
+kimi-k3-eco	Moonshot AI
+kimi-k3-fast	Moonshot AI
+kimi-k3-fast-api	Moonshot AI
+kimi-k3.256k	Moonshot AI
+kimi-k3@eu	Moonshot AI
+kimi-latest	Moonshot AI
+kling-v2-6	Kuaishou
+kling-v2.5-turbo-i2v	Kuaishou
+kling-v2.5-turbo-t2v	Kuaishou
+kling-v2.6-i2v	Kuaishou
+kling-v2.6-motion-control	Kuaishou
+kling-v2.6-t2v	Kuaishou
+kling-v3.0-i2v	Kuaishou
+kling-v3.0-motion-control	Kuaishou
+kling-v3.0-t2v	Kuaishou
+kosmos-2	Microsoft
+kosmos-2-patch14-224	Microsoft
+kosmos-2.5	Microsoft
+kosmos-2.5-chat	Microsoft
+l3-8b-lunaris	L3
+l3-8b-stheno-v3.2	L3
+l3-lunaris-8b	L3
+l3.1-70b-celeste-v0.1-bf16	L3
+l3.3-cu-mai-r1-70b	L3
+l3.3-electra-r1-70b	L3
+l3.3-ms-evayale-70b	L3
+l3.3-ms-nevoria-70b	L3
+l3.3-nevoria-r1-70b	L3
+labs-devstral-small-2512	Mistral AI
+large	Large
+learnlm-1.5-pro-experimental	Google
+lfm-2.5-2.6b	Liquid AI
+lfm2-24b-a2b	Lfm2
+ling-1t	Inclusion AI
+ling-2.6-1t	Inclusion AI
+ling-2.6-flash	Inclusion AI
+ling-3.0-flash	Inclusion AI
+ling-3.0-flash:thinking	Inclusion AI
+ling-3.0-tiny	Inclusion AI
+ling-3.0-tiny:thinking	Inclusion AI
+ling-flash-2.0	Inclusion AI
+llama-3.1-405b-instruct	Meta
+llama-3.1-70b-instruct	NVIDIA
+llama-3.1-8b-instruct	NVIDIA
+llama-3.1-nemoguard-8b-content-safety	NVIDIA
+llama-3.1-nemoguard-8b-topic-control	NVIDIA
+llama-3.1-nemotron-51b-instruct	NVIDIA
+llama-3.1-nemotron-70b-instruct	NVIDIA
+llama-3.1-nemotron-70b-instruct-hf	NVIDIA
+llama-3.1-nemotron-8b-ultralong-1m-instruct	NVIDIA
+llama-3.1-nemotron-nano-4b-v1.1	NVIDIA
+llama-3.1-nemotron-nano-8b-v1	NVIDIA
+llama-3.1-nemotron-nano-vl-8b-v1	NVIDIA
+llama-3.1-nemotron-nano-vl-8b-v1-mcore	NVIDIA
+llama-3.1-nemotron-safety-guard-8b-v3	NVIDIA
+llama-3.1-nemotron-ultra-253b	Meta
+llama-3.1-nemotron-ultra-253b-cpt-v1	NVIDIA
+llama-3.1-nemotron-ultra-253b-v1	NVIDIA
+llama-3.2-11b-vision-instruct	NVIDIA
+llama-3.2-1b-instruct	NVIDIA
+llama-3.2-3b-instruct	NVIDIA
+llama-3.2-90b-vision-instruct	NVIDIA
+llama-3.2-nemoretriever-1b-vlm-embed-v1	NVIDIA
+llama-3.2-nemoretriever-300m-embed-v1	NVIDIA
+llama-3.2-nv-embedqa-1b-v1	NVIDIA
+llama-3.2-nv-embedqa-1b-v2	NVIDIA
+llama-3.3-70b-instruct	Meta
+llama-3.3-nemotron-super-49b-v1	NVIDIA
+llama-3.3-nemotron-super-49b-v1.5	NVIDIA
+llama-4-maverick	Meta
+llama-4-maverick-17b-128e-instruct	NVIDIA
+llama-4-maverick-17b-instruct	Meta
+llama-4-scout	Meta
+llama-4-scout-17b-16e-instruct	Meta
+llama-4-scout-17b-instruct	Meta
+llama-guard-3-8b	Meta
+llama-guard-4	Meta
+llama-guard-4-12b	NVIDIA
+llama-nemotron-embed-1b-v2	NVIDIA
+llama-nemotron-embed-vl-1b-v2	NVIDIA
+llama-nemotron-rerank-vl-1b-v2	NVIDIA
+llama2-13b	Meta
+llama2-13b-chat	Meta
+llama2-13b-chat-hf	Meta
+llama2-13b-hf	Meta
+llama2-70b	Meta
+llama2-70b-chat	Meta
+llama2-70b-chat-hf	Meta
+llama2-70b-hf	Meta
+llama2-7b	Meta
+llama2-7b-chat	Meta
+llama2-7b-chat-hf	Meta
+llama2-7b-hf	Meta
+llama3-chatqa-1.5-70b	NVIDIA
+lucid-origin	Lucid
+lucid-realism	Lucid
+lucidnova-rf1-100b	Lucidnova
+lucidquery-agi-01-frontier	Lucidquery
+lucidquery-agi-01-swift	Lucidquery
+lucidquery-nexus-coder	Lucidquery
+lynkr-auto	Lynkr
+lyria	Google
+lyria-3-clip-preview	Google
+lyria-3-pro-preview	Google
+m2m100-1.2b	M2m100
+magibu-11b-v8	Magibu
+magistral-medium	Mistral AI
+magistral-medium-latest	Mistral AI
+magistral-small	Mistral AI
+magistral-small-2506	NVIDIA
+magistral-small-2509	Mistral AI
+magpie-tts-zeroshot	NVIDIA
+mai-code-1-flash-picker	Mai
+mai-code-1.1-flash	Mai
+mamba-codestral-7b-v0.1	Mistral AI
+manta-flash-1.0	Manta
+manta-mini-1.0	Manta
+manta-pro-1.0	Manta
+medgemma-4b	Medgemma
+mellum2-12b-a2.5b-instruct	Mellum2
+melotts	Melotts
+mercury-2	Mercury
+mercury-coder-small	Mercury
+mercury-edit-2	Mercury
+meta-llama-3-1-8b-instruct	Meta
+meta-llama-3-3-70b-instruct	Meta
+meta-llama-3-8b-instruct-lite	Meta
+meta-llama-3.1-405b-instruct-turbo	Meta
+meta-llama-3.1-8b-instruct	Meta
+meta-llama-3.1-8b-instruct-gguf	Meta
+meta-llama-3.3-70b-instruct	Meta
+meta-llama-guard-2-8b	Meta
+mimo-v2-5	Xiaomi
+mimo-v2-5-pro	Xiaomi
+mimo-v2-flash	Xiaomi
+mimo-v2-omni	Xiaomi
+mimo-v2-pro	Xiaomi
+mimo-v2-tts	Xiaomi
+mimo-v2.5	Xiaomi
+mimo-v2.5-pro	Xiaomi
+mimo-v2.5-pro-crof	Xiaomi
+mimo-v2.5-pro-crof:thinking	Xiaomi
+mimo-v2.5-pro-ultraspeed	Xiaomi
+mimo-v2.5-pro:thinking	Xiaomi
+mimo-v2.5-tts	Xiaomi
+mimo-v2.5-tts-voiceclone	Xiaomi
+mimo-v2.5-tts-voicedesign	Xiaomi
+mimo-v2.5:thinking	Xiaomi
+mini.lm.l12-v2	Mini
+minicpm-v-4.5	Minicpm
+minimax-01	MiniMax
+minimax-h3	MiniMax
+minimax-latest	MiniMax
+minimax-m1	MiniMax
+minimax-m1.80k	MiniMax
+minimax-m2	MiniMax
+minimax-m2-her	MiniMax
+minimax-m2.1	MiniMax
+minimax-m2.1-lightning	MiniMax
+minimax-m2.5	Alibaba
+minimax-m2.5-230b	MiniMax
+minimax-m2.5-fast	MiniMax
+minimax-m2.5-highspeed	MiniMax
+minimax-m2.5-lightning	MiniMax
+minimax-m2.7	MiniMax
+minimax-m2.7-highspeed	MiniMax
+minimax-m2.7-turbo	MiniMax
+minimax-m25	MiniMax
+minimax-m27	MiniMax
+minimax-m2p7	MiniMax
+minimax-m3	MiniMax
+minimax-m3-preview	MiniMax
+minimax-m3:thinking	MiniMax
+minimax-text-01	MiniMax
+ministral-14b	Mistral AI
+ministral-14b-2512	Mistral AI
+ministral-14b-instruct-2512	NVIDIA
+ministral-3-14b-instruct	Mistral AI
+ministral-3-14b-instruct-2512	Mistral AI
+ministral-3-14b-reasoning-2512	Mistral AI
+ministral-3-3b-instruct	Mistral AI
+ministral-3-3b-reasoning-2512	Mistral AI
+ministral-3-8b-instruct	Mistral AI
+ministral-3-8b-instruct-2512	Mistral AI
+ministral-3b	Mistral AI
+ministral-3b-2512	Mistral AI
+ministral-3b-latest	Mistral AI
+ministral-8b	Mistral AI
+ministral-8b-2512	Mistral AI
+ministral-8b-instruct-2410	Mistral AI
+ministral-8b-latest	Mistral AI
+mirothinker-1-7-deepresearch	Mirothinker
+mirothinker-1-7-deepresearch-mini	Mirothinker
+mistral-3-14b	Mistral AI
+mistral-7b-instruct-v0.1	Mistral AI
+mistral-7b-instruct-v0.2	Mistral AI
+mistral-7b-instruct-v0.3	NVIDIA
+mistral-code-agent-latest	Mistral AI
+mistral-code-latest	Mistral AI
+mistral-embed	Mistral AI
+mistral-large	Mistral AI
+mistral-large-2-instruct	Mistral AI
+mistral-large-2402	Mistral AI
+mistral-large-2407	Mistral AI
+mistral-large-2411	Mistral AI
+mistral-large-2512	Mistral AI
+mistral-large-3	Mistral AI
+mistral-large-3-675b-instruct	Mistral AI
+mistral-large-3-675b-instruct-2512	NVIDIA
+mistral-large-3:675b	Mistral AI
+mistral-large-instruct-2407	Mistral AI
+mistral-large-instruct-2411	Mistral AI
+mistral-large-latest	Mistral AI
+mistral-large2	Mistral AI
+mistral-medium	Mistral AI
+mistral-medium-2505	Mistral AI
+mistral-medium-2508	Mistral AI
+mistral-medium-2604	Mistral AI
+mistral-medium-3	Mistral AI
+mistral-medium-3-5	Mistral AI
+mistral-medium-3-instruct	NVIDIA
+mistral-medium-3.1	Mistral AI
+mistral-medium-3.5	Mistral AI
+mistral-medium-3.5-128b	NVIDIA
+mistral-medium-3.5:thinking	Mistral AI
+mistral-medium-latest	Mistral AI
+mistral-nemo	Mistral AI
+mistral-nemo-12b-instruct	Mistral AI
+mistral-nemo-instruct-2407	Mistral AI
+mistral-nemo-minitron-8b-8k-instruct	NVIDIA
+mistral-nemo-minitron-8b-instruct	NVIDIA
+mistral-nemotron	NVIDIA
+mistral-saba	Mistral AI
+mistral-small	Mistral AI
+mistral-small-24b-instruct-2501	Mistral AI
+mistral-small-2503	Mistral AI
+mistral-small-2506	Mistral AI
+mistral-small-2603	Mistral AI
+mistral-small-3.1-24b-instruct	Mistral AI
+mistral-small-3.1-24b-instruct-2503	Mistral AI
+mistral-small-3.2-24b-instruct	Mistral AI
+mistral-small-3.2-24b-instruct-2506	Mistral AI
+mistral-small-31.24b-instruct	Mistral AI
+mistral-small-4	Mistral AI
+mistral-small-4.119b	Mistral AI
+mistral-small-4.119b-2603	NVIDIA
+mistral-small-4.119b-2603:thinking	Mistral AI
+mistral-small-latest	Mistral AI
+mistral4-119b	Mistral AI
+mistralai-mistral-medium-instruct	Mistral AI
+mistralai-mistral-small	Mistral AI
+mixtral-8x22b-instruct	NVIDIA
+mixtral-8x22b-instruct-v0.1	Mistral AI
+mixtral-8x22b-v0.1	Mistral AI
+mixtral-8x7b-instruct	NVIDIA
+mixtral-8x7b-instruct-v0.1	Mistral AI
+mixtral-8x7b-v0.1	Mistral AI
+mm-poly-8b	Mm
+mn-12b-mag-mell-r1	Mn
+mn-loosecannon-12b-v1	Mn
+model-router	Model
+morph-v3-fast	Morph
+morph-v3-large	Morph
+motif-3	Motif
+multi-qa-mpnet-base-dot-v1	Multi
+multilingual-e5-large-instruct	Multilingual
+multilingual-v2	Multilingual
+muse-glimmer-30b	Muse
+muse-spark-1-1	Muse
+muse-spark-1.1	Muse
+muse-spark-1.2	Muse
+muse-spark-1.2-contributor	Muse
+mythomax-l2-13b	Mythomax
+namazu	Namazu
+nano-banana	Nano
+nano-banana-pro	Nano
+nano-gpt-help	Nano
+nemoguard-jailbreakdetect	NVIDIA
+nemomix-unleashed-12b	Nemomix
+nemoretriever-parse	NVIDIA
+nemotron-120b-a12b	Nemotron
+nemotron-3-120b-a12b	Nemotron
+nemotron-3-content-safety	NVIDIA
+nemotron-3-nano-30b	Nemotron
+nemotron-3-nano-30b-a3b	NVIDIA
+nemotron-3-nano-omni	Nemotron
+nemotron-3-nano-omni-30b-a3b-reasoning	NVIDIA
+nemotron-3-nano-omni-30b-a3b-reasoning-bf16	Nemotron
+nemotron-3-nano:30b	Nemotron
+nemotron-3-super	Nemotron
+nemotron-3-super-120b	Nemotron
+nemotron-3-super-120b-a12b	NVIDIA
+nemotron-3-super-120b-a12b:thinking	Nemotron
+nemotron-3-ultra	Nemotron
+nemotron-3-ultra-550b	Nemotron
+nemotron-3-ultra-550b-a55b	NVIDIA
+nemotron-3-ultra-550b-a55b:thinking	Nemotron
+nemotron-3.5-content-safety	Nemotron
+nemotron-3.5-lightning	Nemotron
+nemotron-3.5-lightning-30b-a3b	NVIDIA
+nemotron-3.5-lightning:thinking	Nemotron
+nemotron-4-340b-instruct	NVIDIA
+nemotron-cascade-2-30b-a3b	Nemotron
+nemotron-content-safety-reasoning-4b	NVIDIA
+nemotron-mini-4b-instruct	NVIDIA
+nemotron-nano-12b-v2	Nemotron
+nemotron-nano-12b-v2-vl	NVIDIA
+nemotron-nano-3-30b	Nemotron
+nemotron-nano-3-30b-a3b	NVIDIA
+nemotron-nano-9b-v2	Nemotron
+nemotron-nano-v2-12b	Nemotron
+nemotron-parse	NVIDIA
+nemotron-super-3-120b	Nemotron
+nemotron-voicechat	NVIDIA
+nomic-embed-text	Nomic
+north-mini-code	Cohere
+north-mini-code-1-0	Cohere
+nova-2-lite	Deepgram
+nova-2-lite-v1	Deepgram
+nova-2-pro-v1	Deepgram
+nova-3	Deepgram
+nova-lite	Amazon
+nova-lite-v1	Amazon
+nova-micro	Amazon
+nova-micro-v1	Amazon
+nova-premier-v1	Amazon
+nova-pro	Amazon
+nova-pro-v1	Amazon
+nv-embed-v1	NVIDIA
+nv-embedcode-7b-v1	NVIDIA
+nv-embedqa-e5-v5	NVIDIA
+nvclip	NVIDIA
+nvidia-llama-3.2-nv-embedqa-1b	Nvidia
+nvidia-nemotron-3-5-lightning-30b-a3b	Nvidia
+nvidia-nemotron-3-nano-30b-a3b	Nvidia
+nvidia-nemotron-3-nano-30b-a3b-bf16	NVIDIA
+nvidia-nemotron-3-nano-omni	Nvidia
+nvidia-nemotron-3-super-120b	Nvidia
+nvidia-nemotron-3-super-120b-a12b-nvfp4	Nvidia
+nvidia-nemotron-3-ultra-550b-a55b	Nvidia
+nvidia-nemotron-3-ultra-550b-a55b-bf16	Nvidia
+nvidia-nemotron-3.5-lightning-30b-a3b	Nvidia
+nvidia-nemotron-nano-9b-v2	NVIDIA
+nvidia-nemotron-parse-2.0	NVIDIA
+nvidia-nemotron-parse-v1.1	NVIDIA
+nvidia-nemotron-parse-v1.1-tc	NVIDIA
+nvidia-nemotron-parse-v1.2	NVIDIA
+o1	OpenAI
+o1-mini	OpenAI
+o1-preview	OpenAI
+o1-pro	OpenAI
+o3	OpenAI
+o3-deep-research	OpenAI
+o3-mini	OpenAI
+o3-mini-high	OpenAI
+o3-mini-low	OpenAI
+o3-pro	OpenAI
+o3-pro-2025-06-10	OpenAI
+o4-mini	OpenAI
+o4-mini-deep-research	OpenAI
+o4-mini-high	OpenAI
+o4-mini@eu	OpenAI
+olafangensan-glm-4.7-flash-heretic	Olafangensan
+olmo-3-32b-think	Allen AI
+open-mistral-7b	Mistral AI
+open-mistral-nemo	Mistral AI
+open-mixtral-8x22b	Mistral AI
+open-mixtral-8x7b	Mistral AI
+openai-gpt-4.1	OpenAI
+openai-gpt-4o	OpenAI
+openai-gpt-4o-2024-11-20	Openai
+openai-gpt-4o-mini	OpenAI
+openai-gpt-4o-mini-2024-07-18	Openai
+openai-gpt-5	OpenAI
+openai-gpt-5-mini	OpenAI
+openai-gpt-5-nano	OpenAI
+openai-gpt-5.1	Openai
+openai-gpt-5.1-codex-max	Openai
+openai-gpt-5.2	OpenAI
+openai-gpt-5.2-pro	OpenAI
+openai-gpt-5.3-codex	OpenAI
+openai-gpt-5.4	OpenAI
+openai-gpt-5.4-mini	OpenAI
+openai-gpt-5.4-nano	OpenAI
+openai-gpt-5.4-pro	OpenAI
+openai-gpt-5.5	OpenAI
+openai-gpt-5.6-luna	OpenAI
+openai-gpt-5.6-sol	OpenAI
+openai-gpt-5.6-terra	OpenAI
+openai-gpt-52	Openai
+openai-gpt-52-codex	Openai
+openai-gpt-53-codex	Openai
+openai-gpt-54	Openai
+openai-gpt-54-mini	Openai
+openai-gpt-54-pro	Openai
+openai-gpt-55	Openai
+openai-gpt-55-pro	Openai
+openai-gpt-56-luna	Openai
+openai-gpt-56-luna-pro	Openai
+openai-gpt-56-sol	Openai
+openai-gpt-56-sol-pro	Openai
+openai-gpt-56-terra	Openai
+openai-gpt-56-terra-pro	Openai
+openai-gpt-image-1	Openai
+openai-gpt-image-1.5	OpenAI
+openai-gpt-image-2	OpenAI
+openai-gpt-oss-120b	OpenAI
+openai-gpt-oss-20b	OpenAI
+openai-o1	OpenAI
+openai-o3	OpenAI
+openai-o3-mini	OpenAI
+openreasoning-nemotron-32b	Openreasoning
+orpheus-arabic-saudi	Orpheus
+orpheus-v1-english	Orpheus
+osmosis-structure-0.6b	Osmosis
+paddleocr-vl	Paddleocr
+paddleocr-vl-1.5	Paddleocr
+palmyra-creative	Writer
+palmyra-creative-122b	Writer
+palmyra-fin-70b-32k	Writer
+palmyra-med-70b	Writer
+palmyra-med-70b-32k	Writer
+palmyra-x4	Writer
+palmyra-x5	Writer
+pareto-code	Pareto
+perceptron-mk1	Perceptron
+perplexity-academic-researcher	Perplexity
+phi-3-vision-128k-instruct	Microsoft
+phi-4	Microsoft
+phi-4-mini	Microsoft
+phi-4-mini-instruct	NVIDIA
+phi-4-mini-reasoning	Microsoft
+phi-4-multimodal	Microsoft
+phi-4-multimodal-instruct	NVIDIA
+phi-4-reasoning	Microsoft
+phi-4-reasoning-plus	Microsoft
+pixtral-12b	Mistral AI
+pixtral-12b-2409	Mistral AI
+pixtral-large-2502	Mistral AI
+pixtral-large-latest	Mistral AI
+plamo-embedding-1b	Plamo
+pokee-isaac	Pokee
+pplx-embed-v1-0.6b	Pplx
+pplx-embed-v1-4b	Pplx
+qvq-max	Alibaba
+qwen-2.5-14b-instruct	Alibaba
+qwen-2.5-72b-instruct	Alibaba
+qwen-2.5-7b-instruct	Alibaba
+qwen-2.5-7b-vision-instruct	Alibaba
+qwen-2.5-coder-32b	Alibaba
+qwen-2.5-coder-32b-instruct	Alibaba
+qwen-3-14b	Alibaba
+qwen-3-235b	Alibaba
+qwen-3-30b	Alibaba
+qwen-3-32b	Alibaba
+qwen-3-6-plus	Alibaba
+qwen-3-7-max	Alibaba
+qwen-3-7-plus	Alibaba
+qwen-3-8-max	Alibaba
+qwen-3.6-max-preview	Alibaba
+qwen-3.6-plus	Alibaba
+qwen-coder-plus	Alibaba
+qwen-deep-research	Alibaba
+qwen-doc-turbo	Alibaba
+qwen-flash	Alibaba
+qwen-image	NVIDIA
+qwen-image-2.0	Alibaba
+qwen-image-2.0-pro	Alibaba
+qwen-image-edit	NVIDIA
+qwen-long	Alibaba
+qwen-math-plus	Alibaba
+qwen-math-turbo	Alibaba
+qwen-max	Alibaba
+qwen-max-2025-01-25	Alibaba
+qwen-max-latest	Alibaba
+qwen-mt-plus	Alibaba
+qwen-mt-turbo	Alibaba
+qwen-omni-turbo	Alibaba
+qwen-omni-turbo-realtime	Alibaba
+qwen-plus	Alibaba
+qwen-plus-2025-07-28	Alibaba
+qwen-plus-2025-07-28:thinking	Alibaba
+qwen-plus-character	Alibaba
+qwen-plus-character-ja	Alibaba
+qwen-plus-latest	Alibaba
+qwen-turbo	Alibaba
+qwen-vl-max	Alibaba
+qwen-vl-max-2025-01-25	Alibaba
+qwen-vl-ocr	Alibaba
+qwen-vl-plus	Alibaba
+qwen2.5-14b-instruct	Alibaba
+qwen2.5-32b-instruct	Alibaba
+qwen2.5-72b-instruct	Alibaba
+qwen2.5-7b-instruct	Alibaba
+qwen2.5-7b-instruct-turbo	Alibaba
+qwen2.5-coder-0.5b	Alibaba
+qwen2.5-coder-32b-instruct	NVIDIA
+qwen2.5-coder-7b-fast	Alibaba
+qwen2.5-coder-7b-instruct	Alibaba
+qwen2.5-math-72b-instruct	Alibaba
+qwen2.5-math-7b-instruct	Alibaba
+qwen2.5-omni-7b	Alibaba
+qwen2.5-vl-32b-instruct	Alibaba
+qwen2.5-vl-72b-instruct	Alibaba
+qwen2.5-vl-7b-instruct	Alibaba
+qwen25-vl-72b-instruct	Qwen25
+qwen3-asr-flash	Alibaba
+qwen3-coder	Alibaba
+qwen3-coder-30b	Alibaba
+qwen3-coder-30b-a3b	Alibaba
+qwen3-coder-30b-a3b-instruct	Alibaba
+qwen3-coder-480b-a35b-instruct	Alibaba
+qwen3-coder-480b-a35b-instruct-turbo	Alibaba
+qwen3-coder-flash	Alibaba
+qwen3-coder-next	Alibaba
+qwen3-coder-plus	Alibaba
+qwen3-embedding-0.6b	Alibaba
+qwen3-embedding-4b	Alibaba
+qwen3-embedding-8b	Alibaba
+qwen3-livetranslate-flash-realtime	Alibaba
+qwen3-max	Alibaba
+qwen3-max-2025-09-23	Alibaba
+qwen3-max-2026-01-23	Alibaba
+qwen3-max-preview	Alibaba
+qwen3-max-thinking	Alibaba
+qwen3-next-80b	Alibaba
+qwen3-next-80b-a3b-instruct	Alibaba
+qwen3-next-80b-a3b-thinking	Alibaba
+qwen3-next-80b-a3b-thinking-fast	Alibaba
+qwen3-omni-30b-a3b-instruct	Alibaba
+qwen3-omni-30b-a3b-thinking	Alibaba
+qwen3-omni-flash	Alibaba
+qwen3-omni-flash-realtime	Alibaba
+qwen3-reranker-0.6b	Alibaba
+qwen3-reranker-4b	Alibaba
+qwen3-tts-voicedesign	Alibaba
+qwen3-vl-235b-a22b	Alibaba
+qwen3-vl-235b-a22b-instruct	Alibaba
+qwen3-vl-235b-a22b-thinking	Alibaba
+qwen3-vl-30b-a3b	Alibaba
+qwen3-vl-30b-a3b-instruct	Alibaba
+qwen3-vl-30b-a3b-thinking	Alibaba
+qwen3-vl-32b-instruct	Alibaba
+qwen3-vl-32b-thinking	Alibaba
+qwen3-vl-8b-instruct	Alibaba
+qwen3-vl-8b-thinking	Alibaba
+qwen3-vl-embedding-8b	Alibaba
+qwen3-vl-flash	Alibaba
+qwen3-vl-instruct	Alibaba
+qwen3-vl-plus	Alibaba
+qwen3-vl-thinking	Alibaba
+qwen3.1.7b-base	Alibaba
+qwen3.14b	Alibaba
+qwen3.14b-instruct	Alibaba
+qwen3.235b	Alibaba
+qwen3.235b-a22b	Alibaba
+qwen3.235b-a22b-2507	Alibaba
+qwen3.235b-a22b-instruct	Alibaba
+qwen3.235b-a22b-instruct-2507	Alibaba
+qwen3.235b-a22b-thinking	Alibaba
+qwen3.235b-a22b-thinking-2507	Alibaba
+qwen3.235b-a22b-thinking-2507-fast	Alibaba
+qwen3.30b-a3b	Alibaba
+qwen3.30b-a3b-2507	Alibaba
+qwen3.30b-a3b-instruct-2507	Alibaba
+qwen3.30b-a3b-thinking-2507	Alibaba
+qwen3.32b	Alibaba
+qwen3.4b-base	Alibaba
+qwen3.4b-instruct-2507	Alibaba
+qwen3.5-0.8b	Alibaba
+qwen3.5-122b	Alibaba
+qwen3.5-122b-a10b	Alibaba
+qwen3.5-122b-a10b-nvfp4	Alibaba
+qwen3.5-122b-a10b:thinking	Alibaba
+qwen3.5-27b	Alibaba
+qwen3.5-27b:thinking	Alibaba
+qwen3.5-2b	Alibaba
+qwen3.5-35b-a3b	Alibaba
+qwen3.5-35b-a3b:thinking	Alibaba
+qwen3.5-397b-a17b	Alibaba
+qwen3.5-397b-a17b-fast	Alibaba
+qwen3.5-397b-a17b-thinking	Alibaba
+qwen3.5-397b-fast	Alibaba
+qwen3.5-4b	Alibaba
+qwen3.5-9b	Alibaba
+qwen3.5-9b-mlx-4bit	Alibaba
+qwen3.5-9b-q4.k.m	Alibaba
+qwen3.5-flash	Alibaba
+qwen3.5-flash-02-23	Alibaba
+qwen3.5-flash:thinking	Alibaba
+qwen3.5-omni-flash	Alibaba
+qwen3.5-omni-plus	Alibaba
+qwen3.5-plus	Alibaba
+qwen3.5-plus-02-15	Alibaba
+qwen3.5-plus-20260420	Alibaba
+qwen3.5-plus-thinking	Alibaba
+qwen3.6-27b	Alibaba
+qwen3.6-27b:thinking	Alibaba
+qwen3.6-35b	Alibaba
+qwen3.6-35b-a3b	Alibaba
+qwen3.6-35b-a3b:thinking	Alibaba
+qwen3.6-35b-fast	Alibaba
+qwen3.6-flash	Alibaba
+qwen3.6-max	Alibaba
+qwen3.6-max-preview	Alibaba
+qwen3.6-plus	Alibaba
+qwen3.7-flash	Alibaba
+qwen3.7-flash:thinking	Alibaba
+qwen3.7-max	Alibaba
+qwen3.7-max:thinking	Alibaba
+qwen3.7-plus	Alibaba
+qwen3.7-plus:thinking	Alibaba
+qwen3.8-2.4t-a95b	Alibaba
+qwen3.8-max	Alibaba
+qwen3.8-max-preview	Alibaba
+qwen3.8-max:thinking	Alibaba
+qwen3.8b	Alibaba
+qwen35.122b-a10b	Qwen35
+qwen35.397b-a17b	Qwen35
+qwen3guard-gen-0.6b	Qwen3guard
+qwen3guard-gen-8b	Qwen3guard
+qwen3p7-plus	Qwen3p7
+qwenlong-l1-32b	Qwenlong
+qwerky-72b	Qwerky
+qwq-32b	Alibaba
+qwq-plus	Alibaba
+ray2	Ray2
+recraft-v2	Recraft
+recraft-v3	Recraft
+recraft-v4	Recraft
+recraft-v4-pro	Recraft
+recraft-v4.1	Recraft
+recraft-v4.1-pro	Recraft
+recraft-v4.1-utility	Recraft
+recraft-v4.1-utility-pro	Recraft
+recurrentgemma-2b	Google
+recurrentgemma-2b-it	Google
+recurrentgemma-9b	Google
+recurrentgemma-9b-it	Google
+reka-edge	Reka
+reka-flash-3	Reka
+relace-apply-3	Relace
+relace-search	Relace
+rerank-2.5	Cohere
+rerank-2.5-lite	Cohere
+rerank-qa-mistral-4b	NVIDIA
+rerank-v3.5	Cohere
+rerank-v4-fast	Cohere
+rerank-v4-pro	Cohere
+ring-1t	Ring
+ring-2.6-1t	Inclusion AI
+riva-translate-4b-instruct	NVIDIA
+riva-translate-4b-instruct-v1.1	NVIDIA
+riva-translate-4b-instruct-v2	NVIDIA
+rnj-1-instruct	Rnj
+rocinante-12b	Rocinante
+rocinante-12b-v1.1	Rocinante
+route-llm	Route
+runway	Runway
+runway-gen-4-turbo	Runway
+s1	S1
+s2-pro	S2
+s2.1-pro	S2
+sakana-namazu	Sakana
+sap-abap-1	Sap
+sarvam-105b	Sarvam AI
+sarvam-30b	Sarvam AI
+sarvam-m	NVIDIA
+schnell	Schnell
+sea-lion-7b-instruct	AI Singapore
+sea-lion-v1-7b-it	AI Singapore
+sea-lion-v1-7b-it-research	AI Singapore
+seed-1-6-250615	ByteDance
+seed-1-6-250915	ByteDance
+seed-1-6-flash-250715	ByteDance
+seed-1-8-251228	ByteDance
+seed-1.6	ByteDance
+seed-1.6-flash	ByteDance
+seed-1.8	ByteDance
+seed-2-0-code	ByteDance
+seed-2-1-turbo	ByteDance
+seed-2.0-code	ByteDance
+seed-2.0-lite	ByteDance
+seed-2.0-mini	ByteDance
+seed-oss-36b-instruct	NVIDIA
+seedance-2	Seedance
+seedance-2.0	Seedance
+seedance-2.0-fast	Seedance
+seedance-2.5	Seedance
+seedance-v1.0-pro	Seedance
+seedance-v1.0-pro-fast	Seedance
+seedance-v1.5-pro	Seedance
+seedream-4.0	Seedream
+seedream-4.5	Seedream
+seedream-5.0-lite	Seedream
+seedream-5.0-pro	Seedream
+shisa-v2-llama3.3-70b	Shisa
+shisa-v2.1-llama3.3-70b	Shisa
+sincap	Sincap
+skyfall-36b-v2	Skyfall
+small	Small
+smart-turn-v2	Smart
+smollm3-3b-base	Smollm3
+snowflake-arctic-embed-l	Snowflake
+snowflake-arctic-embed-l-v2.0	Snowflake
+snowflake-arctic-embed-m-long	Snowflake
+snowflake-llama3.3-70b	Snowflake
+solar-10.7b-instruct	NVIDIA
+solar-mini	Upstage
+solar-pro-3	Upstage
+solar-pro2	Upstage
+solar-pro3	Upstage
+solar-pro4	Upstage
+solar-pro4:thinking	Upstage
+sonar	Perplexity
+sonar-deep-research	Perplexity
+sonar-pro	Perplexity
+sonar-pro-search	Perplexity
+sonar-reasoning	Perplexity
+sonar-reasoning-pro	Perplexity
+sora-2	Sora
+sora-2-pro	Sora
+sparsedrive	NVIDIA
+stable-diffusion-3.5-large	Stable
+stablediffusionxl	Stablediffusionxl
+starcannon-unleashed-12b-v1.0	Mistral AI
+starcoder2-15b	BigCode
+starcoder2-15b-instruct-v0.1	BigCode
+starcoder2-3b	BigCode
+starcoder2-7b	BigCode
+starcoder2-tokenizer	BigCode
+step-1-32k	StepFun
+step-2-16k	StepFun
+step-2-16k-exp	StepFun
+step-2-mini	StepFun
+step-3	StepFun
+step-3-5-flash	StepFun
+step-3-5-flash-2603	StepFun
+step-3-7-flash	StepFun
+step-3.5-flash	StepFun
+step-3.5-flash-2603	StepFun
+step-3.7-flash	StepFun
+step-3.7-flash:thinking	StepFun
+step-r1-v-mini	StepFun
+step-router-v1	StepFun
+step-tts-2	StepFun
+stepaudio-2.5-asr	StepFun
+stepaudio-2.5-tts	StepFun
+stockmark-2-100b-instruct	Stockmark
+stockmark-2-100b-instruct-beta	Stockmark
+streampetr	NVIDIA
+studiovoice	NVIDIA
+synth	Synth
+synth-code	Synth
+synthetic-video-detector	NVIDIA
+tc-code-latest	Tc
+text-embedding-005	Google
+text-embedding-3-large	OpenAI
+text-embedding-3-small	OpenAI
+text-embedding-ada-002	OpenAI
+text-max	Text
+text-multilingual-embedding-002	Text
+text-prime	Text
+text-standard	Text
+text-to-audio	Text
+tim-qwen3.6-27b	Tim
+titan-embed-text-v2	Titan
+tongyi-intent-detect-v3	Alibaba
+topazlabs	Topazlabs
+transcribe-1	Transcribe
+trendyol-7b	Trendyol
+trinity-large-preview	Trinity
+trinity-large-thinking	Trinity
+trinity-mini	Trinity
+tts-1	OpenAI
+tts-1-hd	OpenAI
+ui-tars-1.5-7b	Ui
+umans-coder	Umans
+umans-deepseek-v4-flash-0731	DeepSeek
+umans-flash	Umans
+umans-glm-5.1	Umans
+umans-glm-5.2	Umans
+umans-kimi-k2.7	Umans
+umans-kimi-k3	Umans
+umans-qwen3.6-35b-a3b	Umans
+universal-summarizer	Universal
+unslopnemo-12b	Unslopnemo
+unslopnemo-12b-v4.1	Unslopnemo
+usdcode	NVIDIA
+usdvalidate	NVIDIA
+v0-1.0-md	Vercel
+v0-1.5-lg	Vercel
+v0-1.5-md	Vercel
+veiled-calla-12b	Veiled
+veo-2	Google
+veo-3	Google
+veo-3-fast	Google
+veo-3.0-fast-generate-001	Google
+veo-3.0-generate-001	Google
+veo-3.1	Google
+veo-3.1-fast	Google
+veo-3.1-fast-generate-001	Google
+veo-3.1-fast-generate-preview	Google
+veo-3.1-generate-001	Google
+veo-3.1-generate-preview	Google
+veo-3.1-lite-generate-001	Google
+veo-3.1-lite-generate-preview	Google
+veo3.1	Veo3
+veo3.1-fast	Veo3
+veo3.1-lite	Veo3
+vila	NVIDIA
+virtuoso-large	Virtuoso
+voxtral-mini-3b	Mistral AI
+voxtral-mini-3b-2507	Mistral AI
+voxtral-mini-latest	Mistral AI
+voxtral-mini-tts-latest	Mistral AI
+voxtral-small-24b-2507	Mistral AI
+voxtral-small-2507	Mistral AI
+voxtral-small-latest	Mistral AI
+voyage-3-large	Voyage AI
+voyage-3.5	Voyage AI
+voyage-3.5-lite	Voyage AI
+voyage-4	Voyage AI
+voyage-4-large	Voyage AI
+voyage-4-lite	Voyage AI
+voyage-code-2	Voyage AI
+voyage-code-3	Voyage AI
+voyage-finance-2	Voyage AI
+voyage-law-2	Voyage AI
+wan-v2-6	Wan
+wan-v2.5-t2v-preview	Wan
+wan-v2.6-i2v	Wan
+wan-v2.6-i2v-flash	Wan
+wan-v2.6-r2v	Wan
+wan-v2.6-r2v-flash	Wan
+wan-v2.6-t2v	Wan
+wan-v2.7-r2v	Wan
+wan-v2.7-t2v	Wan
+wan2-2-t2v-a14b	Wan2
+wan2.7-image	Wan2
+wan2.7-image-pro	Wan2
+wayfarer-large-70b-llama-3.3	Wayfarer
+weaver	Weaver
+whisper-1	OpenAI
+whisper-large-v3	NVIDIA
+whisper-large-v3-turbo	OpenAI
+wizardlm-2-8x22b	Wizardlm
+xai.grok-4.3	Xai
+xiaomi-mimo-v2-5	Xiaomi
+xiaomi-mimo-v2.5	Xiaomi
+xiaomi-mimo-v2.5-pro	Xiaomi
+xpersona-frieren-coder	Xpersona
+xpersona-gpt-5.5	Xpersona
+yi-large	01.AI
+yi-lightning	01.AI
+yi-medium-200k	01.AI
+z-ai-glm-5-turbo	Z
+z-ai-glm-5v-turbo	Z
+zai-glm-4.7	Zhipu AI
+zai-glm-5-1	Zhipu AI
+zai-glm-5.1	Zhipu AI
+zai-org-glm-4.6	Zai
+zai-org-glm-4.7	Zai
+zai-org-glm-4.7-flash	Zai
+zai-org-glm-5	Zai
+zai-org-glm-5-1	Zai
+zai-org-glm-5-2	Zai
+zamba2-7b-instruct	Zyphra
+zamba2-7b-instruct-v2	Zyphra

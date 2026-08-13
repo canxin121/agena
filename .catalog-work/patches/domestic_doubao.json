@@ -1,0 +1,308 @@
+{
+ "models": {
+  "doubao-1.5-pro-256k": {
+   "description": "Doubao 1.5 Pro 256k is ByteDance's long-context (256k) variant of the Doubao 1.5 Pro LLM for general chat, analysis, and production workloads."
+  },
+  "doubao-1.5-pro-32k": {
+   "description": "Doubao 1.5 Pro 32k is ByteDance's 32k-context variant of the Doubao 1.5 Pro LLM for everyday chat and cost-efficient high-volume workloads."
+  },
+  "doubao-1.5-thinking-pro": {
+   "pricing": {
+    "input_usd_per_million_tokens": "0.571",
+    "output_usd_per_million_tokens": "2.286"
+   }
+  },
+  "doubao-1.5-vision-pro": {
+   "pricing": {
+    "input_usd_per_million_tokens": "0.429",
+    "output_usd_per_million_tokens": "1.286"
+   }
+  },
+  "doubao-1.5-vision-pro-32k": {
+   "description": "Doubao 1.5 Vision Pro 32k is ByteDance's multimodal 1.5-series model for image and document understanding, with a 32k context window."
+  },
+  "doubao-seed-1-6-250615": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "on": {
+     "display_name": "Thinking",
+     "strategy": "request_only",
+     "request_override": {
+      "body_patch": {
+       "thinking": {
+        "type": "enabled"
+       }
+      }
+     }
+    }
+   },
+   "release_date": "2025-06-15",
+   "description": "Doubao Seed 1.6 is ByteDance's multimodal flagship LLM with a 256k context window for text, image, video, and document input, with deep thinking optionally enabled per request."
+  },
+  "doubao-seed-1-6-flash-250615": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "on": {
+     "display_name": "Thinking",
+     "strategy": "request_only",
+     "request_override": {
+      "body_patch": {
+       "thinking": {
+        "type": "enabled"
+       }
+      }
+     }
+    }
+   },
+   "release_date": "2025-06-15",
+   "description": "Doubao Seed 1.6 Flash is ByteDance's low-latency, cost-optimized variant of the Doubao Seed 1.6 multimodal LLM, with a 256k context window and optional deep thinking."
+  },
+  "doubao-seed-1-8-251215": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "knowledge_cutoff": "2025-01-01",
+   "description": "Doubao Seed 1.8 is ByteDance's multimodal LLM for text, image, video, and document understanding with configurable deep-thinking effort."
+  },
+  "doubao-seed-1.6": {
+   "pricing": {
+    "input_usd_per_million_tokens": "0.114",
+    "output_usd_per_million_tokens": "1.143"
+   }
+  },
+  "doubao-seed-1.6-flash": {
+   "pricing": {
+    "input_usd_per_million_tokens": "0.021",
+    "output_usd_per_million_tokens": "0.214"
+   }
+  },
+  "doubao-seed-1.6-thinking": {
+   "pricing": {
+    "input_usd_per_million_tokens": "0.114",
+    "output_usd_per_million_tokens": "1.143"
+   }
+  },
+  "doubao-seed-2-0-code-preview-260215": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   }
+  },
+  "doubao-seed-2-0-lite-260215": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "description": "Doubao Seed 2.0 Lite is ByteDance's fast, low-cost multimodal LLM with a 256k context window and configurable thinking effort for high-volume workloads."
+  },
+  "doubao-seed-2-0-mini-260215": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "description": "Doubao Seed 2.0 Mini is ByteDance's compact, low-cost multimodal LLM with a 256k context window and configurable thinking effort for lightweight tasks."
+  },
+  "doubao-seed-2-0-pro-260215": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "description": "Doubao Seed 2.0 Pro is ByteDance's high-capability multimodal LLM with a 256k context window, up to 128k output tokens, and configurable thinking effort."
+  },
+  "doubao-seed-2.1-pro": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "on": {
+     "display_name": "Thinking",
+     "strategy": "request_only",
+     "request_override": {
+      "body_patch": {
+       "thinking": {
+        "type": "enabled"
+       }
+      }
+     }
+    }
+   }
+  },
+  "doubao-seed-2.1-turbo": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "on": {
+     "display_name": "Thinking",
+     "strategy": "request_only",
+     "request_override": {
+      "body_patch": {
+       "thinking": {
+        "type": "enabled"
+       }
+      }
+     }
+    }
+   }
+  },
+  "doubao-seed-code": {
+   "thinking_modes": {
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   }
+  },
+  "seed-2-1-turbo": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   }
+  },
+  "seed-oss-36b-instruct": {
+   "open_weights": true,
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "description": "ByteDance's open-weights (Apache-2.0) Seed-OSS-36B-Instruct model with built-in chain-of-thought thinking, a controllable thinking budget, and tool use."
+  }
+ },
+ "notes": "Researched Volcengine Ark docs (docs/82379: model list 1099320, Chat API thinking param 1449737), the ByteDance Seed site (seed.bytedance.com/en/seed2_1, Seed 2.1 release 2026-06-23), the HuggingFace ByteDance-Seed/Seed-OSS-36B-Instruct card, and the provided models.dev snapshot. THINKING: verified the Ark request-toggle key is the 'thinking' object ({type: enabled|disabled|auto}, reasoning output in reasoning_content) and applied the catalog's standard off/on toggle (body_patch thinking:{type:enabled}) to doubao-seed-1-6-250615 and doubao-seed-1-6-flash-250615 (same Doubao Seed 1.6 line as the already-toggled doubao-seed-1.6/-flash; the Ark doc example calls thinking on a Seed 1.6 versioned id), and to doubao-seed-2.1-pro / doubao-seed-2.1-turbo (Seed 2.1's official page confirms reasoning capability; models.dev has no entry, so the toggle is inferred from the standard Ark Seed toggle and may actually be always-on - flagged). Added the full off/minimal/low/medium/high effort set to doubao-seed-1-8-251215 and the 2026-02-15 versioned doubao-seed-2-0-{code-preview,lite,mini,pro}-260215, which are versioned ids of the same Doubao Seed 1.8/2.0 models whose reasoning_options models.dev documents on the undated ids (aihubmix: toggle + reasoning_effort minimal/low/medium/high; zenmux: effort low/medium/high). doubao-seed-code: models.dev zenmux volcengine/doubao-seed-code lists reasoning_options effort [low,medium,high] -> low/medium/high effort modes (no off; the model always reasons at an effort). seed-2-1-turbo: models.dev venice lists reasoning with empty options -> single always-on high mode. seed-oss-36b-instruct: HF card confirms open weights (Apache-2.0) and built-in chain-of-thought (always-on by default, optional token budget) -> open_weights:true and single always-on high mode. doubao-seed-character left without thinking_modes: only one low-quality provider entry (nano-gpt) claims reasoning; not independently verifiable. Already-patched models (doubao-seed-1.6/-flash/-thinking, doubao-seed-1.8, doubao-seed-2-0-{code-preview,lite-260428,mini-260428,pro}, doubao-seed-2.0-{code,lite,mini,pro}, seed-1-6-*, seed-1-8-251228, seed-1.6/-flash/-1.8, seed-2-0-code, seed-2.0-{code,lite,mini}, doubao-1.5-thinking-pro) were left unchanged. PRICING: official Volcengine CNY list prices, converted to USD at 7.0 CNY/USD (the de-facto rate of existing doubao entries, e.g. doubao-seed-1-8-251215 0.114/0.286 = CNY 0.8/2): Doubao Seed 1.6 and 1.6-thinking CNY 0.8 input / 8 output per M (0-32K input tier), 1.6-flash CNY 0.15/1.5, Doubao-1.5-thinking-pro CNY 4/16, Doubao-1.5-vision-pro CNY 3/9 - confirmed by multiple sources (Coze model_fee docs, June 2025 FORCE launch coverage, AIBase). Cache pricing omitted (not officially published for these variants in a verifiable form). KNOWLEDGE CUTOFF: added only to doubao-seed-1-8-251215 (2025-01-01, per models.dev zenmux volcengine/doubao-seed-1.8 knowledge field and model self-report); deliberately NOT set to the release date on seed-1.6 (a cutoff equal to release date would be suspect). The brief's suggested cutoffs (1.6=2025-06, 1.8=2025-12, 2.0=2026-02, 2.1=2026-*) could NOT be verified from official sources: ByteDance/Volcengine publish no cutoff; ZenMux lists Seed 1.8 as 2025-01-01 (not 2025-12), and Seed 2.0 cutoff varies by variant/aggregator (2026-02-14 equals release date; models.sulat lists code at 2025-01-01) - so those were omitted rather than guessed. RELEASE DATE: corrected the nano-gpt placeholder 2024-01-01 on doubao-seed-1-6-250615 / doubao-seed-1-6-flash-250615 to 2025-06-15 (version-id date). DESCRIPTIONS: replaced the clearly-wrong 'Compact GPT model...' placeholder descriptions (a GPT-model template, not ByteDance) on doubao-1.5-pro-256k/32k, doubao-1.5-vision-pro-32k, doubao-seed-1-6-250615/-flash, doubao-seed-2-0-lite/mini/pro-260215, plus improved doubao-seed-1-8-251215 and seed-oss-36b-instruct. OMITTED (unverifiable / not applicable): speed_modes for all models (Volcengine expresses speed via separate model ids -flash/-turbo/-fast; no request-level speed parameter was found in Ark docs); token pricing and token context for the seedance (video) and seedream (image) generation models (token-based pricing/context not applicable - left at existing ctx=0/maxout=0); knowledge cutoffs for Seed 2.0 dated variants, Seed 2.1, and the open-weight seed-1.x models."
+}

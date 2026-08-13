@@ -1,0 +1,203 @@
+{
+  "models": {
+    "gpt-oss-120b": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "low": {"display_name": "Think Low", "strategy": "effort", "effort": "low"},
+        "medium": {"display_name": "Think Medium", "strategy": "effort", "effort": "medium"},
+        "high": {"display_name": "Think High", "strategy": "effort", "effort": "high"}
+      }
+    },
+    "gpt-oss-20b": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "low": {"display_name": "Think Low", "strategy": "effort", "effort": "low"},
+        "medium": {"display_name": "Think Medium", "strategy": "effort", "effort": "medium"},
+        "high": {"display_name": "Think High", "strategy": "effort", "effort": "high"}
+      }
+    },
+    "inkling": {
+      "thinking_modes": {
+        "default": "high",
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "low": {"display_name": "Think Low", "strategy": "effort", "effort": "low"},
+        "medium": {"display_name": "Think Medium", "strategy": "effort", "effort": "medium"},
+        "high": {"display_name": "Think High", "strategy": "effort", "effort": "high"}
+      }
+    },
+    "mistral-medium-3.5-128b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"reasoning_effort": "high"}}}
+      },
+      "max_input_tokens": 262144
+    },
+    "mistral-small-4.119b-2603": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"reasoning_effort": "high"}}}
+      }
+    },
+    "nemotron-120b-a12b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3-120b-a12b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3-nano-30b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      },
+      "knowledge_cutoff": "2024-09"
+    },
+    "nemotron-3-nano-30b-a3b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3-nano-omni": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3-nano-omni-30b-a3b-reasoning": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3-nano-omni-30b-a3b-reasoning-bf16": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3-nano:30b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3-super": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3-super-120b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      },
+      "knowledge_cutoff": "2024-04"
+    },
+    "nemotron-3-super-120b-a12b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3-ultra": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3-ultra-550b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3-ultra-550b-a55b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3.5-lightning": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-3.5-lightning-30b-a3b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-nano-3-30b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nemotron-super-3-120b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nvidia-nemotron-3-5-lightning-30b-a3b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nvidia-nemotron-3-nano-30b-a3b-bf16": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nvidia-nemotron-3-nano-omni": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nvidia-nemotron-3-super-120b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nvidia-nemotron-3-super-120b-a12b-nvfp4": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nvidia-nemotron-3-ultra-550b-a55b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nvidia-nemotron-3-ultra-550b-a55b-bf16": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "nvidia-nemotron-3.5-lightning-30b-a3b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    }
+  },
+  "notes": "THINKING MODES (verified from NVIDIA surfaces: build.nvidia.com embedded playground configs + code examples, docs.nvidia.com NIM 'Use Reasoning Models' 1.15.0 + 'Thinking Budget Control' + Day-0 Nemotron 3 Ultra docs, and models.dev). (1) Nemotron 3 family - ALL of nemotron-3-* (super-120b-a12b, ultra-550b-a55b, nano-30b-a3b, 3.5-lightning-30b-a3b, nano-omni-30b-a3b-reasoning, plus closed hosted variants nemotron-3-nano-30b / nemotron-3-super-120b / nemotron-3-ultra-550b / nvidia-nemotron-3-nano-omni, bf16/nvfp4/omni quant variants, and aliases nemotron-120b-a12b / nemotron-3-120b-a12b / nemotron-3-nano:30b / nemotron-3-super / nemotron-nano-3-30b / nemotron-super-3-120b): reasoning toggle via extra_body chat_template_kwargs.enable_thinking (default ON), plus optional reasoning_budget cap and low_effort/medium_effort hints. Modeled as request_only toggle with body_patch chat_template_kwargs.enable_thinking=true, matching the existing nvidia-nemotron-3-nano-30b-a3b patch in supplement_21.json. (2) gpt-oss-120b/20b: reasoning_effort param low/medium/high (default medium) per NIM reference + models.dev reasoning_options; 'off' modeled as disabled per task spec (no true off value exists - reasoning always on). (3) inkling (NVIDIA-hosted, bundle pricing matches the models.dev venice row which documents reasoning_options effort none/low/medium/high; default high/0.9): effort-based off/low/medium/high default high. (4) Mistral Medium 3.5 (mistral-medium-3.5-128b) and Small 4 (mistral-small-4.119b-2603): reasoning_effort none/high, default high, per NIM reference - modeled as request_only toggle with body_patch reasoning_effort=high, matching the mistral_minimax.json convention. No speed_modes added anywhere: no vendor-documented speed tier (priority service_tier) was verified for any of these models. VERIFIED-NO-TOGGLE / OMITTED thinking_modes: cosmos-reason2-8b (reasoning via prompt template, no API toggle, models.dev reasoning_options []); lfm-2.5-2.6b (always-on reasoning, no documented toggle on Liquid API); lfm2-24b-a2b (instruction model, NOT a reasoning model - no toggle; bundle reasoning flag is a false positive); llama-3.2-1b-instruct (not a reasoning model - reasoning:false in NVIDIA metadata, another false positive); nemotron-3.5-content-safety and nemotron-content-safety-reasoning-4b (guardrail/moderator models, no thinking toggle); nemotron-3-super-120b-a12b:thinking / nemotron-3-ultra-550b-a55b:thinking / nemotron-3.5-lightning:thinking (fixed always-thinking endpoints - thinking cannot be turned off, no toggle); nvidia-nemotron-nano-9b-v2 / nemotron-nano-9b-v2 / nemotron-nano-12b-v2-vl / nemotron-nano-v2-12b (toggle via /think /no_think message signals + min/max_thinking_tokens budget - a chat-template signal, not expressible via request body_patch); llama-3.1-nemotron-nano-8b-v1 / llama-3.1-nemotron-nano-vl-8b-v1 / llama-3.1-nemotron-ultra-253b-v1 / llama-3.3-nemotron-super-49b-v1 / v1.5 (Llama-Nemotron 1.x reasoning models use a system-prompt 'detailed thinking on/off' toggle, default ON for Super 49B/Ultra 253B, OFF for Nano 8B - no request parameter exists, not expressible via body_patch); nemotron-cascade-2-30b-a3b (reasoning model but toggle NOT verifiable - not present on build.nvidia.com); openreasoning-nemotron-32b (always-on reasoning, no toggle); sakana-namazu (models.dev lists reasoning_options effort none/high on kilo/openrouter but first-party mechanism unconfirmed and 'off' is not representable in the schema - omitted to avoid fabrication). OTHER FIELDS: added max_input_tokens 262144 to mistral-medium-3.5-128b (matches NIM context and the mistral-medium-3.5 patch); added knowledge_cutoff 2024-09 to nemotron-3-nano-30b and 2024-04 to nemotron-3-super-120b (inferred from the open-weight sibling models' models.dev rows, same base model). Knowledge cutoff NOT published for cosmos-reason2-8b, inkling, nemotron-cascade-2-30b-a3b, nemotron-3-ultra-550b(-a55b), nemotron-nano-12b-v2-vl, nemotron-3-nano-omni variants - left unset. Token/context/pricing values already present in bundle_entries/nvidia.json were left unchanged (already good)."
+}

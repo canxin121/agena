@@ -1,0 +1,71 @@
+### step domestic models (17 models)
+
+- **step-1-32k**  MISSING: think?, speed?
+  - current: ctx=32768 maxin=32768 maxout=32768
+  - current pricing: {"input_usd_per_million_tokens": "2.05", "output_usd_per_million_tokens": "9.59", "cache_read_usd_per_million_tokens": "0.41"}
+  - models.dev: release=2025-01-01
+- **step-2-16k**  MISSING: think?, speed?
+  - current: ctx=16384 maxin=16384 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "5.21", "output_usd_per_million_tokens": "16.44", "cache_read_usd_per_million_tokens": "1.04"}
+  - models.dev: release=2025-01-01
+- **step-2-16k-exp**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=16000 maxin=16000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "7.004", "output_usd_per_million_tokens": "19.992", "cache_read_usd_per_million_tokens": "3.502"}
+  - models.dev: release=2024-10-15
+- **step-2-mini**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=8000 maxin=8000 maxout=4096
+  - current pricing: {"input_usd_per_million_tokens": "0.2006", "output_usd_per_million_tokens": "0.408", "cache_read_usd_per_million_tokens": "0.1003"}
+  - models.dev: release=2024-10-15
+- **step-3**  MISSING: think?, speed?
+  - current: ctx=65536 maxin=65536 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.2499", "output_usd_per_million_tokens": "0.6494", "cache_read_usd_per_million_tokens": "0.12495"}
+  - models.dev: release=2025-07-31
+- **step-3-5-flash**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=131072
+  - current thinking_modes keys: ['low', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.3", "cache_read_usd_per_million_tokens": "0.02"}
+  - models.dev: release=2026-01-29
+- **step-3-5-flash-2603**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=131072
+  - current thinking_modes keys: ['low', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.3", "cache_read_usd_per_million_tokens": "0.02"}
+  - models.dev: ropts=[{"type": "effort", "values": ["low", "high"]}] | release=2026-04-02
+- **step-3-7-flash**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=131072
+  - current thinking_modes keys: ['default', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "1.15", "cache_read_usd_per_million_tokens": "0.04"}
+  - models.dev: ropts=[{"type": "effort", "values": ["low", "medium", "high"]}] | release=2026-05-29
+- **step-3.5-flash**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=256000
+  - current thinking_modes keys: ['low', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.3", "cache_read_usd_per_million_tokens": "0.02"}
+  - models.dev: ropts=[{"type": "effort", "values": ["low", "high"]}] | release=2026-01-29
+- **step-3.5-flash-2603**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=256000
+  - current thinking_modes keys: ['low', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.1", "output_usd_per_million_tokens": "0.3", "cache_read_usd_per_million_tokens": "0.02"}
+  - models.dev: ropts=[{"type": "effort", "values": ["low", "high"]}] | release=2026-04-02
+- **step-3.7-flash**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=256000
+  - current thinking_modes keys: ['default', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "0.185", "output_usd_per_million_tokens": "1.11", "cache_read_usd_per_million_tokens": "0.037", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "effort", "values": ["low", "medium", "high"]}] | release=2026-05-29
+- **step-3.7-flash:thinking**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=256000
+  - current thinking_modes keys: ['on']
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "1.15", "cache_read_usd_per_million_tokens": "0.04"}
+  - models.dev: ABSENT
+- **step-r1-v-mini**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=65536
+  - current pricing: {"input_usd_per_million_tokens": "2.5", "output_usd_per_million_tokens": "11", "cache_read_usd_per_million_tokens": "1.25"}
+  - models.dev: release=2024-01-01
+- **step-router-v1**  MISSING: price?, think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=256000
+  - models.dev: release=2026-05-29
+- **step-tts-2**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, think?, speed?
+  - models.dev: release=2026-03-01
+- **stepaudio-2.5-asr**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, think?, speed?
+  - models.dev: release=2026-04-24
+- **stepaudio-2.5-tts**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, think?, speed?
+  - models.dev: release=2026-04-16
+

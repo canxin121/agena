@@ -1,0 +1,5 @@
+dola-seed-2.0-code
+dola-seed-2.0-code-preview
+dola-seed-2.0-lite
+dola-seed-2.0-mini
+dola-seed-2.0-pro

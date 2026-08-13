@@ -1,0 +1,1253 @@
+{
+  "models": {
+    "alibaba-qwen3-32b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      },
+      "max_input_tokens": 32768
+    },
+    "deepseek-r1": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "deepseek-r1-0528": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "deepseek-r1-distill-llama-70b": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 32768
+    },
+    "deepseek-r1-distill-llama-8b": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 32768
+    },
+    "deepseek-r1-distill-qwen-1-5b": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 32768
+    },
+    "deepseek-r1-distill-qwen-14b": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 32768
+    },
+    "deepseek-r1-distill-qwen-32b": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 32768
+    },
+    "deepseek-r1-distill-qwen-7b": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 32768
+    },
+    "deepseek-v3.1": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      }
+    },
+    "deepseek-v3.2": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "deepseek-v3.2-exp": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": true
+            }
+          }
+        }
+      }
+    },
+    "glm-5": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "glm-5.1": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "glm-5.2": {
+      "thinking_modes": {
+        "default": "max",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "max": {
+          "display_name": "Think Max",
+          "strategy": "effort",
+          "effort": "max"
+        }
+      }
+    },
+    "minimax-m2.5": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen-3-14b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 40960
+    },
+    "qwen-3-235b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 262144
+    },
+    "qwen-3-30b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 40960
+    },
+    "qwen-3-32b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 128000
+    },
+    "qwen-3-6-plus": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "qwen-3-7-max": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "qwen-3-7-plus": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "qwen-3-8-max": {
+      "thinking_modes": {
+        "default": "xhigh",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "xhigh": {
+          "display_name": "Think Extra-High",
+          "strategy": "effort",
+          "effort": "xhigh"
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "qwen-3.6-max-preview": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 240000
+    },
+    "qwen-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "qwen-plus": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen-plus-2025-07-28:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "qwen3-coder-30b-a3b": {
+      "max_input_tokens": 262144
+    },
+    "qwen3-max-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 262144
+    },
+    "qwen3-next-80b-a3b-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3-next-80b-a3b-thinking-fast": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3-omni-30b-a3b-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 65536
+    },
+    "qwen3-omni-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 65536
+    },
+    "qwen3-vl-235b-a22b-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3-vl-30b-a3b": {
+      "max_input_tokens": 131072
+    },
+    "qwen3-vl-32b-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3-vl-8b-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "qwen3-vl-plus": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 262144
+    },
+    "qwen3-vl-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "qwen3.14b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.235b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.235b-a22b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.235b-a22b-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.235b-a22b-thinking-2507": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.235b-a22b-thinking-2507-fast": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.30b-a3b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.30b-a3b-thinking-2507": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.32b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.4b-instruct-2507": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.5-122b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 262144
+    },
+    "qwen3.5-122b-a10b-nvfp4": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 256144
+    },
+    "qwen3.5-122b-a10b:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.5-27b:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.5-35b-a3b:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.5-397b-a17b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "minimal": {
+          "display_name": "Think Minimal",
+          "strategy": "effort",
+          "effort": "minimal"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.5-397b-a17b-fast": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.5-397b-a17b-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.5-9b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.5-flash-02-23": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "qwen3.5-flash:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.5-plus": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.5-plus-02-15": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "qwen3.5-plus-20260420": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "qwen3.5-plus-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.6-27b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.6-27b:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.6-35b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 256000
+    },
+    "qwen3.6-35b-a3b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "minimal": {
+          "display_name": "Think Minimal",
+          "strategy": "effort",
+          "effort": "minimal"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.6-35b-a3b:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.6-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.6-max": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 256000
+    },
+    "qwen3.6-plus": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "qwen3.7-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.7-flash:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.7-max": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.7-max:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.7-plus": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.7-plus:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.8-2.4t-a95b": {
+      "thinking_modes": {
+        "default": "xhigh",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "xhigh": {
+          "display_name": "Think Extra-High",
+          "strategy": "effort",
+          "effort": "xhigh"
+        }
+      },
+      "max_input_tokens": 262144
+    },
+    "qwen3.8-max": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.8-max-preview": {
+      "thinking_modes": {
+        "default": "xhigh",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "xhigh": {
+          "display_name": "Think Extra-High",
+          "strategy": "effort",
+          "effort": "xhigh"
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "qwen3.8-max:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen3.8b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwq-32b": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    },
+    "qwq-plus": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 131072
+    }
+  },
+  "notes": "Sources: models.dev local snapshot (2026-08) + official DashScope/Qwen docs (docs.qwencloud.com, platform.qianwenai.com) + Zhipu BigModel docs + MiniMax platform docs.\nTHINKING MODES: patched on 84 of 91 models.\n- Qwen3-family hybrid (38 models): Qwen3 base (qwen-3-14b/30b/32b/235b, qwen3.14b, qwen3.30b-a3b, qwen3.32b, qwen3.235b, qwen3.235b-a22b, qwen3.8b, alibaba-qwen3-32b, qwen3.4b-instruct-2507), Qwen3.5 (qwen3.5-9b/122b/122b-a10b-nvfp4/397b-a17b + -fast alias/flash-02-23/plus + 02-15 & 20260420), Qwen3.6 (qwen3.6-27b/35b/35b-a3b/flash/max/plus, qwen-3-6-plus), Qwen3.7 (qwen3.7-flash/max/plus, qwen-3-7-max/plus), plus qwen-3.6-max-preview, qwen-flash, qwen-plus, qwen3-omni-flash, qwen3-vl-plus -> toggle via `enable_thinking` (request_only 'on' + disabled 'off'). All verified: models.dev lists reasoning_options type 'toggle' (usually with budget_tokens) for the official alibaba/alibaba-cn entry or 3P providers; matches the DashScope enable_thinking param.\n- Qwen3.8 family (4): qwen3.8-max, qwen3.8-max-preview, qwen-3-8-max (venice preview of 3.8-max), qwen3.8-2.4t-a95b -> EFFORT low/medium/xhigh (`reasoning_effort`, default xhigh) + disabled off. Verified: alibaba/alibaba-cn qwen3.8-max shows toggle+effort low/medium/xhigh+budget; qwen3.8-2.4t-a95b effort low/medium/xhigh on openrouter/kilo (no toggle); qwen-3-8-max inferred from family (venice lists no reasoning_options).\n- DeepSeek V3.1/V3.2/V3.2-exp (3): hybrid toggle via `thinking` bool body patch (DeepSeek V3.1+ API; matches the deepseek patch's alicloud-deepseek-* convention; models.dev shows type 'toggle').\n- GLM-5 / GLM-5.1 (2): toggle via `enable_thinking` (served on Alibaba Cloud; matches zhipu patch's alicloud-glm-5.1). GLM-5.2 (1): EFFORT off/high/max, default max (matches zhipu patch glm-5-2 convention; models.dev shows effort high/max).\n- Always-on thinking (36): all *-thinking variants, qwq-32b/qwq-plus, deepseek-r1 family, qwen3-max-thinking, qwen3-next-80b-a3b-thinking (+ -fast alias), qwen3-omni-30b-a3b-thinking, qwen3-vl-*-thinking, minimax-m2.5. Represented as a single effort-high mode with no 'off' (these models always reason). Caveat: Qwen thinking variants actually budget thinking via `thinking_budget`; models.dev exposes only per-provider budget_tokens ranges, so we used the catalog-standard single always-on mode rather than fabricate a fixed budget. minimax-m2.5 = always-on per MiniMax docs (M2.x thinking cannot be disabled), consistent with the mistral_minimax patch's M2.x treatment.\nNOT PATCHED with thinking_modes (7): deepseek-v4-flash / v4-flash-0731 / v4-pro (3) -> runtime already enriches default effort modes via openai_compatible_reasoning_modes, no catalog thinking_modes; non-thinking base/Instruct (4): qwen3-coder-30b-a3b (non-reasoning Instruct), qwen3-vl-30b-a3b (Instruct), qwen3.1.7b-base, qwen3.4b-base.\nSPEED MODES: NONE added - Alibaba/Qwen documents no per-request speed tier/service_tier. The '-fast' models (qwen3.5-397b-a17b-fast, qwen3-next-80b-a3b-thinking-fast, qwen3.235b-a22b-thinking-2507-fast) are deprecated legacy model IDs, not speed modes; each is an alias of its base and inherits the base thinking mode.\nALIASES mapped to base: qwen3.5-397b-a17b-fast -> qwen3.5-397b-a17b (toggle); qwen3-next-80b-a3b-thinking-fast -> qwen3-next-80b-a3b-thinking (always-on); qwen3.235b-a22b-thinking-2507-fast -> qwen3.235b-a22b-thinking-2507 (always-on).\nmax_input_tokens: filled on 38 models from the models.dev context limit, each verified to equal the bundle's context_window_tokens (input == single context window, the Qwen convention). 7 models have no models.dev entry (qwen3-vl-32b-thinking, qwen3.235b, qwen3.235b-a22b-thinking, qwen3.30b-a3b-thinking-2507, qwen3.1.7b-base, qwen3.4b-base, qwen3.4b-instruct-2507) -> max_input_tokens left unset (cannot verify, per no-fabrication rule).\nknowledge_cutoff: none added - models.dev reports null knowledge for every bundle model that is missing it (e.g. qwen-3-7-max, qwen3.7-flash, qwen3.8-max, qwen3.5-flash-02-23, glm-5.2).\nUNVERIFIED/INFERRED (family pattern applied, flagged for review): qwen-3-8-max effort (from 3.8-max preview family); qwen3.8-2.4t-a95b effort (no toggle on its providers); open-weights Qwen3 IDs absent from models.dev (qwen3.14b/30b-a3b/32b/235b/235b-a22b/8b, qwen3.4b-instruct-2507) -> toggle from the well-documented Qwen3 hybrid architecture; always-on variants absent from models.dev (qwen3.235b-a22b-thinking, qwen3.235b-a22b-thinking-2507, qwen3.30b-a3b-thinking-2507, qwen3-vl-32b-thinking) -> always-on from the '-thinking' naming convention."
+}

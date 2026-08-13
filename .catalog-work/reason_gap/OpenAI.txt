@@ -1,0 +1,15 @@
+codex-mini
+gpt-5.3-chat-latest
+gpt-chat-latest
+gpt-latest
+gpt-mini-latest
+gpt-oss-120b-fast
+gpt-oss-safeguard-120b
+gpt-oss-safeguard-20b
+gpt-realtime-2.1
+openai-gpt-4o-mini
+openai-gpt-oss-120b
+openai-gpt-oss-20b
+openai-o1
+openai-o3
+openai-o3-mini

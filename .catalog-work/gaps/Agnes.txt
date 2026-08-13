@@ -1,0 +1,2 @@
+agnes-1.5-lite
+agnes-1.5-pro

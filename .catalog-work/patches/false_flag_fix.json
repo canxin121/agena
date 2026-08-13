@@ -1,0 +1,24 @@
+{
+  "models": {
+    "grok-4": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        }
+      }
+    }
+  },
+  "notes": "Remove spurious 'reasoning' feature from 10 non-reasoning models (models.dev authoritative reasoning=false: apertus-70b, gemma-3-27b-it, grok-code-fast-1 fast lane, llama-3.1-8b / 3.2-3b instruct, pixtral-12b-2409, qvq-max, qwen-turbo, qwen2.5-vl-72b, qwen3-coder-next). grok-4 keeps reasoning and gets the xAI family effort ladder (grok-4.0709 / grok-4.5 verified)."
+}

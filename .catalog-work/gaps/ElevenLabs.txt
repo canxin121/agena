@@ -1,0 +1,3 @@
+elevenlabs-music
+elevenlabs-v2.5-turbo
+elevenlabs-v3

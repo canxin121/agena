@@ -1,0 +1,51 @@
+### ernie domestic models (11 models)
+
+- **ernie-4.5-21b-a3b**  MISSING: input?, think?, speed?
+  - current: ctx=120000 maxin=120000 maxout=8000
+  - current pricing: {"input_usd_per_million_tokens": "0.07", "output_usd_per_million_tokens": "0.28"}
+  - models.dev: ABSENT
+- **ernie-4.5-21b-a3b-thinking**  MISSING: speed?
+  - current: ctx=128000 maxin=128000 maxout=8000
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.07", "output_usd_per_million_tokens": "0.28"}
+  - models.dev: release=2025-03-16
+- **ernie-4.5-300b-a47b**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=131000 maxin=131000 maxout=131000
+  - current pricing: {"input_usd_per_million_tokens": "0.28", "output_usd_per_million_tokens": "1.1"}
+  - models.dev: ABSENT
+- **ernie-4.5-300b-a47b-paddle**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=123000 maxin=123000 maxout=12000
+  - current pricing: {"input_usd_per_million_tokens": "0.28", "output_usd_per_million_tokens": "1.1"}
+  - models.dev: ABSENT
+- **ernie-4.5-vl-28b-a3b**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=30000 maxin=30000 maxout=8000
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.56"}
+  - models.dev: ABSENT
+- **ernie-4.5-vl-28b-a3b-thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=131072 maxin=131072 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.39", "output_usd_per_million_tokens": "0.39"}
+  - models.dev: ABSENT
+- **ernie-4.5-vl-424b-a47b**  MISSING: think?, speed?
+  - current: ctx=123000 maxin=123000 maxout=16000
+  - current pricing: {"input_usd_per_million_tokens": "0.42", "output_usd_per_million_tokens": "1.25"}
+  - models.dev: ABSENT
+- **ernie-5.0-thinking-preview**  MISSING: speed?
+  - current: ctx=128000 maxin=128000 maxout=16384
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "1", "output_usd_per_million_tokens": "3.5", "cache_read_usd_per_million_tokens": "0.5"}
+  - models.dev: release=2025-11-18
+- **ernie-5.1**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=119000 maxin=119000 maxout=64000
+  - current pricing: {"input_usd_per_million_tokens": "0.75", "output_usd_per_million_tokens": "3", "cache_read_usd_per_million_tokens": "0.75"}
+  - models.dev: release=2026-05-10
+- **ernie-5.1:thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=119000 maxin=119000 maxout=64000
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.75", "output_usd_per_million_tokens": "3", "cache_read_usd_per_million_tokens": "0.75"}
+  - models.dev: release=2026-05-10
+- **ernie-x1.1-preview**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=64000 maxin=64000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.15", "output_usd_per_million_tokens": "0.6", "cache_read_usd_per_million_tokens": "0.075"}
+  - models.dev: release=2025-09-10
+

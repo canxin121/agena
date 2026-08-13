@@ -1,0 +1,3 @@
+agent-max
+agent-prime
+agent-standard

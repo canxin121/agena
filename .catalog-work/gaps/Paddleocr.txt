@@ -1,0 +1,2 @@
+paddleocr-vl
+paddleocr-vl-1.5

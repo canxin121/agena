@@ -1,0 +1,556 @@
+{
+  "models": {
+    "command-a-plus-05-2026": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "command-a-reasoning-08-2025": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "magistral-medium": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 128000
+    },
+    "magistral-medium-latest": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 128000
+    },
+    "magistral-small": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 128000
+    },
+    "magistral-small-2509": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 128000
+    },
+    "minimax-latest": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "adaptive"
+              }
+            }
+          }
+        }
+      }
+    },
+    "minimax-m1": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "minimax-m1.80k": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 1000000
+    },
+    "minimax-m2": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "minimax-m2.1": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "minimax-m2.1-lightning": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 196608
+    },
+    "minimax-m2.5-230b": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 196608
+    },
+    "minimax-m2.5-fast": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "minimax-m2.5-highspeed": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 204800
+    },
+    "minimax-m2.5-lightning": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 204800
+    },
+    "minimax-m2.7": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "minimax-m2.7-highspeed": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 204800
+    },
+    "minimax-m2.7-turbo": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "minimax-m25": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 198000
+    },
+    "minimax-m27": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 198000
+    },
+    "minimax-m2p7": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 196608
+    },
+    "minimax-m3": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "adaptive"
+              }
+            }
+          }
+        }
+      }
+    },
+    "minimax-m3-preview": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "adaptive"
+              }
+            }
+          }
+        }
+      },
+      "max_input_tokens": 524288
+    },
+    "minimax-m3:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "minimax-text-01": {
+      "max_input_tokens": 1000000
+    },
+    "ministral-3-14b-reasoning-2512": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 262144
+    },
+    "ministral-3-3b-reasoning-2512": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 262144
+    },
+    "mistral-large-2402": {
+      "max_input_tokens": 32000
+    },
+    "mistral-medium-2604": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "reasoning_effort": "high"
+            }
+          }
+        }
+      },
+      "max_input_tokens": 262144
+    },
+    "mistral-medium-3-5": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "reasoning_effort": "high"
+            }
+          }
+        }
+      },
+      "max_input_tokens": 262144
+    },
+    "mistral-medium-3.5": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "reasoning_effort": "high"
+            }
+          }
+        }
+      }
+    },
+    "mistral-medium-3.5:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "mistral-medium-latest": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "reasoning_effort": "high"
+            }
+          }
+        }
+      },
+      "max_input_tokens": 262144
+    },
+    "mistral-small-2603": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "reasoning_effort": "high"
+            }
+          }
+        }
+      },
+      "max_input_tokens": 256000
+    },
+    "mistral-small-4.119b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "reasoning_effort": "high"
+            }
+          }
+        }
+      },
+      "max_input_tokens": 256000,
+      "knowledge_cutoff": "2025-06"
+    },
+    "mistral-small-4.119b-2603:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "mistral-small-latest": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "reasoning_effort": "high"
+            }
+          }
+        }
+      },
+      "max_input_tokens": 256000
+    },
+    "mistral4-119b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "reasoning_effort": "high"
+            }
+          }
+        }
+      },
+      "max_input_tokens": 262144
+    },
+    "mistralai-mistral-small": {
+      "max_input_tokens": 128000
+    },
+    "mixtral-8x7b-instruct-v0.1": {
+      "max_input_tokens": 32000
+    },
+    "north-mini-code": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "north-mini-code-1-0": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 256000
+    },
+    "pixtral-large-2502": {
+      "max_input_tokens": 128000
+    },
+    "reka-flash-3": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "max_input_tokens": 65536
+    }
+  },
+  "notes": "Sources: models.dev local snapshot (2026-08) + official vendor docs. MISTRAL: magistral-* reason natively (always-on), NO toggle; sending reasoning_effort to magistral returns HTTP 422. Mistral Small 4 / Medium 3.5 / aliases are adjustable via the `reasoning_effort` request param (values none/high; reasoning off by default, only emits thinking when reasoning_effort=high) -> modeled as request_only toggle with body_patch reasoning_effort high. mistral-*-:thinking variants are always-on reasoning aliases. Ministral-3-*-reasoning support reasoning_effort low/medium/high (none disables) per vLLM/AI-ML docs; not present in models.dev, values from community docs. mistral-large-2402, pixtral-large-2502, mixtral-8x7b, mistralai-mistral-small: general models, no documented thinking toggle -> no thinking_modes (omitted). mistralai-mistral-small looks like a mistral-small-3.1 alias (128k ctx, $0.07/$0.28) which has no thinking mode. MINIMAX: official platform.minimax.io docs state M1 and all M2.x (M2/M2.1/M2.5/M2.7) thinking CANNOT be disabled (`thinking:{\"type\":\"disabled\"}` accepted but ignored) -> always-on. Note: task brief suggested a toggle on M1/M2 but official docs contradict this. MiniMax-M3 thinking IS toggleable via `thinking` param (type adaptive/disabled; on by default on OpenAI-compat API) -> request_only toggle. minimax-m3:thinking = always-on variant. minimax-text-01 = general text model, no thinking toggle. COHERE: Command A Plus / Command A Reasoning use `thinking` param (type enabled/disabled, ENABLED by default) -> request_only toggle. north-mini-code DOES do reasoning (verified: interleaved reasoning_content, reasoning_effort none/high per models.dev + Cohere docs) -> effort-based off/high. REKA: reka-flash-3 reasons always-on (thinks before every output, no off switch; only budget-forcing) -> always-on. SPEED MODES: NONE added - no vendor documents a per-request speed tier / service_tier for any of these 45 models; MiniMax 'highspeed'/'lightning' are separate model IDs, not speed modes. max_input_tokens filled where missing using models.dev context limits (input==context when no separate input limit). knowledge_cutoff only added where models.dev confirms (mistral-small-4.119b=2025-06). Pricing/descriptions already present in bundle entries and cross-checked against models.dev (match) - not re-emitted. UNVERIFIED/OMITTED: knowledge cutoffs for magistral-small-2509, ministral-3-3b-reasoning, and most MiniMax models (models.dev shows null); exact hosted-API behavior of Ministral-3 reasoning_effort not confirmed against Mistral's own docs; minimax-latest underlying model identity (likely M3) not confirmed."
+}

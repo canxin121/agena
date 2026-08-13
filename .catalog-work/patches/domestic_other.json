@@ -1,0 +1,41 @@
+{
+  "models": {
+    "baichuan-m2": {
+      "description": "Baichuan's medical-domain large language model served on the Baichuan API platform with a 32K-token context window and OpenAI-compatible API.",
+      "pricing": {
+        "input_usd_per_million_tokens": "0.32",
+        "output_usd_per_million_tokens": "3.20"
+      }
+    },
+    "baichuan-m2-32b": {
+      "description": "Baichuan's open-weight (Apache-2.0) medical reasoning model built on Qwen2.5-32B with a Large Verifier System; world-leading open-source model on HealthBench with a 131K-token context window.",
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "chat_template_kwargs": {
+                "thinking_mode": "on"
+              }
+            }
+          }
+        }
+      }
+    },
+    "yi-large": {
+      "description": "01.AI's flagship hundred-billion-parameter Yi large model with strong question-answering, text generation, and reasoning capability plus enhanced System Prompt handling; 32K context window."
+    },
+    "yi-lightning": {
+      "description": "01.AI's fast, cost-efficient Yi chat model designed for real-time interaction and high-complexity reasoning scenarios with strong output quality and greatly improved inference speed."
+    },
+    "yi-medium-200k": {
+      "description": "01.AI's Yi Medium variant with a 200K-token context window for long-text understanding and generation, document reading, question-answering, and knowledge-base use cases."
+    }
+  },
+  "notes": "Researched the 01.AI Lingyiwanwu platform docs (model/pricing table archived 2024-11 and the API-reference + model table archived 2026-06, recovered from the Wayback Machine because platform.lingyiwanwu.com/docs is a client-rendered SPA), the Baichuan official pricing page (platform.baichuan-ai.com/prices), and the official Baichuan-M2-32B Hugging Face model card + config.json. YI MODELS: the official 01.AI chat-completions API reference documents only model/messages/tools/tool_choice/max_tokens/top_p/temperature/stream - NO reasoning/thinking toggle - so thinking_modes are deliberately left absent for yi-large, yi-lightning, yi-medium-200k; third-party aggregator pages claiming a 'reasoning_effort' param are NOT backed by official docs (conflict resolved in favor of official docs per spec). No request-level speed param exists either (speed is expressed via separate model IDs like yi-lightning-lite/yi-large-turbo), so speed_modes absent. Knowledge cutoffs are not published by 01.AI and could not be verified - omitted. Only descriptions were added (the catalog's existing 'Compact GPT model for low-latency assistance' texts were generic placeholders). Note: yi-large is absent from the current (2026-06) platform model list; the current yi-lightning is a 16K smart-routing alias (routes to DeepSeek-V3, Qwen3-30B-A3B, Yi-Lightning, priced at 0.99 CNY/M) whereas the catalog entry reflects the original 12K-context model - existing ctx/max_output/pricing/release fields were left untouched. BAICHUAN: the task premise that M2 is MoE is incorrect - Baichuan-M2-32B is a DENSE Qwen2.5-32B-based model (config.json architectures: Qwen2ForCausalLM, 131072 max_position_embeddings). baichuan-m2-32b IS the open-source M2 (Apache-2.0, HF created 2025-08-10); the platform serves Baichuan-M2 and Baichuan-M2-Plus (both 32k). baichuan-m2 pricing was corrected from the unverifiable $15.73/M to the official platform rates 0.002 CNY/1k in / 0.02 CNY/1k out (= 2 CNY/M / 20 CNY/M), converted at ~6.26 CNY/USD, consistent with the catalog's existing 01.AI/Baichuan conversions (e.g. yi-large 20 CNY -> $3.196, baichuan4-turbo 15 CNY -> $2.42); no cache-read price is published so cache_read was dropped. Reasoning: the open M2-32B model card confirms it is a reasoning model - its chat template takes thinking_mode on/off/auto, producing hidden <think> reasoning and consuming qwen3-style reasoning output; the on toggle is expressed as chat_template_kwargs.thinking_mode per the model card's own vLLM/SGLang deployment docs (--reasoning-parser qwen3). For baichuan-m2 (the closed platform model) NO request-level thinking toggle could be verified - the platform docs are a JS SPA and the pricing page documents deep-thinking only as a built-in automatic capability of M2-Plus - so thinking_modes are left absent there (prefer omission over guessing), and the catalog's existing features.unsupported:reasoning flag on both M2 entries conflicts with the verified reasoning capability of the M2 family. knowledge_cutoff for baichuan-m2-32b is already present as 2024-12, consistent with the Qwen2.5-32B base-model cutoff. Release dates for the Baichuan platform M2 could not be independently verified and were left unchanged."
+}

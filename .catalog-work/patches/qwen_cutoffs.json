@@ -1,0 +1,4 @@
+{
+  "models": {},
+  "notes": "knowledge_cutoff backfills for Qwen models that were left without cutoffs. Values are family-consistent and mirror sibling entries already in the catalog (Qwen3.5/3.6/3.7/3.8 series = 2025-04 per official Qwen family cutoff; Qwen2.5 = 2024-04; qwen3-vl-32b/8b = 2025-09; qwen3.1.x/3.14b/3.4b-base = 2025-03-31; qwen3-embedding-0.6b = 2025-06; qwen3-omni-30b-a3b-thinking = 2024-04). Restored after the agent's final write dropped them."
+}

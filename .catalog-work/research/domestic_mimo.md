@@ -1,0 +1,193 @@
+### mimo domestic models (40 models)
+
+- **mimo-v2-5**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=128000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.7", "output_usd_per_million_tokens": "1.4", "cache_read_usd_per_million_tokens": "0.014"}
+  - models.dev: release=2026-04-22
+- **mimo-v2-5-pro**  MISSING: speed?
+  - current: ctx=1000000 maxin=1000000 maxout=128000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "2.175", "output_usd_per_million_tokens": "4.35", "cache_read_usd_per_million_tokens": "0.018"}
+  - models.dev: release=2026-04-22
+- **mimo-v2-flash**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.0028"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2025-12-16
+- **mimo-v2-omni**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.0028"}
+  - models.dev: release=2026-03-18
+- **mimo-v2-pro**  MISSING: speed?
+  - current: ctx=1048576 maxin=1048576 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.435", "output_usd_per_million_tokens": "0.87", "cache_read_usd_per_million_tokens": "0.0036", "tiers": [{"input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.4"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.4"}]}
+  - models.dev: release=2026-03-18
+- **mimo-v2-tts**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=8192 maxin=8192 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-03-18
+- **mimo-v2.5**  MISSING: speed?
+  - current: ctx=1048576 maxin=1048576 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.0028", "cache_write_usd_per_million_tokens": "0.14", "tiers": [{"input_usd_per_million_tokens": "0.8", "output_usd_per_million_tokens": "4", "cache_read_usd_per_million_tokens": "0.16"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "0.8", "output_usd_per_million_tokens": "4", "cache_read_usd_per_million_tokens": "0.16"}]}
+  - models.dev: release=2026-04-22
+- **mimo-v2.5-pro**  MISSING: speed?
+  - current: ctx=1048576 maxin=1048576 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.435", "output_usd_per_million_tokens": "0.87", "cache_read_usd_per_million_tokens": "0.0036", "cache_write_usd_per_million_tokens": "0.435", "tiers": [{"input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.4"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "6", "cache_read_usd_per_million_tokens": "0.4"}, {"input_usd_per_million_tokens": "0.522", "output_usd_per_million_tokens": "1.044", "cache_read_usd_per_million_tokens": "0.0043"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "0.522", "output_usd_per_million_tokens": "1.044", "cache_read_usd_per_million_tokens": "0.0043"}]}
+  - models.dev: release=2026-04-22
+- **mimo-v2.5-pro-crof**  MISSING: input?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "0.8", "cache_read_usd_per_million_tokens": "0.003"}
+  - models.dev: ABSENT
+- **mimo-v2.5-pro-crof:thinking**  MISSING: input?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "0.8", "cache_read_usd_per_million_tokens": "0.003"}
+  - models.dev: ABSENT
+- **mimo-v2.5-pro-ultraspeed**  MISSING: speed?
+  - current: ctx=1048576 maxin=1048576 maxout=131072
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "1.305", "output_usd_per_million_tokens": "2.61", "cache_read_usd_per_million_tokens": "0.0108"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-06-08
+- **mimo-v2.5-pro:thinking**  MISSING: input?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.435", "output_usd_per_million_tokens": "0.87", "cache_read_usd_per_million_tokens": "0.0036", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **mimo-v2.5-tts**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=8192 maxin=8192 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-04-22
+- **mimo-v2.5-tts-voiceclone**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=8192 maxin=8192 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-04-22
+- **mimo-v2.5-tts-voicedesign**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=8192 maxin=8192 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-04-22
+- **mimo-v2.5:thinking**  MISSING: speed?
+  - current: ctx=1048576 maxin=1048576 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.14", "output_usd_per_million_tokens": "0.28", "cache_read_usd_per_million_tokens": "0.0028", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **minimax-01**  MISSING: think?, speed?
+  - current: ctx=1000192 maxin=1000192 maxout=1000192
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "1.1", "cache_read_usd_per_million_tokens": "0.0697"}
+  - models.dev: ABSENT
+- **minimax-h3**  MISSING: kcutoff?, ctx?, maxin?, maxout?, price?, think?, speed?
+  - models.dev: ABSENT
+- **minimax-latest**  MISSING: kcutoff?, speed?
+  - current: ctx=512000 maxin=512000 maxout=80000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "1.2", "cache_read_usd_per_million_tokens": "0.06"}
+  - models.dev: ABSENT
+- **minimax-m1**  MISSING: input?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=128000
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.132", "output_usd_per_million_tokens": "1.254", "cache_read_usd_per_million_tokens": "0.0697"}
+  - models.dev: ABSENT
+- **minimax-m1.80k**  MISSING: kcutoff?, input?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=40000
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.55", "output_usd_per_million_tokens": "2.2", "cache_read_usd_per_million_tokens": "0.3026"}
+  - models.dev: ABSENT
+- **minimax-m2**  MISSING: speed?
+  - current: ctx=196608 maxin=200000 maxout=128000
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "1", "cache_read_usd_per_million_tokens": "0.03", "cache_write_usd_per_million_tokens": "0.375"}
+  - models.dev: release=2025-10-27
+- **minimax-m2-her**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=65536 maxin=65532 maxout=2048
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "1.2", "cache_read_usd_per_million_tokens": "0.03"}
+  - models.dev: ABSENT
+- **minimax-m2.1**  MISSING: speed?
+  - current: ctx=204800 maxin=200000 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.27", "output_usd_per_million_tokens": "1.1", "cache_read_usd_per_million_tokens": "0.1", "cache_write_usd_per_million_tokens": "0.375"}
+  - models.dev: release=2025-12-23
+- **minimax-m2.1-lightning**  MISSING: speed?
+  - current: ctx=196608 maxin=196608 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.12", "output_usd_per_million_tokens": "0.48", "cache_read_usd_per_million_tokens": "0.03", "cache_write_usd_per_million_tokens": "0.375"}
+  - models.dev: release=2025-12-23
+- **minimax-m2.5**  MISSING: speed?
+  - current: ctx=228700 maxin=196601 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "1.2", "cache_read_usd_per_million_tokens": "0.03", "cache_write_usd_per_million_tokens": "0.375"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-02-12
+- **minimax-m2.5-230b**  MISSING: kcutoff?, speed?
+  - current: ctx=196608 maxin=196608 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.25", "output_usd_per_million_tokens": "1.2"}
+  - models.dev: release=2026-02-12
+- **minimax-m2.5-fast**  MISSING: input?, speed?
+  - current: ctx=8000 maxin=7000 maxout=8192
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "1.2", "cache_read_usd_per_million_tokens": "0.03", "cache_write_usd_per_million_tokens": "0.375"}
+  - models.dev: ABSENT
+- **minimax-m2.5-highspeed**  MISSING: kcutoff?, speed?
+  - current: ctx=204800 maxin=204800 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "2.4", "cache_read_usd_per_million_tokens": "0.03", "cache_write_usd_per_million_tokens": "0.375"}
+  - models.dev: release=2026-02-13
+- **minimax-m2.5-lightning**  MISSING: input?, speed?
+  - current: ctx=204800 maxin=204800 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "4.8", "cache_read_usd_per_million_tokens": "0.06", "cache_write_usd_per_million_tokens": "0.75"}
+  - models.dev: ABSENT
+- **minimax-m2.7**  MISSING: speed?
+  - current: ctx=204800 maxin=204800 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.08", "output_usd_per_million_tokens": "0.32", "cache_read_usd_per_million_tokens": "0.017", "cache_write_usd_per_million_tokens": "0.375"}
+  - models.dev: release=2026-03-18
+- **minimax-m2.7-highspeed**  MISSING: speed?
+  - current: ctx=204800 maxin=204800 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "2.4", "cache_read_usd_per_million_tokens": "0.06", "cache_write_usd_per_million_tokens": "0.375"}
+  - models.dev: release=2026-03-18
+- **minimax-m2.7-turbo**  MISSING: kcutoff?, input?, speed?
+  - current: ctx=204800 maxin=204800 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "2.4", "cache_read_usd_per_million_tokens": "0.3"}
+  - models.dev: ABSENT
+- **minimax-m25**  MISSING: kcutoff?, speed?
+  - current: ctx=198000 maxin=198000 maxout=32768
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.27", "output_usd_per_million_tokens": "0.95", "cache_read_usd_per_million_tokens": "0.03"}
+  - models.dev: ropts=[{"type": "effort", "values": ["low", "medium", "high"]}] | release=2026-02-12
+- **minimax-m27**  MISSING: kcutoff?, speed?
+  - current: ctx=198000 maxin=198000 maxout=32768
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.375", "output_usd_per_million_tokens": "1.5", "cache_read_usd_per_million_tokens": "0.06875"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "medium", "high"]}] | release=2026-03-18
+- **minimax-m2p7**  MISSING: kcutoff?, input?, speed?
+  - current: ctx=196608 maxin=196608 maxout=196608
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "1.2", "cache_read_usd_per_million_tokens": "0.06"}
+  - models.dev: ABSENT
+- **minimax-m3**  MISSING: speed?
+  - current: ctx=1048576 maxin=512000 maxout=128000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "1.2", "cache_read_usd_per_million_tokens": "0.06", "cache_write_usd_per_million_tokens": "0", "tiers": [{"input_usd_per_million_tokens": "0.45", "output_usd_per_million_tokens": "1.8", "cache_read_usd_per_million_tokens": "0.09"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "0.45", "output_usd_per_million_tokens": "1.8", "cache_read_usd_per_million_tokens": "0.09"}, {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "2.4", "cache_read_usd_per_million_tokens": "0.12", "cache_write_usd_per_million_tokens": "0"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "2.4", "cache_read_usd_per_million_tokens": "0.12", "cache_write_usd_per_million_tokens": "0"}, {"input_usd_per_million_tokens": "0.66", "output_usd_per_million_tokens": "2.63", "cache_read_usd_per_million_tokens": "0.132", "cache_write_usd_per_million_tokens": "0.66"}, {"tier_type": "context", "size_tokens": 200000, "input_usd_per_million_tokens": "0.66", "output_usd_per_million_tokens": "2.63", "cache_read_usd_per_million_tokens": "0.132", "cache_write_usd_per_million_tokens": "0.66"}]}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-05-31
+- **minimax-m3-preview**  MISSING: kcutoff?, speed?
+  - current: ctx=524288 maxin=524288 maxout=65536
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "1.2", "cache_read_usd_per_million_tokens": "0.06"}
+  - models.dev: release=2026-06-12
+- **minimax-m3:thinking**  MISSING: kcutoff?, speed?
+  - current: ctx=512000 maxin=512000 maxout=80000
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "1.2", "cache_read_usd_per_million_tokens": "0.06"}
+  - models.dev: ABSENT
+- **minimax-text-01**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current pricing: {"input_usd_per_million_tokens": "0.2", "output_usd_per_million_tokens": "1.1"}
+  - models.dev: release=2025-01-15
+

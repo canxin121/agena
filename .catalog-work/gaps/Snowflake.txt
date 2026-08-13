@@ -1,0 +1,5 @@
+arctic-embed-l
+snowflake-arctic-embed-l
+snowflake-arctic-embed-l-v2.0
+snowflake-arctic-embed-m-long
+snowflake-llama3.3-70b

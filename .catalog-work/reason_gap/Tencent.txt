@@ -1,0 +1,3 @@
+hunyuan-2.0-thinking
+hunyuan-a13b-instruct
+hunyuan-t1

@@ -1,0 +1,7 @@
+# Cached models.dev snapshot — reproducible via `curl -s https://models.dev/api.json`.
+# Kept on disk for offline tooling; not committed (3.5MB each, multiple copies).
+research/models.dev.json
+research/models.dev.live.json
+modelsdev.json
+models-dev.json
+models-dev-flat.tsv

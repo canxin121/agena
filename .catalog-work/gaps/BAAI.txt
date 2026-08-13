@@ -1,0 +1,7 @@
+bge-base-en-v1.5
+bge-large-en-v1.5
+bge-multilingual-gemma2
+bge-reranker-base
+bge-reranker-v2-m3
+bge-small-en-v1.5
+bge.multilingual.gemma2

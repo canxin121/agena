@@ -1,0 +1,3 @@
+manta-flash-1.0
+manta-mini-1.0
+manta-pro-1.0

@@ -1,0 +1,1023 @@
+{
+  "models": {
+    "codex-mini": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "coding-xiaomi-mimo-v2.5": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "coding-xiaomi-mimo-v2.5-pro": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "gpt-5.3-chat-latest": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "gpt-chat-latest": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "gpt-latest": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "gpt-mini-latest": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "gpt-oss-120b-fast": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "gpt-oss-safeguard-120b": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "gpt-oss-safeguard-20b": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "gpt-realtime-2.1": {
+      "thinking_modes": {
+        "default": "low",
+        "minimal": {
+          "display_name": "Think Minimal",
+          "strategy": "effort",
+          "effort": "minimal"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4-fast": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4-fast-reasoning": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4.0709": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4.1-fast-reasoning": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4.2-fast": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4.20": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4.20-0309-reasoning": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4.20-beta-0309-reasoning": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4.20-multi-agent": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4.20-multi-agent-beta": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4.20-multi-agent-beta-0309": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4.20-reasoning": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-4.20-reasoning-beta": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-build-0-1": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-build-0.1": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-code": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "grok-latest": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "mimo-v2-5": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "mimo-v2-5-pro": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "mimo-v2-flash": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "mimo-v2-omni": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "mimo-v2-pro": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "mimo-v2.5": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "mimo-v2.5-pro": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "mimo-v2.5-pro-crof": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      },
+      "knowledge_cutoff": "2024-12"
+    },
+    "mimo-v2.5-pro-crof:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "knowledge_cutoff": "2024-12"
+    },
+    "mimo-v2.5-pro-ultraspeed": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "mimo-v2.5-pro:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "mimo-v2.5:thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "openai-gpt-oss-120b": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "openai-gpt-oss-20b": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "openai-o1": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "openai-o3": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "speed_modes": {
+        "fast": {
+          "display_name": "Fast",
+          "description": "1.5x speed, increased usage",
+          "request_override": {
+            "body_patch": {
+              "service_tier": "priority"
+            }
+          },
+          "adapter_overrides": {
+            "openai": {
+              "body_patch": {
+                "service_tier": "priority"
+              }
+            }
+          }
+        }
+      }
+    },
+    "openai-o3-mini": {
+      "thinking_modes": {
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "xai.grok-4.3": {
+      "thinking_modes": {
+        "default": "medium",
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "low": {
+          "display_name": "Think Low",
+          "strategy": "effort",
+          "effort": "low"
+        },
+        "medium": {
+          "display_name": "Think Medium",
+          "strategy": "effort",
+          "effort": "medium"
+        },
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      },
+      "knowledge_cutoff": "2025-12"
+    },
+    "xiaomi-mimo-v2-5": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "xiaomi-mimo-v2.5": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    },
+    "xiaomi-mimo-v2.5-pro": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "thinking": {
+                "type": "enabled"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "notes": "THINKING MODES\n- OpenAI gpt-5.x chat family (gpt-5.3-chat-latest, gpt-chat-latest, gpt-latest, gpt-mini-latest) and codex-mini: reasoning.effort low/medium/high + off, default medium (OpenAI documented default). codex-mini is a codex reasoning model using the same reasoning effort param.\n- xAI grok-4 family: effort levels low/medium/high + off per task direction. NOTE: official xAI reasoning docs (docs.x.ai) state reasoning 'cannot be disabled' and effort defaults to 'high'; the 'off' mode and 'default: medium' follow the task-specified shape / existing catalog grok-4.3 convention and may be adjusted. Effort low/medium/high (xhigh on some) verified for the family.\n- grok-4.0709 (original grok-4, 2025-07): modeled ALWAYS-ON, not effort+off, because xAI/OpenRouter docs confirm original grok-4 does not expose reasoning_effort and reasoning cannot be disabled (always default).\n- Xiaomi MiMo V2/V2.5 incl. aliases (coding-xiaomi-*, xiaomi-mimo-v2.5*, mimo-v2-5*, v2-flash/v2-omni/v2-pro, v2.5, v2.5-pro, v2.5-pro-ultraspeed, v2.5-pro-crof): request-toggle per official Xiaomi MiMo API docs (mimo.mi.com) - thinking enabled by default, toggle via {'thinking': {'type': 'enabled'|'disabled'}}; models.dev xiaomi provider lists reasoning_options [toggle] for these.\n- MiMo ':thinking' variants (mimo-v2.5:thinking, mimo-v2.5-pro:thinking, mimo-v2.5-pro-crof:thinking): always-on (dedicated thinking-served variants).\n- OpenAI gpt-oss family (gpt-oss-120b-fast, gpt-oss-safeguard-120b/20b, openai-gpt-oss-120b/20b): reasoning_effort low/medium/high, no off (gpt-oss reasoning cannot be disabled; verified via OpenAI gpt-oss-120b docs / HF model card 'Reasoning: low/medium/high'). Safeguard variants inherit the family param (inferred, not individually documented).\n- openai-o3 / o3-mini: reasoning_effort low/medium/high, always-on (no off). openai-o1: always-on, no effort control (o1 fixed reasoning).\n- gpt-realtime-2.1: reasoning.effort minimal/low/medium/high via realtime session (default low), no off (no documented none/off for realtime; per Microsoft Foundry / community guides).\n- openai-gpt-4o-mini: NO thinking_modes added - gpt-4o-mini has no documented reasoning/thinking control (reasoning=True in catalog is a task-capability flag, not CoT control).\n\nSPEED MODES\n- openai-o3: speed_modes.fast via service_tier=priority - o3 is listed on OpenAI's official Fast mode / priority processing pricing page (openai.com/api-fast-mode).\n- NO speed modes for other OpenAI models: gpt-5.3-chat-latest, gpt-chat-latest, gpt-latest, gpt-mini-latest, codex-mini, gpt-oss-*, openai-gpt-4o-mini, openai-o1, openai-o3-mini are NOT in OpenAI's documented Fast-mode supported list (covers GPT-5/5.1/5.2/5.4/5.5/5.6, GPT-5 mini, GPT-5 codex/5.1 codex, GPT-4.1 family, GPT-4o selected snapshots, GPT-4o mini, o3, o4-mini). Dynamic 'latest' aliases can't be verified to resolve to a supported model.\n- NO speed modes for xAI: xAI selects fast via model ID (grok-4-fast / grok-4-fast-reasoning / grok-4-fast-non-reasoning); no in-request speed toggle exists (verified: xAI reasoning docs note 'no fast reasoning toggle; latency tuned via effort').\n\nOTHER FIELDS\n- max_input_tokens: NOT filled anywhere - no verifiable input limit in models.dev (limit.input absent) for any model lacking it; context_window_tokens already present for all 50.\n- knowledge_cutoff filled only where directly verifiable: xai.grok-4.3=2025-12 (Oracle OCI / Vercel / The Decoder / CometAPI); mimo-v2.5-pro-crof & :thinking=2024-12 (same model as mimo-v2.5-pro). Not filled for grok-4.0709, grok-4.20-*, grok-build-*, grok-code, grok-latest - no published cutoff.\n- context_window_tokens, max_output_tokens, description, pricing already present for all 50; not re-patched.\n\nUNVERIFIED / OMITTED\n- service_tier for gpt-mini-latest / gpt-latest / gpt-chat-latest (dynamic aliases, unverifiable target model).\n- Individual reasoning_effort support for grok-4-fast / grok-4.2-fast / grok-4-fast-reasoning / grok-4.1-fast-reasoning (given the family shape per task direction).\n- openai-gpt-4o-mini thinking modes (no control documented).\n- MiMo effort-level control: Responses API accepts reasoning.effort none/low/medium/high but Xiaomi docs state low/medium/high all enable thinking identically, so modeled as on/off toggle only."
+}

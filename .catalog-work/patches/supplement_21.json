@@ -1,0 +1,67 @@
+{
+  "models": {
+    "qwen3-vl-235b-a22b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"enable_thinking": true}}}
+      }
+    },
+    "qwen3.5-122b-a10b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"enable_thinking": true}}}
+      }
+    },
+    "qwen3.5-27b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"enable_thinking": true}}}
+      }
+    },
+    "qwen3.5-35b-a3b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"enable_thinking": true}}}
+      }
+    },
+    "qwen3.5-flash": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"enable_thinking": true}}}
+      }
+    },
+    "qwen3.6-max-preview": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"enable_thinking": true}}}
+      }
+    },
+    "qwen-3.6-plus": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"enable_thinking": true}}}
+      }
+    },
+    "deepseek-reasoner": {
+      "thinking_modes": {
+        "high": {"display_name": "Think High", "strategy": "effort", "effort": "high"}
+      }
+    },
+    "nvidia-nemotron-3-nano-30b-a3b": {
+      "thinking_modes": {
+        "off": {"display_name": "Off", "strategy": "disabled"},
+        "on": {"display_name": "Thinking", "strategy": "request_only", "request_override": {"body_patch": {"chat_template_kwargs": {"enable_thinking": true}}}}
+      }
+    },
+    "sonar-deep-research": {
+      "thinking_modes": {
+        "default": "medium",
+        "minimal": {"display_name": "Think Minimal", "strategy": "effort", "effort": "minimal"},
+        "low": {"display_name": "Think Low", "strategy": "effort", "effort": "low"},
+        "medium": {"display_name": "Think Medium", "strategy": "effort", "effort": "medium"},
+        "high": {"display_name": "Think High", "strategy": "effort", "effort": "high"}
+      }
+    }
+  },
+  "notes": "Per-model verdict (reasoning-toggle VERIFIED / NOT-FOUND): qwen3-vl-235b-a22b VERIFIED (Qwen3-VL hybrid, enable_thinking toggle, default OFF); qwen3.5-122b-a10b VERIFIED (Qwen3.5 hybrid, enable_thinking, default ON); qwen3.5-27b VERIFIED (enable_thinking, default ON); qwen3.5-35b-a3b VERIFIED (enable_thinking, default ON); qwen3.5-flash VERIFIED (enable_thinking, default ON); qwen3.6-max-preview VERIFIED (enable_thinking, default ON, also supports preserve_thinking); qwen-3.6-plus VERIFIED (enable_thinking, default ON); deepseek-reasoner VERIFIED (always-on reasoning, no off/effort param - modeled as single high mode per task spec); nvidia-nemotron-3-nano-30b-a3b VERIFIED (chat_template_kwargs.enable_thinking toggle, default ON, reasoning_budget also supported); sonar-deep-research VERIFIED (Perplexity reasoning_effort param minimal/low/medium/high, default medium, billed separately at $3/MTok reasoning tokens). qwen3-coder-next NOT-FOUND (official Qwen3-Coder README: non-thinking only, 'specifying enable_thinking=False is no longer required'); qwen-turbo NOT-FOUND (pre-Qwen3, no thinking toggle); qvq-max NOT-FOUND (pre-Qwen3 visual-reasoning model, no toggle); qwen2.5-vl-72b-instruct NOT-FOUND (pre-Qwen3, no toggle); grok-4 NOT-FOUND (original grok-4 reasons always-on but rejects reasoning_effort param - effort control added only in grok-4.3; reasoning trace not exposed; deprecated); grok-code-fast-1 NOT-FOUND (always-on reasoning, no reasoning_effort toggle, reasoning trace via reasoning_content; deprecated May 2026 -> grok-build-0.1); llama-3.1-8b-instruct NOT-FOUND (plain instruct model, reasoning flag is models.dev false positive); llama-3.2-3b-instruct NOT-FOUND (plain instruct model, false positive); pixtral-12b-2409 NOT-FOUND (no thinking toggle; reasoning:false in models.dev); gemma-3-27b-it NOT-FOUND (no API reasoning toggle; reasoning flag false positive); apertus-70b NOT-FOUND (no thinking toggle). No speed_modes added (no vendor-documented speed tier verified for any of these). Existing token/context/pricing values in bundle_entries/supplement_21.json left unchanged (already good)."
+}

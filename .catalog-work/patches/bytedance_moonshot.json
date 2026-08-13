@@ -1,0 +1,973 @@
+{
+ "models": {
+  "doubao-1.5-thinking-pro": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 128000
+  },
+  "doubao-seed-1-6-thinking-250715": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "doubao-seed-1.6-thinking": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "doubao-seed-1.6": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "on": {
+     "display_name": "Thinking",
+     "strategy": "request_only",
+     "request_override": {
+      "body_patch": {
+       "thinking": {
+        "type": "enabled"
+       }
+      }
+     }
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "doubao-seed-1.6-flash": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "on": {
+     "display_name": "Thinking",
+     "strategy": "request_only",
+     "request_override": {
+      "body_patch": {
+       "thinking": {
+        "type": "enabled"
+       }
+      }
+     }
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "seed-1.6": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "on": {
+     "display_name": "Thinking",
+     "strategy": "request_only",
+     "request_override": {
+      "body_patch": {
+       "thinking": {
+        "type": "enabled"
+       }
+      }
+     }
+    }
+   },
+   "max_input_tokens": 262144
+  },
+  "seed-1.6-flash": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "on": {
+     "display_name": "Thinking",
+     "strategy": "request_only",
+     "request_override": {
+      "body_patch": {
+       "thinking": {
+        "type": "enabled"
+       }
+      }
+     }
+    }
+   },
+   "max_input_tokens": 262144
+  },
+  "doubao-seed-1.8": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "seed-1-8-251228": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "seed-1.8": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "doubao-seed-2-0-code-preview": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "doubao-seed-2-0-lite-260428": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "doubao-seed-2-0-mini-260428": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "doubao-seed-2-0-pro": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "doubao-seed-2.0-code": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "doubao-seed-2.0-lite": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "doubao-seed-2.0-mini": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "doubao-seed-2.0-pro": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "seed-2-0-code": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "seed-2.0-code": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   }
+  },
+  "seed-2.0-lite": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   }
+  },
+  "seed-2.0-mini": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262144
+  },
+  "seed-1-6-250615": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "seed-1-6-250915": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "seed-1-6-flash-250715": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "minimal": {
+     "display_name": "Think Minimal",
+     "strategy": "effort",
+     "effort": "minimal"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 256000
+  },
+  "k3": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 1048576
+  },
+  "k3-256k": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262144
+  },
+  "kimi-k3-eco": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 1000000
+  },
+  "kimi-k3@eu": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 1048576
+  },
+  "umans-kimi-k3": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 1048576
+  },
+  "kimi-for-coding": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262144
+  },
+  "kimi-for-coding-highspeed": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262144
+  },
+  "kimi-k2.7-code-1100b": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262144
+  },
+  "kimi-k2.7-code-flex": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262144
+  },
+  "kimi-k2.7-code-nitro": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 200000
+  },
+  "kimi-k2p7-code": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262000
+  },
+  "kimi-k2p7-code-fast": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262000
+  },
+  "umans-coder": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262144
+  },
+  "umans-kimi-k2.7": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262144
+  },
+  "kimi-k2-thinking-turbo": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262144
+  },
+  "kimi-k2.5:thinking": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   }
+  },
+  "kimi-k2.6:thinking": {
+   "thinking_modes": {
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   }
+  },
+  "kimi-k2.6-flex": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "on": {
+     "display_name": "Thinking",
+     "strategy": "request_only",
+     "request_override": {
+      "body_patch": {
+       "thinking": {
+        "type": "enabled"
+       }
+      }
+     }
+    }
+   },
+   "max_input_tokens": 262128
+  },
+  "kimi-k2p6": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "on": {
+     "display_name": "Thinking",
+     "strategy": "request_only",
+     "request_override": {
+      "body_patch": {
+       "thinking": {
+        "type": "enabled"
+       }
+      }
+     }
+    }
+   },
+   "max_input_tokens": 262000
+  },
+  "kimi-latest": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "on": {
+     "display_name": "Thinking",
+     "strategy": "request_only",
+     "request_override": {
+      "body_patch": {
+       "thinking": {
+        "type": "enabled"
+       }
+      }
+     }
+    }
+   }
+  },
+  "kimi-k2.5-lightning": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 131072
+  },
+  "umans-flash": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262144
+  },
+  "umans-glm-5.1": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "on": {
+     "display_name": "Thinking",
+     "strategy": "request_only",
+     "request_override": {
+      "body_patch": {
+       "thinking": {
+        "type": "enabled"
+       }
+      }
+     }
+    }
+   },
+   "max_input_tokens": 204800
+  },
+  "umans-glm-5.2": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    },
+    "max": {
+     "display_name": "Think Max",
+     "strategy": "effort",
+     "effort": "max"
+    }
+   },
+   "max_input_tokens": 405504
+  },
+  "umans-qwen3.6-35b-a3b": {
+   "thinking_modes": {
+    "off": {
+     "display_name": "Off",
+     "strategy": "disabled"
+    },
+    "low": {
+     "display_name": "Think Low",
+     "strategy": "effort",
+     "effort": "low"
+    },
+    "medium": {
+     "display_name": "Think Medium",
+     "strategy": "effort",
+     "effort": "medium"
+    },
+    "high": {
+     "display_name": "Think High",
+     "strategy": "effort",
+     "effort": "high"
+    }
+   },
+   "max_input_tokens": 262144
+  }
+ },
+ "notes": "Thinking-mode research based on official Volcano Engine Ark docs (thinking: {type: enabled|disabled|auto}, reasoning_effort minimal/low/medium/high for Seed 1.8/2.0) and Moonshot Kimi API docs (K3 always reasons, no toggle; kimi-k2.7-code thinking-only cannot disable; K2.6 uses thinking toggle; reasoning_effort low/high/max only on K3), plus models.dev reasoning_options. Doubao Seed 'thinking' variants and Kimi thinking variants are always-on -> single high-effort mode. Base Doubao Seed 1.6/2.0 and Kimi K2.6/kimi-latest use request-toggle body_patch {thinking:{type:enabled}}. max_input_tokens filled = context_window_tokens (OpenAI-compatible providers expose context window as the input cap); already-present fields in the bundle (context_window_tokens, max_output_tokens, knowledge_cutoff, description, pricing) were cross-checked against models.dev and left as-is where they matched. NO speed_modes added: none of these model ids expose a single-model speed toggle; highspeed/nitro/fast/turbo variants are separate model ids (speed tiers), not a per-request toggle. NOT patched (unverifiable or speed-tier variants): doubao-seed-character, doubao-seed-code (thinking toggle not documented); kimi-k2.6-fast, kimi-k2.6-nitro, kimi-k2p6-fast, kimi-k2p6-turbo, kimi-k3-fast, kimi-k3-fast-api (fast/nitro speed tiers, conflicting or absent reasoning-option data; neuralwatt lists kimi-k3-fast with thinking disabled); seed-2-1-turbo (turbo fast variant, no documented reasoning options)."
+}

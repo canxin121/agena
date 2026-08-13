@@ -1,0 +1,1072 @@
+
+===== aihubmix / alicloud-deepseek-v4-flash =====
+  id: "alicloud-deepseek-v4-flash"
+  name: "DeepSeek V4 Flash (Alibaba Cloud)"
+  description: "Fast DeepSeek model for efficient chat, coding help, and agent loops"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "toggle"}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  knowledge: "2025-05"
+  release_date: "2026-04-24"
+  last_updated: "2026-04-24"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28, "cache_read": 0.028}
+
+===== aihubmix / alicloud-deepseek-v4-pro =====
+  id: "alicloud-deepseek-v4-pro"
+  name: "DeepSeek V4 Pro (Alibaba Cloud)"
+  description: "Flagship DeepSeek model for coding, reasoning, and agentic work"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: [{"type": "toggle"}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  knowledge: "2025-05"
+  release_date: "2026-04-24"
+  last_updated: "2026-04-24"
+  open_weights: true
+  cost: {"input": 1.69, "output": 3.38, "cache_read": 0.13}
+
+===== aihubmix / deep-deepseek-v4-flash =====
+  id: "deep-deepseek-v4-flash"
+  name: "DeepSeek V4 Flash (DeepSeek)"
+  description: "Fast DeepSeek model for efficient chat, coding help, and agent loops"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "toggle"}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  knowledge: "2025-05"
+  release_date: "2026-04-24"
+  last_updated: "2026-04-24"
+  open_weights: true
+  cost: {"input": 0.154, "output": 0.308, "cache_read": 0.0308}
+
+===== aihubmix / deep-deepseek-v4-pro =====
+  id: "deep-deepseek-v4-pro"
+  name: "DeepSeek V4 Pro (DeepSeek)"
+  description: "Flagship DeepSeek model for coding, reasoning, and agentic work"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: [{"type": "toggle"}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  knowledge: "2025-05"
+  release_date: "2026-04-24"
+  last_updated: "2026-04-24"
+  open_weights: true
+  cost: {"input": 0.478, "output": 0.956, "cache_read": 0.004302}
+
+===== deepseek / deepseek-chat =====
+  id: "deepseek-chat"
+  name: "DeepSeek Chat"
+  description: "DeepSeek chat model for instruction following, coding, and analysis"
+  family: "deepseek"
+  reasoning: false
+  tool_call: true
+  temperature: true
+  attachment: true
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  knowledge: "2025-09"
+  release_date: "2025-12-01"
+  last_updated: "2026-02-28"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28, "cache_read": 0.0028}
+
+===== deepseek / deepseek-reasoner =====
+  id: "deepseek-reasoner"
+  name: "DeepSeek Reasoner"
+  description: "DeepSeek reasoning model for multi-step analysis, math, coding, and tools"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: []
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  attachment: true
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  knowledge: "2025-09"
+  release_date: "2025-12-01"
+  last_updated: "2026-02-28"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28, "reasoning": 0.28, "cache_read": 0.0028}
+
+===== deepseek / deepseek-v4-flash =====
+  id: "deepseek-v4-flash"
+  name: "DeepSeek V4 Flash"
+  description: "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "toggle"}, {"type": "effort", "values": ["low", "high", "max"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  knowledge: "2025-05"
+  release_date: "2026-07-31"
+  last_updated: "2026-07-31"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28, "reasoning": 0.28, "cache_read": 0.0028}
+
+===== deepseek / deepseek-v4-pro =====
+  id: "deepseek-v4-pro"
+  name: "DeepSeek V4 Pro"
+  description: "DeepSeek V4 Pro snapshot with million-token context and support for thinking and non-thinking modes"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: [{"type": "toggle"}, {"type": "effort", "values": ["high", "max"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  release_date: "2026-08-12"
+  last_updated: "2026-08-12"
+  open_weights: false
+  cost: {"input": 0.435, "output": 0.87, "reasoning": 0.87, "cache_read": 0.003625}
+
+===== stepfun / step-3.5-flash =====
+  id: "step-3.5-flash"
+  name: "Step 3.5 Flash"
+  description: "StepFun flash lane for quick multimodal reasoning and coding assistance"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["low", "high"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 256000, "input": 256000, "output": 256000}
+  knowledge: "2025-01"
+  release_date: "2026-01-29"
+  last_updated: "2026-06-15"
+  open_weights: true
+  cost: {"input": 0.1, "output": 0.3, "cache_read": 0.02}
+
+===== stepfun / step-3.5-flash-2603 =====
+  id: "step-3.5-flash-2603"
+  name: "Step 3.5 Flash 2603"
+  description: "StepFun flash model for efficient multimodal reasoning, coding, and tool use"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["low", "high"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 256000, "input": 256000, "output": 256000}
+  knowledge: "2025-01"
+  release_date: "2026-04-02"
+  last_updated: "2026-04-02"
+  open_weights: true
+  cost: {"input": 0.1, "output": 0.3, "cache_read": 0.02}
+
+===== stepfun / step-3.7-flash =====
+  id: "step-3.7-flash"
+  name: "Step 3.7 Flash"
+  description: "Newer StepFun flash model for faster agents, coding, and multimodal prompts"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["low", "medium", "high"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  attachment: true
+  modalities: {"input": ["text", "image", "video"], "output": ["text"]}
+  limit: {"context": 256000, "input": 256000, "output": 256000}
+  knowledge: "2026-03-01"
+  release_date: "2026-05-29"
+  last_updated: "2026-06-29"
+  open_weights: true
+  cost: {"input": 0.185, "output": 1.11, "cache_read": 0.037}
+
+===== stepfun-ai / step-3.5-flash =====
+  id: "step-3.5-flash"
+  name: "Step 3.5 Flash"
+  description: "StepFun flash lane for quick multimodal reasoning and coding assistance"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["low", "high"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 256000, "input": 256000, "output": 256000}
+  knowledge: "2025-01"
+  release_date: "2026-01-29"
+  last_updated: "2026-06-15"
+  open_weights: true
+  cost: {"input": 0.1, "output": 0.3, "cache_read": 0.02}
+
+===== stepfun-ai / step-3.5-flash-2603 =====
+  id: "step-3.5-flash-2603"
+  name: "Step 3.5 Flash 2603"
+  description: "StepFun flash model for efficient multimodal reasoning, coding, and tool use"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["low", "high"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 256000, "input": 256000, "output": 256000}
+  knowledge: "2025-01"
+  release_date: "2026-04-02"
+  last_updated: "2026-04-02"
+  open_weights: true
+  cost: {"input": 0.1, "output": 0.3, "cache_read": 0.02}
+
+===== stepfun-ai / step-3.7-flash =====
+  id: "step-3.7-flash"
+  name: "Step 3.7 Flash"
+  description: "Newer StepFun flash model for faster agents, coding, and multimodal prompts"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["low", "medium", "high"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  attachment: true
+  modalities: {"input": ["text", "image", "video"], "output": ["text"]}
+  limit: {"context": 256000, "input": 256000, "output": 256000}
+  knowledge: "2026-03-01"
+  release_date: "2026-05-29"
+  last_updated: "2026-06-29"
+  open_weights: true
+  cost: {"input": 0.185, "output": 1.11, "cache_read": 0.037}
+
+===== nano-gpt / deepseek/deepseek-v4-flash =====
+  id: "deepseek/deepseek-v4-flash"
+  name: "DeepSeek V4 Flash"
+  description: "Fast DeepSeek V4 lane for economical reasoning, coding, and long-context work"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "high", "max"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "input": 1048576, "output": 384000}
+  knowledge: "2025-05"
+  release_date: "2026-04-24"
+  last_updated: "2026-04-24"
+  open_weights: true
+  cost: {"input": 0.07, "output": 0.14, "cache_read": 0.014}
+
+===== nano-gpt / deepseek/deepseek-v4-flash:thinking =====
+  id: "deepseek/deepseek-v4-flash:thinking"
+  name: "DeepSeek V4 Flash (Thinking)"
+  description: "Fast DeepSeek V4 lane for economical reasoning, coding, and long-context work"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "high", "max"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "input": 1048576, "output": 384000}
+  knowledge: "2025-05"
+  release_date: "2026-04-24"
+  last_updated: "2026-04-24"
+  open_weights: true
+  cost: {"input": 0.07, "output": 0.14, "cache_read": 0.014}
+
+===== nano-gpt / deepseek/deepseek-v4-pro =====
+  id: "deepseek/deepseek-v4-pro"
+  name: "DeepSeek V4 Pro"
+  description: "Open MoE flagship with million-token context for coding and long agent runs"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "high", "max"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "input": 1048576, "output": 384000}
+  knowledge: "2025-05"
+  release_date: "2026-04-24"
+  last_updated: "2026-04-24"
+  open_weights: true
+  cost: {"input": 1.1, "output": 2.2, "cache_read": 0.11}
+
+===== nano-gpt / deepseek/deepseek-v4-pro:thinking =====
+  id: "deepseek/deepseek-v4-pro:thinking"
+  name: "DeepSeek V4 Pro (Thinking)"
+  description: "Open MoE flagship with million-token context for coding and long agent runs"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "high", "max"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "input": 1048576, "output": 384000}
+  knowledge: "2025-05"
+  release_date: "2026-04-24"
+  last_updated: "2026-04-24"
+  open_weights: true
+  cost: {"input": 1.1, "output": 2.2, "cache_read": 0.11}
+
+===== nano-gpt / deepseek/deepseek-v3.2 =====
+  id: "deepseek/deepseek-v3.2"
+  name: "DeepSeek V3.2"
+  description: "Hybrid-reasoning DeepSeek model with thinking and non-thinking modes, sparse attention, and tool-use"
+  family: "deepseek"
+  reasoning: false
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: true
+  modalities: {"input": ["text", "pdf"], "output": ["text"]}
+  limit: {"context": 163000, "input": 163000, "output": 65536}
+  knowledge: "2024-07"
+  release_date: "2025-12-01"
+  last_updated: "2025-12-01"
+  open_weights: true
+  cost: {"input": 0.28, "output": 0.42, "cache_read": 0.14}
+
+===== nano-gpt / deepseek/deepseek-v3.2:thinking =====
+  id: "deepseek/deepseek-v3.2:thinking"
+  name: "DeepSeek V3.2 Thinking"
+  description: "Hybrid-reasoning DeepSeek model with thinking and non-thinking modes, sparse attention, and tool-use"
+  family: "deepseek"
+  reasoning: true
+  reasoning_options: []
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: true
+  modalities: {"input": ["text", "pdf"], "output": ["text"]}
+  limit: {"context": 163000, "input": 163000, "output": 65536}
+  knowledge: "2024-07"
+  release_date: "2025-12-01"
+  last_updated: "2025-12-01"
+  open_weights: true
+  cost: {"input": 0.28, "output": 0.42, "cache_read": 0.14}
+
+===== nano-gpt / deepseek/deepseek-v4-flash-0731 =====
+  id: "deepseek/deepseek-v4-flash-0731"
+  name: "DeepSeek V4 Flash 0731"
+  description: "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "high", "max"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "input": 1000000, "output": 131072}
+  knowledge: "2025-05"
+  release_date: "2026-07-31"
+  last_updated: "2026-07-31"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28, "cache_read": 0.014}
+
+===== nano-gpt / deepseek/deepseek-v4-flash-0731:thinking =====
+  id: "deepseek/deepseek-v4-flash-0731:thinking"
+  name: "DeepSeek V4 Flash 0731 (Thinking)"
+  description: "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "high", "max"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "input": 1000000, "output": 131072}
+  knowledge: "2025-05"
+  release_date: "2026-07-31"
+  last_updated: "2026-07-31"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28, "cache_read": 0.014}
+
+===== nano-gpt / deepseek/deepseek-v4-pro-0813 =====
+  id: "deepseek/deepseek-v4-pro-0813"
+  name: "DeepSeek V4 Pro 0813"
+  description: "DeepSeek V4 Pro snapshot with million-token context and support for thinking and non-thinking modes"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "high", "max"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "input": 1048576, "output": 384000}
+  release_date: "2026-08-12"
+  last_updated: "2026-08-12"
+  open_weights: false
+  cost: {"input": 0.435, "output": 0.87, "cache_read": 0.003625}
+
+===== nano-gpt / deepseek/deepseek-v4-pro-0813:thinking =====
+  id: "deepseek/deepseek-v4-pro-0813:thinking"
+  name: "DeepSeek V4 Pro 0813 Thinking"
+  description: "DeepSeek V4 Pro snapshot with million-token context and support for thinking and non-thinking modes"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "high", "max"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "input": 1048576, "output": 384000}
+  release_date: "2026-08-12"
+  last_updated: "2026-08-12"
+  open_weights: false
+  cost: {"input": 0.435, "output": 0.87, "cache_read": 0.003625}
+
+===== nano-gpt / deepseek/deepseek-v4-flash-latest =====
+  id: "deepseek/deepseek-v4-flash-latest"
+  name: "DeepSeek V4 Flash Latest"
+  description: "Compatibility alias that routes to the newest dated DeepSeek V4 Flash release. Currently routes to DeepSeek V4 Flash 0731. \u26a0\ufe0f This route goes directly to DeepSeek, so privacy and logging guarantees are limited."
+  family: "deepseek"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "high", "max"]}]
+  tool_call: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "input": 1048576, "output": 384000}
+  release_date: "2026-08-02"
+  last_updated: "2026-08-02"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28, "cache_read": 0.014}
+
+===== nano-gpt / deepseek-ai/deepseek-v3.2-exp-thinking =====
+  id: "deepseek-ai/deepseek-v3.2-exp-thinking"
+  name: "DeepSeek V3.2 Exp Thinking"
+  description: "DeepSeek chat model for instruction following, coding, and analysis"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: []
+  tool_call: false
+  structured_output: false
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 163840, "input": 163840, "output": 65536}
+  release_date: "2024-01-01"
+  last_updated: "2025-09-29"
+  open_weights: true
+  cost: {"input": 0.28, "output": 0.42, "cache_read": 0.14}
+
+===== nano-gpt / deepseek-ai/DeepSeek-V3.1-Terminus =====
+  id: "deepseek-ai/DeepSeek-V3.1-Terminus"
+  name: "DeepSeek V3.1 Terminus"
+  description: "DeepSeek chat model for instruction following, coding, and analysis"
+  family: "deepseek"
+  reasoning: false
+  tool_call: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 128000, "input": 128000, "output": 65536}
+  release_date: "2025-08-02"
+  last_updated: "2025-08-02"
+  open_weights: true
+  cost: {"input": 0.25, "output": 0.7, "cache_read": 0.125}
+
+===== nano-gpt / stepfun/step-3.7-flash:thinking =====
+  id: "stepfun/step-3.7-flash:thinking"
+  name: "Step 3.7 Flash Thinking"
+  description: "Newer StepFun flash model for faster agents, coding, and multimodal prompts"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "medium", "high"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: true
+  modalities: {"input": ["text", "image", "video"], "output": ["text"]}
+  limit: {"context": 262144, "input": 262144, "output": 256000}
+  knowledge: "2026-03-01"
+  release_date: "2026-05-29"
+  last_updated: "2026-05-29"
+  open_weights: true
+  cost: {"input": 0.2, "output": 1.15, "cache_read": 0.04}
+
+===== nano-gpt / deepseek-r1 =====
+  id: "deepseek-r1"
+  name: "DeepSeek R1"
+  description: "Classic open reasoning model for transparent math, coding, and deliberate problem solving"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: []
+  tool_call: false
+  temperature: true
+  structured_output: false
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 128000, "input": 128000, "output": 8192}
+  knowledge: "2024-07"
+  release_date: "2025-01-20"
+  last_updated: "2025-05-29"
+  open_weights: true
+  cost: {"input": 0.4, "output": 1.7, "cache_read": 0.2}
+
+===== nano-gpt / deepseek/deepseek-latest =====
+  id: "deepseek/deepseek-latest"
+  name: "DeepSeek Latest"
+  description: "DeepSeek chat model for instruction following, coding, and analysis"
+  family: "deepseek"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "high", "max"]}]
+  tool_call: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "input": 1048576, "output": 384000}
+  release_date: "2026-05-03"
+  last_updated: "2026-05-03"
+  open_weights: true
+  cost: {"input": 0.435, "output": 0.87, "cache_read": 0.003625}
+
+===== fireworks-ai / accounts/fireworks/models/deepseek-v4-flash =====
+  id: "accounts/fireworks/models/deepseek-v4-flash"
+  name: "DeepSeek V4 Flash"
+  description: "Fast DeepSeek V4 lane for economical reasoning, coding, and long-context work"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "toggle"}, {"type": "effort", "values": ["high", "max"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  knowledge: "2025-05"
+  release_date: "2026-04-24"
+  last_updated: "2026-06-16"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28, "cache_read": 0.028}
+
+===== fireworks-ai / accounts/fireworks/models/deepseek-v4-flash-0731 =====
+  id: "accounts/fireworks/models/deepseek-v4-flash-0731"
+  name: "DeepSeek V4 Flash 0731"
+  description: "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "toggle"}, {"type": "effort", "values": ["low", "high", "max"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  knowledge: "2025-05"
+  release_date: "2026-07-31"
+  last_updated: "2026-07-31"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28, "cache_read": 0.028}
+
+===== fireworks-ai / accounts/fireworks/models/deepseek-v4-pro =====
+  id: "accounts/fireworks/models/deepseek-v4-pro"
+  name: "DeepSeek V4 Pro"
+  description: "Open MoE flagship with million-token context for coding and long agent runs"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: [{"type": "toggle"}, {"type": "effort", "values": ["high", "max"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  knowledge: "2025-05"
+  release_date: "2026-04-24"
+  last_updated: "2026-04-24"
+  open_weights: true
+  cost: {"input": 1.74, "output": 3.48, "cache_read": 0.145}
+
+===== anyapi / deepseek/deepseek-r1 =====
+  id: "deepseek/deepseek-r1"
+  name: "DeepSeek Reasoner"
+  description: "DeepSeek reasoning model for multi-step analysis, math, coding, and tools"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: []
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  attachment: true
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  knowledge: "2025-09"
+  release_date: "2025-12-01"
+  last_updated: "2026-02-28"
+  open_weights: true
+
+===== anyapi / deepseek/deepseek-chat =====
+  id: "deepseek/deepseek-chat"
+  name: "DeepSeek Chat"
+  description: "DeepSeek chat model for instruction following, coding, and analysis"
+  family: "deepseek"
+  reasoning: false
+  tool_call: true
+  temperature: true
+  attachment: true
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 384000}
+  knowledge: "2025-09"
+  release_date: "2025-12-01"
+  last_updated: "2026-02-28"
+  open_weights: true
+
+===== requesty / deepseek-v4-flash-0731 =====
+  id: "deepseek-v4-flash-0731"
+  name: "DeepSeek V4 Flash 0731"
+  description: "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "medium", "high", "max"]}, {"type": "budget_tokens"}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "output": 131072}
+  knowledge: "2025-05"
+  release_date: "2026-07-31"
+  last_updated: "2026-07-31"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28, "cache_read": 0.07}
+
+===== requesty / deepseek-v4-flash-0731@eu =====
+  id: "deepseek-v4-flash-0731@eu"
+  name: "DeepSeek V4 Flash 0731 (EU)"
+  description: "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "medium", "high", "max"]}, {"type": "budget_tokens"}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "output": 131072}
+  knowledge: "2025-05"
+  release_date: "2026-07-31"
+  last_updated: "2026-07-31"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28, "cache_read": 0.07}
+
+===== venice / deepseek-v4-flash-0731-fast =====
+  id: "deepseek-v4-flash-0731-fast"
+  name: "DeepSeek V4 Flash 0731 Fast"
+  description: "Fast DeepSeek model for efficient chat, coding help, and agent loops"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "high", "max"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 32768}
+  knowledge: "2025-05"
+  release_date: "2026-08-09"
+  last_updated: "2026-08-11"
+  open_weights: true
+  cost: {"input": 0.35, "output": 0.7, "cache_read": 0.0875}
+
+===== ollama-cloud / deepseek-v4-flash:0731 =====
+  id: "deepseek-v4-flash:0731"
+  name: "DeepSeek V4 Flash 0731"
+  description: "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "toggle"}, {"type": "effort", "values": ["high", "max"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "output": 1048576}
+  knowledge: "2025-05"
+  release_date: "2026-07-31"
+  last_updated: "2026-07-31"
+  open_weights: true
+
+===== kilo / deepseek/deepseek-v4-flash:discounted =====
+  id: "deepseek/deepseek-v4-flash:discounted"
+  name: "DeepSeek: DeepSeek V4 Flash (lowest price)"
+  description: "This DeepSeek V4 Flash endpoint provides the lowest cost for multi-turn conversations for this model. This is accomplished with an exceptionally low cache read price. By using this endpoint you agree prompts and completions may be retained by DeepSeek and used to train future models."
+  family: "deepseek"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "high", "xhigh"]}]
+  tool_call: true
+  temperature: true
+  structured_output: false
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "output": 384000}
+  release_date: "2025-08-26"
+  last_updated: "2025-08-26"
+  open_weights: false
+  cost: {"input": 0.14, "output": 0.28, "reasoning": 0, "cache_read": 0.0028}
+
+===== kilo / deepseek/deepseek-v4-pro:discounted =====
+  id: "deepseek/deepseek-v4-pro:discounted"
+  name: "DeepSeek: DeepSeek V4 Pro (lowest price)"
+  description: "This DeepSeek V4 Pro endpoint provides the lowest cost for multi-turn conversations for this model. This is accomplished with an exceptionally low cache read price. By using this endpoint you agree prompts and completions may be retained by DeepSeek and used to train future models."
+  family: "deepseek"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "high", "xhigh"]}]
+  tool_call: true
+  temperature: true
+  structured_output: false
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "output": 384000}
+  release_date: "2025-08-26"
+  last_updated: "2025-08-26"
+  open_weights: false
+  cost: {"input": 0.435, "output": 0.87, "reasoning": 0, "cache_read": 0.003625}
+
+===== kilo / deepseek/deepseek-v4-pro-0813 =====
+  id: "deepseek/deepseek-v4-pro-0813"
+  name: "DeepSeek V4 Pro 0813"
+  description: "DeepSeek V4 Pro 0813 is a large-scale mixture-of-experts model from DeepSeek. This is the GA release of DeepSeek V4 Pro."
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "high", "max"]}]
+  tool_call: true
+  temperature: true
+  structured_output: false
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "output": 384000}
+  release_date: "2026-08-12"
+  last_updated: "2026-08-12"
+  open_weights: false
+  cost: {"input": 0.435, "output": 0.87, "cache_read": 0.003625}
+
+===== poe / empiriolabs/deepseek-v4-flash-el =====
+  id: "empiriolabs/deepseek-v4-flash-el"
+  name: "DeepSeek-V4-Flash-EL"
+  description: "Fast DeepSeek model for efficient chat, coding help, and agent loops"
+  reasoning: true
+  reasoning_options: []
+  tool_call: true
+  attachment: true
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "input": 1000000, "output": 384000}
+  release_date: "2026-04-24"
+  last_updated: "2026-05-02"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28}
+
+===== poe / empiriolabs/deepseek-v4-pro-el =====
+  id: "empiriolabs/deepseek-v4-pro-el"
+  name: "DeepSeek-V4-Pro-EL"
+  description: "Flagship DeepSeek model for coding, reasoning, and agentic work"
+  reasoning: true
+  reasoning_options: []
+  tool_call: true
+  attachment: true
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "input": 1000000, "output": 384000}
+  release_date: "2026-04-24"
+  last_updated: "2026-05-02"
+  open_weights: true
+  cost: {"input": 1.67, "output": 3.33}
+
+===== novita-ai / deepseek/deepseek-r1-turbo =====
+  id: "deepseek/deepseek-r1-turbo"
+  name: "DeepSeek R1 (Turbo)\t"
+  description: "DeepSeek reasoning model for multi-step analysis, math, coding, and tools"
+  reasoning: true
+  reasoning_options: []
+  tool_call: true
+  temperature: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 64000, "output": 16000}
+  release_date: "2025-03-05"
+  last_updated: "2025-03-05"
+  open_weights: true
+  cost: {"input": 0.7, "output": 2.5}
+
+===== novita-ai / deepseek/deepseek-r1-0528-qwen3-8b =====
+  id: "deepseek/deepseek-r1-0528-qwen3-8b"
+  name: "DeepSeek R1 0528 Qwen3 8B"
+  description: "DeepSeek reasoning model for multi-step analysis, math, coding, and tools"
+  reasoning: true
+  reasoning_options: []
+  tool_call: false
+  temperature: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 128000, "output": 32000}
+  release_date: "2025-05-29"
+  last_updated: "2025-05-29"
+  open_weights: true
+  cost: {"input": 0.06, "output": 0.09}
+
+===== qiniu-ai / deepseek/deepseek-math-v2 =====
+  id: "deepseek/deepseek-math-v2"
+  name: "Deepseek/Deepseek-Math-V2"
+  description: "DeepSeek chat model for instruction following, coding, and analysis"
+  reasoning: true
+  reasoning_options: []
+  tool_call: false
+  temperature: true
+  structured_output: false
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 160000, "output": 160000}
+  release_date: "2025-12-04"
+  last_updated: "2025-12-04"
+  open_weights: false
+
+===== qiniu-ai / deepseek/deepseek-v3.2-251201 =====
+  id: "deepseek/deepseek-v3.2-251201"
+  name: "Deepseek/DeepSeek-V3.2"
+  description: "DeepSeek chat model for instruction following, coding, and analysis"
+  reasoning: true
+  reasoning_options: []
+  tool_call: true
+  temperature: true
+  structured_output: false
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 128000, "output": 32000}
+  release_date: "2025-12-01"
+  last_updated: "2025-12-01"
+  open_weights: false
+
+===== qiniu-ai / deepseek/deepseek-v3.2-exp-thinking =====
+  id: "deepseek/deepseek-v3.2-exp-thinking"
+  name: "DeepSeek/DeepSeek-V3.2-Exp-Thinking"
+  description: "DeepSeek chat model for instruction following, coding, and analysis"
+  reasoning: true
+  reasoning_options: []
+  tool_call: false
+  temperature: true
+  structured_output: false
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 128000, "output": 32000}
+  release_date: "2025-09-29"
+  last_updated: "2025-09-29"
+  open_weights: false
+
+===== vultr / nvidia/DeepSeek-V3.2-NVFP4 =====
+  id: "nvidia/DeepSeek-V3.2-NVFP4"
+  name: "DeepSeek V3.2"
+  description: "DeepSeek chat model for instruction following, coding, and analysis"
+  family: "deepseek"
+  reasoning: true
+  reasoning_options: []
+  tool_call: true
+  temperature: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 131072, "output": 131072}
+  knowledge: "2024-07"
+  release_date: "2025-12-01"
+  last_updated: "2025-12-01"
+  open_weights: true
+  cost: {"input": 0.55, "output": 1.65}
+
+===== nebius / deepseek-ai/DeepSeek-V3.2-fast =====
+  id: "deepseek-ai/DeepSeek-V3.2-fast"
+  name: "DeepSeek-V3.2-fast"
+  description: "Legacy model retained for compatibility with older integrations"
+  reasoning: true
+  reasoning_options: [{"type": "toggle"}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 8000, "input": 7000, "output": 8192}
+  knowledge: "2025-01"
+  release_date: "2025-01-27"
+  last_updated: "2026-05-07"
+  open_weights: true
+  cost: {"input": 0.4, "output": 2, "cache_read": 0.04, "cache_write": 0.5}
+
+===== 302ai / deepseek-v3.2-thinking =====
+  id: "deepseek-v3.2-thinking"
+  name: "DeepSeek-V3.2-Thinking"
+  description: "DeepSeek chat model for instruction following, coding, and analysis"
+  reasoning: true
+  reasoning_options: []
+  tool_call: true
+  temperature: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 128000, "output": 128000}
+  knowledge: "2024-12"
+  release_date: "2025-12-01"
+  last_updated: "2025-12-01"
+  open_weights: false
+  cost: {"input": 0.29, "output": 0.43}
+
+===== digitalocean / deepseek-3.2 =====
+  id: "deepseek-3.2"
+  name: "Deepseek 3.2"
+  description: "DeepSeek chat model for instruction following, coding, and analysis"
+  family: "deepseek"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "medium", "high"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 163840, "output": 163840}
+  knowledge: "2024-12"
+  release_date: "2025-12-02"
+  last_updated: "2026-04-30"
+  open_weights: true
+  cost: {"input": 0.25, "output": 0.8, "cache_read": 0.075}
+
+===== empiriolabs / step-3-5-flash =====
+  id: "step-3-5-flash"
+  name: "Step 3.5 Flash"
+  description: "StepFun flash lane for quick multimodal reasoning and coding assistance"
+  reasoning: true
+  reasoning_options: []
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 256000, "input": 256000, "output": 131072}
+  knowledge: "2025-01"
+  release_date: "2026-01-29"
+  last_updated: "2026-02-13"
+  open_weights: true
+  cost: {"input": 0.1, "output": 0.3, "cache_read": 0.02}
+
+===== empiriolabs / step-3-5-flash-2603 =====
+  id: "step-3-5-flash-2603"
+  name: "Step 3.5 Flash 2603"
+  description: "StepFun flash model for efficient multimodal reasoning, coding, and tool use"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["low", "high"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 256000, "input": 256000, "output": 131072}
+  knowledge: "2025-01"
+  release_date: "2026-04-02"
+  last_updated: "2026-04-02"
+  open_weights: true
+  cost: {"input": 0.1, "output": 0.3, "cache_read": 0.02}
+
+===== empiriolabs / step-3-7-flash =====
+  id: "step-3-7-flash"
+  name: "Step 3.7 Flash"
+  description: "Newer StepFun flash model for faster agents, coding, and multimodal prompts"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["low", "medium", "high"]}]
+  tool_call: true
+  temperature: true
+  structured_output: true
+  attachment: true
+  modalities: {"input": ["text", "image", "video"], "output": ["text"]}
+  limit: {"context": 256000, "input": 256000, "output": 131072}
+  knowledge: "2026-03-01"
+  release_date: "2026-05-29"
+  last_updated: "2026-05-29"
+  open_weights: true
+  cost: {"input": 0.2, "output": 1.15, "cache_read": 0.04}
+
+===== umans-ai / umans-deepseek-v4-flash-0731 =====
+  id: "umans-deepseek-v4-flash-0731"
+  name: "DeepSeek V4 Flash"
+  description: "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding"
+  family: "deepseek-flash"
+  reasoning: true
+  reasoning_options: [{"type": "toggle"}, {"type": "effort", "values": ["low", "high", "max"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1048576, "output": 393215}
+  knowledge: "2025-05"
+  release_date: "2026-07-31"
+  last_updated: "2026-07-31"
+  open_weights: true
+  cost: {"input": 0.14, "output": 0.28, "cache_read": 0.028}
+
+===== crof / deepseek-v4-pro-lightning =====
+  id: "deepseek-v4-pro-lightning"
+  name: "DeepSeek V4 Pro Lightning"
+  description: "Open MoE flagship with million-token context for coding and long agent runs"
+  family: "deepseek-thinking"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "low", "medium", "high"]}]
+  tool_call: true
+  interleaved: {"field": "reasoning_content"}
+  temperature: true
+  structured_output: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 1000000, "output": 131072}
+  knowledge: "2025-05"
+  release_date: "2026-04-24"
+  last_updated: "2026-04-24"
+  open_weights: true
+  cost: {"input": 0.8, "output": 1.6, "cache_read": 0.02}
+  provider: {"npm": "@ai-sdk/openai-compatible"}
+
+===== tensorx / deepseek/deepseek-chat-v3.1 =====
+  id: "deepseek/deepseek-chat-v3.1"
+  name: "DeepSeek Chat V3.1"
+  description: "DeepSeek chat model for instruction following, coding, and analysis"
+  family: "deepseek"
+  reasoning: true
+  reasoning_options: [{"type": "effort", "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]}]
+  tool_call: true
+  temperature: true
+  attachment: false
+  modalities: {"input": ["text"], "output": ["text"]}
+  limit: {"context": 164000, "output": 163840}
+  knowledge: "2024-11"
+  release_date: "2025-08-21"
+  last_updated: "2025-08-21"
+  open_weights: true
+  cost: {"input": 0.2, "output": 0.8, "cache_read": 0.05, "cache_write": 0.25}

@@ -1,0 +1,4473 @@
+{
+  "agent-max": {
+    "lifecycle": "beta",
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 922000,
+    "max_output_tokens": 128000,
+    "description": "Frontier models for autonomous research, deep multi-step tool chains, and complex long-horizon tasks. Any model that meets the contract spec can serve your request.",
+    "release_date": "2026-05-04",
+    "last_updated": "2026-07-24",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "Agent Max",
+    "origin": "Agent",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "temperature"
+      ]
+    }
+  },
+  "agent-prime": {
+    "lifecycle": "beta",
+    "context_window_tokens": 196608,
+    "max_input_tokens": 120000,
+    "max_output_tokens": 30000,
+    "description": "Reliable models for dependable agentic applications, multi-step tool use, and reasoning workflows. Any model that meets the contract spec can serve your request.",
+    "release_date": "2026-05-04",
+    "last_updated": "2026-07-15",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "Agent Prime",
+    "origin": "Agent",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "agent-standard": {
+    "lifecycle": "beta",
+    "context_window_tokens": 128000,
+    "max_input_tokens": 120000,
+    "max_output_tokens": 16000,
+    "description": "Price-optimized models for fast tool calls, simple agent loops, high-throughput automation, and orchestration. Any model that meets the contract spec can serve your request.",
+    "release_date": "2026-05-04",
+    "last_updated": "2026-07-15",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "Agent Standard",
+    "origin": "Agent",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "agnes-1.5-pro": {
+    "context_window_tokens": 256000,
+    "max_output_tokens": 256000,
+    "description": "Flagship model for demanding analysis, coding, and production agent workflows",
+    "release_date": "2026-03-21",
+    "last_updated": "2026-03-21",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.16",
+      "output_usd_per_million_tokens": "0.8"
+    },
+    "display_name": "Agnes 1.5 Pro",
+    "origin": "Agnes",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 256000
+  },
+  "aion-2.0": {
+    "context_window_tokens": 131072,
+    "max_input_tokens": 131072,
+    "max_output_tokens": 32768,
+    "description": "Reasoning model for deliberate analysis, multi-step problem solving, and tool use",
+    "release_date": "2026-02-23",
+    "last_updated": "2026-02-23",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.8",
+      "output_usd_per_million_tokens": "1.6",
+      "cache_read_usd_per_million_tokens": "0.2"
+    },
+    "display_name": "AionLabs: Aion-2.0",
+    "origin": "AionLabs",
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    }
+  },
+  "aion-3.0": {
+    "context_window_tokens": 131072,
+    "max_input_tokens": 131072,
+    "max_output_tokens": 32768,
+    "description": "Aion-3.0 is a multi-model roleplaying and storytelling system from AionLabs, built on the GLM family of models. It uses a collaborative generation process in which multiple specialized models each contribute...",
+    "release_date": "2026-07-07",
+    "last_updated": "2026-07-07",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "3",
+      "output_usd_per_million_tokens": "6",
+      "cache_read_usd_per_million_tokens": "0.75"
+    },
+    "display_name": "AionLabs: Aion-3.0",
+    "origin": "AionLabs",
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    }
+  },
+  "aion-3.0-mini": {
+    "context_window_tokens": 131072,
+    "max_input_tokens": 131072,
+    "max_output_tokens": 32768,
+    "description": "Aion-3.0 Mini is a multi-model roleplaying and storytelling system from AionLabs, built on the DeepSeek family of models. It uses a collaborative generation process in which multiple specialized models each...",
+    "release_date": "2026-07-07",
+    "last_updated": "2026-07-07",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.7",
+      "output_usd_per_million_tokens": "1.4",
+      "cache_read_usd_per_million_tokens": "0.18"
+    },
+    "display_name": "AionLabs: Aion-3.0-Mini",
+    "origin": "AionLabs",
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    }
+  },
+  "apertus-70b": {
+    "context_window_tokens": 65536,
+    "max_output_tokens": 65536,
+    "description": "Apertus 70B is an open, multilingual language model designed for research, long-context reasoning, and sovereignty-focused AI systems.",
+    "knowledge_cutoff": "2025-09",
+    "release_date": "2025-09-02",
+    "last_updated": "2025-09-02",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.393",
+      "output_usd_per_million_tokens": "2.228"
+    },
+    "display_name": "Apertus 70B",
+    "origin": "Apertus",
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    },
+    "max_input_tokens": 65536
+  },
+  "baichuan-m2": {
+    "context_window_tokens": 32768,
+    "max_input_tokens": 32768,
+    "max_output_tokens": 32768,
+    "description": "Baichuan's medical-domain large language model served on the Baichuan API platform with a 32K-token context window and OpenAI-compatible API.",
+    "release_date": "2025-08-19",
+    "last_updated": "2025-08-19",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.32",
+      "output_usd_per_million_tokens": "3.20"
+    },
+    "display_name": "Baichuan M2 32B Medical",
+    "origin": "Baichuan",
+    "features": {
+      "supported": [
+        "reasoning"
+      ],
+      "unsupported": [
+        "tool_calling",
+        "structured_output"
+      ]
+    }
+  },
+  "balanced": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 65536,
+    "description": "Automatic model router for matching prompts to suitable backends and budgets",
+    "release_date": "1970-01-01",
+    "last_updated": "1970-01-01",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.325",
+      "output_usd_per_million_tokens": "1.95",
+      "cache_read_usd_per_million_tokens": "0.0325",
+      "cache_write_usd_per_million_tokens": "0.40625"
+    },
+    "display_name": "Auto Balanced",
+    "origin": "Balanced",
+    "input": [
+      "image",
+      "file"
+    ],
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "big-pickle": {
+    "context_window_tokens": 200000,
+    "max_input_tokens": 160000,
+    "max_output_tokens": 32000,
+    "description": "Reasoning model for deliberate analysis, multi-step problem solving, and tool use",
+    "knowledge_cutoff": "2025-01",
+    "release_date": "2025-10-17",
+    "last_updated": "2025-10-17",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0",
+      "output_usd_per_million_tokens": "0",
+      "cache_read_usd_per_million_tokens": "0",
+      "cache_write_usd_per_million_tokens": "0"
+    },
+    "display_name": "Big Pickle",
+    "origin": "Big",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "cheap": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 131072,
+    "description": "TrustedRouter low-cost routing alias that prefers inexpensive healthy model endpoints.",
+    "release_date": "2026-05-01",
+    "last_updated": "2026-06-27",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "Cheap",
+    "origin": "Cheap",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "document",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "claudinio": {
+    "context_window_tokens": 256000,
+    "max_output_tokens": 64000,
+    "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+    "knowledge_cutoff": "2026-05",
+    "release_date": "2026-05-12",
+    "last_updated": "2026-06-02",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.5",
+      "output_usd_per_million_tokens": "2",
+      "cache_read_usd_per_million_tokens": "0.15"
+    },
+    "display_name": "Claudinio",
+    "origin": "Claudinio",
+    "input": {
+      "supported": [
+        "audio",
+        "file",
+        "image",
+        "text",
+        "video"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 256000
+  },
+  "claudius": {
+    "context_window_tokens": 256000,
+    "max_output_tokens": 64000,
+    "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+    "knowledge_cutoff": "2026-05",
+    "release_date": "2026-05-12",
+    "last_updated": "2026-05-12",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "3",
+      "output_usd_per_million_tokens": "8",
+      "cache_read_usd_per_million_tokens": "0.9"
+    },
+    "display_name": "Claudius",
+    "origin": "Claudius",
+    "input": {
+      "supported": [
+        "audio",
+        "file",
+        "image",
+        "text",
+        "video"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 256000
+  },
+  "claw-high": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "description": "Compact GPT model for low-latency assistance and high-volume workloads",
+    "release_date": "2026-05-11",
+    "last_updated": "2026-05-11",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "5",
+      "output_usd_per_million_tokens": "25",
+      "cache_read_usd_per_million_tokens": "2.5"
+    },
+    "display_name": "Claw High",
+    "origin": "Claw",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "document",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ]
+    }
+  },
+  "claw-low": {
+    "context_window_tokens": 1048576,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 65536,
+    "description": "Compact GPT model for low-latency assistance and high-volume workloads",
+    "release_date": "2026-05-11",
+    "last_updated": "2026-05-11",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.25",
+      "output_usd_per_million_tokens": "1.5",
+      "cache_read_usd_per_million_tokens": "0.025",
+      "cache_write_usd_per_million_tokens": "0.08333"
+    },
+    "display_name": "Claw Low",
+    "origin": "Claw",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "document",
+        "text",
+        "video"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ]
+    }
+  },
+  "claw-medium": {
+    "context_window_tokens": 204800,
+    "max_input_tokens": 204800,
+    "max_output_tokens": 131072,
+    "description": "Compact GPT model for low-latency assistance and high-volume workloads",
+    "release_date": "2026-05-11",
+    "last_updated": "2026-05-11",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.315",
+      "output_usd_per_million_tokens": "1.26",
+      "cache_read_usd_per_million_tokens": "0.1575"
+    },
+    "display_name": "Claw Medium",
+    "origin": "Claw",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "code-max": {
+    "lifecycle": "beta",
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 922000,
+    "max_output_tokens": 128000,
+    "description": "Frontier models for complex research, architectural decisions, debugging, and multi-file development. Any model that meets the contract spec can serve your request.",
+    "release_date": "2026-05-04",
+    "last_updated": "2026-07-24",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "Code Max",
+    "origin": "Code",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "temperature"
+      ]
+    }
+  },
+  "code-prime": {
+    "lifecycle": "beta",
+    "context_window_tokens": 196608,
+    "max_input_tokens": 120000,
+    "max_output_tokens": 30000,
+    "description": "Reliable models for everyday software tasks, code completion, review, and standard debugging. Any model that meets the contract spec can serve your request.",
+    "release_date": "2026-05-04",
+    "last_updated": "2026-07-15",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "Code Prime",
+    "origin": "Code",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "code-standard": {
+    "lifecycle": "beta",
+    "context_window_tokens": 128000,
+    "max_input_tokens": 120000,
+    "max_output_tokens": 16000,
+    "description": "Price-optimized models for rapid autocomplete, linting, high-frequency suggestions, and batch edits. Any model that meets the contract spec can serve your request.",
+    "release_date": "2026-05-04",
+    "last_updated": "2026-07-15",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "Code Standard",
+    "origin": "Code",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "coding-minimax-m2.7": {
+    "context_window_tokens": 204800,
+    "max_output_tokens": 128100,
+    "description": "MiniMax model for chat, coding, office work, and agentic tasks",
+    "release_date": "2026-03-18",
+    "last_updated": "2026-03-18",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.2",
+      "output_usd_per_million_tokens": "0.2"
+    },
+    "display_name": "Coding MiniMax M2.7",
+    "origin": "Coding",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    },
+    "max_input_tokens": 204800
+  },
+  "coding-minimax-m2.7-highspeed": {
+    "context_window_tokens": 204800,
+    "max_output_tokens": 128100,
+    "description": "High-speed MiniMax model for low-latency coding and agent workflows",
+    "release_date": "2026-03-18",
+    "last_updated": "2026-03-18",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.2",
+      "output_usd_per_million_tokens": "0.2"
+    },
+    "display_name": "Coding MiniMax M2.7 Highspeed",
+    "origin": "Coding",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    },
+    "max_input_tokens": 204800
+  },
+  "coding-router": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "description": "Automatic model router for matching prompts to suitable backends and budgets",
+    "release_date": "2026-05-12",
+    "last_updated": "2026-05-12",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.1",
+      "output_usd_per_million_tokens": "2.2",
+      "cache_read_usd_per_million_tokens": "0.11"
+    },
+    "display_name": "Coding Router",
+    "origin": "Coding",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output"
+    ]
+  },
+  "coding-router:high": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "description": "Automatic model router for matching prompts to suitable backends and budgets",
+    "release_date": "2026-05-12",
+    "last_updated": "2026-05-12",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.1",
+      "output_usd_per_million_tokens": "2.2",
+      "cache_read_usd_per_million_tokens": "0.11"
+    },
+    "display_name": "Coding Router High",
+    "origin": "Coding",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output"
+    ]
+  },
+  "coding-router:low": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "description": "Automatic model router for matching prompts to suitable backends and budgets",
+    "release_date": "2026-05-12",
+    "last_updated": "2026-05-12",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.14",
+      "output_usd_per_million_tokens": "0.28",
+      "cache_read_usd_per_million_tokens": "0.028"
+    },
+    "display_name": "Coding Router Low",
+    "origin": "Coding",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output"
+    ]
+  },
+  "coding-router:max": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "description": "Automatic model router for matching prompts to suitable backends and budgets",
+    "release_date": "2026-05-12",
+    "last_updated": "2026-05-12",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "5",
+      "output_usd_per_million_tokens": "30",
+      "cache_read_usd_per_million_tokens": "0.5"
+    },
+    "display_name": "Coding Router Max",
+    "origin": "Coding",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output"
+    ]
+  },
+  "coding-router:medium": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "description": "Automatic model router for matching prompts to suitable backends and budgets",
+    "release_date": "2026-05-12",
+    "last_updated": "2026-05-12",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.14",
+      "output_usd_per_million_tokens": "0.28",
+      "cache_read_usd_per_million_tokens": "0.028"
+    },
+    "display_name": "Coding Router Medium",
+    "origin": "Coding",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output"
+    ]
+  },
+  "cogito-v2-1-671b": {
+    "context_window_tokens": 163840,
+    "max_output_tokens": 163840,
+    "description": "Reasoning model for deliberate analysis, multi-step problem solving, and tool use",
+    "release_date": "2025-11-13",
+    "last_updated": "2025-11-13",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.25",
+      "output_usd_per_million_tokens": "1.25"
+    },
+    "display_name": "Cogito v2.1 671B",
+    "origin": "Cogito",
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 163840
+  },
+  "cogito-v2.1-671b": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 32768,
+    "description": "Reasoning model for deliberate analysis, multi-step problem solving, and tool use",
+    "release_date": "2025-11-13",
+    "last_updated": "2025-11-13",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.25",
+      "output_usd_per_million_tokens": "1.25"
+    },
+    "display_name": "Deep Cogito: Cogito v2.1 671B",
+    "origin": "Cogito",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "cosmos-reason2-8b": {
+    "context_window_tokens": 131072,
+    "max_output_tokens": 16384,
+    "description": "Vision language model for physical-world understanding with structured reasoning on video and images",
+    "release_date": "2025-12-01",
+    "last_updated": "2025-12-01",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0",
+      "output_usd_per_million_tokens": "0"
+    },
+    "display_name": "Cosmos Reason2 8B",
+    "origin": "NVIDIA",
+    "input": [
+      "image",
+      "video",
+      "file"
+    ],
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 131072
+  },
+  "deepseek-v4-flash": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 384000,
+    "description": "Fast DeepSeek V4 lane for economical reasoning, coding, and long-context work",
+    "knowledge_cutoff": "2025-05",
+    "release_date": "2026-04-24",
+    "last_updated": "2026-04-24",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.14",
+      "output_usd_per_million_tokens": "0.28",
+      "cache_read_usd_per_million_tokens": "0.0028",
+      "cache_write_usd_per_million_tokens": "0"
+    },
+    "display_name": "DeepSeek V4 Flash",
+    "origin": "Alibaba",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "deepseek-v4-flash-0731": {
+    "lifecycle": "beta",
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 384000,
+    "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+    "knowledge_cutoff": "2025-05",
+    "release_date": "2026-07-31",
+    "last_updated": "2026-07-31",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.2",
+      "output_usd_per_million_tokens": "0.4",
+      "cache_read_usd_per_million_tokens": "0.04",
+      "cache_write_usd_per_million_tokens": "0"
+    },
+    "display_name": "DeepSeek V4 Flash 0731",
+    "origin": "Alibaba",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "deepseek-v4-flash-0731-fast": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 32768,
+    "description": "Fast DeepSeek model for efficient chat, coding help, and agent loops",
+    "knowledge_cutoff": "2025-05",
+    "release_date": "2026-08-09",
+    "last_updated": "2026-08-11",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.35",
+      "output_usd_per_million_tokens": "0.7",
+      "cache_read_usd_per_million_tokens": "0.0875"
+    },
+    "display_name": "DeepSeek V4 Flash 0731 Fast",
+    "origin": "DeepSeek",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "deepseek-v4-flash-0731:thinking": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 131072,
+    "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+    "knowledge_cutoff": "2025-05",
+    "release_date": "2026-07-31",
+    "last_updated": "2026-07-31",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.14",
+      "output_usd_per_million_tokens": "0.28",
+      "cache_read_usd_per_million_tokens": "0.014"
+    },
+    "display_name": "DeepSeek V4 Flash 0731 (Thinking)",
+    "origin": "DeepSeek",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output",
+      "temperature"
+    ]
+  },
+  "deepseek-v4-flash-0731@eu": {
+    "context_window_tokens": 1048576,
+    "max_output_tokens": 131072,
+    "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+    "knowledge_cutoff": "2025-05",
+    "release_date": "2026-07-31",
+    "last_updated": "2026-07-31",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.14",
+      "output_usd_per_million_tokens": "0.28",
+      "cache_read_usd_per_million_tokens": "0.07"
+    },
+    "display_name": "DeepSeek V4 Flash 0731 (EU)",
+    "origin": "DeepSeek",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    },
+    "max_input_tokens": 1048576
+  },
+  "deepseek-v4-flash-el": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 384000,
+    "description": "Fast DeepSeek model for efficient chat, coding help, and agent loops",
+    "release_date": "2026-04-24",
+    "last_updated": "2026-05-02",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.14",
+      "output_usd_per_million_tokens": "0.28"
+    },
+    "display_name": "DeepSeek-V4-Flash-EL",
+    "origin": "DeepSeek",
+    "input": [
+      "file"
+    ],
+    "features": [
+      "reasoning",
+      "tool_calling"
+    ],
+    "knowledge_cutoff": "2025-05"
+  },
+  "deepseek-v4-flash-latest": {
+    "context_window_tokens": 1048576,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 262144,
+    "description": "This model always redirects to the latest model in the DeepSeek V4 Flash family.",
+    "release_date": "2026-08-01",
+    "last_updated": "2026-08-01",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.079996",
+      "output_usd_per_million_tokens": "0.252",
+      "cache_read_usd_per_million_tokens": "0.0252"
+    },
+    "display_name": "DeepSeek V4 Flash Latest",
+    "origin": "DeepSeek",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output",
+      "temperature"
+    ],
+    "knowledge_cutoff": "2025-05"
+  },
+  "deepseek-v4-flash:0731": {
+    "context_window_tokens": 1048576,
+    "max_output_tokens": 1048576,
+    "description": "Official DeepSeek V4 Flash release with enhanced agentic capabilities and integrated DSpark speculative decoding",
+    "knowledge_cutoff": "2025-05",
+    "release_date": "2026-07-31",
+    "last_updated": "2026-07-31",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "DeepSeek V4 Flash 0731",
+    "origin": "DeepSeek",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    },
+    "max_input_tokens": 1048576,
+    "pricing": {
+      "input_usd_per_million_tokens": "0.14",
+      "output_usd_per_million_tokens": "0.28",
+      "cache_read_usd_per_million_tokens": "0.0028"
+    }
+  },
+  "deepseek-v4-flash:discounted": {
+    "context_window_tokens": 1048576,
+    "max_output_tokens": 384000,
+    "description": "This DeepSeek V4 Flash endpoint provides the lowest cost for multi-turn conversations for this model. This is accomplished with an exceptionally low cache read price. By using this endpoint you agree prompts and completions may be retained by DeepSeek and used to train future models.",
+    "release_date": "2025-08-26",
+    "last_updated": "2025-08-26",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.14",
+      "output_usd_per_million_tokens": "0.28",
+      "cache_read_usd_per_million_tokens": "0.0028"
+    },
+    "display_name": "DeepSeek: DeepSeek V4 Flash (lowest price)",
+    "origin": "DeepSeek",
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    },
+    "max_input_tokens": 1048576,
+    "knowledge_cutoff": "2025-05"
+  },
+  "deepseek-v4-flash:thinking": {
+    "context_window_tokens": 1048576,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 384000,
+    "description": "Fast DeepSeek V4 lane for economical reasoning, coding, and long-context work",
+    "knowledge_cutoff": "2025-05",
+    "release_date": "2026-04-24",
+    "last_updated": "2026-04-24",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.07",
+      "output_usd_per_million_tokens": "0.14",
+      "cache_read_usd_per_million_tokens": "0.014"
+    },
+    "display_name": "DeepSeek V4 Flash (Thinking)",
+    "origin": "DeepSeek",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output",
+      "temperature"
+    ]
+  },
+  "deepseek-v4-pro": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 384000,
+    "description": "Open MoE flagship with million-token context for coding and long agent runs",
+    "knowledge_cutoff": "2025-05",
+    "release_date": "2026-04-24",
+    "last_updated": "2026-04-24",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.435",
+      "output_usd_per_million_tokens": "0.87",
+      "cache_read_usd_per_million_tokens": "0.003625",
+      "cache_write_usd_per_million_tokens": "0"
+    },
+    "display_name": "DeepSeek V4 Pro",
+    "origin": "Alibaba",
+    "input": {
+      "supported": [
+        "file",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    }
+  },
+  "deepseek-v4-pro-0813": {
+    "context_window_tokens": 1048576,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 384000,
+    "description": "DeepSeek V4 Pro 0813 is a large-scale mixture-of-experts model from DeepSeek. This is the GA release of DeepSeek V4 Pro.",
+    "release_date": "2026-08-12",
+    "last_updated": "2026-08-12",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.435",
+      "output_usd_per_million_tokens": "0.87",
+      "cache_read_usd_per_million_tokens": "0.003625"
+    },
+    "display_name": "DeepSeek V4 Pro 0813",
+    "origin": "DeepSeek",
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    },
+    "knowledge_cutoff": "2025-05"
+  },
+  "deepseek-v4-pro-0813:thinking": {
+    "context_window_tokens": 1048576,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 384000,
+    "description": "DeepSeek V4 Pro snapshot with million-token context and support for thinking and non-thinking modes",
+    "release_date": "2026-08-12",
+    "last_updated": "2026-08-12",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.435",
+      "output_usd_per_million_tokens": "0.87",
+      "cache_read_usd_per_million_tokens": "0.003625"
+    },
+    "display_name": "DeepSeek V4 Pro 0813 Thinking",
+    "origin": "DeepSeek",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output",
+      "temperature"
+    ],
+    "knowledge_cutoff": "2025-05"
+  },
+  "deepseek-v4-pro-el": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 384000,
+    "description": "Flagship DeepSeek model for coding, reasoning, and agentic work",
+    "release_date": "2026-04-24",
+    "last_updated": "2026-05-02",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.67",
+      "output_usd_per_million_tokens": "3.33"
+    },
+    "display_name": "DeepSeek-V4-Pro-EL",
+    "origin": "DeepSeek",
+    "input": [
+      "file"
+    ],
+    "features": [
+      "reasoning",
+      "tool_calling"
+    ],
+    "knowledge_cutoff": "2025-05"
+  },
+  "deepseek-v4-pro-lightning": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 131072,
+    "description": "Open MoE flagship with million-token context for coding and long agent runs",
+    "knowledge_cutoff": "2025-05",
+    "release_date": "2026-04-24",
+    "last_updated": "2026-04-24",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.8",
+      "output_usd_per_million_tokens": "1.6",
+      "cache_read_usd_per_million_tokens": "0.02"
+    },
+    "display_name": "DeepSeek V4 Pro Lightning",
+    "origin": "DeepSeek",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "deepseek-v4-pro:discounted": {
+    "context_window_tokens": 1048576,
+    "max_output_tokens": 384000,
+    "description": "This DeepSeek V4 Pro endpoint provides the lowest cost for multi-turn conversations for this model. This is accomplished with an exceptionally low cache read price. By using this endpoint you agree prompts and completions may be retained by DeepSeek and used to train future models.",
+    "release_date": "2025-08-26",
+    "last_updated": "2025-08-26",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.435",
+      "output_usd_per_million_tokens": "0.87",
+      "cache_read_usd_per_million_tokens": "0.003625"
+    },
+    "display_name": "DeepSeek: DeepSeek V4 Pro (lowest price)",
+    "origin": "DeepSeek",
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    },
+    "max_input_tokens": 1048576,
+    "knowledge_cutoff": "2025-05"
+  },
+  "deepseek-v4-pro:thinking": {
+    "context_window_tokens": 1048576,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 384000,
+    "description": "Open MoE flagship with million-token context for coding and long agent runs",
+    "knowledge_cutoff": "2025-05",
+    "release_date": "2026-04-24",
+    "last_updated": "2026-04-24",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.1",
+      "output_usd_per_million_tokens": "2.2",
+      "cache_read_usd_per_million_tokens": "0.11"
+    },
+    "display_name": "DeepSeek V4 Pro (Thinking)",
+    "origin": "DeepSeek",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output",
+      "temperature"
+    ]
+  },
+  "diffusiongemma-26b-a4b-it": {
+    "context_window_tokens": 262144,
+    "max_output_tokens": 131072,
+    "description": "Gemini model for general assistance, reasoning, and multimodal workflows",
+    "release_date": "2026-05-31",
+    "last_updated": "2026-05-31",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.5",
+      "output_usd_per_million_tokens": "0.5",
+      "cache_read_usd_per_million_tokens": "0.5",
+      "cache_write_usd_per_million_tokens": "0.5"
+    },
+    "display_name": "DiffusionGemma 26B-A4B IT",
+    "origin": "Diffusiongemma",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 262144
+  },
+  "dola-seed-2.0-pro": {
+    "context_window_tokens": 131072,
+    "max_output_tokens": 32768,
+    "description": "Higher-capability Seed model for complex chat, analysis, and production tasks",
+    "release_date": "2026-03-28",
+    "last_updated": "2026-03-28",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.5",
+      "output_usd_per_million_tokens": "3"
+    },
+    "display_name": "Seed 2.0 Pro",
+    "origin": "Dola",
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling",
+        "structured_output"
+      ]
+    },
+    "max_input_tokens": 131072
+  },
+  "doubao-seed-character": {
+    "context_window_tokens": 128000,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 32768,
+    "description": "ByteDance's character-focused Doubao Seed model for roleplay, persona consistency, dialogue, and creative character interactions. It supports text and image input with a 128k context window. Requests route through ZenMux to ByteDance; ZenMux does not publish a model-API zero-retention or training guarantee, so avoid sensitive data.",
+    "release_date": "2026-07-18",
+    "last_updated": "2026-07-18",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.1179",
+      "output_usd_per_million_tokens": "0.2947",
+      "cache_read_usd_per_million_tokens": "0.0236",
+      "cache_write_usd_per_million_tokens": "0.0025"
+    },
+    "display_name": "Doubao Seed Character",
+    "origin": "ByteDance",
+    "input": [
+      "image",
+      "file"
+    ],
+    "features": {
+      "supported": [
+        "reasoning"
+      ],
+      "unsupported": [
+        "tool_calling",
+        "structured_output"
+      ]
+    }
+  },
+  "e2e": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 131072,
+    "description": "TrustedRouter privacy routing alias for end-to-end encrypted provider routes where available.",
+    "release_date": "2026-06-01",
+    "last_updated": "2026-06-27",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "End-to-End Encrypted",
+    "origin": "E2e",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "document",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "efficient": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 65536,
+    "description": "Routes each request to the cheapest model that gets the job done, based on continuously benchmarked accuracy and cost.",
+    "release_date": "1970-01-01",
+    "last_updated": "1970-01-01",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.325",
+      "output_usd_per_million_tokens": "1.95",
+      "cache_read_usd_per_million_tokens": "0.0325",
+      "cache_write_usd_per_million_tokens": "0.40625"
+    },
+    "display_name": "Auto Efficient",
+    "origin": "Efficient",
+    "input": [
+      "image",
+      "file"
+    ],
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "frontier": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "description": "Automatic model router for matching prompts to suitable backends and budgets",
+    "release_date": "1970-01-01",
+    "last_updated": "1970-01-01",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "5",
+      "output_usd_per_million_tokens": "25",
+      "cache_read_usd_per_million_tokens": "0.5",
+      "cache_write_usd_per_million_tokens": "6.25"
+    },
+    "display_name": "Auto Frontier",
+    "origin": "Frontier",
+    "input": [
+      "image",
+      "document",
+      "file"
+    ],
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "fugu-ultra": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 1000000,
+    "description": "Quality-first multi-agent model for hard research, analysis, and competitions",
+    "release_date": "2026-06-22",
+    "last_updated": "2026-06-22",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "5",
+      "output_usd_per_million_tokens": "30",
+      "cache_read_usd_per_million_tokens": "0.5",
+      "cache_write_usd_per_million_tokens": "5",
+      "tiers": [
+        {
+          "input_usd_per_million_tokens": "10",
+          "output_usd_per_million_tokens": "45",
+          "cache_read_usd_per_million_tokens": "1"
+        },
+        {
+          "tier_type": "context",
+          "size_tokens": 200000,
+          "input_usd_per_million_tokens": "10",
+          "output_usd_per_million_tokens": "45",
+          "cache_read_usd_per_million_tokens": "1"
+        }
+      ]
+    },
+    "display_name": "Fugu Ultra",
+    "origin": "Fugu",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    }
+  },
+  "gemini-omni-flash-preview": {
+    "context_window_tokens": 131072,
+    "max_output_tokens": 65536,
+    "description": "Video generation and editing model for fast, conversational text- and image-to-video workflows",
+    "release_date": "2026-06-30",
+    "last_updated": "2026-06-30",
+    "open_weights": false,
+    "output_modalities": [
+      "video",
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.5",
+      "output_usd_per_million_tokens": "17.5"
+    },
+    "display_name": "Gemini Omni Flash Preview",
+    "origin": "Google",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "text",
+        "video"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 131072
+  },
+  "gemma-3-27b-it": {
+    "context_window_tokens": 131000,
+    "max_input_tokens": 131072,
+    "max_output_tokens": 131000,
+    "description": "Gemma 3 is a family of lightweight, multimodal models from Google, supporting text and image inputs, multilingual capabilities, and a 131K context window.",
+    "knowledge_cutoff": "2024-08",
+    "release_date": "2025-03-12",
+    "last_updated": "2025-03-12",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.099",
+      "output_usd_per_million_tokens": "0.299",
+      "cache_read_usd_per_million_tokens": "0.1",
+      "cache_write_usd_per_million_tokens": "0.125"
+    },
+    "display_name": "gemma-3-27b-it",
+    "origin": "Google",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    }
+  },
+  "gemma4-31b": {
+    "context_window_tokens": 262144,
+    "max_input_tokens": 262144,
+    "max_output_tokens": 32768,
+    "description": "Largest Gemma 4 instruction model for open, self-hosted chat and reasoning",
+    "release_date": "2026-04-02",
+    "last_updated": "2026-04-02",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0",
+      "output_usd_per_million_tokens": "0",
+      "cache_read_usd_per_million_tokens": "0.4"
+    },
+    "display_name": "Gemma 4 31B IT",
+    "origin": "Gemma4",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    }
+  },
+  "green-r": {
+    "context_window_tokens": 131072,
+    "max_output_tokens": 32768,
+    "description": "Open GPT reasoning model for self-hosted agents and controllable deployments",
+    "release_date": "2025-08-05",
+    "last_updated": "2025-08-05",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.399",
+      "output_usd_per_million_tokens": "1.083"
+    },
+    "display_name": "Green R",
+    "origin": "Green",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 131072
+  },
+  "grok-4": {
+    "lifecycle": "deprecated",
+    "context_window_tokens": 256000,
+    "max_output_tokens": 256000,
+    "description": "Grok model for agentic tool use, reasoning, coding, and live assistance",
+    "knowledge_cutoff": "2024-07",
+    "release_date": "2025-07-09",
+    "last_updated": "2025-07-09",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "3",
+      "output_usd_per_million_tokens": "15",
+      "cache_read_usd_per_million_tokens": "0.75",
+      "cache_write_usd_per_million_tokens": "15"
+    },
+    "display_name": "Grok 4",
+    "origin": "xAI",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    },
+    "max_input_tokens": 256000
+  },
+  "grok-code-fast-1": {
+    "lifecycle": "deprecated",
+    "context_window_tokens": 256000,
+    "max_output_tokens": 16384,
+    "description": "Fast Grok model for responsive chat, reasoning, and tool-assisted work",
+    "knowledge_cutoff": "2023-10",
+    "release_date": "2025-09-01",
+    "last_updated": "2025-09-01",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.2",
+      "output_usd_per_million_tokens": "1.5",
+      "cache_read_usd_per_million_tokens": "0.02"
+    },
+    "display_name": "Grok Code Fast 1",
+    "origin": "xAI",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 256000
+  },
+  "hermes-high": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "description": "Compact GPT model for low-latency assistance and high-volume workloads",
+    "release_date": "2026-05-11",
+    "last_updated": "2026-05-11",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "5",
+      "output_usd_per_million_tokens": "25",
+      "cache_read_usd_per_million_tokens": "2.5"
+    },
+    "display_name": "Hermes High",
+    "origin": "Hermes",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "document",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ]
+    }
+  },
+  "hermes-low": {
+    "context_window_tokens": 1048576,
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 65536,
+    "description": "Compact GPT model for low-latency assistance and high-volume workloads",
+    "release_date": "2026-05-11",
+    "last_updated": "2026-05-11",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.25",
+      "output_usd_per_million_tokens": "1.5",
+      "cache_read_usd_per_million_tokens": "0.025",
+      "cache_write_usd_per_million_tokens": "0.08333"
+    },
+    "display_name": "Hermes Low",
+    "origin": "Hermes",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "document",
+        "text",
+        "video"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ]
+    }
+  },
+  "hermes-medium": {
+    "context_window_tokens": 204800,
+    "max_input_tokens": 204800,
+    "max_output_tokens": 131072,
+    "description": "Compact GPT model for low-latency assistance and high-volume workloads",
+    "release_date": "2026-05-11",
+    "last_updated": "2026-05-11",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.315",
+      "output_usd_per_million_tokens": "1.26",
+      "cache_read_usd_per_million_tokens": "0.1575"
+    },
+    "display_name": "Hermes Medium",
+    "origin": "Hermes",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "interfaze-beta": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 32000,
+    "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+    "release_date": "2025-10-07",
+    "last_updated": "2026-04-29",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.5",
+      "output_usd_per_million_tokens": "3.5"
+    },
+    "display_name": "Interfaze Beta",
+    "origin": "Interfaze",
+    "input": [
+      "image",
+      "document"
+    ],
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "kat-coder-pro-v1": {
+    "context_window_tokens": 256000,
+    "max_output_tokens": 32000,
+    "description": "Coding model for repository understanding, refactors, and agentic engineering tasks",
+    "knowledge_cutoff": "2024-10",
+    "release_date": "2025-11-09",
+    "last_updated": "2025-10-24",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.3",
+      "output_usd_per_million_tokens": "1.2",
+      "cache_read_usd_per_million_tokens": "0.06"
+    },
+    "display_name": "KAT-Coder-Pro V1",
+    "origin": "Kat",
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 256000
+  },
+  "kimi-k2.6-fast": {
+    "lifecycle": "deprecated",
+    "context_window_tokens": 262144,
+    "max_output_tokens": 262144,
+    "description": "Multimodal Kimi workhorse for agent loops, coding tasks, and visual context",
+    "knowledge_cutoff": "2025-01",
+    "release_date": "2026-04-21",
+    "last_updated": "2026-04-21",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.655",
+      "output_usd_per_million_tokens": "8.778",
+      "cache_read_usd_per_million_tokens": "0.1725"
+    },
+    "display_name": "Kimi K2.6 Fast",
+    "origin": "Moonshot AI",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 262144
+  },
+  "kimi-k2.6-nitro": {
+    "context_window_tokens": 200000,
+    "max_output_tokens": 32000,
+    "description": "Multimodal Kimi workhorse for agent loops, coding tasks, and visual context",
+    "knowledge_cutoff": "2025-01",
+    "release_date": "2026-04-21",
+    "last_updated": "2026-04-21",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.275",
+      "output_usd_per_million_tokens": "1.1"
+    },
+    "display_name": "Kimi K2.6 Nitro",
+    "origin": "Moonshot AI",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text",
+        "video"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 200000
+  },
+  "kimi-k2p6-fast": {
+    "context_window_tokens": 262000,
+    "max_output_tokens": 262000,
+    "description": "Kimi reasoning model for long-horizon research, planning, and tool use",
+    "release_date": "2026-04-17",
+    "last_updated": "2026-06-05",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "2",
+      "output_usd_per_million_tokens": "8",
+      "cache_read_usd_per_million_tokens": "0.3"
+    },
+    "display_name": "Kimi K2.6 Fast",
+    "origin": "Moonshot AI",
+    "input": [
+      "image",
+      "file"
+    ],
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 262000,
+    "knowledge_cutoff": "2025-01"
+  },
+  "kimi-k2p6-turbo": {
+    "context_window_tokens": 262000,
+    "max_output_tokens": 262000,
+    "description": "Kimi reasoning model for long-horizon research, planning, and tool use",
+    "release_date": "2026-04-17",
+    "last_updated": "2026-04-17",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "2",
+      "output_usd_per_million_tokens": "8",
+      "cache_read_usd_per_million_tokens": "0.3"
+    },
+    "display_name": "Kimi K2.6 Turbo",
+    "origin": "Moonshot AI",
+    "input": [
+      "image",
+      "file"
+    ],
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 262000,
+    "knowledge_cutoff": "2025-01"
+  },
+  "kimi-k3-fast": {
+    "context_window_tokens": 1040384,
+    "max_output_tokens": 131072,
+    "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+    "release_date": "2026-07-16",
+    "last_updated": "2026-07-16",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "4.5",
+      "output_usd_per_million_tokens": "22.5",
+      "cache_read_usd_per_million_tokens": "0.45"
+    },
+    "display_name": "Kimi K3",
+    "origin": "Moonshot AI",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "text",
+        "video"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "temperature"
+      ]
+    },
+    "max_input_tokens": 1040384
+  },
+  "kimi-k3-fast-api": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 131072,
+    "description": "Kimi multimodal agent model for visual understanding, coding, and planning",
+    "release_date": "2026-08-03",
+    "last_updated": "2026-08-03",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "4.5",
+      "output_usd_per_million_tokens": "22.5",
+      "cache_read_usd_per_million_tokens": "0.45"
+    },
+    "display_name": "Kimi K3 Fast",
+    "origin": "Moonshot AI",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "temperature"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "large": {
+    "context_window_tokens": 202752,
+    "max_output_tokens": 202752,
+    "description": "Flagship GLM model for hybrid reasoning, coding, and agentic engineering",
+    "release_date": "2026-06-13",
+    "last_updated": "2026-06-13",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.05",
+      "output_usd_per_million_tokens": "4.4",
+      "cache_read_usd_per_million_tokens": "0.2",
+      "cache_write_usd_per_million_tokens": "0"
+    },
+    "display_name": "Ambient Large",
+    "origin": "Large",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output",
+      "temperature"
+    ],
+    "max_input_tokens": 202752
+  },
+  "lfm-2.5-2.6b": {
+    "context_window_tokens": 128000,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 32768,
+    "description": "Liquid AI's compact 2.6B reasoning model for agent workflows, data extraction, RAG, and long-context processing. It supports tool calling and structured output, but Liquid advises against using it for agentic coding. Warning: prompts and responses may be logged and used for model training or service improvement; do not send sensitive data.",
+    "release_date": "2026-08-12",
+    "last_updated": "2026-08-12",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.1",
+      "output_usd_per_million_tokens": "0.2",
+      "cache_read_usd_per_million_tokens": "0.05"
+    },
+    "display_name": "LFM2.5 2.6B",
+    "origin": "Liquid AI",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output",
+      "temperature"
+    ]
+  },
+  "lfm2-24b-a2b": {
+    "context_window_tokens": 32768,
+    "max_output_tokens": 32768,
+    "description": "Open-weight instruction model for adaptable chat and self-hosted production workloads",
+    "release_date": "2026-01-31",
+    "last_updated": "2026-02-25",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.03",
+      "output_usd_per_million_tokens": "0.12",
+      "cache_read_usd_per_million_tokens": "0.03",
+      "cache_write_usd_per_million_tokens": "0.03"
+    },
+    "display_name": "LFM2 24B A2B",
+    "origin": "Lfm2",
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 32768
+  },
+  "ling-3.0-flash": {
+    "lifecycle": "deprecated",
+    "context_window_tokens": 262144,
+    "max_input_tokens": 262144,
+    "max_output_tokens": 262144,
+    "description": "Efficient model for low-latency assistance, extraction, and routine automation",
+    "release_date": "2026-08-02",
+    "last_updated": "2026-08-02",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.06",
+      "output_usd_per_million_tokens": "0.18",
+      "cache_read_usd_per_million_tokens": "0.012"
+    },
+    "display_name": "InclusionAI Ling 3.0 Flash",
+    "origin": "Inclusion AI",
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "ling-3.0-tiny": {
+    "context_window_tokens": 262144,
+    "max_input_tokens": 262144,
+    "max_output_tokens": 32768,
+    "description": "Ling 3.0 Tiny is a compact 7.9B-parameter Mixture-of-Experts model with 1.3B parameters active per token. It is designed for responsive agents, reliable instruction following, natural multi-turn conversations, long-context work, and function calling at low inference cost.",
+    "release_date": "2026-08-09",
+    "last_updated": "2026-08-09",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.1",
+      "output_usd_per_million_tokens": "0.2",
+      "cache_read_usd_per_million_tokens": "0.01"
+    },
+    "display_name": "Ling 3.0 Tiny",
+    "origin": "Inclusion AI",
+    "features": {
+      "supported": [
+        "tool_calling",
+        "reasoning",
+        "temperature"
+      ],
+      "unsupported": [
+        "reasoning",
+        "structured_output"
+      ]
+    }
+  },
+  "llama-3.1-405b-instruct": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 128000,
+    "description": "Open Llama instruction model for multilingual chat, reasoning, and coding",
+    "knowledge_cutoff": "2023-12",
+    "release_date": "2024-07-23",
+    "last_updated": "2024-07-23",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.95",
+      "output_usd_per_million_tokens": "1.95"
+    },
+    "display_name": "Llama 3.1 405B Instruct",
+    "origin": "Meta",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "llama-3.1-8b-instruct": {
+    "context_window_tokens": 128000,
+    "max_input_tokens": 131072,
+    "max_output_tokens": 128000,
+    "description": "Optimized for dialogue, this LLM by Meta outperforms other open-source chat models in benchmarks while prioritizing helpfulness and safety.",
+    "knowledge_cutoff": "2024-07",
+    "release_date": "2024-04-09",
+    "last_updated": "2024-04-09",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.167",
+      "output_usd_per_million_tokens": "0.167",
+      "cache_read_usd_per_million_tokens": "0.2",
+      "cache_write_usd_per_million_tokens": "0.2"
+    },
+    "display_name": "llama-3.1-8b-instruct",
+    "origin": "NVIDIA",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "llama-3.1-nemotron-nano-8b-v1": {
+    "context_window_tokens": 131072,
+    "max_output_tokens": 16384,
+    "description": "Nemotron model for efficient reasoning, coding, and specialized AI agents",
+    "release_date": "2025-03-18",
+    "last_updated": "2025-03-18",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0",
+      "output_usd_per_million_tokens": "0"
+    },
+    "display_name": "Llama 3.1 Nemotron Nano 8B v1",
+    "origin": "NVIDIA",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 131072
+  },
+  "llama-3.1-nemotron-nano-vl-8b-v1": {
+    "context_window_tokens": 32768,
+    "max_output_tokens": 16384,
+    "description": "Nemotron multimodal model for visual reasoning and agentic AI workflows",
+    "release_date": "2025-04-10",
+    "last_updated": "2025-04-10",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0",
+      "output_usd_per_million_tokens": "0"
+    },
+    "display_name": "Llama 3.1 Nemotron Nano VL 8B v1",
+    "origin": "NVIDIA",
+    "input": [
+      "image",
+      "file"
+    ],
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 32768
+  },
+  "llama-3.1-nemotron-ultra-253b-v1": {
+    "context_window_tokens": 128000,
+    "max_input_tokens": 120000,
+    "max_output_tokens": 128000,
+    "description": "A reasoning-optimized LLM based on Llama 3.1, Nemotron Ultra 253B delivers strong performance in tasks like RAG and tool use, with high efficiency and reduced latency.",
+    "knowledge_cutoff": "2024-12",
+    "release_date": "2025-04-07",
+    "last_updated": "2025-04-07",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.598",
+      "output_usd_per_million_tokens": "1.794",
+      "cache_read_usd_per_million_tokens": "0.06",
+      "cache_write_usd_per_million_tokens": "0.75"
+    },
+    "display_name": "llama-3.1-nemotron-ultra-253b-v1",
+    "origin": "NVIDIA",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "llama-3.2-1b-instruct": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 4096,
+    "description": "Open Llama instruction model for multilingual chat, reasoning, and coding",
+    "knowledge_cutoff": "2023-12",
+    "release_date": "2024-09-18",
+    "last_updated": "2024-09-18",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0",
+      "output_usd_per_million_tokens": "0",
+      "cache_read_usd_per_million_tokens": "0.1",
+      "cache_write_usd_per_million_tokens": "0.1"
+    },
+    "display_name": "Llama 3.2 1b Instruct",
+    "origin": "NVIDIA",
+    "features": {
+      "supported": [
+        "tool_calling",
+        "structured_output",
+        "temperature",
+        "reasoning"
+      ],
+      "unsupported": [
+        "reasoning",
+        "tool_calling",
+        "structured_output"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "llama-3.2-3b-instruct": {
+    "context_window_tokens": 32768,
+    "max_input_tokens": 131072,
+    "max_output_tokens": 32000,
+    "description": "Open Llama instruction model for multilingual chat, reasoning, and coding",
+    "knowledge_cutoff": "2023-12",
+    "release_date": "2024-09-18",
+    "last_updated": "2024-09-18",
+    "open_weights": true,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.03",
+      "output_usd_per_million_tokens": "0.05",
+      "cache_read_usd_per_million_tokens": "0.1",
+      "cache_write_usd_per_million_tokens": "0.1"
+    },
+    "display_name": "Llama 3.2 3B Instruct",
+    "origin": "NVIDIA",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling"
+      ]
+    }
+  },
+  "llama-3.3-nemotron-super-49b-v1": {
+    "context_window_tokens": 131072,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 65536,
+    "description": "Nemotron model for efficient reasoning, coding, and specialized AI agents",
+    "release_date": "2025-04-07",
+    "last_updated": "2025-04-07",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0",
+      "output_usd_per_million_tokens": "0",
+      "cache_read_usd_per_million_tokens": "0.075"
+    },
+    "display_name": "Llama 3.3 Nemotron Super 49B v1",
+    "origin": "NVIDIA",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ]
+  },
+  "llama-3.3-nemotron-super-49b-v1.5": {
+    "lifecycle": "deprecated",
+    "context_window_tokens": 131072,
+    "max_output_tokens": 65536,
+    "description": "Nemotron model for efficient reasoning, coding, and specialized AI agents",
+    "release_date": "2025-07-25",
+    "last_updated": "2025-07-25",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0",
+      "output_usd_per_million_tokens": "0"
+    },
+    "display_name": "Llama 3.3 Nemotron Super 49B v1.5",
+    "origin": "NVIDIA",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature",
+      "structured_output"
+    ],
+    "max_input_tokens": 131072
+  },
+  "lucidnova-rf1-100b": {
+    "context_window_tokens": 120000,
+    "max_output_tokens": 8000,
+    "description": "Reasoning model for deliberate analysis, multi-step problem solving, and tool use",
+    "knowledge_cutoff": "2025-09-16",
+    "release_date": "2024-12-28",
+    "last_updated": "2025-09-10",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "2",
+      "output_usd_per_million_tokens": "5"
+    },
+    "display_name": "LucidNova RF1 100B",
+    "origin": "Lucidnova",
+    "input": {
+      "supported": [
+        "file",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "temperature"
+      ]
+    },
+    "max_input_tokens": 120000
+  },
+  "lucidquery-agi-01-frontier": {
+    "context_window_tokens": 300000,
+    "max_output_tokens": 120000,
+    "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+    "knowledge_cutoff": "2026-06-05",
+    "release_date": "2026-06-16",
+    "last_updated": "2026-06-16",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "4.5",
+      "output_usd_per_million_tokens": "22"
+    },
+    "display_name": "AGI-01 Frontier",
+    "origin": "Lucidquery",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 300000
+  },
+  "lucidquery-agi-01-swift": {
+    "context_window_tokens": 300000,
+    "max_output_tokens": 120000,
+    "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+    "knowledge_cutoff": "2026-06-05",
+    "release_date": "2026-06-16",
+    "last_updated": "2026-06-16",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "2.5",
+      "output_usd_per_million_tokens": "15"
+    },
+    "display_name": "AGI-01 Swift",
+    "origin": "Lucidquery",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 300000
+  },
+  "lucidquery-nexus-coder": {
+    "context_window_tokens": 250000,
+    "max_output_tokens": 60000,
+    "description": "Coding model for repository understanding, refactors, and agentic engineering tasks",
+    "knowledge_cutoff": "2025-08-01",
+    "release_date": "2025-09-01",
+    "last_updated": "2025-09-01",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "2",
+      "output_usd_per_million_tokens": "5"
+    },
+    "display_name": "LucidQuery Nexus Coder",
+    "origin": "Lucidquery",
+    "input": {
+      "supported": [
+        "file",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "temperature"
+      ]
+    },
+    "max_input_tokens": 250000
+  },
+  "mercury-2": {
+    "context_window_tokens": 128000,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 50000,
+    "description": "Reasoning model for deliberate analysis, multi-step problem solving, and tool use",
+    "knowledge_cutoff": "2025-01-01",
+    "release_date": "2026-02-24",
+    "last_updated": "2026-02-24",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.25",
+      "output_usd_per_million_tokens": "0.75",
+      "cache_read_usd_per_million_tokens": "0.025"
+    },
+    "display_name": "Mercury 2",
+    "origin": "Mercury",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "mercury-edit-2": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 8192,
+    "description": "Reasoning model for deliberate analysis, multi-step problem solving, and tool use",
+    "release_date": "2026-03-30",
+    "last_updated": "2026-03-30",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.25",
+      "output_usd_per_million_tokens": "0.75",
+      "cache_read_usd_per_million_tokens": "0.025"
+    },
+    "display_name": "Mercury Edit 2",
+    "origin": "Mercury",
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "minimax-text-01": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 131072,
+    "description": "MiniMax model for chat, coding, office work, and agentic tasks",
+    "release_date": "2025-01-15",
+    "last_updated": "2025-01-15",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.2",
+      "output_usd_per_million_tokens": "1.1"
+    },
+    "display_name": "MiniMax Text 01",
+    "origin": "MiniMax",
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "mirothinker-1-7-deepresearch": {
+    "context_window_tokens": 262144,
+    "max_input_tokens": 262144,
+    "max_output_tokens": 16384,
+    "description": "Research model for long-horizon investigation, synthesis, and analytical reports",
+    "release_date": "2026-05-11",
+    "last_updated": "2026-05-11",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "4",
+      "output_usd_per_million_tokens": "25",
+      "cache_read_usd_per_million_tokens": "2"
+    },
+    "display_name": "MiroThinker 1.7 Deep Research",
+    "origin": "Mirothinker",
+    "features": {
+      "supported": [
+        "reasoning"
+      ],
+      "unsupported": [
+        "structured_output",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "mirothinker-1-7-deepresearch-mini": {
+    "context_window_tokens": 262144,
+    "max_input_tokens": 262144,
+    "max_output_tokens": 16384,
+    "description": "Research model for long-horizon investigation, synthesis, and analytical reports",
+    "release_date": "2026-05-11",
+    "last_updated": "2026-05-11",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.25",
+      "output_usd_per_million_tokens": "10",
+      "cache_read_usd_per_million_tokens": "0.625"
+    },
+    "display_name": "MiroThinker 1.7 Deep Research Mini",
+    "origin": "Mirothinker",
+    "features": {
+      "supported": [
+        "reasoning"
+      ],
+      "unsupported": [
+        "structured_output",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "mistral-large-2402": {
+    "context_window_tokens": 32000,
+    "max_output_tokens": 32000,
+    "description": "Mistral Large (24.02) is Mistral AI’s most advanced language model, built for complex multilingual reasoning, code generation, and deep text understanding.",
+    "release_date": "2025-05-26",
+    "last_updated": "2025-05-26",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "4.284",
+      "output_usd_per_million_tokens": "12.952"
+    },
+    "display_name": "mistral-large-2402",
+    "origin": "Mistral AI",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "temperature"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    },
+    "max_input_tokens": 32000
+  },
+  "mistralai-mistral-small": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 128000,
+    "description": "Fast Mistral production model for chat, extraction, and cost-sensitive agents",
+    "knowledge_cutoff": "2025-06",
+    "release_date": "2026-03-16",
+    "last_updated": "2026-03-16",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.07",
+      "output_usd_per_million_tokens": "0.28"
+    },
+    "display_name": "mistralai--mistral-small",
+    "origin": "Mistral AI",
+    "input": [
+      "image",
+      "file"
+    ],
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 128000
+  },
+  "mixtral-8x7b-instruct-v0.1": {
+    "context_window_tokens": 32000,
+    "max_output_tokens": 32000,
+    "description": "Reasoning model for deliberate analysis, multi-step problem solving, and tool use",
+    "knowledge_cutoff": "2023-09",
+    "release_date": "2023-12-11",
+    "last_updated": "2023-12-11",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.488",
+      "output_usd_per_million_tokens": "0.758"
+    },
+    "display_name": "Mixtral 8x7B Instruct v0.1",
+    "origin": "Mistral AI",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 32000
+  },
+  "motif-3": {
+    "context_window_tokens": 262144,
+    "max_output_tokens": 262144,
+    "description": "Motif 3 is a large-scale, decoder-only Mixture-of-Experts (MoE) language model with 314 billion total parameters and 13.2 billion parameters activated per token.",
+    "release_date": "2026-08-12",
+    "last_updated": "2026-08-12",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.5",
+      "output_usd_per_million_tokens": "2"
+    },
+    "display_name": "Motif 3",
+    "origin": "Motif",
+    "features": {
+      "supported": [
+        "reasoning"
+      ],
+      "unsupported": [
+        "tool_calling",
+        "structured_output",
+        "temperature"
+      ]
+    },
+    "max_input_tokens": 262144
+  },
+  "muse-glimmer-30b": {
+    "context_window_tokens": 131072,
+    "max_input_tokens": 131072,
+    "max_output_tokens": 131072,
+    "description": "Muse Glimmer 30B is a dense, open-weight multimodal model from Meta Superintelligence Labs, distilled from Muse Spark and optimized for autonomous agents on consumer hardware. It is suited for long-horizon...",
+    "knowledge_cutoff": "2026-01-04",
+    "release_date": "2026-08-10",
+    "last_updated": "2026-08-10",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.3",
+      "output_usd_per_million_tokens": "1.2",
+      "cache_read_usd_per_million_tokens": "0.04"
+    },
+    "display_name": "Muse Glimmer 30B",
+    "origin": "Muse",
+    "input": [
+      "image",
+      "document",
+      "file"
+    ],
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output",
+      "temperature"
+    ]
+  },
+  "namazu": {
+    "context_window_tokens": 256000,
+    "max_output_tokens": 256000,
+    "description": "Multi-agent model for routing expert agents across complex analytical tasks",
+    "release_date": "2026-08-03",
+    "last_updated": "2026-08-03",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.95",
+      "output_usd_per_million_tokens": "4",
+      "cache_read_usd_per_million_tokens": "0.15"
+    },
+    "display_name": "Sakana Namazu",
+    "origin": "Namazu",
+    "input": [
+      "image",
+      "document",
+      "file"
+    ],
+    "features": [
+      "reasoning",
+      "tool_calling"
+    ],
+    "max_input_tokens": 256000
+  },
+  "nemotron-3-super-120b-a12b:thinking": {
+    "context_window_tokens": 262144,
+    "max_input_tokens": 262144,
+    "max_output_tokens": 16384,
+    "description": "Nemotron middle tier for collaborative agents and high-volume reasoning workloads",
+    "release_date": "2026-03-01",
+    "last_updated": "2026-03-01",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.05",
+      "output_usd_per_million_tokens": "0.25",
+      "cache_read_usd_per_million_tokens": "0.025"
+    },
+    "display_name": "Nvidia Nemotron 3 Super 120B Thinking",
+    "origin": "Nemotron",
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    }
+  },
+  "nemotron-3-ultra-550b-a55b:thinking": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 65536,
+    "description": "Largest Nemotron 3 model for maximum open-weight reasoning and agent accuracy",
+    "release_date": "2026-06-04",
+    "last_updated": "2026-06-04",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.5",
+      "output_usd_per_million_tokens": "2.5",
+      "cache_read_usd_per_million_tokens": "0.25"
+    },
+    "display_name": "Nvidia Nemotron 3 Ultra 550B Thinking",
+    "origin": "Nemotron",
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    }
+  },
+  "nemotron-3.5-content-safety": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 8192,
+    "description": "NVIDIA Nemotron 3.5 Content Safety is a compact 4B-parameter multimodal guardrail model from NVIDIA, fine-tuned from Google Gemma-3-4B. It moderates both inputs to and responses from LLMs and VLMs, accepting... **Terms of service** For NVIDIA free endpoints (Super/Ultra/etc): Trial use only - do not submit personal or confidential data. Your use is logged for security purposes and to improve NVIDIA products and services. The logged session data for improvement purposes is not linked to your identity or any persistent identifier. For more information about our data processing practices, see our [Privacy Policy](https://www.nvidia.com/en-us/about-nvidia/privacy-policy/). By interacting with this endpoint, you consent to our collection, recording, and use of such information and the [NVIDIA API Trial Terms of Service](https://assets.ngc.nvidia.com/products/api-catalog/legal/NVIDIA%20API%20Trial%20Terms%20of%20Service.pdf).",
+    "release_date": "2026-06-04",
+    "last_updated": "2026-06-04",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0",
+      "output_usd_per_million_tokens": "0"
+    },
+    "display_name": "NVIDIA: Nemotron 3.5 Content Safety (free)",
+    "origin": "Nemotron",
+    "input": [
+      "image",
+      "file"
+    ],
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling",
+        "structured_output"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "nemotron-3.5-lightning:thinking": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 65536,
+    "description": "Fast NVIDIA Nemotron MoE for reliable agentic tasks across enterprise workloads",
+    "release_date": "2026-08-11",
+    "last_updated": "2026-08-11",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.05",
+      "output_usd_per_million_tokens": "0.2",
+      "cache_read_usd_per_million_tokens": "0.01"
+    },
+    "display_name": "Nvidia Nemotron 3.5 Lightning Thinking",
+    "origin": "Nemotron",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output",
+      "temperature"
+    ]
+  },
+  "nemotron-cascade-2-30b-a3b": {
+    "context_window_tokens": 262144,
+    "max_output_tokens": 131072,
+    "description": "Nemotron model for efficient reasoning, coding, and specialized AI agents",
+    "knowledge_cutoff": "2024-07",
+    "release_date": "2025-12-01",
+    "last_updated": "2025-12-01",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.15",
+      "output_usd_per_million_tokens": "0.6"
+    },
+    "display_name": "NVIDIA Nemotron Cascade 2",
+    "origin": "Nemotron",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 262144
+  },
+  "nemotron-content-safety-reasoning-4b": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 4096,
+    "description": "Safety model for policy screening, moderation, and risk-aware routing workflows",
+    "release_date": "2026-01-22",
+    "last_updated": "2026-01-22",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0",
+      "output_usd_per_million_tokens": "0"
+    },
+    "display_name": "nemotron-content-safety-reasoning-4b",
+    "origin": "NVIDIA",
+    "features": {
+      "supported": [
+        "reasoning"
+      ],
+      "unsupported": [
+        "tool_calling",
+        "temperature"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "nemotron-nano-12b-v2-vl": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 16384,
+    "description": "Nemotron multimodal model for visual reasoning and agentic AI workflows",
+    "knowledge_cutoff": "2024-10",
+    "release_date": "2025-10-28",
+    "last_updated": "2025-10-28",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.2",
+      "output_usd_per_million_tokens": "0.6"
+    },
+    "display_name": "Nemotron-nano 12b v2-vl",
+    "origin": "NVIDIA",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text",
+        "video"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "nemotron-nano-9b-v2": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 8192,
+    "description": "Compact Nemotron model for efficient reasoning and deployable AI agents",
+    "knowledge_cutoff": "2024-10",
+    "release_date": "2025-08-18",
+    "last_updated": "2025-08-18",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.06",
+      "output_usd_per_million_tokens": "0.23"
+    },
+    "display_name": "Nemotron Nano 9B",
+    "origin": "Nemotron",
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling",
+        "structured_output"
+      ],
+      "unsupported": [
+        "tool_calling",
+        "structured_output",
+        "reasoning"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "nemotron-nano-v2-12b": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 128000,
+    "description": "NVIDIA Nemotron Nano v2 12B is a 12-billion-parameter multimodal reasoning model designed for advanced video understanding, document intelligence, and visual reasoning, built with a hybrid Transformer-Mamba architecture for high efficiency and low latency.",
+    "release_date": "2025-10-31",
+    "last_updated": "2025-10-31",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.24",
+      "output_usd_per_million_tokens": "0.707"
+    },
+    "display_name": "nemotron-nano-v2-12b",
+    "origin": "Nemotron",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "temperature"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "nova-2-lite": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 1000000,
+    "description": "Nova 2 Lite is an advanced multimodal reasoning model that combines efficiency and performance, delivering reliable AI for agentic workflows and enterprise applications.",
+    "knowledge_cutoff": "2024-10",
+    "release_date": "2025-12-04",
+    "last_updated": "2025-12-04",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.373",
+      "output_usd_per_million_tokens": "3.144",
+      "cache_read_usd_per_million_tokens": "0.075"
+    },
+    "display_name": "nova-2-lite",
+    "origin": "Deepgram",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "nova-2-pro-v1": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 64000,
+    "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+    "release_date": "2025-12-03",
+    "last_updated": "2026-01-03",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0",
+      "output_usd_per_million_tokens": "0"
+    },
+    "display_name": "Nova 2 Pro",
+    "origin": "Deepgram",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "document",
+        "text",
+        "video"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "nova-lite-v1": {
+    "context_window_tokens": 300000,
+    "max_input_tokens": 300000,
+    "max_output_tokens": 300000,
+    "description": "Nova Lite is a fast, low-cost multimodal foundation model capable of reasoning over text, images, and video in 200+ languages.",
+    "knowledge_cutoff": "2024-10-31",
+    "release_date": "2025-04-14",
+    "last_updated": "2025-04-14",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.069",
+      "output_usd_per_million_tokens": "0.275",
+      "cache_read_usd_per_million_tokens": "0.02975"
+    },
+    "display_name": "nova-lite-v1",
+    "origin": "Amazon",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text",
+        "video"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    }
+  },
+  "nova-micro-v1": {
+    "context_window_tokens": 128000,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 128000,
+    "description": "Nova Micro is a multilingual text-to-text foundation model with strong reasoning capabilities and broad language coverage across 200+ languages.",
+    "knowledge_cutoff": "2024-10-31",
+    "release_date": "2025-04-14",
+    "last_updated": "2025-04-14",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.04",
+      "output_usd_per_million_tokens": "0.159",
+      "cache_read_usd_per_million_tokens": "0.01785"
+    },
+    "display_name": "nova-micro-v1",
+    "origin": "Amazon",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    }
+  },
+  "nova-pro-v1": {
+    "context_window_tokens": 300000,
+    "max_input_tokens": 300000,
+    "max_output_tokens": 5000,
+    "description": "Flagship model for demanding analysis, coding, and production agent workflows",
+    "knowledge_cutoff": "2024-04",
+    "release_date": "2024-12-03",
+    "last_updated": "2024-12-03",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.918",
+      "output_usd_per_million_tokens": "3.671",
+      "cache_read_usd_per_million_tokens": "0.3995"
+    },
+    "display_name": "Nova Pro 1.0",
+    "origin": "Amazon",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text",
+        "video"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    }
+  },
+  "nvidia-nemotron-nano-9b-v2": {
+    "context_window_tokens": 131072,
+    "max_output_tokens": 131072,
+    "description": "Compact Nemotron model for efficient reasoning and deployable AI agents",
+    "knowledge_cutoff": "2024-09",
+    "release_date": "2025-08-18",
+    "last_updated": "2025-08-18",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0",
+      "output_usd_per_million_tokens": "0"
+    },
+    "display_name": "nvidia-nemotron-nano-9b-v2",
+    "origin": "NVIDIA",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 131072
+  },
+  "openai-gpt-4o-mini": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 16384,
+    "description": "Compact GPT model for low-latency assistance and high-volume workloads",
+    "knowledge_cutoff": "2023-09",
+    "release_date": "2024-07-18",
+    "last_updated": "2024-07-18",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.15",
+      "output_usd_per_million_tokens": "0.6",
+      "cache_read_usd_per_million_tokens": "0.075"
+    },
+    "display_name": "OpenAI GPT-4o mini",
+    "origin": "OpenAI",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "openreasoning-nemotron-32b": {
+    "context_window_tokens": 32768,
+    "max_input_tokens": 32768,
+    "max_output_tokens": 65536,
+    "description": "Nemotron model for efficient reasoning, coding, and specialized AI agents",
+    "release_date": "2025-08-21",
+    "last_updated": "2025-08-21",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.1",
+      "output_usd_per_million_tokens": "0.4",
+      "cache_read_usd_per_million_tokens": "0.05"
+    },
+    "display_name": "OpenReasoning Nemotron 32B",
+    "origin": "Openreasoning",
+    "features": {
+      "supported": [
+        "reasoning"
+      ],
+      "unsupported": [
+        "tool_calling",
+        "structured_output"
+      ]
+    }
+  },
+  "perceptron-mk1": {
+    "context_window_tokens": 32768,
+    "max_input_tokens": 32768,
+    "max_output_tokens": 8192,
+    "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+    "release_date": "2026-05-12",
+    "last_updated": "2026-05-12",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.15",
+      "output_usd_per_million_tokens": "1.5",
+      "cache_read_usd_per_million_tokens": "0.075"
+    },
+    "display_name": "Perceptron: Perceptron Mk1",
+    "origin": "Perceptron",
+    "input": [
+      "image",
+      "video",
+      "file"
+    ],
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling"
+      ]
+    }
+  },
+  "pixtral-12b-2409": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 128000,
+    "description": "Pixtral 2409 12B is a state-of-the-art multimodal model with 12B parameters and a 400M vision encoder, natively trained on interleaved text and image data. It excels in tasks spanning vision-language reasoning, instruction following, and pure text understanding, making it highly effective for real-world multimodal applications.",
+    "knowledge_cutoff": "2024-09",
+    "release_date": "2024-11-09",
+    "last_updated": "2024-11-09",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.223",
+      "output_usd_per_million_tokens": "0.223",
+      "cache_read_usd_per_million_tokens": "0.15",
+      "cache_write_usd_per_million_tokens": "0.15"
+    },
+    "display_name": "pixtral-12b-2409",
+    "origin": "Mistral AI",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "pixtral-large-2502": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 128000,
+    "description": "Pixtral Large (25.02) is a 124B open-weight multimodal model built on Mistral Large 2, offering advanced image understanding and strong performance across text and code tasks.",
+    "release_date": "2025-05-26",
+    "last_updated": "2025-05-26",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.993",
+      "output_usd_per_million_tokens": "5.978"
+    },
+    "display_name": "pixtral-large-2502",
+    "origin": "Mistral AI",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "pokee-isaac": {
+    "context_window_tokens": 10000000,
+    "max_input_tokens": 10000000,
+    "max_output_tokens": 60000,
+    "description": "Pokee-Isaac is a 28B agentic model with a roughly 10-million-token context window, function calling, and OpenAI-compatible structured output. Pokee bills in $0.01 increments, rounding each non-zero request up to the next cent.",
+    "release_date": "2026-08-04",
+    "last_updated": "2026-08-04",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.15",
+      "output_usd_per_million_tokens": "1",
+      "cache_read_usd_per_million_tokens": "0.075"
+    },
+    "display_name": "Pokee-Isaac 28B",
+    "origin": "Pokee",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "qvq-max": {
+    "context_window_tokens": 131072,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 8192,
+    "description": "Qwen vision-language model for visual reasoning, documents, and agent tasks",
+    "knowledge_cutoff": "2024-04",
+    "release_date": "2025-03-25",
+    "last_updated": "2025-03-25",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "1.2",
+      "output_usd_per_million_tokens": "4.8",
+      "cache_read_usd_per_million_tokens": "0.6"
+    },
+    "display_name": "QVQ Max",
+    "origin": "Alibaba",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    }
+  },
+  "qwen-turbo": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 16384,
+    "description": "Efficient Qwen model for fast chat, extraction, and high-volume workloads",
+    "knowledge_cutoff": "2024-04",
+    "release_date": "2024-11-01",
+    "last_updated": "2025-04-28",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.05",
+      "output_usd_per_million_tokens": "0.2",
+      "cache_read_usd_per_million_tokens": "0.02499"
+    },
+    "display_name": "Qwen Turbo",
+    "origin": "Alibaba",
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "qwen2.5-vl-72b-instruct": {
+    "context_window_tokens": 32000,
+    "max_input_tokens": 120000,
+    "max_output_tokens": 32000,
+    "description": "Qwen2.5-VL is a powerful vision-language model with advanced capabilities in visual understanding, long video reasoning, and structured output generation.",
+    "knowledge_cutoff": "2024-06-30",
+    "release_date": "2025-01-27",
+    "last_updated": "2025-01-27",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.25",
+      "output_usd_per_million_tokens": "0.747",
+      "cache_read_usd_per_million_tokens": "0.025",
+      "cache_write_usd_per_million_tokens": "0.31"
+    },
+    "display_name": "qwen2.5-vl-72b-instruct",
+    "origin": "Alibaba",
+    "input": {
+      "supported": [
+        "audio",
+        "file",
+        "image",
+        "text",
+        "video"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    }
+  },
+  "qwen3-coder-30b-a3b": {
+    "context_window_tokens": 262144,
+    "max_output_tokens": 8192,
+    "description": "Qwen coding model for software agents, repository edits, and code reasoning",
+    "knowledge_cutoff": "2025-04",
+    "release_date": "2025-07-31",
+    "last_updated": "2025-04",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.15",
+      "output_usd_per_million_tokens": "0.6"
+    },
+    "display_name": "Qwen 3 Coder 30B A3B Instruct",
+    "origin": "Alibaba",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 262144
+  },
+  "qwen3-coder-next": {
+    "context_window_tokens": 262144,
+    "max_input_tokens": 262144,
+    "max_output_tokens": 65536,
+    "description": "Qwen coding model for software agents, repository edits, and code reasoning",
+    "knowledge_cutoff": "2025-09",
+    "release_date": "2025-10-15",
+    "last_updated": "2025-10-15",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.108",
+      "output_usd_per_million_tokens": "0.675",
+      "cache_read_usd_per_million_tokens": "0.06",
+      "cache_write_usd_per_million_tokens": "0"
+    },
+    "display_name": "Qwen3 Coder Next",
+    "origin": "Alibaba",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "qwen3.1.7b-base": {
+    "context_window_tokens": 32768,
+    "max_output_tokens": 32768,
+    "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+    "release_date": "2025-03-31",
+    "last_updated": "2025-03-31",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.1",
+      "output_usd_per_million_tokens": "0.1",
+      "cache_read_usd_per_million_tokens": "0.1",
+      "cache_write_usd_per_million_tokens": "0.1"
+    },
+    "display_name": "Qwen3 1.7B Base",
+    "origin": "Alibaba",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 32768,
+    "knowledge_cutoff": "2025-03-31"
+  },
+  "qwen3.4b-base": {
+    "context_window_tokens": 32768,
+    "max_output_tokens": 32768,
+    "description": "Qwen instruction model for multilingual chat, reasoning, and tool use",
+    "release_date": "2025-03-31",
+    "last_updated": "2025-03-31",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.15",
+      "output_usd_per_million_tokens": "0.15",
+      "cache_read_usd_per_million_tokens": "0.15",
+      "cache_write_usd_per_million_tokens": "0.15"
+    },
+    "display_name": "Qwen3 4B Base",
+    "origin": "Alibaba",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 32768,
+    "knowledge_cutoff": "2025-03-31"
+  },
+  "ring-1t": {
+    "lifecycle": "deprecated",
+    "context_window_tokens": 128000,
+    "max_output_tokens": 32000,
+    "description": "Reasoning model for deliberate analysis, multi-step problem solving, and tool use",
+    "knowledge_cutoff": "2024-06",
+    "release_date": "2025-10",
+    "last_updated": "2025-10",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.57",
+      "output_usd_per_million_tokens": "2.29",
+      "cache_read_usd_per_million_tokens": "0.11"
+    },
+    "display_name": "Ring-1T",
+    "origin": "Ring",
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature"
+      ],
+      "unsupported": [
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "ring-2.6-1t": {
+    "lifecycle": "deprecated",
+    "context_window_tokens": 262144,
+    "max_input_tokens": 262144,
+    "max_output_tokens": 65536,
+    "description": "Reasoning model for deliberate analysis, multi-step problem solving, and tool use",
+    "knowledge_cutoff": "2025-12-31",
+    "release_date": "2026-05-08",
+    "last_updated": "2026-05-08",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.3",
+      "output_usd_per_million_tokens": "2.5",
+      "cache_read_usd_per_million_tokens": "0.06"
+    },
+    "display_name": "inclusionAI: Ring-2.6-1T",
+    "origin": "Inclusion AI",
+    "input": [
+      "file"
+    ],
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    }
+  },
+  "sakana-namazu": {
+    "context_window_tokens": 262144,
+    "max_output_tokens": 65536,
+    "description": "Sakana Namazu is a Japanese-specialized reasoning model from Sakana AI, based on Kimi K2.6 with additional training for Japanese language and business contexts. It is suited for Japanese instruction following,...",
+    "release_date": "2026-08-11",
+    "last_updated": "2026-08-11",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.95",
+      "output_usd_per_million_tokens": "4",
+      "cache_read_usd_per_million_tokens": "0.15"
+    },
+    "display_name": "Sakana: Sakana Namazu",
+    "origin": "Sakana",
+    "input": [
+      "image",
+      "document",
+      "file"
+    ],
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "structured_output"
+      ],
+      "unsupported": [
+        "temperature"
+      ]
+    },
+    "max_input_tokens": 262144
+  },
+  "small": {
+    "context_window_tokens": 262144,
+    "max_output_tokens": 32768,
+    "description": "Automatic model router for matching prompts to suitable backends and budgets",
+    "release_date": "1970-01-01",
+    "last_updated": "1970-01-01",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.05",
+      "output_usd_per_million_tokens": "0.4",
+      "cache_read_usd_per_million_tokens": "0.005"
+    },
+    "display_name": "Auto Small",
+    "origin": "Small",
+    "input": [
+      "image",
+      "file"
+    ],
+    "features": {
+      "supported": [
+        "reasoning",
+        "tool_calling",
+        "temperature"
+      ],
+      "unsupported": [
+        "structured_output"
+      ]
+    },
+    "max_input_tokens": 262144
+  },
+  "smollm3-3b-base": {
+    "context_window_tokens": 32768,
+    "max_output_tokens": 32768,
+    "description": "Tool-capable chat model for instruction following and agentic application workflows",
+    "release_date": "2025-06-30",
+    "last_updated": "2025-06-30",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.15",
+      "output_usd_per_million_tokens": "0.15",
+      "cache_read_usd_per_million_tokens": "0.15",
+      "cache_write_usd_per_million_tokens": "0.15"
+    },
+    "display_name": "SmolLM3 3B Base",
+    "origin": "Smollm3",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "temperature"
+    ],
+    "max_input_tokens": 32768
+  },
+  "solar-pro-3": {
+    "context_window_tokens": 131072,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 131072,
+    "description": "Flagship model for demanding analysis, coding, and production agent workflows",
+    "release_date": "2026-01-27",
+    "last_updated": "2026-01-27",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "0.15",
+      "output_usd_per_million_tokens": "0.6",
+      "cache_read_usd_per_million_tokens": "0.015"
+    },
+    "display_name": "Upstage: Solar Pro 3",
+    "origin": "Upstage",
+    "features": [
+      "reasoning",
+      "tool_calling",
+      "structured_output",
+      "temperature"
+    ]
+  },
+  "synth": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 131072,
+    "description": "TrustedRouter synthesis orchestration alias that combines multiple model responses into one answer.",
+    "release_date": "2026-06-20",
+    "last_updated": "2026-06-27",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "Synth",
+    "origin": "Synth",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "document",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "synth-code": {
+    "context_window_tokens": 1000000,
+    "max_output_tokens": 131072,
+    "description": "TrustedRouter code synthesis orchestration alias that combines multiple model responses into one answer.",
+    "release_date": "2026-06-20",
+    "last_updated": "2026-06-27",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "Synth Code",
+    "origin": "Synth",
+    "input": {
+      "supported": [
+        "document",
+        "file",
+        "image",
+        "document",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 1000000
+  },
+  "text-max": {
+    "context_window_tokens": 1000000,
+    "max_input_tokens": 922000,
+    "max_output_tokens": 128000,
+    "description": "Frontier models for deep reasoning, long context, and complex workflows. Any model that meets the contract spec can serve your request.",
+    "release_date": "2026-02-26",
+    "last_updated": "2026-07-24",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "Text Max",
+    "origin": "Text",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "tool_calling"
+      ],
+      "unsupported": [
+        "temperature"
+      ]
+    }
+  },
+  "text-prime": {
+    "context_window_tokens": 196608,
+    "max_input_tokens": 120000,
+    "max_output_tokens": 30000,
+    "description": "Reliable models for everyday text generation, editing, and analysis across diverse workflows. Any model that meets the contract spec can serve your request.",
+    "release_date": "2026-02-26",
+    "last_updated": "2026-07-15",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "Text Prime",
+    "origin": "Text",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "text-standard": {
+    "context_window_tokens": 128000,
+    "max_input_tokens": 120000,
+    "max_output_tokens": 16000,
+    "description": "Price-optimized models with low-latency, high-throughput and shorter maximum outputs. Any model that meets the contract spec can serve your request.",
+    "release_date": "2026-02-26",
+    "last_updated": "2026-07-15",
+    "open_weights": false,
+    "assistant_reasoning_interleaved": true,
+    "assistant_reasoning_field": "reasoning_content",
+    "output_modalities": [
+      "text"
+    ],
+    "display_name": "Text Standard",
+    "origin": "Text",
+    "features": {
+      "supported": [
+        "reasoning",
+        "structured_output",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "input": {
+      "supported": [
+        "text"
+      ]
+    }
+  },
+  "v0-1.0-md": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 32000,
+    "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+    "release_date": "2025-05-22",
+    "last_updated": "2025-05-22",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "3",
+      "output_usd_per_million_tokens": "15"
+    },
+    "display_name": "v0-1.0-md",
+    "origin": "Vercel",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 128000
+  },
+  "v0-1.5-lg": {
+    "context_window_tokens": 512000,
+    "max_output_tokens": 32000,
+    "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+    "release_date": "2025-06-09",
+    "last_updated": "2025-06-09",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "15",
+      "output_usd_per_million_tokens": "75"
+    },
+    "display_name": "v0-1.5-lg",
+    "origin": "Vercel",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 512000
+  },
+  "v0-1.5-md": {
+    "context_window_tokens": 128000,
+    "max_output_tokens": 32000,
+    "description": "Multimodal reasoning model for visual analysis, planning, and tool use",
+    "release_date": "2025-06-09",
+    "last_updated": "2025-06-09",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "pricing": {
+      "input_usd_per_million_tokens": "3",
+      "output_usd_per_million_tokens": "15"
+    },
+    "display_name": "v0-1.5-md",
+    "origin": "Vercel",
+    "input": {
+      "supported": [
+        "file",
+        "image",
+        "text"
+      ]
+    },
+    "features": {
+      "supported": [
+        "reasoning",
+        "temperature",
+        "tool_calling"
+      ]
+    },
+    "max_input_tokens": 128000
+  }
+}

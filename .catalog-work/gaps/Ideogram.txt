@@ -1,0 +1,4 @@
+ideogram
+ideogram-v2
+ideogram-v2a
+ideogram-v2a-turbo

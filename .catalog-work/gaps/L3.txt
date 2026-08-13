@@ -1,0 +1,9 @@
+l3-8b-lunaris
+l3-8b-stheno-v3.2
+l3-lunaris-8b
+l3.1-70b-celeste-v0.1-bf16
+l3.3-cu-mai-r1-70b
+l3.3-electra-r1-70b
+l3.3-ms-evayale-70b
+l3.3-ms-nevoria-70b
+l3.3-nevoria-r1-70b

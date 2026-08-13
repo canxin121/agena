@@ -1,0 +1,6 @@
+zai-org-glm-4.6
+zai-org-glm-4.7
+zai-org-glm-4.7-flash
+zai-org-glm-5
+zai-org-glm-5-1
+zai-org-glm-5-2

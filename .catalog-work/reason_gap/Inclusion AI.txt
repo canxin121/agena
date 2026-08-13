@@ -1,0 +1,5 @@
+ling-3.0-flash
+ling-3.0-flash:thinking
+ling-3.0-tiny
+ling-3.0-tiny:thinking
+ring-2.6-1t

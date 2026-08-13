@@ -1,0 +1,48 @@
+{
+ "models": {
+  "kimi-k2-instruct-0711": {
+   "knowledge_cutoff": "2024-10",
+   "release_date": "2025-07-11"
+  },
+  "kimi-k2-instruct-fast": {
+   "knowledge_cutoff": "2024-10",
+   "description": "Fast low-latency variant of Kimi K2 0711 Instruct for high-volume workloads"
+  },
+  "kimi-k2.0711": {
+   "release_date": "2025-07-11"
+  },
+  "kimi-k2.0905": {
+   "open_weights": true
+  },
+  "kimi-k2.5-fw": {
+   "knowledge_cutoff": "2025-01"
+  },
+  "kimi-k2.5-lightning": {
+   "knowledge_cutoff": "2025-01"
+  },
+  "kimi-k2p6": {
+   "knowledge_cutoff": "2025-01"
+  },
+  "kimi-k2p6-fast": {
+   "knowledge_cutoff": "2025-01"
+  },
+  "kimi-k2p6-turbo": {
+   "knowledge_cutoff": "2025-01"
+  },
+  "kimi-k2p7-code": {
+   "knowledge_cutoff": "2025-01"
+  },
+  "kimi-k2p7-code-fast": {
+   "knowledge_cutoff": "2025-01"
+  },
+  "kimi-k3.256k": {
+   "pricing": {
+    "input_usd_per_million_tokens": "3",
+    "output_usd_per_million_tokens": "15",
+    "cache_read_usd_per_million_tokens": "0.3"
+   },
+   "release_date": "2026-07-16"
+  }
+ },
+ "notes": "Researched the 41 Kimi/Moonshot models against the models.dev snapshot (.catalog-work/modelsdev.json), official Kimi platform docs (platform.kimi.com/.ai, successor to platform.moonshot.cn), Moonshot/HF model cards, and pricing aggregators. THINKING MODES: no thinking_modes added. The models.dev snapshot (authoritative for toggle/effort form) lists kimi-k2-0711-preview, kimi-k2-0905-preview and kimi-k2-turbo-preview with reasoning=false, and the open K2 instruct/base models (kimi-k2, kimi-k2-instruct*, kimi-k2.0711*) expose no hidden CoT (catalog features already mark reasoning unsupported), so the base K2 family is NOT a reasoning family and gets no toggle - this corrects the working hypothesis that the whole K2 series reasons. The genuinely reasoning K2.5/K2.6/K2.7/K3 models and the always-on thinking variants already carry thinking_modes in the catalog and were left untouched per instructions. Official Kimi docs confirm the request toggle shape is thinking:{type:enabled|disabled} for K2.x (already reflected in the existing bytedance_moonshot patch for kimi-k2.6-flex/kimi-k2p6/kimi-latest) and top-level reasoning_effort for K3. SPEED MODES: none added - Moonshot expresses speed purely via separate model IDs (-fast/-highspeed/-turbo/-nitro/-lightning/-flex/-eco), and no request-level speed parameter exists in the Kimi/Moonshot docs. KNOWLEDGE_CUTOFF: added family values from the models.dev snapshot that the catalog already uses for sibling models (K2 family '2024-10'; K2.5/K2.6/K2.7 family '2025-01') to the 9 models that lacked it (kimi-k2-instruct-0711, kimi-k2-instruct-fast, kimi-k2.5-fw, kimi-k2.5-lightning, kimi-k2p6, kimi-k2p6-fast, kimi-k2p6-turbo, kimi-k2p7-code, kimi-k2p7-code-fast). Moonshot does NOT publish official cutoff dates for K2/K2.5/K2.6 (third parties conflict: K2.6 '2025-04' vs '2025-01'; K2 '2024-10' vs '2025-07'), so existing catalog values were left as-is and the hinted '2025-07/2025-09/2025-12' values were NOT used (unverifiable). K3's cutoff is officially unpublished (models.dev knowledge=None; docsbot/llm-stats list 'Unknown'), so knowledge_cutoff for all K3-family models (kimi-k3, kimi-k3-eco, kimi-k3-fast, kimi-k3-fast-api, kimi-k3.256k, kimi-k3@eu) is deliberately OMITTED rather than guessed. PRICING: added kimi-k3.256k pricing ($3.00 in / $15.00 out / $0.30 cache-hit per 1M, same flat rate as kimi-k3 per kimik2ai.com and pricing aggregators; cache_write omitted - not reported for the 256K variant). OPEN_WEIGHTS: set kimi-k2.0905=true (the underlying moonshotai/Kimi-K2-Instruct-0905 is open-weights on HF, as listed in the task); kimi-k2-instruct-0711/0905 already true. kimi-k2.0711 left at false - not in the task's open-variant list. RELEASE_DATE: fixed two obvious placeholders (kimi-k2-instruct-0711 '2024-01-01' and kimi-k2.0711 '2025-01-01' -> '2025-07-11', the documented Kimi K2 release/HF publish date) and added kimi-k3.256k release '2026-07-16' (same launch day as K3; models.dev k3-256k release_date). DESCRIPTION: fixed kimi-k2-instruct-fast which carried a wrong copy-pasted 'Compact GPT model...' string; it is the NanoGPT-provider fast alias of Kimi K2 0711 Instruct (131K ctx) per aifordevelopers.org/NanoGPT registry. Context/max tokens: verified present on all 41 models, nothing missing. Deliberately left unchanged: all models already carrying thinking_modes, all -fast/-highspeed/-nitro/-turbo speed-tier variants (conflicting or absent reasoning-option data - same precedent as the bytedance_moonshot patch), and all existing knowledge_cutoff/release_date/pricing values that could not be corrected with a verified source."
+}

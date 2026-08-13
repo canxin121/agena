@@ -1,0 +1,2 @@
+qwen3guard-gen-0.6b
+qwen3guard-gen-8b

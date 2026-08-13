@@ -1,0 +1,8 @@
+recraft-v2
+recraft-v3
+recraft-v4
+recraft-v4-pro
+recraft-v4.1
+recraft-v4.1-pro
+recraft-v4.1-utility
+recraft-v4.1-utility-pro

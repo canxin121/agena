@@ -1,0 +1,189 @@
+### kimi domestic models (41 models)
+
+- **kimi-for-coding**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=32768
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-06-12
+- **kimi-for-coding-highspeed**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=32768
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-06-12
+- **kimi-k2**  MISSING: think?, speed?
+  - current: ctx=256000 maxin=256000 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.57", "output_usd_per_million_tokens": "2.3", "cache_read_usd_per_million_tokens": "0.5"}
+  - models.dev: release=2025-07-11
+- **kimi-k2-instruct**  MISSING: input?, think?, speed?
+  - current: ctx=131072 maxin=256000 maxout=131072
+  - current pricing: {"input_usd_per_million_tokens": "0.57", "output_usd_per_million_tokens": "2.3", "cache_read_usd_per_million_tokens": "0.2"}
+  - models.dev: ABSENT
+- **kimi-k2-instruct-0711**  MISSING: kcutoff?, input?, think?, speed?
+  - current: ctx=128000 maxin=128000 maxout=8192
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "1.8", "cache_read_usd_per_million_tokens": "0.2"}
+  - models.dev: ABSENT
+- **kimi-k2-instruct-0905**  MISSING: input?, think?, speed?
+  - current: ctx=262144 maxin=256000 maxout=262144
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0", "cache_read_usd_per_million_tokens": "0.195", "cache_write_usd_per_million_tokens": "0.78"}
+  - models.dev: ABSENT
+- **kimi-k2-instruct-fast**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.4", "output_usd_per_million_tokens": "1.8", "cache_read_usd_per_million_tokens": "0.2"}
+  - models.dev: release=2025-12-15
+- **kimi-k2-thinking**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=16384
+  - current thinking_modes keys: ['high', 'low', 'off']
+  - current pricing: {"input_usd_per_million_tokens": "0.574", "output_usd_per_million_tokens": "2.294", "cache_read_usd_per_million_tokens": "0.15", "cache_write_usd_per_million_tokens": "1.1"}
+  - models.dev: release=2025-11-06
+- **kimi-k2-thinking-turbo**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=262144
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "1.15", "output_usd_per_million_tokens": "8", "cache_read_usd_per_million_tokens": "0.15"}
+  - models.dev: release=2025-09-05
+- **kimi-k2-turbo-preview**  MISSING: think?, speed?
+  - current: ctx=262144 maxin=262144 maxout=262144
+  - current pricing: {"input_usd_per_million_tokens": "2.4", "output_usd_per_million_tokens": "10", "cache_read_usd_per_million_tokens": "0.6"}
+  - models.dev: release=2025-07-08
+- **kimi-k2.0711**  MISSING: input?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.5700000000000001", "output_usd_per_million_tokens": "2.3"}
+  - models.dev: ABSENT
+- **kimi-k2.0711-preview**  MISSING: input?, think?, speed?
+  - current: ctx=131072 maxin=131072 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "2.5", "cache_read_usd_per_million_tokens": "0.15"}
+  - models.dev: ABSENT
+- **kimi-k2.0905**  MISSING: input?, think?, speed?
+  - current: ctx=262144 maxin=262144 maxout=100352
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "2.5", "cache_read_usd_per_million_tokens": "0.15"}
+  - models.dev: ABSENT
+- **kimi-k2.0905-preview**  MISSING: input?, think?, speed?
+  - current: ctx=262144 maxin=262144 maxout=262144
+  - current pricing: {"input_usd_per_million_tokens": "0.6", "output_usd_per_million_tokens": "2.5", "cache_read_usd_per_million_tokens": "0.15"}
+  - models.dev: ABSENT
+- **kimi-k2.5**  MISSING: speed?
+  - current: ctx=262144 maxin=256000 maxout=32768
+  - current thinking_modes keys: ['high', 'low', 'off']
+  - current pricing: {"input_usd_per_million_tokens": "0.574", "output_usd_per_million_tokens": "2.411", "cache_read_usd_per_million_tokens": "0.1", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: release=2026-01-27
+- **kimi-k2.5-fast**  MISSING: think?, speed?
+  - current: ctx=262128 maxin=256000 maxout=262128
+  - current pricing: {"input_usd_per_million_tokens": "0.52", "output_usd_per_million_tokens": "2.59", "cache_read_usd_per_million_tokens": "0.13", "cache_write_usd_per_million_tokens": "0.625"}
+  - models.dev: release=2026-01-27
+- **kimi-k2.5-fw**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=262144 maxin=245760 maxout=16384
+  - current pricing: {"input_usd_per_million_tokens": "0", "output_usd_per_million_tokens": "0"}
+  - models.dev: ABSENT
+- **kimi-k2.5-lightning**  MISSING: kcutoff?, speed?
+  - current: ctx=131072 maxin=131072 maxout=32768
+  - current thinking_modes keys: ['off', 'low', 'medium', 'high']
+  - current pricing: {"input_usd_per_million_tokens": "1", "output_usd_per_million_tokens": "3", "cache_read_usd_per_million_tokens": "0.2"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "medium", "high"]}] | release=2026-02-06
+- **kimi-k2.5:thinking**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.3", "output_usd_per_million_tokens": "1.9", "cache_read_usd_per_million_tokens": "0.15"}
+  - models.dev: ABSENT
+- **kimi-k2.6**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=16384
+  - current thinking_modes keys: ['high', 'low', 'off']
+  - current pricing: {"input_usd_per_million_tokens": "0.929", "output_usd_per_million_tokens": "3.858", "cache_read_usd_per_million_tokens": "0.16", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-04-21
+- **kimi-k2.6-fast**  MISSING: think?, speed?
+  - current: ctx=262144 maxin=262144 maxout=262144
+  - current pricing: {"input_usd_per_million_tokens": "1.655", "output_usd_per_million_tokens": "8.778", "cache_read_usd_per_million_tokens": "0.1725"}
+  - models.dev: release=2026-04-21
+- **kimi-k2.6-flex**  MISSING: kcutoff?, speed?
+  - current: ctx=262128 maxin=262128 maxout=262128
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.345", "output_usd_per_million_tokens": "1.61", "cache_read_usd_per_million_tokens": "0.08625"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-04-21
+- **kimi-k2.6-nitro**  MISSING: think?, speed?
+  - current: ctx=200000 maxin=200000 maxout=32000
+  - current pricing: {"input_usd_per_million_tokens": "0.275", "output_usd_per_million_tokens": "1.1"}
+  - models.dev: release=2026-04-21
+- **kimi-k2.6:thinking**  MISSING: speed?
+  - current: ctx=256000 maxin=256000 maxout=65536
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.5", "output_usd_per_million_tokens": "2.6", "cache_read_usd_per_million_tokens": "0.125"}
+  - models.dev: ABSENT
+- **kimi-k2.7-code**  MISSING: speed?
+  - current: ctx=262144 maxin=224000 maxout=262144
+  - current thinking_modes keys: ['high', 'low']
+  - current pricing: {"input_usd_per_million_tokens": "0.95", "output_usd_per_million_tokens": "4", "cache_read_usd_per_million_tokens": "0.19", "cache_write_usd_per_million_tokens": "0"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-06-12
+- **kimi-k2.7-code-1100b**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=81920
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.86", "output_usd_per_million_tokens": "3"}
+  - models.dev: release=2026-06-12
+- **kimi-k2.7-code-flex**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=262144
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.475", "output_usd_per_million_tokens": "2", "cache_read_usd_per_million_tokens": "0.11875"}
+  - models.dev: release=2026-06-12
+- **kimi-k2.7-code-highspeed**  MISSING: speed?
+  - current: ctx=262144 maxin=262144 maxout=262144
+  - current thinking_modes keys: ['high', 'low']
+  - current pricing: {"input_usd_per_million_tokens": "1.9", "output_usd_per_million_tokens": "8", "cache_read_usd_per_million_tokens": "0.38"}
+  - models.dev: ropts=[{"type": "effort", "values": ["low", "medium", "high"]}] | release=2026-06-12
+- **kimi-k2.7-code-nitro**  MISSING: speed?
+  - current: ctx=200000 maxin=200000 maxout=32000
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.275", "output_usd_per_million_tokens": "1.1"}
+  - models.dev: release=2026-06-12
+- **kimi-k2p6**  MISSING: kcutoff?, speed?
+  - current: ctx=262000 maxin=262000 maxout=262000
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "0.95", "output_usd_per_million_tokens": "4", "cache_read_usd_per_million_tokens": "0.16"}
+  - models.dev: ABSENT
+- **kimi-k2p6-fast**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=262000 maxin=262000 maxout=262000
+  - current pricing: {"input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "8", "cache_read_usd_per_million_tokens": "0.3"}
+  - models.dev: ABSENT
+- **kimi-k2p6-turbo**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=262000 maxin=262000 maxout=262000
+  - current pricing: {"input_usd_per_million_tokens": "2", "output_usd_per_million_tokens": "8", "cache_read_usd_per_million_tokens": "0.3"}
+  - models.dev: ABSENT
+- **kimi-k2p7-code**  MISSING: kcutoff?, speed?
+  - current: ctx=262000 maxin=262000 maxout=262000
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "0.95", "output_usd_per_million_tokens": "4", "cache_read_usd_per_million_tokens": "0.19"}
+  - models.dev: ABSENT
+- **kimi-k2p7-code-fast**  MISSING: kcutoff?, speed?
+  - current: ctx=262000 maxin=262000 maxout=262000
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "1.9", "output_usd_per_million_tokens": "8", "cache_read_usd_per_million_tokens": "0.38"}
+  - models.dev: ABSENT
+- **kimi-k3**  MISSING: kcutoff?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=131072
+  - current thinking_modes keys: ['high', 'low', 'max']
+  - current pricing: {"input_usd_per_million_tokens": "3", "output_usd_per_million_tokens": "15", "cache_read_usd_per_million_tokens": "0.3", "cache_write_usd_per_million_tokens": "3"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "minimal", "low", "medium", "high"]}] | release=2026-07-16
+- **kimi-k3-eco**  MISSING: kcutoff?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "1", "output_usd_per_million_tokens": "4", "cache_read_usd_per_million_tokens": "0.1"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "high", "max"]}] | release=2026-07-16
+- **kimi-k3-fast**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=1040384 maxin=1040384 maxout=131072
+  - current pricing: {"input_usd_per_million_tokens": "4.5", "output_usd_per_million_tokens": "22.5", "cache_read_usd_per_million_tokens": "0.45"}
+  - models.dev: release=2026-07-16
+- **kimi-k3-fast-api**  MISSING: kcutoff?, think?, speed?
+  - current: ctx=1000000 maxin=1000000 maxout=131072
+  - current pricing: {"input_usd_per_million_tokens": "4.5", "output_usd_per_million_tokens": "22.5", "cache_read_usd_per_million_tokens": "0.45"}
+  - models.dev: release=2026-08-03
+- **kimi-k3.256k**  MISSING: kcutoff?, price?, speed?
+  - current: ctx=262144 maxin=262144 maxout=65536
+  - current thinking_modes keys: ['high', 'low', 'max']
+  - models.dev: ABSENT
+- **kimi-k3@eu**  MISSING: kcutoff?, speed?
+  - current: ctx=1048576 maxin=1048576 maxout=262144
+  - current thinking_modes keys: ['high']
+  - current pricing: {"input_usd_per_million_tokens": "2.25", "output_usd_per_million_tokens": "11.25", "cache_read_usd_per_million_tokens": "0.225"}
+  - models.dev: ropts=[{"type": "effort", "values": ["none", "low", "medium", "high", "max"]}, {"type": "budget_tokens"}] | release=2026-07-16
+- **kimi-latest**  MISSING: speed?
+  - current: ctx=256000 maxin=1048576 maxout=262144
+  - current thinking_modes keys: ['off', 'on']
+  - current pricing: {"input_usd_per_million_tokens": "1.791", "output_usd_per_million_tokens": "8.9436", "cache_read_usd_per_million_tokens": "0.1733"}
+  - models.dev: ropts=[{"type": "toggle"}] | release=2026-04-21
+

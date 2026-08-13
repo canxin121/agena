@@ -1,0 +1,34 @@
+{
+  "models": {
+    "hunyuan-2.0-instruct": {
+      "description": "Tencent Hunyuan 2.0 instruct chat variant (non-reasoning) for fast coding, instruction-following, and agent tasks"
+    },
+    "hunyuan-a13b-instruct": {
+      "open_weights": true
+    },
+    "hunyuan-mt-7b": {
+      "open_weights": true
+    },
+    "hunyuan-t1": {
+      "knowledge_cutoff": "2024-12-31",
+      "release_date": "2025-03-21"
+    },
+    "hunyuan-turbos": {
+      "knowledge_cutoff": "2024-12-31",
+      "description": "Tencent Hunyuan TurboS fast-response hybrid MoE chat model (non-reasoning) for low-latency assistance and high-volume workloads",
+      "release_date": "2025-02-27"
+    },
+    "hunyuan-turbos-20250226": {
+      "knowledge_cutoff": "2024-12-31",
+      "release_date": "2025-02-27"
+    },
+    "hunyuan-2.0-instruct": {
+      "description": "Tencent Hunyuan 2.0 instruct chat variant (non-reasoning) for fast coding, instruction-following, and agent tasks",
+      "release_date": "2025-12-05"
+    },
+    "hunyuan-2.0-thinking": {
+      "release_date": "2025-12-05"
+    }
+  },
+  "notes": "Researched Tencent Hunyuan docs (cloud.tencent.com/document/product/1729/111007), HuggingFace model cards (tencent/Hunyuan-A13B-Instruct, tencent/Hunyuan-MT-7B), and model databases apxml.com / model.aibase.com. KNOWLEDGE CUTOFFS: Hunyuan-T1 and Hunyuan-TurboS both verified as 2024-12-31 (training-data cutoff) by two independent aggregators (apxml: 'Dec 2024'; aibase: '2024-12-31'); applied to hunyuan-t1, hunyuan-turbos, hunyuan-turbos-20250226 (dated snapshot of the same TurboS model). Note: the task hint suggested T1 '2025-02', but all traced sources report Dec 2024 — used the verified value. Hunyuan 2.0 (instruct/thinking) has NO officially published knowledge cutoff; the API version ID hunyuan-2.0-thinking-20251109 implies late-2025 data, but per do-not-fabricate I omitted it. hunyuan-mt-7b is a translation model with no documented cutoff — omitted. THINKING MODES: hunyuan-t1 and hunyuan-2.0-thinking are always-on reasoning models (hosted API has no enable_thinking/thinking toggle for them — docs show only enable_enhancement/multimedia/search params; models.dev ropts is empty, reasoning=true, interleaved reasoning_content), so their existing single 'high' effort mode is the correct always-on representation (same convention as deepseek-r1) and is left unchanged. hunyuan-2.0-instruct, hunyuan-mt-7b, hunyuan-turbos, hunyuan-turbos-20250226 are non-reasoning (models.dev reasoning=false) — no thinking modes. hunyuan-a13b-instruct already carries {'off','high'} matching models.dev kilo effort-ropts ['none','high'] — left unchanged. No request-level thinking toggle applies to any of the 7. SPEED MODES: Tencent exposes no request-level speed/tier parameter (enable_speed_search is a search-enhancement switch, unrelated); speed is expressed via separate model IDs (turbos=fast, t1=slow; 2.0-instruct vs 2.0-thinking) — left speed_modes absent per spec. OPEN WEIGHTS: hunyuan-a13b-instruct (tencent/Hunyuan-A13B-Instruct, open-sourced 2025-06-27) and hunyuan-mt-7b (tencent/Hunyuan-MT-7B, released 2025-09-01) are open-weights HuggingFace models; catalog had open_weights=false, corrected to true. DESCRIPTIONS: corrected hunyuan-2.0-instruct and hunyuan-turbos, which wrongly claimed 'reasoning model' although both are non-reasoning (models.dev reasoning=false). LEFT UNCHANGED: context/max-token limits, pricing, and existing knowledge_cutoff for a13b (2025-03-31, from OpenRouter models.dev). RELEASE DATES CORRECTED: the catalog carried provider-listing dates (2026-03-08 from the models.dev 'tencent-coding-plan' listing); replaced with verified launch dates — TurboS=2025-02-27 (IT之家/Tencent Cloud 2025-02-27), T1 official=2025-03-21 (IT之家/36Kr), Hunyuan 2.0=2025-12-05 (IT之家/36Kr/Tencent Cloud)."
+}

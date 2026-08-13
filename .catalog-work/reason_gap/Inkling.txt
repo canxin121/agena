@@ -1,0 +1,5 @@
+inkling-nvfp4
+inkling-small
+inkling-small:thinking
+inkling:peft:262144
+inkling:thinking

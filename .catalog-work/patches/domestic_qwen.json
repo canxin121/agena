@@ -1,0 +1,339 @@
+{
+  "models": {
+    "qwen3-max": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3-max-2025-09-23": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3-max-2026-01-23": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3-max-preview": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen-plus-2025-07-28": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3-next-80b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3-next-80b-a3b-instruct": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.14b-instruct": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.235b-a22b-instruct": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.235b-a22b-instruct-2507": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.30b-a3b-instruct-2507": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.235b-a22b-2507": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.30b-a3b-2507": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.5-0.8b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.5-2b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3.5-4b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen35.122b-a10b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen35.397b-a17b": {
+      "thinking_modes": {
+        "off": {
+          "display_name": "Off",
+          "strategy": "disabled"
+        },
+        "on": {
+          "display_name": "Thinking",
+          "strategy": "request_only",
+          "request_override": {
+            "body_patch": {
+              "enable_thinking": true
+            }
+          }
+        }
+      }
+    },
+    "qwen3-vl-30b-a3b-thinking": {
+      "thinking_modes": {
+        "high": {
+          "display_name": "Think High",
+          "strategy": "effort",
+          "effort": "high"
+        }
+      }
+    },
+    "qwen-2.5-14b-instruct": {
+      "pricing": {
+        "input_usd_per_million_tokens": "0.36",
+        "output_usd_per_million_tokens": "1.45"
+      }
+    },
+    "qwen-max-2025-01-25": {
+      "pricing": {
+        "input_usd_per_million_tokens": "1.6",
+        "output_usd_per_million_tokens": "6.4",
+        "cache_read_usd_per_million_tokens": "0.79985"
+      }
+    },
+    "qwen-vl-max-2025-01-25": {
+      "pricing": {
+        "input_usd_per_million_tokens": "0.42",
+        "output_usd_per_million_tokens": "1.27"
+      }
+    }
+  },
+  "notes": "SOURCES: DashScope/Qwen Cloud official docs (help.aliyun.com/zh/model-studio/qwen-max, deep-thinking mode page; docs.qwencloud.com/developer-guides/text-generation/thinking; docs.qwencloud.com/changelog/models), Qwen official blog + HF model cards (Qwen3.5-397B-A17B/122B-A10B/27B, Qwen3.6-35B-A3B, Qwen3.8-2.4T-A95B, Qwen2.5-Coder-32B, Qwen2.5-VL-*), Qwen arXiv technical reports (Qwen3-VL 2511.21631, Qwen3-Omni 2509.17765), and the local models.dev snapshot (research/models.dev.json). Two subagents did source-verification web research in parallel; findings incorporated below.\n\nTHINKING MODES ADDED (15):\n- Qwen3-Max family (4): qwen3-max, qwen3-max-2025-09-23, qwen3-max-2026-01-23, qwen3-max-preview -> hybrid toggle via enable_thinking. DashScope docs state the Max series is hybrid ('Max 系列，混合模式，默认关闭'): thinking OFF by default, enabled with enable_thinking=true. Matches the request-toggle form already used for qwen-plus/qwen3-omni-flash.\n- qwen-plus-2025-07-28 (1): Qwen3-based qwen-plus hybrid, switchable thinking/non-thinking per official qwen-plus model doc + Alibaba notice; base qwen-plus already has the same toggle.\n- Qwen3-Next (2): qwen3-next-80b (base, venice 3P listing) and qwen3-next-80b-a3b-instruct are the hybrid members of the Qwen3-Next family; the -thinking variant is always-on (already in catalog) while base/instruct toggle. Per Qwen3-Next blog/README the base and Instruct are hybrid; the Qwen3-Next-80B-A3B-Thinking variant is thinking-only.\n- Qwen3 family instruct + 2507 checkpoints (6): qwen3.14b-instruct, qwen3.235b-a22b-instruct, qwen3.235b-a22b-instruct-2507, qwen3.30b-a3b-instruct-2507, qwen3.235b-a22b-2507, qwen3.30b-a3b-2507. Same Qwen3 hybrid architecture as the already-toggled siblings qwen3.235b-a22b / qwen3.30b-a3b / qwen3.14b / qwen3.4b-instruct-2507 (all get the enable_thinking toggle in the catalog today); the -2507 checkpoints are the July-2025 updated weights of those hybrids. models.dev has no per-model ropts for these absent IDs, so toggle is from the documented Qwen3 hybrid architecture (family-consistent, flagged for review like the alibaba.json inference entries).\n- Qwen3.5 small + alt-ID variants (5): qwen3.5-0.8b, qwen3.5-2b, qwen3.5-4b, qwen35.122b-a10b, qwen35.397b-a17b. Qwen3.5 models are hybrid (enable_thinking toggle) per the Qwen3.5 architecture; the 122b/397b alt-IDs are the same models as qwen3.5-122b-a10b / qwen3.5-397b-a17b which already carry toggles. models.dev carries no ropts for the small sizes -> family-consistent toggle (flagged for review).\n- qwen3-vl-30b-a3b-thinking (1): always-on thinking variant, single effort-high mode, matching the catalog's convention for every other *-thinking Qwen3-VL / Qwen3-Omni variant (qwen3-vl-32b-thinking, qwen3-vl-8b-thinking, qwen3-vl-235b-a22b-thinking, qwen3-omni-30b-a3b-thinking all use the identical shape).\n\nSPEED MODES: NONE added. Alibaba/Qwen documents no per-request speed tier/service_tier parameter; speed is expressed via separate model IDs (-flash/-turbo/-fast variants), so speed_modes left absent per the spec (do not invent a request parameter).\n\nKNOWLEDGE_CUTOFF: NONE added. Exhaustive research across Qwen blog posts, HF model cards, arXiv technical reports, and DashScope/QwenCloud docs found that Qwen does not publish an explicit knowledge cutoff for any model in this bundle (verified for Qwen3.5/3.6/3.7/3.8, Qwen3-VL, Qwen3-Next, Qwen3-Omni, Qwen2.5-Coder-32B, Qwen2.5-VL-*, and the image models). Per the no-fabrication rule all 67 models flagged 'kcutoff?' are left with knowledge_cutoff absent (same decision as the alibaba.json patch, which also declined unverifiable cutoffs).\n\nPRICING (3):\n- qwen-2.5-14b-instruct: $0.36 in / $1.45 out per 1M (international/Singapore, converted from official DashScope pricing 2.569/10.275 CNY at ~7.1; model delisted 2026-03-30, these are the last official prices, verified in two archived official pricing pages).\n- qwen-max-2025-01-25: $1.6 in / $6.4 out + cache_read $0.79985 per 1M. Official docs state the snapshot is functionally equivalent to current qwen-max and priced identically (Singapore USD per the English official pricing page; matches existing qwen-max entry).\n- qwen-vl-max-2025-01-25: $0.42 in / $1.27 out per 1M (China region 3.0/9.0 CNY converted at ~7.1; official price-cut notice confirms this snapshot kept the Dec-2024 3/9 CNY price, NOT the current qwen-vl-max 1.6/4.0 CNY).\n\nIMAGE MODELS (qwen-image-2.0 / qwen-image-2.0-pro / qwen-image-edit): max_output_tokens and context/max_input left at existing values (0). Official DashScope image model docs list max input/output/context as NOT APPLICABLE ('-') for these models - they are billed per generated image, not per token, and publish no token limits. Documented prompt caps: 1,300 tokens (2.0/2.0-pro), 800 tokens (image-edit); image-edit takes 1-3 images (<=10MB each) and emits one fixed image. These are prompt caps, not token context windows, so max_input_tokens was not set. Per-image pricing (0.2 CNY qwen-image-2.0, 0.5 CNY 2.0-pro, 0.3 CNY image-edit) does not fit the per-token pricing schema and was not added.\n\nDELIBERATE OMISSIONS (thinking_modes left absent):\n- Qwen2.5 / Qwen2.5-* / qwen-2.5-* (all sizes, coder, math, vl, omni) + qwen-vl-max/plus/ocr, qwen-max/qwen-max-latest, qwen-turbo, qwen-plus-character(-ja), qwen-mt-*, qwen-omni-turbo(-realtime), qwen-doc-turbo, qwen-long, qwen-math-*: non-thinking or pre-Qwen3 commercial models with no documented enable_thinking. qwen-plus-latest also left absent: its catalog entry is the 2025-01-25 snapshot era (features list reasoning as unsupported, input image+text) and models.dev lists no ropts - not confirmed hybrid.\n- qwen3-coder / qwen-coder-plus / qwen3-coder-next + all qwen3-coder-* variants: per Qwen official README these are NON-thinking; thinking_modes deliberately absent.\n- qwen3-omni-30b-a3b-instruct and qwen3-vl-*-instruct variants (qwen3-vl-30b-a3b-instruct, qwen3-vl-235b-a22b-instruct, qwen3-vl-32b-instruct, qwen3-vl-8b-instruct, qwen3-vl-instruct): models.dev lists no ropts (toggle) for these; the task rule is to add the toggle only where ropts=toggle, else leave. The base VL models (qwen3-vl-30b-a3b, qwen3-vl-235b-a22b, qwen3-vl-plus) already carry toggles from alibaba.json; instruct variants left absent pending provider-level ropts.\n- qwen3.5-397b-fast, qwen3.6-35b-fast: fast-tier API aliases described as 'fast chat, extraction, high-volume' - not confirmed hybrid; models.dev shows no ropts. Left absent (unlike qwen3.5-397b-a17b-fast, which alibaba.json mapped to its hybrid base).\n- qwen3-asr-flash, qwen3-livetranslate-flash-realtime, qwen3-embedding-*, qwen3-reranker-*, qwen3-tts-voicedesign, qwen-image*, qwen3-omni-flash-realtime: ASR/translation/embedding/reranker/TTS/image/realtime models - not thinking models.\n- qwen3-deep-research / qwen-deep-research: research-agent models, in the runtime-enriched set, skipped per task.\n- qwenlong-l1-32b, qwen3guard-gen-*: long-context / guard models, no documented reasoning toggle (guard-gen is a safety classifier).\n\nNOT VERIFIED / NOT APPLICABLE:\n- qwen3-tts-voicedesign pricing: the exact ID 'qwen3-tts-voicedesign' does not exist on DashScope; the official voice-design models are qwen-voice-design (0.2 CNY/call) and qwen3-tts-vd (0.8 CNY/10k chars). Since the catalog ID cannot be mapped to a per-token price, pricing left absent (do not invent).\n- release_date / open_weights: already present on all 179 models, not modified."
+}

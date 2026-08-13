@@ -239,6 +239,53 @@ async fn create_and_reload_use_the_sealed_facade() {
 }
 
 #[tokio::test]
+async fn session_model_selection_survives_a_store_reload() {
+    let manager = test_manager().await;
+    let session = create(&manager, "model selection persistence").await;
+    let updated = manager
+        .update_session_selection(
+            session.id,
+            agena_runtime::SessionRunOptions {
+                model: ModelRef::new("acme", "acme-fast"),
+                thinking_mode: None,
+                speed_mode: None,
+                verbosity: None,
+                thinking: None,
+                request_override: Default::default(),
+                system: None,
+                temperature: None,
+                max_output_tokens: None,
+            },
+        )
+        .await
+        .expect("update session selection");
+    assert_eq!(
+        manager
+            .model_from_session_selection(&updated)
+            .expect("updated selection parses")
+            .map(|model| model.model_id.to_string()),
+        Some("acme-fast".to_owned()),
+        "the returned session carries the new model"
+    );
+
+    // The bug: the selection was only mutated in memory, so a reload from the
+    // store dropped it and the next turn resolved the default model. It must
+    // be persisted to `sessions.config_json` and restored on load.
+    let reloaded = manager
+        .get_session(session.id)
+        .await
+        .expect("reload session after selection update");
+    assert_eq!(
+        manager
+            .model_from_session_selection(&reloaded)
+            .expect("reloaded selection parses")
+            .map(|model| model.model_id.to_string()),
+        Some("acme-fast".to_owned()),
+        "the selected model must be restored from the store after a reload"
+    );
+}
+
+#[tokio::test]
 async fn messages_are_run_markers_plus_ordered_parts() {
     let manager = test_manager().await;
     let session = create(&manager, "ordered parts").await;

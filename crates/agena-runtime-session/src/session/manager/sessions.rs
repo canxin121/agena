@@ -271,9 +271,11 @@ impl SessionManager {
         if !self.apply_run_selection_to_session(&mut session, &options) {
             return Ok(session);
         }
-        let persisted = self
-            .persist_session_changes(session, Vec::new(), None, state.clone())
-            .await?;
+        // Persist the selection to `sessions.config_json`. `persist_session_changes`
+        // is a no-op without changed parts, which would leave the override
+        // in-memory only — invisible to `selected_model()` and the TUI's
+        // post-send sync after the next store load.
+        let persisted = self.store.persist_execution_config(session).await?;
         if let Ok(mut permissions) = state.shared_session_permissions.write() {
             permissions.insert(
                 session_id,
@@ -304,8 +306,7 @@ impl SessionManager {
             model.adapter_id.as_ref().map(ToString::to_string),
             Some(model.model_id.to_string()),
         );
-        self.persist_session_changes(session, Vec::new(), None, state)
-            .await
+        self.store.persist_execution_config(session).await
     }
 
     pub async fn session_usage_async(&self, session: &Session) -> Result<SessionUsage, AppError> {

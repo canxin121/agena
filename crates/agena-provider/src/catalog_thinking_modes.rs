@@ -63,6 +63,17 @@ pub fn inferred_catalog_thinking_modes(
         insert_catalog_thinking_effort(&mut modes, ReasoningEffort::Max);
     }
 
+    if normalized.contains("deepseek-v4") {
+        for effort in [
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Max,
+        ] {
+            insert_catalog_thinking_effort(&mut modes, effort);
+        }
+    }
+
     modes
 }
 
@@ -148,6 +159,29 @@ mod tests {
         ModelCapabilityPatch, ModelCatalogDocument,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn enriches_a_reasoning_deepseek_v4_catalog_entry() {
+        let mut document = ModelCatalogDocument {
+            models: BTreeMap::from([(
+                "deepseek-v4-pro".to_owned(),
+                CatalogModelDefinition {
+                    capabilities: ModelCapabilityPatch {
+                        features: Some(CapabilitySelectionPatch::Supported(vec![
+                            ModelCapabilityFeature::Reasoning,
+                        ])),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )]),
+        };
+        enrich_catalog_document_thinking_modes(&mut document);
+        let modes = &document.models["deepseek-v4-pro"].thinking_modes;
+        for selector in ["low", "medium", "high", "max"] {
+            assert!(modes.contains_key(selector), "missing {selector}");
+        }
+    }
 
     #[test]
     fn enriches_a_reasoning_gpt_five_catalog_entry() {

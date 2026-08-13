@@ -178,6 +178,18 @@ fn openai_reasoning_modes(model: &str, metadata: &ModelMetadata) -> Vec<ModelThi
         ));
     }
 
+    if model.contains("deepseek-v4") {
+        return openai_reasoning_mode_overrides(effort_modes(
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+            false,
+        ));
+    }
+
     Vec::new()
 }
 
@@ -587,6 +599,18 @@ mod tests {
         modes
             .iter()
             .any(|mode| mode.selector().as_deref() == Some(selector))
+    }
+
+    #[test]
+    fn deepseek_v4_exposes_effort_ladder_for_openai_protocol() {
+        let modes = openai_reasoning_modes("deepseek-v4-pro", &ModelMetadata::default());
+        assert!(has_mode(&modes, "low"));
+        assert!(has_mode(&modes, "medium"));
+        assert!(has_mode(&modes, "high"));
+        assert!(has_mode(&modes, "max"));
+
+        let flash = openai_reasoning_modes("deepseek-v4-flash", &ModelMetadata::default());
+        assert!(has_mode(&flash, "max"));
     }
 
     #[test]

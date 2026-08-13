@@ -164,6 +164,20 @@ pub trait SessionStore: Send + Sync {
         idempotency_key: Option<String>,
     ) -> Result<SubmitOutcome, StoreError>;
 
+    /// Atomically settle a background operation against the run that launched
+    /// it: refresh the lease without aborting the target run, terminalize the
+    /// launching tool part, append the result parts (`PartRole::Assistant`,
+    /// no new run marker), and terminalize the launching run once no in-flight
+    /// child remains. Returns the created parts.
+    async fn settle_background_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_id: i64,
+        tool_part: Option<(i64, PartState, Value)>,
+        parts: Vec<NewPart>,
+    ) -> Result<Vec<Part>, StoreError>;
+
     /// Append content parts to an in-flight run (streaming, D10). Returns the
     /// committed parts with their engine-assigned ids.
     async fn append_parts(
@@ -520,6 +534,17 @@ impl MemoryLayer {
             .lock()
             .expect("streaming lock")
             .retain(|(buffer_session_id, _), _| *buffer_session_id != session_id);
+    }
+
+    /// Drop one part's streaming buffer. Used by the background-settle path,
+    /// which must clear only the launching tool part's overlay — clearing the
+    /// whole session would discard unflushed streaming content a live
+    /// execution is still writing.
+    fn clear_streaming_part(&self, session_id: i64, part_id: i64) {
+        self.streaming
+            .lock()
+            .expect("streaming lock")
+            .remove(&(session_id, part_id));
     }
 }
 
@@ -1150,6 +1175,69 @@ where
                 .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         }
         Ok(outcome)
+    }
+
+    async fn settle_background_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_id: i64,
+        tool_part: Option<(i64, PartState, Value)>,
+        parts: Vec<NewPart>,
+    ) -> Result<Vec<Part>, StoreError> {
+        let owner = self.owner(owner_id);
+        // The launching tool part may still be buffered as a streaming
+        // InProgress overlay from the launch turn. Drop that one part's
+        // buffer so the engine's atomic settle is the authoritative row — the
+        // buffered overlay would otherwise mask (or, on a stale lease, fail)
+        // the terminal write. Only the tool part's buffer is cleared: the
+        // settle can run mid-turn while another execution is streaming, and
+        // clearing the whole session would discard its unflushed content. The
+        // engine itself performs the lease refresh, so no `ensure_lease` here.
+        let tool_part_id = tool_part.as_ref().map(|(part_id, _, _)| *part_id);
+        if let Some(tool_part_id) = tool_part_id {
+            self.memory.clear_streaming_part(session_id, tool_part_id);
+        }
+        let created = self
+            .engine
+            .settle_background_run(
+                session_id,
+                &owner,
+                run_id,
+                tool_part,
+                parts,
+                self.now(),
+            )
+            .await?;
+        // The engine also terminalized the tool part and possibly the run
+        // marker, neither of which it returns. Invalidate the cache and
+        // re-derive the changed rows so live observers see the settled state.
+        self.memory.invalidate(session_id);
+        for part in &created {
+            self.bus.emit(SessionChange::PartAdded {
+                session_id,
+                part: part.clone(),
+            });
+        }
+        if let Some(tool_part_id) = tool_part_id {
+            let view = self.engine.load_session(session_id).await?;
+            let mut emitted = Vec::new();
+            if let Some(part) = view.parts.iter().find(|part| part.part_id == tool_part_id) {
+                emitted.push(part.clone());
+            }
+            if let Some(part) = view.parts.iter().find(|part| part.part_id == run_id) {
+                emitted.push(part.clone());
+            }
+            for part in emitted {
+                self.bus.emit(SessionChange::PartUpdated {
+                    session_id,
+                    part,
+                });
+            }
+        }
+        let meta = self.engine.session_meta(session_id).await?;
+        self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        Ok(created)
     }
 
     async fn append_parts(
@@ -3319,6 +3407,20 @@ mod tests {
         ) -> Result<SubmitOutcome, StoreError> {
             self.inner
                 .submit_user_run(session_id, owner_id, parts, idempotency_key, now_ms)
+                .await
+        }
+
+        async fn settle_background_run(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+            run_id: i64,
+            tool_part: Option<(i64, PartState, Value)>,
+            parts: Vec<NewPart>,
+            now_ms: i64,
+        ) -> Result<Vec<Part>, StoreError> {
+            self.inner
+                .settle_background_run(session_id, owner_id, run_id, tool_part, parts, now_ms)
                 .await
         }
 

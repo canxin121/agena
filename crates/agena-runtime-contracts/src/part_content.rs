@@ -389,6 +389,59 @@ impl TryFrom<&Value> for HookContent {
     }
 }
 
+/// `system_notification` — a background-operation completion (or event)
+/// notification delivered to the model as an Assistant-role part appended to
+/// the launching run (no new run). This is the agena analog of Claude Code's
+/// `<task-notification>`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct SystemNotificationContent {
+    /// The background operation id (task id or process id).
+    #[serde(default)]
+    pub operation_id: String,
+    /// "task" | "shell" | "workflow" | "monitor".
+    #[serde(default)]
+    pub operation_kind: String,
+    /// The launching tool_call's provider operation id (`agena.operation_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    /// "event" | "completed" | "failed" | "cancelled" | "timed_out".
+    #[serde(default)]
+    pub status: String,
+    /// One-line summary, e.g. `Task "explore" finished`.
+    #[serde(default)]
+    pub summary: String,
+    /// Optional structured detail (failure reason, exit code, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// The body the model sees — mirrors Claude's
+    /// `<note>…<result>…</result>…</note>` shape.
+    #[serde(default)]
+    pub body: String,
+    /// Monotonic per-monitor event sequence (see `agena.monitor_event_seq`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_seq: Option<u64>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl SystemNotificationContent {
+    pub const fn kind() -> &'static str {
+        "system_notification"
+    }
+
+    pub fn as_value(&self) -> Value {
+        serde_json::to_value(self).expect("system notification content is always JSON serializable")
+    }
+}
+
+impl TryFrom<&Value> for SystemNotificationContent {
+    type Error = String;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        decode_object(Self::kind(), value)
+    }
+}
+
 /// `compaction` — compaction summary with the compacted window.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct CompactionContent {
@@ -585,6 +638,7 @@ pub enum TypedContent {
     SkillRef(SkillRefContent),
     Notice(NoticeContent),
     Hook(HookContent),
+    SystemNotification(SystemNotificationContent),
     Compaction(CompactionContent),
     Error(ErrorContent),
     Interaction(InteractionContent),
@@ -605,6 +659,9 @@ pub fn decode(kind: &str, value: &Value) -> Result<TypedContent, String> {
         "skill_ref" => TypedContent::SkillRef(SkillRefContent::try_from(value)?),
         "notice" => TypedContent::Notice(NoticeContent::try_from(value)?),
         "hook" => TypedContent::Hook(HookContent::try_from(value)?),
+        "system_notification" => {
+            TypedContent::SystemNotification(SystemNotificationContent::try_from(value)?)
+        }
         "compaction" => TypedContent::Compaction(CompactionContent::try_from(value)?),
         "error" => TypedContent::Error(ErrorContent::try_from(value)?),
         "interaction" => TypedContent::Interaction(InteractionContent::try_from(value)?),

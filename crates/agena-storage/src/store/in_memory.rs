@@ -986,6 +986,147 @@ impl PersistenceEngine for InMemoryEngine {
         )
     }
 
+    async fn settle_background_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_id: i64,
+        tool_part: Option<(i64, PartState, serde_json::Value)>,
+        new_parts: Vec<NewPart>,
+        now_ms: i64,
+    ) -> Result<Vec<Part>, StoreError> {
+        // Lease refresh (see the trait doc): a stale lease (held by this
+        // owner or another) is re-heartbeated so the settle may write; a fresh
+        // lease held by another owner is a live conflict. Other in-flight runs
+        // are deliberately NOT aborted — the settle targets one specific
+        // launching run and must never destroy a different run a live
+        // execution is still driving.
+        {
+            let mut leases = self.leases.write().expect("leases lock");
+            if let Some(existing) = leases.get(&session_id) {
+                if existing.owner_id != owner_id
+                    && now_ms - existing.heartbeat_at_ms <= LEASE_STALENESS_MS
+                {
+                    return Err(StoreError::LeaseHeldByOther {
+                        session_id,
+                        owner_id: existing.owner_id.clone(),
+                        heartbeat_at_ms: existing.heartbeat_at_ms,
+                    });
+                }
+                leases.insert(
+                    session_id,
+                    LeaseState {
+                        session_id,
+                        owner_id: owner_id.to_owned(),
+                        run_id: None,
+                        lease_started_at_ms: now_ms,
+                        heartbeat_at_ms: now_ms,
+                    },
+                );
+            } else {
+                leases.insert(
+                    session_id,
+                    LeaseState {
+                        session_id,
+                        owner_id: owner_id.to_owned(),
+                        run_id: None,
+                        lease_started_at_ms: now_ms,
+                        heartbeat_at_ms: now_ms,
+                    },
+                );
+            }
+        }
+        // Terminalize the launching tool part when supplied.
+        if let Some((part_id, terminal, content)) = tool_part {
+            let mut part = self
+                .parts
+                .write()
+                .expect("parts lock")
+                .get_mut(&part_id)
+                .cloned()
+                .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?;
+            part.state = terminal;
+            part.content = content;
+            part.finished_at_ms = Some(now_ms);
+            part.revision += 1;
+            part.updated_at_ms = now_ms;
+            self.parts
+                .write()
+                .expect("parts lock")
+                .insert(part_id, part);
+        }
+        // Append the result parts (Assistant role) under the launching run —
+        // no new run marker.
+        let mut created = Vec::with_capacity(new_parts.len());
+        {
+            let mut all_parts = self.parts.write().expect("parts lock");
+            let mut membership = self.membership.write().expect("membership lock");
+            for new_part in new_parts {
+                let id = self.next_part_id();
+                let part = Part {
+                    part_id: id,
+                    kind: new_part.kind,
+                    role: new_part.role,
+                    state: new_part.state,
+                    content: new_part.content,
+                    summary: new_part.summary,
+                    visibility: new_part.visibility,
+                    rendered_markdown: new_part.rendered_markdown,
+                    parent_part_id: new_part.parent_part_id,
+                    run_id: Some(run_id),
+                    origin_session_id: session_id,
+                    revision: 1,
+                    started_at_ms: now_ms,
+                    finished_at_ms: new_part.state.is_terminal().then_some(now_ms),
+                    created_at_ms: now_ms,
+                    updated_at_ms: now_ms,
+                    provider_state: None,
+                };
+                all_parts.insert(id, part.clone());
+                membership.entry(session_id).or_default().insert(id);
+                created.push(part);
+            }
+        }
+        // Terminalize the launching run marker once no in-flight child remains.
+        let mut run = self
+            .parts
+            .read()
+            .expect("parts lock")
+            .get(&run_id)
+            .cloned()
+            .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
+        if run.is_run_marker() && run.state.is_in_flight() {
+            let remaining = self
+                .parts
+                .read()
+                .expect("parts lock")
+                .values()
+                .any(|part| {
+                    part.origin_session_id == session_id
+                        && part.run_id == Some(run_id)
+                        && part.part_id != run_id
+                        && part.state.is_in_flight()
+                });
+            if !remaining {
+                run.state = PartState::Completed;
+                run.finished_at_ms = Some(now_ms);
+                if let serde_json::Value::Object(map) = &mut run.content {
+                    map.insert("abort_reason".to_owned(), serde_json::Value::Null);
+                }
+                run.revision += 1;
+                run.updated_at_ms = now_ms;
+                self.parts
+                    .write()
+                    .expect("parts lock")
+                    .insert(run_id, run);
+            }
+        }
+        if !created.is_empty() {
+            self.bump_session_version(session_id, now_ms)?;
+        }
+        Ok(created)
+    }
+
     async fn append_parts(
         &self,
         session_id: i64,

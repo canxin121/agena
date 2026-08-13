@@ -372,6 +372,46 @@ pub enum ShellToolInput {
     Stop { process_id: String },
 }
 
+/// WebSocket endpoint monitored by the monitor tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("url"), non_empty("url"))]
+pub struct MonitorWsInput {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protocols: Vec<String>,
+}
+
+/// Input of the monitor tool: watch a command's output or a WebSocket feed,
+/// emitting each event to the model as a `system_notification` part appended to
+/// the launching run (everything-is-a-part: the monitor is its `tool_call`
+/// part, every event is a `system_notification` part).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum MonitorToolInput {
+    /// Start a background monitor. Pass exactly one of `command` or `ws`.
+    #[input(exactly_one_of("command", "ws"), trim("command", "description"))]
+    Start {
+        /// Shell command whose stdout/stderr lines become events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+        /// WebSocket feed whose text frames become events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ws: Option<MonitorWsInput>,
+        /// Optional timeout in ms; the monitor is killed when it elapses.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_ms: Option<u64>,
+        /// Keep the monitor across model turns (default true).
+        #[serde(default = "default_true")]
+        persistent: bool,
+        /// Human-readable description shown in the transcript and activity panel.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        description: String,
+    },
+    /// Stop a running monitor (kills its command / closes its WebSocket).
+    #[input(non_empty("monitor_id"))]
+    Stop { monitor_id: String },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
     trim(
@@ -1151,6 +1191,12 @@ const ADVERTISED_TOOL_IDENTITY_METADATA_KEY: &str = "advertised_tool_identity";
 /// at tool-success time, and the runtime's completion bridge reads it back to
 /// terminalize the part when the process/task settles.
 pub(crate) const BACKGROUND_OPERATION_METADATA_KEY: &str = "agena.background";
+/// Durable claim that a background operation's completion has already been
+/// notified to the model. Set on the launching tool part's operation metadata
+/// once the notification run is committed, so a re-delivered completion signal
+/// (e.g. a repeated `SessionMetaUpdated`) is a no-op — the agena analog of
+/// Claude Code's atomic `notified` claim (`I4e`).
+pub const NOTIFIED_METADATA_KEY: &str = "agena.notified";
 
 /// Which background work a launched-but-unfinished operation corresponds to,
 /// used to correlate the transcript part with the completion signal.
@@ -1434,6 +1480,23 @@ impl OperationPart {
             .get(BACKGROUND_OPERATION_METADATA_KEY)
             .cloned()
             .and_then(|value| serde_json::from_value::<BackgroundOperation>(value).ok())
+    }
+
+    /// Atomically claim that this operation's completion has been notified to
+    /// the model (see [`NOTIFIED_METADATA_KEY`]).
+    pub fn set_notified(&mut self) {
+        self.metadata.insert(
+            NOTIFIED_METADATA_KEY.to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+
+    /// Whether this operation's completion has already been notified.
+    pub fn is_notified(&self) -> bool {
+        self.metadata
+            .get(NOTIFIED_METADATA_KEY)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
     }
 
     pub fn call_id(&self) -> i64 {

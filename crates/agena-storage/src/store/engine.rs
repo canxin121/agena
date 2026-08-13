@@ -12,9 +12,9 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 
 use super::{
-    InteractionAnswerOutcome, LeaseAcquire, NewPart, NewSession, Part, PartDelta, ReconcileOutcome,
-    RunOutcome, SessionListQuery, SessionMeta, SessionSummary, SessionView, StoreError,
-    SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
+    InteractionAnswerOutcome, LeaseAcquire, NewPart, NewSession, Part, PartDelta, PartState,
+    ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta, SessionSummary, SessionView,
+    StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
 };
 
 /// A live-update notification derived from an operation and emitted after
@@ -202,6 +202,36 @@ pub trait PersistenceEngine: Send + Sync {
         idempotency_key: Option<String>,
         now_ms: i64,
     ) -> Result<SubmitOutcome, StoreError>;
+
+    /// Atomically settle a background operation against the run that launched
+    /// it (the agena analog of Claude Code's `<task-notification>` arriving on
+    /// the launching turn). In one transaction the method:
+    ///
+    /// 1. refreshes the lease — a stale lease (any owner) is re-heartbeated so
+    ///    the transaction may write. Other in-flight runs are deliberately
+    ///    **not** aborted: the settle targets one specific launching run and
+    ///    must never destroy a *different* run that a live execution is still
+    ///    driving (aborting unrelated in-flight runs is `try_acquire_lease`'s
+    ///    job when a new execution genuinely takes over);
+    /// 2. terminalizes the launching tool part (the operation's own part);
+    /// 3. appends the result parts (`new_parts`, `PartRole::Assistant`) under
+    ///    the launching run — **no new run marker**;
+    /// 4. terminalizes the launching run marker (Completed) once no in-flight
+    ///    child remains, so the session returns to Ready instead of lingering
+    ///    in Interrupted.
+    ///
+    /// `tool_part` is `Some((part_id, terminal_state, content))` when the
+    /// launching tool part must be terminalized. Returns the created parts
+    /// (the appended notification rows).
+    async fn settle_background_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_id: i64,
+        tool_part: Option<(i64, PartState, serde_json::Value)>,
+        new_parts: Vec<NewPart>,
+        now_ms: i64,
+    ) -> Result<Vec<Part>, StoreError>;
 
     /// Append content parts to an existing run (streaming).
     async fn append_parts(

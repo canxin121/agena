@@ -263,6 +263,18 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
                     });
                 }
             }
+            // A background-operation completion/event notification (the agena
+            // analog of Claude's `<task-notification>`). The run's role is
+            // System, so it becomes a system message in the model transcript;
+            // `body` carries the full `<agena_notification>…</agena_notification>`
+            // payload the model is taught to recognize (§3).
+            TypedContent::SystemNotification(notification) => {
+                if !notification.body.trim().is_empty() {
+                    wire.push(WirePart::Text {
+                        text: notification.body.clone(),
+                    });
+                }
+            }
             TypedContent::Notice(_) | TypedContent::Interaction(_) | TypedContent::Error(_) => {}
         }
     }
@@ -568,6 +580,14 @@ fn parts_as_text_lossy(parts: &[Part]) -> String {
                 .filter(|text| !text.trim().is_empty())
                 .map(str::to_owned)
                 .or_else(|| part.summary.clone()),
+            TypedContent::SystemNotification(notification) => {
+                let body = notification.body.trim();
+                if !body.is_empty() {
+                    Some(body.to_owned())
+                } else {
+                    Some(notification.summary.clone())
+                }
+            }
         };
         if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
             out.push(text);

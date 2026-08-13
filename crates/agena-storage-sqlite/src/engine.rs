@@ -1168,6 +1168,175 @@ impl PersistenceEngine for SqliteEngine {
         .await
     }
 
+    async fn settle_background_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_id: i64,
+        tool_part: Option<(i64, PartState, serde_json::Value)>,
+        new_parts: Vec<NewPart>,
+        now_ms: i64,
+    ) -> Result<Vec<Part>, StoreError> {
+        let db = self.db();
+        let owner_id = owner_id.to_owned();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                // Lease refresh (see the trait doc): a stale lease (held by
+                // this owner or another) is re-heartbeated so the transaction
+                // may write; a fresh lease held by another owner is a live
+                // conflict. Other in-flight runs are deliberately NOT aborted —
+                // the settle targets one specific launching run and must never
+                // destroy a different run a live execution is still driving.
+                let lease = lease_tx(txn, session_id).await?;
+                match lease {
+                    Some(lease)
+                        if lease.owner_id != owner_id
+                            && now_ms - lease.heartbeat_at_ms
+                                <= agena_storage::store::LEASE_STALENESS_MS =>
+                    {
+                        return Err(StoreError::LeaseHeldByOther {
+                            session_id,
+                            owner_id: lease.owner_id,
+                            heartbeat_at_ms: lease.heartbeat_at_ms,
+                        });
+                    }
+                    Some(_) => {
+                        upsert_lease_tx(txn, session_id, &owner_id, now_ms).await?;
+                    }
+                    None => {
+                        upsert_lease_tx(txn, session_id, &owner_id, now_ms).await?;
+                    }
+                }
+
+                // The launching run marker must exist; it may already be
+                // terminal (e.g. aborted before the operation settled), in
+                // which case the result parts are still appended onto it.
+                let run = load_part_by_id(txn, run_id)
+                    .await?
+                    .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
+                if !run.is_run_marker() {
+                    return Err(StoreError::InvalidState(format!(
+                        "part {run_id} is not a run marker"
+                    )));
+                }
+                if run.origin_session_id != session_id {
+                    return Err(StoreError::InvalidState(format!(
+                        "run marker {run_id} is shared; only its origin session may settle it"
+                    )));
+                }
+
+                // Terminalize the launching tool part (the operation's own
+                // part) when supplied.
+                if let Some((part_id, terminal, content)) = tool_part {
+                    let mut part = load_part_by_id(txn, part_id)
+                        .await?
+                        .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?;
+                    if part.origin_session_id != session_id {
+                        return Err(StoreError::InvalidState(format!(
+                            "part {part_id} is shared; only its origin session may settle it"
+                        )));
+                    }
+                    part.state = terminal;
+                    part.content = content;
+                    part.finished_at_ms = Some(now_ms);
+                    txn.execute(Statement::from_sql_and_values(
+                        DatabaseBackend::Sqlite,
+                        "UPDATE agena_parts \
+                         SET state = ?, content = ?, finished_at_ms = ?, \
+                             revision = revision + 1, updated_at_ms = ? \
+                         WHERE part_id = ?",
+                        [
+                            part.state.as_str().into(),
+                            text_value(Some(serde_json::to_string(&part.content).map_err(
+                                |error| {
+                                    StoreError::Serialization(format!(
+                                        "encode part content: {error}"
+                                    ))
+                                },
+                            )?)),
+                            Value::BigInt(part.finished_at_ms),
+                            now_ms.into(),
+                            part_id.into(),
+                        ],
+                    ))
+                    .await
+                    .map_err(map_db_err)?;
+                }
+
+                // Append the result parts (Assistant role) under the launching
+                // run — no new run marker.
+                let mut created = Vec::with_capacity(new_parts.len());
+                for new_part in new_parts {
+                    let id = next_part_id_tx(txn).await.map_err(map_db_err)?;
+                    let part = content_part(id, session_id, run_id, new_part, now_ms);
+                    insert_part_tx(txn, &part).await.map_err(map_db_err)?;
+                    insert_membership_tx(txn, session_id, id, now_ms)
+                        .await
+                        .map_err(map_db_err)?;
+                    created.push(part);
+                }
+
+                // Terminalize the launching run marker (Completed) once no
+                // in-flight child remains, so the session returns to Ready
+                // instead of lingering in Running/Interrupted.
+                if run.state.is_in_flight() {
+                    let remaining: Option<i64> = txn
+                        .query_one(Statement::from_sql_and_values(
+                            DatabaseBackend::Sqlite,
+                            "SELECT part_id FROM agena_parts \
+                             WHERE origin_session_id = ? AND run_id = ? AND part_id != ? \
+                               AND state IN ('pending', 'in_progress') \
+                             LIMIT 1",
+                            [
+                                session_id.into(),
+                                run_id.into(),
+                                run_id.into(),
+                            ],
+                        ))
+                        .await
+                        .map_err(map_db_err)?
+                        .and_then(|row| row.try_get("", "part_id").ok());
+                    if remaining.is_none() {
+                        let mut marker = run;
+                        marker.state = PartState::Completed;
+                        marker.finished_at_ms = Some(now_ms);
+                        if let serde_json::Value::Object(map) = &mut marker.content {
+                            map.insert("abort_reason".to_owned(), serde_json::Value::Null);
+                        }
+                        txn.execute(Statement::from_sql_and_values(
+                            DatabaseBackend::Sqlite,
+                            "UPDATE agena_parts \
+                             SET state = ?, content = ?, finished_at_ms = ?, \
+                                 revision = revision + 1, updated_at_ms = ? \
+                             WHERE part_id = ?",
+                            [
+                                marker.state.as_str().into(),
+                                text_value(Some(serde_json::to_string(&marker.content).map_err(
+                                    |error| {
+                                        StoreError::Serialization(format!(
+                                            "encode part content: {error}"
+                                        ))
+                                    },
+                                )?)),
+                                Value::BigInt(marker.finished_at_ms),
+                                now_ms.into(),
+                                run_id.into(),
+                            ],
+                        ))
+                        .await
+                        .map_err(map_db_err)?;
+                    }
+                }
+
+                if !created.is_empty() {
+                    bump_session_version_tx(txn, session_id, now_ms).await?;
+                }
+                Ok(created)
+            })
+        })
+        .await
+    }
+
     async fn append_parts(
         &self,
         session_id: i64,

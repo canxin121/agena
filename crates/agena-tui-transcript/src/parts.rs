@@ -324,6 +324,35 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
                 message: None,
             },
         ))),
+        // A background-operation completion/event delivered to the model as a
+        // System message (the agena analog of Claude's task-notification chip).
+        // Reuses the Hook activity renderer so it draws as a compact
+        // notification row with the operation identity in the hook slot.
+        "system_notification" => {
+            let operation_kind = string_field(content, "operation_kind")
+                .unwrap_or_else(|| "background".to_string());
+            let operation_id = string_field(content, "operation_id").unwrap_or_default();
+            let status = string_field(content, "status").unwrap_or_default();
+            let hook = if operation_id.is_empty() {
+                operation_kind
+            } else {
+                format!("{operation_kind}:{operation_id}:{status}")
+            };
+            let summary = string_field(content, "summary")
+                .or_else(|| string_field(content, "body"))
+                .unwrap_or_default();
+            let detail = string_field(content, "detail")
+                .or_else(|| string_field(content, "body"));
+            TranscriptPartContent::Activity(TranscriptActivityContent::Hook(Box::new(
+                HookPartResource {
+                    hook,
+                    plugin_id: None,
+                    summary,
+                    detail,
+                    message: None,
+                },
+            )))
+        }
         "error" => match serde_json::from_value::<ErrorPartResource>(part.content.clone()) {
             Ok(error) => TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)),
             Err(_) => TranscriptPartContent::Text(TextPartResource {

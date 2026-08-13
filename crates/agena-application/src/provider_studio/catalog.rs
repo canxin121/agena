@@ -25,13 +25,6 @@ use agena_provider::{
     ProviderAdapterOverlay, ProviderCapabilityFamilyConfig,
 };
 
-pub(crate) fn preferred_catalog_model_for_model_id<'a>(
-    models: &'a [crate::dto::CatalogModelResource],
-    model_id: &str,
-) -> Option<&'a crate::dto::CatalogModelResource> {
-    preferred_catalog_model_for_lookup_ids(models, &[model_id.to_owned()])
-}
-
 pub(crate) fn preferred_catalog_model_for_lookup_ids<'a>(
     models: &'a [crate::dto::CatalogModelResource],
     model_ids: &[String],
@@ -55,28 +48,109 @@ pub(crate) fn preferred_catalog_model_for_provider_model<'a>(
     models: &'a [crate::dto::CatalogModelResource],
     provider_model: &agena_api::resource::ProviderModelResource,
 ) -> Option<&'a crate::dto::CatalogModelResource> {
-    preferred_catalog_model_for_lookup_ids(
-        models,
-        &[
-            provider_model.id.clone(),
-            catalog_lookup_id_for_provider_model(provider_model),
-        ],
-    )
+    let lookup_ids = provider_model_catalog_lookup_candidates(provider_model);
+    preferred_catalog_model_for_lookup_ids(models, &lookup_ids)
+}
+
+/// All catalog lookup candidates for a provider model, most specific first.
+pub(crate) fn provider_model_catalog_lookup_candidates(
+    provider_model: &agena_api::resource::ProviderModelResource,
+) -> Vec<String> {
+    let mut lookup_ids = Vec::new();
+    for id in [
+        provider_model.catalog_model_id.clone().unwrap_or_default(),
+        provider_model.id.clone(),
+    ] {
+        if !id.trim().is_empty() {
+            lookup_ids.extend(catalog_lookup_candidates(id.as_str()));
+        }
+    }
+    lookup_ids
 }
 
 pub(crate) fn catalog_lookup_id_for_model_id(model_id: &str) -> String {
     agena_provider::normalized_catalog_model_id(model_id)
 }
 
-pub(crate) fn catalog_lookup_id_for_provider_model(
-    provider_model: &agena_api::resource::ProviderModelResource,
-) -> String {
-    provider_model
-        .catalog_model_id
-        .as_ref()
-        .cloned()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| catalog_lookup_id_for_model_id(provider_model.id.as_str()))
+/// Lookup candidate ids for a provider model, most specific first. Provider
+/// ids frequently carry a dated/versioned tail (`gpt-5-2025-07-07`,
+/// `claude-opus-4-6-20250514`, `gemini-2.5-pro-preview-09-2025`) that the
+/// catalog stores either with its own snapshot key or as the bare model
+/// (`gpt-5`). We try the raw id, then progressively stripped versions, then
+/// the normalized form of each so a dated provider id still resolves to the
+/// canonical catalog entry. Catalog keys are never re-normalized, so distinct
+/// dated entries stay distinct at load time.
+pub(crate) fn catalog_lookup_candidates(model_id: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    // Raw id, then progressively stripped version/date tails.
+    push_lookup_candidate(model_id, &mut candidates, &mut seen);
+    let mut base = model_id.to_owned();
+    while let Some(stripped) = strip_catalog_version_tail(&base) {
+        push_lookup_candidate(stripped.as_str(), &mut candidates, &mut seen);
+        base = stripped;
+    }
+
+    // Normalized forms of every candidate so raw/normalized aliases land on
+    // the same key.
+    let normalized = candidates
+        .iter()
+        .map(|candidate| catalog_lookup_id_for_model_id(candidate))
+        .collect::<Vec<_>>();
+    for id in normalized {
+        push_lookup_candidate(id.as_str(), &mut candidates, &mut seen);
+    }
+
+    // The canonical rules can turn a dash date into a dot (`gpt-5-2025-07-07`
+    // → `gpt-5.2025-07-07`); strip tails from the normalized forms too so the
+    // bare `gpt-5` is reached as a final fallback.
+    let normalized_bases = candidates
+        .iter()
+        .map(|candidate| catalog_lookup_id_for_model_id(candidate))
+        .collect::<Vec<_>>();
+    for normalized_base in normalized_bases {
+        let mut base = normalized_base;
+        while let Some(stripped) = strip_catalog_version_tail(&base) {
+            push_lookup_candidate(stripped.as_str(), &mut candidates, &mut seen);
+            base = stripped;
+        }
+    }
+    candidates
+}
+
+fn push_lookup_candidate(
+    value: &str,
+    candidates: &mut Vec<String>,
+    seen: &mut std::collections::BTreeSet<String>,
+) {
+    let trimmed = value.trim().to_owned();
+    if !trimmed.is_empty() && seen.insert(trimmed.clone()) {
+        candidates.push(trimmed);
+    }
+}
+
+/// Strip one trailing version/date segment from a model id, if present.
+/// Matches `-YYYYMMDD`, `-YYYY-MM-DD`, `-MM-YYYY`, `-YYYYMM`, `-YYYY`, and
+/// `-latest` tails (e.g. `claude-opus-4-6-20250514` → `claude-opus-4-6`).
+fn strip_catalog_version_tail(model_id: &str) -> Option<String> {
+    let trimmed = model_id.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let tail_start = trimmed.rfind('-')?;
+    let tail = &trimmed[tail_start + 1..];
+    let is_version_segment = tail == "latest"
+        || tail.chars().all(|ch| ch.is_ascii_digit()) && matches!(tail.len(), 4 | 6 | 8)
+        || tail.chars().all(|ch| ch.is_ascii_digit() || ch == '-')
+            && tail.matches('-').count() == 1
+            && matches!(tail.len(), 7 | 9 | 10);
+    if is_version_segment {
+        let stripped = trimmed[..tail_start].trim().to_owned();
+        (!stripped.is_empty()).then_some(stripped)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn provider_model_json_for_model_id(
@@ -96,22 +170,19 @@ pub(crate) fn provider_model_overlay_for_model_id(
     model_id: &str,
     provider_model: Option<&agena_api::resource::ProviderModelResource>,
 ) -> agena_provider::ResolvedProviderModelConfig {
-    let mut overlay = preferred_catalog_model_for_model_id(catalog_entries, model_id)
-        .or_else(|| {
-            let lookup_id = catalog_lookup_id_for_model_id(model_id);
-            (lookup_id != model_id)
-                .then(|| preferred_catalog_model_for_model_id(catalog_entries, lookup_id.as_str()))
-                .flatten()
+    let mut overlay = preferred_catalog_model_for_lookup_ids(
+        catalog_entries,
+        &catalog_lookup_candidates(model_id),
+    )
+    .map(catalog_model_to_provider_model_overlay)
+    .or_else(|| {
+        provider_model.and_then(|provider_model| {
+            preferred_catalog_model_for_provider_model(catalog_entries, provider_model)
+                .map(catalog_model_to_provider_model_overlay)
+                .or_else(|| Some(provider_model_to_provider_model_overlay(provider_model)))
         })
-        .map(catalog_model_to_provider_model_overlay)
-        .or_else(|| {
-            provider_model.and_then(|provider_model| {
-                preferred_catalog_model_for_provider_model(catalog_entries, provider_model)
-                    .map(catalog_model_to_provider_model_overlay)
-                    .or_else(|| Some(provider_model_to_provider_model_overlay(provider_model)))
-            })
-        })
-        .unwrap_or_default();
+    })
+    .unwrap_or_default();
     if let Some(provider_model) = provider_model {
         overlay.native_compaction = provider_model.native_compaction;
     }

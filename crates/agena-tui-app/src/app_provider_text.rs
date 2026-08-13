@@ -426,7 +426,8 @@ pub(crate) fn provider_studio_model_count_label(i18n: &I18n, count: usize) -> St
 /// Detail line for a Provider Studio model list item, rendered from the
 /// catalog-enriched `ProviderModelResource` (the listing is enriched against
 /// the model catalog at the application chokepoint). Shows the catalog
-/// display name when known and the context window when advertised.
+/// display name, lifecycle, context window, max output tokens, and pricing
+/// when the catalog advertises them.
 pub(crate) fn provider_studio_model_list_detail(
     i18n: &I18n,
     model: &ProviderModelResource,
@@ -440,6 +441,12 @@ pub(crate) fn provider_studio_model_list_detail(
     {
         parts.push(display_name.to_owned());
     }
+    // Active is the default state; only surface non-default lifecycle stages.
+    if let Some(lifecycle) = model.metadata.lifecycle.filter(|lifecycle| {
+        !matches!(lifecycle, agena_api::resource::ModelLifecycle::Active)
+    }) {
+        parts.push(provider_studio_model_lifecycle_label(i18n, lifecycle));
+    }
     if let Some(context_window) = model.metadata.context_window_tokens.map(|value| {
         i18n.text_args(
             "session-model-context-window",
@@ -449,6 +456,65 @@ pub(crate) fn provider_studio_model_list_detail(
         )
     }) {
         parts.push(context_window);
+    }
+    if let Some(max_output) = model.metadata.max_output_tokens.map(|value| {
+        i18n.text_args(
+            "session-model-max-output",
+            &agena_tui::fl_args!(
+                "value" => crate::app_choice_helpers::format_compact_token_count(value as u64)
+            ),
+        )
+    }) {
+        parts.push(max_output);
+    }
+    let pricing = provider_studio_model_pricing_summary(i18n, model.metadata.pricing.as_ref());
+    if !pricing.is_empty() {
+        parts.push(pricing);
+    }
+    join_inline_segments(parts)
+}
+
+/// Localized lifecycle label for a model resource.
+fn provider_studio_model_lifecycle_label(
+    i18n: &I18n,
+    lifecycle: agena_api::resource::ModelLifecycle,
+) -> String {
+    let key = match lifecycle {
+        agena_api::resource::ModelLifecycle::Active => "overlay-model-catalog-lifecycle-active",
+        agena_api::resource::ModelLifecycle::Preview => "overlay-model-catalog-lifecycle-preview",
+        agena_api::resource::ModelLifecycle::Beta => "overlay-model-catalog-lifecycle-beta",
+        agena_api::resource::ModelLifecycle::Alpha => "overlay-model-catalog-lifecycle-alpha",
+        agena_api::resource::ModelLifecycle::Experimental => {
+            "overlay-model-catalog-lifecycle-experimental"
+        }
+        agena_api::resource::ModelLifecycle::Deprecated => {
+            "overlay-model-catalog-lifecycle-deprecated"
+        }
+    };
+    ui_text::t(i18n, key)
+}
+
+/// Compact input/output pricing summary for a model resource, e.g.
+/// `in $1.25/M · out $10/M`. Empty when no prices are advertised.
+fn provider_studio_model_pricing_summary(
+    i18n: &I18n,
+    pricing: Option<&agena_api::resource::ModelPricing>,
+) -> String {
+    let Some(pricing) = pricing.filter(|pricing| !pricing.is_empty()) else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    if let Some(value) = pricing.input_usd_per_million_tokens.as_deref() {
+        parts.push(i18n.text_args(
+            "overlay-model-catalog-price-input",
+            &agena_tui::fl_args!("value" => value),
+        ));
+    }
+    if let Some(value) = pricing.output_usd_per_million_tokens.as_deref() {
+        parts.push(i18n.text_args(
+            "overlay-model-catalog-price-output",
+            &agena_tui::fl_args!("value" => value),
+        ));
     }
     join_inline_segments(parts)
 }
@@ -550,6 +616,48 @@ mod tests {
 
         assert!(plain.contains("DeepSeek V4 Pro"), "got: {detail}");
         assert!(plain.contains("1.05M ctx"), "got: {detail}");
+    }
+
+    #[test]
+    fn detail_renders_max_output_and_pricing_when_advertised() {
+        let i18n = I18n::english();
+        let mut model = bare_model("deepseek-v4-pro");
+        model.display_name = Some("DeepSeek V4 Pro".to_owned());
+        model.metadata.lifecycle = Some(agena_api::resource::ModelLifecycle::Beta);
+        model.metadata.max_output_tokens = Some(65536);
+        model.metadata.pricing = Some(agena_api::resource::ModelPricing {
+            input_usd_per_million_tokens: Some("1.25".to_owned()),
+            output_usd_per_million_tokens: Some("10".to_owned()),
+            cache_read_usd_per_million_tokens: None,
+            cache_write_usd_per_million_tokens: None,
+            tiers: Vec::new(),
+        });
+
+        let detail = provider_studio_model_list_detail(&i18n, &model);
+        let plain = detail.replace(['\u{2068}', '\u{2069}'], "");
+
+        assert!(plain.contains("DeepSeek V4 Pro"), "got: {detail}");
+        assert!(plain.contains("beta"), "got: {detail}");
+        assert!(plain.contains("out 65.5K"), "got: {detail}");
+        assert!(plain.contains("in $1.25/M"), "got: {detail}");
+        assert!(plain.contains("out $10/M"), "got: {detail}");
+    }
+
+    #[test]
+    fn detail_skips_active_lifecycle_and_absent_pricing() {
+        let i18n = I18n::english();
+        let mut model = bare_model("model-a");
+        model.display_name = Some("Model A".to_owned());
+        model.metadata.lifecycle = Some(agena_api::resource::ModelLifecycle::Active);
+        model.metadata.context_window_tokens = Some(8192);
+
+        let detail = provider_studio_model_list_detail(&i18n, &model);
+        let plain = detail.replace(['\u{2068}', '\u{2069}'], "");
+
+        assert!(plain.contains("Model A"), "got: {detail}");
+        assert!(plain.contains("8.19K ctx"), "got: {detail}");
+        assert!(!plain.contains("active"), "got: {detail}");
+        assert!(!plain.contains("/M"), "got: {detail}");
     }
 
     #[test]

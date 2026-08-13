@@ -22,7 +22,7 @@ use agena_provider::{
 };
 
 use crate::provider_studio::catalog::{
-    catalog_lookup_id_for_model_id, catalog_model_to_catalog_definition,
+    catalog_lookup_candidates, catalog_model_to_catalog_definition,
     preferred_catalog_model_for_lookup_ids,
 };
 use crate::{Application, ApplicationError};
@@ -355,14 +355,7 @@ pub(crate) fn provider_adapter_models_response(
         .adapters
         .iter()
         .flat_map(|adapter| adapter.models.iter())
-        .flat_map(|model| {
-            let mut ids = vec![model.id.to_string()];
-            let normalized = catalog_lookup_id_for_model_id(model.id.as_ref());
-            if !normalized.is_empty() && normalized != model.id.as_ref() {
-                ids.push(normalized);
-            }
-            ids
-        })
+        .flat_map(|model| catalog_lookup_candidates(model.id.as_ref()))
         .collect::<Vec<_>>();
     let catalog_entries = app.lookup_model_catalog_models(&lookup_ids);
     ProviderAdapterModelsResponse {
@@ -396,14 +389,7 @@ pub fn configured_provider_adapter_models_response(
         .adapters
         .iter()
         .flat_map(|adapter| adapter.model_ids.iter())
-        .flat_map(|model_id| {
-            let mut ids = vec![model_id.to_string()];
-            let normalized = catalog_lookup_id_for_model_id(model_id);
-            if !normalized.is_empty() && normalized != model_id.as_str() {
-                ids.push(normalized);
-            }
-            ids
-        })
+        .flat_map(|model_id| catalog_lookup_candidates(model_id))
         .collect::<Vec<_>>();
     let catalog_entries = app.lookup_model_catalog_models(&lookup_ids);
     routing
@@ -442,14 +428,7 @@ fn enrich_listing_model_from_catalog(
     model: agena_domain::Model,
     catalog_entries: &[crate::dto::CatalogModelResource],
 ) -> agena_domain::Model {
-    let lookup_ids = {
-        let mut ids = vec![model.id.to_string()];
-        let normalized = catalog_lookup_id_for_model_id(model.id.as_ref());
-        if !normalized.is_empty() && normalized != model.id.as_ref() {
-            ids.push(normalized);
-        }
-        ids
-    };
+    let lookup_ids = catalog_lookup_candidates(model.id.as_ref());
     match preferred_catalog_model_for_lookup_ids(catalog_entries, &lookup_ids) {
         Some(catalog_model) => {
             let definition = catalog_model_to_catalog_definition(catalog_model);

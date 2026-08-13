@@ -909,6 +909,7 @@ overlay-session-model-prompt = Search models
 overlay-session-model-list-title = Models
 overlay-session-model-footer = Type to filter
 session-model-context-window = {$value} ctx
+session-model-max-output = out {$value}
 overlay-provider-studio-title = Provider Config
 overlay-provider-studio-header = Provider Config
 overlay-provider-studio-footer = Tab/Shift+Tab panels · Arrows select · Space toggle · Enter edit · Ctrl+D delete selected · Ctrl+R refresh · Ctrl+N add model · Ctrl+A save adapter · Ctrl+S save provider · Esc close

@@ -16,9 +16,10 @@ use super::catalog::{
     apply_provider_auth_required_adapter_defaults_to_json_adapters,
     apply_provider_auth_required_adapter_defaults_to_json_value,
     build_provider_auth_patch_value_for_save, build_provider_patch_value_for_save,
-    catalog_lookup_id_for_provider_model, ensure_provider_model_entry,
+    ensure_provider_model_entry,
     merge_provider_model_adapter_patch_for_save, optional_non_empty,
     preferred_catalog_model_for_provider_model, provider_adapter_settings_path,
+    provider_model_catalog_lookup_candidates,
     provider_defaults_adapter, provider_defaults_point_to, provider_model_json_for_model_id,
     provider_model_overlay_to_json, provider_model_selection_contains,
     provider_model_settings_path, provider_settings_path, quoted_settings_segment,
@@ -321,7 +322,7 @@ pub(crate) async fn save_provider_draft(
                 adapter_models
                     .models
                     .iter()
-                    .map(catalog_lookup_id_for_provider_model)
+                    .flat_map(provider_model_catalog_lookup_candidates)
             })
             .chain(requested_default_model.iter().cloned())
             .collect::<Vec<_>>(),
@@ -496,7 +497,7 @@ pub(crate) async fn save_provider_adapter_matches(
         &adapter_models
             .models
             .iter()
-            .map(catalog_lookup_id_for_provider_model)
+            .flat_map(provider_model_catalog_lookup_candidates)
             .collect::<Vec<_>>(),
     );
     let existing_models = read_file_provider_settings(app, provider_id)
@@ -577,7 +578,7 @@ pub(crate) fn provider_model_draft_value(
     let catalog_entries = app.lookup_model_catalog_models(
         &[model_id.to_owned()]
             .into_iter()
-            .chain(provider_model.map(catalog_lookup_id_for_provider_model))
+            .chain(provider_model.map(provider_model_catalog_lookup_candidates).into_iter().flatten())
             .collect::<Vec<_>>(),
     );
     Ok(provider_model_json_for_model_id(

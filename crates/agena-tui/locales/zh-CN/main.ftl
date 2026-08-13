@@ -938,6 +938,7 @@ overlay-session-model-prompt = 搜索模型
 overlay-session-model-list-title = 模型
 overlay-session-model-footer = 输入以过滤
 session-model-context-window = 上下文 {$value}
+session-model-max-output = 输出 {$value}
 overlay-provider-studio-title = Provider 配置
 overlay-provider-studio-header = Provider 配置
 overlay-provider-studio-footer = Tab/Shift+Tab 切换面板 · 方向键选择 · Space 切换 · Enter 编辑 · Ctrl+D 删除选中项 · Ctrl+R 刷新 · Ctrl+N 新增模型 · Ctrl+A 保存 Adapter · Ctrl+S 保存 Provider · Esc 关闭

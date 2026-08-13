@@ -255,6 +255,19 @@ pub enum ReasoningEffortResource {
     Max,
 }
 
+impl AsRef<str> for ReasoningEffortResource {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 /// How model thinking is displayed.
@@ -286,6 +299,34 @@ pub struct ProviderModelThinkingModeResource {
     pub request_override: ProviderModelRequestOverrideResource,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub adapter_overrides: BTreeMap<String, ProviderModelRequestOverrideResource>,
+}
+
+impl ProviderModelThinkingModeResource {
+    /// The stable selector exposed to users and persisted in execution
+    /// preferences. Mirrors `agena_domain::ModelThinkingMode::selector`: a
+    /// non-empty `preset` wins; otherwise the selector derives from the
+    /// request shape (effort name or `off` for a disabled mode).
+    pub fn selector(&self) -> Option<std::borrow::Cow<'_, str>> {
+        if let Some(name) = self
+            .preset
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            return Some(std::borrow::Cow::Borrowed(name));
+        }
+        match self.thinking.as_ref() {
+            Some(ThinkingRequestResource::Disabled) => Some(std::borrow::Cow::Borrowed("off")),
+            Some(ThinkingRequestResource::Effort { effort })
+            | Some(ThinkingRequestResource::Adaptive {
+                effort: Some(effort),
+                ..
+            }) => Some(std::borrow::Cow::Borrowed(effort.as_ref())),
+            Some(ThinkingRequestResource::Budget { .. })
+            | Some(ThinkingRequestResource::Adaptive { effort: None, .. })
+            | None => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

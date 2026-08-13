@@ -359,10 +359,15 @@ pub(crate) fn apply_provider_model_config_supported_modes(
     let Some(provider_model) = provider_model else {
         return;
     };
+    // Selectors come from `preset` when set, otherwise from the request
+    // shape (effort name / `off`), matching the domain's `selector()`. Live
+    // models (e.g. cpa's deepseek-v4) advertise effort modes with `preset`
+    // unset, so deriving the selector here keeps the detail panel in sync
+    // with what the mode selector offers.
     draft.supported_thinking_modes = provider_model
         .thinking_modes
         .iter()
-        .filter_map(|mode| mode.preset.clone())
+        .filter_map(|mode| mode.selector().map(std::borrow::Cow::into_owned))
         .collect();
     draft.supported_speed_modes = provider_model.speed_modes.keys().cloned().collect();
 }
@@ -621,7 +626,8 @@ mod tests {
     use super::{
         ProviderModelConfigField, apply_provider_model_config_supported_modes,
         commit_provider_model_config_field, provider_model_config_draft_from_overlay,
-        provider_model_config_draft_to_model_value, provider_model_config_fields,
+        provider_model_config_draft_to_model_value, provider_model_config_field_value,
+        provider_model_config_fields,
     };
     use agena_provider::{AgenaToolMode, AgenaToolsConfig, ResolvedProviderModelConfig};
 
@@ -763,5 +769,67 @@ mod tests {
             draft.supported_speed_modes,
             std::collections::BTreeSet::from(["fast".to_owned()]),
         );
+    }
+
+    #[test]
+    fn live_effort_modes_without_preset_still_show_in_the_model_detail() {
+        // Live OpenAI-compatible models (e.g. cpa's deepseek-v4) advertise
+        // effort modes with `preset` unset; the selector derives from the
+        // request shape. The detail panel must show them, not 未设置.
+        let mut draft = provider_model_config_draft_from_overlay(
+            "deepseek-v4-pro",
+            ResolvedProviderModelConfig::default(),
+        );
+        let mut model = agena_api::resource::ProviderModelResource::configured(
+            "openai_responses",
+            "deepseek-v4-pro",
+        );
+        for effort in ["low", "medium", "high", "max"] {
+            model.thinking_modes.push(
+                agena_api::resource::ProviderModelThinkingModeResource {
+                    preset: None,
+                    is_default: false,
+                    display_name: None,
+                    description: None,
+                    thinking: Some(agena_api::resource::ThinkingRequestResource::Effort {
+                        effort: match effort {
+                            "low" => agena_api::resource::ReasoningEffortResource::Low,
+                            "medium" => agena_api::resource::ReasoningEffortResource::Medium,
+                            "high" => agena_api::resource::ReasoningEffortResource::High,
+                            _ => agena_api::resource::ReasoningEffortResource::Max,
+                        },
+                    }),
+                    request_override: Default::default(),
+                    adapter_overrides: Default::default(),
+                },
+            );
+        }
+        model.thinking_modes.push(
+            agena_api::resource::ProviderModelThinkingModeResource {
+                preset: None,
+                is_default: false,
+                display_name: None,
+                description: None,
+                thinking: Some(agena_api::resource::ThinkingRequestResource::Disabled),
+                request_override: Default::default(),
+                adapter_overrides: Default::default(),
+            },
+        );
+
+        apply_provider_model_config_supported_modes(Some(&model), &mut draft);
+
+        assert_eq!(
+            draft.supported_thinking_modes,
+            ["low", "medium", "high", "max", "off"]
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
+        );
+        assert!(!provider_model_config_field_value(
+            &draft,
+            ProviderModelConfigField::ThinkingModes
+        )
+        .trim()
+        .is_empty());
     }
 }

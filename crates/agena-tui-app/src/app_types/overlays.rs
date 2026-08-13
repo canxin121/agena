@@ -8,7 +8,7 @@ use agena_api::resource::ProviderAdapterModelsResource;
 use agena_domain::{ModelRef, PermissionConfig, UserInputRequest};
 use agena_domain::{PermissionMode, PermissionReplyKind, PermissionRequest, PermissionScope};
 
-use agena_application::dto::{CatalogModelResource, ModelCatalogResponse};
+use agena_application::dto::ModelCatalogResponse;
 use agena_application::provider_studio::ProviderConfigDraft;
 use agena_provider::AgenaToolMode;
 use agena_tui::model_catalog::ModelCatalogPresentation;
@@ -399,7 +399,6 @@ pub(crate) struct ProviderStudioOverlay {
     pub(crate) adapter_candidate_ids: Vec<String>,
     pub(crate) selected_adapter_ids: BTreeSet<String>,
     pub(crate) selected_model_keys: BTreeSet<String>,
-    pub(crate) catalog_matches: BTreeMap<String, CatalogModelResource>,
     pub(crate) listing_adapter_models: bool,
     pub(crate) saving: bool,
     pub(crate) pending_adapter_models_key: Option<String>,

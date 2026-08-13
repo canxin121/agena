@@ -497,7 +497,7 @@ pub(crate) fn session_model_choice_item(
     }
 }
 
-fn format_compact_token_count(value: u64) -> String {
+pub(crate) fn format_compact_token_count(value: u64) -> String {
     fn format_unit(value: u64, unit: u64, suffix: char) -> String {
         if value.is_multiple_of(unit) {
             return format!("{}{suffix}", value / unit);
@@ -586,36 +586,13 @@ pub(crate) fn session_model_matches_current(
             || current.adapter_id.is_none())
 }
 
-pub(crate) fn provider_model_catalog_lookup_id(model: &ProviderModelResource) -> String {
-    model
-        .catalog_model_id
-        .as_ref()
-        .cloned()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| agena_provider::normalized_catalog_model_id(model.id.as_str()))
-}
-
-pub(crate) fn provider_studio_catalog_match_model<'a>(
-    model: &ProviderModelResource,
-    catalog_models: &'a [CatalogModelResource],
-) -> Option<&'a CatalogModelResource> {
-    let lookup_id = provider_model_catalog_lookup_id(model);
-    catalog_models
-        .iter()
-        .filter(|catalog_model| {
-            catalog_model.model_id == model.id || catalog_model.model_id == lookup_id
-        })
-        .min_by_key(|catalog_model| catalog_model.model_id.as_str())
-}
-
 use crate::{
-    BTreeSet, CatalogModelResource, ChoiceItem, ChoiceOverlayAction, ConfigJsonSources, I18n,
-    InspectorRow, JsonValue, ModelCatalogListResponse, ModelRef, PermissionMode,
-    PermissionRuleStudioChoiceField, ProviderModel, ProviderModelResource, ProviderStudioField,
-    ProviderStudioProviderRow, ProviderSummaryResource, SelectionPickerCommand,
-    SessionModelChoiceItem, SessionModelIdentity, SettingsFieldKind, SettingsFieldSpec,
-    SettingsPickerAction, SettingsStudioItem, join_inline_segments,
-    provider_model_config_field_label, provider_studio_field_label, ui_text,
+    BTreeSet, ChoiceItem, ChoiceOverlayAction, ConfigJsonSources, I18n, InspectorRow, JsonValue,
+    ModelCatalogListResponse, ModelRef, PermissionMode, PermissionRuleStudioChoiceField,
+    ProviderModel, ProviderStudioField, ProviderStudioProviderRow,
+    ProviderSummaryResource, SelectionPickerCommand, SessionModelChoiceItem, SessionModelIdentity,
+    SettingsFieldKind, SettingsFieldSpec, SettingsPickerAction, SettingsStudioItem,
+    join_inline_segments, provider_model_config_field_label, provider_studio_field_label, ui_text,
 };
 
 #[cfg(test)]

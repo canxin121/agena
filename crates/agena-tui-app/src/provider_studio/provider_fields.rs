@@ -253,9 +253,6 @@ pub(crate) fn remove_provider_studio_adapter_from_dialog(
     dialog
         .selected_model_keys
         .retain(|key| !key.starts_with(prefix.as_str()));
-    dialog
-        .catalog_matches
-        .retain(|key, _| !key.starts_with(prefix.as_str()));
     if dialog.draft.default_adapter == adapter_id {
         dialog.draft.default_adapter.clear();
         dialog.draft.default_model.clear();

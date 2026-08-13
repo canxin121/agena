@@ -28,6 +28,7 @@ use super::draft_auth_data::{
     ProviderStudioSaveError, ProviderStudioSaveField, ProviderStudioSaveResult,
 };
 use super::draft_config::ProviderConfigDraft;
+use crate::provider_queries::provider_adapter_models_response;
 use crate::Application;
 use agena_domain::ProviderId;
 
@@ -1162,32 +1163,6 @@ async fn clear_default_selection_for_removed_adapter(
     changes.insert("default_selection".to_owned(), JsonValue::Null);
     patch_provider_settings_root(app, JsonValue::Object(changes)).await?;
     Ok(())
-}
-
-pub(crate) fn provider_adapter_models_response(
-    _app: &Application,
-    adapter_models: agena_provider::ProviderAdapterModelsListing,
-) -> agena_api::resource::ProviderAdapterModelsResponse {
-    agena_api::resource::ProviderAdapterModelsResponse {
-        provider_id: adapter_models.provider_id,
-        adapters: adapter_models
-            .adapters
-            .into_iter()
-            .map(
-                |adapter| agena_api::resource::ProviderAdapterModelsResource {
-                    adapter_id: adapter.adapter_id,
-                    enabled: adapter.enabled,
-                    resolved_base_url: adapter.resolved_base_url,
-                    models: adapter
-                        .models
-                        .into_iter()
-                        .map(crate::provider_model_resource_from_domain)
-                        .collect(),
-                    failure: adapter.failure.map(Into::into),
-                },
-            )
-            .collect(),
-    }
 }
 
 pub(crate) async fn patch_provider_settings(

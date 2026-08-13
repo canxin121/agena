@@ -2,10 +2,7 @@
 //! catalog lookups, and the inspector rows for think/speed/verbosity choices.
 
 use agena_api::resource::{ProviderAdapterModelsResource, ProviderModelResource};
-use agena_application::{
-    Application,
-    dto::{CatalogModelResource, ModelCatalogListResponse},
-};
+use agena_application::{Application, dto::ModelCatalogListResponse};
 use agena_domain::Model as ProviderModel;
 use agena_domain::{ModelRef, ProviderId};
 use anyhow::{Result, anyhow};
@@ -93,13 +90,6 @@ pub(crate) fn list_model_catalog_models(
     limit: usize,
 ) -> Result<ModelCatalogListResponse> {
     Ok(application.list_model_catalog_with_origin(query, None, offset, limit))
-}
-
-pub(crate) fn lookup_model_catalog_models(
-    application: &Application,
-    model_ids: &[String],
-) -> Vec<CatalogModelResource> {
-    application.lookup_model_catalog_models(model_ids)
 }
 
 /// Resolve the effective think-mode rows for the model implied by `request`.

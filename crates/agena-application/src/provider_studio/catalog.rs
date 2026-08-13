@@ -13,9 +13,16 @@ use super::draft_auth_data::{
     ProviderStudioSaveValidationError,
 };
 use super::draft_config::ProviderConfigDraft;
+use agena_api::resource::{
+    CapabilitySupportResource, ProviderModelRequestOverrideResource, ReasoningEffortResource,
+    ThinkingDisplayResource, ThinkingRequestResource,
+};
+use agena_domain::{ModelInputModality, ModelSpeedModeRequestOverride};
 use agena_provider::{
-    CatalogModelDefinition, CredentialIssuer, OpenAiResponsesBackendConfig, ProviderAdapterOverlay,
-    ProviderCapabilityFamilyConfig,
+    CapabilitySelectionPatch, CatalogModelDefinition, ConfiguredModeDefault,
+    ConfiguredModelModeMap, ConfiguredModelSpeedMode, ConfiguredModelThinkingMode,
+    CredentialIssuer, ModelCapabilityFeature, ModelCapabilityPatch, OpenAiResponsesBackendConfig,
+    ProviderAdapterOverlay, ProviderCapabilityFamilyConfig,
 };
 
 pub(crate) fn preferred_catalog_model_for_model_id<'a>(
@@ -238,13 +245,197 @@ pub(crate) fn provider_model_to_provider_model_overlay(
         None,
         model.display_name.clone(),
         None,
-        Default::default(),
-        Default::default(),
-        Default::default(),
+        provider_model_thinking_modes_to_configured(model),
+        provider_model_speed_modes_to_configured(model),
+        provider_model_capabilities_to_patch(model),
     );
     let mut overlay = agena_provider::provider_model_overlay_from_catalog_definition(&definition);
     overlay.native_compaction = model.native_compaction;
     overlay
+}
+
+/// Convert the live model's thinking modes into a configured mode map. Uses the
+/// provider's `From<Vec<ConfiguredModelThinkingMode>>` impl, which derives each
+/// mode's selector, marks the map default, and persists the flat
+/// strategy/effort/budget form (the `#[serde(skip)]` `preset`/`thinking` fields
+/// never reach disk), so the saved config round-trips like a catalog overlay.
+fn provider_model_thinking_modes_to_configured(
+    model: &agena_api::resource::ProviderModelResource,
+) -> ConfiguredModelModeMap<ConfiguredModelThinkingMode> {
+    model
+        .thinking_modes
+        .iter()
+        .map(|mode| ConfiguredModelThinkingMode {
+            is_default: mode.is_default.then_some(true),
+            display_name: mode.display_name.clone(),
+            description: mode.description.clone(),
+            preset: mode.preset.clone(),
+            thinking: mode.thinking.as_ref().map(thinking_request_resource_to_domain),
+            strategy: None,
+            effort: None,
+            budget_tokens: None,
+            display: None,
+            request_override: model_speed_mode_request_override_from_resource(
+                &mode.request_override,
+            ),
+            adapter_overrides: mode
+                .adapter_overrides
+                .iter()
+                .map(|(adapter, override_patch)| {
+                    (
+                        adapter.clone(),
+                        model_speed_mode_request_override_from_resource(override_patch),
+                    )
+                })
+                .collect(),
+            disabled: false,
+        })
+        .collect::<Vec<_>>()
+        .into()
+}
+
+/// Convert the live model's speed modes into a configured mode map, mirroring
+/// the thinking-mode impl's default handling (the `is_default` entry becomes
+/// the map default).
+fn provider_model_speed_modes_to_configured(
+    model: &agena_api::resource::ProviderModelResource,
+) -> ConfiguredModelModeMap<ConfiguredModelSpeedMode> {
+    let mut result = ConfiguredModelModeMap::default();
+    for (name, mode) in &model.speed_modes {
+        if mode.is_default {
+            result.default = ConfiguredModeDefault::Mode(name.clone());
+        }
+        result.modes.insert(
+            name.clone(),
+            ConfiguredModelSpeedMode {
+                is_default: mode.is_default.then_some(true),
+                display_name: mode.display_name.clone(),
+                description: mode.description.clone(),
+                request_override: model_speed_mode_request_override_from_resource(
+                    &mode.request_override,
+                ),
+                adapter_overrides: mode
+                    .adapter_overrides
+                    .iter()
+                    .map(|(adapter, override_patch)| {
+                        (
+                            adapter.clone(),
+                            model_speed_mode_request_override_from_resource(override_patch),
+                        )
+                    })
+                    .collect(),
+                disabled: false,
+            },
+        );
+    }
+    result
+}
+
+/// Map the flat per-feature capability resource to a capability patch. Only
+/// `Supported`/`Unsupported` contribute; `Unknown` is omitted so it can later
+/// be filled from the catalog during decoration.
+fn provider_model_capabilities_to_patch(
+    model: &agena_api::resource::ProviderModelResource,
+) -> ModelCapabilityPatch {
+    let capabilities = &model.capabilities;
+    let mut input_supported = Vec::new();
+    let mut input_unsupported = Vec::new();
+    for (modality, support) in [
+        (ModelInputModality::Text, &capabilities.text_input),
+        (ModelInputModality::Image, &capabilities.image_input),
+        (ModelInputModality::Document, &capabilities.document_input),
+        (ModelInputModality::Audio, &capabilities.audio_input),
+        (ModelInputModality::Video, &capabilities.video_input),
+        (ModelInputModality::File, &capabilities.file_input),
+    ] {
+        push_capability_support(&mut input_supported, &mut input_unsupported, modality, support);
+    }
+    let mut feature_supported = Vec::new();
+    let mut feature_unsupported = Vec::new();
+    for (feature, support) in [
+        (ModelCapabilityFeature::ToolCalling, &capabilities.tool_calling),
+        (ModelCapabilityFeature::Streaming, &capabilities.streaming),
+        (ModelCapabilityFeature::Reasoning, &capabilities.reasoning),
+        (
+            ModelCapabilityFeature::StructuredOutput,
+            &capabilities.structured_output,
+        ),
+        (ModelCapabilityFeature::Temperature, &capabilities.temperature_supported),
+    ] {
+        push_capability_support(&mut feature_supported, &mut feature_unsupported, feature, support);
+    }
+    ModelCapabilityPatch {
+        input: CapabilitySelectionPatch::optional_from_supported_unsupported(
+            input_supported,
+            input_unsupported,
+        ),
+        features: CapabilitySelectionPatch::optional_from_supported_unsupported(
+            feature_supported,
+            feature_unsupported,
+        ),
+    }
+}
+
+fn push_capability_support<T>(
+    supported: &mut Vec<T>,
+    unsupported: &mut Vec<T>,
+    value: T,
+    support: &CapabilitySupportResource,
+) {
+    match support {
+        CapabilitySupportResource::Supported => supported.push(value),
+        CapabilitySupportResource::Unsupported => unsupported.push(value),
+        CapabilitySupportResource::Unknown => {}
+    }
+}
+
+fn thinking_request_resource_to_domain(value: &ThinkingRequestResource) -> agena_domain::ThinkingRequest {
+    match value {
+        ThinkingRequestResource::Budget { budget_tokens } => {
+            agena_domain::ThinkingRequest::Budget {
+                budget_tokens: *budget_tokens,
+            }
+        }
+        ThinkingRequestResource::Adaptive { effort, display } => {
+            agena_domain::ThinkingRequest::Adaptive {
+                effort: effort.map(reasoning_effort_resource_to_domain),
+                display: display.map(thinking_display_resource_to_domain),
+            }
+        }
+        ThinkingRequestResource::Effort { effort } => {
+            agena_domain::ThinkingRequest::Effort {
+                effort: reasoning_effort_resource_to_domain(*effort),
+            }
+        }
+        ThinkingRequestResource::Disabled => agena_domain::ThinkingRequest::Disabled,
+    }
+}
+
+fn reasoning_effort_resource_to_domain(value: ReasoningEffortResource) -> agena_domain::ReasoningEffort {
+    match value {
+        ReasoningEffortResource::Minimal => agena_domain::ReasoningEffort::Minimal,
+        ReasoningEffortResource::Low => agena_domain::ReasoningEffort::Low,
+        ReasoningEffortResource::Medium => agena_domain::ReasoningEffort::Medium,
+        ReasoningEffortResource::High => agena_domain::ReasoningEffort::High,
+        ReasoningEffortResource::Xhigh => agena_domain::ReasoningEffort::Xhigh,
+        ReasoningEffortResource::Max => agena_domain::ReasoningEffort::Max,
+    }
+}
+
+fn thinking_display_resource_to_domain(value: ThinkingDisplayResource) -> agena_domain::ThinkingDisplay {
+    match value {
+        ThinkingDisplayResource::Summarized => agena_domain::ThinkingDisplay::Summarized,
+        ThinkingDisplayResource::Omitted => agena_domain::ThinkingDisplay::Omitted,
+    }
+}
+
+fn model_speed_mode_request_override_from_resource(
+    value: &ProviderModelRequestOverrideResource,
+) -> ModelSpeedModeRequestOverride {
+    ModelSpeedModeRequestOverride {
+        headers: value.headers.clone(),
+        body_patch: value.body_patch.clone(),
+    }
 }
 
 pub(crate) fn dedupe_vec<T: PartialEq>(values: &mut Vec<T>) {
@@ -617,4 +808,151 @@ pub(crate) fn optional_non_empty(value: &str) -> Option<&str> {
 /// message otherwise.
 pub(crate) fn required_trimmed<'a>(value: &'a str, field: &str) -> anyhow::Result<&'a str> {
     optional_non_empty(value).ok_or_else(|| anyhow!("{field} is required"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{provider_model_overlay_to_json, provider_model_to_provider_model_overlay};
+    use agena_api::resource::{
+        CapabilitySupportResource, ProviderModelCapabilitiesResource,
+        ProviderModelMetadataResource, ProviderModelResource, ProviderModelSpeedModeResource,
+        ProviderModelThinkingModeResource, ReasoningEffortResource, ThinkingRequestResource,
+    };
+    use agena_provider::{ConfiguredModeDefault, ResolvedProviderModelConfig};
+    use std::collections::BTreeMap;
+
+    fn effort_mode(effort: ReasoningEffortResource, is_default: bool) -> ProviderModelThinkingModeResource {
+        ProviderModelThinkingModeResource {
+            is_default,
+            display_name: None,
+            description: None,
+            preset: None,
+            thinking: Some(ThinkingRequestResource::Effort { effort }),
+            request_override: Default::default(),
+            adapter_overrides: BTreeMap::new(),
+        }
+    }
+
+    fn live_model_with_modes_and_capabilities() -> ProviderModelResource {
+        let mut capabilities = ProviderModelCapabilitiesResource::default();
+        capabilities.image_input = CapabilitySupportResource::Supported;
+        capabilities.audio_input = CapabilitySupportResource::Unsupported;
+        capabilities.reasoning = CapabilitySupportResource::Supported;
+        let mut speed_modes = BTreeMap::new();
+        speed_modes.insert(
+            "turbo".to_owned(),
+            ProviderModelSpeedModeResource {
+                is_default: true,
+                display_name: Some("Turbo".to_owned()),
+                description: None,
+                request_override: Default::default(),
+                adapter_overrides: BTreeMap::new(),
+            },
+        );
+        ProviderModelResource {
+            provider_id: "cpa".to_owned(),
+            adapter_id: Some("openai_responses".to_owned()),
+            id: "deepseek-v4-flash".to_owned(),
+            catalog_model_id: None,
+            display_name: Some("DeepSeek V4 Flash".to_owned()),
+            native_compaction: true,
+            capabilities,
+            metadata: ProviderModelMetadataResource {
+                context_window_tokens: Some(262_144),
+                ..Default::default()
+            },
+            thinking_modes: vec![
+                effort_mode(ReasoningEffortResource::Low, false),
+                effort_mode(ReasoningEffortResource::Medium, true),
+                effort_mode(ReasoningEffortResource::High, false),
+                ProviderModelThinkingModeResource {
+                    is_default: false,
+                    display_name: None,
+                    description: None,
+                    preset: None,
+                    thinking: Some(ThinkingRequestResource::Disabled),
+                    request_override: Default::default(),
+                    adapter_overrides: BTreeMap::new(),
+                },
+            ],
+            speed_modes,
+        }
+    }
+
+    #[test]
+    fn unmatched_live_model_overlay_preserves_modes_and_capabilities() {
+        let model = live_model_with_modes_and_capabilities();
+        let value = provider_model_overlay_to_json(provider_model_to_provider_model_overlay(
+            &model,
+        ));
+        let overlay: ResolvedProviderModelConfig = serde_json::from_value(value).unwrap();
+
+        let selectors = overlay
+            .definition
+            .thinking_modes
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            selectors,
+            ["low", "medium", "high", "off"]
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect()
+        );
+        assert_eq!(
+            overlay.definition.thinking_modes.default,
+            ConfiguredModeDefault::Mode("medium".to_owned())
+        );
+        // `preset`/`thinking` are `#[serde(skip)]`; the flat strategy form is
+        // what persists and round-trips through `ResolvedProviderModelConfig`.
+        assert_eq!(
+            overlay.definition.thinking_modes["high"].strategy,
+            Some(agena_provider::ConfiguredThinkingStrategy::Effort)
+        );
+        assert_eq!(
+            overlay.definition.thinking_modes["high"].effort,
+            Some(agena_domain::ReasoningEffort::High)
+        );
+        assert_eq!(
+            overlay.definition.thinking_modes["off"].strategy,
+            Some(agena_provider::ConfiguredThinkingStrategy::Disabled)
+        );
+
+        assert_eq!(
+            overlay.definition.speed_modes.default,
+            ConfiguredModeDefault::Mode("turbo".to_owned())
+        );
+        assert!(overlay.definition.speed_modes.contains_key("turbo"));
+
+        assert!(
+            overlay
+                .definition
+                .capabilities
+                .input_support(agena_domain::ModelInputModality::Image)
+                == Some(agena_domain::CapabilitySupport::Supported)
+        );
+        assert!(
+            overlay
+                .definition
+                .capabilities
+                .input_support(agena_domain::ModelInputModality::Audio)
+                == Some(agena_domain::CapabilitySupport::Unsupported)
+        );
+        assert!(
+            overlay
+                .definition
+                .capabilities
+                .feature_support(agena_provider::ModelCapabilityFeature::Reasoning)
+                == Some(agena_domain::CapabilitySupport::Supported)
+        );
+        assert_eq!(
+            overlay.definition.context_window_tokens,
+            Some(262_144)
+        );
+        assert_eq!(
+            overlay.definition.display_name.as_deref(),
+            Some("DeepSeek V4 Flash")
+        );
+    }
 }

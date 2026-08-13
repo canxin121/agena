@@ -423,31 +423,33 @@ pub(crate) fn provider_studio_model_count_label(i18n: &I18n, count: usize) -> St
     )
 }
 
-pub(crate) fn provider_studio_catalog_match_label(i18n: &I18n, model_id: Option<&str>) -> String {
-    model_id
-        .map(|model| {
-            i18n.text_args(
-                "overlay-provider-studio-catalog-match",
-                &agena_tui::fl_args!("model" => model.to_string()),
-            )
-        })
-        .unwrap_or_else(|| ui_text::t(i18n, "overlay-provider-studio-catalog-unmatched"))
-}
-
+/// Detail line for a Provider Studio model list item, rendered from the
+/// catalog-enriched `ProviderModelResource` (the listing is enriched against
+/// the model catalog at the application chokepoint). Shows the catalog
+/// display name when known and the context window when advertised.
 pub(crate) fn provider_studio_model_list_detail(
     i18n: &I18n,
-    dialog: &ProviderStudioOverlay,
-    adapter_id: &str,
-    model_id: &str,
+    model: &ProviderModelResource,
 ) -> String {
-    let key = provider_studio_model_key(adapter_id, model_id);
-    let parts = vec![provider_studio_catalog_match_label(
-        i18n,
-        dialog
-            .catalog_matches
-            .get(key.as_str())
-            .map(|entry| entry.model_id.as_str()),
-    )];
+    let mut parts = Vec::new();
+    if let Some(display_name) = model
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(display_name.to_owned());
+    }
+    if let Some(context_window) = model.metadata.context_window_tokens.map(|value| {
+        i18n.text_args(
+            "session-model-context-window",
+            &agena_tui::fl_args!(
+                "value" => crate::app_choice_helpers::format_compact_token_count(value as u64)
+            ),
+        )
+    }) {
+        parts.push(context_window);
+    }
     join_inline_segments(parts)
 }
 
@@ -522,6 +524,38 @@ pub(crate) fn provider_studio_listing_auth_required_message(
     )
 }
 use crate::{
-    CredentialIssuer, I18n, ProviderDraftAdapterRule, ProviderDraftAuthKind, ProviderStudioOverlay,
-    join_inline_segments, provider_studio_adapter_rule, provider_studio_model_key, ui_text,
+    CredentialIssuer, I18n, ProviderDraftAdapterRule, ProviderDraftAuthKind, ProviderModelResource,
+    ProviderStudioOverlay, join_inline_segments, provider_studio_adapter_rule, ui_text,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::provider_studio_model_list_detail;
+    use crate::{I18n, ProviderModelResource};
+
+    fn bare_model(id: &str) -> ProviderModelResource {
+        ProviderModelResource::configured("openai_responses", id)
+    }
+
+    #[test]
+    fn detail_renders_catalog_display_name_and_compact_context_window() {
+        let i18n = I18n::english();
+        let mut model = bare_model("deepseek-v4-pro");
+        model.display_name = Some("DeepSeek V4 Pro".to_owned());
+        model.metadata.context_window_tokens = Some(1_048_576);
+
+        let detail = provider_studio_model_list_detail(&i18n, &model);
+        // Fluent wraps interpolated numbers in bidi isolation marks (U+2068/U+2069).
+        let plain = detail.replace(['\u{2068}', '\u{2069}'], "");
+
+        assert!(plain.contains("DeepSeek V4 Pro"), "got: {detail}");
+        assert!(plain.contains("1.05M ctx"), "got: {detail}");
+    }
+
+    #[test]
+    fn detail_is_empty_for_a_bare_model_without_catalog_data() {
+        let i18n = I18n::english();
+        let detail = provider_studio_model_list_detail(&i18n, &bare_model("model-a"));
+        assert_eq!(detail, "");
+    }
+}

@@ -21,6 +21,10 @@ use agena_provider::{
     ProviderProtocolPaths as ProviderCatalogProtocolPaths,
 };
 
+use crate::provider_studio::catalog::{
+    catalog_lookup_id_for_model_id, catalog_model_to_catalog_definition,
+    preferred_catalog_model_for_lookup_ids,
+};
 use crate::{Application, ApplicationError};
 
 pub fn list_providers_response(state: &Application) -> Vec<ProviderSummaryResource> {
@@ -327,7 +331,7 @@ pub async fn list_provider_adapter_models_response(
         ))
         .await
         .map_err(map_provider_catalog_error)?;
-    Ok(provider_adapter_models_response(listing))
+    Ok(provider_adapter_models_response(state, listing))
 }
 
 pub async fn list_saved_provider_adapter_models_response(
@@ -340,24 +344,71 @@ pub async fn list_saved_provider_adapter_models_response(
         .list_saved_adapter_models(&provider_id, params.adapter_ids)
         .await
         .map_err(map_provider_catalog_error)?;
-    Ok(provider_adapter_models_response(listing))
+    Ok(provider_adapter_models_response(state, listing))
 }
 
-fn provider_adapter_models_response(
+pub(crate) fn provider_adapter_models_response(
+    app: &Application,
     adapter_models: agena_provider::ProviderAdapterModelsListing,
 ) -> ProviderAdapterModelsResponse {
+    let lookup_ids = adapter_models
+        .adapters
+        .iter()
+        .flat_map(|adapter| adapter.models.iter())
+        .flat_map(|model| {
+            let mut ids = vec![model.id.to_string()];
+            let normalized = catalog_lookup_id_for_model_id(model.id.as_ref());
+            if !normalized.is_empty() && normalized != model.id.as_ref() {
+                ids.push(normalized);
+            }
+            ids
+        })
+        .collect::<Vec<_>>();
+    let catalog_entries = app.lookup_model_catalog_models(&lookup_ids);
     ProviderAdapterModelsResponse {
         provider_id: adapter_models.provider_id,
         adapters: adapter_models
             .adapters
             .into_iter()
-            .map(provider_adapter_models_resource)
+            .map(|adapter| provider_adapter_models_resource(adapter, &catalog_entries))
             .collect(),
+    }
+}
+
+/// Enrich a raw listing model with its preferred catalog entry. Returns the
+/// model unchanged when no catalog entry matches. The adapter-merged listing
+/// model's own capabilities/metadata act as the fallback, so existing
+/// (non-unknown) values win and only gaps are filled from the catalog —
+/// matching the session path's `CatalogedModelsProvider` merge.
+fn enrich_listing_model_from_catalog(
+    model: agena_domain::Model,
+    catalog_entries: &[crate::dto::CatalogModelResource],
+) -> agena_domain::Model {
+    let lookup_ids = {
+        let mut ids = vec![model.id.to_string()];
+        let normalized = catalog_lookup_id_for_model_id(model.id.as_ref());
+        if !normalized.is_empty() && normalized != model.id.as_ref() {
+            ids.push(normalized);
+        }
+        ids
+    };
+    match preferred_catalog_model_for_lookup_ids(catalog_entries, &lookup_ids) {
+        Some(catalog_model) => {
+            let definition = catalog_model_to_catalog_definition(catalog_model);
+            agena_provider::apply_catalog_definition_as_baseline(
+                &definition,
+                &model.capabilities.clone(),
+                &model.metadata.clone(),
+                model,
+            )
+        }
+        None => model,
     }
 }
 
 fn provider_adapter_models_resource(
     value: ProviderAdapterModelsEntry,
+    catalog_entries: &[crate::dto::CatalogModelResource],
 ) -> ProviderAdapterModelsResource {
     ProviderAdapterModelsResource {
         adapter_id: value.adapter_id,
@@ -366,7 +417,12 @@ fn provider_adapter_models_resource(
         models: value
             .models
             .into_iter()
-            .map(provider_model_resource_from_domain)
+            .map(|model| {
+                provider_model_resource_from_domain(enrich_listing_model_from_catalog(
+                    model,
+                    catalog_entries,
+                ))
+            })
             .collect(),
         failure: value.failure.map(Into::into),
     }
@@ -384,5 +440,72 @@ fn map_provider_catalog_error(error: ProviderCatalogError) -> ApplicationError {
             ApplicationError::not_found_with_diagnostic("The provider was not found.", message)
         }
         ProviderCatalogError::Operation(message) => ApplicationError::internal(message),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::enrich_listing_model_from_catalog;
+    use agena_domain::{Model, ReasoningEffort, ThinkingRequest};
+    use agena_provider::{CatalogModelRecord, ConfiguredModelThinkingMode};
+
+    fn catalog_model_with_thinking_modes() -> crate::dto::CatalogModelResource {
+        let mut modes = Vec::new();
+        for effort in [
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Max,
+        ] {
+            modes.push(ConfiguredModelThinkingMode {
+                is_default: Some(effort == ReasoningEffort::High),
+                thinking: Some(ThinkingRequest::Effort { effort }),
+                ..Default::default()
+            });
+        }
+        crate::dto::CatalogModelResource::from_record(
+            CatalogModelRecord {
+                model_id: "deepseek-v4-pro".to_owned(),
+                context_window_tokens: Some(1_048_576),
+                thinking_modes: modes.into(),
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn listing_model_is_enriched_with_catalog_modes_and_limits() {
+        let catalog_entries = vec![catalog_model_with_thinking_modes()];
+        let mut model = Model::new("cpa", "deepseek-v4-pro");
+        model.display_name = Some("DeepSeek V4 Pro".to_owned());
+
+        let enriched = enrich_listing_model_from_catalog(model, &catalog_entries);
+
+        let selectors = enriched
+            .thinking_modes
+            .iter()
+            .filter_map(|mode| mode.selector().map(|value| value.into_owned()))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            selectors,
+            ["low", "medium", "high", "max"]
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect()
+        );
+        assert_eq!(
+            enriched.metadata.limits.context_window_tokens,
+            Some(1_048_576)
+        );
+        assert_eq!(enriched.display_name.as_deref(), Some("DeepSeek V4 Pro"));
+    }
+
+    #[test]
+    fn listing_model_without_catalog_entry_passes_through_unchanged() {
+        let model = Model::new("cpa", "brand-new-model");
+        let enriched = enrich_listing_model_from_catalog(model, &[]);
+        assert_eq!(enriched.id.as_ref(), "brand-new-model");
+        assert!(enriched.thinking_modes.is_empty());
     }
 }

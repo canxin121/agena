@@ -472,7 +472,6 @@ impl App {
                     .selection
                     .clamp_left(dialog.adapter_candidate_ids.len());
                 dialog.selection.set_right_selected(0);
-                self.reload_provider_studio_catalog_matches(&mut dialog);
                 dialog.selected_model_keys = preserved_model_keys;
                 dialog
                     .selected_model_keys

@@ -56,54 +56,12 @@ impl App {
         }
     }
 
-    pub(crate) fn reload_provider_studio_catalog_matches(
-        &self,
-        dialog: &mut ProviderStudioOverlay,
-    ) {
-        let lookup_ids = dialog
-            .adapter_models
-            .iter()
-            .flat_map(|adapter| {
-                adapter.models.iter().flat_map(|model| {
-                    [
-                        model.id.to_string(),
-                        provider_model_catalog_lookup_id(model),
-                    ]
-                })
-            })
-            .collect::<Vec<_>>();
-        let catalog_entries = crate::app_backend::provider_mappings::lookup_model_catalog_models(
-            &self.application,
-            &lookup_ids,
-        );
-        dialog.catalog_matches = dialog
-            .adapter_models
-            .iter()
-            .flat_map(|adapter| {
-                adapter.models.iter().filter_map(|provider_model| {
-                    provider_studio_catalog_match_model(provider_model, &catalog_entries).map(
-                        |catalog_model| {
-                            (
-                                provider_studio_model_key(
-                                    adapter.adapter_id.as_str(),
-                                    provider_model.id.as_ref(),
-                                ),
-                                catalog_model.clone(),
-                            )
-                        },
-                    )
-                })
-            })
-            .collect();
-    }
-
     pub(crate) fn refresh_provider_studio_adapter_state(
         &mut self,
         dialog: &mut ProviderStudioOverlay,
     ) {
         dialog.adapter_models.clear();
         dialog.selected_model_keys.clear();
-        dialog.catalog_matches.clear();
         self.sync_provider_studio_shape(dialog);
         dialog.selection.set_right_selected(0);
         dialog.pending_adapter_models_key = None;
@@ -111,10 +69,8 @@ impl App {
     }
 }
 use crate::{
-    App, BTreeSet, Instant, ProviderStudioOverlay, provider_model_catalog_lookup_id,
-    provider_studio_adapter_selectable, provider_studio_auth_poll_interval,
-    provider_studio_candidate_adapter_ids, provider_studio_catalog_match_model,
-    provider_studio_detail_fields, provider_studio_model_key,
-    provider_studio_restore_model_selection, provider_studio_selected_adapter_models,
-    provider_studio_visible_fields,
+    App, BTreeSet, Instant, ProviderStudioOverlay, provider_studio_adapter_selectable,
+    provider_studio_auth_poll_interval, provider_studio_candidate_adapter_ids,
+    provider_studio_detail_fields, provider_studio_restore_model_selection,
+    provider_studio_selected_adapter_models, provider_studio_visible_fields,
 };

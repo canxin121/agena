@@ -95,9 +95,7 @@ impl App {
                             Some(
                                 sanitize_display_text(provider_studio_model_list_detail(
                                     &self.i18n,
-                                    dialog,
-                                    adapter_models.adapter_id.as_str(),
-                                    model.id.as_ref(),
+                                    model,
                                 ))
                                 .into(),
                             ),

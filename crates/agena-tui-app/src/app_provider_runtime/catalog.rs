@@ -153,7 +153,6 @@ impl App {
             adapter_candidate_ids: Vec::new(),
             selected_adapter_ids: BTreeSet::new(),
             selected_model_keys: BTreeSet::new(),
-            catalog_matches: BTreeMap::new(),
             listing_adapter_models: false,
             saving: false,
             pending_adapter_models_key: None,
@@ -228,8 +227,6 @@ impl App {
                         provider_studio_model_key(adapter_id.as_str(), model_id.as_str())
                     })
                     .collect();
-                dialog.catalog_matches.clear();
-                self.reload_provider_studio_catalog_matches(dialog);
                 self.sync_provider_studio_shape(dialog);
                 if let Some(first_selected) = dialog
                     .adapter_candidate_ids
@@ -424,7 +421,7 @@ impl App {
     }
 }
 use crate::{
-    App, AppMessage, BTreeMap, BTreeSet, DashboardSelectionState, ModelCatalogResponse,
+    App, AppMessage, BTreeSet, DashboardSelectionState, ModelCatalogResponse,
     ModelCatalogStudioOverlay, ProviderConfigDraft, ProviderPickerPurpose, ProviderStudioFocus,
     ProviderStudioOverlay, Route, SelectableListState, SelectionPickerCommand,
     SelectionPickerOverlay, SelectionPickerQuery, SessionModelChooserPurpose,

@@ -43,6 +43,12 @@ fn merge_round_record(
     marker_content: Option<&serde_json::Value>,
     round_record: serde_json::Value,
 ) -> Option<serde_json::Value> {
+    if marker_content.is_none() {
+        tracing::warn!(
+            target: "agena::session::processor",
+            "round record merge skipped: no marker content available; this round's parts will fall back to whole-run wire projection"
+        );
+    }
     let mut content = marker_content?.as_object()?.clone();
     let mut rounds = content
         .get(MARKER_ROUNDS_KEY)
@@ -721,5 +727,50 @@ fn provider_native_artifact_to_operation_block(
         name: artifact.name,
         size_bytes: artifact.size_bytes,
         sha256: artifact.sha256,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_round_record_appends_to_an_existing_rounds_array() {
+        let marker = serde_json::json!({
+            "run_kind": "continue",
+            "rounds": [{"part_ids": [101, 102], "provider_state": null}]
+        });
+        let record = serde_json::json!({
+            "part_ids": [103, 104],
+            "provider_state": {"response_id": "r1"}
+        });
+        let merged = merge_round_record(Some(&marker), record).expect("marker content present");
+        let rounds = merged["rounds"].as_array().expect("rounds array");
+        assert_eq!(rounds.len(), 2);
+        assert_eq!(rounds[1]["part_ids"], serde_json::json!([103, 104]));
+        assert_eq!(rounds[1]["provider_state"]["response_id"], "r1");
+        // Other marker keys are preserved alongside the accumulated rounds.
+        assert_eq!(merged["run_kind"], "continue");
+    }
+
+    #[test]
+    fn merge_round_record_starts_the_array_on_a_fresh_marker() {
+        let marker = serde_json::json!({"run_kind": "continue"});
+        let record = serde_json::json!({"part_ids": [201], "provider_state": null});
+        let merged = merge_round_record(Some(&marker), record).expect("marker content present");
+        let rounds = merged["rounds"].as_array().expect("rounds array");
+        assert_eq!(rounds.len(), 1);
+        assert_eq!(rounds[0]["part_ids"], serde_json::json!([201]));
+        assert_eq!(merged["run_kind"], "continue");
+    }
+
+    #[test]
+    fn merge_round_record_without_marker_content_returns_none() {
+        // The caller falls back to whole-run wire projection when no marker
+        // content is available; the first round of a multi-round turn must
+        // never reach this path (its caller threads the initial marker
+        // content), but the fallback itself must stay `None`.
+        let record = serde_json::json!({"part_ids": [301], "provider_state": null});
+        assert!(merge_round_record(None, record).is_none());
     }
 }

@@ -741,35 +741,42 @@ impl SessionManager {
             // One user message == one run marker (turn-scoped runs). The first
             // model turn of a stable run starts the marker (durable before the
             // provider call, design 17.4); every later model turn of the same
-            // turn reuses it. The marker's current content (accumulated round
-            // records, usage) is threaded into the processor so it can extend
-            // the round list.
+            // turn reuses it. Build the marker content once up front: it is
+            // needed both to start the durable marker and, on the first model
+            // turn (when the brand-new marker is not yet installed in the
+            // in-memory session), as the fallback marker content threaded into
+            // the processor. Without that fallback the first round's record
+            // would merge onto a missing marker and be silently dropped,
+            // breaking the prompt projection for every later round.
+            let initial_marker_content = run_marker_content(
+                "continue",
+                Some(current_options.model.provider_id.as_ref()),
+                Some(current_options.model.model_id.as_ref()),
+                Some(control.turn_id()),
+                Some(control.reply_id()),
+            );
             let marker_run_id = match turn_run_id {
                 Some(run_id) => run_id,
                 None => {
                     let run_id = self
                         .store
-                        .start_run(
-                            session.id,
-                            "continue",
-                            crate::session::store::run_marker_content(
-                                "continue",
-                                Some(current_options.model.provider_id.as_ref()),
-                                Some(current_options.model.model_id.as_ref()),
-                                Some(control.turn_id()),
-                                Some(control.reply_id()),
-                            ),
-                        )
+                        .start_run(session.id, "continue", initial_marker_content.clone())
                         .await?;
                     turn_run_id = Some(run_id);
                     run_id
                 }
             };
+            // The marker's current content (accumulated round records, usage)
+            // is threaded into the processor so it can extend the round list.
+            // On the first model turn the marker was just started and is not
+            // yet present in `session.parts()`; fall back to the initial
+            // content so the first round record still lands on the marker.
             let marker_content = session
                 .parts()
                 .iter()
                 .find(|part| part.part_id == marker_run_id)
-                .map(|marker| marker.content.clone());
+                .map(|marker| marker.content.clone())
+                .or_else(|| Some(initial_marker_content.clone()));
 
             match Box::pin(self.run_model_turn(
                 session,

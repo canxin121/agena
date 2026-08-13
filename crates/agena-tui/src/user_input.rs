@@ -908,6 +908,51 @@ impl UserInputPresentation {
         }
     }
 
+    /// Space on a specific option row of a specific question (the transcript
+    /// cursor IS the option cursor in the continuous ask body). Focuses the
+    /// question then toggles: a `multiple` question adds/removes that option,
+    /// a single-pick question selects it or clears it when it is already
+    /// picked. Delegates to [`Self::toggle_option`] so answer-draft semantics
+    /// stay single-sourced with the wizard.
+    pub fn toggle_option_index(&mut self, question_index: usize, option_index: usize) {
+        if self.questions.get(question_index).is_none() {
+            return;
+        }
+        self.state.focus_question(question_index, self.questions.len());
+        self.state.set_selected_option(option_index);
+        self.toggle_option();
+    }
+
+    /// Enter on a specific option row: focuses the question and selects that
+    /// option (single-pick) or toggles it (multiple). Delegates to
+    /// [`Self::select_option`] / [`Self::toggle_option`].
+    pub fn commit_option_index(&mut self, question_index: usize, option_index: usize) {
+        if self.questions.get(question_index).is_none() {
+            return;
+        }
+        self.state.focus_question(question_index, self.questions.len());
+        self.state.set_selected_option(option_index);
+        if self
+            .questions
+            .get(question_index)
+            .is_some_and(|question| question.multiple)
+        {
+            self.toggle_option();
+        } else {
+            self.select_option();
+        }
+    }
+
+    /// Space/Enter on the 其他 (custom) row of a question: focuses the question
+    /// and opens its inline custom editor. Returns whether the editor opened.
+    pub fn begin_custom_edit_for(&mut self, question_index: usize) -> bool {
+        if self.questions.get(question_index).is_none() {
+            return false;
+        }
+        self.state.focus_question(question_index, self.questions.len());
+        self.begin_custom_edit()
+    }
+
     fn select_option(&mut self) {
         let is_custom = {
             let Some(question) = self.questions.get(self.state.selected_question()) else {

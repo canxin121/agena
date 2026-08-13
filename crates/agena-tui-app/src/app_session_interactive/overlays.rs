@@ -78,8 +78,7 @@ impl App {
                 custom_draft: review.custom_input().text().to_owned(),
                 editing_custom: review.is_editing_custom(),
                 custom_cursor: review.custom_input().cursor(),
-                wizard_page: None,
-                wizard_option: 0,
+                editing_question: None,
                 answers: std::collections::BTreeMap::new(),
                 plan_body_lines,
                 plan_width: width,
@@ -98,15 +97,14 @@ impl App {
                     )
                 })
                 .collect();
-            // Ask-user is a paged wizard: the current page (`None` = the final
-            // summary page), the option cursor and any open custom editor come
-            // from the presentation, not the transcript cursor.
-            let wizard_page = if presentation.screen()
-                == agena_tui::user_input::QuestionFlowScreen::Review
-            {
-                None
-            } else {
+            // Ask-user is one continuous body; the whole-line cursor is the
+            // transcript cursor. The only presentation state the renderer needs
+            // is the per-question answers and which question's custom slot is
+            // showing the inline editor.
+            let editing_question = if presentation.is_editing_custom() {
                 Some(presentation.selected_question())
+            } else {
+                None
             };
             agena_tui_transcript::PendingInteractionView {
                 selected_option: None,
@@ -114,8 +112,7 @@ impl App {
                 custom_draft: presentation.custom_input().text().to_owned(),
                 editing_custom: presentation.is_editing_custom(),
                 custom_cursor: presentation.custom_input().cursor(),
-                wizard_page,
-                wizard_option: presentation.selected_option(),
+                editing_question,
                 answers,
                 plan_body_lines,
                 plan_width: width,
@@ -977,8 +974,11 @@ mod tests {
         assert!(!overlay.presentation.is_review_decision());
         let view = App::interaction_view_for(&request, &overlay.presentation, 80);
         assert!(view.answers.is_empty());
-        assert_eq!(view.wizard_page, Some(0));
-        assert_eq!(view.wizard_option, 0);
         assert_eq!(view.selected_option, None);
+        assert_eq!(view.editing_question, None, "no inline editor is open");
+        assert!(!view.editing_custom);
+        assert!(view.custom_text.is_empty());
+        assert!(view.custom_draft.is_empty());
+        assert_eq!(view.plan_width, 80);
     }
 }

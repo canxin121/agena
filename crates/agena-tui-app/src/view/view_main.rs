@@ -228,6 +228,10 @@ impl App {
             // the pending-interaction selection from wherever the cursor sits
             // before the renderer draws the decision markers.
             self.refresh_interaction_selection(layout.body.width);
+            // Inside an expanded pending ask part the transcript cursor IS the
+            // option cursor, drawn as a whole-line highlight (not a single
+            // grapheme). Review parts keep the normal single-cell cursor.
+            let ask_cursor_line = self.active_ask_part_cursor_line(layout.body.width);
             let rendered = self.transcript.rendered(layout.body.width);
             transcript_line_count = rendered.lines.len();
             let active_match =
@@ -272,7 +276,11 @@ impl App {
                     if transcript_line_is_in_block(idx, highlighted_block.as_ref()) {
                         rendered_line = apply_block_highlight(rendered_line, layout.body.width);
                     }
-                    if let Some((cursor_line, range)) = cursor_cell.as_ref()
+                    if ask_cursor_line == Some(idx) {
+                        // Whole-line cursor inside the pending ask body.
+                        rendered_line =
+                            apply_block_highlight(rendered_line, layout.body.width);
+                    } else if let Some((cursor_line, range)) = cursor_cell.as_ref()
                         && *cursor_line == idx
                     {
                         rendered_line = apply_cursor_cell_highlight(rendered_line, range.clone());

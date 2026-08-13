@@ -563,7 +563,6 @@ mod interaction_part_routing_tests {
 
     use super::super::{App, I18n, LaunchOptions};
     use crate::app_types::{RunActivityTarget, RunOperation};
-    use agena_tui::user_input::QuestionFlowScreen;
     use agena_tui_transcript::{TranscriptContentId, TranscriptEntryId, TranscriptNodeKey};
 
     const REQUEST_ID: &str = "host-input:1:2:0";
@@ -973,24 +972,6 @@ mod interaction_part_routing_tests {
         }
     }
 
-    fn ask_user_interaction_part() -> SessionTranscriptPart {
-        SessionTranscriptPart {
-            part_id: 5,
-            kind: "interaction".to_owned(),
-            role: "assistant".to_owned(),
-            state: "in_progress".to_owned(),
-            content: serde_json::to_value(RequestPartResource::UserInput {
-                request: ask_user_wire_request(),
-                reply: None,
-            })
-            .expect("request part serializes"),
-            summary: None,
-            created_at_ms: 50,
-            parent_part_id: None,
-            run_id: Some(3),
-        }
-    }
-
     fn seed_pending_ask_user(app: &mut App) {
         seed_pending_ask_user_with(app, ask_user_wire_request(), ask_user_domain_request());
     }
@@ -1063,6 +1044,38 @@ mod interaction_part_routing_tests {
             .interaction_views
             .get(REQUEST_ID)
             .expect("the ask-user view is projected")
+    }
+
+    /// Body offset of a question's first option row (its header row when it
+    /// has no options) in the LIVE rendered continuous body. Computed from the
+    /// projected layout so answered-preview rows growing earlier question
+    /// blocks never drift the tests.
+    fn q_landing_offset(app: &App, question_index: usize) -> usize {
+        let view = wizard_view(app);
+        let layouts = agena_tui_transcript::interaction_question_layouts(
+            &dialog(app).request,
+            &view.answers,
+        );
+        agena_tui_transcript::ask_user_question_landing_offset(
+            view.plan_body_lines,
+            &layouts,
+            question_index,
+        )
+    }
+
+    /// Body offset of a question's 其他 (custom) row in the live body.
+    fn q_custom_row_offset(app: &App, question_index: usize) -> usize {
+        let view = wizard_view(app);
+        let layouts = agena_tui_transcript::interaction_question_layouts(
+            &dialog(app).request,
+            &view.answers,
+        );
+        let start = agena_tui_transcript::ask_user_question_body_start(
+            view.plan_body_lines,
+            &layouts,
+            question_index,
+        );
+        start + 2 + layouts[question_index].options_len
     }
 
     #[tokio::test]
@@ -1534,83 +1547,96 @@ mod interaction_part_routing_tests {
     }
 
     #[tokio::test]
-    async fn ask_user_arrow_keys_move_the_option_cursor_within_a_page() {
+    async fn ask_user_up_down_are_free_transcript_motion() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
         move_cursor_to_part_headline(&mut app);
 
-        assert_eq!(dialog(&app).presentation.screen(), QuestionFlowScreen::Question);
-        assert_eq!(dialog(&app).presentation.selected_question(), 0);
-        assert_eq!(wizard_view(&app).wizard_page, Some(0));
-        assert_eq!(wizard_view(&app).wizard_option, 0);
-
-        // Down moves the option cursor within the page; the page is untouched.
+        let start_line = interaction_node_start(&mut app);
+        // Up/Down are NOT owned by the ask part: the transcript cursor is a
+        // normal line-by-line cursor (the two-cursor bug fix).
         assert!(
-            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
-            "Down is owned while the wizard is active"
+            !app.handle_active_interaction_action(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            "Up must not be intercepted by the ask part"
         );
-        assert_eq!(dialog(&app).presentation.selected_option(), 1);
-        assert_eq!(wizard_view(&app).wizard_option, 1);
-        assert_eq!(wizard_view(&app).wizard_page, Some(0), "page unchanged");
-
-        // Up returns to the first option.
-        assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)));
-        assert_eq!(wizard_view(&app).wizard_option, 0);
-        assert_eq!(dialog(&app).presentation.selected_option(), 0);
-
-        // The dialog stays pending and no reply was sent.
+        assert!(
+            !app.handle_active_interaction_action(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            "Down must not be intercepted by the ask part"
+        );
+        // The normal transcript dispatch moves the cursor one line at a time...
+        app.handle_transcript_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            app.transcript.navigation_cursor_line(),
+            Some(start_line + 1),
+            "Down is free transcript motion"
+        );
+        // ...and from the part top, Up leaves the part upward — the core bug
+        // fix: the cursor is never trapped inside the ask part.
+        app.handle_transcript_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        app.handle_transcript_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert!(
+            app.transcript
+                .navigation_cursor_line()
+                .is_some_and(|line| line < start_line),
+            "Up from the part top must leave the part upward"
+        );
+        // The part stays pending and interactive after all that free motion.
         assert!(app.user_input_interactions.contains_key(REQUEST_ID));
-        assert!(!app.run_activity.has_operation(
-            RunActivityTarget::Session(SESSION_ID),
-            RunOperation::UserInputReply,
-        ));
     }
 
     #[tokio::test]
-    async fn ask_user_left_right_switch_pages_and_refit() {
+    async fn ask_user_left_right_jump_between_questions() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
         move_cursor_to_part_headline(&mut app);
 
-        // Right moves to the second question page. The page turn re-runs the
-        // fit-scroll reveal, which rebuilds the render cache immediately (the
-        // old contract — "switch pages, leave the cache invalidated" — is
-        // gone: a new page can be taller than the viewport, so the view must
-        // be re-fit-scrolled, not just marked stale).
+        let start_line = interaction_node_start(&mut app);
+        // Left with the cursor on the plan area (before Q0) is a no-op but
+        // still consumed.
+        assert!(
+            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            "Left is owned while the cursor is on the part"
+        );
+        assert_eq!(
+            app.transcript.navigation_cursor_line(),
+            Some(start_line),
+            "Left before the first question is a no-op"
+        );
+
+        // Right from the plan area jumps to Q0's first option row.
         assert!(
             app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
-            "Right is owned while the wizard is active"
+            "Right is owned while the cursor is on the part"
         );
-        assert_eq!(dialog(&app).presentation.selected_question(), 1);
-        assert_eq!(wizard_view(&app).wizard_page, Some(1));
-        assert!(
-            app.revealed_user_input_request_ids.contains(REQUEST_ID),
-            "the page turn re-runs the fit-scroll reveal"
-        );
-        assert!(
-            app.transcript.rendered.is_some(),
-            "the reveal rebuilds the render cache so the new page is measurable"
+        assert_eq!(
+            app.transcript.navigation_cursor_line(),
+            Some(start_line + 1 + q_landing_offset(&app, 0)),
+            "Right jumps to Q0's first option row"
         );
 
-        // Right again reaches the summary page (`wizard_page: None`).
+        // Right again jumps to Q1's first option row.
         assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)));
-        assert_eq!(dialog(&app).presentation.screen(), QuestionFlowScreen::Review);
-        assert_eq!(wizard_view(&app).wizard_page, None, "summary page");
+        assert_eq!(
+            app.transcript.navigation_cursor_line(),
+            Some(start_line + 1 + q_landing_offset(&app, 1)),
+            "Right jumps to Q1's first option row"
+        );
 
-        // Left returns to the last question page.
-        assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)));
-        assert_eq!(wizard_view(&app).wizard_page, Some(1));
-        assert_eq!(dialog(&app).presentation.selected_question(), 1);
+        // Right at the last question is a no-op but still consumed.
+        assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)));
+        assert_eq!(
+            app.transcript.navigation_cursor_line(),
+            Some(start_line + 1 + q_landing_offset(&app, 1)),
+            "Right at the last question is a no-op"
+        );
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
     }
 
     #[tokio::test]
-    async fn ask_user_page_turn_refits_a_taller_than_viewport_page() {
+    async fn ask_user_continuous_body_is_taller_than_viewport_and_down_reaches_its_bottom() {
         let mut app = seeded_app().await;
-        // Give the SECOND question page 30 options so it is far taller than
-        // the 24-row viewport. Turning onto it must bottom-anchor the viewport
-        // (the whole page visible) instead of keeping the previous page's
-        // top-anchored view — the regression where page turns stopped scrolling
-        // to the bottom and cut the page off.
+        // Give the SECOND question 30 options so the continuous body is far
+        // taller than the 24-row viewport.
         let tall_options: Vec<agena_api::resource::UserInputOption> = (0..30)
             .map(|index| agena_api::resource::UserInputOption {
                 label: format!("Option {index}"),
@@ -1630,12 +1656,6 @@ mod interaction_part_routing_tests {
         seed_pending_ask_user_with(&mut app, wire, domain);
         move_cursor_to_part_headline(&mut app);
 
-        assert!(
-            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
-            "Right is owned while the wizard is active"
-        );
-        assert_eq!(wizard_view(&app).wizard_page, Some(1));
-
         let height = usize::from(HEIGHT);
         let (start_line, end_line) = {
             let rendered = app.transcript.rendered(WIDTH);
@@ -1648,49 +1668,51 @@ mod interaction_part_routing_tests {
         };
         assert!(
             end_line.saturating_sub(start_line) > height,
-            "the fixture page must exceed the viewport for this test to prove the refit"
+            "the continuous body must exceed the viewport for this test to prove free motion"
         );
-        // The page turn re-runs the fit-scroll: the tall page's bottom row is
-        // pulled into the viewport (bottom-anchored), and the viewport stays
-        // inside the part (the top may scroll above the viewport — that is how
-        // the bottom fits — but the anchor row must not pass the part's bottom).
-        let top = app.transcript.viewport_top();
-        assert!(
-            end_line <= top + height,
-            "the tall page's bottom rows must be pulled into the viewport"
-        );
-        assert!(
-            top <= end_line,
-            "the fit-scroll anchor must stay inside the part"
-        );
-        assert!(
-            top + height >= start_line,
-            "the viewport must still show the part's top rows"
-        );
+
+        // Free Down (transcript dispatch) walks the cursor to the last body
+        // row — the footer key-hint.
+        let mut cursor = app
+            .transcript
+            .navigation_cursor_line()
+            .expect("the cursor is inside the part");
+        while cursor + 1 < end_line {
+            app.handle_transcript_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+            let next = app
+                .transcript
+                .navigation_cursor_line()
+                .expect("the cursor stays on a line");
+            assert!(next > cursor, "Down must keep moving the cursor");
+            cursor = next;
+        }
+        assert_eq!(cursor, end_line - 1, "free Down reaches the footer");
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
     }
 
     #[tokio::test]
-    async fn ask_user_space_toggles_the_option_and_stays_on_the_page() {
+    async fn ask_user_space_toggles_the_option_under_the_cursor() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        move_cursor_to_part_headline(&mut app);
+        let q0_landing = q_landing_offset(&app, 0);
+        move_cursor_to_body_offset(&mut app, q0_landing);
 
-        // Space selects option 0 (single-pick) and stays on the page.
+        // Space selects the option under the cursor (single-pick Q0 option 0).
         assert!(
             app.handle_active_interaction_action(space_key()),
-            "Space is owned while the wizard is active"
+            "Space on an option row is owned"
         );
         assert_eq!(
             dialog(&app)
                 .presentation
                 .answer(0)
                 .map(|answer| answer.option_indexes.iter().copied().collect::<Vec<_>>()),
-            Some(vec![0])
+            Some(vec![0]),
+            "Space selects the option under the cursor"
         );
-        assert_eq!(wizard_view(&app).wizard_page, Some(0), "stays on the page");
         assert!(app.user_input_interactions.contains_key(REQUEST_ID));
 
-        // Space again (single-pick) unselects the option: select/unselect.
+        // Space again (single-pick) unselects it: select/unselect.
         assert!(app.handle_active_interaction_action(space_key()));
         assert_eq!(
             dialog(&app).presentation.answer(0).map(|answer| answer.option_indexes.len()),
@@ -1701,60 +1723,229 @@ mod interaction_part_routing_tests {
             RunActivityTarget::Session(SESSION_ID),
             RunOperation::UserInputReply,
         ));
+
+        // PgDn is NOT owned by the ask part — it falls through to paging.
+        assert!(
+            !app.handle_active_interaction_action(page_down()),
+            "PgDn must not be intercepted by the ask part"
+        );
     }
 
     #[tokio::test]
-    async fn ask_user_enter_on_summary_submits_and_validation_jumps_to_unanswered_page() {
+    async fn ask_user_enter_on_answered_option_submits_the_request() {
         let mut app = seeded_app().await;
         seed_pending_ask_user(&mut app);
-        move_cursor_to_part_headline(&mut app);
-        // Page into the summary page with both questions unanswered.
-        for _ in 0..2 {
-            assert!(app.handle_active_interaction_action(KeyEvent::new(
-                KeyCode::Right,
-                KeyModifiers::NONE
-            )));
-        }
-        assert_eq!(dialog(&app).presentation.screen(), QuestionFlowScreen::Review);
+        // Answer Q0 with Space, then Enter on Q1's option row: Enter checks it
+        // (multi-pick toggles it on) AND submits — every question is answered.
+        // The option offset is computed from the live layout after Q0 is
+        // answered (Q0's block grows an answered-preview row).
+        let q0_landing = q_landing_offset(&app, 0);
+        move_cursor_to_body_offset(&mut app, q0_landing);
+        app.handle_active_interaction_action(space_key());
+        let q1_landing = q_landing_offset(&app, 1);
+        move_cursor_to_body_offset(&mut app, q1_landing);
 
-        // Enter on the summary with an unanswered question: no reply is sent,
-        // and the wizard jumps to the first unanswered page (Q0).
-        assert!(app.handle_active_interaction_action(enter()));
-        assert_eq!(
-            dialog(&app).presentation.screen(),
-            QuestionFlowScreen::Question,
-            "validation jumps back to a question page"
+        assert!(
+            app.handle_active_interaction_action(enter()),
+            "Enter on an option row is owned"
         );
-        assert_eq!(dialog(&app).presentation.selected_question(), 0);
-        assert_eq!(wizard_view(&app).wizard_page, Some(0));
-        assert!(!app.run_activity.has_operation(
-            RunActivityTarget::Session(SESSION_ID),
-            RunOperation::UserInputReply,
-        ));
-        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
-
-        // Answer both questions with Space (toggle), advance pages with Enter
-        // (submit current page AND advance), then submit from the summary.
-        assert!(app.handle_active_interaction_action(space_key())); // Q0 → Vanilla
-        assert!(app.handle_active_interaction_action(enter())); // Q0 → Q1
-        assert_eq!(dialog(&app).presentation.selected_question(), 1);
-        assert!(app.handle_active_interaction_action(space_key())); // Q1 → Sprinkles
-        assert!(app.handle_active_interaction_action(enter())); // Q1 → summary
-        assert_eq!(dialog(&app).presentation.screen(), QuestionFlowScreen::Review);
-
-        assert!(app.handle_active_interaction_action(enter()));
         assert!(
             !app.user_input_interactions.contains_key(REQUEST_ID),
             "submitting drops the dialog"
         );
         assert!(
             !app.transcript.interaction_views.contains_key(REQUEST_ID),
-            "the part stops rendering the stale summary page"
+            "the part stops rendering the stale pending body"
         );
         assert!(app.run_activity.has_operation(
             RunActivityTarget::Session(SESSION_ID),
             RunOperation::UserInputReply,
         ));
+    }
+
+    #[tokio::test]
+    async fn ask_user_enter_validation_jumps_to_first_unanswered_question() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        // Answer only Q0 (Vanilla), leave Q1 unanswered.
+        let q0_landing = q_landing_offset(&app, 0);
+        move_cursor_to_body_offset(&mut app, q0_landing);
+        app.handle_active_interaction_action(space_key());
+
+        // Enter on Q0's option row: Q0 is answered but Q1 is not, so no reply
+        // is sent and the cursor jumps to the first unanswered question (Q1).
+        assert!(
+            app.handle_active_interaction_action(enter()),
+            "Enter on an option row is owned"
+        );
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply,
+        ));
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+        let start_line = interaction_node_start(&mut app);
+        assert_eq!(
+            app.transcript.navigation_cursor_line(),
+            Some(start_line + 1 + q_landing_offset(&app, 1)),
+            "the cursor lands on the first unanswered question's first option row"
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_user_enter_on_plan_row_collapses_instead_of_submitting() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        move_cursor_to_body_offset(&mut app, 0);
+
+        // Enter on the plan body is a plain Toggle: the thin layer declines it
+        // (returns false), so the normal dispatch collapses the part. No
+        // answer was submitted.
+        assert!(
+            !app.handle_active_interaction_action(enter()),
+            "Enter on a plan row must not be intercepted"
+        );
+        assert!(
+            app.user_input_interactions.contains_key(REQUEST_ID),
+            "no reply may be sent from the plan body"
+        );
+        app.handle_transcript_key(enter());
+        assert_eq!(
+            app.transcript.node_expansions.get(&node_key()),
+            Some(&false),
+            "Enter on a plan row toggles the part collapsed (normal chat behavior)"
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_user_space_on_the_custom_row_opens_the_inline_editor() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        let custom_row = q_custom_row_offset(&app, 0);
+        move_cursor_to_body_offset(&mut app, custom_row);
+
+        assert!(
+            app.handle_active_interaction_action(space_key()),
+            "Space on the custom row is owned"
+        );
+        assert_eq!(
+            app.interaction_editing.as_deref(),
+            Some(REQUEST_ID),
+            "the inline editor owns the key stream"
+        );
+        assert!(
+            app.user_input_interactions
+                .get(REQUEST_ID)
+                .is_some_and(|dialog| dialog.presentation.is_editing_custom())
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_user_e_does_not_open_the_custom_editor() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        let custom_row = q_custom_row_offset(&app, 0);
+        move_cursor_to_body_offset(&mut app, custom_row);
+
+        // `e` is deliberately NOT owned by the ask part: the hint is wrong and
+        // `e` must never open the custom editor.
+        assert!(
+            !app.handle_active_interaction_action(edit()),
+            "`e` must NOT be intercepted by the ask part"
+        );
+        assert_eq!(
+            app.interaction_editing, None,
+            "`e` never opens the inline custom editor"
+        );
+        assert!(
+            !app.user_input_interactions
+                .get(REQUEST_ID)
+                .is_some_and(|dialog| dialog.presentation.is_editing_custom())
+        );
+        assert!(app.user_input_interactions.contains_key(REQUEST_ID));
+    }
+
+    #[tokio::test]
+    async fn ask_user_enter_on_custom_row_submits_committed_text_or_opens_the_editor() {
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        let custom_row = q_custom_row_offset(&app, 0);
+        move_cursor_to_body_offset(&mut app, custom_row);
+
+        // Empty custom: Enter opens the inline editor (no submit yet).
+        assert!(
+            app.handle_active_interaction_action(enter()),
+            "Enter on an empty custom row is owned"
+        );
+        assert_eq!(
+            app.interaction_editing.as_deref(),
+            Some(REQUEST_ID),
+            "Enter on an empty custom row opens the editor"
+        );
+        // Type into the editor, then Enter commits the custom text and closes
+        // the editor (single-pick advances the presentation to Q1).
+        assert!(app.paste_into_active_interaction("mint"));
+        assert!(app.handle_active_interaction_action(enter()));
+        assert_eq!(
+            dialog(&app).presentation.answer(0).map(|answer| answer.custom_values.clone()),
+            Some(vec!["mint".to_owned()]),
+            "the editor commit stores the custom value"
+        );
+        assert_eq!(app.interaction_editing, None, "the editor closed");
+        assert!(!app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply,
+        ));
+
+        // Answer Q1 with Space, then Enter on Q0's custom row: the custom text
+        // is committed and every question is answered, so Enter submits.
+        let q1_landing = q_landing_offset(&app, 1);
+        move_cursor_to_body_offset(&mut app, q1_landing);
+        app.handle_active_interaction_action(space_key());
+        let custom_row = q_custom_row_offset(&app, 0);
+        move_cursor_to_body_offset(&mut app, custom_row);
+        assert!(
+            app.handle_active_interaction_action(enter()),
+            "Enter on a custom row with committed text submits"
+        );
+        assert!(!app.user_input_interactions.contains_key(REQUEST_ID));
+        assert!(app.run_activity.has_operation(
+            RunActivityTarget::Session(SESSION_ID),
+            RunOperation::UserInputReply,
+        ));
+    }
+
+    #[tokio::test]
+    async fn active_ask_part_cursor_line_highlights_only_the_expanded_ask_body() {
+        // Ask part: the cursor line inside the body is the whole-line highlight.
+        let mut app = seeded_app().await;
+        seed_pending_ask_user(&mut app);
+        let q0_landing = q_landing_offset(&app, 0);
+        move_cursor_to_body_offset(&mut app, q0_landing);
+        let start_line = interaction_node_start(&mut app);
+        let highlighted = app.active_ask_part_cursor_line(WIDTH);
+        assert_eq!(
+            highlighted,
+            Some(start_line + 1 + q0_landing),
+            "the cursor line inside the ask body is the whole-line highlight"
+        );
+        // Off the part: no whole-line highlight.
+        app.transcript
+            .move_cursor_to_visual_line_number(WIDTH, HEIGHT, Some(1));
+        assert_eq!(
+            app.active_ask_part_cursor_line(WIDTH),
+            None,
+            "off the part there is no whole-line highlight"
+        );
+        // Review part: the whole-line highlight does NOT apply — it keeps the
+        // normal single-cell cursor.
+        let mut review_app = seeded_app().await;
+        seed_pending_review(&mut review_app);
+        move_cursor_to_body_offset(&mut review_app, 2);
+        assert_eq!(
+            review_app.active_ask_part_cursor_line(WIDTH),
+            None,
+            "review keeps the normal single-cell cursor"
+        );
     }
 
     #[tokio::test]
@@ -1803,6 +1994,7 @@ mod interaction_part_routing_tests {
             KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
             enter(),
+            space_key(),
         ] {
             assert!(
                 !app.handle_active_interaction_action(key),

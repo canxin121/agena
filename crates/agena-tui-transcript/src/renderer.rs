@@ -515,8 +515,7 @@ mod tests {
             custom_draft: String::new(),
             editing_custom,
             custom_cursor: 0,
-            wizard_page: None,
-            wizard_option: 0,
+            editing_question: None,
             answers: std::collections::BTreeMap::new(),
             plan_body_lines,
             plan_width: 80,
@@ -724,8 +723,7 @@ mod tests {
             custom_draft: String::new(),
             editing_custom: false,
             custom_cursor: 0,
-            wizard_page: None,
-            wizard_option: 0,
+            editing_question: None,
             answers: std::collections::BTreeMap::new(),
             plan_body_lines,
             plan_width: 80,
@@ -774,15 +772,15 @@ mod tests {
     }
 
     #[test]
-    fn ask_user_wizard_page_row_counts_match_the_layout_contract() {
+    fn ask_user_continuous_body_row_count_matches_the_layout_contract() {
         use crate::interaction_view::{
-            PendingInteractionAnswerView, PendingInteractionView,
-            interaction_ask_user_page_body_rows, interaction_ask_user_question_block_rows,
-            interaction_ask_user_summary_body_rows, interaction_plan_body_lines,
-            interaction_question_layouts,
+            InteractionLineKind, PendingInteractionAnswerView, PendingInteractionView,
+            ask_user_body_rows, ask_user_question_block_rows,
+            ask_user_question_landing_offset, classify_ask_user_line,
+            interaction_plan_body_lines, interaction_question_layouts,
         };
         let now = Utc::now();
-        // A long plan body so page 0 carries more than one plan row — the
+        // A long plan body so the plan region carries more than one row — the
         // exact drift class the old AskUser classifier missed.
         let plan_body = format!("## Proposed Plan\n\n{}", "word ".repeat(20));
         let request = agena_api::resource::UserInputRequest {
@@ -882,17 +880,14 @@ mod tests {
                 .join("\n");
             (body_rows, text)
         };
-        let view = |page: Option<usize>,
-                    option: usize,
-                    answers: std::collections::BTreeMap<usize, PendingInteractionAnswerView>| {
+        let view = |answers: std::collections::BTreeMap<usize, PendingInteractionAnswerView>| {
             PendingInteractionView {
                 selected_option: None,
                 custom_text: String::new(),
                 custom_draft: String::new(),
                 editing_custom: false,
                 custom_cursor: 0,
-                wizard_page: page,
-                wizard_option: option,
+                editing_question: None,
                 answers,
                 plan_body_lines,
                 plan_width: 80,
@@ -900,39 +895,57 @@ mod tests {
         };
         let empty = std::collections::BTreeMap::new();
         let layouts_empty = interaction_question_layouts(&request, &empty);
-        // Page 0: plan + separator + question block + footer.
-        let (page0_rows, page0_text) = render(view(Some(0), 0, empty.clone()));
+        // The continuous body: plan + separator + every question block + footer.
+        let (body_rows, text) = render(view(empty.clone()));
         assert_eq!(
-            page0_rows,
-            interaction_ask_user_page_body_rows(plan_body_lines, 0, &layouts_empty[0]),
-            "page 0 includes the plan and separator"
+            body_rows,
+            ask_user_body_rows(plan_body_lines, &layouts_empty),
+            "the rendered body matches the shared layout contract"
         );
         assert!(
-            page0_text.contains("Proposed Plan"),
-            "page 0 renders the plan body: {page0_text}"
+            text.contains("Proposed Plan"),
+            "the body renders the plan: {text}"
         );
-        assert!(page0_text.contains("1/2"), "page 0 footer: {page0_text}");
-        // Page 1: no plan/separator, just the question block + footer.
-        let (page1_rows, page1_text) = render(view(Some(1), 0, empty.clone()));
+        assert!(text.contains("Flavor"), "{text}");
+        assert!(text.contains("Toppings"), "{text}");
+        assert!(text.contains("Vanilla"), "{text}");
+        assert!(text.contains("Nuts"), "{text}");
+        // No paging artifacts: no `▸` option cursor, no page indicator, no
+        // summary page.
+        assert!(!text.contains('▸'), "no presentation option cursor: {text}");
+        assert!(!text.contains("1/2") && !text.contains("2/2"), "no page footer: {text}");
+        // The classifier covers the whole budget, one row kind per offset.
+        let total = ask_user_body_rows(plan_body_lines, &layouts_empty);
+        for body_offset in 0..(total - 1) {
+            let kind = classify_ask_user_line(
+                &layouts_empty,
+                plan_body_lines,
+                body_offset,
+                false,
+            );
+            assert!(
+                !matches!(kind, InteractionLineKind::AskFooter),
+                "footer is the LAST row, not offset {body_offset}"
+            );
+            let _ = kind;
+        }
         assert_eq!(
-            page1_rows,
-            interaction_ask_user_page_body_rows(plan_body_lines, 1, &layouts_empty[1]),
-            "later pages drop the plan and separator"
+            classify_ask_user_line(&layouts_empty, plan_body_lines, total - 1, false),
+            InteractionLineKind::AskFooter,
+            "the budget's last offset is the footer"
         );
-        assert!(
-            !page1_text.contains("Proposed Plan"),
-            "page 1 has no plan body: {page1_text}"
-        );
-        assert!(page1_text.contains("2/2"), "page 1 footer: {page1_text}");
-        // Summary page: title + one row per question + separator + submit.
-        let (summary_rows, summary_text) = render(view(None, 0, empty));
         assert_eq!(
-            summary_rows,
-            interaction_ask_user_summary_body_rows(2),
-            "summary is title + per-question rows + separator + submit"
+            classify_ask_user_line(&layouts_empty, plan_body_lines, total + 5, false),
+            InteractionLineKind::AskFooter,
+            "anything beyond the budget is the footer"
         );
-        assert!(summary_text.contains("Flavor"), "{summary_text}");
-        assert!(summary_text.contains("Toppings"), "{summary_text}");
+        // The landing offset is the first option row (or the header without
+        // options).
+        assert_eq!(
+            ask_user_question_landing_offset(plan_body_lines, &layouts_empty, 0),
+            plan_body_lines + 1 + 2,
+            "Q0 lands on its first option row (header + text)"
+        );
         // An answered question adds one preview row to its block's budget.
         let answered = std::collections::BTreeMap::from([(
             0usize,
@@ -946,19 +959,19 @@ mod tests {
             layouts_answered[0].answered,
             "the answer snapshot marks the question answered"
         );
-        let (answered_rows, answered_text) = render(view(Some(0), 0, answered));
+        let (answered_rows, answered_text) = render(view(answered));
         assert_eq!(
             answered_rows,
-            interaction_ask_user_page_body_rows(plan_body_lines, 0, &layouts_answered[0]),
+            ask_user_body_rows(plan_body_lines, &layouts_answered),
             "answered block adds its preview row"
         );
         assert!(
-            answered_text.contains("answered"),
+            answered_text.contains("(x) Vanilla"),
             "answered preview row present: {answered_text}"
         );
         assert_eq!(
-            interaction_ask_user_question_block_rows(&layouts_answered[0]),
-            interaction_ask_user_question_block_rows(&layouts_empty[0]) + 1
+            ask_user_question_block_rows(&layouts_answered[0]),
+            ask_user_question_block_rows(&layouts_empty[0]) + 1
         );
     }
 

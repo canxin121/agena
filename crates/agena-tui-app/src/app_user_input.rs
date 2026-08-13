@@ -207,9 +207,11 @@ impl App {
             return true;
         }
         if !review {
-            // Ask-user is a paged wizard: arrows/Enter drive the presentation
-            // page + option cursor, not the transcript cursor.
-            return self.handle_ask_user_wizard_key(&request_id, key);
+            // Ask-user is a continuous body: the transcript cursor IS the
+            // option cursor. Left/Right, Space and Enter are owned only
+            // because the cursor sits on the part; Up/Down, `e`, paging and
+            // everything else fall through to the normal transcript dispatch.
+            return self.handle_ask_user_key(key);
         }
         // Review: the transcript cursor IS the decision cursor — the hit
         // derives the active request and the row kind from where the cursor
@@ -302,130 +304,309 @@ impl App {
     }
 
     /// Route a key while the cursor is on an expanded pending ask-user part
-    /// (the paged wizard). Up/Down move the option cursor within the current
-    /// question, Left/Right switch question pages without committing (and
-    /// reach the summary page), Space toggles the option under the cursor,
-    /// and Enter submits the current page and advances (submitting the whole
-    /// request on the summary page). Esc is deliberately NOT owned: it falls
-    /// through to the normal transcript dispatch (the wizard never collapses
-    /// the part out from under the user). Every other key — including `h`/`l`
-    /// on non-part text and all chat paging — falls through too.
-    fn handle_ask_user_wizard_key(&mut self, request_id: &str, key: KeyEvent) -> bool {
+    /// (the continuous body). Up/Down and `j`/`k` are NOT owned — the
+    /// transcript cursor is a normal line-by-line cursor and can always leave
+    /// the part (this is the two-cursor bug fix). Left/Right jump the cursor
+    /// to the previous/next question's first option row; Space toggles the
+    /// option under the cursor (or opens the inline custom editor on the 其他
+    /// row); Enter checks the option and submits the request, jumping to the
+    /// first unanswered question on a validation miss. `e`, Esc, PgUp/PgDn,
+    /// Shift+Space and Ctrl+f are deliberately NOT owned: they fall through to
+    /// the normal transcript dispatch.
+    fn handle_ask_user_key(&mut self, key: KeyEvent) -> bool {
+        let Some(hit) = self.ask_user_cursor_hit(self.layout.transcript_body.width) else {
+            return false;
+        };
         if key.modifiers != KeyModifiers::NONE {
             return false;
         }
+        // Left/Right are owned only for plain motions: a pending operator or
+        // prefix (`3l`, `yj`, `g`, `z`, search, visual selection) still falls
+        // through, mirroring the review Up/Down guard.
+        let plain_motion = self.transcript_motion_prefix.is_none()
+            && !self.transcript_yank_pending
+            && !self.transcript_goto_pending
+            && !self.transcript_viewport_pending
+            && self.transcript_find_pending.is_none()
+            && self.transcript_text_object_pending.is_none()
+            && !self.transcript.has_visual_selection();
+        if plain_motion {
+            match resolve_tui_key(KeyContext::Transcript, key) {
+                Some(KeyAction::MoveLeft) => {
+                    return self.ask_jump_question(&hit.request_id, hit.line_kind, -1)
+                }
+                Some(KeyAction::MoveRight) => {
+                    return self.ask_jump_question(&hit.request_id, hit.line_kind, 1)
+                }
+                _ => {}
+            }
+        }
+        // Space is matched on the RAW key (never via the keymap, which maps an
+        // unmodified Space to PageDown) so a plain space toggles while PgDn /
+        // Ctrl+f / Shift+Space still page normally. Enter is raw too.
         match key.code {
-            KeyCode::Up => {
-                self.wizard_move_option(request_id, -1);
+            KeyCode::Char(' ') => self.ask_space(&hit.request_id, hit.line_kind),
+            KeyCode::Enter => self.ask_enter(&hit.request_id, hit.line_kind),
+            _ => false,
+        }
+    }
+
+    /// Derive the ask-user row under the transcript cursor — the cursor IS the
+    /// option cursor in the continuous body. Review parts return `None`; the
+    /// ask classifier maps the cursor's body offset to a concrete row kind.
+    fn ask_user_cursor_hit(&mut self, width: u16) -> Option<InteractionCursorHit> {
+        let node = self.transcript.current_cursor_node_cloned(width)?;
+        if !node.expanded {
+            return None;
+        }
+        let request_id = self.interaction_request_id_for_node_key(&node.key)?;
+        let cursor_line = self.transcript.navigation_cursor_line()?;
+        if cursor_line < node.start_line || cursor_line >= node.end_line {
+            return None;
+        }
+        let dialog = self.user_input_interactions.get(&request_id)?;
+        if agena_tui_transcript::request_is_review_decision(&dialog.request) {
+            return None;
+        }
+        let view = self.transcript.interaction_views.get(&request_id)?;
+        let body_offset = cursor_line.saturating_sub(node.start_line).saturating_sub(1);
+        let editing_custom = dialog.presentation.is_editing_custom();
+        let layouts =
+            agena_tui_transcript::interaction_question_layouts(&dialog.request, &view.answers);
+        let line_kind = agena_tui_transcript::classify_ask_user_line(
+            &layouts,
+            view.plan_body_lines,
+            body_offset,
+            editing_custom,
+        );
+        Some(InteractionCursorHit {
+            request_id,
+            line_kind,
+        })
+    }
+
+    /// Jump the transcript cursor to the previous/next question's first option
+    /// row (or its header row when the question has no options). No-op at the
+    /// first/last question, but the key is still consumed while the cursor is
+    /// on the part.
+    fn ask_jump_question(
+        &mut self,
+        request_id: &str,
+        line_kind: agena_tui_transcript::InteractionLineKind,
+        delta: isize,
+    ) -> bool {
+        use agena_tui_transcript::InteractionLineKind;
+        // The current question comes from the cursor's row kind; plan,
+        // separator and footer rows sit "before Q0".
+        let current = match line_kind {
+            InteractionLineKind::AskQuestionHeader { question_index }
+            | InteractionLineKind::AskQuestionText { question_index }
+            | InteractionLineKind::AskOption { question_index, .. }
+            | InteractionLineKind::AskCustomRow { question_index }
+            | InteractionLineKind::AskCustomEditor { question_index }
+            | InteractionLineKind::AskCustomDetail { question_index }
+            | InteractionLineKind::AskAnsweredPreview { question_index } => question_index as isize,
+            _ => -1,
+        };
+        let Some(dialog) = self.user_input_interactions.get(request_id) else {
+            return false;
+        };
+        let question_count = dialog.request.questions.len() as isize;
+        let target = current + delta;
+        if target < 0 || target >= question_count {
+            return true;
+        }
+        let target = target as usize;
+        let Some(view) = self.transcript.interaction_views.get(request_id).cloned() else {
+            return false;
+        };
+        let layouts =
+            agena_tui_transcript::interaction_question_layouts(&dialog.request, &view.answers);
+        let body_offset = agena_tui_transcript::ask_user_question_landing_offset(
+            view.plan_body_lines,
+            &layouts,
+            target,
+        );
+        let width = self.layout.transcript_body.width;
+        let height = self.layout.transcript_body.height;
+        let Some(node) = self.transcript.current_cursor_node_cloned(width) else {
+            return false;
+        };
+        // `node.start_line` is 0-indexed; `move_cursor_to_visual_line_number`
+        // is 1-indexed and the body starts one row below the headline.
+        self.transcript.move_cursor_to_visual_line_number(
+            width,
+            height,
+            Some(node.start_line + 2 + body_offset),
+        );
+        self.transcript.invalidate_render();
+        true
+    }
+
+    /// Space on an ask option row toggles that option; Space on the 其他 row
+    /// opens its inline custom editor (the editor takes ownership of the key
+    /// stream). Any other row falls through to the normal PageDown dispatch.
+    fn ask_space(
+        &mut self,
+        request_id: &str,
+        line_kind: agena_tui_transcript::InteractionLineKind,
+    ) -> bool {
+        use agena_tui_transcript::InteractionLineKind;
+        match line_kind {
+            InteractionLineKind::AskOption {
+                question_index,
+                option_index,
+            } => {
+                let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
+                    return false;
+                };
+                dialog
+                    .presentation
+                    .toggle_option_index(question_index, option_index);
+                self.user_input_interactions
+                    .insert(request_id.to_string(), dialog);
+                self.sync_interaction_documents();
                 true
             }
-            KeyCode::Down => {
-                self.wizard_move_option(request_id, 1);
-                true
-            }
-            KeyCode::Left => {
-                self.wizard_move_tab(request_id, -1);
-                true
-            }
-            KeyCode::Right => {
-                self.wizard_move_tab(request_id, 1);
-                true
-            }
-            KeyCode::Char(' ') => {
-                self.wizard_toggle_option(request_id);
-                true
-            }
-            KeyCode::Enter => {
-                self.wizard_enter(request_id);
+            InteractionLineKind::AskCustomRow { question_index } => {
+                let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
+                    return false;
+                };
+                if dialog
+                    .presentation
+                    .begin_custom_edit_for(question_index)
+                {
+                    self.interaction_editing = Some(request_id.to_string());
+                }
+                self.user_input_interactions
+                    .insert(request_id.to_string(), dialog);
+                self.sync_interaction_documents();
                 true
             }
             _ => false,
         }
     }
 
-    /// Move the wizard's option cursor within the current question page.
-    fn wizard_move_option(&mut self, request_id: &str, delta: isize) {
-        let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
-            return;
-        };
-        dialog.presentation.move_option(delta);
-        self.user_input_interactions.insert(request_id.to_string(), dialog);
-        self.sync_interaction_documents();
-    }
-
-    /// Switch the wizard to the previous/next question page, or into/out of
-    /// the final summary page. Every page change re-runs the fit-scroll
-    /// reveal: a new page can be taller than the viewport, and the previous
-    /// reveal (on arrival, or on the last page turn) would otherwise keep the
-    /// viewport top-anchored and cut off the new page's bottom rows.
-    fn wizard_move_tab(&mut self, request_id: &str, delta: isize) {
-        let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
-            return;
-        };
-        dialog.presentation.move_wizard_tab(delta);
-        self.user_input_interactions.insert(request_id.to_string(), dialog);
-        self.sync_interaction_documents();
-        self.reveal_pending_user_input_interaction(request_id);
-    }
-
-    /// Space on a wizard question page: toggles the option/custom row under
-    /// the wizard's option cursor (opening the inline custom editor on the
-    /// custom row). The page stays put — selection never advances the flow.
-    fn wizard_toggle_option(&mut self, request_id: &str) {
-        let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
-            return;
-        };
-        dialog.presentation.toggle_option();
-        if dialog.presentation.is_editing_custom() {
-            // The presentation opened the inline custom editor; the app takes
-            // ownership of the key stream.
-            self.interaction_editing = Some(request_id.to_string());
+    /// Enter on an ask option row checks that option and submits the whole
+    /// request when every question is answered; otherwise it does not submit
+    /// and moves the cursor to the first unanswered question. Enter on the 其他
+    /// row submits its committed custom text, or opens the inline editor when
+    /// empty. Any other row falls through to the normal Toggle dispatch (the
+    /// part collapses, exactly like review's plan-row Enter).
+    fn ask_enter(
+        &mut self,
+        request_id: &str,
+        line_kind: agena_tui_transcript::InteractionLineKind,
+    ) -> bool {
+        use agena_tui_transcript::InteractionLineKind;
+        if !matches!(
+            line_kind,
+            InteractionLineKind::AskOption { .. } | InteractionLineKind::AskCustomRow { .. }
+        ) {
+            return false;
         }
-        self.user_input_interactions.insert(request_id.to_string(), dialog);
-        self.sync_interaction_documents();
-    }
-
-    /// Enter on a wizard page: on a question page, submits the current page's
-    /// answer and advances to the next page (or the summary); on the summary
-    /// page, submits the whole request — jumping to the unanswered question's
-    /// page on a validation miss. The summary page has no Submit row and no
-    /// locked cursor, so Enter anywhere on it submits.
-    fn wizard_enter(&mut self, request_id: &str) {
         let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
-            return;
+            return false;
         };
-        if dialog.presentation.screen()
-            == agena_tui::user_input::QuestionFlowScreen::Review
-        {
-            match Self::build_structured_user_input_reply(&self.i18n, &mut dialog, None) {
-                Ok(reply) => {
-                    let session_id = dialog.session_id;
-                    self.request_user_input_reply(session_id, reply);
-                    // The dialog is gone from the map; rebuild the views so the
-                    // part stops rendering the (now stale) summary page.
+        match line_kind {
+            InteractionLineKind::AskOption {
+                question_index,
+                option_index,
+            } => {
+                dialog
+                    .presentation
+                    .commit_option_index(question_index, option_index);
+            }
+            InteractionLineKind::AskCustomRow { question_index } => {
+                let answered = dialog
+                    .presentation
+                    .answer(question_index)
+                    .is_some_and(|draft| !draft.custom_values.is_empty());
+                if !answered {
+                    // No custom text yet: Enter opens the inline editor.
+                    if dialog
+                        .presentation
+                        .begin_custom_edit_for(question_index)
+                    {
+                        self.interaction_editing = Some(request_id.to_string());
+                    }
+                    self.user_input_interactions
+                        .insert(request_id.to_string(), dialog);
                     self.sync_interaction_documents();
-                    return;
-                }
-                Err(error) => {
-                    // Keep the dialog so the user can correct the missing
-                    // answer; `focus_question` moved the page there, and the
-                    // view rebuild below lands on it.
-                    self.flash_warning(error);
+                    return true;
                 }
             }
-        } else {
-            // Question page: commit the page (Space already wrote the draft)
-            // and advance to the next page — the summary is reached from the
-            // last question page, and it is the only submit surface.
-            dialog.presentation.move_wizard_tab(1);
+            _ => unreachable!("guarded above"),
         }
-        self.user_input_interactions.insert(request_id.to_string(), dialog);
-        self.sync_interaction_documents();
-        // The dialog survived the Enter: either a question page advanced, or the
-        // review validation miss jumped to the unanswered question's page. Both
-        // moved the page, so re-run the fit-scroll reveal the way a Left/Right
-        // page turn does — the new page may be taller than the viewport.
-        self.reveal_pending_user_input_interaction(request_id);
+        match Self::build_structured_user_input_reply(&self.i18n, &mut dialog, None) {
+            Ok(reply) => {
+                let session_id = dialog.session_id;
+                self.request_user_input_reply(session_id, reply);
+                // Reply sent: the dialog stays out of the map and the views are
+                // rebuilt so the part stops rendering the pending body.
+                self.sync_interaction_documents();
+                true
+            }
+            Err(error) => {
+                // Keep the dialog so the user can correct the missing answer;
+                // `build_structured_user_input_reply` focused the first
+                // unanswered question on the miss.
+                self.flash_warning(error);
+                self.user_input_interactions
+                    .insert(request_id.to_string(), dialog);
+                self.sync_interaction_documents();
+                self.ask_focus_unanswered(request_id);
+                true
+            }
+        }
+    }
+
+    /// Move the transcript cursor onto the presentation's selected question
+    /// (the first unanswered one after a validation miss), landing on its
+    /// first option row.
+    fn ask_focus_unanswered(&mut self, request_id: &str) {
+        let Some(dialog) = self.user_input_interactions.get(request_id) else {
+            return;
+        };
+        let target = dialog.presentation.selected_question();
+        let Some(view) = self.transcript.interaction_views.get(request_id).cloned() else {
+            return;
+        };
+        let layouts =
+            agena_tui_transcript::interaction_question_layouts(&dialog.request, &view.answers);
+        let body_offset = agena_tui_transcript::ask_user_question_landing_offset(
+            view.plan_body_lines,
+            &layouts,
+            target,
+        );
+        let width = self.layout.transcript_body.width;
+        let height = self.layout.transcript_body.height;
+        let Some(node) = self.transcript.current_cursor_node_cloned(width) else {
+            return;
+        };
+        self.transcript.move_cursor_to_visual_line_number(
+            width,
+            height,
+            Some(node.start_line + 2 + body_offset),
+        );
+        self.transcript.invalidate_render();
+    }
+
+    /// The transcript cursor line when it sits inside an expanded pending
+    /// ask-user part, for the whole-line cursor highlight. Review parts return
+    /// `None` — they keep the normal single-grapheme cursor.
+    pub(crate) fn active_ask_part_cursor_line(&mut self, width: u16) -> Option<usize> {
+        let node = self.transcript.current_cursor_node_cloned(width)?;
+        if !node.expanded {
+            return None;
+        }
+        let request_id = self.interaction_request_id_for_node_key(&node.key)?;
+        let dialog = self.user_input_interactions.get(&request_id)?;
+        if agena_tui_transcript::request_is_review_decision(&dialog.request) {
+            return None;
+        }
+        let cursor_line = self.transcript.navigation_cursor_line()?;
+        (cursor_line >= node.start_line && cursor_line < node.end_line).then_some(cursor_line)
     }
 
     /// Enter on a decision row of the pending interaction part. The line kind

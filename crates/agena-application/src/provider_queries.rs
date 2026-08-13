@@ -397,22 +397,24 @@ pub fn configured_provider_adapter_models_response(
         .into_iter()
         .map(|adapter| {
             let adapter_id = adapter.adapter_id.clone();
+            let mut models = adapter
+                .model_ids
+                .into_iter()
+                .map(|model_id| {
+                    let mut model = agena_domain::Model::new(provider_id, model_id);
+                    model.adapter_id = Some(agena_domain::AdapterId::new(adapter_id.as_str()));
+                    provider_model_resource_from_domain(enrich_listing_model_from_catalog(
+                        model,
+                        &catalog_entries,
+                    ))
+                })
+                .collect::<Vec<_>>();
+            sort_models_alphabetically(&mut models);
             ProviderAdapterModelsResource {
                 adapter_id: adapter_id.clone(),
                 enabled: adapter.enabled,
                 resolved_base_url: None,
-                models: adapter
-                    .model_ids
-                    .into_iter()
-                    .map(|model_id| {
-                        let mut model = agena_domain::Model::new(provider_id, model_id);
-                        model.adapter_id = Some(agena_domain::AdapterId::new(adapter_id.as_str()));
-                        provider_model_resource_from_domain(enrich_listing_model_from_catalog(
-                            model,
-                            &catalog_entries,
-                        ))
-                    })
-                    .collect(),
+                models,
                 failure: None,
             }
         })
@@ -447,22 +449,31 @@ fn provider_adapter_models_resource(
     value: ProviderAdapterModelsEntry,
     catalog_entries: &[crate::dto::CatalogModelResource],
 ) -> ProviderAdapterModelsResource {
+    let mut models = value
+        .models
+        .into_iter()
+        .map(|model| {
+            provider_model_resource_from_domain(enrich_listing_model_from_catalog(
+                model,
+                catalog_entries,
+            ))
+        })
+        .collect::<Vec<_>>();
+    sort_models_alphabetically(&mut models);
     ProviderAdapterModelsResource {
         adapter_id: value.adapter_id,
         enabled: value.enabled,
         resolved_base_url: value.resolved_base_url,
-        models: value
-            .models
-            .into_iter()
-            .map(|model| {
-                provider_model_resource_from_domain(enrich_listing_model_from_catalog(
-                    model,
-                    catalog_entries,
-                ))
-            })
-            .collect(),
+        models,
         failure: value.failure.map(Into::into),
     }
+}
+
+/// Sort a model listing alphabetically by id (case-insensitive). Provider
+/// `list_models` responses are in arbitrary order, and the Provider Studio
+/// shows the live list directly, so the rows are ordered here for display.
+fn sort_models_alphabetically(models: &mut [ProviderModelResource]) {
+    models.sort_by(|left, right| left.id.to_lowercase().cmp(&right.id.to_lowercase()));
 }
 
 fn map_provider_catalog_error(error: ProviderCatalogError) -> ApplicationError {
@@ -482,7 +493,7 @@ fn map_provider_catalog_error(error: ProviderCatalogError) -> ApplicationError {
 
 #[cfg(test)]
 mod tests {
-    use super::enrich_listing_model_from_catalog;
+    use super::{enrich_listing_model_from_catalog, sort_models_alphabetically};
     use agena_domain::{Model, ReasoningEffort, ThinkingRequest};
     use agena_provider::{CatalogModelRecord, ConfiguredModelThinkingMode};
 
@@ -544,5 +555,37 @@ mod tests {
         let enriched = enrich_listing_model_from_catalog(model, &[]);
         assert_eq!(enriched.id.as_ref(), "brand-new-model");
         assert!(enriched.thinking_modes.is_empty());
+    }
+
+    #[test]
+    fn model_listing_is_sorted_case_insensitively_by_id() {
+        use agena_api::resource::ProviderModelResource;
+
+        fn listing_model(id: &str) -> ProviderModelResource {
+            ProviderModelResource::configured("openai_responses", id)
+        }
+
+        let mut models = vec![
+            listing_model("o3-mini"),
+            listing_model("GPT-5.1"),
+            listing_model("gpt-4o-mini"),
+            listing_model("O1"),
+            listing_model("gpt-5"),
+        ];
+        sort_models_alphabetically(&mut models);
+        let ids = models
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "gpt-4o-mini",
+                "gpt-5",
+                "GPT-5.1",
+                "O1",
+                "o3-mini",
+            ]
+        );
     }
 }

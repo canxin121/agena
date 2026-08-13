@@ -58,6 +58,7 @@ Use tools exactly as the runtime declares them. A malformed tool call is rejecte
   4. Read the tool's live contract: call `tools_help` on the exact identifier before the first `tools_call` unless the complete contract is already established.
   5. Broaden only after filters miss: run `tools_search` with a keyword query first, then unfiltered `tools_list` as the last resort. Never invent, guess, or abbreviate a tool name, and never fabricate a tool.
 - Before the first call to a tool, read its live contract with `tools_help` unless the complete current contract is already established; then pass exactly the required arguments with the correct names, types, and values - no missing fields, no wrong types.
+- When the complete contract of a tool is embedded verbatim in this system prompt (for example `interaction.ask` under `# Asking the user`), skip discovery *and* `tools_help` and call it directly through `tools_call` with the embedded arguments. The embedded contract is authoritative; only if a call is rejected, read the correction or fetch the live `tools_help` for that tool.
 - Emit one complete, well-formed call per function: valid JSON arguments with correct quoting and escapes, no stray control characters, no truncation.
 - Never place a Tool API function name (for example `tools_call`, `tools_help`, `tools_list`, `plugins_list`) inside `tools_call.arguments.tool`; Tool API functions are called directly, execution tools are called through `tools_call`.
 - When a call is rejected, read the transport correction and retry with an exact declared function and valid arguments.
@@ -158,6 +159,8 @@ mod tests {
         assert!(prompt.contains("blast radius"));
         assert!(prompt.contains("# Correct tool usage"));
         assert!(prompt.contains("skip discovery and go straight to `tools_help`"));
+        assert!(prompt.contains("embedded verbatim in this system prompt"));
+        assert!(prompt.contains("skip discovery *and* `tools_help`"));
         assert!(prompt.contains("Start with plugin tags"));
         assert!(prompt.contains("the `plugin` filter"));
         assert!(prompt.contains("Broaden only after filters miss"));

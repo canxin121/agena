@@ -50,7 +50,7 @@ Tools that proxy an official hosted provider service (`chatgpt.*`, `claude.*`, `
 
 Use tools exactly as the runtime declares them. A malformed tool call is rejected by the transport and sent back for repair, so precision keeps the run moving:
 
-- If you already know the exact tool name (for example from this system prompt, a previous discovery, or the conversation), skip discovery and go straight to `tools_help` to learn how to use it, then call it. Do not re-discover a tool whose name is already known.
+- If you already know the exact tool name (for example from this system prompt, a previous discovery, or the conversation), skip discovery and go straight to `tools_help` to learn how to use it, then call it. A known name NEVER triggers `tools_search`/`tools_list`; it goes directly to `tools_help`, then `tools_call`.
 - For an unknown tool, discover it in a fixed order before naming or calling anything:
   1. Start with plugin tags: call `plugins_tags` and use `tag`/`tags` filters to narrow to the capability you need.
   2. Find the plugin that owns it: `plugins_search` (or `plugins_list` with filters) to choose the plugin.
@@ -58,7 +58,7 @@ Use tools exactly as the runtime declares them. A malformed tool call is rejecte
   4. Read the tool's live contract: call `tools_help` on the exact identifier before the first `tools_call` unless the complete contract is already established.
   5. Broaden only after filters miss: run `tools_search` with a keyword query first, then unfiltered `tools_list` as the last resort. Never invent, guess, or abbreviate a tool name, and never fabricate a tool.
 - Before the first call to a tool, read its live contract with `tools_help` unless the complete current contract is already established; then pass exactly the required arguments with the correct names, types, and values - no missing fields, no wrong types.
-- When the complete contract of a tool is embedded verbatim in this system prompt (for example `interaction.ask` under `# Asking the user`), skip discovery *and* `tools_help` and call it directly through `tools_call` with the embedded arguments. The embedded contract is authoritative; only if a call is rejected, read the correction or fetch the live `tools_help` for that tool.
+- Tool contracts are never embedded in this system prompt; the prompt only names tools. Knowing a tool's name means you know it exists — never re-discover a named tool with `tools_search`/`tools_list`; go straight to `tools_help` to read its live contract, then call it through `tools_call`. Being named in the prompt is not the tool's contract.
 - Emit one complete, well-formed call per function: valid JSON arguments with correct quoting and escapes, no stray control characters, no truncation.
 - Never place a Tool API function name (for example `tools_call`, `tools_help`, `tools_list`, `plugins_list`) inside `tools_call.arguments.tool`; Tool API functions are called directly, execution tools are called through `tools_call`.
 - When a call is rejected, read the transport correction and retry with an exact declared function and valid arguments.
@@ -159,8 +159,8 @@ mod tests {
         assert!(prompt.contains("blast radius"));
         assert!(prompt.contains("# Correct tool usage"));
         assert!(prompt.contains("skip discovery and go straight to `tools_help`"));
-        assert!(prompt.contains("embedded verbatim in this system prompt"));
-        assert!(prompt.contains("skip discovery *and* `tools_help`"));
+        assert!(prompt.contains("never embed"));
+        assert!(prompt.contains("Being named in the prompt is not the tool's contract"));
         assert!(prompt.contains("Start with plugin tags"));
         assert!(prompt.contains("the `plugin` filter"));
         assert!(prompt.contains("Broaden only after filters miss"));

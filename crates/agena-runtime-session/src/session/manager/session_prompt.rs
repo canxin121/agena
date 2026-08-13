@@ -48,33 +48,16 @@ While the current plan is in the `planning` phase, mutating tools are blocked by
 
 /// Ask decision semantics injected when `agena.interaction.ask` is available.
 ///
-/// The ask tool is promoted to first-class in the system prompt: its exact
-/// identifier, its live input contract, and a ready-to-call `tools_call`
-/// shape are embedded here so the model can ask without the discovery dance
-/// (`tools_search` -> `tools_help` -> `tools_call`). The five `agena.tools`
-/// gateway functions stay the only protocol surface; this section just makes
-/// the embedded contract skip discovery, exactly like `session.rename` and
-/// `plan.set` are named directly in other sections.
+/// The ask tool is named first-class in the system prompt so the model knows
+/// it exists, but its contract is never embedded: the live input contract is
+/// served by `tools_help`. The five `agena.tools` gateway functions stay the
+/// only protocol surface; this section just names the tool and its decision
+/// semantics, exactly like `session.rename` and `plan.set` are named directly
+/// in other sections.
 pub(crate) fn render_asking_section() -> String {
     r#"# Asking the user
 
-`interaction.ask` is a first-class tool for decisions that are genuinely the user's to make. Its contract is embedded here — call it directly with `tools_call`, without first running `tools_search` or `tools_help`:
-
-```json
-{"tool": "interaction.ask", "input": {
-  "title": "Short heading",
-  "questions": [{
-    "question": "Which approach do you prefer?",
-    "header": "Approach",
-    "options": [
-      {"label": "Option A", "description": "Shortly what A means"},
-      {"label": "Option B", "description": "Shortly what B means"}
-    ],
-    "multiple": false,
-    "allow_custom": true
-  }]
-}}
-```
+`interaction.ask` is a first-class tool for decisions that are genuinely the user's to make. Its name is known, so do not search for it — read its live contract with `tools_help` before the first call, then invoke it through `tools_call`.
 
 Every question needs at least two genuinely distinct options — a single option carries no decision. While the user answers, your turn suspends; it resumes with their answers as a tool result and your working state preserved, so continue the same task. If the runtime rejects the call, read the correction and retry; the live `tools_help` for `interaction.ask` remains authoritative for anything unclear.
 
@@ -217,13 +200,13 @@ mod tests {
     }
 
     #[test]
-    fn asking_section_embeds_contract_and_carries_red_line() {
+    fn asking_section_names_tool_and_carries_red_line() {
         let section = render_asking_section();
         assert!(section.contains("# Asking the user"));
         assert!(section.contains("interaction.ask"));
         assert!(section.contains("genuinely the user's to make"));
-        assert!(section.contains("\"questions\""));
-        assert!(section.contains("without first running `tools_search` or `tools_help`"));
+        assert!(section.contains("tools_help"));
+        assert!(!section.contains("\"questions\""));
         assert!(section.contains("your turn suspends"));
         assert!(section.contains("Never use `interaction.ask`"));
     }

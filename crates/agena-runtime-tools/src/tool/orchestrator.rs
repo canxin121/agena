@@ -29,7 +29,6 @@ const BUILTIN_TOOL_NAMES: &[&str] = &[
     "lsp_references",
     "shell",
     "read",
-    "schedule_wakeup",
     "task",
     "tool_search",
     "enter_snapshot",

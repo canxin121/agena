@@ -6,7 +6,7 @@ use super::{
     ToolInvocationExecution, ToolOutput, UserInputReplyKind, Utc,
 };
 use crate::session::Session;
-use agena_domain::{PermissionReply, UserInputReply, UserInputRequest};
+use agena_domain::{PermissionReply, StructuredValue, UserInputReply, UserInputRequest};
 use agena_tool::ToolHumanRenderer;
 
 /// Default lifetime of an interactive user-input request when the caller does
@@ -187,14 +187,19 @@ pub(super) fn background_operation_from_execution(
     invocation: &ToolInvocation,
     details: &ToolOutput,
 ) -> Option<crate::part::BackgroundOperation> {
-    // Delegated task: `agena.tasks.create` returns immediately while the child
-    // session keeps running in the background. The generated task id lives in
-    // the output payload (`tasks[0].task_id`), not the input (the caller may
-    // omit `task_id` and let the tool generate one).
+    // Delegated task launched in the background: `tasks.run` with
+    // `run_in_background: true` returns immediately while the child session
+    // keeps running in the background. The generated task id lives in the
+    // output payload (`tasks[0].task_id`), not the input (the caller may omit
+    // `task_id` and let the tool generate one).
     if matches!(
         invocation.name.as_str(),
-        "agena.tasks.create" | "tasks.create" | "agena_tasks_create"
-    ) {
+        "agena.tasks.run" | "tasks.run" | "agena_tasks_run"
+    ) && matches!(
+        invocation.input.get("run_in_background"),
+        Some(StructuredValue::Boolean { value: true })
+    )
+    {
         let task_id = custom_payload_value(details)
             .and_then(|value| value.get("tasks").cloned())
             .and_then(|value| value.as_array().cloned())

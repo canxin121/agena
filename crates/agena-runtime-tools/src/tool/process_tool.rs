@@ -67,13 +67,13 @@ pub(crate) async fn execute_async(
         ShellToolInput::Run {
             shell: ProcessShell::Bash,
             command,
-            background: false,
+            run_in_background: false,
             monitor: None,
         } => execute_foreground_bash_async(executor, command, context).await,
         ShellToolInput::Run {
             shell: ProcessShell::Powershell,
             command,
-            background: false,
+            run_in_background: false,
             monitor: None,
         } => {
             let execution = powershell::execute_async(executor, command, context).await?;
@@ -82,9 +82,9 @@ pub(crate) async fn execute_async(
         ShellToolInput::Run {
             shell,
             command,
-            background,
+            run_in_background,
             monitor,
-        } if *background || monitor.is_some() => {
+        } if *run_in_background || monitor.is_some() => {
             execute_background_run_async(executor, *shell, command, monitor.as_ref(), context).await
         }
         _ => {

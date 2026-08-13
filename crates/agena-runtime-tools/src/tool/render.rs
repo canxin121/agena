@@ -482,10 +482,6 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                     w.list_item(cron_run_summary_line(entry));
                 }
             }
-            P::ScheduleWakeup { id, next_fire_at } => {
-                w.heading(format!("`schedule_wakeup` · {id}"));
-                w.line(format!("next fire {next_fire_at}"));
-            }
             P::LspDefinition { locations } => {
                 w.heading(format!(
                     "`lsp_definition` · {} location(s)",

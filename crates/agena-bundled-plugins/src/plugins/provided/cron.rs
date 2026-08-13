@@ -1,4 +1,4 @@
-//! `agena.cron` plugin: schedules cron and one-shot wakeup jobs.
+//! `agena.cron` plugin: schedules cron jobs.
 //!
 //! The model-visible schedule tools execute through the same plugin tool
 //! surface as every other tool.
@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::part::{
     CronCreateToolInput, CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput,
-    CronListToolInput, CronUpdateToolInput, ScheduleWakeupToolInput,
+    CronListToolInput, CronUpdateToolInput,
 };
 use crate::plugins::provided::router;
 use agena_plugin_host::PluginError;
@@ -59,6 +59,7 @@ impl CronPlugin {
     #[tool(
         tags(query, scheduler, discovery),
         summary = "List registered cron jobs and wakeups.",
+        help = "List every scheduled job registered in this session. Jobs are session-only — they exist for this session's lifetime and are gone when it ends — and recurring jobs auto-expire after seven days. Use this to review schedules you created; never poll it waiting for a job to fire.",
         read_only,
         scheduler,
         concurrency_safe
@@ -81,6 +82,7 @@ impl CronPlugin {
     #[tool(
         tags(mutate, scheduler),
         summary = "Create one cron schedule.",
+        help = "Schedule a one-shot or recurring job with a standard 5-field cron expression (minute hour day-of-month month day-of-week). The job fires while the session is idle and submits its prompt as a new user message, waking you again; never use it to poll. Jobs are session-only and recurring jobs auto-expire after seven days. When the exact time does not matter, pick a minute that is not :00 or :30 to avoid clumping.",
         mutating,
         scheduler
     )]
@@ -102,6 +104,7 @@ impl CronPlugin {
     #[tool(
         tags(mutate, scheduler),
         summary = "Delete one cron schedule.",
+        help = "Permanently remove a scheduled job from this session. Deleting stops future firings immediately.",
         mutating,
         scheduler
     )]
@@ -123,6 +126,7 @@ impl CronPlugin {
     #[tool(
         tags(mutate, scheduler),
         summary = "Update the prompt or schedule parameters of one retained job.",
+        help = "Change the prompt or cron parameters of an existing job. The updated schedule takes effect for subsequent firings.",
         mutating,
         scheduler
     )]
@@ -144,6 +148,7 @@ impl CronPlugin {
     #[tool(
         tags(mutate, scheduler),
         summary = "Pause one scheduled job without deleting it.",
+        help = "Temporarily suspend a job's future firings while keeping its definition. Use resume to start it again.",
         mutating,
         scheduler
     )]
@@ -165,6 +170,7 @@ impl CronPlugin {
     #[tool(
         tags(mutate, scheduler),
         summary = "Resume one paused scheduled job.",
+        help = "Re-enable a job that was paused so its future firings happen again.",
         mutating,
         scheduler
     )]
@@ -186,6 +192,7 @@ impl CronPlugin {
     #[tool(
         tags(query, scheduler),
         summary = "Inspect bounded persisted delivery history for scheduled jobs.",
+        help = "Read the bounded delivery history (fire times, outcome, last error) for scheduled jobs. Never poll this waiting for a job to fire — the firing itself submits a new message and wakes you.",
         read_only,
         scheduler,
         concurrency_safe
@@ -198,27 +205,6 @@ impl CronPlugin {
         let _ = self.host()?;
         router::invoke_tool(
             "cron_history",
-            serde_json::to_value(args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-            context.session_id,
-            context.call_id,
-        )
-    }
-
-    #[tool(
-        tags(mutate, scheduler),
-        summary = "Create one one-shot wakeup.",
-        mutating,
-        scheduler
-    )]
-    async fn invoke_wakeup(
-        &self,
-        context: &agena_plugin_host::sdk::ToolInvokeContext<'_>,
-        args: ScheduleWakeupToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let _ = self.host()?;
-        router::invoke_tool(
-            "schedule_wakeup",
             serde_json::to_value(args)
                 .map_err(|err| PluginError::invalid_params(err.to_string()))?,
             context.session_id,

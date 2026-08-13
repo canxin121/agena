@@ -811,7 +811,6 @@ pub(in crate::session::manager) fn non_recursive_subtask_capability_denials()
         "tasks.run",
         "agena.tasks.run",
         "agena_tasks_run",
-        "agena.tasks.create",
         "agena.tasks.followup",
         "agena.tasks.message",
     ]
@@ -833,7 +832,6 @@ mod tests {
             "tasks.run",
             "agena.tasks.run",
             "agena_tasks_run",
-            "agena.tasks.create",
             "agena.tasks.followup",
             "agena.tasks.message",
         ] {

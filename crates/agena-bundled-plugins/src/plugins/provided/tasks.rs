@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use crate::part::{TaskAccess, TaskToolInput};
 use crate::plugins::provided::workflow::{WorkflowPlugin, WorkflowPluginConfig};
@@ -129,35 +128,6 @@ const fn default_output_limit() -> u32 {
     100
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(rename_all = "snake_case")]
-enum TaskWaitMode {
-    Any,
-    #[default]
-    All,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(
-    trim("task_ids[]"),
-    non_empty("task_ids[]"),
-    min_items("task_ids", 1),
-    max_items("task_ids", 64),
-    maximum("timeout_ms", 60000)
-)]
-#[serde(deny_unknown_fields)]
-struct TaskWaitInput {
-    task_ids: Vec<String>,
-    #[serde(default)]
-    mode: TaskWaitMode,
-    #[serde(default = "default_wait_timeout_ms")]
-    timeout_ms: u64,
-}
-
-const fn default_wait_timeout_ms() -> u64 {
-    30_000
-}
-
 fn run_subtask_access(access: TaskAccess) -> RunSubtaskAccess {
     match access {
         TaskAccess::Inherit => RunSubtaskAccess::Inherit,
@@ -190,29 +160,20 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, execute),
-        summary = "Create or resume a delegated subagent task. Attach Skill names in `skills` so the child session applies them as task guidance.",
-        help = "Reach for this tool when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Delegates a bounded task to a subagent session. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.",
+        summary = "Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach Skill names in `skills` so the child session applies them as task guidance.",
+        help = "Reach for this tool when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.",
         task,
         subtask,
         concurrency_safe
     )]
-    async fn run(&self, input: &TaskToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.inner.invoke_task(input).await
-    }
-
-    #[tool(
-        tags(subtask, mutate),
-        summary = "Create a delegated subagent task in the background. Attach Skill names in `skills` so the child session applies them as task guidance.",
-        help = "Creates a delegated background task. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills. The task runs in the background and returns immediately; you will be notified with a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.",
-        task,
-        subtask,
-        concurrency_safe
-    )]
-    async fn create(
+    async fn run(
         &self,
         input: &TaskToolInput,
         context: &ToolInvokeContext<'_>,
     ) -> SdkResult<ToolInvokeOutput> {
+        if !input.run_in_background {
+            return self.inner.invoke_task(input).await;
+        }
         self.hydrate_session_tasks(context).await?;
         ensure_task_capacity(&self.tasks, context.session_id, None)?;
         let task_id = input
@@ -287,7 +248,7 @@ impl TasksPlugin {
         Ok(task_output(
             "Start task",
             format!(
-                "Started delegated task '{task_id}' in the background. You will be notified with a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it."
+                "Started task '{task_id}' in the background. You will be notified when it completes — do not poll; continue with other work in the meantime."
             ),
             vec![entry_state(&self.tasks, task_id.as_str())?],
             false,
@@ -568,69 +529,6 @@ impl TasksPlugin {
                 context.session_id,
             )?],
             false,
-        ))
-    }
-
-    #[tool(
-        tags(subtask, query),
-        summary = "Wait for any or all delegated tasks to finish.",
-        read_only,
-        task,
-        concurrency_safe
-    )]
-    async fn wait(
-        &self,
-        input: &TaskWaitInput,
-        context: &ToolInvokeContext<'_>,
-    ) -> SdkResult<ToolInvokeOutput> {
-        self.hydrate_session_tasks(context).await?;
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(input.timeout_ms);
-        let (states, timed_out) = loop {
-            let entries = input
-                .task_ids
-                .iter()
-                .map(|task_id| task_entry_for_parent(&self.tasks, task_id, context.session_id))
-                .collect::<SdkResult<Vec<_>>>()?;
-            let states = input
-                .task_ids
-                .iter()
-                .map(|task_id| entry_state_for_parent(&self.tasks, task_id, context.session_id))
-                .collect::<SdkResult<Vec<_>>>()?;
-            let complete = match input.mode {
-                TaskWaitMode::Any => states
-                    .iter()
-                    .any(|state| is_terminal(state.status.as_str())),
-                TaskWaitMode::All => states
-                    .iter()
-                    .all(|state| is_terminal(state.status.as_str())),
-            };
-            if complete {
-                break (states, false);
-            }
-            if tokio::time::Instant::now() >= deadline {
-                break (states, true);
-            }
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            let notifications = entries
-                .iter()
-                .map(|entry| Box::pin(Arc::clone(&entry.notify).notified_owned()))
-                .collect::<Vec<_>>();
-            if tokio::time::timeout(remaining, futures_util::future::select_all(notifications))
-                .await
-                .is_err()
-            {
-                break (states, true);
-            }
-        };
-        Ok(task_output(
-            "Wait for tasks",
-            if timed_out {
-                format!("Wait timed out after {} ms.", input.timeout_ms)
-            } else {
-                format!("Task wait condition {:?} completed.", input.mode)
-            },
-            states,
-            timed_out,
         ))
     }
 
@@ -1020,22 +918,18 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             names,
-            [
-                "run", "create", "list", "get", "output", "cancel", "message", "followup", "wait"
-            ]
+            ["run", "list", "get", "output", "cancel", "message", "followup"]
         );
-        for name in ["create", "output", "cancel", "message", "followup"] {
+        for name in ["output", "cancel", "message", "followup"] {
             assert!(
                 manifest.tools.iter().any(|tool| tool.name == name),
                 "missing task lifecycle tool `{name}`"
             );
         }
         // Delegated task tools must be flagged concurrency-safe so the
-        // runtime fans out multiple tasks.run/create/followup calls from one
+        // runtime fans out multiple tasks.run/followup calls from one
         // turn instead of serializing them (one child session at a time).
-        for name in [
-            "run", "create", "list", "get", "output", "cancel", "message", "followup", "wait",
-        ] {
+        for name in ["run", "list", "get", "output", "cancel", "message", "followup"] {
             let tool = manifest
                 .tools
                 .iter()

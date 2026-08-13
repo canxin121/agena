@@ -1,4 +1,5 @@
-//! cron_create / cron_list / cron_delete / schedule_wakeup plugin tools.
+//! cron_create / cron_list / cron_delete / cron_update / cron_pause / cron_resume / cron_history
+//! plugin tools.
 
 use std::sync::Arc;
 
@@ -8,7 +9,6 @@ use agena_tool::CronRunSummary;
 use crate::part::{
     CronCreateToolInput, CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput,
     CronListToolInput, CronMisfirePolicyInput, CronRetryPolicyInput, CronUpdateToolInput,
-    ScheduleWakeupToolInput,
 };
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
@@ -264,42 +264,6 @@ pub(super) async fn execute_history_async(
     );
     Ok(ToolPayloadExecution::new(
         ToolPayloadOutput::CronHistory { entries },
-        view,
-    ))
-}
-
-pub(super) async fn execute_wakeup_async(
-    executor: &ToolExecutor,
-    input: &ScheduleWakeupToolInput,
-    session_id: Option<i64>,
-) -> Result<ToolPayloadExecution, ToolError> {
-    let scheduler = require_scheduler(executor)?;
-    let when = chrono::Utc::now() + chrono::Duration::seconds(input.delay_seconds as i64);
-    let mut job = ScheduledJob::new_once(when, input.prompt.trim());
-    if let Some(session_id) = session_id {
-        job.set_owner(session_id);
-    }
-    let id = job.id;
-    let next = job.next_fire_at.map(|t| t.to_rfc3339()).unwrap_or_default();
-    scheduler.add(job).await;
-
-    let view = ToolExecutionView::simple(
-        "Schedule wake-up",
-        format!("Scheduled for {next}"),
-        format!(
-            "wake-up scheduled at {next}{}",
-            input
-                .reason
-                .as_deref()
-                .map(|r| format!(" ({r})"))
-                .unwrap_or_default()
-        ),
-    );
-    Ok(ToolPayloadExecution::new(
-        ToolPayloadOutput::ScheduleWakeup {
-            id: id.to_string(),
-            next_fire_at: next,
-        },
         view,
     ))
 }

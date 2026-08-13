@@ -20,7 +20,7 @@ pub use tool::{
     GlobToolInput, GrepToolInput, InteractionNotifyToolInput, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, ModelVisibleOutput,
     MonitorToolInput, MonitorWsInput,
-    OperationCompletion, OperationPart, BackgroundOperation, ReadToolInput, ScheduleWakeupToolInput,
+    OperationCompletion, OperationPart, BackgroundOperation, ReadToolInput,
     ShellCommandInput,
     ShellMonitorInput, ShellMonitorPatternKind, ShellToolInput, TaskAccess, TaskToolInput,
     ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,

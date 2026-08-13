@@ -21,7 +21,7 @@ impl ToolExecutor {
         let ToolPayloadInput::Shell(crate::part::ShellToolInput::Run {
             shell: agena_domain::ProcessShell::Bash,
             command: process_input,
-            background,
+            run_in_background,
             monitor,
         }) = payload
         else {
@@ -40,7 +40,7 @@ impl ToolExecutor {
         let rewritten_invocation = ToolPayloadInput::Shell(crate::part::ShellToolInput::Run {
             shell: agena_domain::ProcessShell::Bash,
             command: Box::new(rewritten),
-            background,
+            run_in_background,
             monitor,
         })
         .into_invocation();
@@ -392,10 +392,6 @@ impl ToolExecutor {
                 }
                 ToolPayloadInput::CronHistory(input) => {
                     crate::tool::cron::execute_history_async(self, &input).await?
-                }
-                ToolPayloadInput::ScheduleWakeup(input) => {
-                    crate::tool::cron::execute_wakeup_async(self, &input, context.session_id)
-                        .await?
                 }
                 ToolPayloadInput::LspDefinition(input) => {
                     crate::tool::lsp::execute_definition_async(self, &input).await?

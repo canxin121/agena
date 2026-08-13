@@ -374,22 +374,23 @@ impl BackgroundCompletionBridge {
             // has nothing to do here.
             ProcessStatus::Running => return,
         };
+        let command_label = format!("\"{}\"", summary.command.trim());
         let outcome = if terminal == PartState::Completed {
-            Ok(summary
-                .exit_code
-                .map(|code| format!("Exit code {code}"))
-                .unwrap_or_default())
+            Ok(match summary.exit_code {
+                Some(code) => format!("Command {command_label} completed (exit code {code})"),
+                None => format!("Command {command_label} completed"),
+            })
         } else {
             let fallback = match summary.status {
-                ProcessStatus::TimedOut => "The background process timed out.".to_string(),
-                ProcessStatus::Stopped => "The background process was stopped.".to_string(),
+                ProcessStatus::TimedOut => format!("Command {command_label} timed out."),
+                ProcessStatus::Stopped => format!("Command {command_label} was stopped."),
                 ProcessStatus::Failed => format!(
-                    "The background process failed (exit {}).",
+                    "Command {command_label} failed (exit {}).",
                     summary
                         .exit_code
                         .map_or_else(|| "unknown".to_string(), |code| code.to_string())
                 ),
-                _ => "The background process failed.".to_string(),
+                _ => format!("Command {command_label} failed."),
             };
             Err(background_failure(summary.status, fallback))
         };
@@ -409,9 +410,15 @@ impl BackgroundCompletionBridge {
             .to_string();
         tokio::spawn(async move {
             // The tool part's marker update is buffered and only committed when
-            // the owning run terminalizes (turn end), so a shell finishing
-            // mid-turn can beat the index — resolve with a bounded retry.
-            let Some(session_id) = bridge.resolve_background_session("shell", &process_id).await else {
+            // the owning run terminalizes (turn end), so a process finishing
+            // mid-turn can beat the index — resolve with a bounded retry. The
+            // process registry indexes `shell.run` under `("shell", id)` and
+            // `monitor.start` under `("monitor", id)`, and the terminal event
+            // does not say which, so fall back across both kinds.
+            let Some((session_id, kind)) = bridge
+                .resolve_background_session_either(&["shell", "monitor"], &process_id)
+                .await
+            else {
                 return;
             };
             let Some(manager) = bridge.manager.lock().expect("background manager lock").clone()
@@ -424,13 +431,13 @@ impl BackgroundCompletionBridge {
             let result = manager
                 .settle_background_operation(
                     session_id,
-                    "shell",
+                    &kind,
                     &process_id,
                     terminal,
                     outcome,
                     SystemNotificationContent {
                         operation_id: process_id.clone(),
-                        operation_kind: "shell".to_string(),
+                        operation_kind: kind.clone(),
                         status: status.to_string(),
                         summary: summary_line.clone(),
                         body: summary_line,
@@ -520,6 +527,41 @@ impl BackgroundCompletionBridge {
         tracing::warn!(
             target: "agena_background",
             %kind, %id,
+            "no transcript part indexed for background operation; leaving the part spinning"
+        );
+        None
+    }
+
+    /// Resolve the session for a background marker whose launch kind is
+    /// ambiguous. The process registry indexes every process under the kind of
+    /// its launch tool: `shell.run` (with or without a `monitor` sub-object)
+    /// indexes under `"shell"` while the `monitor.start` tool indexes under
+    /// `"monitor"`, and a terminal `on_finished` event does not say which.
+    /// Try each candidate kind in order and return the first hit with the kind
+    /// that matched, so the settle uses the kind the index actually holds.
+    async fn resolve_background_session_either(
+        &self,
+        kinds: &[&str],
+        id: &str,
+    ) -> Option<(i64, String)> {
+        let keys: Vec<(String, String)> = kinds
+            .iter()
+            .map(|kind| (kind.to_string(), id.to_string()))
+            .collect();
+        for _ in 0..60 {
+            {
+                let index = self.index.lock().expect("background index lock");
+                for key in &keys {
+                    if let Some(session_id) = index.get(key).copied() {
+                        return Some((session_id, key.0.clone()));
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        tracing::warn!(
+            target: "agena_background",
+            ?kinds, %id,
             "no transcript part indexed for background operation; leaving the part spinning"
         );
         None
@@ -636,10 +678,35 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
         ),
         SubtaskStatus::Created | SubtaskStatus::Running => return,
     };
+    let task_label = if meta.title.trim().is_empty() {
+        task_id.clone()
+    } else {
+        format!("\"{}\"", meta.title.trim())
+    };
     let Some(manager) = bridge.manager.lock().expect("background manager lock").clone() else {
         return;
     };
     let child_session_id = meta.id;
+    let notification_status = match status {
+        SubtaskStatus::Completed => "completed",
+        SubtaskStatus::Failed => "failed",
+        SubtaskStatus::Cancelled | SubtaskStatus::Interrupted => "cancelled",
+        SubtaskStatus::TimedOut => "timed_out",
+        SubtaskStatus::Created | SubtaskStatus::Running => unreachable!("terminal status"),
+    }
+    .to_string();
+    let (summary_ok, summary_failed) = match status {
+        SubtaskStatus::Completed => (format!("Task {task_label} finished"), String::new()),
+        SubtaskStatus::Failed => (
+            String::new(),
+            format!("Task {task_label} failed"),
+        ),
+        SubtaskStatus::Cancelled | SubtaskStatus::Interrupted => {
+            (format!("Task {task_label} cancelled"), String::new())
+        }
+        SubtaskStatus::TimedOut => (format!("Task {task_label} timed out"), String::new()),
+        SubtaskStatus::Created | SubtaskStatus::Running => unreachable!("terminal status"),
+    };
     tokio::spawn(async move {
         let outcome = match terminal {
             PartState::Completed => {
@@ -657,22 +724,27 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
         // Wake the model with a completion notification (the agena analog of
         // Claude Code's `<task-notification>`); the task's final text is
         // wrapped in `<result>` so the model can distinguish it from its own
-        // turn output. The settle terminalizes the tool part, appends the
+        // turn output. The summary is a one-line `Task "…" finished` (mirroring
+        // Claude's notification headline); a failure appends the surfaced
+        // reason. The settle terminalizes the tool part, appends the
         // notification onto the launching run, and wakes the model in one
         // atomic step.
+        let summary = match &outcome {
+            Ok(_) => summary_ok,
+            Err(failure) => {
+                let reason = failure.user.fallback.trim().trim_end_matches('.');
+                if reason.is_empty() {
+                    summary_failed
+                } else {
+                    format!("{summary_failed}: {reason}")
+                }
+            }
+        };
         let notification = SystemNotificationContent {
             operation_id: task_id.clone(),
             operation_kind: "task".to_string(),
-            status: if terminal == PartState::Completed {
-                "completed".to_string()
-            } else {
-                "failed".to_string()
-            },
-            summary: outcome
-                .as_ref()
-                .map(String::as_str)
-                .unwrap_or_else(|failure| failure.user.fallback.as_str())
-                .to_string(),
+            status: notification_status,
+            summary,
             body: match &outcome {
                 Ok(text) => format!("<result>{text}</result>"),
                 Err(failure) => failure.user.fallback.clone(),
@@ -818,5 +890,91 @@ fn empty_task_logs(task_id: &str, cursor: i64) -> BackgroundActivityLogRead {
         dropped_lines: 0,
         exit_code: None,
         completion_reason: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::mpsc;
+
+    use super::BackgroundCompletionBridge;
+    use crate::activity::ActivityRegistry;
+
+    fn bridge_with_index(entries: &[(&str, &str, i64)]) -> BackgroundCompletionBridge {
+        let (tx, _rx) = mpsc::channel(16);
+        let registry = ActivityRegistry::new(tx);
+        let bridge = BackgroundCompletionBridge::new(None, registry);
+        let mut index = bridge.index.lock().expect("background index lock");
+        for (kind, id, session_id) in entries {
+            index.insert((kind.to_string(), id.to_string()), *session_id);
+        }
+        drop(index);
+        bridge
+    }
+
+    /// The terminal settle for a process resolves the launching session through
+    /// the `(kind, id)` index. A monitored shell (`shell.run` + `monitor`)
+    /// indexes under `"monitor"` while a plain background shell uses
+    /// `"shell"`, and the terminal `ProcessSummary` does not say which — the
+    /// fallback across both kinds is what lets a monitor's natural end / stop /
+    /// timeout settle instead of leaving its part spinning forever.
+    #[tokio::test]
+    async fn resolve_across_shell_and_monitor_kinds_finds_the_monitor_entry() {
+        let bridge = bridge_with_index(&[("monitor", "proc_m", 42), ("shell", "proc_s", 7)]);
+        let resolved = bridge
+            .resolve_background_session_either(&["shell", "monitor"], "proc_m")
+            .await;
+        assert_eq!(
+            resolved,
+            Some((42, "monitor".to_string())),
+            "a monitor-indexed process resolves with the monitor kind"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_across_shell_and_monitor_kinds_prefers_the_shell_entry() {
+        let bridge = bridge_with_index(&[("monitor", "proc_m", 42), ("shell", "proc_s", 7)]);
+        let resolved = bridge
+            .resolve_background_session_either(&["shell", "monitor"], "proc_s")
+            .await;
+        assert_eq!(
+            resolved,
+            Some((7, "shell".to_string())),
+            "a shell-indexed process resolves with the shell kind"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_across_shell_and_monitor_kinds_misses_without_an_entry() {
+        let bridge = bridge_with_index(&[]);
+        let resolved = bridge
+            .resolve_background_session_either(&["shell", "monitor"], "absent")
+            .await;
+        assert_eq!(resolved, None, "no index entry means no settling session");
+    }
+
+    #[tokio::test]
+    async fn resolve_across_shell_and_monitor_kinds_retries_until_an_entry_lands() {
+        // The part's marker update is committed only when its owning run
+        // terminalizes, so a process finishing mid-turn can beat the index. The
+        // bounded retry must pick the entry up once it lands.
+        let bridge = bridge_with_index(&[]);
+        let bridge_for_insert = bridge.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let mut index = bridge_for_insert
+                .index
+                .lock()
+                .expect("background index lock");
+            index.insert(("monitor".to_string(), "proc_late".to_string()), 9);
+        });
+        let resolved = bridge
+            .resolve_background_session_either(&["shell", "monitor"], "proc_late")
+            .await;
+        assert_eq!(
+            resolved,
+            Some((9, "monitor".to_string())),
+            "a late-arriving marker is picked up by the retry loop"
+        );
     }
 }

@@ -91,7 +91,7 @@ pub(crate) fn render_delegating_section() -> String {
 
 Reach for `tasks.run` when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. Attach `skills` that match the task (for example an explore skill for exploration, a read-only review skill for review). For a single-fact lookup where you already know the file, symbol, or value, search directly. Once you have delegated a search, do not also run it yourself — wait for the result.
 
-Do small tasks yourself instead of delegating them; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; keep the number of concurrent subtasks low. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result."#
+By default `tasks.run` waits synchronously for the delegated task and returns its final result; set `run_in_background: true` to launch it in the background instead — it returns immediately and the result arrives as a `system_notification` on a later turn. Do small tasks yourself instead of delegating them; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; keep the number of concurrent subtasks low. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result."#
         .to_string()
 }
 
@@ -104,9 +104,11 @@ Do small tasks yourself instead of delegating them; do not fan out a single task
 pub(crate) fn render_background_section() -> String {
     r#"# Background execution
 
-`shell.run` with `background: true` and `tasks.run` start work that continues while the session moves on. The tool returns immediately with a handle; the work keeps running in the background. When the operation settles — completes, fails, times out, or is cancelled — you are notified with a `system_notification` message describing the outcome. The result is also written onto the operation's own transcript part.
+`shell.run` and `tasks.run` with `run_in_background: true` start work that continues while the session moves on. The tool returns immediately with a handle; the work keeps running in the background. When the operation settles — completes, fails, times out, or is cancelled — you are notified with a `system_notification` message describing the outcome. The result is also written onto the operation's own transcript part.
 
 `monitor.start` is a continuous background listener: each event is delivered as its own `system_notification` message (with a per-event sequence), so you will be notified on every event — keep working, do not poll or sleep, and do not repeatedly call `monitor.start`/`shell.list` to check for new events.
+
+`cron.create` schedules a one-shot or recurring job: it fires while the session is idle and submits its prompt as a new message, waking you again. Jobs are session-only and recurring jobs expire after seven days.
 
 Never poll: do not repeatedly call `shell.run`/`tasks.run` status or read logs just to wait for completion. After launching background work, continue with other useful work (or end your turn) and wait for the `system_notification`. When a `system_notification` arrives mid-task, act on it: incorporate the outcome into your ongoing work and report it when relevant. When it arrives after you finished a turn, pick up where you left off."#
         .to_string()
@@ -114,17 +116,19 @@ Never poll: do not repeatedly call `shell.run`/`tasks.run` status or read logs j
 
 /// Whether the available tool set can launch background work, so the
 /// `# Background execution` discipline section must be injected. Covers
-/// `shell.run` and friends, `tasks.run`, and the continuous `monitor.start`.
+/// `shell.run` and friends, `tasks.run`, the continuous `monitor.start`, and
+/// `cron.create` (a scheduled job fires later and wakes the session again).
 fn wants_background_section(tool_names: &[String]) -> bool {
     let has_tasks = tool_names.iter().any(|name| name == "tasks.run");
     let has_monitor = tool_names.iter().any(|name| name == "monitor.start");
+    let has_cron = tool_names.iter().any(|name| name == "cron.create");
     let has_shell = tool_names.iter().any(|name| {
         matches!(
             name.as_str(),
             "shell.run" | "powershell.run" | "process.run"
         )
     });
-    has_shell || has_tasks || has_monitor
+    has_shell || has_tasks || has_monitor || has_cron
 }
 
 impl SessionManager {
@@ -236,10 +240,18 @@ mod tests {
     }
 
     #[test]
+    fn delegating_section_specifies_the_background_decision_rule() {
+        let section = render_delegating_section();
+        assert!(section.contains("waits synchronously"));
+        assert!(section.contains("`run_in_background: true`"));
+        assert!(section.contains("arrives as a `system_notification` on a later turn"));
+    }
+
+    #[test]
     fn background_section_forbids_polling_and_announces_notification() {
         let section = render_background_section();
         assert!(section.contains("# Background execution"));
-        assert!(section.contains("background: true"));
+        assert!(section.contains("`run_in_background: true`"));
         assert!(section.contains("system_notification"));
         assert!(section.contains("Never poll"));
         assert!(section.contains("wait for the `system_notification`"));
@@ -254,9 +266,23 @@ mod tests {
     }
 
     #[test]
+    fn background_section_announces_cron_scheduled_jobs() {
+        let section = render_background_section();
+        assert!(section.contains("`cron.create` schedules a one-shot or recurring job"));
+        assert!(section.contains("recurring jobs expire after seven days"));
+    }
+
+    #[test]
     fn monitor_start_alone_injects_the_background_section() {
         assert!(super::wants_background_section(&["monitor.start".to_owned()]));
         assert!(!super::wants_background_section(&["monitor.stop".to_owned()]));
         assert!(!super::wants_background_section(&["read".to_owned()]));
+    }
+
+    #[test]
+    fn cron_create_injects_the_background_section() {
+        assert!(super::wants_background_section(&["cron.create".to_owned()]));
+        assert!(!super::wants_background_section(&["cron.list".to_owned()]));
+        assert!(!super::wants_background_section(&["cron.history".to_owned()]));
     }
 }

@@ -1,7 +1,6 @@
 pub mod code;
 pub mod context;
 pub mod cron;
-pub mod environment;
 pub mod fs;
 pub mod image;
 pub mod interaction;

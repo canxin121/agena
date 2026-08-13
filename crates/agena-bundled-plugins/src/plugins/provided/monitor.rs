@@ -50,7 +50,7 @@ impl MonitorPlugin {
     #[tool(
         tags(execute),
         summary = "Start a continuous background monitor.",
-        help = "Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Use monitor.stop to terminate it.",
+        help = "Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Terminate it with `monitor.stop`, or it ends when the session does.",
         mutating,
         shell,
         network(connects = ws_url_targets(input)?)

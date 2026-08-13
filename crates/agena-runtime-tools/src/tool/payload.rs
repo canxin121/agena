@@ -9,7 +9,7 @@ use crate::part::{
     CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput, CronListToolInput,
     CronUpdateToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput, GlobToolInput,
     GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput,
-    LspReferencesToolInput, ReadToolInput, ScheduleWakeupToolInput, ShellToolInput,
+    LspReferencesToolInput, ReadToolInput, ShellToolInput,
     ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput, MonitorToolInput,
 };
 use agena_domain::{
@@ -53,7 +53,6 @@ pub enum ToolPayloadInput {
     CronPause(CronJobControlToolInput),
     CronResume(CronJobControlToolInput),
     CronHistory(CronHistoryToolInput),
-    ScheduleWakeup(ScheduleWakeupToolInput),
     LspDefinition(LspDefinitionToolInput),
     LspReferences(LspReferencesToolInput),
     LspHover(LspHoverToolInput),
@@ -84,7 +83,6 @@ impl ToolPayloadInput {
             Self::CronPause(_) => "cron_pause",
             Self::CronResume(_) => "cron_resume",
             Self::CronHistory(_) => "cron_history",
-            Self::ScheduleWakeup(_) => "schedule_wakeup",
             Self::LspDefinition(_) => "lsp_definition",
             Self::LspReferences(_) => "lsp_references",
             Self::LspHover(_) => "lsp_hover",
@@ -162,7 +160,6 @@ impl ToolPayloadInput {
             ("agena", "cron", "pause") => ("cron_pause", None),
             ("agena", "cron", "resume") => ("cron_resume", None),
             ("agena", "cron", "history") => ("cron_history", None),
-            ("agena", "cron", "wakeup") => ("schedule_wakeup", None),
             ("agena", "lsp", "definition") => ("lsp_definition", None),
             ("agena", "lsp", "references") => ("lsp_references", None),
             ("agena", "lsp", "hover") => ("lsp_hover", None),
@@ -403,10 +400,6 @@ pub enum ToolPayloadOutput {
     CronHistory {
         entries: Vec<CronRunSummary>,
     },
-    ScheduleWakeup {
-        id: String,
-        next_fire_at: String,
-    },
     LspDefinition {
         locations: Vec<String>,
     },
@@ -574,12 +567,6 @@ const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
         "agena_cron_history",
     ),
     (
-        "schedule_wakeup",
-        "cron.wakeup",
-        "agena.cron.wakeup",
-        "agena_cron_wakeup",
-    ),
-    (
         "lsp_definition",
         "lsp.definition",
         "agena.lsp.definition",
@@ -636,7 +623,6 @@ fn is_payload_variant_tag(name: &str) -> bool {
             | "cron_pause"
             | "cron_resume"
             | "cron_history"
-            | "schedule_wakeup"
             | "lsp_definition"
             | "lsp_references"
             | "lsp_hover"
@@ -700,7 +686,6 @@ fn invocation_name_for_payload_tool(
         "cron_pause" => canonical_registry_tool_name("agena.cron", "pause"),
         "cron_resume" => canonical_registry_tool_name("agena.cron", "resume"),
         "cron_history" => canonical_registry_tool_name("agena.cron", "history"),
-        "schedule_wakeup" => canonical_registry_tool_name("agena.cron", "wakeup"),
         "enter_snapshot" => {
             let name = input
                 .remove("name")
@@ -1129,10 +1114,6 @@ mod tests {
             ("cron.pause", "cron_pause"),
             ("cron.resume", "cron_resume"),
             ("cron.history", "cron_history"),
-            ("cron.wakeup", "schedule_wakeup"),
-            ("agena.cron.wakeup", "schedule_wakeup"),
-            ("agena_cron_wakeup", "schedule_wakeup"),
-            ("schedule_wakeup", "schedule_wakeup"),
             // lsp family
             ("lsp.definition", "lsp_definition"),
             ("agena.lsp.definition", "lsp_definition"),
@@ -1169,7 +1150,6 @@ mod tests {
             ("snapshot.exit", "exit_snapshot"),
             ("cron.create", "cron_create"),
             ("cron.list", "cron_list"),
-            ("cron.wakeup", "schedule_wakeup"),
             ("lsp.definition", "lsp_definition"),
             ("lsp.diagnostics", "lsp_diagnostics"),
             ("shell.run", "shell"),

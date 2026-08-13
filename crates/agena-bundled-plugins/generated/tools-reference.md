@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **25 plugins and 146 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **24 plugins and 142 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, concurrency / streaming / strict runtime flags, examples, an input parameter table, and the full input / output JSON Schema.
 - The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
@@ -18,8 +18,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.claude`](#agenaclaude) — Anthropic Claude server and client tools exposed as ordinary Agena tools. (11 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (2 tools)
 - [`agena.context`](#agenacontext) — Safe context-window budget, model identity, and compaction status. (2 tools)
-- [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (8 tools)
-- [`agena.environment`](#agenaenvironment) — Wait for filesystem, TCP, or HTTP environment readiness. (1 tools)
+- [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (9 tools)
 - [`agena.gemini`](#agenagemini) — Google Gemini Interactions and image capabilities exposed as ordinary Agena tools. (11 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
@@ -36,7 +35,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.shell`](#agenashell) — Shell command execution and background process tools. (4 tools)
 - [`agena.skills`](#agenaskills) — Discover and read plain-text skills and slash commands. (7 tools)
 - [`agena.snapshot`](#agenasnapshot) — Managed snapshot tools backed by Rift or git worktree. (3 tools)
-- [`agena.tasks`](#agenatasks) — Delegated subtask orchestration tools. (9 tools)
+- [`agena.tasks`](#agenatasks) — Delegated subtask orchestration tools. (7 tools)
 - [`agena.tools`](#agenatools) — Tool API discovery functions. The runtime resolves tools_call directly to its execution target. (7 tools)
 - [`agena.web`](#agenaweb) — Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering. (13 tools)
 
@@ -3136,7 +3135,7 @@ Safe context-window budget, model identity, and compaction status.
 
 ## agena.cron
 
-**Version** `0.1.0` · **Tools** 8
+**Version** `0.1.0` · **Tools** 7
 
 Cron-style and one-shot wakeup scheduling tools.
 
@@ -3147,6 +3146,9 @@ Cron-style and one-shot wakeup scheduling tools.
 **Tags**: `mutate` `scheduler`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Schedule a one-shot or recurring job with a standard 5-field cron expression (minute hour day-of-month month day-of-week). The job fires while the session is idle and submits its prompt as a new user message, waking you again; never use it to poll. Jobs are session-only and recurring jobs auto-expire after seven days. When the exact time does not matter, pick a minute that is not :00 or :30 to avoid clumping.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -3260,6 +3262,9 @@ Cron-style and one-shot wakeup scheduling tools.
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
+**Help**:
+> Permanently remove a scheduled job from this session. Deleting stops future firings immediately.
+
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -3290,6 +3295,9 @@ Cron-style and one-shot wakeup scheduling tools.
 **Tags**: `query` `scheduler`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Read the bounded delivery history (fire times, outcome, last error) for scheduled jobs. Never poll this waiting for a job to fire — the firing itself submits a new message and wakes you.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -3332,6 +3340,9 @@ Cron-style and one-shot wakeup scheduling tools.
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
+**Help**:
+> List every scheduled job registered in this session. Jobs are session-only — they exist for this session's lifetime and are gone when it ends — and recurring jobs auto-expire after seven days. Use this to review schedules you created; never poll it waiting for a job to fire.
+
 **Input schema**:
 ```json
 {
@@ -3348,6 +3359,9 @@ Cron-style and one-shot wakeup scheduling tools.
 **Tags**: `mutate` `scheduler`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Temporarily suspend a job's future firings while keeping its definition. Use resume to start it again.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -3380,6 +3394,9 @@ Cron-style and one-shot wakeup scheduling tools.
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
+**Help**:
+> Re-enable a job that was paused so its future firings happen again.
+
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -3410,6 +3427,9 @@ Cron-style and one-shot wakeup scheduling tools.
 **Tags**: `mutate` `scheduler`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+
+**Help**:
+> Change the prompt or cron parameters of an existing job. The updated schedule takes effect for subsequent firings.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -3530,189 +3550,6 @@ Cron-style and one-shot wakeup scheduling tools.
   },
   "required": [
     "id"
-  ],
-  "type": "object"
-}
-```
-
-### wakeup
-
-`agena.cron.wakeup` · **Summary**: Create one one-shot wakeup.
-
-**Tags**: `mutate` `scheduler`
-
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `delay_seconds` | `integer` | ✓ | — |  |
-| `prompt` | `string` | ✓ | — |  |
-| `reason` | `string / null` | — | — | Short reason logged for diagnostics / shown back to the user. |
-
-**Input schema**:
-```json
-{
-  "description": "Input of the schedule wakeup tool.",
-  "properties": {
-    "delay_seconds": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000000"
-    },
-    "prompt": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000001"
-    },
-    "reason": {
-      "description": "Short reason logged for diagnostics / shown back to the user.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    }
-  },
-  "required": [
-    "delay_seconds",
-    "prompt"
-  ],
-  "type": "object"
-}
-```
-
-## agena.environment
-
-**Version** `0.1.0` · **Tools** 1
-
-Wait for filesystem, TCP, or HTTP environment readiness.
-
-### wait
-
-`agena.environment.wait` · **Summary**: Wait until a path, TCP endpoint, or HTTP health check is ready.
-
-**Tags**: `query` `filesystem` `network`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `condition` | `WaitCondition` | ✓ | — |  |
-| `interval_ms` | `integer` | — | `500` |  |
-| `timeout_ms` | `integer` | — | `60000` |  |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "WaitCondition": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "kind": {
-              "const": "path",
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "path"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "host": {
-              "type": "string"
-            },
-            "kind": {
-              "const": "tcp",
-              "type": "string"
-            },
-            "port": {
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
-              "type": "integer"
-            }
-          },
-          "required": [
-            "kind",
-            "host",
-            "port"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "contains": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "expected_status": {
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "kind": {
-              "const": "http",
-              "type": "string"
-            },
-            "url": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "url"
-          ],
-          "type": "object"
-        }
-      ],
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000000"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "condition": {
-      "$ref": "#/$defs/WaitCondition"
-    },
-    "interval_ms": {
-      "default": 500,
-      "format": "uint64",
-      "maximum": 30000,
-      "minimum": 50,
-      "type": "integer",
-      "x-agena-order": "000002"
-    },
-    "timeout_ms": {
-      "default": 60000,
-      "format": "uint64",
-      "maximum": 600000,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "condition"
   ],
   "type": "object"
 }
@@ -6095,7 +5932,7 @@ Continuous-stream background monitoring tools.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Use monitor.stop to terminate it.
+> Start a continuous background monitor. Pass exactly one of `command` (a long-running shell command, e.g. `tail -f`) or `ws` (a WebSocket endpoint; text frames become events). The monitor starts immediately and returns a `monitor_id`. You will be notified with a `system_notification` on each event — keep working, do not poll or sleep. Terminate it with `monitor.stop`, or it ends when the session does.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7577,17 +7414,17 @@ Shell command execution and background process tools.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Run one shell process. Always pass the required `reads` and `writes` path arrays declaring every file or directory the command reads or modifies - empty arrays `[]` when the command touches only its executables (never list the executables). Pass the `network` array of outbound targets (host names, `host:port`, or URLs) the command may connect to - empty array `[]` when none. Set `background = true` to keep the process attached to the session. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop. Background launches return immediately; you will be notified with a `system_notification` when the process settles — do not poll shell.list/logs waiting for it.
+> Run one shell process. Always pass the required `reads` and `writes` path arrays declaring every file or directory the command reads or modifies - empty arrays `[]` when the command touches only its executables (never list the executables). Pass the `network` array of outbound targets (host names, `host:port`, or URLs) the command may connect to - empty array `[]` when none. Set `run_in_background = true` to keep the process attached to the session; you will be notified when it completes — do not poll. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop. Background launches return immediately; you will be notified with a `system_notification` when the process settles — do not poll shell.list/logs waiting for it.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `background` | `boolean` | — | `false` |  |
 | `command` | `string` | ✓ | — |  |
 | `description` | `string` | — | `` |  |
 | `monitor` | `ShellMonitorInput / null` | — | — |  |
 | `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
 | `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
+| `run_in_background` | `boolean` | — | `false` |  |
 | `shell` | `ProcessShell` | — | `bash` |  |
 | `timeout_ms` | `integer / null` | — | — |  |
 | `workdir` | `string / null` | — | — |  |
@@ -7683,11 +7520,6 @@ Shell command execution and background process tools.
   "additionalProperties": false,
   "description": "Input of a shell command execution.",
   "properties": {
-    "background": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000002"
-    },
     "command": {
       "minLength": 1,
       "type": "string",
@@ -7736,6 +7568,14 @@ Shell command execution and background process tools.
       },
       "type": "array",
       "x-agena-order": "000001.000004"
+    },
+    "run_in_background": {
+      "default": false,
+      "type": "boolean",
+      "x-agena-aliases": [
+        "background"
+      ],
+      "x-agena-order": "000002"
     },
     "shell": {
       "$ref": "#/$defs/ProcessShell",
@@ -8220,7 +8060,7 @@ Managed snapshot tools backed by Rift or git worktree.
 
 ## agena.tasks
 
-**Version** `0.1.0` · **Tools** 9
+**Version** `0.1.0` · **Tools** 7
 
 Delegated subtask orchestration tools.
 
@@ -8250,184 +8090,6 @@ Delegated subtask orchestration tools.
   },
   "required": [
     "task_id"
-  ],
-  "type": "object"
-}
-```
-
-### create
-
-`agena.tasks.create` · **Summary**: Create a delegated subagent task in the background. Attach Skill names in `skills` so the child session applies them as task guidance.
-
-**Tags**: `subtask` `mutate`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
-
-**Help**:
-> Creates a delegated background task. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills. The task runs in the background and returns immediately; you will be notified with a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `access` | `TaskAccess` | — | `inherit` | Hard capability boundary for this delegated Agena instance. |
-| `description` | `string` | ✓ | — | Short label for the subtask session. |
-| `max_cost_microusd` | `integer / null` | — | — | Cumulative child-completion cost ceiling in USD micro-units (one<br>millionth of a USD). Integer micro-units avoid a floating-point value<br>becoming a durable budget boundary; for example, 250000 means $0.25. |
-| `max_tokens` | `integer / null` | — | — | Cumulative child-completion token budget. This includes prompt,<br>output, reasoning and cache token accounting reported by the route. |
-| `prompt` | `string` | ✓ | — | Full instruction payload for the delegated subtask. |
-| `selection` | `TaskModelSelection / null` | — | — | Optional model and mode overrides. Explicit values take precedence over<br>the parent session. |
-| `skills` | `array<string>` | — | — | Optional Skill names or aliases to attach to the delegated subtask's<br>first user message as immutable Skill references. The child session<br>receives the resolved Skill instructions as task guidance and should<br>apply them while completing the task. Use skills appropriate to the<br>task: for example a read-only review task can attach a review/read-only<br>skill, an exploration task can attach an explore skill. Unknown names<br>or aliases are rejected before the subtask starts. |
-| `task_id` | `string / null` | — | — | Resume an existing subtask session instead of creating a new one. |
-| `timeout_ms` | `integer / null` | — | — | Overall task timeout. A timeout cancels the child execution and returns<br>a structured `timed_out` task result. |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "TaskAccess": {
-      "description": "Hard capability boundary for this delegated Agena instance.",
-      "enum": [
-        "inherit",
-        "read_only"
-      ],
-      "type": "string",
-      "x-agena-order": "000002"
-    },
-    "TaskModelSelection": {
-      "additionalProperties": false,
-      "description": "Optional provider/model selection overrides for a delegated task.",
-      "properties": {
-        "adapter": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "parallel_tool_calls": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "provider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "speed_mode": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "thinking_mode": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "verbosity": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    }
-  },
-  "additionalProperties": false,
-  "description": "Input of the task tool.",
-  "properties": {
-    "access": {
-      "$ref": "#/$defs/TaskAccess",
-      "default": "inherit",
-      "description": "Hard capability boundary for this delegated Agena instance."
-    },
-    "description": {
-      "description": "Short label for the subtask session.",
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    },
-    "max_cost_microusd": {
-      "description": "Cumulative child-completion cost ceiling in USD micro-units (one\nmillionth of a USD). Integer micro-units avoid a floating-point value\nbecoming a durable budget boundary; for example, 250000 means $0.25.",
-      "format": "uint64",
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000008"
-    },
-    "max_tokens": {
-      "description": "Cumulative child-completion token budget. This includes prompt,\noutput, reasoning and cache token accounting reported by the route.",
-      "format": "uint64",
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000007"
-    },
-    "prompt": {
-      "description": "Full instruction payload for the delegated subtask.",
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000001"
-    },
-    "selection": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/TaskModelSelection"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Optional model and mode overrides. Explicit values take precedence over\nthe parent session.",
-      "x-agena-order": "000005"
-    },
-    "skills": {
-      "description": "Optional Skill names or aliases to attach to the delegated subtask's\nfirst user message as immutable Skill references. The child session\nreceives the resolved Skill instructions as task guidance and should\napply them while completing the task. Use skills appropriate to the\ntask: for example a read-only review task can attach a review/read-only\nskill, an exploration task can attach an explore skill. Unknown names\nor aliases are rejected before the subtask starts.",
-      "items": {
-        "type": "string"
-      },
-      "type": [
-        "array",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "task_id": {
-      "description": "Resume an existing subtask session instead of creating a new one.",
-      "minLength": 1,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "timeout_ms": {
-      "description": "Overall task timeout. A timeout cancels the child execution and returns\na structured `timed_out` task result.",
-      "format": "uint64",
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    }
-  },
-  "required": [
-    "description",
-    "prompt"
   ],
   "type": "object"
 }
@@ -8650,14 +8312,14 @@ Delegated subtask orchestration tools.
 
 ### run
 
-`agena.tasks.run` · **Summary**: Create or resume a delegated subagent task. Attach Skill names in `skills` so the child session applies them as task guidance.
+`agena.tasks.run` · **Summary**: Delegate a bounded task to a subagent session. Set `run_in_background` to run it in the background and be notified when it settles. Attach Skill names in `skills` so the child session applies them as task guidance.
 
 **Tags**: `subtask` `execute`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Reach for this tool when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Delegates a bounded task to a subagent session. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.
+> Reach for this tool when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills. By default the subtask runs inline and this call returns its final result before returning. With `run_in_background: true` the subtask runs in the background: the tool returns immediately with a task id and the result is delivered as a `system_notification` when it settles — do not poll tasks.get/tasks.output waiting for it.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8667,6 +8329,7 @@ Delegated subtask orchestration tools.
 | `max_cost_microusd` | `integer / null` | — | — | Cumulative child-completion cost ceiling in USD micro-units (one<br>millionth of a USD). Integer micro-units avoid a floating-point value<br>becoming a durable budget boundary; for example, 250000 means $0.25. |
 | `max_tokens` | `integer / null` | — | — | Cumulative child-completion token budget. This includes prompt,<br>output, reasoning and cache token accounting reported by the route. |
 | `prompt` | `string` | ✓ | — | Full instruction payload for the delegated subtask. |
+| `run_in_background` | `boolean` | — | `false` | Run the subtask in the background (default false). When false (default)<br>the subtask runs inline and this call returns its final result before<br>the tool call returns. When true, the tool returns immediately with a<br>task id and the result is delivered as a `system_notification` when the<br>subtask settles — do not poll tasks.get/tasks.output waiting for it. |
 | `selection` | `TaskModelSelection / null` | — | — | Optional model and mode overrides. Explicit values take precedence over<br>the parent session. |
 | `skills` | `array<string>` | — | — | Optional Skill names or aliases to attach to the delegated subtask's<br>first user message as immutable Skill references. The child session<br>receives the resolved Skill instructions as task guidance and should<br>apply them while completing the task. Use skills appropriate to the<br>task: for example a read-only review task can attach a review/read-only<br>skill, an exploration task can attach an explore skill. Unknown names<br>or aliases are rejected before the subtask starts. |
 | `task_id` | `string / null` | — | — | Resume an existing subtask session instead of creating a new one. |
@@ -8757,7 +8420,7 @@ Delegated subtask orchestration tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000008"
+      "x-agena-order": "000009"
     },
     "max_tokens": {
       "description": "Cumulative child-completion token budget. This includes prompt,\noutput, reasoning and cache token accounting reported by the route.",
@@ -8767,13 +8430,22 @@ Delegated subtask orchestration tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000007"
+      "x-agena-order": "000008"
     },
     "prompt": {
       "description": "Full instruction payload for the delegated subtask.",
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000001"
+    },
+    "run_in_background": {
+      "default": false,
+      "description": "Run the subtask in the background (default false). When false (default)\nthe subtask runs inline and this call returns its final result before\nthe tool call returns. When true, the tool returns immediately with a\ntask id and the result is delivered as a `system_notification` when the\nsubtask settles — do not poll tasks.get/tasks.output waiting for it.",
+      "type": "boolean",
+      "x-agena-aliases": [
+        "background"
+      ],
+      "x-agena-order": "000003"
     },
     "selection": {
       "anyOf": [
@@ -8785,7 +8457,7 @@ Delegated subtask orchestration tools.
         }
       ],
       "description": "Optional model and mode overrides. Explicit values take precedence over\nthe parent session.",
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     },
     "skills": {
       "description": "Optional Skill names or aliases to attach to the delegated subtask's\nfirst user message as immutable Skill references. The child session\nreceives the resolved Skill instructions as task guidance and should\napply them while completing the task. Use skills appropriate to the\ntask: for example a read-only review task can attach a review/read-only\nskill, an exploration task can attach an explore skill. Unknown names\nor aliases are rejected before the subtask starts.",
@@ -8796,7 +8468,7 @@ Delegated subtask orchestration tools.
         "array",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "task_id": {
       "description": "Resume an existing subtask session instead of creating a new one.",
@@ -8805,7 +8477,7 @@ Delegated subtask orchestration tools.
         "string",
         "null"
       ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     },
     "timeout_ms": {
       "description": "Overall task timeout. A timeout cancels the child execution and returns\na structured `timed_out` task result.",
@@ -8815,72 +8487,12 @@ Delegated subtask orchestration tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000006"
+      "x-agena-order": "000007"
     }
   },
   "required": [
     "description",
     "prompt"
-  ],
-  "type": "object"
-}
-```
-
-### wait
-
-`agena.tasks.wait` · **Summary**: Wait for any or all delegated tasks to finish.
-
-**Tags**: `subtask` `query`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `mode` | `TaskWaitMode` | — | `all` |  |
-| `task_ids` | `array<string>` | ✓ | — |  |
-| `timeout_ms` | `integer` | — | `30000` |  |
-
-**Input schema**:
-```json
-{
-  "$defs": {
-    "TaskWaitMode": {
-      "enum": [
-        "any",
-        "all"
-      ],
-      "type": "string",
-      "x-agena-order": "000001"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "mode": {
-      "$ref": "#/$defs/TaskWaitMode",
-      "default": "all"
-    },
-    "task_ids": {
-      "items": {
-        "minLength": 1,
-        "type": "string"
-      },
-      "maxItems": 64,
-      "minItems": 1,
-      "type": "array",
-      "x-agena-order": "000000"
-    },
-    "timeout_ms": {
-      "default": 30000,
-      "format": "uint64",
-      "maximum": 60000,
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000002"
-    }
-  },
-  "required": [
-    "task_ids"
   ],
   "type": "object"
 }

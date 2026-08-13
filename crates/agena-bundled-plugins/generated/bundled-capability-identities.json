@@ -1,10 +1,10 @@
 {
   "counts": {
     "bundled_skills": 14,
-    "execution_tools": 142,
+    "execution_tools": 138,
     "gateway_tools": 4,
-    "plugins": 25,
-    "tools": 146
+    "plugins": 24,
+    "tools": 142
   },
   "plugins": [
     {
@@ -532,42 +532,6 @@
           "tags": [
             "mutate",
             "scheduler"
-          ]
-        },
-        {
-          "canonical_name": "agena.cron.wakeup",
-          "conditional": null,
-          "definition_identity": "5d4c2420404f929f19204e6f6ce9596e1bd4fe9d230a2412177689b43011aa38",
-          "gateway": false,
-          "input_schema_sha256": "f51d24de212fcc590214ed3ed509d7ae12194e66c1b81ccc09a4cd7c822403eb",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "mutate",
-            "scheduler"
-          ]
-        }
-      ],
-      "version": "0.1.0"
-    },
-    {
-      "conditional": null,
-      "hooks": [
-        "init",
-        "tool.invoke"
-      ],
-      "id": "agena.environment",
-      "tools": [
-        {
-          "canonical_name": "agena.environment.wait",
-          "conditional": null,
-          "definition_identity": "9aa6586551b01b093920b1b54b31bccaf355097b56401cae219d4b9b5d2ce57f",
-          "gateway": false,
-          "input_schema_sha256": "b3d89f70dfdfd4a12ce38c0372440a75acdb2380b009e72c7cf1fb02da5a6575",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "query",
-            "filesystem",
-            "network"
           ]
         }
       ],
@@ -1522,9 +1486,9 @@
         {
           "canonical_name": "agena.shell.run",
           "conditional": null,
-          "definition_identity": "ba6e268014cff4e8042bcde43cf3696aae9c11050e11dc583151a4c3862be555",
+          "definition_identity": "c24e2b86a5184a98416646173d3708b809ab8eb1d436fa142063a3fec36dd019",
           "gateway": false,
-          "input_schema_sha256": "6f33c70896cb243bd30cbfe259854e084772b46595795b447d1284066418d29c",
+          "input_schema_sha256": "332908e4df7ad384fd204e8731b416c97a71518e0889bf02e8b54f6314517c54",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "execute"
@@ -1710,18 +1674,6 @@
           ]
         },
         {
-          "canonical_name": "agena.tasks.create",
-          "conditional": null,
-          "definition_identity": "26ef3f0c1e08951d342f9e1704ffdeda80b238bee079d4313af096c211969ba2",
-          "gateway": false,
-          "input_schema_sha256": "eac4d13ee273c7e3ca43c12f518cff213ed6d4a494723d4e1fde79db81a22c29",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "subtask",
-            "mutate"
-          ]
-        },
-        {
           "canonical_name": "agena.tasks.followup",
           "conditional": null,
           "definition_identity": "f1cecea5ca3777c59537b836099d428f6db6b5701eec165336f4f44e74d1b678",
@@ -1785,25 +1737,13 @@
         {
           "canonical_name": "agena.tasks.run",
           "conditional": null,
-          "definition_identity": "f035d718f179e028f7440b22e2ee2713fdc9d50324c2fc94ee289ba31903523f",
+          "definition_identity": "b8a950171227701624830d042692ddc33a20af535df845812092eb6187b79d7f",
           "gateway": false,
-          "input_schema_sha256": "eac4d13ee273c7e3ca43c12f518cff213ed6d4a494723d4e1fde79db81a22c29",
+          "input_schema_sha256": "00aca83f4774acdf3a375776de031ff01663dc736ce8628fb1d967806f25924e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "subtask",
             "execute"
-          ]
-        },
-        {
-          "canonical_name": "agena.tasks.wait",
-          "conditional": null,
-          "definition_identity": "9746e66f98588f883805f080c39414434aa5f776034224b594eb038a69cef6a8",
-          "gateway": false,
-          "input_schema_sha256": "4a7e0505883550bbd78d205e5aa034d4ea30d2a871645aa2831078c02e82992f",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "subtask",
-            "query"
           ]
         }
       ],

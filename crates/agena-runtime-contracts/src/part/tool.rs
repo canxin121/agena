@@ -277,6 +277,13 @@ pub struct TaskToolInput {
     /// Hard capability boundary for this delegated Agena instance.
     #[serde(default)]
     pub access: TaskAccess,
+    /// Run the subtask in the background (default false). When false (default)
+    /// the subtask runs inline and this call returns its final result before
+    /// the tool call returns. When true, the tool returns immediately with a
+    /// task id and the result is delivered as a `system_notification` when the
+    /// subtask settles — do not poll tasks.get/tasks.output waiting for it.
+    #[serde(default, rename = "run_in_background", alias = "background")]
+    pub run_in_background: bool,
     /// Optional Skill names or aliases to attach to the delegated subtask's
     /// first user message as immutable Skill references. The child session
     /// receives the resolved Skill instructions as task guidance and should
@@ -335,7 +342,7 @@ pub struct ToolSearchToolInput {
 #[serde(tag = "action", rename_all = "snake_case")]
 /// Input of the shell tool.
 pub enum ShellToolInput {
-    /// Run one process. Set `background = true` to keep it attached to the session.
+    /// Run one process. Set `run_in_background = true` to keep it attached to the session.
     #[input(non_empty("command"))]
     Run {
         #[serde(default)]
@@ -343,10 +350,10 @@ pub enum ShellToolInput {
         #[serde(flatten)]
         command: Box<ShellCommandInput>,
         /// If true, keep the process attached to the session and return a process id.
-        #[serde(default)]
-        background: bool,
+        #[serde(default, rename = "run_in_background", alias = "background")]
+        run_in_background: bool,
         /// Optional monitor conditions. When present, the invocation is always
-        /// managed as a background process regardless of `background`.
+        /// managed as a background process regardless of `run_in_background`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         monitor: Option<ShellMonitorInput>,
     },
@@ -668,17 +675,6 @@ impl Default for CronHistoryToolInput {
             limit: default_cron_history_limit(),
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(trim("prompt", "reason"), non_empty("prompt"))]
-/// Input of the schedule wakeup tool.
-pub struct ScheduleWakeupToolInput {
-    pub delay_seconds: u32,
-    pub prompt: String,
-    /// Short reason logged for diagnostics / shown back to the user.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]

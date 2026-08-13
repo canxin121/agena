@@ -220,8 +220,8 @@ mod tests {
     fn asking_section_embeds_contract_and_carries_red_line() {
         let section = render_asking_section();
         assert!(section.contains("# Asking the user"));
-        assert!(section.contains("genuinely the user's to make"));
         assert!(section.contains("interaction.ask"));
+        assert!(section.contains("genuinely the user's to make"));
         assert!(section.contains("\"questions\""));
         assert!(section.contains("without first running `tools_search` or `tools_help`"));
         assert!(section.contains("your turn suspends"));

@@ -47,10 +47,18 @@ While the current plan is in the `planning` phase, mutating tools are blocked by
 }
 
 /// Ask decision semantics injected when `agena.interaction.ask` is available.
+///
+/// The ask tool's name is given directly (it lives behind the discovery
+/// layer), so the model knows it exists without searching; its live contract
+/// is still read with `tools_help` like any other tool.
 pub(crate) fn render_asking_section() -> String {
     r#"# Asking the user
 
-Use `ask` only when you are blocked on a decision that is genuinely the user's to make: a preference, a direction choice, or a decision with no reasonable default. If a sensible default exists or you can verify the answer yourself, proceed instead of asking. When you do ask, ask all necessary clarifying questions at once. Never use `ask` to ask whether you should proceed or to seek plan approval."#
+`interaction.ask` asks the user for short structured input when a decision is genuinely the user's to make: a preference, a direction choice, a decision with no reasonable default, or requirements so ambiguous that guessing could waste real work. Its name is given here so you need not search for it — go straight to `tools_help` for its contract, then call it through `tools_call`.
+
+Prefer asking up front, before doing work a wrong guess would redo; mid-task, ask at a genuine fork instead of guessing. When you do ask, ask all necessary clarifying questions at once. While the user answers, your turn suspends; it resumes with their answers as a tool result and your working state preserved, so continue the same task.
+
+Proceed without asking when a sensible default exists, when you can verify the answer yourself, or when the choice is small and reversible. Never use `interaction.ask` to ask whether you should proceed or to seek plan approval — that is `plan.review`'s job."#
         .to_string()
 }
 
@@ -171,11 +179,14 @@ mod tests {
     }
 
     #[test]
-    fn asking_section_carries_red_line() {
+    fn asking_section_names_tool_and_carries_red_line() {
         let section = render_asking_section();
         assert!(section.contains("# Asking the user"));
+        assert!(section.contains("interaction.ask"));
         assert!(section.contains("genuinely the user's to make"));
-        assert!(section.contains("Never use `ask`"));
+        assert!(section.contains("go straight to `tools_help`"));
+        assert!(section.contains("your turn suspends"));
+        assert!(section.contains("Never use `interaction.ask`"));
     }
 
     #[test]

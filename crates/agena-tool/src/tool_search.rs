@@ -56,6 +56,12 @@ impl AsRef<str> for SearchCandidate<'_> {
 /// full-text index per request costs much more than matching the candidates
 /// directly. Nucleo handles Unicode normalization, case folding, tokenized
 /// query patterns, typo-like subsequences, and deterministic score ordering.
+///
+/// When the query names a complete tool (`monitor.start`), the exact-name
+/// match is hoisted ahead of every fuzzy match: a tool the caller already
+/// identified by name must land on the first page regardless of how many
+/// loosely-matching tools dilute the fuzzy ranking, or the caller concludes —
+/// wrongly — that the tool does not exist.
 pub fn search_tools(
     documents: &[ToolSearchDocument],
     query: &str,
@@ -66,16 +72,7 @@ pub fn search_tools(
         return Vec::new();
     }
 
-    let normalized_query = query
-        .chars()
-        .map(|character| {
-            if character.is_alphanumeric() || character.is_whitespace() {
-                character
-            } else {
-                ' '
-            }
-        })
-        .collect::<String>();
+    let normalized_query = normalize_search_text(query);
     let pattern = Pattern::new(
         normalized_query.as_str(),
         CaseMatching::Ignore,
@@ -86,12 +83,44 @@ pub fn search_tools(
         .iter()
         .map(|document| SearchCandidate { document });
     let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
-    pattern
+    let mut matched = pattern
         .match_list(candidates, &mut matcher)
         .into_iter()
-        .take(limit)
         .map(|(candidate, _score)| candidate.document.clone())
-        .collect()
+        .collect::<Vec<_>>();
+
+    // Hoist exact tool-name hits above the fuzzy ranking.
+    let mut exact = Vec::new();
+    matched.retain(|document| {
+        if normalize_search_text(&document.name) == normalized_query {
+            exact.push(document.clone());
+            false
+        } else {
+            true
+        }
+    });
+    exact.extend(matched);
+    exact.into_iter().take(limit).collect()
+}
+
+/// The search space's punctuation-to-space normalization, so an exact-name
+/// comparison and the fuzzy query normalization stay in the same form.
+/// Case-insensitive and whitespace-collapsed: `monitor.start`, `Monitor.Start`
+/// and `monitor . start` all compare equal.
+fn normalize_search_text(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_alphanumeric() || character.is_whitespace() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -184,5 +213,78 @@ mod tests {
         ];
 
         assert_eq!(search_tools(&docs, "background", 2).len(), 2);
+    }
+
+    #[test]
+    fn exact_tool_name_ranks_first_even_when_many_tools_dilute_the_match() {
+        // A catalog where dozens of tools mention "monitor" loosely, so a pure
+        // fuzzy ranking buries the exact-name hit past the first page.
+        let mut docs = Vec::new();
+        for index in 0..30 {
+            docs.push(doc(
+                &format!("service.monitor{}", index),
+                "monitoring heartbeat metrics stream watch log tail",
+                &["monitor"],
+            ));
+        }
+        docs.push(doc("monitor.start", "Start a continuous background monitor", &["monitor"]));
+        docs.push(doc("monitor.stop", "Stop one background monitor", &["monitor"]));
+        docs.push(doc(
+            "session.rename",
+            "Rename the current session",
+            &["session"],
+        ));
+
+        let results = search_tools(&docs, "monitor.start", 8);
+        assert_eq!(
+            results.first().map(|doc| doc.name.as_str()),
+            Some("monitor.start"),
+            "the exact tool name must land on the first page"
+        );
+        assert!(results.contains(&doc("monitor.stop", "Stop one background monitor", &["monitor"])));
+        // Non-matching tools never appear, exact hoist or not.
+        assert!(!results
+            .iter()
+            .any(|doc| doc.name == "session.rename"));
+    }
+
+    #[test]
+    fn exact_name_match_is_case_and_punctuation_insensitive() {
+        let docs = vec![
+            doc("monitor.start", "Start a continuous background monitor", &[]),
+            doc("monitor.state", "Report monitor state", &[]),
+        ];
+
+        for query in ["Monitor.Start", "monitor . start", "MONITOR.START"] {
+            let results = search_tools(&docs, query, 2);
+            assert_eq!(
+                results.first().map(|doc| doc.name.as_str()),
+                Some("monitor.start"),
+                "query {query:?} must hoist the exact-name hit"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_hoist_only_promotes_a_tool_with_the_query_as_its_full_name() {
+        let docs = vec![
+            doc("monitor.start", "Start a continuous background monitor", &[]),
+            doc("monitor.startup", "Inspect process startup", &[]),
+            doc("shell.run", "Run a shell command", &[]),
+        ];
+
+        // `monitor.startup` is a different tool: its name is not the query, so
+        // the exact-name hoist must not claim it; fuzzy ranking still leads
+        // with the closest name.
+        let results = search_tools(&docs, "monitor.start", 3);
+        assert_eq!(
+            results.first().map(|doc| doc.name.as_str()),
+            Some("monitor.start")
+        );
+        // The hoist only reorders; it never invents a result that does not
+        // match at all.
+        assert!(!results
+            .iter()
+            .any(|doc| doc.name == "shell.run"));
     }
 }

@@ -77,12 +77,24 @@ pub(crate) fn append_rendered_part_node(
     i18n: &I18n,
     defaults: &TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
-    interactions: &std::collections::BTreeMap<String, crate::interaction_view::PendingInteractionView>,
+    interactions: &std::collections::BTreeMap<
+        String,
+        crate::interaction_view::PendingInteractionView,
+    >,
 ) {
     // Like Markdown blocks, non-text parts start after the message header so
     // selecting the first activity part never highlights `assistant`.
     let start_line = lines.len();
-    let node = render_part_node(message, part, width, lines, i18n, defaults, expansions, interactions);
+    let node = render_part_node(
+        message,
+        part,
+        width,
+        lines,
+        i18n,
+        defaults,
+        expansions,
+        interactions,
+    );
     if lines.len() > start_line {
         let end_line = node.end_line.unwrap_or(lines.len());
         let atomic = node.kind.uses_atomic_navigation()
@@ -153,6 +165,10 @@ pub(crate) fn activity_kind_id_for_part(part: &TranscriptEntryPart) -> Option<&'
             TranscriptActivityContent::Hook(_) => Some(agena_domain::ACTIVITY_KIND_HOOK),
             TranscriptActivityContent::Request(_) => Some(agena_domain::ACTIVITY_KIND_INTERACTION),
             TranscriptActivityContent::TextSegment(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
+            // The answer defaults to expanded independently of the global
+            // activity default; resolve kind overrides as usual so a user may
+            // still collapse assistant answers globally if they choose.
+            TranscriptActivityContent::Answer(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
             TranscriptActivityContent::Canonical(payload) => activity_kind_id_for_payload(payload),
             TranscriptActivityContent::AssistantReplyLifecycle(_) => None,
         },
@@ -1155,7 +1171,10 @@ pub(crate) fn render_part_node(
     i18n: &I18n,
     defaults: &TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
-    interactions: &std::collections::BTreeMap<String, crate::interaction_view::PendingInteractionView>,
+    interactions: &std::collections::BTreeMap<
+        String,
+        crate::interaction_view::PendingInteractionView,
+    >,
 ) -> RenderedNodeDraft {
     match transcript_part_content(part) {
         TranscriptPartContent::UserDocument(document) => {
@@ -1205,6 +1224,64 @@ pub(crate) fn render_part_node(
                 defaults,
                 expansions,
             )
+        }
+        // The final reply text is a part that defaults to expanded: it reads
+        // as a normal assistant answer on arrival (headline + full Markdown
+        // body), but the user may collapse or expand it like any other
+        // activity part. Interstitial TextSegments render through the
+        // canonical path and stay collapsed; the answer is its own toggleable
+        // node so it is never folded with the working notes. Like canonical
+        // activities, the node owns only its headline range and the body is a
+        // child section, so selection and navigation match every other block.
+        TranscriptPartContent::Activity(TranscriptActivityContent::Answer(answer)) => {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: message.id,
+                content_id: part.id,
+            };
+            let expanded = expansions.get(&key).copied().unwrap_or(true);
+            push_activity_headline(
+                out,
+                part.status,
+                expanded,
+                true,
+                "Answer",
+                answer.text.as_str(),
+                width,
+            );
+            let headline_end = out.len();
+            let mut children = Vec::new();
+            let body_start = out.len();
+            if expanded {
+                push_markdown_document(out, "    ", answer.text.as_str(), width);
+            }
+            if let Some(child) = rendered_activity_section_node(
+                TranscriptNodeKey::ActivitySection {
+                    entry_id: message.id,
+                    content_id: part.id,
+                    section: TranscriptActivitySection::Detail(0),
+                },
+                body_start,
+                out.len(),
+                answer.text.clone(),
+                false,
+                true,
+                out,
+            ) {
+                children.push(child);
+            }
+            RenderedNodeDraft {
+                key,
+                kind: TranscriptNodeKind::Activity,
+                copy_text: if expanded {
+                    answer.text.clone()
+                } else {
+                    String::new()
+                },
+                toggleable: true,
+                expanded,
+                end_line: Some(headline_end),
+                children,
+            }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
             let key = TranscriptNodeKey::Activity {
@@ -1274,9 +1351,8 @@ pub(crate) fn render_part_node(
             // read-only plan + questions + answers once answered; fall through
             // to the plain tool execution renderer for operations without
             // user input.
-            let user_input_rendered = render_operation_user_input(
-                part, tool, out, width, i18n, expanded, interactions,
-            );
+            let user_input_rendered =
+                render_operation_user_input(part, tool, out, width, i18n, expanded, interactions);
             if !user_input_rendered {
                 render_tool_execution(part, tool, out, width, i18n, expanded);
             }
@@ -1545,15 +1621,7 @@ pub(crate) fn render_part_node(
                         .map(|question| question.question.as_str())
                         .filter(|text| !text.trim().is_empty())
                         .unwrap_or(request.title.as_str());
-                    push_activity_headline(
-                        out,
-                        part.status,
-                        expanded,
-                        true,
-                        title,
-                        summary,
-                        width,
-                    );
+                    push_activity_headline(out, part.status, expanded, true, title, summary, width);
                     if expanded {
                         // A pending part with a live interaction view renders
                         // its plan body and decision rows natively (the part IS
@@ -1751,7 +1819,12 @@ fn render_answered_review_rows(
     if question.allow_custom {
         let custom: Vec<&String> = values
             .iter()
-            .filter(|value| !question.options.iter().any(|option| &option.label == *value))
+            .filter(|value| {
+                !question
+                    .options
+                    .iter()
+                    .any(|option| &option.label == *value)
+            })
             .collect();
         if !custom.is_empty() {
             let marker = "(x)";
@@ -1804,11 +1877,7 @@ fn render_answered_question_block(
     for (_option_index, option) in question.options.iter().enumerate() {
         let picked = values.iter().any(|value| value == &option.label);
         let marker = if question.multiple {
-            if picked {
-                "[x]"
-            } else {
-                "[ ]"
-            }
+            if picked { "[x]" } else { "[ ]" }
         } else if picked {
             "(x)"
         } else {
@@ -1827,7 +1896,12 @@ fn render_answered_question_block(
     if question.allow_custom {
         let custom: Vec<&String> = values
             .iter()
-            .filter(|value| !question.options.iter().any(|option| &option.label == *value))
+            .filter(|value| {
+                !question
+                    .options
+                    .iter()
+                    .any(|option| &option.label == *value)
+            })
             .collect();
         if !custom.is_empty() {
             out.push(RenderedLine::rich(Line::from(vec![
@@ -1897,10 +1971,7 @@ fn render_review_decision_rows(
     // Localized footer hint: Enter on an option submits, Enter on the title
     // collapses/expands. This row is never a submit target.
     out.push(RenderedLine::plain(
-        format!(
-            "    {}",
-            i18n.text("overlay-user-input-review-footer-hint")
-        ),
+        format!("    {}", i18n.text("overlay-user-input-review-footer-hint")),
         Style::default().fg(agena_tui_components::theme::muted_color()),
     ));
 }
@@ -1989,10 +2060,7 @@ fn render_ask_user_body(
     // Localized footer hint: the continuous-body key contract. This row is
     // never a submit target.
     out.push(RenderedLine::plain(
-        format!(
-            "    {}",
-            i18n.text("overlay-user-input-wizard-keys")
-        ),
+        format!("    {}", i18n.text("overlay-user-input-wizard-keys")),
         Style::default().fg(agena_tui_components::theme::muted_color()),
     ));
 }
@@ -2028,11 +2096,7 @@ fn render_ask_user_question_block(
     for (option_index, option) in question.options.iter().enumerate() {
         let picked = answer.is_some_and(|answer| answer.picked.contains(&option_index));
         let marker = if question.multiple {
-            if picked {
-                "[x]"
-            } else {
-                "[ ]"
-            }
+            if picked { "[x]" } else { "[ ]" }
         } else if picked {
             "(x)"
         } else {
@@ -2053,11 +2117,7 @@ fn render_ask_user_question_block(
             .unwrap_or_default();
         let picked = !custom_values.is_empty();
         let marker = if question.multiple {
-            if picked {
-                "[x]"
-            } else {
-                "[ ]"
-            }
+            if picked { "[x]" } else { "[ ]" }
         } else if picked {
             "(x)"
         } else {

@@ -85,6 +85,13 @@ pub enum TranscriptActivityContent<'a> {
     /// cannot borrow from a synthetic, function-local payload). Renderers
     /// treat it exactly like `Canonical` of a persisted TextSegment.
     TextSegment(Box<TextSegmentActivity>),
+    /// The final reply text (the answer). Same owned payload as [`Self::TextSegment`],
+    /// but projected through its own variant so the renderer can make it a
+    /// toggleable part that defaults to expanded: the answer must be visible
+    /// immediately, unlike interstitial working notes, and the plain `Text`
+    /// projection (which draws as non-collapsible inline prose) must never
+    /// carry the answer.
+    Answer(Box<TextSegmentActivity>),
     Reasoning(ReasoningPartResource),
     Attachment(AttachmentPartResource),
     SkillReference(SkillReferencePartResource),

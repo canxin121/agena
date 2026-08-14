@@ -7,7 +7,7 @@
 
 use crate::TranscriptActivityPresentation;
 use agena_api::{
-    part::{PartExecutionStatusResource, ReasoningPartResource, TextPartResource},
+    part::{PartExecutionStatusResource, ReasoningPartResource},
     resource::{RunRole, RunStatus},
 };
 use agena_domain::{
@@ -201,23 +201,25 @@ fn assistant_reply_document_parts<'a>(
 ) -> Vec<TranscriptEntryPart<'a>> {
     let nodes = document.nodes();
     // One reply can span many assistant messages: an opening paragraph, tool
-    // calls, interstitial text, and a closing summary. Only the final body
-    // segment is the actual answer and renders inline as plain text; every
-    // earlier body segment is an intermediate step and projects as a
-    // collapsible TextSegment activity so a long tool run reads as a stack of
-    // blocks with a single visible reply at the end.
+    // calls, interstitial text, and a closing summary. Every earlier body
+    // segment is an intermediate step and projects as a collapsible TextSegment
+    // activity; the final body segment is the answer and projects as a
+    // toggleable part that defaults to expanded, so a long tool run reads as a
+    // stack of blocks with a single visible reply at the end.
     //
     // "Final" is only knowable once the reply is done. Promoting whatever
     // body segment happens to be last while the reply is still streaming
     // would demote it back to an Activity the moment the document grows
     // (later text, or a tool call proving more model turns will follow) —
     // the jarring "plain text first, Activity later" flip. So:
-    // * Completed replies promote exactly the last body segment to inline.
+    // * Completed replies promote exactly the last body segment to the
+    //   answer part.
     // * In-progress replies that already issued a tool call keep every body
     //   segment as a collapsible TextSegment Activity: the tool call proves
     //   the reply continues, so no body segment is final yet.
     // * In-progress replies that have not issued a tool call keep the live
-    //   body segment inline so a plain question/answer still streams inline.
+    //   body segment as the answer part so a plain question/answer still
+    //   streams expanded.
     let final_text_index = if matches!(state, RunStatus::Completed) {
         nodes.iter().rposition(is_body_text_node)
     } else if nodes.iter().any(is_tool_call_node) {
@@ -232,13 +234,17 @@ fn assistant_reply_document_parts<'a>(
             ContentNode::Text { segment } => {
                 let id = TranscriptContentId::Text(segment.id);
                 if Some(index) == final_text_index {
+                    // The answer: an owned activity variant (the payload cannot
+                    // borrow a function-local value) rendered as a toggleable
+                    // part that defaults to expanded.
                     TranscriptEntryPart {
                         id,
                         status: PartExecutionStatusResource::Completed,
-                        content: TranscriptPartContent::Text(TextPartResource {
-                            text: segment.text.clone(),
-                            synthetic: false,
-                        }),
+                        content: TranscriptPartContent::Activity(
+                            TranscriptActivityContent::Answer(Box::new(TextSegmentActivity {
+                                text: segment.text.clone(),
+                            })),
+                        ),
                     }
                 } else {
                     // Intermediate body segments project as collapsible
@@ -260,8 +266,8 @@ fn assistant_reply_document_parts<'a>(
                 if matches!(activity.payload, ActivityPayload::TextSegment(_)) =>
             {
                 // A legacy persisted TextSegment that happens to be the final
-                // body renders as plain text (the answer); older intermediates
-                // keep their canonical Activity projection.
+                // body renders as the answer part; older intermediates keep
+                // their canonical Activity projection.
                 let id = TranscriptContentId::Activity(activity.id);
                 if Some(index) == final_text_index {
                     let text = match &activity.payload {
@@ -271,10 +277,11 @@ fn assistant_reply_document_parts<'a>(
                     TranscriptEntryPart {
                         id,
                         status: PartExecutionStatusResource::Completed,
-                        content: TranscriptPartContent::Text(TextPartResource {
-                            text,
-                            synthetic: false,
-                        }),
+                        content: TranscriptPartContent::Activity(
+                            TranscriptActivityContent::Answer(Box::new(TextSegmentActivity {
+                                text,
+                            })),
+                        ),
                     }
                 } else {
                     activity_entry_part(activity)
@@ -1464,7 +1471,7 @@ mod tests {
         ));
         assert!(matches!(
             reply.parts[1].content,
-            TranscriptPartContent::Text(_)
+            TranscriptPartContent::Activity(TranscriptActivityContent::Answer(_))
         ));
     }
 
@@ -1554,7 +1561,7 @@ mod tests {
         assert_eq!(second.parts.len(), 3);
         assert!(matches!(
             second.parts[0].content,
-            TranscriptPartContent::Text(_)
+            TranscriptPartContent::Activity(TranscriptActivityContent::Answer(_))
         ));
         assert_eq!(
             second.parts[1].id,
@@ -3424,6 +3431,7 @@ mod tests {
     fn text_segment_activity_renders_collapsible_with_normal_body_color() {
         let response_id = agena_domain::AssistantReplyId::new();
         let activity_id = agena_domain::ActivityId::new();
+        let answer_text_id = agena_domain::TextSegmentId::new();
         let body = "Second paragraph after the tool call.
 It has two lines.";
         let document = ContentDocument::new(vec![
@@ -3442,9 +3450,10 @@ It has two lines.";
                 }),
                 provenance: ActivityProvenance::default(),
             }),
-            // A final body segment after the interstitial text renders inline
-            // as plain text, never as a collapsed Activity.
-            ContentNode::text_at(agena_domain::TextSegmentId::new(), "final answer", 1, 2),
+            // A final body segment after the interstitial text is the answer:
+            // it renders as its own default-expanded part, never as a
+            // collapsed Activity.
+            ContentNode::text_at(answer_text_id, "final answer", 1, 2),
         ]);
         let entry = assistant_reply_document_entry(
             response_id,
@@ -3463,7 +3472,8 @@ It has two lines.";
         ));
         assert!(matches!(
             &entry.parts[1].content,
-            TranscriptPartContent::Text(text) if text.text == "final answer"
+            TranscriptPartContent::Activity(TranscriptActivityContent::Answer(answer))
+                if answer.text == "final answer"
         ));
         let defaults = crate::TranscriptDetailDefaults {
             activity_default_expanded: false,
@@ -3487,9 +3497,14 @@ It has two lines.";
             .collect::<Vec<_>>();
         // Interstitial segments default to collapsed: the headline shows the
         // label with a preview and the body stays folded, while the final
-        // answer is visible inline.
+        // answer renders as its own default-expanded part (headline plus full
+        // body), so both are visible.
         assert!(
             collapsed_lines.iter().any(|line| line.contains("Text")),
+            "{collapsed_lines:?}"
+        );
+        assert!(
+            collapsed_lines.iter().any(|line| line.contains("Answer")),
             "{collapsed_lines:?}"
         );
         assert!(
@@ -3527,6 +3542,19 @@ It has two lines.";
             "{text}"
         );
         assert!(text.contains("It has two lines."), "{text}");
+        // The answer is its own default-expanded part: it stays expanded even
+        // with the global activity default collapsed.
+        let answer_key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Text(answer_text_id),
+        };
+        let answer_node = collapsed
+            .nodes
+            .iter()
+            .find(|node| node.key == answer_key)
+            .expect("answer node");
+        assert!(answer_node.expanded, "answer must default to expanded");
+        assert!(answer_node.toggleable, "answer must be collapsible");
 
         // The expanded body must use the normal text style, not thinking's
         // muted color.
@@ -3569,10 +3597,12 @@ It has two lines.";
             TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(segment))
                 if segment.text == "Let me inspect the file."
         ));
-        // The final body segment is the answer and stays inline plain text.
+        // The final body segment is the answer: it projects as a
+        // default-expanded Answer part, not as inline plain text.
         assert!(matches!(
             &entry.parts[1].content,
-            TranscriptPartContent::Text(text) if text.text == "That is the answer."
+            TranscriptPartContent::Activity(TranscriptActivityContent::Answer(answer))
+                if answer.text == "That is the answer."
         ));
 
         let rendered = crate::render_entry_detailed(
@@ -3594,10 +3624,23 @@ It has two lines.";
                 "
 ",
             );
-        // Collapsed headline shows the interstitial label; the answer is
-        // visible inline without any label.
+        // The interstitial headline shows the working-note label; the answer
+        // renders as its own expanded part (headline plus full body), so it is
+        // visible even with the global activity default collapsed.
         assert!(text.contains("Text"), "{text}");
+        assert!(text.contains("Answer"), "{text}");
         assert!(text.contains("That is the answer."), "{text}");
+        let answer_key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Text(second_text_id),
+        };
+        let answer_node = rendered
+            .nodes
+            .iter()
+            .find(|node| node.key == answer_key)
+            .expect("answer node");
+        assert!(answer_node.expanded, "answer must default to expanded");
+        assert!(answer_node.toggleable, "answer must be collapsible");
     }
 
     #[test]
@@ -3676,7 +3719,7 @@ It has two lines.";
     }
 
     #[test]
-    fn in_progress_reply_without_tool_call_keeps_live_text_inline() {
+    fn in_progress_reply_without_tool_call_keeps_live_text_as_answer() {
         let response_id = agena_domain::AssistantReplyId::new();
         let first_text_id = agena_domain::TextSegmentId::new();
         let document = ContentDocument::new(vec![ContentNode::text_at(
@@ -3685,9 +3728,10 @@ It has two lines.";
             0,
             1,
         )]);
-        // A plain question/answer still streams inline: with no tool call in
+        // A plain question/answer still streams expanded: with no tool call in
         // the document, the current body segment is the (candidate) final
-        // text and must not collapse into an Activity while streaming.
+        // text, projected as the answer part (default expanded) and never
+        // collapsed into an interstitial Activity while streaming.
         let entry = assistant_reply_document_entry(
             response_id,
             RunStatus::InProgress,
@@ -3700,9 +3744,9 @@ It has two lines.";
         assert!(matches!(
             entry.parts.as_slice(),
             [TranscriptEntryPart {
-                content: TranscriptPartContent::Text(text),
+                content: TranscriptPartContent::Activity(TranscriptActivityContent::Answer(answer)),
                 ..
-            }] if text.text == "live answer"
+            }] if answer.text == "live answer"
         ));
     }
 

@@ -26,6 +26,7 @@ use agena_api::{
         UserInputReplyKind, UserInputRequest,
     },
 };
+use agena_domain::TextSegmentActivity;
 use agena_runtime_contracts::part_content::InteractionContent;
 use serde_json::Value;
 
@@ -166,11 +167,47 @@ fn run_marker_entry(marker: &SessionTranscriptPart) -> TranscriptEntry<'static> 
 }
 
 fn finalize_run_entry(mut entry: TranscriptEntry<'static>) -> TranscriptEntry<'static> {
-    // Mirror the v1 reply projection: an assistant run renders a trailing
-    // lifecycle row when it has no content yet (the active envelope) or when
-    // it ended without a durable Error part carrying the outcome (failed,
-    // cancelled, denied). A completed run with body content needs no row.
     if entry.role == Some(RunRole::Assistant) {
+        // The final assistant text part is the answer and must render as a
+        // default-expanded part ([`TranscriptActivityContent::Answer`]); every
+        // earlier text part is a working note and stays a collapsible
+        // TextSegment. A text followed by a tool call is interstitial (the
+        // reply continues past it), so only the last text with no tool call
+        // after it is promoted.
+        if let Some(index) = entry
+            .parts
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, part)| {
+                let is_text_segment = matches!(
+                    part.content,
+                    TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(_))
+                );
+                let tool_call_follows = entry.parts[index + 1..].iter().any(|later| {
+                    matches!(
+                        later.content,
+                        TranscriptPartContent::Activity(TranscriptActivityContent::Operation(_))
+                    )
+                });
+                (is_text_segment && !tool_call_follows).then_some(index)
+            })
+        {
+            let part = &mut entry.parts[index];
+            let segment = match &part.content {
+                TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(
+                    segment,
+                )) => segment.text.clone(),
+                _ => unreachable!("promotion target filtered to TextSegment"),
+            };
+            part.content = TranscriptPartContent::Activity(TranscriptActivityContent::Answer(
+                Box::new(TextSegmentActivity { text: segment }),
+            ));
+        }
+        // Mirror the v1 reply projection: an assistant run renders a trailing
+        // lifecycle row when it has no content yet (the active envelope) or when
+        // it ended without a durable Error part carrying the outcome (failed,
+        // cancelled, denied). A completed run with body content needs no row.
         let state = entry.state;
         let has_error_part = entry.parts.iter().any(|part| {
             matches!(
@@ -219,10 +256,23 @@ fn entry_part(part: &SessionTranscriptPart) -> TranscriptEntryPart<'static> {
 fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> {
     let content = &part.content;
     match part.kind.as_str() {
-        "text" => TranscriptPartContent::Text(TextPartResource {
-            text: string_field(content, "text").unwrap_or_default(),
-            synthetic: bool_field(content, "synthetic").unwrap_or(false),
-        }),
+        "text" => {
+            let text = string_field(content, "text").unwrap_or_default();
+            if part.role == "assistant" && !text.trim().is_empty() {
+                // Assistant reply text projects as an owned activity so it
+                // renders as a toggleable part. [`finalize_run_entry`] promotes
+                // the final non-tool-followed text part to `Answer` (default
+                // expanded); earlier turn texts stay collapsible TextSegments.
+                TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(Box::new(
+                    TextSegmentActivity { text },
+                )))
+            } else {
+                TranscriptPartContent::Text(TextPartResource {
+                    text,
+                    synthetic: bool_field(content, "synthetic").unwrap_or(false),
+                })
+            }
+        }
         "think" => TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(
             ReasoningPartResource {
                 summary: string_array_field(content, "summary"),
@@ -329,8 +379,8 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
         // Reuses the Hook activity renderer so it draws as a compact
         // notification row with the operation identity in the hook slot.
         "system_notification" => {
-            let operation_kind = string_field(content, "operation_kind")
-                .unwrap_or_else(|| "background".to_string());
+            let operation_kind =
+                string_field(content, "operation_kind").unwrap_or_else(|| "background".to_string());
             let operation_id = string_field(content, "operation_id").unwrap_or_default();
             let status = string_field(content, "status").unwrap_or_default();
             let hook = if operation_id.is_empty() {
@@ -341,8 +391,7 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
             let summary = string_field(content, "summary")
                 .or_else(|| string_field(content, "body"))
                 .unwrap_or_default();
-            let detail = string_field(content, "detail")
-                .or_else(|| string_field(content, "body"));
+            let detail = string_field(content, "detail").or_else(|| string_field(content, "body"));
             TranscriptPartContent::Activity(TranscriptActivityContent::Hook(Box::new(
                 HookPartResource {
                     hook,
@@ -435,14 +484,14 @@ fn normalize_stored_operation_block(block: &mut Value) {
             }
         }
         Some("search_results") => {
-            if let Some(items) = object.remove("items").and_then(|items| items.as_array().cloned())
+            if let Some(items) = object
+                .remove("items")
+                .and_then(|items| items.as_array().cloned())
             {
                 let results = items
                     .into_iter()
                     .map(|mut item| {
-                        if let Some(uri) = item
-                            .as_object_mut()
-                            .and_then(|item| item.remove("url"))
+                        if let Some(uri) = item.as_object_mut().and_then(|item| item.remove("url"))
                         {
                             item.as_object_mut()
                                 .map(|item| item.insert("uri".to_owned(), uri));
@@ -622,7 +671,9 @@ fn interaction_reply_resource(interaction: &InteractionContent) -> Option<UserIn
 /// canonicalizing the enum kind back to its wire string. Shared with the
 /// renderer, which converts a tool operation's `user_input` record request to
 /// the resource it draws from.
-pub(crate) fn user_input_request_resource(request: agena_domain::UserInputRequest) -> UserInputRequest {
+pub(crate) fn user_input_request_resource(
+    request: agena_domain::UserInputRequest,
+) -> UserInputRequest {
     UserInputRequest {
         request_id: request.request_id,
         session_id: request.session_id,
@@ -904,9 +955,10 @@ mod tests {
             entries[1].parts[0].content,
             TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(_))
         ));
+        // The final assistant text is the answer: a default-expanded part.
         assert!(matches!(
             entries[1].parts[1].content,
-            TranscriptPartContent::Text(_)
+            TranscriptPartContent::Activity(TranscriptActivityContent::Answer(_))
         ));
     }
 
@@ -964,17 +1016,19 @@ mod tests {
         // state from the LAST marker (live turn shows InProgress while running).
         assert_eq!(entries[1].id, TranscriptEntryId::StoredMessage(3));
         assert_eq!(entries[1].state, RunStatus::Completed);
-        // All tool calls, results and the final text live in the one block.
+        // All tool calls, results and the final text live in the one block;
+        // the final assistant text is the answer part, tool results stay plain.
         let kinds = entries[1]
             .parts
             .iter()
             .map(|part| match &part.content {
                 TranscriptPartContent::Activity(TranscriptActivityContent::Operation(_)) => "op",
+                TranscriptPartContent::Activity(TranscriptActivityContent::Answer(_)) => "answer",
                 TranscriptPartContent::Text(_) => "text",
                 _ => "other",
             })
             .collect::<Vec<_>>();
-        assert_eq!(kinds, vec!["op", "text", "op", "text", "text"]);
+        assert_eq!(kinds, vec!["op", "text", "op", "text", "answer"]);
     }
 
     #[test]
@@ -1323,7 +1377,10 @@ mod tests {
         assert_eq!(request.title, "Approve New Plan");
         assert_eq!(request.kind, "review");
         assert_eq!(request.questions.len(), 1);
-        assert_eq!(request.questions[0].question, "Choose whether this plan should move to active.");
+        assert_eq!(
+            request.questions[0].question,
+            "Choose whether this plan should move to active."
+        );
         assert!(reply.is_none());
     }
 
@@ -1358,7 +1415,9 @@ mod tests {
         };
         let RequestPartResource::UserInput { request, reply } = request.as_ref();
         assert_eq!(request.kind, "review");
-        let reply = reply.as_ref().expect("reply is recovered from the reply object");
+        let reply = reply
+            .as_ref()
+            .expect("reply is recovered from the reply object");
         assert_eq!(reply.answers["decision"], ["approve"]);
     }
 

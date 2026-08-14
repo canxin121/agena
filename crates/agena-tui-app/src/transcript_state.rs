@@ -2103,12 +2103,7 @@ impl TranscriptState {
     /// screen instead of just showing the part's top. Unlike
     /// [`Self::move_cursor_to_visual_line_number`] (minimal reveal), this
     /// never lets the reveal step clobber the fit-scroll.
-    pub(crate) fn reveal_node_fully(
-        &mut self,
-        key: &TranscriptNodeKey,
-        width: u16,
-        height: u16,
-    ) {
+    pub(crate) fn reveal_node_fully(&mut self, key: &TranscriptNodeKey, width: u16, height: u16) {
         let (start_line, end_line, total_lines) = {
             let rendered = self.rendered(width);
             let Some(node) = rendered.nodes.iter().find(|node| node.key == *key) else {

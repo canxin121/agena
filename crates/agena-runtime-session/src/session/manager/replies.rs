@@ -9,7 +9,7 @@ use crate::session::model::{
 use crate::session::store::{OPERATION_ID_METADATA_KEY, typed_content_from_value};
 use agena_domain::UserInputReply;
 use agena_provider::ResponsesApiRequestMetadata;
-use agena_runtime_contracts::part_content::{operation_from_tool_call, InteractionContent};
+use agena_runtime_contracts::part_content::{InteractionContent, operation_from_tool_call};
 use agena_storage::store::{Part, PartRole, PartState};
 use agena_tool::ToolPermissionCheck;
 
@@ -313,7 +313,10 @@ fn interaction_from_part(part: &Part) -> Option<InteractionContent> {
 /// below goes through this accessor so legacy rows keep projecting.
 fn user_input_records_from_part(
     part: &Part,
-) -> Vec<(agena_domain::UserInputRequest, Option<agena_domain::UserInputReply>)> {
+) -> Vec<(
+    agena_domain::UserInputRequest,
+    Option<agena_domain::UserInputReply>,
+)> {
     if let Some(operation) = operation_from_part(part) {
         return operation
             .user_input
@@ -387,7 +390,10 @@ pub(super) fn cancel_unanswered_request_parts_for_operation(
             let mut cleared = false;
             apply_operation_mutation(part, |operation| {
                 let before = operation.user_input.requests.len();
-                operation.user_input.requests.retain(|record| record.reply.is_some());
+                operation
+                    .user_input
+                    .requests
+                    .retain(|record| record.reply.is_some());
                 cleared = before != operation.user_input.requests.len();
             });
             if cleared {
@@ -596,9 +602,9 @@ pub(super) fn find_pending_user_input_by_request_id(
 
 pub(super) fn has_replied_user_input_request(session: &Session, request_id: &str) -> bool {
     session.parts().iter().any(|part| {
-        user_input_records_from_part(part).iter().any(|(request, reply)| {
-            request.request_id == request_id && reply.is_some()
-        })
+        user_input_records_from_part(part)
+            .iter()
+            .any(|(request, reply)| request.request_id == request_id && reply.is_some())
     })
 }
 
@@ -794,12 +800,14 @@ impl SessionManager {
             .ok_or_else(|| pending_reply_part_missing_error("user input", request_id))?;
         let replied_at_ms = Utc::now().timestamp_millis();
         {
-            let part = session.part_mut(&request_part).ok_or_else(|| {
-                pending_reply_part_missing_error("user input", request_id)
-            })?;
+            let part = session
+                .part_mut(&request_part)
+                .ok_or_else(|| pending_reply_part_missing_error("user input", request_id))?;
             if part.kind == "tool_call" {
                 apply_operation_mutation(part, |operation| {
-                    operation.user_input.record_reply(reply.clone(), replied_at_ms);
+                    operation
+                        .user_input
+                        .record_reply(reply.clone(), replied_at_ms);
                 });
                 return Ok(request_part.part_id);
             }
@@ -815,12 +823,10 @@ impl SessionManager {
                 .unwrap_or_default();
             let tool_part_id = interaction.tool_part_id().unwrap_or(request_part.part_id);
             let mut replied = crate::session::store::interaction_from_request(
-                &crate::part::RequestPart::UserInput(
-                    crate::part::InteractiveRequestPart::replied(
-                        user_input_request.clone(),
-                        reply.clone(),
-                    ),
-                ),
+                &crate::part::RequestPart::UserInput(crate::part::InteractiveRequestPart::replied(
+                    user_input_request.clone(),
+                    reply.clone(),
+                )),
             );
             replied.extra.insert(
                 "request_id".to_owned(),
@@ -1540,8 +1546,7 @@ impl SessionManager {
                 // Legacy rows without a stored source fall back to the typed
                 // inference inside `InteractionContent::source()` (host parts
                 // always wrote `request_id = host-input:...` ≠ `operation_id`).
-                let is_host = user_input_request.source
-                    == agena_domain::UserInputSource::Host
+                let is_host = user_input_request.source == agena_domain::UserInputSource::Host
                     || session
                         .part(&pending.request)
                         .and_then(interaction_from_part)
@@ -1609,9 +1614,10 @@ impl SessionManager {
                     // `interaction` part needs its own InProgress->Completed
                     // write here so an answered request cannot resurrect as
                     // pending on reload.
-                    let is_legacy_part = session.parts().iter().any(|part| {
-                        part.part_id == changed_part_id && part.kind == "interaction"
-                    });
+                    let is_legacy_part = session
+                        .parts()
+                        .iter()
+                        .any(|part| part.part_id == changed_part_id && part.kind == "interaction");
                     if is_legacy_part {
                         session = self
                             .persist_session_changes(
@@ -1901,8 +1907,9 @@ use super::{
     SessionManager, SessionManagerState, SessionPermissionReplyRequest, SessionRunOptions,
     SessionRunRequest, SessionRunTermination, StreamingToolExecution, TimeRange, ToolError,
     ToolInvocation, ToolInvocationExecution, UserInputReplyKind, Utc, ask_user_title,
-    background_operation_from_execution, completed_lifecycle, custom_payload_value,
-    execution_control_to_app_error, host_user_input_response, mpsc, operation_blocks_from_tool_output,
-    payload_tool_name_for_invocation, permission_action_key, persisted_rules_for_reply,
+    background_operation_from_execution, background_operation_id, completed_lifecycle,
+    custom_payload_value, execution_control_to_app_error, host_user_input_response, mpsc,
+    operation_blocks_from_tool_output, payload_tool_name_for_invocation, permission_action_key,
+    persisted_rules_for_reply, requested_background_kind, reserve_background_external_id,
     resolve_pending_tool, run_abort_reason, text_result_blocks, tool_name, user_input_execution,
 };

@@ -896,8 +896,7 @@ impl UserInputPresentation {
             }
         } else {
             let picked = self.state.selected_option();
-            let already = draft.option_indexes.len() == 1
-                && draft.option_indexes.contains(&picked);
+            let already = draft.option_indexes.len() == 1 && draft.option_indexes.contains(&picked);
             if already {
                 draft.option_indexes.clear();
             } else {
@@ -918,7 +917,8 @@ impl UserInputPresentation {
         if self.questions.get(question_index).is_none() {
             return;
         }
-        self.state.focus_question(question_index, self.questions.len());
+        self.state
+            .focus_question(question_index, self.questions.len());
         self.state.set_selected_option(option_index);
         self.toggle_option();
     }
@@ -930,7 +930,8 @@ impl UserInputPresentation {
         if self.questions.get(question_index).is_none() {
             return;
         }
-        self.state.focus_question(question_index, self.questions.len());
+        self.state
+            .focus_question(question_index, self.questions.len());
         self.state.set_selected_option(option_index);
         if self
             .questions
@@ -949,7 +950,8 @@ impl UserInputPresentation {
         if self.questions.get(question_index).is_none() {
             return false;
         }
-        self.state.focus_question(question_index, self.questions.len());
+        self.state
+            .focus_question(question_index, self.questions.len());
         self.begin_custom_edit()
     }
 

@@ -29,6 +29,14 @@ pub use monitor::{
     MonitorStopOutcome, MonitorWsParams, default_monitor_registry,
 };
 pub use monitor::{ReadParams as MonitorReadParams, StartParams as MonitorStartParams};
+
+/// Deterministic external identity reserved before a session-owned process is
+/// spawned. The session manager and tool adapters both derive this value, so
+/// completion callbacks can resolve the durable aggregate even when a process
+/// exits before the launch tool returns.
+pub fn managed_process_id(session_id: i64, call_id: i64) -> String {
+    format!("proc_{session_id}_{call_id}")
+}
 pub use project_paths::{
     MAX_GENERATED_IMAGE_BYTES, ManagedGeneratedImageArtifact, ManagedGeneratedImageError,
     agena_home_dir, generated_image_artifact_path, generated_media_extension,

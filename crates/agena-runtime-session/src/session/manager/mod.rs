@@ -15,30 +15,28 @@ use crate::context_governor::ContextGovernor;
 use crate::part::{AttachmentItem, AttachmentKind, AttachmentSource, OperationPart};
 use crate::provider::ProviderRegistry;
 use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
-use agena_domain::ExecutionStatus;
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
-use agena_domain::{UserInputReply, UserInputSource};
 use agena_domain::{
     DecisionTraceStep, ExecutionOutcome, ExecutionSource, PermissionAction, PermissionMode,
     PermissionReplyKind, PermissionScope, RunAbortReason, TimeRange, UserInputReplyKind,
 };
+use agena_domain::{ExecutionStatus, ProcessStatus};
 pub(crate) use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
+use agena_domain::{UserInputReply, UserInputSource};
 use agena_failure::Failure;
-use agena_runtime_contracts::part_content::{
-    SystemNotificationContent, TextContent, TypedContent,
-};
+use agena_runtime_contracts::part_content::{SystemNotificationContent, TextContent, TypedContent};
 use agena_storage::PersistedPermissionRule;
-use agena_storage::store::{Part, PartRole, PartState};
+use agena_storage::store::{
+    BackgroundDelivery, BackgroundEventRequest, BackgroundOperationKind, BackgroundOperationPhase,
+    BackgroundOperationTransition, NewBackgroundOperation, PartRole, PartState,
+};
 use agena_tool::PreparedShellCommand;
 
-use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPartRef, SessionPendingTool};
+use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPendingTool};
 use super::processor::{SessionRunRequest, SessionRunTermination};
 use super::prompt_window::PromptRequestOptions;
-use super::store::{
-    StoreAdapter, new_part_from_content, tool_call_from_operation, typed_content_to_value,
-    typed_content_from_value,
-};
+use super::store::{StoreAdapter, new_part_from_content};
 use super::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
 use crate::session::{Session, SessionProcessor};
 use agena_domain::{SessionListRequest, SessionSummary, UsageStats, UsageStatsQuery};
@@ -617,8 +615,9 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
     ) -> Result<(), agena_runtime::SessionExecutionCommandError> {
         let parts = part_contents_from_composer_document(document)
             .map_err(session_execution_command_error)?;
-        SessionManager::steer_input(self, session_id, parts).await
-        .map_err(session_execution_command_error)
+        SessionManager::steer_input(self, session_id, parts)
+            .await
+            .map_err(session_execution_command_error)
     }
 
     async fn continue_session(
@@ -1697,24 +1696,10 @@ impl SessionManager {
         agena_domain::SessionCacheStats::default()
     }
 
-    /// Settle a launched-in-background operation (a monitored shell process
-    /// or a delegated task) once the underlying work actually settles. In one
-    /// session-exclusive mutation this terminalizes the launching tool part
-    /// (spinner → real final result) and appends the completion notification
-    /// as an **Assistant-role** `system_notification` part **onto the
-    /// launching run** — no new run marker. The operation was launched by the
-    /// model, so its result belongs to the model's own turn: this is the agena
-    /// analog of Claude Code's `<task-notification>` arriving back on the
-    /// launching turn.
-    ///
-    /// The durable `system_notification` part is the claim (mirroring Claude's
-    /// atomic `notified` flag `I4e`), so a re-delivered completion signal is a
-    /// no-op.
-    ///
-    /// The model is then woken over the settled result: mid-turn, the running
-    /// execution is steered (a pure re-trigger — the parts are already
-    /// appended); idle, a fresh execution is started that picks the appended
-    /// result up as its first input.
+    /// Settle one durable background-operation aggregate and enqueue its
+    /// unique terminal delivery. The notification is appended in a new
+    /// Runtime-role ingress run at its actual arrival position; the launch
+    /// tool part remains the immutable, already-completed launch receipt.
     pub async fn settle_background_operation(
         &self,
         session_id: i64,
@@ -1724,159 +1709,257 @@ impl SessionManager {
         outcome: Result<String, Failure>,
         notification: SystemNotificationContent,
     ) -> Result<(), AppError> {
-        let committed = self
-            .session_mutations
-            .run(session_id, async {
-                let mut session = self.store.load_session(session_id).await?;
-                if session
-                    .parts()
-                    .iter()
-                    .any(|part| part_records_notification(part, kind, id))
-                {
-                    // The durable part is the claim; a re-delivered completion
-                    // signal is a no-op. The operation was already settled and
-                    // notified on first delivery.
-                    return Ok((false, None));
-                }
-                let part_index = session
-                    .parts()
-                    .iter()
-                    .position(|part| {
-                        if part.kind != "tool_call" {
-                            return false;
-                        }
-                        operation_from_part(part).is_some_and(|operation| {
-                            operation.background_operation().is_some_and(|marker| {
-                                marker.kind == kind && marker.id == id
-                            })
-                        })
-                    })
-                    .ok_or_else(|| {
-                        AppError::Internal(format!(
-                            "background {kind} {id} has no in-progress tool part in session {session_id}"
-                        ))
-                    })?;
-                let part_id = session.parts()[part_index].part_id;
-                let part_ref = SessionPartRef {
-                    part_index,
-                    part_id,
-                };
-                let tool_part = session.part_mut(&part_ref).ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "background {kind} {id} tool part {part_id} vanished from session {session_id}"
-                    ))
-                })?;
-                let mut operation = operation_from_part(tool_part).ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "background {kind} {id} tool part {part_id} has no operation content"
-                    ))
-                })?;
-                let lifecycle = TimeRange {
-                    start_ms: operation.lifecycle().start_ms,
-                    end_ms: Some(Utc::now().timestamp_millis()),
-                };
-                let details = operation
-                    .result
-                    .structured
-                    .clone()
-                    .and_then(|payload| {
-                        agena_domain::ToolOutput::from_json_payload(Some(&payload)).ok()
-                    })
-                    .unwrap_or_default();
-                match outcome {
-                    Ok(output_text) => {
-                        let title = operation.title().unwrap_or(kind).to_owned();
-                        let summary = output_text.clone();
-                        let blocks = text_result_blocks(&output_text);
-                        operation = OperationPart::completed(
-                            operation.call_id(),
-                            operation.invocation().clone(),
-                            crate::part::OperationCompletion::new(
-                                title,
-                                summary,
-                                output_text.clone(),
-                                blocks,
-                                operation.result.attachments.clone(),
-                                details,
-                            ),
-                            lifecycle,
-                        );
-                    }
-                    Err(failure) => {
-                        let fallback = failure.user.fallback.clone();
-                        let blocks = text_result_blocks(&fallback);
-                        operation = OperationPart::failed(
-                            operation.call_id(),
-                            operation.invocation().clone(),
-                            failure,
-                            blocks,
-                            Vec::new(),
-                            details,
-                            lifecycle,
-                        );
-                    }
-                }
-                operation.set_background_operation(&crate::part::BackgroundOperation {
-                    kind: kind.to_string(),
-                    id: id.to_string(),
-                });
-                let content = typed_content_to_value(&TypedContent::ToolCall(
-                    tool_call_from_operation(&operation),
-                ))
-                .expect("background operation content is always JSON serializable");
-                // The launching run is the assistant run that called the tool
-                // (the tool part's `run_id`). The notification result belongs
-                // to that run: append it as an Assistant-role part under the
-                // SAME marker — no new run. Its body projects as a dedicated
-                // system-message wire part (never assistant reply text), so it
-                // cannot leak into the assistant's own visible output.
-                let run_id = session
-                    .parts()
-                    .iter()
-                    .find(|part| part.part_id == part_id)
-                    .and_then(|part| part.run_id)
-                    .unwrap_or(part_id);
-                let new_part = new_part_from_content(
-                    "system_notification",
-                    PartRole::Assistant,
-                    &TypedContent::SystemNotification(notification.clone()),
-                    PartState::Completed,
-                )?;
-                let created = self
-                    .store
-                    .settle_background_run(
-                        session_id,
-                        run_id,
-                        Some((part_id, terminal, content)),
-                        vec![new_part],
-                    )
-                    .await?;
-                Ok((true, created.first().map(|part| part.part_id)))
+        let operation_kind = BackgroundOperationKind::parse(kind).ok_or_else(|| {
+            AppError::Internal(format!("unsupported background operation kind {kind}"))
+        })?;
+        let operation = self
+            .background_operation_for_signal(session_id, operation_kind, id)
+            .await?;
+        let next_phase = match (terminal, notification.status.as_str()) {
+            (_, "timed_out") => BackgroundOperationPhase::TimedOut,
+            (_, "interrupted") => BackgroundOperationPhase::Interrupted,
+            (PartState::Completed, _) => BackgroundOperationPhase::Completed,
+            (PartState::Cancelled, _) => BackgroundOperationPhase::Cancelled,
+            _ => BackgroundOperationPhase::Failed,
+        };
+        let (outcome_value, failure_value) = match &outcome {
+            Ok(text) => (Some(serde_json::json!({ "text": text })), None),
+            Err(failure) => (
+                None,
+                Some(serde_json::json!({
+                    "id": failure.id.to_string(),
+                    "message": failure.user.fallback,
+                })),
+            ),
+        };
+        let new_part = new_part_from_content(
+            "system_notification",
+            PartRole::Runtime,
+            &TypedContent::SystemNotification(notification.clone()),
+            PartState::Completed,
+        )?;
+        let settled = self
+            .store
+            .record_background_event(BackgroundEventRequest {
+                operation_id: operation.operation_id,
+                event_key: "terminal".to_owned(),
+                event_seq: None,
+                next_phase: Some(next_phase),
+                outcome: outcome_value,
+                failure: failure_value,
+                notification: new_part,
             })
             .await?;
-        let (committed, notification_part_id) = committed;
-        if !committed {
-            return Ok(());
-        }
-        // Wake the model over the settled result (the agena analog of Claude
-        // Code's `<task-notification>` waking the launching turn).
-        self.wake_after_notification(session_id, notification_part_id, notification)
+        self.dispatch_background_delivery(settled.delivery, notification)
             .await
     }
 
-    /// Append one monitor event as a `system_notification` part onto the
-    /// launching run and wake the model — the everything-is-a-part Monitor's
-    /// "settle but don't terminalize" step (§7.3).
-    ///
-    /// Unlike a terminal completion, an event leaves the monitor's tool part
-    /// `InProgress` and the launching run marker in-flight. The event part is
-    /// appended via `settle_background_run` with `tool_part: None`: its lease
-    /// block refreshes on stale/own/None exactly like the terminal settle, and
-    /// the still-in-flight monitor part keeps the marker open.
-    ///
-    /// The durable claim is per-event: a `system_notification` part recording
-    /// `(kind, id, event_seq)` — each event is notified once, independently.
-    /// A re-delivered event signal for an already-recorded seq is a no-op.
+    /// Resolve a runtime callback through the durable external-id index. This
+    /// is intentionally public to the runtime bridge so callback routing never
+    /// depends on a process-local PartUpdated observer.
+    pub async fn background_operation_owner_for_external(
+        &self,
+        kinds: &[BackgroundOperationKind],
+        external_id: &str,
+    ) -> Result<Option<(i64, BackgroundOperationKind)>, AppError> {
+        for kind in kinds {
+            if let Some(operation) = self
+                .store
+                .background_operation_by_external_id(*kind, external_id)
+                .await?
+            {
+                return Ok(Some((operation.session_id, *kind)));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Terminalize a launch adapter failure without allowing a concurrent
+    /// callback/event revision bump to strand the aggregate. A terminal
+    /// callback always wins; otherwise stale optimistic revisions are retried
+    /// from the durable row a small bounded number of times.
+    async fn fail_background_launch_if_active(
+        &self,
+        operation_id: &str,
+        next_phase: BackgroundOperationPhase,
+        message: String,
+    ) -> Result<(), AppError> {
+        for attempt in 0..4 {
+            let current = self
+                .store
+                .background_operation(operation_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "background operation {operation_id} disappeared during launch"
+                    ))
+                })?;
+            if current.phase.is_terminal() {
+                return Ok(());
+            }
+            let result = self
+                .store
+                .transition_background_operation(BackgroundOperationTransition {
+                    operation_id: operation_id.to_owned(),
+                    expected_revision: current.revision,
+                    next_phase,
+                    external_id: None,
+                    outcome: None,
+                    failure: Some(serde_json::json!({ "message": message })),
+                    owner_id: None,
+                    lease_until_ms: None,
+                })
+                .await;
+            match result {
+                Ok(_) => return Ok(()),
+                Err(error) if attempt == 3 => return Err(error),
+                Err(_) => continue,
+            }
+        }
+        unreachable!("bounded launch-failure retry returns from the loop")
+    }
+
+    /// Convert the short launch lease into a renewable runtime ownership lease
+    /// after the adapter returns its receipt. This lets another process
+    /// distinguish live work from a restart orphan without consulting an
+    /// in-memory registry. A very fast completion may already be terminal.
+    async fn finish_background_launch_handoff(&self, operation_id: &str) -> Result<(), AppError> {
+        for attempt in 0..4 {
+            let current = self
+                .store
+                .background_operation(operation_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "background operation {operation_id} disappeared during handoff"
+                    ))
+                })?;
+            if current.phase.is_terminal() {
+                return Ok(());
+            }
+            let result = self
+                .store
+                .transition_background_operation(BackgroundOperationTransition {
+                    operation_id: operation_id.to_owned(),
+                    expected_revision: current.revision,
+                    next_phase: current.phase,
+                    external_id: None,
+                    outcome: None,
+                    failure: None,
+                    owner_id: Some(self.store.background_owner_id().to_owned()),
+                    lease_until_ms: Some(Utc::now().timestamp_millis() + 120_000),
+                })
+                .await;
+            match result {
+                Ok(_) => return Ok(()),
+                Err(error) if attempt == 3 => return Err(error),
+                Err(_) => continue,
+            }
+        }
+        unreachable!("bounded launch-handoff retry returns from the loop")
+    }
+
+    /// Resolve a completion signal through the durable unique index. The
+    /// legacy marker adoption arm is only for v8 rows created before the
+    /// operation ledger existed; all new launches create the aggregate before
+    /// executing their external side effect.
+    async fn background_operation_for_signal(
+        &self,
+        session_id: i64,
+        kind: BackgroundOperationKind,
+        external_id: &str,
+    ) -> Result<agena_storage::store::BackgroundOperation, AppError> {
+        if let Some(operation) = self
+            .store
+            .background_operation_by_external_id(kind, external_id)
+            .await?
+        {
+            if operation.session_id != session_id {
+                return Err(AppError::Internal(format!(
+                    "background signal {}:{} belongs to session {}, not {}",
+                    kind.as_str(),
+                    external_id,
+                    operation.session_id,
+                    session_id
+                )));
+            }
+            return Ok(operation);
+        }
+
+        let session = self.store.load_session(session_id).await?;
+        let part = session
+            .parts()
+            .iter()
+            .find(|part| {
+                part.kind == "tool_call"
+                    && operation_from_part(part).is_some_and(|operation| {
+                        operation.background_operation().is_some_and(|marker| {
+                            marker.kind == kind.as_str() && marker.id == external_id
+                        })
+                    })
+            })
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "background {}:{} has neither an aggregate nor a legacy marker in session {}",
+                    kind.as_str(),
+                    external_id,
+                    session_id
+                ))
+            })?;
+        let run_id = part.run_id.ok_or_else(|| {
+            AppError::Internal(format!(
+                "legacy background tool {} has no run",
+                part.part_id
+            ))
+        })?;
+        let operation_id = background_operation_id(session_id, part.part_id);
+        let created = self
+            .store
+            .create_background_operation(NewBackgroundOperation {
+                operation_id: operation_id.clone(),
+                session_id,
+                launch_run_id: Some(run_id),
+                launch_tool_part_id: Some(part.part_id),
+                kind,
+            })
+            .await?;
+        let launching = if created.phase == BackgroundOperationPhase::LaunchRequested {
+            self.store
+                .transition_background_operation(BackgroundOperationTransition {
+                    operation_id: operation_id.clone(),
+                    expected_revision: created.revision,
+                    next_phase: BackgroundOperationPhase::Launching,
+                    external_id: None,
+                    outcome: None,
+                    failure: None,
+                    owner_id: Some("legacy-adoption".to_owned()),
+                    lease_until_ms: Some(Utc::now().timestamp_millis() + 30_000),
+                })
+                .await?
+        } else {
+            created
+        };
+        if launching.phase == BackgroundOperationPhase::Launching {
+            self.store
+                .transition_background_operation(BackgroundOperationTransition {
+                    operation_id,
+                    expected_revision: launching.revision,
+                    next_phase: BackgroundOperationPhase::Running,
+                    external_id: Some(external_id.to_owned()),
+                    outcome: None,
+                    failure: None,
+                    owner_id: None,
+                    lease_until_ms: None,
+                })
+                .await
+        } else {
+            Ok(launching)
+        }
+    }
+
+    /// Record one sequenced monitor event on the same durable aggregate. The
+    /// monitor remains Running; only its event cursor and unique delivery
+    /// advance.
     pub async fn settle_background_event(
         &self,
         session_id: i64,
@@ -1885,87 +1968,43 @@ impl SessionManager {
         event_seq: u64,
         notification: SystemNotificationContent,
     ) -> Result<(), AppError> {
-        let committed = self
-            .session_mutations
-            .run(session_id, async {
-                let session = self.store.load_session(session_id).await?;
-                if session
-                    .parts()
-                    .iter()
-                    .any(|part| part_records_event(part, kind, id, event_seq))
-                {
-                    // The durable part is the claim; a re-delivered event
-                    // signal for an already-recorded seq is a no-op.
-                    return Ok((false, None));
-                }
-                let part_index = session
-                    .parts()
-                    .iter()
-                    .position(|part| {
-                        if part.kind != "tool_call" {
-                            return false;
-                        }
-                        operation_from_part(part).is_some_and(|operation| {
-                            operation.background_operation().is_some_and(|marker| {
-                                marker.kind == kind && marker.id == id
-                            })
-                        })
-                    })
-                    .ok_or_else(|| {
-                        AppError::Internal(format!(
-                            "monitor {kind} {id} has no in-progress tool part in session {session_id}"
-                        ))
-                    })?;
-                let part_id = session.parts()[part_index].part_id;
-                // The launching run is the assistant run that started the
-                // monitor (the tool part's `run_id`). The event belongs to
-                // that run: append it as an Assistant-role part under the
-                // SAME marker — no new run. Its body projects as a dedicated
-                // system-message wire part (never assistant reply text), so it
-                // cannot leak into the assistant's own visible output.
-                let run_id = session
-                    .parts()
-                    .iter()
-                    .find(|part| part.part_id == part_id)
-                    .and_then(|part| part.run_id)
-                    .unwrap_or(part_id);
-                let new_part = new_part_from_content(
-                    "system_notification",
-                    PartRole::Assistant,
-                    &TypedContent::SystemNotification(notification.clone()),
-                    PartState::Completed,
-                )?;
-                // `tool_part: None`: the monitor stays InProgress and its run
-                // marker stays in-flight — settle, don't terminalize.
-                let created = self
-                    .store
-                    .settle_background_run(session_id, run_id, None, vec![new_part])
-                    .await?;
-                Ok((true, created.first().map(|part| part.part_id)))
+        let operation_kind = BackgroundOperationKind::parse(kind).ok_or_else(|| {
+            AppError::Internal(format!("unsupported background operation kind {kind}"))
+        })?;
+        let operation = self
+            .background_operation_for_signal(session_id, operation_kind, id)
+            .await?;
+        let new_part = new_part_from_content(
+            "system_notification",
+            PartRole::Runtime,
+            &TypedContent::SystemNotification(notification.clone()),
+            PartState::Completed,
+        )?;
+        let settled = self
+            .store
+            .record_background_event(BackgroundEventRequest {
+                operation_id: operation.operation_id,
+                event_key: format!("event:{event_seq}"),
+                event_seq: Some(event_seq),
+                next_phase: None,
+                outcome: None,
+                failure: None,
+                notification: new_part,
             })
             .await?;
-        let (committed, notification_part_id) = committed;
-        if !committed {
-            return Ok(());
-        }
-        // Wake the model over the settled event (the agena analog of Claude
-        // Code's `<task-notification>` waking the launching turn).
-        self.wake_after_notification(session_id, notification_part_id, notification)
+        self.dispatch_background_delivery(settled.delivery, notification)
             .await
     }
 
-    /// Deliver a scheduled job's prompt as an **Assistant-role**
-    /// `system_notification` part appended onto the existing run — no new run
-    /// marker — and wake the model over it. This is the AI-identity
-    /// counterpart of a background operation's completion notification: the
-    /// prompt rides the launching assistant run as a typed part, projected as
-    /// a dedicated system-message wire part (never assistant reply text, never
-    /// a User-role `user_send` run).
+    /// Deliver one scheduled job through the same durable aggregate and outbox
+    /// used by every other background operation.
     ///
-    /// The durable `system_notification` part (`operation_kind`
-    /// "scheduled_delivery", `operation_id` = delivery key) is the idempotency
-    /// claim, so a re-delivered job (e.g. after a process crash) is a no-op.
-    /// Returns true when newly delivered, false when the claim already existed.
+    /// Scheduled deliveries have no launching tool part, so their operation
+    /// uses a synthetic stable id and nullable launch references. The prompt
+    /// is committed in a new Runtime-role ingress run at its actual arrival
+    /// position; it is never appended retroactively to an assistant response.
+    /// Replaying the same delivery key is idempotent all the way through the
+    /// operation, transcript projection, and model-wake delivery.
     pub async fn deliver_scheduled_job(
         &self,
         session_id: i64,
@@ -1973,6 +2012,7 @@ impl SessionManager {
         delivery_key: String,
         prompt: String,
     ) -> Result<bool, AppError> {
+        let operation_id = format!("scheduled:{session_id}:{delivery_key}");
         let notification = SystemNotificationContent {
             operation_id: delivery_key.clone(),
             operation_kind: "scheduled_delivery".to_string(),
@@ -1981,92 +2021,571 @@ impl SessionManager {
             body: prompt.clone(),
             ..Default::default()
         };
-        let committed = self
-            .session_mutations
-            .run(session_id, async {
-                let session = self.store.load_session(session_id).await?;
-                if session
-                    .parts()
-                    .iter()
-                    .any(|part| part_records_notification(part, "scheduled_delivery", &delivery_key))
-                {
-                    // The durable part is the claim; a re-delivered job is a
-                    // no-op.
-                    return Ok((false, None));
-                }
-                // The delivery belongs to the existing assistant run: append
-                // it as an Assistant-role part under the SAME marker — no new
-                // run. Its body projects as a dedicated system-message wire
-                // part (never assistant reply text), so it cannot leak into
-                // the assistant's own visible output or masquerade as a user
-                // message.
-                let launching = session.parts().iter().rev().find(|part| part.is_run_marker());
-                let new_part = new_part_from_content(
-                    "system_notification",
-                    PartRole::Assistant,
-                    &TypedContent::SystemNotification(notification.clone()),
-                    PartState::Completed,
-                )?;
-                let notification_part_id = match launching {
-                    // In-flight assistant run → guarded append.
-                    Some(marker) if marker.role == PartRole::Assistant
-                        && marker.state.is_in_flight() => {
-                        let created = self
-                            .store
-                            .append_parts(session.id, marker.part_id, vec![new_part])
-                            .await?;
-                        created.first().map(|part| part.part_id)
-                    }
-                    // Terminal assistant run (Completed/Failed/Cancelled) →
-                    // settle appends under terminal markers without closing
-                    // anything.
-                    Some(marker) if marker.role == PartRole::Assistant => {
-                        let created = self
-                            .store
-                            .settle_background_run(
-                                session.id,
-                                marker.part_id,
-                                None,
-                                vec![new_part],
-                            )
-                            .await?;
-                        created.first().map(|part| part.part_id)
-                    }
-                    // Appending an Assistant notification under a User run
-                    // would project its prompt as *user* content — the exact
-                    // identity regression being fixed. Unreachable: the
-                    // scheduler skips while the session is running, so no
-                    // `user_send` marker can be last.
-                    Some(marker) => {
-                        return Err(AppError::Internal(format!(
-                            "scheduled delivery for session {session_id} found a {:?} run marker to ride",
-                            marker.role
-                        )))
-                    }
-                    None => {
-                        return Err(AppError::Internal(format!(
-                            "scheduled delivery for session {session_id} found no run marker to ride"
-                        )))
-                    }
-                };
-                Ok((true, notification_part_id))
+        let mut operation = self
+            .store
+            .create_background_operation(NewBackgroundOperation {
+                operation_id: operation_id.clone(),
+                session_id,
+                launch_run_id: None,
+                launch_tool_part_id: None,
+                kind: BackgroundOperationKind::ScheduledDelivery,
             })
             .await?;
-        let (committed, notification_part_id) = committed;
-        if !committed {
-            return Ok(false);
+        // Multiple scheduler workers may deliver the same key concurrently.
+        // Advance the idempotent aggregate with optimistic retry rather than
+        // leaking a harmless revision race as a failed scheduled job.
+        for attempt in 0..8 {
+            let transition = match operation.phase {
+                BackgroundOperationPhase::LaunchRequested => Some(BackgroundOperationTransition {
+                    operation_id: operation_id.clone(),
+                    expected_revision: operation.revision,
+                    next_phase: BackgroundOperationPhase::Launching,
+                    external_id: None,
+                    outcome: None,
+                    failure: None,
+                    owner_id: Some(format!("scheduled-delivery:{job_id}")),
+                    lease_until_ms: Some(Utc::now().timestamp_millis() + 30_000),
+                }),
+                BackgroundOperationPhase::Launching => Some(BackgroundOperationTransition {
+                    operation_id: operation_id.clone(),
+                    expected_revision: operation.revision,
+                    next_phase: BackgroundOperationPhase::Running,
+                    external_id: Some(delivery_key.clone()),
+                    outcome: None,
+                    failure: None,
+                    owner_id: None,
+                    lease_until_ms: None,
+                }),
+                _ => None,
+            };
+            let Some(transition) = transition else {
+                break;
+            };
+            match self.store.transition_background_operation(transition).await {
+                Ok(updated) => operation = updated,
+                Err(error) if attempt == 7 => return Err(error),
+                Err(_) => {
+                    operation = self
+                        .store
+                        .background_operation(&operation_id)
+                        .await?
+                        .ok_or_else(|| {
+                            AppError::Internal(format!(
+                                "scheduled background operation {operation_id} disappeared"
+                            ))
+                        })?;
+                }
+            }
         }
-        // Wake the model over the delivered prompt (the agena analog of Claude
-        // Code's `<task-notification>` waking the launching turn).
-        self.wake_after_notification(session_id, notification_part_id, notification)
+        let new_part = new_part_from_content(
+            "system_notification",
+            PartRole::Runtime,
+            &TypedContent::SystemNotification(notification.clone()),
+            PartState::Completed,
+        )?;
+        let settled = self
+            .store
+            .record_background_event(BackgroundEventRequest {
+                operation_id,
+                event_key: "terminal".to_owned(),
+                event_seq: None,
+                next_phase: Some(BackgroundOperationPhase::Completed),
+                outcome: Some(serde_json::json!({ "job_id": job_id })),
+                failure: None,
+                notification: new_part,
+            })
             .await?;
-        Ok(true)
+        self.dispatch_background_delivery(settled.delivery, notification)
+            .await?;
+        Ok(settled.created)
+    }
+
+    /// Claim and deliver one persisted notification. A failure releases the
+    /// claim back to Pending, so restart recovery can retry it; success marks
+    /// it Consumed only after the wake execution returns.
+    ///
+    /// A completed assistant `continue` run after the Runtime notification is
+    /// durable proof that an earlier dispatcher finished the wake but crashed
+    /// before consuming the outbox row. Recovery consumes that row without
+    /// invoking the model again, closing the classic response-commit / outbox-
+    /// ack crash window.
+    async fn dispatch_background_delivery(
+        &self,
+        delivery: BackgroundDelivery,
+        notification: SystemNotificationContent,
+    ) -> Result<(), AppError> {
+        const DELIVERY_CLAIM_MS: i64 = 15 * 60 * 1_000;
+        let now_ms = Utc::now().timestamp_millis();
+        let Some(claimed) = self
+            .store
+            .claim_background_delivery(&delivery.delivery_id, now_ms + DELIVERY_CLAIM_MS)
+            .await?
+        else {
+            // Another live dispatcher owns it, or it is already consumed.
+            return Ok(());
+        };
+        if self
+            .notification_has_completed_assistant_response(
+                claimed.session_id,
+                claimed.notification_part_id,
+            )
+            .await?
+        {
+            self.store
+                .consume_background_delivery(&claimed.delivery_id)
+                .await?;
+            return Ok(());
+        }
+        let delivered = self
+            .wake_after_notification(
+                claimed.session_id,
+                claimed.notification_part_id,
+                notification,
+            )
+            .await;
+        match delivered {
+            Ok(()) => {
+                self.store
+                    .consume_background_delivery(&claimed.delivery_id)
+                    .await?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self
+                    .store
+                    .retry_background_delivery(
+                        &claimed.delivery_id,
+                        serde_json::json!({ "message": error.to_string() }),
+                    )
+                    .await;
+                Err(error)
+            }
+        }
+    }
+
+    /// Whether the append-only transcript proves that `notification_part_id`
+    /// has already received a completed model response.
+    ///
+    /// Runtime ingress is committed before its answering assistant run, and
+    /// part ids are allocated monotonically. Compaction markers are excluded:
+    /// only a completed assistant `continue` run is evidence of model handling.
+    /// This derives delivery progress from the canonical transcript instead of
+    /// adding another persisted `notified`/`responded` flag.
+    async fn notification_has_completed_assistant_response(
+        &self,
+        session_id: i64,
+        notification_part_id: Option<i64>,
+    ) -> Result<bool, AppError> {
+        let Some(notification_part_id) = notification_part_id else {
+            return Ok(false);
+        };
+        let session = self.store.load_session(session_id).await?;
+        let notification_exists = session.parts().iter().any(|part| {
+            part.part_id == notification_part_id
+                && part.kind == "system_notification"
+                && part.role == PartRole::Runtime
+                && part.state == PartState::Completed
+        });
+        if !notification_exists {
+            return Err(AppError::Internal(format!(
+                "background delivery notification part {notification_part_id} is missing or invalid in session {session_id}"
+            )));
+        }
+        Ok(session.parts().iter().any(|part| {
+            part.part_id > notification_part_id
+                && part.is_run_marker()
+                && part.role == PartRole::Assistant
+                && part.state == PartState::Completed
+                && part
+                    .content
+                    .get("run_kind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("continue")
+        }))
+    }
+
+    /// Restart-safe dispatcher backstop. The live bus only lowers latency;
+    /// this durable scan is what guarantees a notification committed before a
+    /// crash is eventually presented after restart.
+    pub async fn recover_background_deliveries(&self, limit: usize) -> Result<usize, AppError> {
+        let pending = self.store.pending_background_deliveries(limit).await?;
+        let mut recovered = 0usize;
+        for delivery in pending {
+            let notification =
+                serde_json::from_value::<SystemNotificationContent>(delivery.payload.clone())
+                    .map_err(|error| {
+                        AppError::Internal(format!(
+                            "decode background delivery {}: {error}",
+                            delivery.delivery_id
+                        ))
+                    })?;
+            match self
+                .dispatch_background_delivery(delivery.clone(), notification)
+                .await
+            {
+                Ok(()) => recovered += 1,
+                Err(error) => tracing::warn!(
+                    target: "agena_background",
+                    delivery_id = %delivery.delivery_id,
+                    %error,
+                    "durable background delivery retry failed"
+                ),
+            }
+        }
+        Ok(recovered)
+    }
+
+    /// Renew ownership only for work this runtime can prove is still live.
+    /// The durable lease is a cross-process liveness hint, never the source of
+    /// lifecycle truth; failure to renew merely makes the operation eligible
+    /// for reconciliation after the bounded lease window.
+    pub async fn renew_background_operation_leases(&self, limit: usize) -> Result<usize, AppError> {
+        let operations = self.store.active_background_operations(None, limit).await?;
+        let process_summaries = self
+            .execution_state()
+            .tool_executor
+            .monitor_registry()
+            .map(|registry| registry.list())
+            .unwrap_or_default();
+        let mut renewed = 0usize;
+        for operation in operations {
+            if operation.owner_id.as_deref() != Some(self.store.background_owner_id())
+                || operation.phase != BackgroundOperationPhase::Running
+            {
+                continue;
+            }
+            let live = match operation.kind {
+                BackgroundOperationKind::Shell | BackgroundOperationKind::Monitor => {
+                    operation.external_id.as_deref().is_some_and(|external_id| {
+                        process_summaries.iter().any(|summary| {
+                            summary.process_id == external_id
+                                && summary.status == ProcessStatus::Running
+                        })
+                    })
+                }
+                BackgroundOperationKind::Task => {
+                    let Some(task_id) = operation.external_id.as_deref() else {
+                        continue;
+                    };
+                    let Some(child_id) = self
+                        .store
+                        .find_subagent_by_task_id(operation.session_id, task_id)
+                        .await?
+                    else {
+                        continue;
+                    };
+                    self.execution_registry.is_active(child_id).await
+                }
+                BackgroundOperationKind::ScheduledDelivery => false,
+            };
+            if !live {
+                continue;
+            }
+            match self
+                .store
+                .transition_background_operation(BackgroundOperationTransition {
+                    operation_id: operation.operation_id,
+                    expected_revision: operation.revision,
+                    next_phase: BackgroundOperationPhase::Running,
+                    external_id: None,
+                    outcome: None,
+                    failure: None,
+                    owner_id: Some(self.store.background_owner_id().to_owned()),
+                    lease_until_ms: Some(Utc::now().timestamp_millis() + 120_000),
+                })
+                .await
+            {
+                Ok(_) => renewed += 1,
+                // An event or completion may have advanced the revision after
+                // the scan. The next maintenance tick re-evaluates it; never
+                // overwrite that newer state.
+                Err(error) => tracing::debug!(
+                    target: "agena_background",
+                    %error,
+                    "background lease renewal lost a concurrent transition"
+                ),
+            }
+        }
+        Ok(renewed)
+    }
+
+    /// Reconcile shell/monitor operations whose owning runtime disappeared or
+    /// whose terminal callback was lost. A live lease owned by another
+    /// process wins; after expiry the local process registry is checked and an
+    /// absent process becomes an explicit Interrupted notification.
+    pub async fn reconcile_background_processes(&self, limit: usize) -> Result<usize, AppError> {
+        let mut operations = self
+            .store
+            .active_background_operations(Some(BackgroundOperationKind::Shell), limit)
+            .await?;
+        if operations.len() < limit {
+            operations.extend(
+                self.store
+                    .active_background_operations(
+                        Some(BackgroundOperationKind::Monitor),
+                        limit - operations.len(),
+                    )
+                    .await?,
+            );
+        }
+        let summaries = self
+            .execution_state()
+            .tool_executor
+            .monitor_registry()
+            .map(|registry| registry.list())
+            .unwrap_or_default();
+        let now_ms = Utc::now().timestamp_millis();
+        let mut reconciled = 0usize;
+        for operation in operations {
+            if operation.lease_until_ms.is_some_and(|until| until > now_ms) {
+                continue;
+            }
+            let Some(external_id) = operation.external_id.clone() else {
+                self.record_interrupted_background_operation(
+                    operation,
+                    "launch ended before an external identity was bound".to_owned(),
+                )
+                .await?;
+                reconciled += 1;
+                continue;
+            };
+            let summary = summaries
+                .iter()
+                .find(|summary| summary.process_id == external_id);
+            match summary.map(|summary| summary.status) {
+                Some(ProcessStatus::Running) => {
+                    // The local registry proves the process is alive; adopt
+                    // ownership if its previous lease merely expired.
+                    self.finish_background_launch_handoff(&operation.operation_id)
+                        .await?;
+                }
+                Some(status) => {
+                    let notification_status = match status {
+                        ProcessStatus::Exited => "completed",
+                        ProcessStatus::TimedOut => "timed_out",
+                        ProcessStatus::Stopped => "cancelled",
+                        ProcessStatus::Failed => "failed",
+                        ProcessStatus::Running => unreachable!(),
+                    };
+                    let text = format!(
+                        "Background process {external_id} ended with status {:?}",
+                        status
+                    );
+                    let outcome = if status == ProcessStatus::Exited {
+                        Ok(text.clone())
+                    } else {
+                        Err(AppError::Internal(text.clone()).failure())
+                    };
+                    self.settle_background_operation(
+                        operation.session_id,
+                        operation.kind.as_str(),
+                        &external_id,
+                        if status == ProcessStatus::Exited {
+                            PartState::Completed
+                        } else if status == ProcessStatus::Stopped {
+                            PartState::Cancelled
+                        } else {
+                            PartState::Failed
+                        },
+                        outcome,
+                        SystemNotificationContent {
+                            operation_id: external_id.clone(),
+                            operation_kind: operation.kind.as_str().to_owned(),
+                            status: notification_status.to_owned(),
+                            summary: text.clone(),
+                            body: text,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                    reconciled += 1;
+                }
+                None => {
+                    self.record_interrupted_background_operation(
+                        operation,
+                        format!(
+                            "background process {external_id} is absent after its owner lease expired"
+                        ),
+                    )
+                    .await?;
+                    reconciled += 1;
+                }
+            }
+        }
+        Ok(reconciled)
+    }
+
+    async fn record_interrupted_background_operation(
+        &self,
+        operation: agena_storage::store::BackgroundOperation,
+        reason: String,
+    ) -> Result<(), AppError> {
+        let external_id = operation
+            .external_id
+            .clone()
+            .unwrap_or_else(|| operation.operation_id.clone());
+        let notification = SystemNotificationContent {
+            operation_id: external_id,
+            operation_kind: operation.kind.as_str().to_owned(),
+            status: "interrupted".to_owned(),
+            summary: reason.clone(),
+            body: reason.clone(),
+            ..Default::default()
+        };
+        let notification_part = new_part_from_content(
+            "system_notification",
+            PartRole::Runtime,
+            &TypedContent::SystemNotification(notification.clone()),
+            PartState::Completed,
+        )?;
+        let settled = self
+            .store
+            .record_background_event(BackgroundEventRequest {
+                operation_id: operation.operation_id,
+                event_key: "terminal".to_owned(),
+                event_seq: None,
+                next_phase: Some(BackgroundOperationPhase::Interrupted),
+                outcome: None,
+                failure: Some(serde_json::json!({ "message": reason })),
+                notification: notification_part,
+            })
+            .await?;
+        self.dispatch_background_delivery(settled.delivery, notification)
+            .await
+    }
+
+    /// Reconcile terminal child sessions against active task aggregates.
+    ///
+    /// The facade observer still lowers notification latency, but it is not a
+    /// correctness dependency: after a dropped bus event or process restart,
+    /// this scan reads both sides from durable storage and records the same
+    /// idempotent terminal event/outbox row.
+    pub async fn reconcile_background_tasks(&self, limit: usize) -> Result<usize, AppError> {
+        let operations = self
+            .store
+            .active_background_operations(Some(BackgroundOperationKind::Task), limit)
+            .await?;
+        let mut reconciled = 0usize;
+        for operation in operations {
+            let Some(task_id) = operation.external_id.as_deref() else {
+                continue;
+            };
+            let Some(child_id) = self
+                .store
+                .find_subagent_by_task_id(operation.session_id, task_id)
+                .await?
+            else {
+                continue;
+            };
+            let child = self.store.load_session(child_id).await?;
+            if child.runtime.subtask.status == agena_domain::SubtaskStatus::Running {
+                let launch_is_live = operation
+                    .lease_until_ms
+                    .is_some_and(|until| until > Utc::now().timestamp_millis());
+                if launch_is_live {
+                    // The task tool published Running immediately before
+                    // execute_registered installs the child lease. The
+                    // operation's short launch lease closes that handoff race.
+                    continue;
+                }
+                self.reconcile_interrupted_session(child_id).await?;
+            }
+            let child = self.store.load_session(child_id).await?;
+            let status = child.runtime.subtask.status;
+            if !status.is_terminal() {
+                continue;
+            }
+            let (terminal, notification_status) = match status {
+                agena_domain::SubtaskStatus::Completed => (PartState::Completed, "completed"),
+                agena_domain::SubtaskStatus::Failed => (PartState::Failed, "failed"),
+                agena_domain::SubtaskStatus::Cancelled => (PartState::Cancelled, "cancelled"),
+                agena_domain::SubtaskStatus::TimedOut => (PartState::Failed, "timed_out"),
+                agena_domain::SubtaskStatus::Interrupted => (PartState::Cancelled, "interrupted"),
+                agena_domain::SubtaskStatus::Created | agena_domain::SubtaskStatus::Running => {
+                    continue;
+                }
+            };
+            let title = child.title.trim();
+            let task_label = if title.is_empty() {
+                task_id.to_owned()
+            } else {
+                format!("\"{title}\"")
+            };
+            let final_text = child
+                .parts()
+                .iter()
+                .rev()
+                .find_map(|part| {
+                    part.content
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .or_else(|| part.summary.clone())
+                })
+                .filter(|text| !text.trim().is_empty())
+                .unwrap_or_else(|| "Task completed.".to_owned());
+            let outcome = if status == agena_domain::SubtaskStatus::Completed {
+                Ok(final_text)
+            } else {
+                Err(child.runtime.subtask.failure.clone().unwrap_or_else(|| {
+                    if status == agena_domain::SubtaskStatus::Cancelled {
+                        AppError::Cancelled.failure()
+                    } else {
+                        AppError::Internal(format!(
+                            "delegated task {task_id} ended with status {}",
+                            status.as_ref()
+                        ))
+                        .failure()
+                    }
+                }))
+            };
+            let summary = match &outcome {
+                Ok(_) => format!("Task {task_label} finished"),
+                Err(failure) => {
+                    let reason = failure.user.fallback.trim().trim_end_matches('.');
+                    let verb = match status {
+                        agena_domain::SubtaskStatus::Cancelled
+                        | agena_domain::SubtaskStatus::Interrupted => "cancelled",
+                        agena_domain::SubtaskStatus::TimedOut => "timed out",
+                        _ => "failed",
+                    };
+                    if reason.is_empty() {
+                        format!("Task {task_label} {verb}")
+                    } else {
+                        format!("Task {task_label} {verb}: {reason}")
+                    }
+                }
+            };
+            let notification = SystemNotificationContent {
+                operation_id: task_id.to_owned(),
+                operation_kind: "task".to_owned(),
+                status: notification_status.to_owned(),
+                summary,
+                body: match &outcome {
+                    Ok(text) => format!("<result>{text}</result>"),
+                    Err(failure) => failure.user.fallback.clone(),
+                },
+                ..Default::default()
+            };
+            self.settle_background_operation(
+                operation.session_id,
+                "task",
+                task_id,
+                terminal,
+                outcome,
+                notification,
+            )
+            .await?;
+            reconciled += 1;
+        }
+        Ok(reconciled)
     }
 
     /// Wake the model over a freshly-settled notification (a background
     /// completion, a monitor event, or a scheduled delivery), shared by the
-    /// three settle paths. The notification part was appended onto the
-    /// launching run inside the session mutation; this runs outside it.
+    /// three settle paths. The notification part was atomically committed in
+    /// its own chronological Runtime ingress run; this runs outside that
+    /// transaction.
     ///
     /// The mid-turn arm steers the active execution and then **verifies the
     /// steer landed**: the stable-run loop acknowledges the notification part
@@ -2126,7 +2645,9 @@ impl SessionManager {
                 operation_id = %notification.operation_id, %error,
                 "notification steer missed the active execution; waking idle"
             );
-            self.execution_registry.wait_until_released(session_id).await;
+            self.execution_registry
+                .wait_until_released(session_id)
+                .await;
             self.wake_idle_notification(session_id).await?;
             return Ok(());
         }
@@ -2134,14 +2655,14 @@ impl SessionManager {
         // acknowledges the appended part, or it exits without observing it
         // (its final drain already passed) and a fresh wake takes over.
         let Some(ack_rx) = ack_rx else {
-            // No part id captured (should not happen for the settle paths);
-            // the loop's own notification detection still picks the part up
-            // on its next reload.
-            return Ok(());
+            return Err(AppError::Internal(format!(
+                "background notification {}:{} has no durable notification part id",
+                notification.operation_kind, notification.operation_id
+            )));
         };
-        tokio::select! {
+        let acknowledged_before_release = tokio::select! {
             biased;
-            _ = ack_rx => {}
+            _ = ack_rx => true,
             _ = self.execution_registry.wait_until_released(session_id) => {
                 tracing::debug!(
                     target: "agena_background",
@@ -2150,7 +2671,33 @@ impl SessionManager {
                     "notification steer acknowledged no new turn; waking idle"
                 );
                 self.wake_idle_notification(session_id).await?;
+                false
             }
+        };
+        if !acknowledged_before_release {
+            return Ok(());
+        }
+
+        // Cursor observation only proves that the active loop loaded the
+        // Runtime ingress; it does not prove the answering model turn committed.
+        // Keep the delivery claimed until that execution ends, then verify the
+        // durable assistant response. A crash/failure after observation but
+        // before response falls back to a fresh wake instead of consuming and
+        // silently losing the notification.
+        self.execution_registry
+            .wait_until_released(session_id)
+            .await;
+        if !self
+            .notification_has_completed_assistant_response(session_id, notification_part_id)
+            .await?
+        {
+            tracing::debug!(
+                target: "agena_background",
+                %session_id, operation_kind = %notification.operation_kind,
+                operation_id = %notification.operation_id,
+                "notification was observed but produced no completed assistant response; waking idle"
+            );
+            self.wake_idle_notification(session_id).await?;
         }
         Ok(())
     }
@@ -2173,47 +2720,4 @@ impl SessionManager {
         .await?;
         Ok(())
     }
-}
-
-/// True when a `system_notification` part records the given operation's
-/// completion — the durable claim that the operation has been notified to the
-/// model (the agena analog of Claude Code's atomic `notified` flag).
-///
-/// Terminal only: a part recording a per-event notification
-/// (`event_seq: Some(_)`, see [`part_records_event`]) does **not** claim the
-/// terminal — a monitor's events must never swallow its completion.
-pub(crate) fn part_records_notification(part: &Part, kind: &str, id: &str) -> bool {
-    part.kind == "system_notification"
-        && typed_content_from_value(&part.kind, &part.content)
-            .ok()
-            .and_then(|content| match content {
-                TypedContent::SystemNotification(notification) => {
-                    (notification.operation_kind == kind
-                        && notification.operation_id == id
-                        && notification.event_seq.is_none())
-                        .then_some(())
-                }
-                _ => None,
-            })
-            .is_some()
-}
-
-/// True when a `system_notification` part records the given monitor event —
-/// the durable per-event claim (`kind + id + event_seq`, monotonic). Each
-/// event is notified once, independently; re-delivered signals for an
-/// already-recorded seq are no-ops.
-pub(crate) fn part_records_event(part: &Part, kind: &str, id: &str, event_seq: u64) -> bool {
-    part.kind == "system_notification"
-        && typed_content_from_value(&part.kind, &part.content)
-            .ok()
-            .and_then(|content| match content {
-                TypedContent::SystemNotification(notification) => {
-                    (notification.operation_kind == kind
-                        && notification.operation_id == id
-                        && notification.event_seq == Some(event_seq))
-                        .then_some(())
-                }
-                _ => None,
-            })
-            .is_some()
 }

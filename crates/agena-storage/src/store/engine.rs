@@ -12,9 +12,11 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 
 use super::{
-    InteractionAnswerOutcome, LeaseAcquire, NewPart, NewSession, Part, PartDelta, PartState,
-    ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta, SessionSummary, SessionView,
-    StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
+    BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationTransition,
+    BackgroundSettleOutcome, InteractionAnswerOutcome, LeaseAcquire, NewBackgroundOperation,
+    NewPart, NewSession, Part, PartDelta, PartState, ReconcileOutcome, RunOutcome,
+    SessionListQuery, SessionMeta, SessionSummary, SessionView, StoreError, SubmitOutcome,
+    UsageQuery, UsageRecord, UsageStats,
 };
 
 /// A live-update notification derived from an operation and emitted after
@@ -189,11 +191,101 @@ pub trait PersistenceEngine: Send + Sync {
     /// Delete leases whose heartbeat is stale and return their session ids.
     async fn reap_stale_leases(&self, stale_before_ms: i64) -> Result<Vec<i64>, StoreError>;
 
+    // --- durable background-operation aggregate ---
+
+    /// Create the idempotent launch intent before starting the external side
+    /// effect. Replays for the same `(session, tool_part)` return the existing
+    /// aggregate.
+    async fn create_background_operation(
+        &self,
+        operation: NewBackgroundOperation,
+        now_ms: i64,
+    ) -> Result<BackgroundOperation, StoreError>;
+
+    /// Load one aggregate by its stable internal id.
+    async fn background_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<BackgroundOperation>, StoreError>;
+
+    /// Resolve a runtime completion signal without an in-memory correlation
+    /// index. The unique `(kind, external_id)` index is authoritative.
+    async fn background_operation_by_external_id(
+        &self,
+        kind: super::BackgroundOperationKind,
+        external_id: &str,
+    ) -> Result<Option<BackgroundOperation>, StoreError>;
+
+    /// List non-terminal aggregates in deterministic creation order. This is
+    /// the durable reconciliation source after restart; observer buses and
+    /// runtime registries are only latency optimizations.
+    async fn active_background_operations(
+        &self,
+        kind: Option<super::BackgroundOperationKind>,
+        limit: usize,
+    ) -> Result<Vec<BackgroundOperation>, StoreError>;
+
+    /// Advance one aggregate through the validated state machine with an
+    /// optimistic revision check.
+    async fn transition_background_operation(
+        &self,
+        transition: BackgroundOperationTransition,
+        now_ms: i64,
+    ) -> Result<BackgroundOperation, StoreError>;
+
+    /// Atomically record a unique operation event, append its notification in
+    /// a chronological runtime-ingress run, and enqueue the durable delivery.
+    /// The store serializes aggregate mutation internally; callback callers do
+    /// not perform an optimistic read/write pair that could lose concurrent
+    /// monitor events.
+    async fn record_background_event(
+        &self,
+        request: BackgroundEventRequest,
+        now_ms: i64,
+    ) -> Result<BackgroundSettleOutcome, StoreError>;
+
+    /// Claim a pending or expired delivery. Returns `None` when another live
+    /// owner holds the claim or the delivery is already consumed.
+    async fn claim_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        claim_until_ms: i64,
+        now_ms: i64,
+    ) -> Result<Option<BackgroundDelivery>, StoreError>;
+
+    /// Mark a claimed delivery consumed after the model wake completes.
+    async fn consume_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        now_ms: i64,
+    ) -> Result<BackgroundDelivery, StoreError>;
+
+    /// Release a failed claim back to pending with a durable diagnostic so a
+    /// restart or later dispatcher pass can retry it.
+    async fn retry_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        error: serde_json::Value,
+        now_ms: i64,
+    ) -> Result<BackgroundDelivery, StoreError>;
+
+    /// Pending or expired deliveries, oldest first, for restart recovery.
+    async fn pending_background_deliveries(
+        &self,
+        limit: usize,
+        now_ms: i64,
+    ) -> Result<Vec<BackgroundDelivery>, StoreError>;
+
     // --- writes (all require the session lease) ---
 
     /// User send (7.1): create the run marker + content parts + membership
     /// edges + optional idempotency row in one transaction. The marker's
-    /// `run_kind` is taken from `content.run_kind`.
+    /// `run_kind` is taken from `content.run_kind`. When every submitted input
+    /// part is already terminal, the marker is terminal too: a user input is a
+    /// committed external event, not an execution-liveness guard.
     async fn submit_user_run(
         &self,
         session_id: i64,
@@ -213,18 +305,17 @@ pub trait PersistenceEngine: Send + Sync {
     ///    must never destroy a *different* run that a live execution is still
     ///    driving (aborting unrelated in-flight runs is `try_acquire_lease`'s
     ///    job when a new execution genuinely takes over);
-    /// 2. terminalizes the launching tool part (the operation's own part);
-    /// 3. appends the result parts (`new_parts`, `PartRole::Assistant`) under
-    ///    the launching run — **no new run marker**. The notification part's
-    ///    body is projected as a dedicated system-message wire part (never
-    ///    assistant reply text), so riding the assistant run is safe;
+    /// 2. transitions the launching tool part (InProgress for the atomic
+    ///    launch checkpoint, terminal when the operation settles);
+    /// 3. appends the companion parts (`new_parts`, preserving their supplied
+    ///    roles) under the launching run — **no new run marker**;
     /// 4. terminalizes the launching run marker (Completed) once no in-flight
     ///    child remains, so the session returns to Ready instead of lingering
     ///    in Interrupted.
     ///
-    /// `tool_part` is `Some((part_id, terminal_state, content))` when the
-    /// launching tool part must be terminalized. Returns the created parts
-    /// (the appended notification rows).
+    /// `tool_part` is `Some((part_id, next_state, content))` when the launching
+    /// tool part must be checkpointed or terminalized. Returns the created
+    /// parts (a launch guard or settled notification rows).
     async fn settle_background_run(
         &self,
         session_id: i64,

@@ -1465,7 +1465,8 @@ impl OperationPart {
     pub fn set_background_operation(&mut self, background: &BackgroundOperation) {
         self.metadata.insert(
             BACKGROUND_OPERATION_METADATA_KEY.to_string(),
-            serde_json::to_value(background).expect("background marker is always JSON serializable"),
+            serde_json::to_value(background)
+                .expect("background marker is always JSON serializable"),
         );
     }
 

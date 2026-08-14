@@ -134,29 +134,26 @@ impl AgenaRuntime {
         // operations (monitored shells, delegated tasks) with their transcript
         // parts. The manager may not exist yet on a control-only bootstrap;
         // the bridge tolerates `None` and simply never terminalizes parts.
-        let background_completion =
-            crate::activity::BackgroundCompletionBridge::new(None, activity_registry.clone());
+        let background_completion = crate::activity::BackgroundCompletionBridge::new(None);
         let monitor_registry = tokio::runtime::Handle::try_current().ok().map(|handle| {
             let registry = crate::MonitorRegistry::from_handle(handle);
             let bridge = crate::activity::MonitorActivityBridge {
                 registry: activity_registry.clone(),
-                on_finished: std::sync::Arc::new(std::sync::Mutex::new(Some(
-                    std::sync::Arc::new({
+                on_finished: std::sync::Arc::new(std::sync::Mutex::new(Some(std::sync::Arc::new(
+                    {
                         let completion = background_completion.clone();
                         move |summary: &agena_domain::ProcessSummary| {
                             completion.complete_shell(summary);
                         }
-                    }),
-                ))),
-                on_event: std::sync::Arc::new(std::sync::Mutex::new(Some(
-                    std::sync::Arc::new({
-                        let completion = background_completion.clone();
-                        move |event: &agena_domain::ProcessEvent,
-                              summary: &agena_domain::ProcessSummary| {
-                            completion.settle_monitor_event(event, summary);
-                        }
-                    }),
-                ))),
+                    },
+                )))),
+                on_event: std::sync::Arc::new(std::sync::Mutex::new(Some(std::sync::Arc::new({
+                    let completion = background_completion.clone();
+                    move |event: &agena_domain::ProcessEvent,
+                          summary: &agena_domain::ProcessSummary| {
+                        completion.settle_monitor_event(event, summary);
+                    }
+                })))),
             };
             registry.with_monitor_listener(Arc::new(bridge))
         });
@@ -240,7 +237,40 @@ impl AgenaRuntime {
         runtime.apply_tracing_filter(initial_snapshot.tracing_config());
         runtime.spawn_background_tasks();
         runtime.spawn_subtask_activity_bridge();
+        runtime.spawn_background_delivery_recovery();
         Ok(runtime)
+    }
+
+    /// Recover notification handoffs committed before a prior process exited.
+    /// The durable delivery table is authoritative; this startup task merely
+    /// drives pending rows without delaying runtime bootstrap.
+    fn spawn_background_delivery_recovery(&self) {
+        let Some(manager) = self.current_snapshot().session_manager() else {
+            return;
+        };
+        tokio::spawn(async move {
+            if let Err(error) = manager.reconcile_background_tasks(64).await {
+                tracing::warn!(
+                    target: "agena_background",
+                    %error,
+                    "startup background task reconciliation failed"
+                );
+            }
+            if let Err(error) = manager.reconcile_background_processes(64).await {
+                tracing::warn!(
+                    target: "agena_background",
+                    %error,
+                    "startup background process reconciliation failed"
+                );
+            }
+            if let Err(error) = manager.recover_background_deliveries(64).await {
+                tracing::warn!(
+                    target: "agena_background",
+                    %error,
+                    "startup background delivery recovery failed"
+                );
+            }
+        });
     }
 
     /// Project delegated-task status into the unified background-activity
@@ -1984,6 +2014,46 @@ impl AgenaRuntime {
                                         "session lease reaping failed"
                                     );
                                 }
+                                let delivery_manager = Arc::clone(&manager);
+                                tokio::spawn(async move {
+                                    if let Err(error) = delivery_manager
+                                        .renew_background_operation_leases(128)
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            target: "agena_background",
+                                            %error,
+                                            "background operation lease renewal failed"
+                                        );
+                                    }
+                                    if let Err(error) =
+                                        delivery_manager.reconcile_background_tasks(64).await
+                                    {
+                                        tracing::warn!(
+                                            target: "agena_background",
+                                            %error,
+                                            "periodic background task reconciliation failed"
+                                        );
+                                    }
+                                    if let Err(error) =
+                                        delivery_manager.reconcile_background_processes(64).await
+                                    {
+                                        tracing::warn!(
+                                            target: "agena_background",
+                                            %error,
+                                            "periodic background process reconciliation failed"
+                                        );
+                                    }
+                                    if let Err(error) =
+                                        delivery_manager.recover_background_deliveries(64).await
+                                    {
+                                        tracing::warn!(
+                                            target: "agena_background",
+                                            %error,
+                                            "periodic background delivery recovery failed"
+                                        );
+                                    }
+                                });
                             }
                         }
                     },

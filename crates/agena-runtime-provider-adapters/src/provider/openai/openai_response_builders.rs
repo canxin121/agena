@@ -1625,7 +1625,9 @@ mod tool_api_history_tests {
             .as_array()
             .expect("responses input array")
             .iter()
-            .filter(|item| item.pointer("/role").and_then(serde_json::Value::as_str) == Some("system"))
+            .filter(|item| {
+                item.pointer("/role").and_then(serde_json::Value::as_str) == Some("system")
+            })
             .collect::<Vec<_>>();
         assert_eq!(
             system_messages.len(),
@@ -1643,8 +1645,10 @@ mod tool_api_history_tests {
                 .as_array()
                 .expect("responses input array")
                 .iter()
-                .any(|item| item.pointer("/role").and_then(serde_json::Value::as_str)
-                    == Some("assistant")),
+                .any(
+                    |item| item.pointer("/role").and_then(serde_json::Value::as_str)
+                        == Some("assistant")
+                ),
             "the notification must never wire as assistant output content"
         );
     }

@@ -1,6 +1,5 @@
 use agena_application::{
-    dto::SessionPermissionUpdateRequest,
-    session::session_resource_from_summary,
+    dto::SessionPermissionUpdateRequest, session::session_resource_from_summary,
 };
 
 /// Thin adapter: project a session's execution resource through the shared
@@ -9,9 +8,7 @@ async fn session_execution_json_from_id(
     state: &AppState,
     session_id: i64,
 ) -> Result<Json<agena_application::dto::SessionExecutionResource>, ServerError> {
-    Ok(Json(
-        state.session_execution_resource(session_id).await?,
-    ))
+    Ok(Json(state.session_execution_resource(session_id).await?))
 }
 
 async fn assert_if_match_session_version(

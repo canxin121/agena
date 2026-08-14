@@ -90,7 +90,12 @@ impl App {
         let Some(hit) = self.interaction_cursor_hit(width) else {
             return;
         };
-        let Some(mut view) = self.transcript.interaction_views.get(&hit.request_id).cloned() else {
+        let Some(mut view) = self
+            .transcript
+            .interaction_views
+            .get(&hit.request_id)
+            .cloned()
+        else {
             return;
         };
         let Some(dialog) = self.user_input_interactions.get(&hit.request_id) else {
@@ -151,7 +156,9 @@ impl App {
         }
         let view = self.transcript.interaction_views.get(&request_id)?;
         // Body offset: the headline row precedes the body.
-        let body_offset = cursor_line.saturating_sub(node.start_line).saturating_sub(1);
+        let body_offset = cursor_line
+            .saturating_sub(node.start_line)
+            .saturating_sub(1);
         let editing_custom = dialog.presentation.review().is_editing_custom();
         let layouts =
             agena_tui_transcript::interaction_question_layouts(&dialog.request, &view.answers);
@@ -333,10 +340,10 @@ impl App {
         if plain_motion {
             match resolve_tui_key(KeyContext::Transcript, key) {
                 Some(KeyAction::MoveLeft) => {
-                    return self.ask_jump_question(&hit.request_id, hit.line_kind, -1)
+                    return self.ask_jump_question(&hit.request_id, hit.line_kind, -1);
                 }
                 Some(KeyAction::MoveRight) => {
-                    return self.ask_jump_question(&hit.request_id, hit.line_kind, 1)
+                    return self.ask_jump_question(&hit.request_id, hit.line_kind, 1);
                 }
                 _ => {}
             }
@@ -369,7 +376,9 @@ impl App {
             return None;
         }
         let view = self.transcript.interaction_views.get(&request_id)?;
-        let body_offset = cursor_line.saturating_sub(node.start_line).saturating_sub(1);
+        let body_offset = cursor_line
+            .saturating_sub(node.start_line)
+            .saturating_sub(1);
         let editing_custom = dialog.presentation.is_editing_custom();
         let layouts =
             agena_tui_transcript::interaction_question_layouts(&dialog.request, &view.answers);
@@ -472,10 +481,7 @@ impl App {
                 let Some(mut dialog) = self.user_input_interactions.remove(request_id) else {
                     return false;
                 };
-                if dialog
-                    .presentation
-                    .begin_custom_edit_for(question_index)
-                {
+                if dialog.presentation.begin_custom_edit_for(question_index) {
                     self.interaction_editing = Some(request_id.to_string());
                 }
                 self.user_input_interactions
@@ -524,10 +530,7 @@ impl App {
                     .is_some_and(|draft| !draft.custom_values.is_empty());
                 if !answered {
                     // No custom text yet: Enter opens the inline editor.
-                    if dialog
-                        .presentation
-                        .begin_custom_edit_for(question_index)
-                    {
+                    if dialog.presentation.begin_custom_edit_for(question_index) {
                         self.interaction_editing = Some(request_id.to_string());
                     }
                     self.user_input_interactions
@@ -657,7 +660,8 @@ impl App {
             _ => {}
         }
         if keep {
-            self.user_input_interactions.insert(request_id.to_string(), dialog);
+            self.user_input_interactions
+                .insert(request_id.to_string(), dialog);
         }
         self.sync_interaction_documents();
     }

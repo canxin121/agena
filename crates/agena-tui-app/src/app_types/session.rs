@@ -293,8 +293,7 @@ pub(crate) struct TranscriptState {
     /// markers) while the plan body and decision labels come from the wire
     /// `request`; the renderer draws them natively inside expanded pending
     /// interaction parts ("everything is a part").
-    pub(crate) interaction_views:
-        BTreeMap<String, agena_tui_transcript::PendingInteractionView>,
+    pub(crate) interaction_views: BTreeMap<String, agena_tui_transcript::PendingInteractionView>,
     pub(crate) rendered: Option<RenderedTranscript>,
 }
 

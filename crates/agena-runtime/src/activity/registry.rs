@@ -6,7 +6,7 @@
 //! records in; every mutation publishes a [`BackgroundActivityChangedEvent`] on
 //! the runtime event bus so TUI/Web can react live.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use agena_domain::{
@@ -18,46 +18,12 @@ use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
 const DEFAULT_ACTIVITY_HISTORY_LIMIT: usize = 256;
-/// Upper bound on ids hidden as part-backed transcript operations, so a
-/// long-lived runtime cannot grow the suppression set without bound.
-const HIDDEN_ACTIVITY_LIMIT: usize = 4096;
-
-#[derive(Debug, Default)]
-struct HiddenActivityIds {
-    /// Ids of background work now surfaced as transcript parts; excluded from
-    /// list/get so the panel does not double-display them ("everything is a
-    /// part", so part-backed work lives on the part, not the panel).
-    ids: HashSet<String>,
-}
-
-impl HiddenActivityIds {
-    /// Remember an id to hide. Returns `true` when the id was newly hidden so
-    /// callers can emit a `Dismissed` signal (the panel must drop a row that
-    /// is no longer listed).
-    fn insert(&mut self, id: String) -> bool {
-        let fresh = self.ids.insert(id.clone());
-        if self.ids.len() > HIDDEN_ACTIVITY_LIMIT {
-            // Bound the set; the panel is snapshot-driven so an evicted id
-            // only reappears until its record finishes and is trimmed.
-            self.ids.remove(&id);
-        }
-        fresh
-    }
-
-    fn contains(&self, id: &str) -> bool {
-        self.ids.contains(id)
-    }
-}
-
 /// Bounded ordered store for activity records. Newest first.
 #[derive(Debug)]
 struct ActivityStore {
     order: VecDeque<String>,
     activities: BTreeMap<String, BackgroundActivity>,
     history_limit: usize,
-    /// Ids suppressed from list/get because the work they describe is now a
-    /// transcript part.
-    hidden: HiddenActivityIds,
 }
 
 impl ActivityStore {
@@ -66,7 +32,6 @@ impl ActivityStore {
             order: VecDeque::new(),
             activities: BTreeMap::new(),
             history_limit,
-            hidden: HiddenActivityIds::default(),
         }
     }
 
@@ -85,21 +50,12 @@ impl ActivityStore {
         self.order
             .iter()
             .filter_map(|id| self.activities.get(id))
-            .filter(|activity| !self.hidden.contains(&activity.id))
             .filter(|activity| filter.matches(activity))
             .cloned()
             .collect()
     }
 
     fn get(&self, id: &str) -> Option<BackgroundActivity> {
-        if self.hidden.contains(id) {
-            return None;
-        }
-        self.activities.get(id).cloned()
-    }
-
-    /// Raw lookup that ignores the hidden set (for signaling a just-hidden id).
-    fn get_unhidden(&self, id: &str) -> Option<BackgroundActivity> {
         self.activities.get(id).cloned()
     }
 
@@ -183,12 +139,6 @@ impl ActivityRegistry {
     pub(crate) fn upsert(&self, activity: BackgroundActivity) {
         let reason = {
             let mut store = self.store.lock();
-            if store.hidden.contains(&activity.id) {
-                // The work behind this id is surfaced as a transcript part and
-                // excluded from list/get; updates must not signal a row that
-                // the panel will never render.
-                return;
-            }
             let previous = store.upsert(activity.clone());
             match previous {
                 None => BackgroundActivityEventReason::Started,
@@ -213,23 +163,6 @@ impl ActivityRegistry {
     /// Remove every finished record; returns the ids that were removed.
     pub(crate) fn clear_finished(&self) -> Vec<String> {
         self.store.lock().clear_finished()
-    }
-
-    /// Hide an activity id from list/get because the work it describes is now
-    /// surfaced as a transcript part. Returns `true` (and emits a `Dismissed`
-    /// signal) when the id was newly hidden, so a snapshot-driven panel drops
-    /// the row instead of leaving it stale.
-    pub(crate) fn hide(&self, id: &str) -> bool {
-        let was_hidden = {
-            let mut store = self.store.lock();
-            store.hidden.insert(id.to_string())
-        };
-        if was_hidden {
-            if let Some(activity) = self.store.lock().get_unhidden(id) {
-                self.publish(activity, BackgroundActivityEventReason::Dismissed);
-            }
-        }
-        was_hidden
     }
 
     pub(crate) fn list(&self, filter: &BackgroundActivityFilter) -> Vec<BackgroundActivity> {
@@ -349,29 +282,5 @@ mod tests {
             rx.try_recv().unwrap().reason,
             BackgroundActivityEventReason::Dismissed
         );
-    }
-
-    #[test]
-    fn hide_excludes_from_list_and_get_and_signals_once() {
-        let (tx, mut rx) = mpsc::channel(8);
-        let registry = ActivityRegistry::new(tx);
-        registry.upsert(activity("proc_1", BackgroundActivityStatus::Running));
-        assert_eq!(rx.try_recv().unwrap().reason, BackgroundActivityEventReason::Started);
-        // Hiding part-backed work removes it from the panel snapshot.
-        assert!(registry.hide("proc_1"));
-        assert!(registry.list(&BackgroundActivityFilter::default()).is_empty());
-        assert!(registry.get("proc_1").is_none());
-        // The hide signals a Dismissed so snapshot-driven panels drop the row.
-        assert_eq!(
-            rx.try_recv().unwrap().reason,
-            BackgroundActivityEventReason::Dismissed
-        );
-        // Re-hiding is a no-op: no duplicate signal.
-        assert!(!registry.hide("proc_1"));
-        assert!(rx.try_recv().is_err());
-        // Updates to a hidden id are swallowed (no phantom row/event).
-        registry.upsert(activity("proc_1", BackgroundActivityStatus::Succeeded));
-        assert!(rx.try_recv().is_err());
-        assert!(registry.get("proc_1").is_none());
     }
 }

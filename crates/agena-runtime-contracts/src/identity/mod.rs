@@ -163,7 +163,9 @@ mod tests {
         // # Correct tool usage.
         assert_eq!(
             prompt
-                .matches("Never call `tools_search`/`tools_list` for a tool whose name you already know")
+                .matches(
+                    "Never call `tools_search`/`tools_list` for a tool whose name you already know"
+                )
                 .count(),
             1
         );

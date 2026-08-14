@@ -331,8 +331,8 @@ use agena_tui_transcript::{
 };
 
 use self::transcript_view::{
-    current_spinner_millis, refresh_spinner_line, render_entry_export, render_parts_export_markdown,
-    spinner_frame,
+    current_spinner_millis, refresh_spinner_line, render_entry_export,
+    render_parts_export_markdown, spinner_frame,
 };
 pub(crate) use agena_tui_transcript::sanitize_terminal_text;
 

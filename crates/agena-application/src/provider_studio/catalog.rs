@@ -341,7 +341,10 @@ fn provider_model_thinking_modes_to_configured(
             display_name: mode.display_name.clone(),
             description: mode.description.clone(),
             preset: mode.preset.clone(),
-            thinking: mode.thinking.as_ref().map(thinking_request_resource_to_domain),
+            thinking: mode
+                .thinking
+                .as_ref()
+                .map(thinking_request_resource_to_domain),
             strategy: None,
             effort: None,
             budget_tokens: None,
@@ -419,21 +422,37 @@ fn provider_model_capabilities_to_patch(
         (ModelInputModality::Video, &capabilities.video_input),
         (ModelInputModality::File, &capabilities.file_input),
     ] {
-        push_capability_support(&mut input_supported, &mut input_unsupported, modality, support);
+        push_capability_support(
+            &mut input_supported,
+            &mut input_unsupported,
+            modality,
+            support,
+        );
     }
     let mut feature_supported = Vec::new();
     let mut feature_unsupported = Vec::new();
     for (feature, support) in [
-        (ModelCapabilityFeature::ToolCalling, &capabilities.tool_calling),
+        (
+            ModelCapabilityFeature::ToolCalling,
+            &capabilities.tool_calling,
+        ),
         (ModelCapabilityFeature::Streaming, &capabilities.streaming),
         (ModelCapabilityFeature::Reasoning, &capabilities.reasoning),
         (
             ModelCapabilityFeature::StructuredOutput,
             &capabilities.structured_output,
         ),
-        (ModelCapabilityFeature::Temperature, &capabilities.temperature_supported),
+        (
+            ModelCapabilityFeature::Temperature,
+            &capabilities.temperature_supported,
+        ),
     ] {
-        push_capability_support(&mut feature_supported, &mut feature_unsupported, feature, support);
+        push_capability_support(
+            &mut feature_supported,
+            &mut feature_unsupported,
+            feature,
+            support,
+        );
     }
     ModelCapabilityPatch {
         input: CapabilitySelectionPatch::optional_from_supported_unsupported(
@@ -460,7 +479,9 @@ fn push_capability_support<T>(
     }
 }
 
-fn thinking_request_resource_to_domain(value: &ThinkingRequestResource) -> agena_domain::ThinkingRequest {
+fn thinking_request_resource_to_domain(
+    value: &ThinkingRequestResource,
+) -> agena_domain::ThinkingRequest {
     match value {
         ThinkingRequestResource::Budget { budget_tokens } => {
             agena_domain::ThinkingRequest::Budget {
@@ -473,16 +494,16 @@ fn thinking_request_resource_to_domain(value: &ThinkingRequestResource) -> agena
                 display: display.map(thinking_display_resource_to_domain),
             }
         }
-        ThinkingRequestResource::Effort { effort } => {
-            agena_domain::ThinkingRequest::Effort {
-                effort: reasoning_effort_resource_to_domain(*effort),
-            }
-        }
+        ThinkingRequestResource::Effort { effort } => agena_domain::ThinkingRequest::Effort {
+            effort: reasoning_effort_resource_to_domain(*effort),
+        },
         ThinkingRequestResource::Disabled => agena_domain::ThinkingRequest::Disabled,
     }
 }
 
-fn reasoning_effort_resource_to_domain(value: ReasoningEffortResource) -> agena_domain::ReasoningEffort {
+fn reasoning_effort_resource_to_domain(
+    value: ReasoningEffortResource,
+) -> agena_domain::ReasoningEffort {
     match value {
         ReasoningEffortResource::Minimal => agena_domain::ReasoningEffort::Minimal,
         ReasoningEffortResource::Low => agena_domain::ReasoningEffort::Low,
@@ -493,7 +514,9 @@ fn reasoning_effort_resource_to_domain(value: ReasoningEffortResource) -> agena_
     }
 }
 
-fn thinking_display_resource_to_domain(value: ThinkingDisplayResource) -> agena_domain::ThinkingDisplay {
+fn thinking_display_resource_to_domain(
+    value: ThinkingDisplayResource,
+) -> agena_domain::ThinkingDisplay {
     match value {
         ThinkingDisplayResource::Summarized => agena_domain::ThinkingDisplay::Summarized,
         ThinkingDisplayResource::Omitted => agena_domain::ThinkingDisplay::Omitted,
@@ -892,7 +915,10 @@ mod tests {
     use agena_provider::{ConfiguredModeDefault, ResolvedProviderModelConfig};
     use std::collections::BTreeMap;
 
-    fn effort_mode(effort: ReasoningEffortResource, is_default: bool) -> ProviderModelThinkingModeResource {
+    fn effort_mode(
+        effort: ReasoningEffortResource,
+        is_default: bool,
+    ) -> ProviderModelThinkingModeResource {
         ProviderModelThinkingModeResource {
             is_default,
             display_name: None,
@@ -953,9 +979,8 @@ mod tests {
     #[test]
     fn unmatched_live_model_overlay_preserves_modes_and_capabilities() {
         let model = live_model_with_modes_and_capabilities();
-        let value = provider_model_overlay_to_json(provider_model_to_provider_model_overlay(
-            &model,
-        ));
+        let value =
+            provider_model_overlay_to_json(provider_model_to_provider_model_overlay(&model));
         let overlay: ResolvedProviderModelConfig = serde_json::from_value(value).unwrap();
 
         let selectors = overlay
@@ -1017,10 +1042,7 @@ mod tests {
                 .feature_support(agena_provider::ModelCapabilityFeature::Reasoning)
                 == Some(agena_domain::CapabilitySupport::Supported)
         );
-        assert_eq!(
-            overlay.definition.context_window_tokens,
-            Some(262_144)
-        );
+        assert_eq!(overlay.definition.context_window_tokens, Some(262_144));
         assert_eq!(
             overlay.definition.display_name.as_deref(),
             Some("DeepSeek V4 Flash")

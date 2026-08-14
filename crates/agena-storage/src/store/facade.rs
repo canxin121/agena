@@ -33,8 +33,10 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{
-    LEASE_STALENESS_MS, LeaseAcquire, MaintenanceOutcome, NewPart, NewSession, Part, PartDelta,
-    PartState, PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
+    BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationKind,
+    BackgroundOperationTransition, BackgroundSettleOutcome, LEASE_STALENESS_MS, LeaseAcquire,
+    MaintenanceOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartDelta, PartState,
+    PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
     SessionPresentation, SessionState, SessionSummary, SessionView, StateInputs, StoreError,
     SubmitOutcome, UsageQuery, UsageRecord, UsageStats, apply_part_transition, presentation,
 };
@@ -152,10 +154,71 @@ pub trait SessionStore: Send + Sync {
     /// Derive the single session state (17.3) for the UI.
     async fn session_state(&self, session_id: i64) -> Result<SessionPresentation, StoreError>;
 
+    /// Durable background-operation aggregate API. These methods, unlike the
+    /// process-local change bus, are safe correctness boundaries across crash
+    /// and restart.
+    async fn create_background_operation(
+        &self,
+        operation: NewBackgroundOperation,
+    ) -> Result<BackgroundOperation, StoreError>;
+
+    async fn background_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<BackgroundOperation>, StoreError>;
+
+    async fn background_operation_by_external_id(
+        &self,
+        kind: BackgroundOperationKind,
+        external_id: &str,
+    ) -> Result<Option<BackgroundOperation>, StoreError>;
+
+    async fn active_background_operations(
+        &self,
+        kind: Option<BackgroundOperationKind>,
+        limit: usize,
+    ) -> Result<Vec<BackgroundOperation>, StoreError>;
+
+    async fn transition_background_operation(
+        &self,
+        transition: BackgroundOperationTransition,
+    ) -> Result<BackgroundOperation, StoreError>;
+
+    async fn record_background_event(
+        &self,
+        request: BackgroundEventRequest,
+    ) -> Result<BackgroundSettleOutcome, StoreError>;
+
+    async fn claim_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        claim_until_ms: i64,
+    ) -> Result<Option<BackgroundDelivery>, StoreError>;
+
+    async fn consume_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+    ) -> Result<BackgroundDelivery, StoreError>;
+
+    async fn retry_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        error: Value,
+    ) -> Result<BackgroundDelivery, StoreError>;
+
+    async fn pending_background_deliveries(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<BackgroundDelivery>, StoreError>;
+
     /// User send (7.1): marker + content parts + membership + optional
-    /// idempotency in one committed transaction. Returns the full
-    /// [`SubmitOutcome`] — the run marker id plus the committed parts — so
-    /// callers never reload after writing.
+    /// idempotency in one committed transaction. An all-terminal input batch
+    /// produces a terminal marker; pending input children keep it in flight.
+    /// Returns the full [`SubmitOutcome`] — the run marker id plus the committed
+    /// parts — so callers never reload after writing.
     async fn submit_user_run(
         &self,
         session_id: i64,
@@ -164,11 +227,11 @@ pub trait SessionStore: Send + Sync {
         idempotency_key: Option<String>,
     ) -> Result<SubmitOutcome, StoreError>;
 
-    /// Atomically settle a background operation against the run that launched
-    /// it: refresh the lease without aborting the target run, terminalize the
-    /// launching tool part, append the result parts (`PartRole::Assistant`,
-    /// no new run marker), and terminalize the launching run once no in-flight
-    /// child remains. Returns the created parts.
+    /// Atomically mutate a background operation against the run that launched
+    /// it. At launch this durably checkpoints the InProgress tool part and its
+    /// correlation marker together with the guard result. At settle it
+    /// terminalizes the tool part and appends notification parts. The run is
+    /// terminalized only once no in-flight child remains.
     async fn settle_background_run(
         &self,
         session_id: i64,
@@ -1148,6 +1211,126 @@ where
         self.derive_presentation(session_id).await
     }
 
+    async fn create_background_operation(
+        &self,
+        operation: NewBackgroundOperation,
+    ) -> Result<BackgroundOperation, StoreError> {
+        self.engine
+            .create_background_operation(operation, self.now())
+            .await
+    }
+
+    async fn background_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<BackgroundOperation>, StoreError> {
+        self.engine.background_operation(operation_id).await
+    }
+
+    async fn background_operation_by_external_id(
+        &self,
+        kind: BackgroundOperationKind,
+        external_id: &str,
+    ) -> Result<Option<BackgroundOperation>, StoreError> {
+        self.engine
+            .background_operation_by_external_id(kind, external_id)
+            .await
+    }
+
+    async fn active_background_operations(
+        &self,
+        kind: Option<BackgroundOperationKind>,
+        limit: usize,
+    ) -> Result<Vec<BackgroundOperation>, StoreError> {
+        self.engine.active_background_operations(kind, limit).await
+    }
+
+    async fn transition_background_operation(
+        &self,
+        transition: BackgroundOperationTransition,
+    ) -> Result<BackgroundOperation, StoreError> {
+        self.engine
+            .transition_background_operation(transition, self.now())
+            .await
+    }
+
+    async fn record_background_event(
+        &self,
+        request: BackgroundEventRequest,
+    ) -> Result<BackgroundSettleOutcome, StoreError> {
+        let outcome = self
+            .engine
+            .record_background_event(request, self.now())
+            .await?;
+        if outcome.created {
+            let session_id = outcome.operation.session_id;
+            self.memory.invalidate(session_id);
+            let view = self.engine.load_session(session_id).await?;
+            if let Some(run_id) = outcome.notification_part.run_id
+                && let Some(marker) = view.parts.iter().find(|part| part.part_id == run_id)
+            {
+                self.bus.emit(SessionChange::PartAdded {
+                    session_id,
+                    part: marker.clone(),
+                });
+            }
+            self.bus.emit(SessionChange::PartAdded {
+                session_id,
+                part: outcome.notification_part.clone(),
+            });
+            let meta = self.engine.session_meta(session_id).await?;
+            self.bus
+                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        }
+        Ok(outcome)
+    }
+
+    async fn claim_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        claim_until_ms: i64,
+    ) -> Result<Option<BackgroundDelivery>, StoreError> {
+        self.engine
+            .claim_background_delivery(
+                delivery_id,
+                &self.owner(owner_id),
+                claim_until_ms,
+                self.now(),
+            )
+            .await
+    }
+
+    async fn consume_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+    ) -> Result<BackgroundDelivery, StoreError> {
+        self.engine
+            .consume_background_delivery(delivery_id, &self.owner(owner_id), self.now())
+            .await
+    }
+
+    async fn retry_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        error: Value,
+    ) -> Result<BackgroundDelivery, StoreError> {
+        self.engine
+            .retry_background_delivery(delivery_id, &self.owner(owner_id), error, self.now())
+            .await
+    }
+
+    async fn pending_background_deliveries(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<BackgroundDelivery>, StoreError> {
+        self.engine
+            .pending_background_deliveries(limit, self.now())
+            .await
+    }
+
     async fn submit_user_run(
         &self,
         session_id: i64,
@@ -1187,31 +1370,25 @@ where
     ) -> Result<Vec<Part>, StoreError> {
         let owner = self.owner(owner_id);
         // The launching tool part may still be buffered as a streaming
-        // InProgress overlay from the launch turn. Drop that one part's
-        // buffer so the engine's atomic settle is the authoritative row — the
-        // buffered overlay would otherwise mask (or, on a stale lease, fail)
-        // the terminal write. Only the tool part's buffer is cleared: the
-        // settle can run mid-turn while another execution is streaming, and
-        // clearing the whole session would discard its unflushed content. The
-        // engine itself performs the lease refresh, so no `ensure_lease` here.
+        // InProgress overlay. Drop that one part's buffer so the engine's
+        // atomic launch/settle transaction is authoritative — otherwise a
+        // background marker can remain memory-only forever because its run
+        // deliberately stays in-flight until that same background operation
+        // settles. Only the tool part's buffer is cleared: another execution
+        // may still be streaming unrelated parts. The engine itself performs
+        // the lease refresh, so no `ensure_lease` here.
         let tool_part_id = tool_part.as_ref().map(|(part_id, _, _)| *part_id);
         if let Some(tool_part_id) = tool_part_id {
             self.memory.clear_streaming_part(session_id, tool_part_id);
         }
         let created = self
             .engine
-            .settle_background_run(
-                session_id,
-                &owner,
-                run_id,
-                tool_part,
-                parts,
-                self.now(),
-            )
+            .settle_background_run(session_id, &owner, run_id, tool_part, parts, self.now())
             .await?;
-        // The engine also terminalized the tool part and possibly the run
-        // marker, neither of which it returns. Invalidate the cache and
-        // re-derive the changed rows so live observers see the settled state.
+        // The engine also transitioned the tool part and may have terminalized
+        // the run marker, neither of which it returns. Invalidate the cache
+        // and re-derive the changed rows so live observers see the committed
+        // launch/settle state.
         self.memory.invalidate(session_id);
         for part in &created {
             self.bus.emit(SessionChange::PartAdded {
@@ -1229,14 +1406,13 @@ where
                 emitted.push(part.clone());
             }
             for part in emitted {
-                self.bus.emit(SessionChange::PartUpdated {
-                    session_id,
-                    part,
-                });
+                self.bus
+                    .emit(SessionChange::PartUpdated { session_id, part });
             }
         }
         let meta = self.engine.session_meta(session_id).await?;
-        self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        self.bus
+            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         Ok(created)
     }
 
@@ -3395,6 +3571,104 @@ mod tests {
 
         async fn reap_stale_leases(&self, stale_before_ms: i64) -> Result<Vec<i64>, StoreError> {
             self.inner.reap_stale_leases(stale_before_ms).await
+        }
+
+        async fn create_background_operation(
+            &self,
+            operation: NewBackgroundOperation,
+            now_ms: i64,
+        ) -> Result<BackgroundOperation, StoreError> {
+            self.inner
+                .create_background_operation(operation, now_ms)
+                .await
+        }
+
+        async fn background_operation(
+            &self,
+            operation_id: &str,
+        ) -> Result<Option<BackgroundOperation>, StoreError> {
+            self.inner.background_operation(operation_id).await
+        }
+
+        async fn background_operation_by_external_id(
+            &self,
+            kind: BackgroundOperationKind,
+            external_id: &str,
+        ) -> Result<Option<BackgroundOperation>, StoreError> {
+            self.inner
+                .background_operation_by_external_id(kind, external_id)
+                .await
+        }
+
+        async fn active_background_operations(
+            &self,
+            kind: Option<BackgroundOperationKind>,
+            limit: usize,
+        ) -> Result<Vec<BackgroundOperation>, StoreError> {
+            self.inner.active_background_operations(kind, limit).await
+        }
+
+        async fn transition_background_operation(
+            &self,
+            transition: BackgroundOperationTransition,
+            now_ms: i64,
+        ) -> Result<BackgroundOperation, StoreError> {
+            self.inner
+                .transition_background_operation(transition, now_ms)
+                .await
+        }
+
+        async fn record_background_event(
+            &self,
+            request: BackgroundEventRequest,
+            now_ms: i64,
+        ) -> Result<BackgroundSettleOutcome, StoreError> {
+            self.inner.record_background_event(request, now_ms).await
+        }
+
+        async fn claim_background_delivery(
+            &self,
+            delivery_id: &str,
+            owner_id: &str,
+            claim_until_ms: i64,
+            now_ms: i64,
+        ) -> Result<Option<BackgroundDelivery>, StoreError> {
+            self.inner
+                .claim_background_delivery(delivery_id, owner_id, claim_until_ms, now_ms)
+                .await
+        }
+
+        async fn consume_background_delivery(
+            &self,
+            delivery_id: &str,
+            owner_id: &str,
+            now_ms: i64,
+        ) -> Result<BackgroundDelivery, StoreError> {
+            self.inner
+                .consume_background_delivery(delivery_id, owner_id, now_ms)
+                .await
+        }
+
+        async fn retry_background_delivery(
+            &self,
+            delivery_id: &str,
+            owner_id: &str,
+            error: Value,
+            now_ms: i64,
+        ) -> Result<BackgroundDelivery, StoreError> {
+            self.inner
+                .retry_background_delivery(delivery_id, owner_id, error, now_ms)
+                .await
+        }
+
+        async fn pending_background_deliveries(
+            &self,
+            limit: usize,
+            now_ms: i64,
+        ) -> Result<Vec<BackgroundDelivery>, StoreError> {
+            self.inner
+                .pending_background_deliveries(limit, now_ms)
+                .await
         }
 
         async fn submit_user_run(

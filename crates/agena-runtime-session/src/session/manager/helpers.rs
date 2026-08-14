@@ -6,7 +6,9 @@ use super::{
     ToolInvocationExecution, ToolOutput, UserInputReplyKind, Utc,
 };
 use crate::session::Session;
-use agena_domain::{PermissionReply, StructuredValue, UserInputReply, UserInputRequest};
+use agena_domain::{
+    PermissionReply, StructuredObject, StructuredValue, UserInputReply, UserInputRequest,
+};
 use agena_tool::ToolHumanRenderer;
 
 /// Default lifetime of an interactive user-input request when the caller does
@@ -198,8 +200,7 @@ pub(super) fn background_operation_from_execution(
     ) && matches!(
         invocation.input.get("run_in_background"),
         Some(StructuredValue::Boolean { value: true })
-    )
-    {
+    ) {
         let task_id = custom_payload_value(details)
             .and_then(|value| value.get("tasks").cloned())
             .and_then(|value| value.as_array().cloned())
@@ -234,9 +235,7 @@ pub(super) fn background_operation_from_execution(
     // keeps streaming; its `monitor_id` stamps the background marker so the
     // runtime can correlate every event part back to this tool part.
     if let Some(crate::tool::ToolPayloadOutput::Monitor {
-        action,
-        monitor_id,
-        ..
+        action, monitor_id, ..
     }) = crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name.as_str(), details)
     {
         if action == "start" {
@@ -249,6 +248,83 @@ pub(super) fn background_operation_from_execution(
         }
     }
     None
+}
+
+/// Whether an invocation requests a durable background launch. This decision
+/// is available before the external side effect begins, allowing the manager
+/// to persist `LaunchRequested` first instead of trying to register a process
+/// only after it already exists.
+pub(super) fn requested_background_kind(
+    invocation: &ToolInvocation,
+) -> Option<agena_storage::store::BackgroundOperationKind> {
+    use agena_runtime_contracts::part::{MonitorToolInput, ShellToolInput};
+    use agena_storage::store::BackgroundOperationKind;
+
+    match crate::tool::ToolPayloadInput::from_invocation(invocation)? {
+        crate::tool::ToolPayloadInput::Shell(ShellToolInput::Run {
+            run_in_background,
+            monitor,
+            ..
+        }) if run_in_background || monitor.is_some() => Some(BackgroundOperationKind::Shell),
+        crate::tool::ToolPayloadInput::Monitor(MonitorToolInput::Start { .. }) => {
+            Some(BackgroundOperationKind::Monitor)
+        }
+        crate::tool::ToolPayloadInput::Task(input) if input.run_in_background => {
+            Some(BackgroundOperationKind::Task)
+        }
+        _ => None,
+    }
+}
+
+/// Stable aggregate id derived from the durable launch tool part. Replaying a
+/// tool attempt cannot allocate a second operation for the same transcript
+/// activity.
+pub(super) fn background_operation_id(session_id: i64, tool_part_id: i64) -> String {
+    format!("bg_{session_id}_{tool_part_id}")
+}
+
+/// Reserve the external identity before a background adapter is allowed to
+/// start its side effect. Task invocations without an explicit resume id are
+/// rewritten with a deterministic task id; shell and monitor adapters derive
+/// the same deterministic process id from the session/call context.
+///
+/// Returning the rewritten invocation is important for crash recovery: the
+/// launch receipt, child-session row, process registry, and normalized
+/// operation all agree on one identity before work can finish quickly enough
+/// to emit a callback.
+pub(super) fn reserve_background_external_id(
+    invocation: &mut ToolInvocation,
+    session_id: i64,
+    tool_part_id: i64,
+    call_id: i64,
+) -> Result<Option<String>, AppError> {
+    let Some(kind) = requested_background_kind(invocation) else {
+        return Ok(None);
+    };
+    if kind == agena_storage::store::BackgroundOperationKind::Task {
+        let Some(crate::tool::ToolPayloadInput::Task(mut input)) =
+            crate::tool::ToolPayloadInput::from_invocation(invocation)
+        else {
+            return Err(AppError::Internal(
+                "background task invocation could not be decoded for identity reservation"
+                    .to_owned(),
+            ));
+        };
+        let task_id = input
+            .task_id
+            .clone()
+            .unwrap_or_else(|| format!("task_{session_id}_{tool_part_id}"));
+        input.task_id = Some(task_id.clone());
+        let rewritten = crate::tool::ToolPayloadInput::Task(input).into_invocation();
+        let input_value = serde_json::Value::from(rewritten.input);
+        invocation.input = StructuredObject::try_from(input_value).map_err(|error| {
+            AppError::Internal(format!("encode reserved background task identity: {error}"))
+        })?;
+        return Ok(Some(task_id));
+    }
+    Ok(Some(agena_runtime_tools::managed_process_id(
+        session_id, call_id,
+    )))
 }
 
 /// Find the pending tool whose decoded operation carries `call_id`. v2 has no
@@ -606,8 +682,36 @@ mod tests {
     }
 
     #[test]
+    fn background_identity_is_reserved_deterministically_before_execution() {
+        let task_input = serde_json::from_value::<crate::part::TaskToolInput>(serde_json::json!({
+            "description": "inspect",
+            "prompt": "inspect the repository",
+            "run_in_background": true
+        }))
+        .expect("decode task input");
+        let mut task = crate::tool::ToolPayloadInput::Task(task_input).into_invocation();
+        let reserved = reserve_background_external_id(&mut task, 53, 901, 7)
+            .expect("reserve task identity")
+            .expect("background task identity");
+        assert_eq!(reserved, "task_53_901");
+        let crate::tool::ToolPayloadInput::Task(rewritten) =
+            crate::tool::ToolPayloadInput::from_invocation(&task).expect("decode rewritten task")
+        else {
+            panic!("rewritten invocation remains a task")
+        };
+        assert_eq!(rewritten.task_id.as_deref(), Some("task_53_901"));
+
+        let mut monitor = invocation_named("agena.monitor.start");
+        let reserved = reserve_background_external_id(&mut monitor, 53, 902, 8)
+            .expect("reserve monitor identity")
+            .expect("background monitor identity");
+        assert_eq!(reserved, agena_runtime_tools::managed_process_id(53, 8));
+    }
+
+    #[test]
     fn glob_produces_a_human_markdown_list_not_a_flat_blob() {
-        let invocation = invocation_named("glob");        let details = output(ToolPayloadOutput::Glob {
+        let invocation = invocation_named("glob");
+        let details = output(ToolPayloadOutput::Glob {
             count: Some(2),
             paths: vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()],
             truncated: false,

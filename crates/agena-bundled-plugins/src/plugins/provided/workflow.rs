@@ -227,8 +227,8 @@ mod tool_api_inputs;
 
 pub(crate) use planning_tools::{
     PlanEditInput, PlanGetInput, PlanGetView, PlanPhaseInput, PlanReviewInput, PlanSetInput,
-    WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep,
-    WorkflowPlanStepInput, WorkflowPlanStepStatus,
+    WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase,
+    WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,
 };
 pub(crate) use repo_tools::{
     EnterSnapshotCommandInput, ExitSnapshotCommandInput, snapshot_enter_permission_paths,
@@ -1150,7 +1150,10 @@ mod tests {
         let empty = PlanPhaseInput::default();
         let error = WorkflowPlugin::validate_plan_phase_input(&empty)
             .expect_err("empty phase input must fail");
-        assert_eq!(error.diagnostic.message, "plan.phase requires `phase` or `autorun`");
+        assert_eq!(
+            error.diagnostic.message,
+            "plan.phase requires `phase` or `autorun`"
+        );
 
         let autorun_only = PlanPhaseInput {
             autorun: Some(true),

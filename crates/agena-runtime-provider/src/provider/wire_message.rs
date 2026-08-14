@@ -1246,14 +1246,11 @@ mod tests {
     }
 
     #[test]
-    fn assistant_run_notification_projects_as_system_message_never_assistant_text() {
+    fn runtime_ingress_notification_projects_as_system_message_never_assistant_text() {
         // The notification-leak regression: a settled background operation
-        // appends its notification as an Assistant-role `system_notification`
-        // part onto the launching assistant run (no new run). The projection
-        // must derive Role::Assistant (the run's role) but emit the body as a
-        // dedicated SystemMessage part — never as `Text`, which is exactly how
-        // notification JSON leaked into the model's visible output before the
-        // fix.
+        // creates a chronological Runtime ingress run. Provider projection maps
+        // that explicit identity to Role::System and emits the body as a
+        // dedicated SystemMessage part — never as assistant `Text`.
         let notification = agena_runtime_contracts::part_content::SystemNotificationContent {
             operation_id: "proc_test".to_string(),
             operation_kind: "shell".to_string(),
@@ -1262,10 +1259,10 @@ mod tests {
             body: "<agena_notification>exit 0</agena_notification>".to_string(),
             ..Default::default()
         };
-        let marker = run_marker(PartRole::Assistant, None);
+        let marker = run_marker(PartRole::Runtime, None);
         let mut body_part = part(
             "system_notification",
-            PartRole::Assistant,
+            PartRole::Runtime,
             PartState::Completed,
             notification.as_value(),
         );
@@ -1275,8 +1272,8 @@ mod tests {
 
         assert_eq!(
             input.role,
-            Role::Assistant,
-            "the notification rides the launching assistant run (no new run marker)"
+            Role::System,
+            "the notification keeps Runtime/System identity"
         );
         assert!(
             matches!(
@@ -1304,7 +1301,7 @@ mod tests {
         };
         let body_part = part(
             "system_notification",
-            PartRole::Assistant,
+            PartRole::Runtime,
             PartState::Completed,
             notification.as_value(),
         );
@@ -1447,15 +1444,10 @@ mod tests {
             arguments: invocation.input.clone(),
         });
         invocation.name = "fs.read".to_owned();
-        invocation.input =
-            StructuredObject::try_from(serde_json::json!({ "path": "README.md" }))
-                .expect("target input");
-        let pending = OperationPart::pending(
-            1396,
-            invocation,
-            "Read README.md",
-            TimeRange::default(),
-        );
+        invocation.input = StructuredObject::try_from(serde_json::json!({ "path": "README.md" }))
+            .expect("target input");
+        let pending =
+            OperationPart::pending(1396, invocation, "Read README.md", TimeRange::default());
         let tool_call = part(
             "tool_call",
             PartRole::Assistant,
@@ -1701,12 +1693,10 @@ mod tests {
     #[test]
     fn scheduled_delivery_projects_as_system_message_never_assistant_text() {
         // The cron-identity regression: a scheduled job's prompt is delivered
-        // as an Assistant-role `system_notification` part (`operation_kind`
-        // "scheduled_delivery") appended onto the existing run — never a
-        // User-role `user_send` run. The projection must derive Role::Assistant
-        // (the run's role) but emit the prompt as a dedicated SystemMessage
-        // part — never as `Text`, which is exactly how a scheduled prompt could
-        // leak into the model's visible output.
+        // as a Runtime-role `system_notification` part (`operation_kind`
+        // "scheduled_delivery") under its own ingress run — never a User-role
+        // `user_send` run. Projection maps Runtime to Role::System and emits the
+        // prompt as a dedicated SystemMessage part, never assistant `Text`.
         let notification = agena_runtime_contracts::part_content::SystemNotificationContent {
             operation_id: "delivery-key-1".to_string(),
             operation_kind: "scheduled_delivery".to_string(),
@@ -1715,10 +1705,10 @@ mod tests {
             body: "check the background task list and report".to_string(),
             ..Default::default()
         };
-        let marker = run_marker(PartRole::Assistant, None);
+        let marker = run_marker(PartRole::Runtime, None);
         let mut body_part = part(
             "system_notification",
-            PartRole::Assistant,
+            PartRole::Runtime,
             PartState::Completed,
             notification.as_value(),
         );
@@ -1728,8 +1718,8 @@ mod tests {
 
         assert_eq!(
             input.role,
-            Role::Assistant,
-            "the scheduled delivery rides the existing assistant run (no new run marker)"
+            Role::System,
+            "the scheduled delivery keeps Runtime/System identity"
         );
         assert!(
             matches!(
@@ -1756,7 +1746,7 @@ mod tests {
         };
         let body_part = part(
             "system_notification",
-            PartRole::Assistant,
+            PartRole::Runtime,
             PartState::Completed,
             notification.as_value(),
         );

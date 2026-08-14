@@ -586,12 +586,12 @@ mod tests {
             .expect("the notification system message");
         assert_eq!(
             system.content,
-            Some(Value::String("<agena_notification>exit 0</agena_notification>".to_owned()))
+            Some(Value::String(
+                "<agena_notification>exit 0</agena_notification>".to_owned()
+            ))
         );
         assert!(
-            !messages
-                .iter()
-                .any(|message| message.role == "assistant"),
+            !messages.iter().any(|message| message.role == "assistant"),
             "the notification must never wire as assistant reply content"
         );
     }
@@ -668,9 +668,7 @@ mod tests {
             ))
         );
         assert!(
-            !messages
-                .iter()
-                .any(|message| message.role == "assistant"),
+            !messages.iter().any(|message| message.role == "assistant"),
             "the hook continuation must never wire as assistant reply content"
         );
     }
@@ -746,18 +744,16 @@ mod tests {
             .expect("the scheduled prompt system message");
         assert_eq!(
             system.content,
-            Some(Value::String("check the background task list and report".to_owned()))
+            Some(Value::String(
+                "check the background task list and report".to_owned()
+            ))
         );
         assert!(
-            !messages
-                .iter()
-                .any(|message| message.role == "assistant"),
+            !messages.iter().any(|message| message.role == "assistant"),
             "the scheduled prompt must never wire as assistant reply content"
         );
         assert!(
-            !messages
-                .iter()
-                .any(|message| message.role == "user"),
+            !messages.iter().any(|message| message.role == "user"),
             "the scheduled prompt must never wire as a user message"
         );
     }
@@ -1003,8 +999,7 @@ fn assistant_messages_from_parts(
     // time the stream is interrupted by a tool result or a system notice.
     let mut messages = Vec::new();
     let mut buffered = Vec::new();
-    let flush = |messages: &mut Vec<ChatMessage>,
-                     buffered: &mut Vec<wire_message::WirePart>| {
+    let flush = |messages: &mut Vec<ChatMessage>, buffered: &mut Vec<wire_message::WirePart>| {
         if buffered.is_empty() {
             return;
         }

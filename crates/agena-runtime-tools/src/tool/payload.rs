@@ -9,8 +9,8 @@ use crate::part::{
     CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput, CronListToolInput,
     CronUpdateToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput, GlobToolInput,
     GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput,
-    LspReferencesToolInput, ReadToolInput, ShellToolInput,
-    ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput, MonitorToolInput,
+    LspReferencesToolInput, MonitorToolInput, ReadToolInput, ShellToolInput, ToolSearchToolInput,
+    WebFetchToolInput, WebSearchToolInput,
 };
 use agena_domain::{
     FileChangeRecord, StructuredObject, ToolInvocation, ToolOutput, WebSearchResult,
@@ -150,9 +150,7 @@ impl ToolPayloadInput {
             ("agena", "shell", action @ ("run" | "list" | "logs" | "stop")) => {
                 ("shell", Some(action))
             }
-            ("agena", "monitor", action @ ("start" | "stop")) => {
-                ("monitor", Some(action))
-            }
+            ("agena", "monitor", action @ ("start" | "stop")) => ("monitor", Some(action)),
             ("agena", "cron", "create") => ("cron_create", None),
             ("agena", "cron", "list") => ("cron_list", None),
             ("agena", "cron", "delete") => ("cron_delete", None),
@@ -896,7 +894,6 @@ mod tests {
             ("agena.cron", "pause"),
             ("agena.cron", "resume"),
             ("agena.cron", "history"),
-            ("agena.cron", "wakeup"),
             ("agena.lsp", "definition"),
             ("agena.lsp", "references"),
             ("agena.lsp", "hover"),

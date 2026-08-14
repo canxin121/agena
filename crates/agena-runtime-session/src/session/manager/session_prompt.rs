@@ -257,8 +257,12 @@ mod tests {
 
     #[test]
     fn monitor_start_alone_injects_the_background_section() {
-        assert!(super::wants_background_section(&["monitor.start".to_owned()]));
-        assert!(!super::wants_background_section(&["monitor.stop".to_owned()]));
+        assert!(super::wants_background_section(&[
+            "monitor.start".to_owned()
+        ]));
+        assert!(!super::wants_background_section(&[
+            "monitor.stop".to_owned()
+        ]));
         assert!(!super::wants_background_section(&["read".to_owned()]));
     }
 
@@ -266,6 +270,8 @@ mod tests {
     fn cron_create_injects_the_background_section() {
         assert!(super::wants_background_section(&["cron.create".to_owned()]));
         assert!(!super::wants_background_section(&["cron.list".to_owned()]));
-        assert!(!super::wants_background_section(&["cron.history".to_owned()]));
+        assert!(!super::wants_background_section(&[
+            "cron.history".to_owned()
+        ]));
     }
 }

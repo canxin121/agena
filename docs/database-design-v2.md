@@ -1,5 +1,11 @@
 # Agena Database Design v2 — Everything is a Part (membership-first)
 
+> Background-operation lifecycle is normalized in schema v9 rather than
+> encoded solely in part JSON. The authoritative extension to this design is
+> [Durable background-operation state machine](background-operation-state-machine.md).
+> The refined rule is: everything observable is a part; operational control
+> state is normalized once and projects into parts.
+
 Status: design draft for review
 Branch: research/db-design-audit (worktree .agena/worktrees/db-design-audit)
 
@@ -128,7 +134,7 @@ closed enums enforced by CHECK.
 
 | kind | role | content JSON | notes |
 |------|------|--------------|-------|
-| `run` | user / runtime | `{"run_kind":"user_send|continue|background","abort_reason":...}` | turn/run marker; state mirrors reply status |
+| `run` | user / assistant / runtime | `{"run_kind":"user_send|continue|runtime_ingress","abort_reason":...}` | message/run marker; user and Runtime arrivals are terminal receipts, assistant state mirrors execution |
 | `text` | user / assistant / system | `{"text":"..."}` | plain text |
 | `think` | assistant | `{"summary":[...],"raw":[...]}` | reasoning |
 | `tool_call` | assistant | `{"name":"...","plugin":"...","input":{...}}` | tool invocation |
@@ -380,12 +386,16 @@ CREATE TABLE idempotency (
 ### 7.1 User send (one transaction)
 
 1. Allocate a `part_id` for the run marker; create marker part
-   (`kind='run'`, `role='user'`, `state='pending'`).
+   (`kind='run'`, `role='user'`). If every submitted input part is already
+   terminal, create the marker as `completed` with `abort_reason=null`; only a
+   batch containing a genuinely in-flight child keeps the marker `pending`.
 2. Create user content parts (`text`, `file_ref`, ...) with `run_id = marker`.
 3. Insert membership rows: marker + content parts (order derives from
    `created_at_ms`/`part_id`; no sequence bookkeeping).
 4. Insert `idempotency` row (if keyed).
-5. Acquire the session lease first (whole batch is the executing run).
+5. Acquire the session lease first for write ownership. A completed user input
+   is an immutable external-arrival receipt, not execution liveness; the
+   assistant run opened for provider/tool work is what gates `Running`.
 
 ### 7.2 Crash recovery / lease steal (one transaction)
 
@@ -1104,6 +1114,11 @@ Only **interactions** (pending) and **run markers** (in-flight) gate the session
 state. All other parts (text, tool calls, hooks, notices) have their own
 lifecycle but never block the session — hooks and notices are non-gating by
 construction.
+
+User and Runtime ingress markers are normally created terminal because their
+payload has already arrived. They never stay `pending` merely to imply that a
+later assistant response is still executing; that response owns its own
+assistant run marker.
 
 ### 17.4 Resume algorithm (exactly one correct next step on open)
 

@@ -1393,7 +1393,9 @@ mod compaction_tests {
             plugin_id: Some("agena.plan".to_owned()),
             summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),
             detail: None,
-            message: Some("<plan_context>continue with the next plan step</plan_context>".to_owned()),
+            message: Some(
+                "<plan_context>continue with the next plan step</plan_context>".to_owned(),
+            ),
             extra: Default::default(),
         };
         parts.push(Part {
@@ -1444,7 +1446,10 @@ mod compaction_tests {
             .expect("the hook run with a message reaches the model prompt");
         assert_eq!(hook_run.run.role, agena_domain::Role::Assistant);
         assert!(
-            hook_run.run.as_text_lossy().contains("continue with the next plan step"),
+            hook_run
+                .run
+                .as_text_lossy()
+                .contains("continue with the next plan step"),
             "the hook message is projected as assistant text: {}",
             hook_run.run.as_text_lossy()
         );

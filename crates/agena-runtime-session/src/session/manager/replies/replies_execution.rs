@@ -5,13 +5,13 @@ use super::{
     SessionPendingTool, SessionRunOptions, SessionRunRequest, SessionRunTermination,
     StreamingToolExecution, ToolError, ToolInvocationExecution, ToolPermissionCheck, Utc,
     ask_user_title, assistant_message_id, background_operation_from_execution,
-    completed_lifecycle, execution_control_to_app_error, is_authorization_phase_title,
-    operation_authorization, operation_blocks_from_tool_output, operation_from_part,
-    operation_permission_approved_actions, pending_operation_for_resolved,
+    background_operation_id, completed_lifecycle, execution_control_to_app_error,
+    is_authorization_phase_title, operation_authorization, operation_blocks_from_tool_output,
+    operation_from_part, operation_permission_approved_actions, pending_operation_for_resolved,
     pending_tool_part_not_found_error, permission_action_key, push_unique_permission_action,
-    resolve_pending_tool, responses_api_request_metadata, run_abort_reason,
-    should_execute_pending_tools_concurrently, terminal_operation_title, tool_name,
-    update_resolved_tool_message,
+    requested_background_kind, reserve_background_external_id, resolve_pending_tool,
+    responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
+    terminal_operation_title, tool_name, update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -20,14 +20,17 @@ use crate::session::store::{
     typed_content_from_value, typed_content_to_value,
 };
 use crate::tool::ToolExecutor;
-use agena_domain::{UserInputKind, UserInputRequest, UserInputSource};
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
     PermissionDecision, PermissionRequest, PermissionScope, PolicySourceKind,
     PromptCompactionTrigger, RunAbortReason,
 };
-use agena_runtime_contracts::part_content::{ToolResultContent, TypedContent, operation_from_tool_call};
-use agena_storage::store::{Part, PartDelta, PartRole, PartState};
+use agena_domain::{UserInputKind, UserInputRequest, UserInputSource};
+use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
+use agena_storage::store::{
+    BackgroundOperationPhase, BackgroundOperationTransition, NewBackgroundOperation, Part,
+    PartDelta, PartRole, PartState,
+};
 use tracing::Instrument;
 
 use super::super::StableRunContext;
@@ -132,27 +135,27 @@ fn should_continue_turn(
 /// The id (run-marker part_id) of the most recent input message in the
 /// session, if any. "Input" is any marker carrying an external arrival into
 /// the conversation: a user-authored run (`PartRole::User`) or a
-/// system-authored run (`PartRole::System`). Used to detect new steer input
-/// across model turns.
+/// system- or runtime-authored run (`PartRole::System`/`Runtime`). Used to
+/// detect new external input across model turns.
 fn last_input_message_id(parts: &[Part]) -> Option<i64> {
     parts
         .iter()
         .rev()
         .find(|part| {
             part.is_run_marker()
-                && (part.role == PartRole::User || part.role == PartRole::System)
+                && matches!(
+                    part.role,
+                    PartRole::User | PartRole::System | PartRole::Runtime
+                )
         })
         .map(|marker| marker.part_id)
 }
 
-/// The part id of the newest `system_notification` content part, if any. A
-/// settled background operation appends its notification — an Assistant-role
-/// `system_notification` part — onto the launching assistant run (no new run
-/// marker), so the newest notification part is the durable cursor for "a new
-/// background operation settled". The stable-run loop watches this cursor and
-/// re-triggers a fresh model turn when it moves, exactly like a new user input
-/// (the agena analog of Claude Code's `<task-notification>` waking the
-/// launching turn).
+/// The part id of the newest `system_notification` content part, if any.
+/// Background events are committed as chronological Runtime ingress runs. The
+/// input-run cursor normally detects those arrivals; this content cursor is an
+/// additional durable acknowledgement key and keeps migrated/legacy
+/// notifications wakeable even when they do not have a Runtime run marker.
 fn newest_notification_part_id(parts: &[Part]) -> Option<i64> {
     parts
         .iter()
@@ -276,6 +279,64 @@ impl SessionManager {
         command_capable.then(|| self.command_event_sink_for_pending(session_id, pending))
     }
 
+    /// Close the assistant run that preceded a newly-arrived external input,
+    /// but only after every child part it owns is terminal.
+    ///
+    /// The stable loop calls this only at a provider/tool boundary, never while
+    /// a provider stream is active. A Runtime notification or user steer may
+    /// arrive while the old turn still has a pending tool; in that case the
+    /// boundary remains deferred until the tool/interaction resolves. This is
+    /// the single handoff point between the old assistant run and the fresh run
+    /// that answers the new input, so dropping a local `turn_run_id` can never
+    /// strand a durable marker in `Pending`.
+    async fn terminalize_turn_at_external_boundary_if_quiescent(
+        &self,
+        session: Session,
+        run_id: i64,
+    ) -> Result<(Session, bool), AppError> {
+        let marker = session
+            .parts()
+            .iter()
+            .find(|part| part.part_id == run_id)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "assistant run {run_id} is missing at an external-input boundary for session {}",
+                    session.id
+                ))
+            })?;
+        if !marker.is_run_marker() || marker.role != PartRole::Assistant {
+            return Err(AppError::Internal(format!(
+                "part {run_id} is not the assistant run expected at an external-input boundary for session {}",
+                session.id
+            )));
+        }
+        if marker.state.is_terminal() {
+            return Ok((session, true));
+        }
+        let has_in_flight_child = session
+            .parts()
+            .iter()
+            .any(|part| part.run_id == Some(run_id) && part.state.is_in_flight());
+        if has_in_flight_child {
+            return Ok((session, false));
+        }
+
+        self.store
+            .complete_run(
+                session.id,
+                run_id,
+                agena_storage::store::RunOutcome {
+                    status: PartState::Completed,
+                    abort_reason: None,
+                    content: None,
+                    provider_state: None,
+                },
+            )
+            .await?;
+        let reloaded = self.store.load_session(session.id).await?;
+        Ok((reloaded, true))
+    }
+
     pub(in crate::session::manager) async fn run_until_stable(
         &self,
         mut session: Session,
@@ -316,17 +377,24 @@ impl SessionManager {
         // This flag becomes true only at command entry, after the entire
         // pending tool batch reaches a barrier, or after new steer input.
         let mut model_requested = true;
-        let mut observed_user_message_id = last_input_message_id(session.parts());
+        let mut observed_input_message_id = last_input_message_id(session.parts());
         // Durable cursor for "the newest settled background-operation
-        // notification the model has seen". A notification appended mid-turn
-        // (by `settle_background_operation`) moves this cursor; the loop then
-        // re-triggers a fresh model turn over it.
+        // notification the model has seen". A chronological Runtime ingress
+        // committed mid-turn moves this cursor; the loop then re-triggers a
+        // fresh model turn over it.
         let mut observed_notification_id = newest_notification_part_id(session.parts());
         // The assistant run marker for the current turn (one user message ==
         // one run marker). Created on the turn's first model turn and reused by
         // every subsequent model turn (tool results, follow-ups, truncations)
         // so all of one reply's parts persist under a single run marker.
         let mut turn_run_id: Option<i64> = None;
+        // A new User/System/Runtime ingress is a hard conversation boundary.
+        // If it arrives while the current assistant run still owns an
+        // in-flight tool or interaction, remember the boundary until those
+        // children settle; only then terminalize the old marker and open the
+        // next assistant run. This is execution-local coordination over the
+        // durable run/part state, not a second persisted lifecycle.
+        let mut external_input_boundary_pending = false;
 
         // Turn-scoped lease heartbeat. A stable run can spend many seconds
         // between database commits — a slow reasoning stream, a multi-second
@@ -387,28 +455,21 @@ impl SessionManager {
                 .drain_steer_input(session, &mut steer_rx, &current_options, state.clone())
                 .await?;
 
-            let latest_user = last_input_message_id(session.parts());
-            if latest_user != observed_user_message_id {
-                active_model_turn_id = latest_user;
-                observed_user_message_id = latest_user;
+            let latest_input = last_input_message_id(session.parts());
+            let input_changed = latest_input != observed_input_message_id;
+            if input_changed {
+                active_model_turn_id = latest_input;
+                observed_input_message_id = latest_input;
                 model_requested = true;
-                // New steer input starts a new turn: the next model turn opens a
-                // fresh assistant run marker instead of continuing the previous
-                // turn's marker.
-                turn_run_id = None;
             }
 
             let latest_notification = newest_notification_part_id(session.parts());
-            if latest_notification != observed_notification_id {
-                // A background operation settled and its Assistant-role
-                // `system_notification` part was appended onto the launching
-                // run (`settle_background_operation`, possibly delivered
-                // through a steer). The model must take a fresh turn over the
-                // settled result — the agena analog of Claude Code's
-                // `<task-notification>` waking the launching turn. The
-                // notification part itself already lives under the launching
-                // run (no new run); the model's response opens a fresh
-                // assistant marker like any new input.
+            let notification_changed = latest_notification != observed_notification_id;
+            if notification_changed {
+                // A background event arrived as a Runtime ingress (or as a
+                // migrated legacy notification). The model must take a fresh
+                // turn over it — the agena analog of Claude Code's
+                // `<task-notification>` waking the launching turn.
                 //
                 // Acknowledge every newly-seen notification part to its
                 // settle: the settle steers and then waits for this
@@ -426,7 +487,26 @@ impl SessionManager {
                 }
                 observed_notification_id = latest_notification;
                 model_requested = true;
-                turn_run_id = None;
+            }
+
+            if (input_changed || notification_changed) && turn_run_id.is_some() {
+                external_input_boundary_pending = true;
+            }
+            if external_input_boundary_pending {
+                let Some(run_id) = turn_run_id else {
+                    return Err(AppError::Internal(format!(
+                        "session {} lost its assistant run while handing off external input",
+                        session.id
+                    )));
+                };
+                let (next_session, terminalized) = self
+                    .terminalize_turn_at_external_boundary_if_quiescent(session, run_id)
+                    .await?;
+                session = next_session;
+                if terminalized {
+                    turn_run_id = None;
+                    external_input_boundary_pending = false;
+                }
             }
 
             let mut current_options = self
@@ -465,10 +545,12 @@ impl SessionManager {
                 continue;
             }
 
-            if let Some(hit) = crate::session::doom_loop::detect(
-                session.active_window_parts(),
-                agena_domain::DoomLoopPolicy::default(),
-            ) {
+            if !external_input_boundary_pending
+                && let Some(hit) = crate::session::doom_loop::detect(
+                    session.active_window_parts(),
+                    agena_domain::DoomLoopPolicy::default(),
+                )
+            {
                 if doom_loop_recoveries < MAX_DOOM_LOOP_RECOVERIES {
                     doom_loop_recoveries += 1;
                     tracing::warn!(
@@ -481,10 +563,7 @@ impl SessionManager {
                         "doom-loop detected; injecting recovery feedback and continuing"
                     );
                     let (continued, continuation_marker) = self
-                        .inject_continuation_message(
-                            session,
-                            DOOM_LOOP_RECOVERY_PROMPT.to_owned(),
-                        )
+                        .inject_continuation_message(session, DOOM_LOOP_RECOVERY_PROMPT.to_owned())
                         .await?;
                     session = continued;
                     // The continuation is a fresh assistant run (or an in-place
@@ -1064,7 +1143,14 @@ impl SessionManager {
             content["text"] = serde_json::Value::String(format!("{existing}\n\n{text}"));
             let updated = self
                 .store
-                .update_part(session.id, part.part_id, PartDelta { content: Some(content), ..PartDelta::default() })
+                .update_part(
+                    session.id,
+                    part.part_id,
+                    PartDelta {
+                        content: Some(content),
+                        ..PartDelta::default()
+                    },
+                )
                 .await?;
             let mut projected = session.parts().to_vec();
             if let Some(existing) = projected
@@ -1117,7 +1203,7 @@ impl SessionManager {
     /// that launched the hooks (kind `hook`, role Assistant) — no new run
     /// marker. The launching run is the last run marker in the session: an
     /// in-flight assistant `continue` marker, a terminal (Completed/Failed/
-    /// Cancelled) final reply, or the always-in-flight `user_send` run when no
+    /// Cancelled) final reply, or the terminal `user_send` receipt when no
     /// assistant run exists yet (session.start). A hook's `message` (an
     /// agent.stop continuation) projects as a dedicated system-message wire
     /// part, never as assistant reply text.
@@ -1150,7 +1236,11 @@ impl SessionManager {
         // The LAST run marker is the launching run at every drain site: the
         // freshly-submitted `user_send` or the current turn's `continue`
         // marker, or the final (terminal) reply after a stop/failure.
-        let launching = session.parts().iter().rev().find(|part| part.is_run_marker());
+        let launching = session
+            .parts()
+            .iter()
+            .rev()
+            .find(|part| part.is_run_marker());
         let created = match launching {
             // In-flight assistant run (mid-turn continue marker): the guarded
             // append accepts it.
@@ -1167,11 +1257,11 @@ impl SessionManager {
                     .settle_background_run(session.id, marker.part_id, None, new_parts)
                     .await?
             }
-            // No assistant run yet (session.start / pre-turn): the always
-            // in-flight `user_send` run.
+            // No assistant run yet (session.start / pre-turn). A user input is
+            // committed terminal, so append hook observations through the
+            // settle path without reopening its immutable receipt.
             Some(marker)
                 if marker.role == PartRole::User
-                    && marker.state.is_in_flight()
                     && marker
                         .content
                         .get("run_kind")
@@ -1179,14 +1269,14 @@ impl SessionManager {
                         == Some("user_send") =>
             {
                 self.store
-                    .append_parts(session.id, marker.part_id, new_parts)
+                    .settle_background_run(session.id, marker.part_id, None, new_parts)
                     .await?
             }
             _ => {
                 return Err(AppError::Internal(format!(
                     "no launching run marker found to record hook runs for session {}",
                     session.id
-                )))
+                )));
             }
         };
         let mut projected = session.parts().to_vec();
@@ -1242,7 +1332,8 @@ impl SessionManager {
                 tool_api_functions.as_slice(),
                 state.as_ref(),
             );
-            let provider_request_shape = state.provider_registry.prompt_cache_shape(&options.model)?;
+            let provider_request_shape =
+                state.provider_registry.prompt_cache_shape(&options.model)?;
             let continuation_supported = state
                 .provider_registry
                 .supports_prompt_continuation(&options.model)
@@ -1800,7 +1891,12 @@ impl SessionManager {
                     Some(session_id),
                 )
                 .await?;
-            (prepared, prepared_invocation, prepared_shell_command, permission_checks)
+            (
+                prepared,
+                prepared_invocation,
+                prepared_shell_command,
+                permission_checks,
+            )
         };
         let invocation_changed = prepared_invocation != original_invocation;
         resolved.prepared_shell_command = prepared_shell_command;
@@ -1915,6 +2011,15 @@ impl SessionManager {
                 return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
             }
             AggregatedPermissionOutcome::Allow => {}
+        }
+
+        // Background launches must persist their LaunchRequested aggregate
+        // immediately before the external side effect. Keep them on the
+        // canonical sequential path so no parallel executor can bypass that
+        // durable handoff.
+        if requested_background_kind(&resolved.invocation).is_some() {
+            *session = before_prepare;
+            return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
         }
 
         if !concurrency_safe {
@@ -2107,10 +2212,10 @@ impl SessionManager {
         let cancellation = self.execution_registry.cancellation_token(session.id).await;
         let resolved = resolve_pending_tool(&session, &pending_tool)?;
         let PreparedPendingToolExecution {
-            resolved,
+            mut resolved,
             scoped_executor,
             permission_checks,
-            session_changed,
+            mut session_changed,
         } = match self
             .prepare_pending_tool_execution(
                 &mut session,
@@ -2184,6 +2289,48 @@ impl SessionManager {
             }
         }
 
+        // Bind the runtime identity before the side effect. For tasks this may
+        // rewrite an omitted task_id to the deterministic durable id, so save
+        // the rewritten invocation back into the launch receipt as part of
+        // the same pre-execution checkpoint.
+        let background_kind = requested_background_kind(&resolved.invocation);
+        let invocation_before_identity = resolved.invocation.clone();
+        let reserved_external_id = if background_kind.is_some() {
+            reserve_background_external_id(
+                &mut resolved.invocation,
+                session.id,
+                resolved.pending.part.part_id,
+                resolved.call_id,
+            )?
+        } else {
+            None
+        };
+        if resolved.invocation != invocation_before_identity {
+            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending tool part not found while reserving background identity: part={}",
+                    resolved.pending.part.part_id
+                ))
+            })?;
+            let mut operation = operation_from_part(tool_part).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending tool payload missing while reserving background identity: part={}",
+                    resolved.pending.part.part_id
+                ))
+            })?;
+            operation.invocation = resolved.invocation.clone();
+            tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_call_from_operation(&operation),
+            ))
+            .map_err(|error| {
+                AppError::Internal(format!(
+                    "serialize background launch identity for part {}: {error}",
+                    resolved.pending.part.part_id
+                ))
+            })?;
+            session_changed = true;
+        }
+
         if session_changed {
             session = Box::pin(self.persist_session_changes(
                 session,
@@ -2222,6 +2369,67 @@ impl SessionManager {
             .await?;
         }
 
+        // Persist the single authoritative background-operation intent before
+        // the tool can spawn a process or child session. A crash from this
+        // point forward leaves a recoverable aggregate instead of an unowned
+        // external side effect. Running means the identity is durably bound
+        // and the adapter now owns the short launch lease; the lease is
+        // cleared only after its launch receipt returns.
+        let background_intent = if let Some(kind) = background_kind {
+            let launch_run_id = assistant_message_id(&session, &resolved.pending.part)?;
+            let operation_id = background_operation_id(session.id, resolved.pending.part.part_id);
+            let external_id = reserved_external_id.ok_or_else(|| {
+                AppError::Internal(format!(
+                    "background launch {operation_id} has no reserved external identity"
+                ))
+            })?;
+            let created = self
+                .store
+                .create_background_operation(NewBackgroundOperation {
+                    operation_id: operation_id.clone(),
+                    session_id: session.id,
+                    launch_run_id: Some(launch_run_id),
+                    launch_tool_part_id: Some(resolved.pending.part.part_id),
+                    kind,
+                })
+                .await?;
+            let launching = if created.phase == BackgroundOperationPhase::LaunchRequested {
+                self.store
+                    .transition_background_operation(BackgroundOperationTransition {
+                        operation_id: operation_id.clone(),
+                        expected_revision: created.revision,
+                        next_phase: BackgroundOperationPhase::Launching,
+                        external_id: Some(external_id.clone()),
+                        outcome: None,
+                        failure: None,
+                        owner_id: Some(self.store.background_owner_id().to_owned()),
+                        lease_until_ms: Some(Utc::now().timestamp_millis() + 30_000),
+                    })
+                    .await?
+            } else {
+                created
+            };
+            let running = if launching.phase == BackgroundOperationPhase::Launching {
+                self.store
+                    .transition_background_operation(BackgroundOperationTransition {
+                        operation_id,
+                        expected_revision: launching.revision,
+                        next_phase: BackgroundOperationPhase::Running,
+                        external_id: Some(external_id),
+                        outcome: None,
+                        failure: None,
+                        owner_id: Some(self.store.background_owner_id().to_owned()),
+                        lease_until_ms: Some(Utc::now().timestamp_millis() + 120_000),
+                    })
+                    .await?
+            } else {
+                launching
+            };
+            Some(running)
+        } else {
+            None
+        };
+
         let scoped_executor = scoped_executor.with_command_event_sink(
             self.command_event_sink_for_pending_if_needed(session.id, &resolved),
         );
@@ -2231,6 +2439,18 @@ impl SessionManager {
         {
             Ok(stream) => stream,
             Err(error) => {
+                if let Some(operation) = background_intent.as_ref() {
+                    self.fail_background_launch_if_active(
+                        &operation.operation_id,
+                        if matches!(error, ToolError::Cancelled) {
+                            BackgroundOperationPhase::Cancelled
+                        } else {
+                            BackgroundOperationPhase::Failed
+                        },
+                        error.to_string(),
+                    )
+                    .await?;
+                }
                 return Box::pin(self.apply_pending_tool_start_error(
                     session,
                     &resolved.pending,
@@ -2243,6 +2463,17 @@ impl SessionManager {
         };
 
         if let Some(stream) = streaming_tool {
+            if let Some(operation) = background_intent {
+                self.fail_background_launch_if_active(
+                    &operation.operation_id,
+                    BackgroundOperationPhase::Failed,
+                    "background launch unexpectedly entered streaming execution".to_owned(),
+                )
+                .await?;
+                return Err(AppError::Internal(
+                    "background launch unexpectedly entered streaming execution".to_owned(),
+                ));
+            }
             return Box::pin(self.apply_streaming_tool_execution(
                 session,
                 &resolved.pending,
@@ -2266,6 +2497,74 @@ impl SessionManager {
                 execution_resolved.prepared_shell_command.clone(),
             )
             .await;
+
+        if let Some(operation) = background_intent {
+            match &execution {
+                Ok(execution) => {
+                    let Some(marker) = background_operation_from_execution(
+                        &execution_resolved.invocation,
+                        &execution.output,
+                    ) else {
+                        let message = format!(
+                            "background launch {} returned no external operation identity",
+                            operation.operation_id
+                        );
+                        self.fail_background_launch_if_active(
+                            &operation.operation_id,
+                            BackgroundOperationPhase::Failed,
+                            message.clone(),
+                        )
+                        .await?;
+                        return Err(AppError::Internal(message));
+                    };
+                    if marker.kind != operation.kind.as_str() {
+                        let message = format!(
+                            "background launch {} changed kind from {} to {}",
+                            operation.operation_id,
+                            operation.kind.as_str(),
+                            marker.kind
+                        );
+                        self.fail_background_launch_if_active(
+                            &operation.operation_id,
+                            BackgroundOperationPhase::Failed,
+                            message.clone(),
+                        )
+                        .await?;
+                        return Err(AppError::Internal(message));
+                    }
+                    if operation.external_id.as_deref() != Some(marker.id.as_str()) {
+                        let message = format!(
+                            "background launch {} returned identity {}, reserved {}",
+                            operation.operation_id,
+                            marker.id,
+                            operation.external_id.as_deref().unwrap_or("<missing>")
+                        );
+                        self.fail_background_launch_if_active(
+                            &operation.operation_id,
+                            BackgroundOperationPhase::Failed,
+                            message.clone(),
+                        )
+                        .await?;
+                        return Err(AppError::Internal(message));
+                    }
+                    self.finish_background_launch_handoff(&operation.operation_id)
+                        .await?;
+                }
+                Err(error) => {
+                    let next_phase = if matches!(error, ToolError::Cancelled) {
+                        BackgroundOperationPhase::Cancelled
+                    } else {
+                        BackgroundOperationPhase::Failed
+                    };
+                    self.fail_background_launch_if_active(
+                        &operation.operation_id,
+                        next_phase,
+                        error.to_string(),
+                    )
+                    .await?;
+                }
+            }
+        }
 
         let session = self.store.load_session(session.id).await?;
         Box::pin(self.apply_tool_execution_result(session, &resolved.pending, execution, state))
@@ -2306,7 +2605,10 @@ impl SessionManager {
                 ))
                 .await
             }
-            Err(error) => self.route_tool_error(session, pending_tool, error, state).await,
+            Err(error) => {
+                self.route_tool_error(session, pending_tool, error, state)
+                    .await
+            }
         }
     }
 
@@ -3203,15 +3505,14 @@ impl SessionManager {
         };
         self.apply_tool_success_execution_context(&mut session, &resolved.invocation, &execution);
 
-        // A background launch (monitored shell process or delegated task) keeps
-        // running after the tool call returns. The operation content presents
-        // as a normal terminal completion (so the provider sees a paired
-        // tool_use + tool_result on the next turn), but the storage part state
-        // stays InProgress so the transcript part keeps spinning until the
-        // runtime completes the background work. The marker correlates the
-        // part with the runtime completion signal.
+        // The launch tool and the launched work have distinct lifecycles. The
+        // tool call completes with a durable launch receipt; the normalized
+        // BackgroundOperation aggregate remains Running until the external
+        // process/task/monitor settles. Keeping the tool part InProgress here
+        // previously required a fake guard result and made control metadata
+        // vulnerable to the streaming buffer.
         let background = background_operation_from_execution(&resolved.invocation, &tool_output);
-        let marker_id = update_resolved_tool_message(&mut session, &resolved, |tool_part| {
+        update_resolved_tool_message(&mut session, &resolved, |tool_part| {
             let mut operation = OperationPart::completed(
                 resolved.call_id,
                 resolved.invocation.clone(),
@@ -3247,40 +3548,8 @@ impl SessionManager {
                 tool_call_from_operation(&operation),
             ))
             .expect("operation content is always JSON serializable");
-            tool_part.state = if background.is_some() {
-                PartState::InProgress
-            } else {
-                PartState::Completed
-            };
+            tool_part.state = PartState::Completed;
         })?;
-
-        // Exclude the background operation from the pending-tool pass so the
-        // stable-run loop does not re-execute it: an empty-output `tool_result`
-        // guard part (invisible to the provider and the transcript) pairs with
-        // the still-in-flight tool part, exactly like a real result would. The
-        // guard has no `delete_part` API to remove it later, so it stays for
-        // the session's lifetime — empty output keeps it invisible everywhere.
-        if background.is_some() {
-            let tool_part_id = resolved.pending.part.part_id;
-            let mut guard = new_part_from_content(
-                "tool_result",
-                PartRole::Tool,
-                &TypedContent::ToolResult(ToolResultContent {
-                    output: String::new(),
-                    ok: true,
-                    extra: Default::default(),
-                }),
-                PartState::Completed,
-            )?;
-            guard.parent_part_id = Some(tool_part_id);
-            let created = self
-                .store
-                .append_parts(session.id, marker_id, vec![guard])
-                .await?;
-            let mut parts = session.parts().to_vec();
-            parts.extend(created);
-            session.install_projected_parts(parts);
-        }
         // Mirror the v1 message usage attribution into the owning run marker's
         // `content["usage"]` (the v2 projection `aggregate_usage()` sums it).
         // Flush the marker content directly: `persist_tool_completion` only

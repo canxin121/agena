@@ -36,9 +36,9 @@ use agena_application::{
 async fn http_page_result<T>(
     future: impl Future<Output = Result<ApplicationPaginatedResponse<T>, ApplicationError>>,
 ) -> Result<agena_api::pagination::PaginatedResponse<T>, ApplicationError> {
-    future.await.map(|page| {
-        agena_application::pagination::api_page_from_application(page, |item| item)
-    })
+    future
+        .await
+        .map(|page| agena_application::pagination::api_page_from_application(page, |item| item))
 }
 
 async fn http_optional_result<T>(

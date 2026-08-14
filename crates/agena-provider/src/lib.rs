@@ -80,8 +80,8 @@ mod anthropic_wire;
 pub use anthropic_wire::{
     AnthropicCacheCreationUsage, AnthropicMessage, AnthropicMessagesRequest,
     AnthropicMessagesResponse, AnthropicModel, AnthropicModelListResponse, AnthropicOutputConfig,
-    AnthropicOutputTokensDetails, AnthropicSseDelta, AnthropicSseEvent,
-    AnthropicSseMessage, AnthropicSseMessageDelta, AnthropicToolCallState, AnthropicUsage,
+    AnthropicOutputTokensDetails, AnthropicSseDelta, AnthropicSseEvent, AnthropicSseMessage,
+    AnthropicSseMessageDelta, AnthropicToolCallState, AnthropicUsage,
 };
 mod anthropic_thinking;
 pub use anthropic_thinking::{

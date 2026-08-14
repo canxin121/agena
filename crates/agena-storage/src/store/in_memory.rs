@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -18,11 +19,13 @@ use serde_json::{Value, json};
 #[cfg(test)]
 use super::PendingInteraction;
 use super::{
-    InFlightRun, InteractionAnswerOutcome, LEASE_STALENESS_MS, LeaseAcquire, LeaseState,
-    MaintenanceOutcome, NewPart, NewSession, Part, PartDelta, PartRole, PartState, PartVisibility,
-    PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta, SessionSummary,
-    SessionView, StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats,
-    apply_part_transition,
+    BackgroundDelivery, BackgroundDeliveryPhase, BackgroundEventRequest, BackgroundOperation,
+    BackgroundOperationPhase, BackgroundOperationTransition, BackgroundSettleOutcome, InFlightRun,
+    InteractionAnswerOutcome, LEASE_STALENESS_MS, LeaseAcquire, LeaseState, MaintenanceOutcome,
+    NewBackgroundOperation, NewPart, NewSession, Part, PartDelta, PartRole, PartState,
+    PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
+    SessionSummary, SessionView, StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord,
+    UsageStats, apply_part_transition,
 };
 use crate::store::jsonl;
 
@@ -55,6 +58,11 @@ pub struct InMemoryEngine {
     usage: Arc<RwLock<Vec<UsageRecord>>>,
     /// (session_id, idempotency_key) -> run_id.
     idempotency: Arc<RwLock<HashMap<(i64, String), i64>>>,
+    background_operations: Arc<RwLock<HashMap<String, BackgroundOperation>>>,
+    background_deliveries: Arc<RwLock<HashMap<String, BackgroundDelivery>>>,
+    /// Serializes compound aggregate + transcript projection mutations so the
+    /// test backend honors the production transaction boundary.
+    background_write: Arc<Mutex<()>>,
 }
 
 impl Default for InMemoryEngine {
@@ -80,6 +88,9 @@ impl InMemoryEngine {
             leases: Arc::new(RwLock::new(HashMap::new())),
             usage: Arc::new(RwLock::new(Vec::new())),
             idempotency: Arc::new(RwLock::new(HashMap::new())),
+            background_operations: Arc::new(RwLock::new(HashMap::new())),
+            background_deliveries: Arc::new(RwLock::new(HashMap::new())),
+            background_write: Arc::new(Mutex::new(())),
         }
     }
 
@@ -662,9 +673,7 @@ impl PersistenceEngine for InMemoryEngine {
                     .is_none_or(|parent_id| meta.parent_id == Some(parent_id))
             })
             .filter(|meta| !query.roots_only || meta.parent_id.is_none())
-            .filter(|meta| {
-                !query.exclude_subagents || !meta.relation_kind.is_subagent()
-            })
+            .filter(|meta| !query.exclude_subagents || !meta.relation_kind.is_subagent())
             .filter(|meta| {
                 search
                     .as_ref()
@@ -969,6 +978,488 @@ impl PersistenceEngine for InMemoryEngine {
         Ok(stale)
     }
 
+    async fn create_background_operation(
+        &self,
+        new: NewBackgroundOperation,
+        now_ms: i64,
+    ) -> Result<BackgroundOperation, StoreError> {
+        let _write = self
+            .background_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(existing) = self
+            .background_operations
+            .read()
+            .expect("background operations lock")
+            .get(&new.operation_id)
+            .cloned()
+        {
+            if existing.session_id == new.session_id
+                && existing.launch_run_id == new.launch_run_id
+                && existing.launch_tool_part_id == new.launch_tool_part_id
+                && existing.kind == new.kind
+            {
+                return Ok(existing);
+            }
+            return Err(StoreError::InvalidState(format!(
+                "background operation {} already identifies a different launch",
+                new.operation_id
+            )));
+        }
+        if !self
+            .sessions
+            .read()
+            .expect("sessions lock")
+            .contains_key(&new.session_id)
+        {
+            return Err(StoreError::not_found(format!("session {}", new.session_id)));
+        }
+        match (new.kind, new.launch_run_id, new.launch_tool_part_id) {
+            (super::BackgroundOperationKind::ScheduledDelivery, None, None) => {}
+            (super::BackgroundOperationKind::ScheduledDelivery, _, _) => {
+                return Err(StoreError::InvalidState(
+                    "scheduled deliveries cannot claim a launch tool part".to_owned(),
+                ));
+            }
+            (_, Some(run_id), Some(tool_part_id)) => {
+                let parts = self.parts.read().expect("parts lock");
+                let run = parts
+                    .get(&run_id)
+                    .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
+                if !run.is_run_marker() || run.origin_session_id != new.session_id {
+                    return Err(StoreError::InvalidState(format!(
+                        "background launch run {run_id} does not belong to session {}",
+                        new.session_id
+                    )));
+                }
+                let tool = parts
+                    .get(&tool_part_id)
+                    .ok_or_else(|| StoreError::not_found(format!("tool part {tool_part_id}")))?;
+                if tool.kind != "tool_call"
+                    || tool.origin_session_id != new.session_id
+                    || tool.run_id != Some(run_id)
+                {
+                    return Err(StoreError::InvalidState(format!(
+                        "background launch tool {tool_part_id} is not owned by run {run_id} in session {}",
+                        new.session_id
+                    )));
+                }
+            }
+            _ => {
+                return Err(StoreError::InvalidState(
+                    "background tool operations require both launch ids".to_owned(),
+                ));
+            }
+        }
+        let operation = BackgroundOperation {
+            operation_id: new.operation_id.clone(),
+            session_id: new.session_id,
+            launch_run_id: new.launch_run_id,
+            launch_tool_part_id: new.launch_tool_part_id,
+            kind: new.kind,
+            external_id: None,
+            phase: BackgroundOperationPhase::LaunchRequested,
+            outcome: None,
+            failure: None,
+            last_event_seq: 0,
+            owner_id: None,
+            lease_until_ms: None,
+            revision: 1,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+            finished_at_ms: None,
+        };
+        self.background_operations
+            .write()
+            .expect("background operations lock")
+            .insert(new.operation_id, operation.clone());
+        Ok(operation)
+    }
+
+    async fn background_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<BackgroundOperation>, StoreError> {
+        Ok(self
+            .background_operations
+            .read()
+            .expect("background operations lock")
+            .get(operation_id)
+            .cloned())
+    }
+
+    async fn background_operation_by_external_id(
+        &self,
+        kind: super::BackgroundOperationKind,
+        external_id: &str,
+    ) -> Result<Option<BackgroundOperation>, StoreError> {
+        Ok(self
+            .background_operations
+            .read()
+            .expect("background operations lock")
+            .values()
+            .find(|operation| {
+                operation.kind == kind && operation.external_id.as_deref() == Some(external_id)
+            })
+            .cloned())
+    }
+
+    async fn active_background_operations(
+        &self,
+        kind: Option<super::BackgroundOperationKind>,
+        limit: usize,
+    ) -> Result<Vec<BackgroundOperation>, StoreError> {
+        let mut operations = self
+            .background_operations
+            .read()
+            .expect("background operations lock")
+            .values()
+            .filter(|operation| {
+                !operation.phase.is_terminal() && kind.is_none_or(|kind| operation.kind == kind)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        operations
+            .sort_by_key(|operation| (operation.created_at_ms, operation.operation_id.clone()));
+        operations.truncate(limit);
+        Ok(operations)
+    }
+
+    async fn transition_background_operation(
+        &self,
+        transition: BackgroundOperationTransition,
+        now_ms: i64,
+    ) -> Result<BackgroundOperation, StoreError> {
+        let _write = self
+            .background_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut operations = self
+            .background_operations
+            .write()
+            .expect("background operations lock");
+        let current = operations
+            .get(&transition.operation_id)
+            .cloned()
+            .ok_or_else(|| {
+                StoreError::not_found(format!("background operation {}", transition.operation_id))
+            })?;
+        if current.revision != transition.expected_revision {
+            return Err(StoreError::InvalidState(format!(
+                "background operation {} revision changed: expected {}, found {}",
+                current.operation_id, transition.expected_revision, current.revision
+            )));
+        }
+        if !current.phase.can_transition(transition.next_phase) {
+            return Err(StoreError::InvalidState(format!(
+                "invalid background transition {} -> {} for {}",
+                current.phase.as_str(),
+                transition.next_phase.as_str(),
+                current.operation_id
+            )));
+        }
+        if let Some(external_id) = transition.external_id.as_deref()
+            && operations.values().any(|operation| {
+                operation.operation_id != current.operation_id
+                    && operation.kind == current.kind
+                    && operation.external_id.as_deref() == Some(external_id)
+            })
+        {
+            return Err(StoreError::InvalidState(format!(
+                "background external id {}:{} already exists",
+                current.kind.as_str(),
+                external_id
+            )));
+        }
+        let mut next = current;
+        next.phase = transition.next_phase;
+        if transition.external_id.is_some() {
+            next.external_id = transition.external_id;
+        }
+        if transition.outcome.is_some() {
+            next.outcome = transition.outcome;
+        }
+        if transition.failure.is_some() {
+            next.failure = transition.failure;
+        }
+        next.owner_id = transition.owner_id;
+        next.lease_until_ms = transition.lease_until_ms;
+        next.revision += 1;
+        next.updated_at_ms = now_ms;
+        next.finished_at_ms = next.phase.is_terminal().then_some(now_ms);
+        if next.phase == BackgroundOperationPhase::Running && next.external_id.is_none() {
+            return Err(StoreError::InvalidState(format!(
+                "background operation {} cannot enter running without an external id",
+                next.operation_id
+            )));
+        }
+        operations.insert(next.operation_id.clone(), next.clone());
+        Ok(next)
+    }
+
+    async fn record_background_event(
+        &self,
+        request: BackgroundEventRequest,
+        now_ms: i64,
+    ) -> Result<BackgroundSettleOutcome, StoreError> {
+        let _write = self
+            .background_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let delivery_id = format!("{}:{}", request.operation_id, request.event_key);
+        if let Some(delivery) = self
+            .background_deliveries
+            .read()
+            .expect("background deliveries lock")
+            .get(&delivery_id)
+            .cloned()
+        {
+            let operation = self
+                .background_operations
+                .read()
+                .expect("background operations lock")
+                .get(&request.operation_id)
+                .cloned()
+                .ok_or_else(|| {
+                    StoreError::not_found(format!("background operation {}", request.operation_id))
+                })?;
+            let notification_part_id = delivery.notification_part_id.ok_or_else(|| {
+                StoreError::InvalidState(format!(
+                    "background delivery {} has no notification part",
+                    delivery.delivery_id
+                ))
+            })?;
+            let notification_part = self
+                .parts
+                .read()
+                .expect("parts lock")
+                .get(&notification_part_id)
+                .cloned()
+                .ok_or_else(|| StoreError::not_found(format!("part {notification_part_id}")))?;
+            return Ok(BackgroundSettleOutcome {
+                operation,
+                delivery,
+                notification_part,
+                created: false,
+            });
+        }
+        let current = self
+            .background_operations
+            .read()
+            .expect("background operations lock")
+            .get(&request.operation_id)
+            .cloned()
+            .ok_or_else(|| {
+                StoreError::not_found(format!("background operation {}", request.operation_id))
+            })?;
+        if let Some(next_phase) = request.next_phase
+            && !current.phase.can_transition(next_phase)
+        {
+            return Err(StoreError::InvalidState(format!(
+                "invalid background transition {} -> {} for {}",
+                current.phase.as_str(),
+                next_phase.as_str(),
+                current.operation_id
+            )));
+        }
+        let mut notification = request.notification;
+        notification.role = PartRole::Runtime;
+        notification.state = PartState::Completed;
+        let projected = self.create_batch(
+            current.session_id,
+            PartRole::Runtime,
+            PartState::Completed,
+            json!({
+                "run_kind": "runtime_ingress",
+                "source": "background_operation",
+                "operation_id": current.operation_id,
+                "abort_reason": null,
+            }),
+            vec![notification],
+            Some(delivery_id.clone()),
+            now_ms,
+        )?;
+        let notification_part = projected.parts.get(1).cloned().ok_or_else(|| {
+            StoreError::InvalidState("runtime ingress omitted notification".into())
+        })?;
+        let mut next = current;
+        if let Some(next_phase) = request.next_phase {
+            next.phase = next_phase;
+        }
+        if request.outcome.is_some() {
+            next.outcome = request.outcome;
+        }
+        if request.failure.is_some() {
+            next.failure = request.failure;
+        }
+        if let Some(event_seq) = request.event_seq {
+            next.last_event_seq = next.last_event_seq.max(event_seq);
+        }
+        if next.phase.is_terminal() {
+            next.owner_id = None;
+            next.lease_until_ms = None;
+        }
+        next.revision += 1;
+        next.updated_at_ms = now_ms;
+        next.finished_at_ms = if next.phase.is_terminal() {
+            next.finished_at_ms.or(Some(now_ms))
+        } else {
+            None
+        };
+        let delivery = BackgroundDelivery {
+            delivery_id: delivery_id.clone(),
+            operation_id: next.operation_id.clone(),
+            session_id: next.session_id,
+            event_key: request.event_key,
+            payload: notification_part.content.clone(),
+            phase: BackgroundDeliveryPhase::Pending,
+            claim_owner: None,
+            claim_until_ms: None,
+            attempts: 0,
+            notification_part_id: Some(notification_part.part_id),
+            last_error: None,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+            consumed_at_ms: None,
+        };
+        self.background_operations
+            .write()
+            .expect("background operations lock")
+            .insert(next.operation_id.clone(), next.clone());
+        self.background_deliveries
+            .write()
+            .expect("background deliveries lock")
+            .insert(delivery_id, delivery.clone());
+        Ok(BackgroundSettleOutcome {
+            operation: next,
+            delivery,
+            notification_part,
+            created: true,
+        })
+    }
+
+    async fn claim_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        claim_until_ms: i64,
+        now_ms: i64,
+    ) -> Result<Option<BackgroundDelivery>, StoreError> {
+        let _write = self
+            .background_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut deliveries = self
+            .background_deliveries
+            .write()
+            .expect("background deliveries lock");
+        let Some(delivery) = deliveries.get_mut(delivery_id) else {
+            return Ok(None);
+        };
+        let claimable = delivery.phase == BackgroundDeliveryPhase::Pending
+            || (delivery.phase == BackgroundDeliveryPhase::Claimed
+                && delivery.claim_until_ms.is_some_and(|until| until <= now_ms));
+        if !claimable {
+            return Ok(None);
+        }
+        delivery.phase = BackgroundDeliveryPhase::Claimed;
+        delivery.claim_owner = Some(owner_id.to_owned());
+        delivery.claim_until_ms = Some(claim_until_ms);
+        delivery.attempts = delivery.attempts.saturating_add(1);
+        delivery.updated_at_ms = now_ms;
+        Ok(Some(delivery.clone()))
+    }
+
+    async fn consume_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        now_ms: i64,
+    ) -> Result<BackgroundDelivery, StoreError> {
+        let _write = self
+            .background_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut deliveries = self
+            .background_deliveries
+            .write()
+            .expect("background deliveries lock");
+        let delivery = deliveries
+            .get_mut(delivery_id)
+            .ok_or_else(|| StoreError::not_found(format!("delivery {delivery_id}")))?;
+        if delivery.phase == BackgroundDeliveryPhase::Consumed {
+            return Ok(delivery.clone());
+        }
+        if delivery.phase != BackgroundDeliveryPhase::Claimed
+            || delivery.claim_owner.as_deref() != Some(owner_id)
+        {
+            return Err(StoreError::InvalidState(format!(
+                "background delivery {delivery_id} is not claimed by {owner_id}"
+            )));
+        }
+        delivery.phase = BackgroundDeliveryPhase::Consumed;
+        delivery.claim_owner = None;
+        delivery.claim_until_ms = None;
+        delivery.updated_at_ms = now_ms;
+        delivery.consumed_at_ms = Some(now_ms);
+        Ok(delivery.clone())
+    }
+
+    async fn retry_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        error: Value,
+        now_ms: i64,
+    ) -> Result<BackgroundDelivery, StoreError> {
+        let _write = self
+            .background_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut deliveries = self
+            .background_deliveries
+            .write()
+            .expect("background deliveries lock");
+        let delivery = deliveries
+            .get_mut(delivery_id)
+            .ok_or_else(|| StoreError::not_found(format!("delivery {delivery_id}")))?;
+        if delivery.phase != BackgroundDeliveryPhase::Claimed
+            || delivery.claim_owner.as_deref() != Some(owner_id)
+        {
+            return Err(StoreError::InvalidState(format!(
+                "background delivery {delivery_id} is not claimed by {owner_id}"
+            )));
+        }
+        delivery.phase = BackgroundDeliveryPhase::Pending;
+        delivery.claim_owner = None;
+        delivery.claim_until_ms = None;
+        delivery.last_error = Some(error);
+        delivery.updated_at_ms = now_ms;
+        Ok(delivery.clone())
+    }
+
+    async fn pending_background_deliveries(
+        &self,
+        limit: usize,
+        now_ms: i64,
+    ) -> Result<Vec<BackgroundDelivery>, StoreError> {
+        let mut deliveries = self
+            .background_deliveries
+            .read()
+            .expect("background deliveries lock")
+            .values()
+            .filter(|delivery| {
+                delivery.phase == BackgroundDeliveryPhase::Pending
+                    || (delivery.phase == BackgroundDeliveryPhase::Claimed
+                        && delivery.claim_until_ms.is_some_and(|until| until <= now_ms))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        deliveries.sort_by_key(|delivery| (delivery.created_at_ms, delivery.delivery_id.clone()));
+        deliveries.truncate(limit);
+        Ok(deliveries)
+    }
+
     async fn submit_user_run(
         &self,
         session_id: i64,
@@ -978,11 +1469,16 @@ impl PersistenceEngine for InMemoryEngine {
         now_ms: i64,
     ) -> Result<SubmitOutcome, StoreError> {
         self.ensure_lease(session_id, owner_id, now_ms)?;
+        let marker_state = if parts.iter().all(|part| part.state.is_terminal()) {
+            PartState::Completed
+        } else {
+            PartState::Pending
+        };
         self.create_batch(
             session_id,
             PartRole::User,
-            PartState::Pending,
-            json!({ "run_kind": "user_send" }),
+            marker_state,
+            json!({ "run_kind": "user_send", "abort_reason": null }),
             parts,
             idempotency_key,
             now_ms,
@@ -1039,8 +1535,10 @@ impl PersistenceEngine for InMemoryEngine {
                 );
             }
         }
-        // Terminalize the launching tool part when supplied.
-        if let Some((part_id, terminal, content)) = tool_part {
+        // Transition the launching tool part when supplied. An InProgress
+        // transition is the atomic background-launch checkpoint; terminal
+        // transitions settle the operation.
+        if let Some((part_id, next_state, content)) = tool_part {
             let mut part = self
                 .parts
                 .write()
@@ -1048,9 +1546,9 @@ impl PersistenceEngine for InMemoryEngine {
                 .get_mut(&part_id)
                 .cloned()
                 .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?;
-            part.state = terminal;
+            part.state = next_state;
             part.content = content;
-            part.finished_at_ms = Some(now_ms);
+            part.finished_at_ms = next_state.is_terminal().then_some(now_ms);
             part.revision += 1;
             part.updated_at_ms = now_ms;
             self.parts
@@ -1058,11 +1556,9 @@ impl PersistenceEngine for InMemoryEngine {
                 .expect("parts lock")
                 .insert(part_id, part);
         }
-        // Append the result parts (Assistant role) under the launching run —
-        // no new run marker. The notification part's body is projected as a
-        // dedicated system-message wire part (never assistant reply text), so
-        // it is safe to keep it on the assistant run that launched the
-        // operation.
+        // Append companion parts under the launching run — the launch guard
+        // or settled notifications, with their supplied roles — and create no
+        // new run marker.
         let mut created = Vec::with_capacity(new_parts.len());
         {
             let mut all_parts = self.parts.write().expect("parts lock");
@@ -1102,17 +1598,12 @@ impl PersistenceEngine for InMemoryEngine {
             .cloned()
             .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
         if run.is_run_marker() && run.state.is_in_flight() {
-            let remaining = self
-                .parts
-                .read()
-                .expect("parts lock")
-                .values()
-                .any(|part| {
-                    part.origin_session_id == session_id
-                        && part.run_id == Some(run_id)
-                        && part.part_id != run_id
-                        && part.state.is_in_flight()
-                });
+            let remaining = self.parts.read().expect("parts lock").values().any(|part| {
+                part.origin_session_id == session_id
+                    && part.run_id == Some(run_id)
+                    && part.part_id != run_id
+                    && part.state.is_in_flight()
+            });
             if !remaining {
                 run.state = PartState::Completed;
                 run.finished_at_ms = Some(now_ms);
@@ -1121,10 +1612,7 @@ impl PersistenceEngine for InMemoryEngine {
                 }
                 run.revision += 1;
                 run.updated_at_ms = now_ms;
-                self.parts
-                    .write()
-                    .expect("parts lock")
-                    .insert(run_id, run);
+                self.parts.write().expect("parts lock").insert(run_id, run);
             }
         }
         if !created.is_empty() {
@@ -1749,7 +2237,7 @@ fn derive_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{NewPart, SessionState};
+    use crate::store::{BackgroundOperationKind, NewPart, SessionState};
 
     fn text_part(text: &str) -> NewPart {
         NewPart::pending("text", PartRole::User, json!({ "text": text }))
@@ -1785,12 +2273,14 @@ mod tests {
     #[tokio::test]
     async fn list_exclude_subagents_hides_only_task_children() {
         let (engine, parent_id) = setup().await;
-        let parent = engine
-            .session_meta(parent_id)
-            .await
-            .expect("parent meta");
+        let parent = engine.session_meta(parent_id).await.expect("parent meta");
         engine
-            .create_subagent_session(parent_id, "task-9".to_owned(), "sub task".to_owned(), engine.now_ms())
+            .create_subagent_session(
+                parent_id,
+                "task-9".to_owned(),
+                "sub task".to_owned(),
+                engine.now_ms(),
+            )
             .await
             .expect("create subagent");
         engine
@@ -1865,6 +2355,30 @@ mod tests {
         assert_eq!(view.parts.len(), 2);
         assert_eq!(view.parts[0].part_id, marker.part_id);
         assert_eq!(view.parts[1].kind, "text");
+    }
+
+    #[tokio::test]
+    async fn completed_user_send_is_a_terminal_input_receipt_not_a_liveness_guard() {
+        let (engine, session_id) = setup().await;
+        let mut input = text_part("already committed");
+        input.state = PartState::Completed;
+        let outcome = engine
+            .submit_user_run(session_id, "owner-a", vec![input], None, engine.now_ms())
+            .await
+            .expect("submit completed input");
+        let marker = &outcome.parts[0];
+        assert_eq!(marker.state, PartState::Completed);
+        assert!(marker.finished_at_ms.is_some());
+        assert_eq!(marker.content["abort_reason"], serde_json::Value::Null);
+
+        let view = engine.load_session(session_id).await.expect("load input");
+        assert!(
+            view.parts
+                .iter()
+                .filter(|part| part.is_run_marker())
+                .all(|part| part.state.is_terminal()),
+            "a completed input contributes no in-flight run marker"
+        );
     }
 
     #[tokio::test]
@@ -2861,5 +3375,125 @@ mod tests {
             engine.session_meta(child.id).await.unwrap().version,
             child_before + 1
         );
+    }
+
+    #[tokio::test]
+    async fn background_aggregate_matches_sqlite_event_and_delivery_semantics() {
+        let (engine, session_id) = setup().await;
+        let submitted = engine
+            .submit_user_run(
+                session_id,
+                "owner-a",
+                vec![NewPart::pending(
+                    "tool_call",
+                    PartRole::Assistant,
+                    json!({"operation": {"title": "background receipt"}}),
+                )],
+                None,
+                engine.now_ms(),
+            )
+            .await
+            .expect("submit launch receipt");
+        let tool_part_id = submitted.parts[1].part_id;
+        let operation_id = format!("bg_{session_id}_{tool_part_id}");
+        let created = engine
+            .create_background_operation(
+                NewBackgroundOperation {
+                    operation_id: operation_id.clone(),
+                    session_id,
+                    launch_run_id: Some(submitted.run_id),
+                    launch_tool_part_id: Some(tool_part_id),
+                    kind: BackgroundOperationKind::Monitor,
+                },
+                1_000_001,
+            )
+            .await
+            .expect("create operation");
+        let launching = engine
+            .transition_background_operation(
+                BackgroundOperationTransition {
+                    operation_id: operation_id.clone(),
+                    expected_revision: created.revision,
+                    next_phase: BackgroundOperationPhase::Launching,
+                    external_id: Some("proc_memory".to_owned()),
+                    outcome: None,
+                    failure: None,
+                    owner_id: Some("test".to_owned()),
+                    lease_until_ms: Some(1_030_000),
+                },
+                1_000_002,
+            )
+            .await
+            .expect("launching");
+        engine
+            .transition_background_operation(
+                BackgroundOperationTransition {
+                    operation_id: operation_id.clone(),
+                    expected_revision: launching.revision,
+                    next_phase: BackgroundOperationPhase::Running,
+                    external_id: Some("proc_memory".to_owned()),
+                    outcome: None,
+                    failure: None,
+                    owner_id: None,
+                    lease_until_ms: None,
+                },
+                1_000_003,
+            )
+            .await
+            .expect("running");
+        let request = |seq| {
+            let mut notification = NewPart::pending(
+                "system_notification",
+                PartRole::Runtime,
+                json!({"operation_id":"proc_memory","operation_kind":"monitor","status":"event","event_seq":seq}),
+            );
+            notification.state = PartState::Completed;
+            BackgroundEventRequest {
+                operation_id: operation_id.clone(),
+                event_key: format!("event:{seq}"),
+                event_seq: Some(seq),
+                next_phase: None,
+                outcome: None,
+                failure: None,
+                notification,
+            }
+        };
+        assert!(
+            engine
+                .record_background_event(request(2), 1_000_004)
+                .await
+                .expect("seq 2")
+                .created
+        );
+        assert!(
+            engine
+                .record_background_event(request(1), 1_000_005)
+                .await
+                .expect("out-of-order seq 1")
+                .created
+        );
+        assert!(
+            !engine
+                .record_background_event(request(1), 1_000_006)
+                .await
+                .expect("duplicate seq 1")
+                .created
+        );
+        let operation = engine
+            .background_operation(&operation_id)
+            .await
+            .expect("load")
+            .expect("operation");
+        assert_eq!(operation.last_event_seq, 2);
+        assert_eq!(operation.phase, BackgroundOperationPhase::Running);
+        let pending = engine
+            .pending_background_deliveries(10, 1_000_010)
+            .await
+            .expect("pending deliveries");
+        assert_eq!(pending.len(), 2);
+        assert!(pending.iter().all(|delivery| {
+            delivery.phase == BackgroundDeliveryPhase::Pending
+                && delivery.notification_part_id.is_some()
+        }));
     }
 }

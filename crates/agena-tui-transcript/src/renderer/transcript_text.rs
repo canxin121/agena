@@ -108,8 +108,9 @@ pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I
             title.as_deref().unwrap_or(task_id.as_str()),
             *status,
         ),
-        OperationBlockResource::Json { value } => serde_json::to_string_pretty(value)
-            .unwrap_or_else(|_| value.to_string()),
+        OperationBlockResource::Json { value } => {
+            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+        }
         OperationBlockResource::Table { columns, rows } => {
             let headings = columns
                 .iter()
@@ -118,7 +119,11 @@ pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I
             let mut table = format!(
                 "| {} |\n| {} |\n",
                 headings.iter().copied().collect::<Vec<_>>().join(" | "),
-                headings.iter().map(|_| "---").collect::<Vec<_>>().join(" | ")
+                headings
+                    .iter()
+                    .map(|_| "---")
+                    .collect::<Vec<_>>()
+                    .join(" | ")
             );
             for row in rows {
                 let cells = row
@@ -134,8 +139,9 @@ pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I
             Some(stream) if !stream.trim().is_empty() => format!("[{stream}]\n{text}"),
             _ => text.clone(),
         },
-        OperationBlockResource::Custom { schema: _, value } => serde_json::to_string_pretty(value)
-            .unwrap_or_else(|_| value.to_string()),
+        OperationBlockResource::Custom { schema: _, value } => {
+            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+        }
     }
 }
 
@@ -334,7 +340,10 @@ fn push_json_field(name: &str, value: &serde_json::Value, indent: usize, out: &m
             }
         }
         serde_json::Value::Array(items) if items.iter().all(is_json_scalar) => {
-            out.push(format!("{prefix}- **{name}**: {}", json_inline_scalar_list(items)));
+            out.push(format!(
+                "{prefix}- **{name}**: {}",
+                json_inline_scalar_list(items)
+            ));
         }
         serde_json::Value::Array(items) => {
             out.push(format!("{prefix}- **{name}**:"));
@@ -347,7 +356,10 @@ fn push_json_field(name: &str, value: &serde_json::Value, indent: usize, out: &m
             push_json_fence(text, indent + 1, out);
         }
         other => {
-            out.push(format!("{prefix}- **{name}**: {}", json_scalar_markdown(other, true)));
+            out.push(format!(
+                "{prefix}- **{name}**: {}",
+                json_scalar_markdown(other, true)
+            ));
         }
     }
 }
@@ -364,7 +376,11 @@ fn push_json_item(value: &serde_json::Value, indent: usize, out: &mut Vec<String
         serde_json::Value::Array(_) => {
             push_json_field("", value, indent, out);
         }
-        other => out.push(format!("{}{}", "  ".repeat(indent), json_scalar_markdown(other, true))),
+        other => out.push(format!(
+            "{}{}",
+            "  ".repeat(indent),
+            json_scalar_markdown(other, true)
+        )),
     }
 }
 
@@ -417,10 +433,7 @@ fn json_scalar_text(value: &serde_json::Value) -> String {
 /// True for JSON scalars (null, bool, number, string) — used to decide
 /// whether an array renders as an inline code list or as sub-bullets.
 fn is_json_scalar(value: &serde_json::Value) -> bool {
-    value.is_null()
-        || value.is_boolean()
-        || value.is_number()
-        || value.is_string()
+    value.is_null() || value.is_boolean() || value.is_number() || value.is_string()
 }
 
 /// Compact single-line rendering of a table cell value: strings bare (with
@@ -1014,7 +1027,10 @@ mod json_value_to_markdown_tests {
         assert!(markdown.contains("- **server**:"), "{markdown}");
         assert!(markdown.contains("  - **host**: `localhost`"), "{markdown}");
         assert!(markdown.contains("  - **port**: 8080"), "{markdown}");
-        assert!(markdown.contains("  - **tags**: `api`, `internal`"), "{markdown}");
+        assert!(
+            markdown.contains("  - **tags**: `api`, `internal`"),
+            "{markdown}"
+        );
         assert!(markdown.contains("- **list**:"), "{markdown}");
         assert!(markdown.contains("  - **kind**: `file`"), "{markdown}");
         assert!(markdown.contains("  - **path**: `a.rs`"), "{markdown}");

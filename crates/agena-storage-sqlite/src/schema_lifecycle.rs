@@ -7,19 +7,18 @@
 
 /// Current SQLite schema version written to `PRAGMA user_version`.
 ///
-/// Version 8 adds a stored generated `is_subagent` column to `agena_sessions`
-/// (derived from `relation_kind = 'subagent'`), so any session row reports in
-/// O(1) whether it is a task child — the session switcher filters on it to
-/// show only parent sessions. This schema owns the nine chat tables —
+/// Version 9 adds the durable background-operation aggregate and delivery
+/// inbox. Version 8 added a stored generated `is_subagent` column to
+/// `agena_sessions` (derived from `relation_kind = 'subagent'`). This schema
+/// owns the chat tables —
 /// `agena_parts`, `agena_session_parts`, `agena_sessions`,
 /// `agena_execution_leases`, `agena_sequences`, `agena_workspaces`,
 /// `agena_permission_rules`, `agena_usage`, `agena_idempotency` — plus the
 /// model-catalog infrastructure tables. Parts are the only chat-content
 /// entity; runs are `kind='run'` marker parts; session state is derived from
-/// parts + leases; there is no event log, no projection watermark, and no
-/// runtime-state JSON. v1 databases are NOT migrated: they are discarded
-/// (decision D3), so a database at any version other than 0 or 8 is rejected
-/// outright.
+/// parts + leases. Background-operation control state is deliberately
+/// normalized rather than encoded only in transcript JSON. v1 databases are
+/// NOT migrated, but the compatible v8 → v9 additive migration is supported.
 ///
 /// Version history:
 /// - 5: the v2 "everything is a part" schema (design
@@ -33,7 +32,10 @@
 ///   `agena_scheduler_jobs` / `agena_scheduler_history`.
 /// - 8: `agena_sessions` gains the stored generated `is_subagent` column for
 ///   O(1) task-child detection used by the `/session` switcher filter.
-pub const CURRENT_SCHEMA_VERSION: i64 = 8;
+/// - 9: `agena_background_operations` becomes the authoritative lifecycle for
+///   shell/task/monitor work and `agena_background_deliveries` persists the
+///   notification handoff so restart cannot lose a wake.
+pub const CURRENT_SCHEMA_VERSION: i64 = 9;
 
 #[cfg(test)]
 mod tests {

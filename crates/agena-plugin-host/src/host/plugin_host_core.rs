@@ -1408,15 +1408,17 @@ impl PluginHost {
                         ),
                         (None, None) => unreachable!("covered by has_effect"),
                     };
-                    self.push_hook_runs(vec![HookRunRecord::new(
-                        "agent.stop",
-                        &plugin_id,
-                        Some(input.session_id),
-                        HookRunStatus::Applied,
-                        summary,
-                        detail,
-                    )
-                    .with_message(p.continue_with_message.clone())]);
+                    self.push_hook_runs(vec![
+                        HookRunRecord::new(
+                            "agent.stop",
+                            &plugin_id,
+                            Some(input.session_id),
+                            HookRunStatus::Applied,
+                            summary,
+                            detail,
+                        )
+                        .with_message(p.continue_with_message.clone()),
+                    ]);
                 }
                 runs.push(AgentStopHookRun {
                     plugin_id,

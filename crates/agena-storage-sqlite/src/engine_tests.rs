@@ -11,8 +11,11 @@ use agena_domain::SessionRelationKind;
 use agena_storage::{
     WorkspaceRepository,
     store::{
-        LeaseAcquire, NewPart, NewSession, PartDelta, PartRole, PartState, PartVisibility,
-        PersistenceEngine, RunOutcome, SessionFacade, SessionListQuery, SessionStore, SessionView,
+        BackgroundDeliveryPhase, BackgroundEventRequest, BackgroundOperationKind,
+        BackgroundOperationPhase, BackgroundOperationTransition, LeaseAcquire,
+        NewBackgroundOperation, NewPart, NewSession, PartDelta, PartRole, PartState,
+        PartVisibility, PersistenceEngine, RunOutcome, SessionFacade, SessionListQuery,
+        SessionStore, SessionView,
     },
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
@@ -65,6 +68,12 @@ fn text_part(text: &str) -> NewPart {
     NewPart::pending("text", PartRole::User, json!({ "text": text }))
 }
 
+fn completed_text_part(text: &str) -> NewPart {
+    let mut part = text_part(text);
+    part.state = PartState::Completed;
+    part
+}
+
 async fn submit_hello(engine: &SqliteEngine, session_id: i64) -> (i64, SessionView) {
     let outcome = engine
         .submit_user_run(
@@ -98,6 +107,421 @@ async fn user_send_creates_marker_and_parts_with_membership() {
     assert_eq!(text.kind, "text");
     assert_eq!(text.run_id, Some(marker.part_id));
     assert_eq!(text.origin_session_id, session_id);
+}
+
+#[tokio::test]
+async fn completed_user_send_is_a_terminal_input_receipt_not_a_liveness_guard() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    let outcome = engine
+        .submit_user_run(
+            session_id,
+            "owner-a",
+            vec![completed_text_part("already committed")],
+            None,
+            1_000_000,
+        )
+        .await
+        .expect("submit completed input");
+    let marker = &outcome.parts[0];
+    assert_eq!(marker.state, PartState::Completed);
+    assert!(marker.finished_at_ms.is_some());
+    assert_eq!(marker.content["abort_reason"], serde_json::Value::Null);
+
+    let view = engine.load_session(session_id).await.expect("load input");
+    assert!(
+        view.parts
+            .iter()
+            .filter(|part| part.is_run_marker())
+            .all(|part| part.state.is_terminal()),
+        "a completed input contributes no in-flight run marker"
+    );
+}
+
+#[tokio::test]
+async fn semantic_checkpoint_flushes_a_buffered_part_before_companion_append() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    let durable_probe = engine.clone();
+    let facade = SessionFacade::new(engine, "owner-a", 16)
+        // Keep the synthetic InProgress content update buffered until the
+        // background transaction explicitly checkpoints it.
+        .with_streaming_flush_delta_count(64);
+
+    let mut tool = NewPart::pending(
+        "tool_call",
+        PartRole::Assistant,
+        json!({"operation": {"phase": "starting"}}),
+    );
+    tool.state = PartState::InProgress;
+    let launched = facade
+        .submit_user_run(session_id, "owner-a", vec![tool], None)
+        .await
+        .expect("submit launching run");
+    let run_id = launched.run_id;
+    let tool_part_id = launched.parts[1].part_id;
+    let marker_content = json!({
+        "operation": {
+            "phase": "launched",
+            "metadata": {
+                "agena.background": {"kind": "shell", "id": "proc_atomic"}
+            }
+        }
+    });
+
+    // Reproduce the original failure shape: this semantic InProgress update
+    // enters D10's stream buffer and is visible through the facade, but is not
+    // in the durable engine row yet.
+    facade
+        .update_part(
+            session_id,
+            "owner-a",
+            tool_part_id,
+            PartDelta {
+                state: Some(PartState::InProgress),
+                content: Some(marker_content.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("buffer background marker");
+    let before = durable_probe
+        .load_session(session_id)
+        .await
+        .expect("load durable row before checkpoint");
+    assert_eq!(
+        before
+            .parts
+            .iter()
+            .find(|part| part.part_id == tool_part_id)
+            .expect("durable tool part")
+            .content["operation"]["phase"],
+        "starting",
+        "the fixture must prove the marker is still memory-only"
+    );
+
+    let mut guard = NewPart::pending(
+        "tool_result",
+        PartRole::Tool,
+        json!({"ok": true, "output": ""}),
+    );
+    guard.state = PartState::Completed;
+    guard.parent_part_id = Some(tool_part_id);
+    facade
+        .settle_background_run(
+            session_id,
+            "owner-a",
+            run_id,
+            Some((tool_part_id, PartState::InProgress, marker_content.clone())),
+            vec![guard],
+        )
+        .await
+        .expect("atomically checkpoint launch");
+
+    // Read through a separate engine handle, bypassing the facade overlay:
+    // both halves must now be durable and the launching run must stay open.
+    let after = durable_probe
+        .load_session(session_id)
+        .await
+        .expect("load durable launch checkpoint");
+    let durable_tool = after
+        .parts
+        .iter()
+        .find(|part| part.part_id == tool_part_id)
+        .expect("checkpointed tool part");
+    assert_eq!(durable_tool.state, PartState::InProgress);
+    assert_eq!(durable_tool.finished_at_ms, None);
+    assert_eq!(durable_tool.content, marker_content);
+    assert!(after.parts.iter().any(|part| {
+        part.kind == "tool_result"
+            && part.parent_part_id == Some(tool_part_id)
+            && part.state == PartState::Completed
+    }));
+    assert!(
+        after
+            .parts
+            .iter()
+            .find(|part| part.part_id == run_id)
+            .expect("launching run")
+            .state
+            .is_in_flight(),
+        "an atomic launch checkpoint must not terminalize its run"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn background_events_are_atomic_idempotent_and_safe_under_out_of_order_concurrency() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    let launched = engine
+        .submit_user_run(
+            session_id,
+            "owner-a",
+            vec![NewPart::pending(
+                "tool_call",
+                PartRole::Assistant,
+                json!({"operation": {"title": "monitor launch receipt"}}),
+            )],
+            None,
+            1_000_000,
+        )
+        .await
+        .expect("submit launch receipt");
+    let tool_part_id = launched.parts[1].part_id;
+    let operation_id = format!("bg_{session_id}_{tool_part_id}");
+    let created = engine
+        .create_background_operation(
+            NewBackgroundOperation {
+                operation_id: operation_id.clone(),
+                session_id,
+                launch_run_id: Some(launched.run_id),
+                launch_tool_part_id: Some(tool_part_id),
+                kind: BackgroundOperationKind::Monitor,
+            },
+            1_000_001,
+        )
+        .await
+        .expect("create launch intent");
+    assert_eq!(created.phase, BackgroundOperationPhase::LaunchRequested);
+    let launching = engine
+        .transition_background_operation(
+            BackgroundOperationTransition {
+                operation_id: operation_id.clone(),
+                expected_revision: created.revision,
+                next_phase: BackgroundOperationPhase::Launching,
+                external_id: Some("proc_concurrent".to_owned()),
+                outcome: None,
+                failure: None,
+                owner_id: Some("launch-owner".to_owned()),
+                lease_until_ms: Some(1_030_000),
+            },
+            1_000_002,
+        )
+        .await
+        .expect("transition launching");
+    let running = engine
+        .transition_background_operation(
+            BackgroundOperationTransition {
+                operation_id: operation_id.clone(),
+                expected_revision: launching.revision,
+                next_phase: BackgroundOperationPhase::Running,
+                external_id: Some("proc_concurrent".to_owned()),
+                outcome: None,
+                failure: None,
+                owner_id: None,
+                lease_until_ms: None,
+            },
+            1_000_003,
+        )
+        .await
+        .expect("transition running");
+    assert_eq!(running.phase, BackgroundOperationPhase::Running);
+
+    let request = |seq: u64| BackgroundEventRequest {
+        operation_id: operation_id.clone(),
+        event_key: format!("event:{seq}"),
+        event_seq: Some(seq),
+        next_phase: None,
+        outcome: None,
+        failure: None,
+        notification: {
+            let mut part = NewPart::pending(
+                "system_notification",
+                PartRole::Runtime,
+                json!({
+                    "operation_id": "proc_concurrent",
+                    "operation_kind": "monitor",
+                    "status": "event",
+                    "event_seq": seq,
+                    "summary": format!("event {seq}"),
+                    "body": format!("event {seq}")
+                }),
+            );
+            part.state = PartState::Completed;
+            part
+        },
+    };
+    let first_engine = engine.clone();
+    let second_engine = engine.clone();
+    let (seq_two, seq_one) = tokio::join!(
+        first_engine.record_background_event(request(2), 1_000_004),
+        second_engine.record_background_event(request(1), 1_000_005),
+    );
+    assert!(seq_two.expect("record seq 2").created);
+    assert!(seq_one.expect("record seq 1").created);
+    let operation = engine
+        .background_operation(&operation_id)
+        .await
+        .expect("load operation")
+        .expect("operation exists");
+    assert_eq!(operation.phase, BackgroundOperationPhase::Running);
+    assert_eq!(
+        operation.last_event_seq, 2,
+        "cursor keeps max seen sequence"
+    );
+
+    let duplicate = engine
+        .record_background_event(request(1), 1_000_006)
+        .await
+        .expect("replay seq 1");
+    assert!(!duplicate.created, "same operation/event key is idempotent");
+    let view = engine
+        .load_session(session_id)
+        .await
+        .expect("load transcript");
+    let notifications = view
+        .parts
+        .iter()
+        .filter(|part| part.kind == "system_notification")
+        .collect::<Vec<_>>();
+    assert_eq!(notifications.len(), 2);
+    assert!(
+        notifications
+            .iter()
+            .all(|part| part.role == PartRole::Runtime)
+    );
+    assert!(notifications.iter().all(|part| {
+        part.run_id.is_some_and(|run_id| {
+            view.parts.iter().any(|marker| {
+                marker.part_id == run_id
+                    && marker.is_run_marker()
+                    && marker.role == PartRole::Runtime
+                    && marker.content["run_kind"] == "runtime_ingress"
+            })
+        })
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn background_delivery_claim_is_exclusive_expirable_and_retryable() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    let operation = engine
+        .create_background_operation(
+            NewBackgroundOperation {
+                operation_id: format!("scheduled:{session_id}:claim-test"),
+                session_id,
+                launch_run_id: None,
+                launch_tool_part_id: None,
+                kind: BackgroundOperationKind::ScheduledDelivery,
+            },
+            1_000_000,
+        )
+        .await
+        .expect("create scheduled operation");
+    let launching = engine
+        .transition_background_operation(
+            BackgroundOperationTransition {
+                operation_id: operation.operation_id.clone(),
+                expected_revision: operation.revision,
+                next_phase: BackgroundOperationPhase::Launching,
+                external_id: None,
+                outcome: None,
+                failure: None,
+                owner_id: Some("scheduler".to_owned()),
+                lease_until_ms: Some(1_030_000),
+            },
+            1_000_001,
+        )
+        .await
+        .expect("launching");
+    let _running = engine
+        .transition_background_operation(
+            BackgroundOperationTransition {
+                operation_id: operation.operation_id.clone(),
+                expected_revision: launching.revision,
+                next_phase: BackgroundOperationPhase::Running,
+                external_id: Some("claim-test".to_owned()),
+                outcome: None,
+                failure: None,
+                owner_id: None,
+                lease_until_ms: None,
+            },
+            1_000_002,
+        )
+        .await
+        .expect("running");
+    let mut notification = NewPart::pending(
+        "system_notification",
+        PartRole::Runtime,
+        json!({
+            "operation_id": "claim-test",
+            "operation_kind": "scheduled_delivery",
+            "status": "submitted",
+            "summary": "scheduled",
+            "body": "scheduled"
+        }),
+    );
+    notification.state = PartState::Completed;
+    let settled = engine
+        .record_background_event(
+            BackgroundEventRequest {
+                operation_id: operation.operation_id,
+                event_key: "terminal".to_owned(),
+                event_seq: None,
+                next_phase: Some(BackgroundOperationPhase::Completed),
+                outcome: None,
+                failure: None,
+                notification,
+            },
+            1_000_003,
+        )
+        .await
+        .expect("record scheduled terminal");
+    assert_eq!(settled.delivery.phase, BackgroundDeliveryPhase::Pending);
+
+    let left = engine.clone();
+    let right = engine.clone();
+    let delivery_id = settled.delivery.delivery_id.clone();
+    let delivery_id_right = delivery_id.clone();
+    let (claim_a, claim_b) = tokio::join!(
+        left.claim_background_delivery(&delivery_id, "dispatcher-a", 1_000_100, 1_000_010),
+        right.claim_background_delivery(&delivery_id_right, "dispatcher-b", 1_000_100, 1_000_010,),
+    );
+    let claims = [claim_a.expect("claim a"), claim_b.expect("claim b")];
+    assert_eq!(claims.iter().filter(|claim| claim.is_some()).count(), 1);
+    let first_owner = claims
+        .iter()
+        .find_map(|claim| {
+            claim
+                .as_ref()
+                .and_then(|delivery| delivery.claim_owner.clone())
+        })
+        .expect("one claim owner");
+    assert!(
+        engine
+            .claim_background_delivery(&delivery_id, "too-early", 1_000_200, 1_000_099)
+            .await
+            .expect("early claim")
+            .is_none()
+    );
+    let reclaimed = engine
+        .claim_background_delivery(&delivery_id, "recovery", 1_000_300, 1_000_100)
+        .await
+        .expect("expired claim")
+        .expect("expired claim is reclaimable");
+    assert_eq!(reclaimed.claim_owner.as_deref(), Some("recovery"));
+    assert_ne!(reclaimed.claim_owner.as_deref(), Some(first_owner.as_str()));
+    let pending = engine
+        .retry_background_delivery(
+            &delivery_id,
+            "recovery",
+            json!({"message": "wake failed"}),
+            1_000_110,
+        )
+        .await
+        .expect("release failed claim");
+    assert_eq!(pending.phase, BackgroundDeliveryPhase::Pending);
+    let final_claim = engine
+        .claim_background_delivery(&delivery_id, "final", 1_000_400, 1_000_120)
+        .await
+        .expect("final claim")
+        .expect("pending delivery claimable");
+    let consumed = engine
+        .consume_background_delivery(&final_claim.delivery_id, "final", 1_000_130)
+        .await
+        .expect("consume delivery");
+    assert_eq!(consumed.phase, BackgroundDeliveryPhase::Consumed);
 }
 
 #[tokio::test]
@@ -1779,7 +2203,12 @@ async fn list_exclude_subagents_filters_task_children_only() {
         .workspace_id;
     // A task child (relation_kind = 'subagent').
     engine
-        .create_subagent_session(parent_id, "task-9".to_owned(), "sub task".to_owned(), 1_000_000)
+        .create_subagent_session(
+            parent_id,
+            "task-9".to_owned(),
+            "sub task".to_owned(),
+            1_000_000,
+        )
         .await
         .expect("create subagent");
     // A regular user child must survive the filter.

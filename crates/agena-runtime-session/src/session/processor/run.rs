@@ -2,8 +2,8 @@ use super::{
     AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, FinishReason, PathBuf,
     PendingProviderNativeToolCall, PendingToolCall, REASONING_PLACEHOLDER, SessionProcessor,
     SessionRunRequest, SessionRunResult, SessionRunTermination, complete_part_status,
-    map_finish_reason, message_provider_state_from_provider_metadata,
-    pending_tool_call_stream_key, terminalize_nonterminal_parts,
+    map_finish_reason, message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
+    terminalize_nonterminal_parts,
 };
 use crate::provider::ProviderRegistry;
 use agena_provider::{ProviderNativeToolArtifact, ProviderNativeToolOutputBlock};

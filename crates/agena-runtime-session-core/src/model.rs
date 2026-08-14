@@ -1035,9 +1035,7 @@ impl Session {
                     let tool = SessionPendingTool {
                         part: SessionPartRef::new(index, part),
                     };
-                    operations.push(SessionPendingOperation::Tool {
-                        tool: tool.clone(),
-                    });
+                    operations.push(SessionPendingOperation::Tool { tool: tool.clone() });
                     let awaiting_user_input = operation_from_part(part)
                         .map(|operation| operation.user_input.awaiting().next().is_some())
                         .unwrap_or(false);

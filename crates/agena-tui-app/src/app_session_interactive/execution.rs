@@ -41,7 +41,9 @@ impl App {
         // it along and restore it in `handle_session_created`.
         let model_stack = submit_draft.as_ref().map(|_| self.run_options.clone());
         tokio::spawn(async move {
-            let result = application.create_session(title, None).await
+            let result = application
+                .create_session(title, None)
+                .await
                 .map_err(|error| crate::UiFailure::from_backend(anyhow::Error::new(error)));
             let _ = tx
                 .send(AppMessage::SessionCreated {

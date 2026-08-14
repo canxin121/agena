@@ -132,7 +132,9 @@ pub enum PendingInteractiveRequestKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{PendingInteractiveRequestKind, UserInputKind, UserInputReplyKind, UserInputSource};
+    use super::{
+        PendingInteractiveRequestKind, UserInputKind, UserInputReplyKind, UserInputSource,
+    };
     use crate::UserInputRequest;
     use serde_json::json;
 
@@ -191,9 +193,10 @@ mod tests {
             serde_json::from_value::<UserInputKind>(serde_json::Value::Null).unwrap(),
             UserInputKind::AskUser
         );
-        let request: UserInputRequest =
-            serde_json::from_value(json!({"request_id": "r1", "created_at": "2026-01-01T00:00:00Z"}))
-                .unwrap();
+        let request: UserInputRequest = serde_json::from_value(
+            json!({"request_id": "r1", "created_at": "2026-01-01T00:00:00Z"}),
+        )
+        .unwrap();
         assert_eq!(request.kind, UserInputKind::AskUser);
     }
 
@@ -237,9 +240,10 @@ mod tests {
 
     #[test]
     fn user_input_source_defaults_to_plugin_on_legacy_rows() {
-        let request: UserInputRequest =
-            serde_json::from_value(json!({"request_id": "r1", "created_at": "2026-01-01T00:00:00Z"}))
-                .unwrap();
+        let request: UserInputRequest = serde_json::from_value(
+            json!({"request_id": "r1", "created_at": "2026-01-01T00:00:00Z"}),
+        )
+        .unwrap();
         assert_eq!(request.source, UserInputSource::Plugin);
     }
 

@@ -13,12 +13,12 @@ use crate::{
 };
 
 use super::shell_tools::resolve_workdir;
-use super::{ToolError, ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ToolExecutor};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
 pub(crate) async fn execute_async(
     executor: &ToolExecutor,
     input: &MonitorToolInput,
-    _context: super::ToolRuntimeContext,
+    context: super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = monitor_registry(executor)?;
     match input {
@@ -31,6 +31,9 @@ pub(crate) async fn execute_async(
         } => {
             let started = registry
                 .start(StartParams {
+                    process_id: context.session_id.zip(context.call_id).map(
+                        |(session_id, call_id)| crate::managed_process_id(session_id, call_id),
+                    ),
                     command: command.clone().unwrap_or_default(),
                     ws: ws.as_ref().map(|ws| MonitorWsParams {
                         url: ws.url.clone(),
@@ -157,7 +160,8 @@ fn insert_summary_metadata(view: &mut ToolExecutionView, summary: &ProcessSummar
     view.metadata
         .insert("started_at_ms".into(), summary.started_at_ms.to_string());
     if let Some(ended) = summary.ended_at_ms {
-        view.metadata.insert("ended_at_ms".into(), ended.to_string());
+        view.metadata
+            .insert("ended_at_ms".into(), ended.to_string());
     }
     if let Some(code) = summary.exit_code {
         view.metadata.insert("exit_code".into(), code.to_string());

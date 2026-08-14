@@ -31,8 +31,8 @@ pub mod provider_studio;
 pub mod service;
 pub mod session;
 
-pub use application::{Application, ApplicationSessionServices, AuthLoginKind};
 pub use application::model_catalog_source_kind_from_domain;
+pub use application::{Application, ApplicationSessionServices, AuthLoginKind};
 pub use error::ApplicationError;
 pub use provider_queries::provider_model_resource_from_domain;
 pub use service::{permission_config_domain_from_resource, permission_config_resource_from_domain};

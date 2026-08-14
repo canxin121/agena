@@ -918,7 +918,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             names,
-            ["run", "list", "get", "output", "cancel", "message", "followup"]
+            [
+                "run", "list", "get", "output", "cancel", "message", "followup"
+            ]
         );
         for name in ["output", "cancel", "message", "followup"] {
             assert!(
@@ -929,7 +931,9 @@ mod tests {
         // Delegated task tools must be flagged concurrency-safe so the
         // runtime fans out multiple tasks.run/followup calls from one
         // turn instead of serializing them (one child session at a time).
-        for name in ["run", "list", "get", "output", "cancel", "message", "followup"] {
+        for name in [
+            "run", "list", "get", "output", "cancel", "message", "followup",
+        ] {
             let tool = manifest
                 .tools
                 .iter()

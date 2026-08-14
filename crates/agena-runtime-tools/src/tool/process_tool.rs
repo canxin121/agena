@@ -187,6 +187,9 @@ async fn execute_background_run_async(
         call_id,
         prepared_shell_command,
     } = context;
+    let reserved_process_id = session_id
+        .zip(call_id)
+        .map(|(session_id, call_id)| crate::managed_process_id(session_id, call_id));
     let prepared = match shell {
         ProcessShell::Bash => match prepared_shell_command {
             Some(prepared) => Some(prepared),
@@ -231,6 +234,7 @@ async fn execute_background_run_async(
             final_command,
             final_cwd,
             env,
+            reserved_process_id,
         )
     })
     .await
@@ -249,6 +253,7 @@ fn execute_background_run_prepared(
     final_command: String,
     final_cwd: std::path::PathBuf,
     env: std::collections::HashMap<String, String>,
+    reserved_process_id: Option<String>,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = process_registry(executor)?;
     let pattern = |value: Option<&String>| {
@@ -259,6 +264,7 @@ fn execute_background_run_prepared(
     };
     let started = registry
         .start(StartParams {
+            process_id: reserved_process_id,
             command: final_command,
             ws: None,
             description: command.description.clone(),

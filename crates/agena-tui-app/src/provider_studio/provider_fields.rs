@@ -782,8 +782,9 @@ mod tests {
             "deepseek-v4-pro",
         );
         for effort in ["low", "medium", "high", "max"] {
-            model.thinking_modes.push(
-                agena_api::resource::ProviderModelThinkingModeResource {
+            model
+                .thinking_modes
+                .push(agena_api::resource::ProviderModelThinkingModeResource {
                     preset: None,
                     is_default: false,
                     display_name: None,
@@ -798,11 +799,11 @@ mod tests {
                     }),
                     request_override: Default::default(),
                     adapter_overrides: Default::default(),
-                },
-            );
+                });
         }
-        model.thinking_modes.push(
-            agena_api::resource::ProviderModelThinkingModeResource {
+        model
+            .thinking_modes
+            .push(agena_api::resource::ProviderModelThinkingModeResource {
                 preset: None,
                 is_default: false,
                 display_name: None,
@@ -810,8 +811,7 @@ mod tests {
                 thinking: Some(agena_api::resource::ThinkingRequestResource::Disabled),
                 request_override: Default::default(),
                 adapter_overrides: Default::default(),
-            },
-        );
+            });
 
         apply_provider_model_config_supported_modes(Some(&model), &mut draft);
 
@@ -822,11 +822,10 @@ mod tests {
                 .map(ToOwned::to_owned)
                 .collect(),
         );
-        assert!(!provider_model_config_field_value(
-            &draft,
-            ProviderModelConfigField::ThinkingModes
-        )
-        .trim()
-        .is_empty());
+        assert!(
+            !provider_model_config_field_value(&draft, ProviderModelConfigField::ThinkingModes)
+                .trim()
+                .is_empty()
+        );
     }
 }

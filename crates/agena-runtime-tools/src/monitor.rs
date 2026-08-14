@@ -67,6 +67,11 @@ pub enum MonitorError {
 #[derive(Debug, Clone)]
 /// Parameters for starting a monitored process.
 pub struct StartParams {
+    /// Stable id reserved by the durable background-operation coordinator.
+    /// Callers outside a session launch may omit it and receive a UUID-based
+    /// id. Reusing a reserved id is idempotent and returns the existing
+    /// monitor instead of spawning a duplicate side effect.
+    pub process_id: Option<String>,
     /// Shell command to run. Exactly one of `command` / `ws` must be set
     /// (`command` empty + `ws` `None` is invalid, both set is invalid).
     pub command: String,
@@ -312,8 +317,17 @@ impl MonitorService for MonitorRegistry {
             .as_ref()
             .map(|ws| format!("ws {}", ws.url))
             .unwrap_or_else(|| params.command.clone());
+        let process_id = params
+            .process_id
+            .clone()
+            .unwrap_or_else(|| format!("proc_{}", Uuid::new_v4().simple()));
+        if process_id.trim().is_empty() {
+            return Err(MonitorError::Invalid(
+                "reserved background process id must not be empty".into(),
+            ));
+        }
         let state = Arc::new(MonitorState {
-            monitor_id: format!("proc_{}", Uuid::new_v4().simple()),
+            monitor_id: process_id,
             command: source,
             description: params.description.clone(),
             started_at_ms,
@@ -334,6 +348,25 @@ impl MonitorService for MonitorRegistry {
             changed: Condvar::new(),
             listener: self.listener.clone(),
         });
+
+        // Reserve the identity before the worker can emit either an event or
+        // completion. This closes the old fast-process race where callbacks
+        // arrived before the registry (and therefore the durable coordinator)
+        // could resolve their owner. A replay with the same durable id is a
+        // no-op rather than a second process.
+        {
+            let mut monitors = self.monitors.lock().unwrap();
+            if let Some(existing) = monitors.get(&state.monitor_id) {
+                return Ok(MonitorStart {
+                    summary: existing.snapshot(),
+                });
+            }
+            monitors.insert(state.monitor_id.clone(), Arc::clone(&state));
+        }
+        let summary = state.snapshot();
+        if let Some(listener) = &self.listener {
+            listener.on_started(&summary);
+        }
 
         let runner_state = Arc::clone(&state);
         let worker = if let Some(ws) = params.ws.clone() {
@@ -381,14 +414,6 @@ impl MonitorService for MonitorRegistry {
             }
         }
 
-        let summary = state.snapshot();
-        self.monitors
-            .lock()
-            .unwrap()
-            .insert(state.monitor_id.clone(), state);
-        if let Some(listener) = &self.listener {
-            listener.on_started(&summary);
-        }
         Ok(MonitorStart { summary })
     }
 
@@ -716,10 +741,11 @@ async fn run_ws_monitor(
 ) {
     let mut abort_rx = abort_rx;
     let connect = async {
-        let mut request = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
-            ws.url.clone(),
-        )
-        .map_err(|error| format!("invalid websocket url: {error}"))?;
+        let mut request =
+            tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
+                ws.url.clone(),
+            )
+            .map_err(|error| format!("invalid websocket url: {error}"))?;
         if !ws.protocols.is_empty() {
             request.headers_mut().insert(
                 tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL,
@@ -784,7 +810,11 @@ async fn run_ws_monitor(
                     let reason = frame
                         .map(|frame| frame.reason.to_string())
                         .unwrap_or_default();
-                    push_event(&state, ProcessStream::Stderr, format!("[ws closed {reason}]"));
+                    push_event(
+                        &state,
+                        ProcessStream::Stderr,
+                        format!("[ws closed {reason}]"),
+                    );
                     return TerminationCause::Exited(None);
                 }
                 Some(Ok(WsMessage::Ping(payload))) => {
@@ -793,7 +823,11 @@ async fn run_ws_monitor(
                 }
                 Some(Ok(WsMessage::Pong(_))) | Some(Ok(WsMessage::Frame(_))) => continue,
                 Some(Err(error)) => {
-                    push_event(&state, ProcessStream::Stderr, format!("[ws error: {error}]"));
+                    push_event(
+                        &state,
+                        ProcessStream::Stderr,
+                        format!("[ws error: {error}]"),
+                    );
                     return TerminationCause::WaitError(error.to_string());
                 }
                 None => {
@@ -818,7 +852,9 @@ async fn run_ws_monitor(
         TerminationCause::Quiet => (ProcessStatus::Exited, "quiet_period".to_string()),
         TerminationCause::Exited(_) => (ProcessStatus::Exited, "ws_closed".to_string()),
         TerminationCause::WaitError(reason) => (ProcessStatus::Failed, reason),
-        TerminationCause::Condition(_) => unreachable!("ws monitor has no success/failure patterns"),
+        TerminationCause::Condition(_) => {
+            unreachable!("ws monitor has no success/failure patterns")
+        }
     };
     mark_ws_finished(&state, final_status, completion_reason);
 }
@@ -1038,6 +1074,7 @@ mod tests {
 
     fn start_params(command: &str) -> StartParams {
         StartParams {
+            process_id: None,
             command: command.to_string(),
             ws: None,
             description: "monitor test".to_string(),
@@ -1085,6 +1122,31 @@ mod tests {
         })
         .await
         .expect("monitor reaches terminal state")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reserved_process_identity_is_visible_before_work_and_replay_is_idempotent() {
+        let registry = Arc::new(MonitorRegistry::from_handle(Handle::current()));
+        let mut params = start_params("printf 'done\\n'");
+        params.process_id = Some("proc_reserved_identity".to_owned());
+        let first = registry
+            .start(params.clone())
+            .expect("start reserved process");
+        assert_eq!(first.summary.process_id, "proc_reserved_identity");
+        let replay = registry.start(params).expect("replay reserved process");
+        assert_eq!(replay.summary.process_id, "proc_reserved_identity");
+        assert_eq!(
+            registry
+                .list()
+                .iter()
+                .filter(|summary| summary.process_id == "proc_reserved_identity")
+                .count(),
+            1,
+            "replaying a durable launch id must not spawn a duplicate process"
+        );
+        let terminal =
+            wait_for_terminal(Arc::clone(&registry), "proc_reserved_identity".to_owned()).await;
+        assert_ne!(terminal.status, ProcessStatus::Running);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

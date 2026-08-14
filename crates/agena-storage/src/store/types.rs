@@ -103,6 +103,240 @@ impl PartState {
     }
 }
 
+/// Kind of work owned by the durable background-operation coordinator.
+///
+/// Tool implementations are adapters around this shared lifecycle; they do
+/// not own separate persistence semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundOperationKind {
+    Shell,
+    Task,
+    Monitor,
+    ScheduledDelivery,
+}
+
+impl BackgroundOperationKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+            Self::Task => "task",
+            Self::Monitor => "monitor",
+            Self::ScheduledDelivery => "scheduled_delivery",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "shell" => Some(Self::Shell),
+            "task" => Some(Self::Task),
+            "monitor" => Some(Self::Monitor),
+            "scheduled_delivery" => Some(Self::ScheduledDelivery),
+            _ => None,
+        }
+    }
+}
+
+/// Authoritative lifecycle of one background operation.
+///
+/// A foreground tool call only launches the operation and may complete while
+/// this state remains [`Self::Running`]. Terminal states are immutable. Every
+/// transition is persisted with an optimistic `revision` check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundOperationPhase {
+    LaunchRequested,
+    Launching,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    TimedOut,
+    Interrupted,
+}
+
+impl BackgroundOperationPhase {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LaunchRequested => "launch_requested",
+            Self::Launching => "launching",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::TimedOut => "timed_out",
+            Self::Interrupted => "interrupted",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "launch_requested" => Some(Self::LaunchRequested),
+            "launching" => Some(Self::Launching),
+            "running" => Some(Self::Running),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled),
+            "timed_out" => Some(Self::TimedOut),
+            "interrupted" => Some(Self::Interrupted),
+            _ => None,
+        }
+    }
+
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Cancelled | Self::TimedOut | Self::Interrupted
+        )
+    }
+
+    pub fn can_transition(self, next: Self) -> bool {
+        (self == next && !self.is_terminal())
+            || matches!(
+                (self, next),
+                (Self::LaunchRequested, Self::Launching)
+                    | (Self::LaunchRequested, Self::Failed)
+                    | (Self::LaunchRequested, Self::Cancelled)
+                    | (Self::LaunchRequested, Self::Interrupted)
+                    | (Self::Launching, Self::Running)
+                    | (Self::Launching, Self::Completed)
+                    | (Self::Launching, Self::Failed)
+                    | (Self::Launching, Self::Cancelled)
+                    | (Self::Launching, Self::TimedOut)
+                    | (Self::Launching, Self::Interrupted)
+                    | (Self::Running, Self::Completed)
+                    | (Self::Running, Self::Failed)
+                    | (Self::Running, Self::Cancelled)
+                    | (Self::Running, Self::TimedOut)
+                    | (Self::Running, Self::Interrupted)
+            )
+    }
+}
+
+/// Durable delivery lifecycle for one operation event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundDeliveryPhase {
+    Pending,
+    Claimed,
+    Consumed,
+}
+
+impl BackgroundDeliveryPhase {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Claimed => "claimed",
+            Self::Consumed => "consumed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "claimed" => Some(Self::Claimed),
+            "consumed" => Some(Self::Consumed),
+            _ => None,
+        }
+    }
+}
+
+/// Single durable source of truth for one background operation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BackgroundOperation {
+    pub operation_id: String,
+    pub session_id: i64,
+    pub launch_run_id: Option<i64>,
+    pub launch_tool_part_id: Option<i64>,
+    pub kind: BackgroundOperationKind,
+    pub external_id: Option<String>,
+    pub phase: BackgroundOperationPhase,
+    pub outcome: Option<Value>,
+    pub failure: Option<Value>,
+    pub last_event_seq: u64,
+    pub owner_id: Option<String>,
+    pub lease_until_ms: Option<i64>,
+    pub revision: i64,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub finished_at_ms: Option<i64>,
+}
+
+/// Input for creating the durable launch intent before the external side
+/// effect starts. `operation_id` is stable and deterministic for the owning
+/// tool part, making retries idempotent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewBackgroundOperation {
+    pub operation_id: String,
+    pub session_id: i64,
+    pub launch_run_id: Option<i64>,
+    pub launch_tool_part_id: Option<i64>,
+    pub kind: BackgroundOperationKind,
+}
+
+/// One validated lifecycle transition. The store compares
+/// `expected_revision` and rejects stale writers before applying the phase
+/// change.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundOperationTransition {
+    pub operation_id: String,
+    pub expected_revision: i64,
+    pub next_phase: BackgroundOperationPhase,
+    pub external_id: Option<String>,
+    pub outcome: Option<Value>,
+    pub failure: Option<Value>,
+    pub owner_id: Option<String>,
+    pub lease_until_ms: Option<i64>,
+}
+
+/// A durable operation event. Terminal events advance the operation phase;
+/// monitor events leave it running. The notification is projected into a new
+/// runtime-ingress run in the same transaction as the unique delivery row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundEventRequest {
+    pub operation_id: String,
+    pub event_key: String,
+    /// Producer sequence when one exists. Unique event keys, rather than
+    /// arrival order, provide idempotency; the aggregate cursor stores the
+    /// highest sequence observed so concurrently delivered events are not
+    /// dropped merely because they arrive out of order.
+    pub event_seq: Option<u64>,
+    pub next_phase: Option<BackgroundOperationPhase>,
+    pub outcome: Option<Value>,
+    pub failure: Option<Value>,
+    pub notification: NewPart,
+}
+
+/// One durable event/delivery belonging to a background operation aggregate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BackgroundDelivery {
+    pub delivery_id: String,
+    pub operation_id: String,
+    pub session_id: i64,
+    pub event_key: String,
+    pub payload: Value,
+    pub phase: BackgroundDeliveryPhase,
+    pub claim_owner: Option<String>,
+    pub claim_until_ms: Option<i64>,
+    pub attempts: u32,
+    pub notification_part_id: Option<i64>,
+    pub last_error: Option<Value>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub consumed_at_ms: Option<i64>,
+}
+
+/// Result of atomically settling an operation and recording its unique
+/// transcript notification plus pending delivery.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundSettleOutcome {
+    pub operation: BackgroundOperation,
+    pub delivery: BackgroundDelivery,
+    pub notification_part: Part,
+    /// `false` when the unique operation event already existed.
+    pub created: bool,
+}
+
 /// Who may see a part (section 18.3).
 ///
 /// The prompt builder (AI) receives `both | ai`; the UI (human) renders

@@ -442,9 +442,11 @@ pub(crate) fn provider_studio_model_list_detail(
         parts.push(display_name.to_owned());
     }
     // Active is the default state; only surface non-default lifecycle stages.
-    if let Some(lifecycle) = model.metadata.lifecycle.filter(|lifecycle| {
-        !matches!(lifecycle, agena_api::resource::ModelLifecycle::Active)
-    }) {
+    if let Some(lifecycle) = model
+        .metadata
+        .lifecycle
+        .filter(|lifecycle| !matches!(lifecycle, agena_api::resource::ModelLifecycle::Active))
+    {
         parts.push(provider_studio_model_lifecycle_label(i18n, lifecycle));
     }
     if let Some(context_window) = model.metadata.context_window_tokens.map(|value| {

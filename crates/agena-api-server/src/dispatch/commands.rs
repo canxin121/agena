@@ -33,10 +33,7 @@ pub async fn dispatch_command(
             Ok(CommandResult::Workspace(workspace))
         }
         Command::DeleteWorkspace(DeleteWorkspaceParams { workspace_id }) => {
-            state
-                .service()
-                .delete_workspace(workspace_id)
-                .await?;
+            state.service().delete_workspace(workspace_id).await?;
             Ok(CommandResult::WorkspaceDeleted { id: workspace_id })
         }
         Command::ResolveWorkspace(ResolveWorkspaceParams {
@@ -205,10 +202,7 @@ pub async fn dispatch_command(
                     .assert_session_version(session_id, expected_version)
                     .await?;
             }
-            state
-                .service()
-                .delete_session(session_id)
-                .await?;
+            state.service().delete_session(session_id).await?;
             Ok(CommandResult::SessionDeleted { id: session_id })
         }
         Command::UpsertPermissionRule(UpsertPermissionRuleParams {
@@ -278,10 +272,7 @@ pub async fn dispatch_command(
             Ok(CommandResult::PermissionRule(rule))
         }
         Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
-            state
-                .service()
-                .delete_permission_rule(rule_id)
-                .await?;
+            state.service().delete_permission_rule(rule_id).await?;
             Ok(CommandResult::PermissionRuleDeleted { id: rule_id })
         }
         Command::StopActivity(StopActivityParams { activity_id }) => {

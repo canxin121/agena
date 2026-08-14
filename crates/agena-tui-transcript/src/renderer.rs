@@ -101,7 +101,10 @@ pub fn render_entry_detailed_with_interactions(
     i18n: &I18n,
     defaults: &TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
-    interactions: &std::collections::BTreeMap<String, crate::interaction_view::PendingInteractionView>,
+    interactions: &std::collections::BTreeMap<
+        String,
+        crate::interaction_view::PendingInteractionView,
+    >,
 ) -> RenderedMessageBlock {
     let mut lines = Vec::new();
     let mut nodes = Vec::new();
@@ -216,15 +219,29 @@ pub fn render_entry_detailed_with_interactions(
                             continue;
                         }
                         append_rendered_part_node(
-                            message, part, width, &mut lines, &mut nodes, i18n, defaults,
-                            expansions, interactions,
+                            message,
+                            part,
+                            width,
+                            &mut lines,
+                            &mut nodes,
+                            i18n,
+                            defaults,
+                            expansions,
+                            interactions,
                         );
                     }
                 } else {
                     for part in activities {
                         append_rendered_part_node(
-                            message, part, width, &mut lines, &mut nodes, i18n, defaults,
-                            expansions, interactions,
+                            message,
+                            part,
+                            width,
+                            &mut lines,
+                            &mut nodes,
+                            i18n,
+                            defaults,
+                            expansions,
+                            interactions,
                         );
                     }
                 }
@@ -288,7 +305,14 @@ pub fn render_entry_detailed_with_interactions(
             }
 
             append_rendered_part_node(
-                message, part, width, &mut lines, &mut nodes, i18n, defaults, expansions,
+                message,
+                part,
+                width,
+                &mut lines,
+                &mut nodes,
+                i18n,
+                defaults,
+                expansions,
                 interactions,
             );
             part_index += 1;
@@ -306,15 +330,14 @@ mod tests {
         TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr, activity_status_icon,
         bounded_title_summary, markdown_blocks, refresh_spinner_line, render_entry_detailed,
         render_entry_detailed_with_interactions, render_entry_export, render_markdown_block,
-        render_tool_execution,
-        render_transcript_entries_export_markdown, should_suppress_markdown_block, spinner_frame,
-        thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
-        transcript_spinner_placeholder,
+        render_tool_execution, render_transcript_entries_export_markdown,
+        should_suppress_markdown_block, spinner_frame, thinking_collapsed_summary,
+        tool_execution_compact_summary, tool_invocation_label, transcript_spinner_placeholder,
     };
     use crate::{
         OperationPartResource, PartExecutionStatusResource, RequestPartResource,
-        ToolInvocationResource, TranscriptActivityContent, TranscriptContentId,
-        TranscriptEntryId, TranscriptEntryPart, TranscriptFixture, TranscriptPartContent,
+        ToolInvocationResource, TranscriptActivityContent, TranscriptContentId, TranscriptEntryId,
+        TranscriptEntryPart, TranscriptFixture, TranscriptPartContent,
     };
     use agena_domain::ExecutionStatus;
     use chrono::{DateTime, Utc};
@@ -467,8 +490,8 @@ mod tests {
         let part = TranscriptEntryPart {
             id: TranscriptContentId::StoredPart(5),
             status: PartExecutionStatusResource::InProgress,
-            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(
-                Box::new(RequestPartResource::UserInput {
+            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(Box::new(
+                RequestPartResource::UserInput {
                     request: agena_api::resource::UserInputRequest {
                         request_id: "host-input:1:2:0".to_owned(),
                         session_id: Some(1),
@@ -491,8 +514,8 @@ mod tests {
                         created_at: now,
                     },
                     reply: None,
-                }),
-            )),
+                },
+            ))),
         };
         let message = entry(
             3,
@@ -505,21 +528,20 @@ mod tests {
             entry_id: TranscriptEntryId::StoredMessage(3),
             content_id: TranscriptContentId::StoredPart(5),
         };
-        let plan_body_lines = crate::interaction_view::interaction_plan_body_lines(
-            "## Proposed Plan",
-            80,
-        );
-        let view = |selected_option, editing_custom| crate::interaction_view::PendingInteractionView {
-            selected_option,
-            custom_text: String::new(),
-            custom_draft: String::new(),
-            editing_custom,
-            custom_cursor: 0,
-            editing_question: None,
-            answers: std::collections::BTreeMap::new(),
-            plan_body_lines,
-            plan_width: 80,
-        };
+        let plan_body_lines =
+            crate::interaction_view::interaction_plan_body_lines("## Proposed Plan", 80);
+        let view =
+            |selected_option, editing_custom| crate::interaction_view::PendingInteractionView {
+                selected_option,
+                custom_text: String::new(),
+                custom_draft: String::new(),
+                editing_custom,
+                custom_cursor: 0,
+                editing_question: None,
+                answers: std::collections::BTreeMap::new(),
+                plan_body_lines,
+                plan_width: 80,
+            };
         // A collapsed pending part must not draw the inline body even when a
         // view is provided for its request_id.
         let collapsed = render_entry_detailed_with_interactions(
@@ -531,7 +553,10 @@ mod tests {
                 kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
-            &std::collections::BTreeMap::from([("host-input:1:2:0".to_owned(), view(Some(0), false))]),
+            &std::collections::BTreeMap::from([(
+                "host-input:1:2:0".to_owned(),
+                view(Some(0), false),
+            )]),
         );
         let collapsed_text = collapsed
             .lines
@@ -553,7 +578,10 @@ mod tests {
                 kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(node_key.clone(), true)]),
-            &std::collections::BTreeMap::from([("host-input:1:2:0".to_owned(), view(Some(0), false))]),
+            &std::collections::BTreeMap::from([(
+                "host-input:1:2:0".to_owned(),
+                view(Some(0), false),
+            )]),
         );
         let expanded_text = expanded
             .lines
@@ -563,7 +591,10 @@ mod tests {
             .join("\n");
         assert!(expanded_text.contains("Proposed Plan"), "{expanded_text}");
         assert!(expanded_text.contains("(x) Approve"), "{expanded_text}");
-        assert!(expanded_text.contains("Feedback to agent"), "{expanded_text}");
+        assert!(
+            expanded_text.contains("Feedback to agent"),
+            "{expanded_text}"
+        );
         assert!(
             expanded
                 .nodes
@@ -595,14 +626,17 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(custom_text.contains("( ) Approve"), "{custom_text}");
-        assert!(custom_text.contains("(x) Feedback to agent"), "{custom_text}");
+        assert!(
+            custom_text.contains("(x) Feedback to agent"),
+            "{custom_text}"
+        );
 
         // Answered parts never draw the inline body, only the plain body.
         let answered = TranscriptEntryPart {
             id: TranscriptContentId::StoredPart(5),
             status: PartExecutionStatusResource::Completed,
-            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(
-                Box::new(RequestPartResource::UserInput {
+            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(Box::new(
+                RequestPartResource::UserInput {
                     request: agena_api::resource::UserInputRequest {
                         request_id: "host-input:1:2:0".to_owned(),
                         session_id: Some(1),
@@ -630,8 +664,8 @@ mod tests {
                         answers: std::collections::BTreeMap::new(),
                         reason: None,
                     }),
-                }),
-            )),
+                },
+            ))),
         };
         let message = entry(
             3,
@@ -649,7 +683,10 @@ mod tests {
                 kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
-            &std::collections::BTreeMap::from([("host-input:1:2:0".to_owned(), view(Some(0), false))]),
+            &std::collections::BTreeMap::from([(
+                "host-input:1:2:0".to_owned(),
+                view(Some(0), false),
+            )]),
         );
         let answered_text = answered_rendered
             .lines
@@ -697,12 +734,12 @@ mod tests {
         let part = TranscriptEntryPart {
             id: TranscriptContentId::StoredPart(5),
             status: PartExecutionStatusResource::InProgress,
-            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(
-                Box::new(RequestPartResource::UserInput {
+            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(Box::new(
+                RequestPartResource::UserInput {
                     request: request.clone(),
                     reply: None,
-                }),
-            )),
+                },
+            ))),
         };
         let message = entry(
             3,
@@ -750,19 +787,17 @@ mod tests {
         // one footer-hint row (review dropped the per-option detail lines).
         let decision_rows = crate::interaction_view::review_decision_rows_count(2, true);
         let predicted = plan_body_lines + 1 + decision_rows + 1;
-        assert_eq!(body_rows, predicted, "renderer body rows match classifier budget");
+        assert_eq!(
+            body_rows, predicted,
+            "renderer body rows match classifier budget"
+        );
 
         // Every DECISION row (separator and beyond, excluding the footer hint)
         // classifies to a concrete kind — never the default PlanBody fallback —
         // so the App's key routing always sees a row kind there.
         let question = layouts[0];
         for body_offset in plan_body_lines..(plan_body_lines + 1 + decision_rows) {
-            let kind = classify_interaction_line(
-                &layouts,
-                plan_body_lines,
-                body_offset,
-                false,
-            );
+            let kind = classify_interaction_line(&layouts, plan_body_lines, body_offset, false);
             assert!(
                 !matches!(kind, InteractionLineKind::PlanBody),
                 "decision row {body_offset} must classify (got PlanBody)"
@@ -775,9 +810,8 @@ mod tests {
     fn ask_user_continuous_body_row_count_matches_the_layout_contract() {
         use crate::interaction_view::{
             InteractionLineKind, PendingInteractionAnswerView, PendingInteractionView,
-            ask_user_body_rows, ask_user_question_block_rows,
-            ask_user_question_landing_offset, classify_ask_user_line,
-            interaction_plan_body_lines, interaction_question_layouts,
+            ask_user_body_rows, ask_user_question_block_rows, ask_user_question_landing_offset,
+            classify_ask_user_line, interaction_plan_body_lines, interaction_question_layouts,
         };
         let now = Utc::now();
         // A long plan body so the plan region carries more than one row — the
@@ -831,12 +865,12 @@ mod tests {
         let part = TranscriptEntryPart {
             id: TranscriptContentId::StoredPart(5),
             status: PartExecutionStatusResource::InProgress,
-            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(
-                Box::new(RequestPartResource::UserInput {
+            content: TranscriptPartContent::Activity(TranscriptActivityContent::Request(Box::new(
+                RequestPartResource::UserInput {
                     request: request.clone(),
                     reply: None,
-                }),
-            )),
+                },
+            ))),
         };
         let message = entry(
             3,
@@ -850,7 +884,10 @@ mod tests {
             content_id: TranscriptContentId::StoredPart(5),
         };
         let plan_body_lines = interaction_plan_body_lines(&plan_body, 80);
-        assert!(plan_body_lines > 1, "plan body must wrap: {plan_body_lines}");
+        assert!(
+            plan_body_lines > 1,
+            "plan body must wrap: {plan_body_lines}"
+        );
         let render = |view: PendingInteractionView| {
             let rendered = render_entry_detailed_with_interactions(
                 &message,
@@ -861,10 +898,7 @@ mod tests {
                     kind_defaults: std::collections::BTreeMap::new(),
                 },
                 &std::collections::BTreeMap::from([(node_key.clone(), true)]),
-                &std::collections::BTreeMap::from([(
-                    "host-input:1:2:0".to_owned(),
-                    view,
-                )]),
+                &std::collections::BTreeMap::from([("host-input:1:2:0".to_owned(), view)]),
             );
             let node = rendered
                 .nodes
@@ -913,16 +947,14 @@ mod tests {
         // No paging artifacts: no `▸` option cursor, no page indicator, no
         // summary page.
         assert!(!text.contains('▸'), "no presentation option cursor: {text}");
-        assert!(!text.contains("1/2") && !text.contains("2/2"), "no page footer: {text}");
+        assert!(
+            !text.contains("1/2") && !text.contains("2/2"),
+            "no page footer: {text}"
+        );
         // The classifier covers the whole budget, one row kind per offset.
         let total = ask_user_body_rows(plan_body_lines, &layouts_empty);
         for body_offset in 0..(total - 1) {
-            let kind = classify_ask_user_line(
-                &layouts_empty,
-                plan_body_lines,
-                body_offset,
-                false,
-            );
+            let kind = classify_ask_user_line(&layouts_empty, plan_body_lines, body_offset, false);
             assert!(
                 !matches!(kind, InteractionLineKind::AskFooter),
                 "footer is the LAST row, not offset {body_offset}"
@@ -2008,10 +2040,7 @@ mod tests {
                         },
                     ],
                     rows: vec![
-                        vec![
-                            serde_json::json!("alice"),
-                            serde_json::json!(9.5),
-                        ],
+                        vec![serde_json::json!("alice"), serde_json::json!(9.5)],
                         vec![serde_json::json!("bob"), serde_json::json!(8)],
                     ],
                 },

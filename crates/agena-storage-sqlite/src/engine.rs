@@ -21,11 +21,13 @@ use std::sync::Arc;
 
 use agena_domain::{SessionLifecycleState, SessionRelationKind};
 use agena_storage::store::{
-    InFlightRun, InteractionAnswerOutcome, LeaseAcquire, LeaseState, MaintenanceOutcome, NewPart,
-    NewSession, Part, PartDelta, PartRole, PartState, PartVisibility, PersistenceEngine,
-    ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta, SessionSummary, SessionView,
-    StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats,
-    apply_part_transition,
+    BackgroundDelivery, BackgroundDeliveryPhase, BackgroundEventRequest, BackgroundOperation,
+    BackgroundOperationKind, BackgroundOperationPhase, BackgroundOperationTransition,
+    BackgroundSettleOutcome, InFlightRun, InteractionAnswerOutcome, LeaseAcquire, LeaseState,
+    MaintenanceOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartDelta, PartRole,
+    PartState, PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery,
+    SessionMeta, SessionSummary, SessionView, StoreError, SubmitOutcome, UsageGroup, UsageQuery,
+    UsageRecord, UsageStats, apply_part_transition,
 };
 use async_trait::async_trait;
 use sea_orm::{
@@ -54,6 +56,17 @@ const SESSION_COLS: &str = "\
     s.task_id, s.subtask_status, s.subtask_started_at_ms, s.subtask_finished_at_ms, \
     CAST(s.subtask_failure_json AS TEXT) AS subtask_failure, CAST(s.config_json AS TEXT) AS config_json, \
     CAST(s.provider_anchors_json AS TEXT) AS provider_anchors_json, s.created_at_ms, s.updated_at_ms";
+
+const BACKGROUND_OPERATION_COLS: &str = "\
+    operation_id, session_id, launch_run_id, launch_tool_part_id, kind, external_id, phase, \
+    CAST(outcome_json AS TEXT) AS outcome_json, CAST(failure_json AS TEXT) AS failure_json, \
+    last_event_seq, owner_id, lease_until_ms, revision, created_at_ms, updated_at_ms, finished_at_ms";
+
+const BACKGROUND_DELIVERY_COLS: &str = "\
+    delivery_id, operation_id, session_id, event_key, \
+    CAST(payload_json AS TEXT) AS payload_json, phase, claim_owner, claim_until_ms, attempts, \
+    notification_part_id, CAST(last_error_json AS TEXT) AS last_error_json, \
+    created_at_ms, updated_at_ms, consumed_at_ms";
 
 /// The production [`PersistenceEngine`]: raw SQL over the v2 schema.
 #[derive(Clone)]
@@ -492,6 +505,77 @@ fn lease_from_row(row: sea_orm::QueryResult) -> Result<LeaseState, DbErr> {
     })
 }
 
+fn background_operation_from_row(row: sea_orm::QueryResult) -> Result<BackgroundOperation, DbErr> {
+    let kind_raw: String = row.try_get("", "kind")?;
+    let phase_raw: String = row.try_get("", "phase")?;
+    let kind = BackgroundOperationKind::parse(&kind_raw)
+        .ok_or_else(|| DbErr::Custom(format!("invalid background kind {kind_raw}")))?;
+    let phase = BackgroundOperationPhase::parse(&phase_raw)
+        .ok_or_else(|| DbErr::Custom(format!("invalid background phase {phase_raw}")))?;
+    let json_col = |name: &str| -> Result<Option<serde_json::Value>, DbErr> {
+        let raw: Option<String> = row.try_get("", name)?;
+        raw.map(|value| {
+            serde_json::from_str(&value)
+                .map_err(|error| DbErr::Custom(format!("decode {name}: {error}")))
+        })
+        .transpose()
+    };
+    let last_event_seq: i64 = row.try_get("", "last_event_seq")?;
+    Ok(BackgroundOperation {
+        operation_id: row.try_get("", "operation_id")?,
+        session_id: row.try_get("", "session_id")?,
+        launch_run_id: row.try_get("", "launch_run_id")?,
+        launch_tool_part_id: row.try_get("", "launch_tool_part_id")?,
+        kind,
+        external_id: row.try_get("", "external_id")?,
+        phase,
+        outcome: json_col("outcome_json")?,
+        failure: json_col("failure_json")?,
+        last_event_seq: u64::try_from(last_event_seq)
+            .map_err(|_| DbErr::Custom("negative background event sequence".to_owned()))?,
+        owner_id: row.try_get("", "owner_id")?,
+        lease_until_ms: row.try_get("", "lease_until_ms")?,
+        revision: row.try_get("", "revision")?,
+        created_at_ms: row.try_get("", "created_at_ms")?,
+        updated_at_ms: row.try_get("", "updated_at_ms")?,
+        finished_at_ms: row.try_get("", "finished_at_ms")?,
+    })
+}
+
+fn background_delivery_from_row(row: sea_orm::QueryResult) -> Result<BackgroundDelivery, DbErr> {
+    let phase_raw: String = row.try_get("", "phase")?;
+    let phase = BackgroundDeliveryPhase::parse(&phase_raw)
+        .ok_or_else(|| DbErr::Custom(format!("invalid delivery phase {phase_raw}")))?;
+    let payload_raw: String = row.try_get("", "payload_json")?;
+    let payload = serde_json::from_str(&payload_raw)
+        .map_err(|error| DbErr::Custom(format!("decode delivery payload: {error}")))?;
+    let last_error_raw: Option<String> = row.try_get("", "last_error_json")?;
+    let last_error = last_error_raw
+        .map(|value| {
+            serde_json::from_str(&value)
+                .map_err(|error| DbErr::Custom(format!("decode delivery error: {error}")))
+        })
+        .transpose()?;
+    let attempts: i64 = row.try_get("", "attempts")?;
+    Ok(BackgroundDelivery {
+        delivery_id: row.try_get("", "delivery_id")?,
+        operation_id: row.try_get("", "operation_id")?,
+        session_id: row.try_get("", "session_id")?,
+        event_key: row.try_get("", "event_key")?,
+        payload,
+        phase,
+        claim_owner: row.try_get("", "claim_owner")?,
+        claim_until_ms: row.try_get("", "claim_until_ms")?,
+        attempts: u32::try_from(attempts)
+            .map_err(|_| DbErr::Custom("invalid delivery attempt count".to_owned()))?,
+        notification_part_id: row.try_get("", "notification_part_id")?,
+        last_error,
+        created_at_ms: row.try_get("", "created_at_ms")?,
+        updated_at_ms: row.try_get("", "updated_at_ms")?,
+        consumed_at_ms: row.try_get("", "consumed_at_ms")?,
+    })
+}
+
 fn summary_from_row(row: sea_orm::QueryResult) -> Result<SessionSummary, DbErr> {
     let relation_kind_raw: String = row.try_get("", "relation_kind")?;
     let lifecycle_state_raw: String = row.try_get("", "lifecycle_state")?;
@@ -533,6 +617,46 @@ async fn load_part_by_id<C: ConnectionTrait>(
         .await
         .map_err(map_db_err)?
         .map(part_from_row)
+        .transpose()
+        .map_err(map_db_err)
+}
+
+async fn load_background_operation<C: ConnectionTrait>(
+    connection: &C,
+    operation_id: &str,
+) -> Result<Option<BackgroundOperation>, StoreError> {
+    connection
+        .query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!(
+                "SELECT {BACKGROUND_OPERATION_COLS} FROM agena_background_operations \
+                 WHERE operation_id = ?"
+            ),
+            [operation_id.into()],
+        ))
+        .await
+        .map_err(map_db_err)?
+        .map(background_operation_from_row)
+        .transpose()
+        .map_err(map_db_err)
+}
+
+async fn load_background_delivery<C: ConnectionTrait>(
+    connection: &C,
+    delivery_id: &str,
+) -> Result<Option<BackgroundDelivery>, StoreError> {
+    connection
+        .query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!(
+                "SELECT {BACKGROUND_DELIVERY_COLS} FROM agena_background_deliveries \
+                 WHERE delivery_id = ?"
+            ),
+            [delivery_id.into()],
+        ))
+        .await
+        .map_err(map_db_err)?
+        .map(background_delivery_from_row)
         .transpose()
         .map_err(map_db_err)
 }
@@ -600,7 +724,7 @@ fn content_part(id: i64, session_id: i64, run_id: i64, new_part: NewPart, now_ms
 
 /// The user-send run marker content.
 fn user_send_marker_content() -> serde_json::Value {
-    serde_json::json!({ "run_kind": "user_send" })
+    serde_json::json!({ "run_kind": "user_send", "abort_reason": null })
 }
 
 #[async_trait]
@@ -1147,6 +1271,642 @@ impl PersistenceEngine for SqliteEngine {
             .collect()
     }
 
+    async fn create_background_operation(
+        &self,
+        new: NewBackgroundOperation,
+        now_ms: i64,
+    ) -> Result<BackgroundOperation, StoreError> {
+        let db = self.db();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                if let Some(existing) = load_background_operation(txn, &new.operation_id).await? {
+                    if existing.session_id == new.session_id
+                        && existing.launch_run_id == new.launch_run_id
+                        && existing.launch_tool_part_id == new.launch_tool_part_id
+                        && existing.kind == new.kind
+                    {
+                        return Ok(existing);
+                    }
+                    return Err(StoreError::InvalidState(format!(
+                        "background operation {} already identifies a different launch",
+                        new.operation_id
+                    )));
+                }
+                match (new.kind, new.launch_run_id, new.launch_tool_part_id) {
+                    (BackgroundOperationKind::ScheduledDelivery, None, None) => {
+                        session_meta_tx(txn, new.session_id).await?;
+                    }
+                    (BackgroundOperationKind::ScheduledDelivery, _, _) => {
+                        return Err(StoreError::InvalidState(
+                            "scheduled deliveries cannot claim a launch tool part".to_owned(),
+                        ));
+                    }
+                    (_, Some(run_id), Some(tool_part_id)) => {
+                        if let Some(row) = txn
+                            .query_one(Statement::from_sql_and_values(
+                                DatabaseBackend::Sqlite,
+                                format!(
+                                    "SELECT {BACKGROUND_OPERATION_COLS} FROM agena_background_operations \
+                                     WHERE session_id = ? AND launch_tool_part_id = ?"
+                                ),
+                                [new.session_id.into(), tool_part_id.into()],
+                            ))
+                            .await
+                            .map_err(map_db_err)?
+                        {
+                            let existing =
+                                background_operation_from_row(row).map_err(map_db_err)?;
+                            if existing.operation_id == new.operation_id
+                                && existing.kind == new.kind
+                            {
+                                return Ok(existing);
+                            }
+                            return Err(StoreError::InvalidState(format!(
+                                "tool part {tool_part_id} already owns background operation {}",
+                                existing.operation_id
+                            )));
+                        }
+                        let run = load_part_by_id(txn, run_id).await?.ok_or_else(|| {
+                            StoreError::not_found(format!("run marker {run_id}"))
+                        })?;
+                        if !run.is_run_marker() || run.origin_session_id != new.session_id {
+                            return Err(StoreError::InvalidState(format!(
+                                "background launch run {run_id} does not belong to session {}",
+                                new.session_id
+                            )));
+                        }
+                        let tool = load_part_by_id(txn, tool_part_id).await?.ok_or_else(|| {
+                            StoreError::not_found(format!("tool part {tool_part_id}"))
+                        })?;
+                        if tool.kind != "tool_call"
+                            || tool.origin_session_id != new.session_id
+                            || tool.run_id != Some(run_id)
+                        {
+                            return Err(StoreError::InvalidState(format!(
+                                "background launch tool {tool_part_id} is not owned by run {run_id} in session {}",
+                                new.session_id
+                            )));
+                        }
+                    }
+                    _ => {
+                        return Err(StoreError::InvalidState(
+                            "background tool operations require both launch ids".to_owned(),
+                        ));
+                    }
+                }
+                txn.execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Sqlite,
+                    "INSERT INTO agena_background_operations \
+                     (operation_id, session_id, launch_run_id, launch_tool_part_id, kind, phase, \
+                      last_event_seq, revision, created_at_ms, updated_at_ms) \
+                     VALUES (?, ?, ?, ?, ?, 'launch_requested', 0, 1, ?, ?)",
+                    [
+                        new.operation_id.as_str().into(),
+                        new.session_id.into(),
+                        Value::BigInt(new.launch_run_id),
+                        Value::BigInt(new.launch_tool_part_id),
+                        new.kind.as_str().into(),
+                        now_ms.into(),
+                        now_ms.into(),
+                    ],
+                ))
+                .await
+                .map_err(map_db_err)?;
+                load_background_operation(txn, &new.operation_id)
+                    .await?
+                    .ok_or_else(|| {
+                        StoreError::not_found(format!(
+                            "background operation {} after insert",
+                            new.operation_id
+                        ))
+                    })
+            })
+        })
+        .await
+    }
+
+    async fn background_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<BackgroundOperation>, StoreError> {
+        load_background_operation(self.db(), operation_id).await
+    }
+
+    async fn background_operation_by_external_id(
+        &self,
+        kind: BackgroundOperationKind,
+        external_id: &str,
+    ) -> Result<Option<BackgroundOperation>, StoreError> {
+        self.db()
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT {BACKGROUND_OPERATION_COLS} FROM agena_background_operations \
+                     WHERE kind = ? AND external_id = ?"
+                ),
+                [kind.as_str().into(), external_id.into()],
+            ))
+            .await
+            .map_err(map_db_err)?
+            .map(background_operation_from_row)
+            .transpose()
+            .map_err(map_db_err)
+    }
+
+    async fn active_background_operations(
+        &self,
+        kind: Option<BackgroundOperationKind>,
+        limit: usize,
+    ) -> Result<Vec<BackgroundOperation>, StoreError> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let (sql, values) = match kind {
+            Some(kind) => (
+                format!(
+                    "SELECT {BACKGROUND_OPERATION_COLS} FROM agena_background_operations \
+                     WHERE phase IN ('launch_requested','launching','running') AND kind = ? \
+                     ORDER BY created_at_ms ASC, operation_id ASC LIMIT ?"
+                ),
+                vec![kind.as_str().into(), limit.into()],
+            ),
+            None => (
+                format!(
+                    "SELECT {BACKGROUND_OPERATION_COLS} FROM agena_background_operations \
+                     WHERE phase IN ('launch_requested','launching','running') \
+                     ORDER BY created_at_ms ASC, operation_id ASC LIMIT ?"
+                ),
+                vec![limit.into()],
+            ),
+        };
+        self.db()
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                sql,
+                values,
+            ))
+            .await
+            .map_err(map_db_err)?
+            .into_iter()
+            .map(background_operation_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_db_err)
+    }
+
+    async fn transition_background_operation(
+        &self,
+        transition: BackgroundOperationTransition,
+        now_ms: i64,
+    ) -> Result<BackgroundOperation, StoreError> {
+        let db = self.db();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                let current = load_background_operation(txn, &transition.operation_id)
+                    .await?
+                    .ok_or_else(|| {
+                        StoreError::not_found(format!(
+                            "background operation {}",
+                            transition.operation_id
+                        ))
+                    })?;
+                if current.revision != transition.expected_revision {
+                    return Err(StoreError::InvalidState(format!(
+                        "background operation {} revision changed: expected {}, found {}",
+                        current.operation_id, transition.expected_revision, current.revision
+                    )));
+                }
+                if !current.phase.can_transition(transition.next_phase) {
+                    return Err(StoreError::InvalidState(format!(
+                        "invalid background transition {} -> {} for {}",
+                        current.phase.as_str(),
+                        transition.next_phase.as_str(),
+                        current.operation_id
+                    )));
+                }
+                let external_id = transition.external_id.or(current.external_id);
+                if transition.next_phase == BackgroundOperationPhase::Running
+                    && external_id.is_none()
+                {
+                    return Err(StoreError::InvalidState(format!(
+                        "background operation {} cannot enter running without an external id",
+                        current.operation_id
+                    )));
+                }
+                let outcome = transition.outcome.or(current.outcome);
+                let failure = transition.failure.or(current.failure);
+                let finished_at_ms = transition.next_phase.is_terminal().then_some(now_ms);
+                let result = txn
+                    .execute(Statement::from_sql_and_values(
+                        DatabaseBackend::Sqlite,
+                        "UPDATE agena_background_operations \
+                         SET external_id = ?, phase = ?, outcome_json = ?, failure_json = ?, \
+                             owner_id = ?, lease_until_ms = ?, revision = revision + 1, \
+                             updated_at_ms = ?, finished_at_ms = ? \
+                         WHERE operation_id = ? AND revision = ?",
+                        [
+                            text_value(external_id),
+                            transition.next_phase.as_str().into(),
+                            text_value(
+                                outcome
+                                    .map(|value| serde_json::to_string(&value))
+                                    .transpose()
+                                    .map_err(|error| {
+                                        StoreError::Serialization(format!(
+                                            "encode background outcome: {error}"
+                                        ))
+                                    })?,
+                            ),
+                            text_value(
+                                failure
+                                    .map(|value| serde_json::to_string(&value))
+                                    .transpose()
+                                    .map_err(|error| {
+                                        StoreError::Serialization(format!(
+                                            "encode background failure: {error}"
+                                        ))
+                                    })?,
+                            ),
+                            text_value(transition.owner_id),
+                            Value::BigInt(transition.lease_until_ms),
+                            now_ms.into(),
+                            Value::BigInt(finished_at_ms),
+                            transition.operation_id.as_str().into(),
+                            transition.expected_revision.into(),
+                        ],
+                    ))
+                    .await
+                    .map_err(map_db_err)?;
+                if result.rows_affected() != 1 {
+                    return Err(StoreError::InvalidState(format!(
+                        "background operation {} changed concurrently",
+                        transition.operation_id
+                    )));
+                }
+                load_background_operation(txn, &transition.operation_id)
+                    .await?
+                    .ok_or_else(|| {
+                        StoreError::not_found(format!(
+                            "background operation {} after transition",
+                            transition.operation_id
+                        ))
+                    })
+            })
+        })
+        .await
+    }
+
+    async fn record_background_event(
+        &self,
+        request: BackgroundEventRequest,
+        now_ms: i64,
+    ) -> Result<BackgroundSettleOutcome, StoreError> {
+        let db = self.db();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                let delivery_id = format!("{}:{}", request.operation_id, request.event_key);
+                if let Some(delivery) = load_background_delivery(txn, &delivery_id).await? {
+                    let operation = load_background_operation(txn, &request.operation_id)
+                        .await?
+                        .ok_or_else(|| {
+                            StoreError::not_found(format!(
+                                "background operation {}",
+                                request.operation_id
+                            ))
+                        })?;
+                    let notification_part_id = delivery.notification_part_id.ok_or_else(|| {
+                        StoreError::InvalidState(format!(
+                            "background delivery {} has no notification part",
+                            delivery.delivery_id
+                        ))
+                    })?;
+                    let notification_part = load_part_by_id(txn, notification_part_id)
+                        .await?
+                        .ok_or_else(|| {
+                            StoreError::not_found(format!("part {notification_part_id}"))
+                        })?;
+                    return Ok(BackgroundSettleOutcome {
+                        operation,
+                        delivery,
+                        notification_part,
+                        created: false,
+                    });
+                }
+                let current = load_background_operation(txn, &request.operation_id)
+                    .await?
+                    .ok_or_else(|| {
+                        StoreError::not_found(format!(
+                            "background operation {}",
+                            request.operation_id
+                        ))
+                    })?;
+                if let Some(next_phase) = request.next_phase
+                    && !current.phase.can_transition(next_phase)
+                {
+                    return Err(StoreError::InvalidState(format!(
+                        "invalid background transition {} -> {} for {}",
+                        current.phase.as_str(),
+                        next_phase.as_str(),
+                        current.operation_id
+                    )));
+                }
+                let mut notification = request.notification;
+                notification.role = PartRole::Runtime;
+                notification.state = PartState::Completed;
+                let ingress = submit_batch_tx(
+                    txn,
+                    current.session_id,
+                    PartRole::Runtime,
+                    PartState::Completed,
+                    serde_json::json!({
+                        "run_kind": "runtime_ingress",
+                        "source": "background_operation",
+                        "operation_id": current.operation_id,
+                        "abort_reason": null,
+                    }),
+                    vec![notification],
+                    Some(delivery_id.clone()),
+                    now_ms,
+                )
+                .await?;
+                let notification_part = ingress.parts.get(1).cloned().ok_or_else(|| {
+                    StoreError::InvalidState("runtime ingress omitted notification".to_owned())
+                })?;
+
+                let next_phase = request.next_phase.unwrap_or(current.phase);
+                let outcome = request.outcome.or(current.outcome);
+                let failure = request.failure.or(current.failure);
+                let last_event_seq = request.event_seq.map_or(current.last_event_seq, |seq| {
+                    current.last_event_seq.max(seq)
+                });
+                let finished_at_ms = if next_phase.is_terminal() {
+                    current.finished_at_ms.or(Some(now_ms))
+                } else {
+                    None
+                };
+                let owner_id = (!next_phase.is_terminal())
+                    .then(|| current.owner_id.clone())
+                    .flatten();
+                let lease_until_ms = (!next_phase.is_terminal())
+                    .then_some(current.lease_until_ms)
+                    .flatten();
+                let result = txn
+                    .execute(Statement::from_sql_and_values(
+                        DatabaseBackend::Sqlite,
+                        "UPDATE agena_background_operations \
+                         SET phase = ?, outcome_json = ?, failure_json = ?, last_event_seq = ?, \
+                             owner_id = ?, lease_until_ms = ?, revision = revision + 1, \
+                             updated_at_ms = ?, finished_at_ms = ? \
+                         WHERE operation_id = ? AND revision = ?",
+                        [
+                            next_phase.as_str().into(),
+                            text_value(
+                                outcome
+                                    .map(|value| serde_json::to_string(&value))
+                                    .transpose()
+                                    .map_err(|error| {
+                                        StoreError::Serialization(format!(
+                                            "encode background outcome: {error}"
+                                        ))
+                                    })?,
+                            ),
+                            text_value(
+                                failure
+                                    .map(|value| serde_json::to_string(&value))
+                                    .transpose()
+                                    .map_err(|error| {
+                                        StoreError::Serialization(format!(
+                                            "encode background failure: {error}"
+                                        ))
+                                    })?,
+                            ),
+                            i64::try_from(last_event_seq)
+                                .map_err(|_| {
+                                    StoreError::InvalidState(
+                                        "background event sequence exceeds SQLite range".to_owned(),
+                                    )
+                                })?
+                                .into(),
+                            text_value(owner_id),
+                            Value::BigInt(lease_until_ms),
+                            now_ms.into(),
+                            Value::BigInt(finished_at_ms),
+                            request.operation_id.as_str().into(),
+                            current.revision.into(),
+                        ],
+                    ))
+                    .await
+                    .map_err(map_db_err)?;
+                if result.rows_affected() != 1 {
+                    return Err(StoreError::InvalidState(format!(
+                        "background operation {} changed concurrently",
+                        request.operation_id
+                    )));
+                }
+                txn.execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Sqlite,
+                    "INSERT INTO agena_background_deliveries \
+                     (delivery_id, operation_id, session_id, event_key, payload_json, phase, \
+                      attempts, notification_part_id, created_at_ms, updated_at_ms) \
+                     VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)",
+                    [
+                        delivery_id.as_str().into(),
+                        request.operation_id.as_str().into(),
+                        current.session_id.into(),
+                        request.event_key.as_str().into(),
+                        serde_json::to_string(&notification_part.content)
+                            .map_err(|error| {
+                                StoreError::Serialization(format!(
+                                    "encode background delivery: {error}"
+                                ))
+                            })?
+                            .into(),
+                        notification_part.part_id.into(),
+                        now_ms.into(),
+                        now_ms.into(),
+                    ],
+                ))
+                .await
+                .map_err(map_db_err)?;
+                let operation = load_background_operation(txn, &request.operation_id)
+                    .await?
+                    .ok_or_else(|| {
+                        StoreError::not_found(format!(
+                            "background operation {} after event",
+                            request.operation_id
+                        ))
+                    })?;
+                let delivery = load_background_delivery(txn, &delivery_id)
+                    .await?
+                    .ok_or_else(|| {
+                        StoreError::not_found(format!("background delivery {delivery_id}"))
+                    })?;
+                Ok(BackgroundSettleOutcome {
+                    operation,
+                    delivery,
+                    notification_part,
+                    created: true,
+                })
+            })
+        })
+        .await
+    }
+
+    async fn claim_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        claim_until_ms: i64,
+        now_ms: i64,
+    ) -> Result<Option<BackgroundDelivery>, StoreError> {
+        let db = self.db();
+        let delivery_id = delivery_id.to_owned();
+        let owner_id = owner_id.to_owned();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                let result = txn
+                    .execute(Statement::from_sql_and_values(
+                        DatabaseBackend::Sqlite,
+                        "UPDATE agena_background_deliveries \
+                         SET phase = 'claimed', claim_owner = ?, claim_until_ms = ?, \
+                             attempts = attempts + 1, updated_at_ms = ? \
+                         WHERE delivery_id = ? AND (phase = 'pending' OR \
+                               (phase = 'claimed' AND claim_until_ms <= ?))",
+                        [
+                            owner_id.as_str().into(),
+                            claim_until_ms.into(),
+                            now_ms.into(),
+                            delivery_id.as_str().into(),
+                            now_ms.into(),
+                        ],
+                    ))
+                    .await
+                    .map_err(map_db_err)?;
+                if result.rows_affected() == 0 {
+                    return Ok(None);
+                }
+                load_background_delivery(txn, &delivery_id).await
+            })
+        })
+        .await
+    }
+
+    async fn consume_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        now_ms: i64,
+    ) -> Result<BackgroundDelivery, StoreError> {
+        let db = self.db();
+        let delivery_id = delivery_id.to_owned();
+        let owner_id = owner_id.to_owned();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                if let Some(existing) = load_background_delivery(txn, &delivery_id).await?
+                    && existing.phase == BackgroundDeliveryPhase::Consumed
+                {
+                    return Ok(existing);
+                }
+                let result = txn
+                    .execute(Statement::from_sql_and_values(
+                        DatabaseBackend::Sqlite,
+                        "UPDATE agena_background_deliveries \
+                         SET phase = 'consumed', claim_owner = NULL, claim_until_ms = NULL, \
+                             updated_at_ms = ?, consumed_at_ms = ? \
+                         WHERE delivery_id = ? AND phase = 'claimed' AND claim_owner = ?",
+                        [
+                            now_ms.into(),
+                            now_ms.into(),
+                            delivery_id.as_str().into(),
+                            owner_id.as_str().into(),
+                        ],
+                    ))
+                    .await
+                    .map_err(map_db_err)?;
+                if result.rows_affected() != 1 {
+                    return Err(StoreError::InvalidState(format!(
+                        "background delivery {delivery_id} is not claimed by {owner_id}"
+                    )));
+                }
+                load_background_delivery(txn, &delivery_id)
+                    .await?
+                    .ok_or_else(|| {
+                        StoreError::not_found(format!("background delivery {delivery_id}"))
+                    })
+            })
+        })
+        .await
+    }
+
+    async fn retry_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        error: serde_json::Value,
+        now_ms: i64,
+    ) -> Result<BackgroundDelivery, StoreError> {
+        let db = self.db();
+        let delivery_id = delivery_id.to_owned();
+        let owner_id = owner_id.to_owned();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                let error = serde_json::to_string(&error).map_err(|encode_error| {
+                    StoreError::Serialization(format!(
+                        "encode background delivery error: {encode_error}"
+                    ))
+                })?;
+                let result = txn
+                    .execute(Statement::from_sql_and_values(
+                        DatabaseBackend::Sqlite,
+                        "UPDATE agena_background_deliveries \
+                         SET phase = 'pending', claim_owner = NULL, claim_until_ms = NULL, \
+                             last_error_json = ?, updated_at_ms = ? \
+                         WHERE delivery_id = ? AND phase = 'claimed' AND claim_owner = ?",
+                        [
+                            error.into(),
+                            now_ms.into(),
+                            delivery_id.as_str().into(),
+                            owner_id.as_str().into(),
+                        ],
+                    ))
+                    .await
+                    .map_err(map_db_err)?;
+                if result.rows_affected() != 1 {
+                    return Err(StoreError::InvalidState(format!(
+                        "background delivery {delivery_id} is not claimed by {owner_id}"
+                    )));
+                }
+                load_background_delivery(txn, &delivery_id)
+                    .await?
+                    .ok_or_else(|| {
+                        StoreError::not_found(format!("background delivery {delivery_id}"))
+                    })
+            })
+        })
+        .await
+    }
+
+    async fn pending_background_deliveries(
+        &self,
+        limit: usize,
+        now_ms: i64,
+    ) -> Result<Vec<BackgroundDelivery>, StoreError> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        self.db()
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT {BACKGROUND_DELIVERY_COLS} FROM agena_background_deliveries \
+                     WHERE phase = 'pending' OR (phase = 'claimed' AND claim_until_ms <= ?) \
+                     ORDER BY created_at_ms, delivery_id LIMIT ?"
+                ),
+                [now_ms.into(), limit.into()],
+            ))
+            .await
+            .map_err(map_db_err)?
+            .into_iter()
+            .map(background_delivery_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_db_err)
+    }
+
     async fn submit_user_run(
         &self,
         session_id: i64,
@@ -1157,6 +1917,11 @@ impl PersistenceEngine for SqliteEngine {
     ) -> Result<SubmitOutcome, StoreError> {
         let db = self.db();
         let owner_id = owner_id.to_owned();
+        let marker_state = if parts.iter().all(|part| part.state.is_terminal()) {
+            PartState::Completed
+        } else {
+            PartState::Pending
+        };
         run_write(db, move |txn| {
             Box::pin(async move {
                 ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
@@ -1164,7 +1929,7 @@ impl PersistenceEngine for SqliteEngine {
                     txn,
                     session_id,
                     PartRole::User,
-                    PartState::Pending,
+                    marker_state,
                     user_send_marker_content(),
                     parts,
                     idempotency_key,
@@ -1233,9 +1998,12 @@ impl PersistenceEngine for SqliteEngine {
                     )));
                 }
 
-                // Terminalize the launching tool part (the operation's own
-                // part) when supplied.
-                if let Some((part_id, terminal, content)) = tool_part {
+                // Transition the launching tool part (the operation's own
+                // part) when supplied. Background launch uses an InProgress
+                // transition to commit the durable correlation marker in the
+                // same transaction as its guard result; completion uses a
+                // terminal transition.
+                if let Some((part_id, next_state, content)) = tool_part {
                     let mut part = load_part_by_id(txn, part_id)
                         .await?
                         .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?;
@@ -1244,9 +2012,9 @@ impl PersistenceEngine for SqliteEngine {
                             "part {part_id} is shared; only its origin session may settle it"
                         )));
                     }
-                    part.state = terminal;
+                    part.state = next_state;
                     part.content = content;
-                    part.finished_at_ms = Some(now_ms);
+                    part.finished_at_ms = next_state.is_terminal().then_some(now_ms);
                     txn.execute(Statement::from_sql_and_values(
                         DatabaseBackend::Sqlite,
                         "UPDATE agena_parts \
@@ -1271,11 +2039,9 @@ impl PersistenceEngine for SqliteEngine {
                     .map_err(map_db_err)?;
                 }
 
-                // Append the result parts (Assistant role) under the launching
-                // run — no new run marker. The notification part's body is
-                // projected as a dedicated system-message wire part (never
-                // assistant reply text), so it is safe to keep it on the
-                // assistant run that launched the operation.
+                // Append companion parts under the launching run — the launch
+                // guard or settled notifications, with their supplied roles —
+                // and create no new run marker.
                 let mut created = Vec::with_capacity(new_parts.len());
                 for new_part in new_parts {
                     let id = next_part_id_tx(txn).await.map_err(map_db_err)?;
@@ -1298,11 +2064,7 @@ impl PersistenceEngine for SqliteEngine {
                              WHERE origin_session_id = ? AND run_id = ? AND part_id != ? \
                                AND state IN ('pending', 'in_progress') \
                              LIMIT 1",
-                            [
-                                session_id.into(),
-                                run_id.into(),
-                                run_id.into(),
-                            ],
+                            [session_id.into(), run_id.into(), run_id.into()],
                         ))
                         .await
                         .map_err(map_db_err)?

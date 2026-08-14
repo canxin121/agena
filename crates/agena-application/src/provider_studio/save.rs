@@ -16,11 +16,10 @@ use super::catalog::{
     apply_provider_auth_required_adapter_defaults_to_json_adapters,
     apply_provider_auth_required_adapter_defaults_to_json_value,
     build_provider_auth_patch_value_for_save, build_provider_patch_value_for_save,
-    ensure_provider_model_entry,
-    merge_provider_model_adapter_patch_for_save, optional_non_empty,
+    ensure_provider_model_entry, merge_provider_model_adapter_patch_for_save, optional_non_empty,
     preferred_catalog_model_for_provider_model, provider_adapter_settings_path,
-    provider_model_catalog_lookup_candidates,
-    provider_defaults_adapter, provider_defaults_point_to, provider_model_json_for_model_id,
+    provider_defaults_adapter, provider_defaults_point_to,
+    provider_model_catalog_lookup_candidates, provider_model_json_for_model_id,
     provider_model_overlay_to_json, provider_model_selection_contains,
     provider_model_settings_path, provider_settings_path, quoted_settings_segment,
     required_provider_save_field, required_trimmed, resolve_provider_defaults_from_value_for_save,
@@ -29,8 +28,8 @@ use super::draft_auth_data::{
     ProviderStudioSaveError, ProviderStudioSaveField, ProviderStudioSaveResult,
 };
 use super::draft_config::ProviderConfigDraft;
-use crate::provider_queries::provider_adapter_models_response;
 use crate::Application;
+use crate::provider_queries::provider_adapter_models_response;
 use agena_domain::ProviderId;
 
 pub(crate) fn parse_credential_issuer(
@@ -578,7 +577,12 @@ pub(crate) fn provider_model_draft_value(
     let catalog_entries = app.lookup_model_catalog_models(
         &[model_id.to_owned()]
             .into_iter()
-            .chain(provider_model.map(provider_model_catalog_lookup_candidates).into_iter().flatten())
+            .chain(
+                provider_model
+                    .map(provider_model_catalog_lookup_candidates)
+                    .into_iter()
+                    .flatten(),
+            )
             .collect::<Vec<_>>(),
     );
     Ok(provider_model_json_for_model_id(

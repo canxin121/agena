@@ -523,12 +523,11 @@ impl SessionManager {
     /// Drain every pending steer message (non-blocking) and append each as
     /// a run before the next model run. Ordinary inputs become a User run
     /// (marker + content parts). A background-operation notification steer is
-    /// a pure re-trigger: `settle_background_operation` already appended the
-    /// Assistant-role `system_notification` part onto the launching run, so
-    /// this only reloads the session (picking the appended part up into the
-    /// projection); the stable-run loop's notification detection then takes a
-    /// fresh model turn over it. A steer becomes the next input the model
-    /// sees.
+    /// a pure re-trigger: `record_background_event` already committed a
+    /// chronological Runtime ingress run, so this only reloads the session;
+    /// the stable-run loop's external-input handoff then closes the preceding
+    /// assistant run and takes a fresh model turn over the notification. A
+    /// steer becomes the next input the model sees.
     pub(in crate::session::manager) async fn drain_steer_input(
         &self,
         mut session: Session,
@@ -565,13 +564,10 @@ impl SessionManager {
                 .iter()
                 .any(|content| matches!(content, TypedContent::SystemNotification(_)))
             {
-                // The settle committed the notification (and terminalized the
-                // launching tool part + run marker) before this steer was
-                // sent. Reload so the appended Assistant-role
-                // `system_notification` part is in the projection; the loop's
-                // notification detection (`newest_notification_part_id`)
-                // re-triggers the next model turn over it. Nothing is
-                // committed here.
+                // The settle committed the Runtime ingress before this steer
+                // was sent. Reload so it is in the projection; the loop's
+                // input/notification cursors re-trigger the next model turn.
+                // Nothing is committed here.
                 session = self.store.load_session(session.id).await?;
             }
         }

@@ -185,15 +185,18 @@ impl App {
         &self,
         request_id: &str,
     ) -> Option<TranscriptNodeKey> {
-        agena_tui_transcript::parts_entries(&self.transcript.parts).iter().find_map(|entry| {
-            entry.parts.iter().find_map(|part| {
-                (agena_tui_transcript::interaction_request_id_for_part(part) == Some(request_id))
+        agena_tui_transcript::parts_entries(&self.transcript.parts)
+            .iter()
+            .find_map(|entry| {
+                entry.parts.iter().find_map(|part| {
+                    (agena_tui_transcript::interaction_request_id_for_part(part)
+                        == Some(request_id))
                     .then(|| TranscriptNodeKey::Activity {
                         entry_id: entry.id,
                         content_id: part.id,
                     })
+                })
             })
-        })
     }
 
     pub(crate) fn pending_user_input_overlay_target(&self) -> Option<(i64, UserInputRequest)> {
@@ -891,26 +894,27 @@ const fn permission_scope_from_wire(
 }
 use crate::{
     App, BTreeSet, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction,
-    ConfirmDialogState, ConfirmOverlay, Editor, LineInputOverlay, Overlay, Path,
-    PathBrowserMode, PathBrowserOverlay, PathBrowserTarget, PendingInteractiveKind,
-    PendingInteractiveOverlayTarget, PendingInteractiveRequest, PermissionOverlay,
-    PermissionPromptPresentation, PermissionRequest, PermissionScope, SearchPickerClearAction,
-    SearchPickerConfig, SearchPickerPreviewMode, SearchPickerSearchMode,
-    SelectionPickerOverlay, SelectionPickerQuery, SessionModelChooserOverlay,
-    SessionModelChooserPurpose, SessionNavigationOverlay, SessionNavigationQuery,
-    SessionSearchOverlay, TimelineOverlay, TimelinePresentation, TranscriptNodeKey,
-    UserInputOverlay, UserInputQuestion, UserInputRequest, choice_overlay_clear_detail,
-    execution_pending_flash_key, first_auto_open_pending_interactive_request,
-    first_pending_interactive_request_by_kind, path_browser_directory_input,
-    pending_interactive_kind_for_execution, permission_prompt_content, settings_clear_label,
-    ui_text,
+    ConfirmDialogState, ConfirmOverlay, Editor, LineInputOverlay, Overlay, Path, PathBrowserMode,
+    PathBrowserOverlay, PathBrowserTarget, PendingInteractiveKind, PendingInteractiveOverlayTarget,
+    PendingInteractiveRequest, PermissionOverlay, PermissionPromptPresentation, PermissionRequest,
+    PermissionScope, SearchPickerClearAction, SearchPickerConfig, SearchPickerPreviewMode,
+    SearchPickerSearchMode, SelectionPickerOverlay, SelectionPickerQuery,
+    SessionModelChooserOverlay, SessionModelChooserPurpose, SessionNavigationOverlay,
+    SessionNavigationQuery, SessionSearchOverlay, TimelineOverlay, TimelinePresentation,
+    TranscriptNodeKey, UserInputOverlay, UserInputQuestion, UserInputRequest,
+    choice_overlay_clear_detail, execution_pending_flash_key,
+    first_auto_open_pending_interactive_request, first_pending_interactive_request_by_kind,
+    path_browser_directory_input, pending_interactive_kind_for_execution,
+    permission_prompt_content, settings_clear_label, ui_text,
 };
 use agena_tui_session::{session_search::SessionSearchPresentation, session_view::SessionViewMode};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena_domain::{UserInputKind, UserInputOption as DomainOption, UserInputQuestion as DomainQuestion};
+    use agena_domain::{
+        UserInputKind, UserInputOption as DomainOption, UserInputQuestion as DomainQuestion,
+    };
 
     fn review_request(body: &str) -> UserInputRequest {
         agena_domain::UserInputRequest {

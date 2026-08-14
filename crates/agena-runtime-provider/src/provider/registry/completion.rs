@@ -1821,8 +1821,7 @@ mod tool_api_function_validation_tests {
 
     #[tokio::test]
     async fn disabled_mode_strips_tool_configuration_at_registry_boundary() {
-        let provider =
-            std::sync::Arc::new(ToolModeProbeProvider::new(AgenaToolMode::Disabled));
+        let provider = std::sync::Arc::new(ToolModeProbeProvider::new(AgenaToolMode::Disabled));
         let mut registry = crate::provider::ProviderRegistry::new();
         registry.register_arc(provider.clone());
 
@@ -1831,16 +1830,13 @@ mod tool_api_function_validation_tests {
         request.provider_native_tools.routes.web_search =
             Some(ProviderNativeToolRoute::ProviderHosted);
         request.previous_response_id = Some("provider-response".to_owned());
-        request
-            .request_override
-            .body_patch
-            .insert("tools".to_owned(), serde_json::json!([{"type": "function"}]));
+        request.request_override.body_patch.insert(
+            "tools".to_owned(),
+            serde_json::json!([{"type": "function"}]),
+        );
 
         registry
-            .complete(
-                &ModelRef::new("tool-mode-test", "test-model"),
-                request,
-            )
+            .complete(&ModelRef::new("tool-mode-test", "test-model"), request)
             .await
             .expect("disabled tool mode should still complete normally");
 
@@ -1875,10 +1871,7 @@ mod tool_api_function_validation_tests {
         );
 
         registry
-            .complete(
-                &ModelRef::new("tool-mode-test", "test-model"),
-                request,
-            )
+            .complete(&ModelRef::new("tool-mode-test", "test-model"), request)
             .await
             .expect("provider protocol should complete normally");
 
@@ -1890,7 +1883,12 @@ mod tool_api_function_validation_tests {
             .expect("provider should receive a request");
         assert_eq!(recorded.tool_api_functions.len(), 5);
         assert!(recorded.provider_native_tools.is_empty());
-        assert!(!recorded.request_override.body_patch.contains_key("functions"));
+        assert!(
+            !recorded
+                .request_override
+                .body_patch
+                .contains_key("functions")
+        );
         assert_eq!(
             recorded.previous_response_id.as_deref(),
             Some("provider-response")

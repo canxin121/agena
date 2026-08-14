@@ -32,8 +32,10 @@ use agena_plugin_sdk::attachment::{AttachmentPart, AttachmentSource};
 use agena_runtime_contracts::part_content;
 use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{
-    NewPart, Part, PartDelta, PartRole, PartState, PartVisibility, SessionMeta, SessionStore,
-    SessionView, StoreError, SubmitOutcome, UsageQuery,
+    BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationKind,
+    BackgroundOperationTransition, BackgroundSettleOutcome, NewBackgroundOperation, NewPart, Part,
+    PartDelta, PartRole, PartState, PartVisibility, SessionMeta, SessionStore, SessionView,
+    StoreError, SubmitOutcome, UsageQuery,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -75,6 +77,10 @@ impl StoreAdapter {
 
     pub(crate) fn now_ms(&self) -> i64 {
         (self.now_ms)()
+    }
+
+    pub(crate) fn background_owner_id(&self) -> &str {
+        &self.owner_id
     }
 
     /// Load a session's transcript and metadata and rebuild the in-memory
@@ -220,12 +226,115 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
-    /// Atomically settle a background operation against its launching run:
-    /// steal-safe lease refresh, tool-part terminalization, and appending the
-    /// result parts (`PartRole::Assistant`) onto the launching run — no new
-    /// run marker. The notification part's body is projected as a dedicated
-    /// system-message wire part (never assistant reply text), so riding the
-    /// assistant run is safe.
+    pub(crate) async fn create_background_operation(
+        &self,
+        operation: NewBackgroundOperation,
+    ) -> Result<BackgroundOperation, AppError> {
+        self.facade
+            .create_background_operation(operation)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn background_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Option<BackgroundOperation>, AppError> {
+        self.facade
+            .background_operation(operation_id)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn background_operation_by_external_id(
+        &self,
+        kind: BackgroundOperationKind,
+        external_id: &str,
+    ) -> Result<Option<BackgroundOperation>, AppError> {
+        self.facade
+            .background_operation_by_external_id(kind, external_id)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn active_background_operations(
+        &self,
+        kind: Option<BackgroundOperationKind>,
+        limit: usize,
+    ) -> Result<Vec<BackgroundOperation>, AppError> {
+        self.facade
+            .active_background_operations(kind, limit)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn transition_background_operation(
+        &self,
+        transition: BackgroundOperationTransition,
+    ) -> Result<BackgroundOperation, AppError> {
+        self.facade
+            .transition_background_operation(transition)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn record_background_event(
+        &self,
+        request: BackgroundEventRequest,
+    ) -> Result<BackgroundSettleOutcome, AppError> {
+        self.facade
+            .record_background_event(request)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn claim_background_delivery(
+        &self,
+        delivery_id: &str,
+        claim_until_ms: i64,
+    ) -> Result<Option<BackgroundDelivery>, AppError> {
+        self.facade
+            .claim_background_delivery(delivery_id, &self.owner_id, claim_until_ms)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn consume_background_delivery(
+        &self,
+        delivery_id: &str,
+    ) -> Result<BackgroundDelivery, AppError> {
+        self.facade
+            .consume_background_delivery(delivery_id, &self.owner_id)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn retry_background_delivery(
+        &self,
+        delivery_id: &str,
+        error: Value,
+    ) -> Result<BackgroundDelivery, AppError> {
+        self.facade
+            .retry_background_delivery(delivery_id, &self.owner_id, error)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn pending_background_deliveries(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<BackgroundDelivery>, AppError> {
+        self.facade
+            .pending_background_deliveries(limit)
+            .await
+            .map_err(store_error)
+    }
+
+    /// Atomically checkpoint or settle a background operation against its
+    /// launching run. Launch commits the InProgress tool part (including its
+    /// durable correlation marker) together with the invisible guard result;
+    /// settle terminalizes that part and appends notification parts. Both
+    /// phases use the same transaction so a crash cannot leave only one half.
     pub(crate) async fn settle_background_run(
         &self,
         session_id: i64,

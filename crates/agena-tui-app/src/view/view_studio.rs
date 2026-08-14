@@ -94,8 +94,7 @@ impl App {
                             sanitize_display_text(format!("{selected} {}", model.id)).into(),
                             Some(
                                 sanitize_display_text(provider_studio_model_list_detail(
-                                    &self.i18n,
-                                    model,
+                                    &self.i18n, model,
                                 ))
                                 .into(),
                             ),

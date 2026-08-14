@@ -34,9 +34,7 @@ use crate::{
 /// the part is not an interaction or has already been answered. Only pending
 /// parts are interactive in the transcript, so the key router and the inline
 /// renderer agree on this boundary.
-pub fn interaction_request_id_for_part<'a>(
-    part: &'a TranscriptEntryPart<'a>,
-) -> Option<&'a str> {
+pub fn interaction_request_id_for_part<'a>(part: &'a TranscriptEntryPart<'a>) -> Option<&'a str> {
     match &part.content {
         TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
             match request.as_ref() {
@@ -64,7 +62,9 @@ pub fn interaction_request_id_for_part<'a>(
 /// Whether a projected tool operation is currently awaiting a user-input
 /// reply. This is the canonical "pending interaction part" predicate for the
 /// single-activity shape (a tool_call activity IS the ask).
-pub fn operation_has_awaiting_user_input(operation: &agena_api::part::OperationPartResource) -> bool {
+pub fn operation_has_awaiting_user_input(
+    operation: &agena_api::part::OperationPartResource,
+) -> bool {
     operation.user_input.awaiting().next().is_some()
 }
 
@@ -200,18 +200,35 @@ pub struct InteractionQuestionLayout {
 pub enum InteractionLineKind {
     PlanBody,
     Separator,
-    ReviewOption { option_index: usize },
+    ReviewOption {
+        option_index: usize,
+    },
     ReviewCustomLabel,
     ReviewEditor,
     AskPlanBody,
     AskSeparator,
-    AskQuestionHeader { question_index: usize },
-    AskQuestionText { question_index: usize },
-    AskOption { question_index: usize, option_index: usize },
-    AskCustomRow { question_index: usize },
-    AskCustomEditor { question_index: usize },
-    AskCustomDetail { question_index: usize },
-    AskAnsweredPreview { question_index: usize },
+    AskQuestionHeader {
+        question_index: usize,
+    },
+    AskQuestionText {
+        question_index: usize,
+    },
+    AskOption {
+        question_index: usize,
+        option_index: usize,
+    },
+    AskCustomRow {
+        question_index: usize,
+    },
+    AskCustomEditor {
+        question_index: usize,
+    },
+    AskCustomDetail {
+        question_index: usize,
+    },
+    AskAnsweredPreview {
+        question_index: usize,
+    },
     AskFooter,
 }
 
@@ -292,20 +309,18 @@ pub fn interaction_question_layouts<R: InteractionRequestFacts>(
 /// this budget and the reconciliation test asserts it, so the layout contract
 /// can never drift.
 pub fn ask_user_question_block_rows(layout: &InteractionQuestionLayout) -> usize {
-    2 + layout.options_len
-        + usize::from(layout.allow_custom) * 2
-        + usize::from(layout.answered)
+    2 + layout.options_len + usize::from(layout.allow_custom) * 2 + usize::from(layout.answered)
 }
 
 /// Total body rows of the continuous ask-user body: plan body + separator +
 /// every question block + the footer key-hint row.
-pub fn ask_user_body_rows(
-    plan_body_lines: usize,
-    layouts: &[InteractionQuestionLayout],
-) -> usize {
+pub fn ask_user_body_rows(plan_body_lines: usize, layouts: &[InteractionQuestionLayout]) -> usize {
     plan_body_lines
         + 1
-        + layouts.iter().map(ask_user_question_block_rows).sum::<usize>()
+        + layouts
+            .iter()
+            .map(ask_user_question_block_rows)
+            .sum::<usize>()
         + 1
 }
 
@@ -318,7 +333,10 @@ pub fn ask_user_question_body_start(
 ) -> usize {
     plan_body_lines
         + 1
-        + layouts[..index].iter().map(ask_user_question_block_rows).sum::<usize>()
+        + layouts[..index]
+            .iter()
+            .map(ask_user_question_block_rows)
+            .sum::<usize>()
 }
 
 /// Body offset to land the cursor on for a question: its first option row, or
@@ -356,7 +374,9 @@ pub fn classify_interaction_line(
     if body_offset == plan_body_lines {
         return InteractionLineKind::Separator;
     }
-    let decision_offset = body_offset.saturating_sub(plan_body_lines).saturating_sub(1);
+    let decision_offset = body_offset
+        .saturating_sub(plan_body_lines)
+        .saturating_sub(1);
     // Review renders ONE row per option (marker + label) plus the custom
     // label row; the trailing footer-hint row and anything beyond classify as
     // PlanBody so Enter there never submits.
@@ -392,7 +412,9 @@ pub fn classify_ask_user_line(
     if body_offset == plan_body_lines {
         return InteractionLineKind::AskSeparator;
     }
-    let mut remaining = body_offset.saturating_sub(plan_body_lines).saturating_sub(1);
+    let mut remaining = body_offset
+        .saturating_sub(plan_body_lines)
+        .saturating_sub(1);
     for (q, layout) in questions.iter().enumerate() {
         let block_rows = ask_user_question_block_rows(layout);
         if remaining >= block_rows {
@@ -402,9 +424,7 @@ pub fn classify_ask_user_line(
         // Within a question block: header, text, options, custom label+detail,
         // answered preview.
         if remaining == 0 {
-            return InteractionLineKind::AskQuestionHeader {
-                question_index: q,
-            };
+            return InteractionLineKind::AskQuestionHeader { question_index: q };
         }
         remaining -= 1;
         if remaining == 0 {
@@ -457,13 +477,18 @@ impl InteractionLineKind {
 mod tests {
     use super::{
         InteractionLineKind, InteractionQuestionLayout, ask_user_body_rows,
-        ask_user_question_block_rows, ask_user_question_landing_offset,
-        classify_ask_user_line, classify_interaction_line, interaction_plan_body_lines,
-        review_decision_region_start, review_decision_rows_count, review_offset_is_custom_label,
+        ask_user_question_block_rows, ask_user_question_landing_offset, classify_ask_user_line,
+        classify_interaction_line, interaction_plan_body_lines, review_decision_region_start,
+        review_decision_rows_count, review_offset_is_custom_label,
         review_selected_option_for_offset,
     };
 
-    fn question(options_len: usize, allow_custom: bool, multiple: bool, answered: bool) -> InteractionQuestionLayout {
+    fn question(
+        options_len: usize,
+        allow_custom: bool,
+        multiple: bool,
+        answered: bool,
+    ) -> InteractionQuestionLayout {
         InteractionQuestionLayout {
             options_len,
             allow_custom,
@@ -542,11 +567,23 @@ mod tests {
     fn ask_user_block_rows_covers_the_full_block_budget() {
         // One question: header + text + options (ONE row per option) + 2 per
         // custom slot + answered preview.
-        assert_eq!(ask_user_question_block_rows(&question(0, false, false, false)), 2);
-        assert_eq!(ask_user_question_block_rows(&question(2, true, false, false)), 2 + 2 + 2);
-        assert_eq!(ask_user_question_block_rows(&question(2, true, false, true)), 2 + 2 + 2 + 1);
+        assert_eq!(
+            ask_user_question_block_rows(&question(0, false, false, false)),
+            2
+        );
+        assert_eq!(
+            ask_user_question_block_rows(&question(2, true, false, false)),
+            2 + 2 + 2
+        );
+        assert_eq!(
+            ask_user_question_block_rows(&question(2, true, false, true)),
+            2 + 2 + 2 + 1
+        );
         // Unanswered with no custom slot: 2 + options.
-        assert_eq!(ask_user_question_block_rows(&question(3, false, true, false)), 2 + 3);
+        assert_eq!(
+            ask_user_question_block_rows(&question(3, false, true, false)),
+            2 + 3
+        );
     }
 
     #[test]
@@ -554,7 +591,10 @@ mod tests {
         // Two questions: block(q0) = 2+2+2 = 6 (2 opts + custom, unanswered),
         // block(q1) = 2+2 = 4 (2 opts, no custom). Total = plan + separator +
         // blocks + footer.
-        let layouts = [question(2, true, false, false), question(2, false, true, false)];
+        let layouts = [
+            question(2, true, false, false),
+            question(2, false, true, false),
+        ];
         let plan = 3;
         let total = ask_user_body_rows(plan, &layouts);
         assert_eq!(total, 3 + 1 + 6 + 4 + 1);
@@ -581,11 +621,17 @@ mod tests {
         );
         assert_eq!(
             classify_ask_user_line(&layouts, plan, q0 + 2, false),
-            InteractionLineKind::AskOption { question_index: 0, option_index: 0 }
+            InteractionLineKind::AskOption {
+                question_index: 0,
+                option_index: 0
+            }
         );
         assert_eq!(
             classify_ask_user_line(&layouts, plan, q0 + 3, false),
-            InteractionLineKind::AskOption { question_index: 0, option_index: 1 }
+            InteractionLineKind::AskOption {
+                question_index: 0,
+                option_index: 1
+            }
         );
         assert_eq!(
             classify_ask_user_line(&layouts, plan, q0 + 4, false),
@@ -607,7 +653,10 @@ mod tests {
         );
         assert_eq!(
             classify_ask_user_line(&layouts, plan, q1 + 3, false),
-            InteractionLineKind::AskOption { question_index: 1, option_index: 1 }
+            InteractionLineKind::AskOption {
+                question_index: 1,
+                option_index: 1
+            }
         );
         // The landing offset is the first option row (start + 2).
         assert_eq!(ask_user_question_landing_offset(plan, &layouts, 0), q0 + 2);
@@ -621,11 +670,17 @@ mod tests {
 
     #[test]
     fn ask_user_landing_offset_falls_back_to_the_header_without_options() {
-        let layouts = [question(0, false, false, false), question(2, false, false, false)];
+        let layouts = [
+            question(0, false, false, false),
+            question(2, false, false, false),
+        ];
         let plan = 0;
         // Question with no options: the landing row is its header.
         assert_eq!(ask_user_question_landing_offset(plan, &layouts, 0), 1);
-        assert_eq!(ask_user_question_landing_offset(plan, &layouts, 1), 1 + 2 + 2);
+        assert_eq!(
+            ask_user_question_landing_offset(plan, &layouts, 1),
+            1 + 2 + 2
+        );
     }
 
     #[test]
@@ -633,7 +688,13 @@ mod tests {
         assert!(InteractionLineKind::ReviewOption { option_index: 0 }.is_submit_eligible());
         assert!(InteractionLineKind::ReviewCustomLabel.is_submit_eligible());
         assert!(InteractionLineKind::ReviewEditor.is_submit_eligible());
-        assert!(InteractionLineKind::AskOption { question_index: 0, option_index: 0 }.is_submit_eligible());
+        assert!(
+            InteractionLineKind::AskOption {
+                question_index: 0,
+                option_index: 0
+            }
+            .is_submit_eligible()
+        );
         assert!(InteractionLineKind::AskCustomRow { question_index: 0 }.is_submit_eligible());
         assert!(!InteractionLineKind::PlanBody.is_submit_eligible());
         assert!(!InteractionLineKind::Separator.is_submit_eligible());

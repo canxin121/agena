@@ -247,7 +247,9 @@ impl SessionManager {
                         }
                     }
                     if !replaced {
-                        request.parts.push(TypedContent::Text(text_content(updated.prompt)));
+                        request
+                            .parts
+                            .push(TypedContent::Text(text_content(updated.prompt)));
                     }
                 }
                 Err(err) => {
@@ -280,9 +282,7 @@ impl SessionManager {
         // identity, so the v1 `bind_activity` step is dropped here.
         let user_parts = input_parts
             .iter()
-            .map(|part| {
-                new_part_from_content("text", PartRole::User, part, PartState::Completed)
-            })
+            .map(|part| new_part_from_content("text", PartRole::User, part, PartState::Completed))
             .collect::<Result<Vec<_>, _>>()?;
         let outcome = self
             .store
@@ -470,10 +470,10 @@ impl SessionManager {
     }
 
     /// The wake execution driven by `settle_background_operation` when the
-    /// session is idle: the settle already appended the Assistant-role
-    /// `system_notification` part onto the launching run, so this only
-    /// refreshes the session and takes a fresh model turn over the appended
-    /// parts. Modeled on `continue_session_inner` minus the Continue identity.
+    /// session is idle: the settle already committed a chronological Runtime
+    /// ingress run, so this refreshes the session and takes a fresh model turn
+    /// over that input. Modeled on `continue_session_inner` minus the Continue
+    /// identity.
     pub(in crate::session::manager) async fn notification_run_inner(
         &self,
         session_id: i64,
@@ -483,7 +483,9 @@ impl SessionManager {
         let state = self.execution_state();
         let mut session = self.store.load_session(session_id).await?;
         self.refresh_execution_policy(&mut session, &state);
-        let options = self.run_options_from_session_async(&session, state.clone()).await?;
+        let options = self
+            .run_options_from_session_async(&session, state.clone())
+            .await?;
         if self.apply_run_selection_to_session(&mut session, &options) {
             session = self.store.persist_execution_config(session).await?;
         }
@@ -639,6 +641,16 @@ impl SessionManager {
                     request.max_tokens,
                     request.max_cost_microusd,
                 );
+                // This live runtime owns the launch. Mark the child reconciled
+                // while it is still in Created state, before publishing
+                // Running. Otherwise a session-tree/TUI read can land in the
+                // few milliseconds before execute_registered installs the
+                // child registry entry and misclassify the brand-new task as
+                // restart-orphaned, writing Interrupted and notifying the
+                // parent even though execution is about to begin. A real
+                // process restart constructs a fresh manager with an empty
+                // reconciled set, so crash recovery remains intact.
+                self.reconciled_sessions.lock().await.insert(child.id);
                 child.runtime.subtask.status = agena_domain::SubtaskStatus::Running;
                 child.runtime.subtask.started_at_ms = Some(started_at_ms);
                 child.runtime.subtask.finished_at_ms = None;

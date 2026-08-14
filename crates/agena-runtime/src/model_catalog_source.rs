@@ -182,7 +182,11 @@ fn source_priority_for_definition(
     grade: &CatalogDefinitionSourcePriority,
 ) -> CatalogDefinitionSourcePriority {
     CatalogDefinitionSourcePriority {
-        sort_priority: if definition.is_empty() { 0 } else { grade.sort_priority },
+        sort_priority: if definition.is_empty() {
+            0
+        } else {
+            grade.sort_priority
+        },
         descriptive_priority: if definition_has_descriptive_fields(definition) {
             grade.descriptive_priority
         } else {
@@ -408,7 +412,9 @@ mod tests {
         assert_eq!(documents.len(), 1);
         assert_eq!(warnings, ["unavailable: offline"]);
         assert_eq!(
-            documents[0].document.models["model"].source_priority.sort_priority,
+            documents[0].document.models["model"]
+                .source_priority
+                .sort_priority,
             sources[0].grade.sort_priority
         );
     }

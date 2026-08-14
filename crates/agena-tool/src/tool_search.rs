@@ -227,8 +227,16 @@ mod tests {
                 &["monitor"],
             ));
         }
-        docs.push(doc("monitor.start", "Start a continuous background monitor", &["monitor"]));
-        docs.push(doc("monitor.stop", "Stop one background monitor", &["monitor"]));
+        docs.push(doc(
+            "monitor.start",
+            "Start a continuous background monitor",
+            &["monitor"],
+        ));
+        docs.push(doc(
+            "monitor.stop",
+            "Stop one background monitor",
+            &["monitor"],
+        ));
         docs.push(doc(
             "session.rename",
             "Rename the current session",
@@ -241,17 +249,23 @@ mod tests {
             Some("monitor.start"),
             "the exact tool name must land on the first page"
         );
-        assert!(results.contains(&doc("monitor.stop", "Stop one background monitor", &["monitor"])));
+        assert!(results.contains(&doc(
+            "monitor.stop",
+            "Stop one background monitor",
+            &["monitor"]
+        )));
         // Non-matching tools never appear, exact hoist or not.
-        assert!(!results
-            .iter()
-            .any(|doc| doc.name == "session.rename"));
+        assert!(!results.iter().any(|doc| doc.name == "session.rename"));
     }
 
     #[test]
     fn exact_name_match_is_case_and_punctuation_insensitive() {
         let docs = vec![
-            doc("monitor.start", "Start a continuous background monitor", &[]),
+            doc(
+                "monitor.start",
+                "Start a continuous background monitor",
+                &[],
+            ),
             doc("monitor.state", "Report monitor state", &[]),
         ];
 
@@ -268,7 +282,11 @@ mod tests {
     #[test]
     fn exact_hoist_only_promotes_a_tool_with_the_query_as_its_full_name() {
         let docs = vec![
-            doc("monitor.start", "Start a continuous background monitor", &[]),
+            doc(
+                "monitor.start",
+                "Start a continuous background monitor",
+                &[],
+            ),
             doc("monitor.startup", "Inspect process startup", &[]),
             doc("shell.run", "Run a shell command", &[]),
         ];
@@ -283,8 +301,6 @@ mod tests {
         );
         // The hoist only reorders; it never invents a result that does not
         // match at all.
-        assert!(!results
-            .iter()
-            .any(|doc| doc.name == "shell.run"));
+        assert!(!results.iter().any(|doc| doc.name == "shell.run"));
     }
 }

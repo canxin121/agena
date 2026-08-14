@@ -201,9 +201,9 @@ use super::{
     ActivityLogsParams, Application, ApplicationError, CursorPaginationQuery, GetActivityParams,
     GetOperationDetailParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
     ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
-    ListSavedProviderAdapterModelsParams, ListSessionsParams,
-    ListWorkspacesParams, OperationDetailResource, Query, QueryResult, SearchPaginationQuery,
-    SessionListQuery, WorkspaceListQuery, http_optional_result, http_page_result,
+    ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
+    OperationDetailResource, Query, QueryResult, SearchPaginationQuery, SessionListQuery,
+    WorkspaceListQuery, http_optional_result, http_page_result,
 };
 
 fn activity_control_error(error: agena_runtime::ActivityControlError) -> ApplicationError {

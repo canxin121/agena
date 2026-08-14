@@ -22,7 +22,10 @@ impl SessionManager {
     /// state without scanning unrelated sessions. Skips sessions with a live
     /// execution lease: another process is actively running them, so their
     /// RunStarted entries are not interrupted and must not be aborted.
-    async fn reconcile_interrupted_session(&self, session_id: i64) -> Result<(), AppError> {
+    pub(super) async fn reconcile_interrupted_session(
+        &self,
+        session_id: i64,
+    ) -> Result<(), AppError> {
         // A live cross-process run means another process is actively running
         // this session; its interrupted work is not ours to abort (17.4 2b).
         let presentation = self.store.session_state(session_id).await?;
@@ -204,14 +207,13 @@ impl SessionManager {
             .tool_executor
             .plugin_manager()
             .drain_hook_runs(session.id);
-        // The `user_send` run must exist before hook parts can ride it:
-        // session.start records land here when no assistant run exists yet, so
-        // `record_hook_runs` needs the always-in-flight `user_send` marker as
-        // its launching run. Create it up front — empty when only hooks need a
-        // home. Persist the injected context/user parts as one `user_send` run
-        // (the same write path `drain_steer_input` uses); the parts carry
-        // their own role so the reloaded projection preserves the
-        // System/User distinction.
+        // The `user_send` receipt must exist before session.start hook parts can
+        // be grouped beneath it when no assistant run exists yet. Create it up
+        // front — empty when only hooks need a home. An all-terminal input batch
+        // creates a terminal receipt; `record_hook_runs` appends through the
+        // terminal-safe settle path without reopening it. The parts carry their
+        // own role so the reloaded projection preserves the System/User
+        // distinction.
         if !injected_new_parts.is_empty() || !hook_runs.is_empty() {
             let outcome = self
                 .store
@@ -330,12 +332,7 @@ impl SessionManager {
             .unwrap_or(false);
         let agena_tool_mode = options
             .as_ref()
-            .and_then(|options| {
-                state
-                    .provider_registry
-                    .agena_tool_mode(&options.model)
-                    .ok()
-            })
+            .and_then(|options| state.provider_registry.agena_tool_mode(&options.model).ok())
             .unwrap_or_default();
         let tool_api_functions = if agena_tool_mode.is_disabled() {
             Vec::new()

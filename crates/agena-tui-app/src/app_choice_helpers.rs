@@ -589,10 +589,10 @@ pub(crate) fn session_model_matches_current(
 use crate::{
     BTreeSet, ChoiceItem, ChoiceOverlayAction, ConfigJsonSources, I18n, InspectorRow, JsonValue,
     ModelCatalogListResponse, ModelRef, PermissionMode, PermissionRuleStudioChoiceField,
-    ProviderModel, ProviderStudioField, ProviderStudioProviderRow,
-    ProviderSummaryResource, SelectionPickerCommand, SessionModelChoiceItem, SessionModelIdentity,
-    SettingsFieldKind, SettingsFieldSpec, SettingsPickerAction, SettingsStudioItem,
-    join_inline_segments, provider_model_config_field_label, provider_studio_field_label, ui_text,
+    ProviderModel, ProviderStudioField, ProviderStudioProviderRow, ProviderSummaryResource,
+    SelectionPickerCommand, SessionModelChoiceItem, SessionModelIdentity, SettingsFieldKind,
+    SettingsFieldSpec, SettingsPickerAction, SettingsStudioItem, join_inline_segments,
+    provider_model_config_field_label, provider_studio_field_label, ui_text,
 };
 
 #[cfg(test)]

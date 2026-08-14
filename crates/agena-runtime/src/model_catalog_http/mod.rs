@@ -131,11 +131,9 @@ mod tests {
 
     use crate::{
         ModelCatalogConfiguredPublicSource, ModelCatalogPublicSource,
-        ModelCatalogRemoteDocumentFetcher, ModelCatalogRemoteSource,
-        ModelCatalogRemoteSourceKind, default_public_model_catalog_sources,
-        public_model_catalog_sources_enabled,
+        ModelCatalogRemoteDocumentFetcher, ModelCatalogRemoteSource, ModelCatalogRemoteSourceKind,
+        default_public_model_catalog_sources, public_model_catalog_sources_enabled,
     };
-
 
     #[test]
     fn default_sources_point_at_the_github_catalog() {
@@ -168,10 +166,9 @@ mod tests {
             if source.name == "unavailable" {
                 return Err("offline".to_owned());
             }
-            let document: ModelCatalogDocument = serde_json::from_str(
-                r#"{"models":{"gpt-4o":{"origin":"OpenAI"}}}"#,
-            )
-            .expect("fixture catalog");
+            let document: ModelCatalogDocument =
+                serde_json::from_str(r#"{"models":{"gpt-4o":{"origin":"OpenAI"}}}"#)
+                    .expect("fixture catalog");
             Ok(document)
         }
     }

@@ -408,9 +408,7 @@ pub(super) fn build_scheduler(
                             }
                             Ok(false) => agena_scheduler::JobDeliveryResult::skipped(
                                 Some(session_id),
-                                scheduler_skip(
-                                    "This scheduled delivery was already delivered.",
-                                ),
+                                scheduler_skip("This scheduled delivery was already delivered."),
                             ),
                             Err(err) => agena_scheduler::JobDeliveryResult::failed(
                                 Some(session_id),

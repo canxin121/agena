@@ -15,9 +15,7 @@ use agena_provider::CompletionFinishReason;
 use agena_provider::CompletionRequest;
 use agena_provider::CompletionStreamEvent;
 
-use super::{
-    store::{ProcessorPartIdAllocator, StoreAdapter},
-};
+use super::store::{ProcessorPartIdAllocator, StoreAdapter};
 use agena_storage::store::Part;
 
 const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";

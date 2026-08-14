@@ -357,9 +357,7 @@ impl SessionManager {
                 };
                 match tokio::time::timeout(
                     agena_permission::AUTO_APPROVAL_CLASSIFY_TIMEOUT,
-                    state
-                        .provider_registry
-                        .complete(&model_ref, request),
+                    state.provider_registry.complete(&model_ref, request),
                 )
                 .await
                 {

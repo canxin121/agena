@@ -1,4 +1,10 @@
-# agena × Claude Code 异步融合设计:通知即 part,part 即通知
+# agena × Claude Code 异步融合设计（历史文档，已废弃）
+
+> **2026-08-14 架构决策：**本文关于“tool part 长期 InProgress、空
+> tool_result guard、Assistant 通知追加回启动 run、observer 内存索引负责
+> completion”的方案已经被 schema v9 的持久统一状态机取代。当前权威设计见
+> [`docs/background-operation-state-machine.md`](docs/background-operation-state-machine.md)。
+> 本文仅保留为问题演进记录，不得再作为实现依据。
 
 > 目标:让 agena 采纳 Claude Code 的异步任务机制 —— AI 调用后台工具后继续工作,工具结束后 AI 能**自己知道并处理结果**,而不是去轮询。同时严格守住 agena 的 **everything-is-a-part** 理念:新机制的全部状态、全部可观测物、全部模型可见内容,都落在 `parts` 表里。
 >

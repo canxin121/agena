@@ -329,7 +329,9 @@ impl SessionManager {
             None,
         )
         .unwrap_or_else(|| {
-            agena_runtime::estimate_prompt_tokens_from_chars(state.context_governor.max_prompt_chars())
+            agena_runtime::estimate_prompt_tokens_from_chars(
+                state.context_governor.max_prompt_chars(),
+            )
         });
         Ok(PromptInputs {
             turns,

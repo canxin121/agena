@@ -573,19 +573,7 @@ mod tests {
             listing_model("gpt-5"),
         ];
         sort_models_alphabetically(&mut models);
-        let ids = models
-            .into_iter()
-            .map(|model| model.id)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            ids,
-            [
-                "gpt-4o-mini",
-                "gpt-5",
-                "GPT-5.1",
-                "O1",
-                "o3-mini",
-            ]
-        );
+        let ids = models.into_iter().map(|model| model.id).collect::<Vec<_>>();
+        assert_eq!(ids, ["gpt-4o-mini", "gpt-5", "GPT-5.1", "O1", "o3-mini",]);
     }
 }

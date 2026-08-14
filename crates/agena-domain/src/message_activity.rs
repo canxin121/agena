@@ -201,9 +201,7 @@ impl OperationUserInput {
     }
 
     pub fn awaiting(&self) -> impl Iterator<Item = &OperationUserInputRecord> {
-        self.requests
-            .iter()
-            .filter(|record| record.reply.is_none())
+        self.requests.iter().filter(|record| record.reply.is_none())
     }
 
     pub fn find(&self, request_id: &str) -> Option<&OperationUserInputRecord> {

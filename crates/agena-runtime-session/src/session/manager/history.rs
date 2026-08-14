@@ -786,20 +786,21 @@ fn activity_payload_from_part(
         })),
         // A background-operation notification surfaces in the activities
         // panel as a notice, exactly like a hook/notice row.
-        Some(TypedContent::SystemNotification(notification)) => Some(ActivityPayload::Notice(
-            NoticeActivity {
+        Some(TypedContent::SystemNotification(notification)) => {
+            Some(ActivityPayload::Notice(NoticeActivity {
                 kind: "system_notification".to_owned(),
                 summary: notification.summary.clone(),
-                detail: notification.detail.clone().or_else(|| {
-                    (!notification.body.is_empty()).then(|| notification.body.clone())
-                }),
+                detail: notification
+                    .detail
+                    .clone()
+                    .or_else(|| (!notification.body.is_empty()).then(|| notification.body.clone())),
                 occurred_at_ms: None,
                 title: Some(format!(
                     "{} {}",
                     notification.operation_kind, notification.operation_id
                 )),
-            },
-        )),
+            }))
+        }
         Some(
             TypedContent::Run(_)
             | TypedContent::ToolResult(_)
@@ -848,19 +849,17 @@ fn pending_interactive_requests_from_session(
                 continue;
             };
             for record in operation.user_input.awaiting() {
-                let request =
-                    agena_domain::PendingInteractiveRequest::from(record.request.clone());
+                let request = agena_domain::PendingInteractiveRequest::from(record.request.clone());
                 if seen.insert(format!("{:?}:{}", request.kind(), request.request_id())) {
                     requests.push(request);
                 }
             }
             continue;
         }
-        let Some(request) = agena_runtime_contracts::part_content::InteractionContent::try_from(
-            &part.content,
-        )
-        .ok()
-        .and_then(|interaction| interaction.request())
+        let Some(request) =
+            agena_runtime_contracts::part_content::InteractionContent::try_from(&part.content)
+                .ok()
+                .and_then(|interaction| interaction.request())
         else {
             continue;
         };

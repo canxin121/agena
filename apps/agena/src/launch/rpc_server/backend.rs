@@ -14,9 +14,7 @@ use agena_cli::{AgenaCli, RpcServerRequest, RpcServerTransport};
 use agena_domain::{PermissionReplyKind, PermissionScope};
 use agena_provider::ProviderCatalog;
 use agena_runtime::bootstrap_application_services;
-use agena_runtime::{
-    SessionPermissionReplyRequest, SessionRunOptions, SessionUserRunRequest,
-};
+use agena_runtime::{SessionPermissionReplyRequest, SessionRunOptions, SessionUserRunRequest};
 use async_trait::async_trait;
 use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

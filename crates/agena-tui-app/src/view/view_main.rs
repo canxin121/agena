@@ -278,8 +278,7 @@ impl App {
                     }
                     if ask_cursor_line == Some(idx) {
                         // Whole-line cursor inside the pending ask body.
-                        rendered_line =
-                            apply_block_highlight(rendered_line, layout.body.width);
+                        rendered_line = apply_block_highlight(rendered_line, layout.body.width);
                     } else if let Some((cursor_line, range)) = cursor_cell.as_ref()
                         && *cursor_line == idx
                     {

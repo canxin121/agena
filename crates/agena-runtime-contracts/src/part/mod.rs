@@ -14,14 +14,12 @@ pub use notice::NoticePart;
 pub use skill_reference::{SkillReference, SkillReferencePart};
 pub use tool::tool_output_content_blocks;
 pub use tool::{
-    ApplyPatchToolInput, AskUserToolInput, CronCreateToolInput, CronDeleteToolInput,
-    CronHistoryToolInput, CronJobControlToolInput, CronListToolInput, CronMisfirePolicyInput,
-    CronRetryPolicyInput, CronUpdateToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput,
-    GlobToolInput, GrepToolInput, InteractionNotifyToolInput, LspDefinitionToolInput,
-    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, ModelVisibleOutput,
-    MonitorToolInput, MonitorWsInput,
-    OperationCompletion, OperationPart, BackgroundOperation, ReadToolInput,
-    ShellCommandInput,
-    ShellMonitorInput, ShellMonitorPatternKind, ShellToolInput, TaskAccess, TaskToolInput,
-    ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
+    ApplyPatchToolInput, AskUserToolInput, BackgroundOperation, CronCreateToolInput,
+    CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput, CronListToolInput,
+    CronMisfirePolicyInput, CronRetryPolicyInput, CronUpdateToolInput, EnterSnapshotToolInput,
+    ExitSnapshotToolInput, GlobToolInput, GrepToolInput, InteractionNotifyToolInput,
+    LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
+    ModelVisibleOutput, MonitorToolInput, MonitorWsInput, OperationCompletion, OperationPart,
+    ReadToolInput, ShellCommandInput, ShellMonitorInput, ShellMonitorPatternKind, ShellToolInput,
+    TaskAccess, TaskToolInput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
 };

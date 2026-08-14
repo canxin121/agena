@@ -11,9 +11,7 @@ use agena_api::resource::{
     PermissionReply, RunOptions, SessionExecutionResource, SessionResource, UserInputReply,
     WorkspaceResource,
 };
-use agena_domain::{
-    CancellationResult, ComposerDocument, ExecutionId, PermissionConfig, TurnId,
-};
+use agena_domain::{CancellationResult, ComposerDocument, ExecutionId, PermissionConfig, TurnId};
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
 use agena_storage::store::SessionPartView;
 
@@ -279,10 +277,9 @@ impl Application {
         options: RunOptions,
         reply: UserInputReply,
     ) -> Result<SessionExecutionResource, ApplicationError> {
-        let request = crate::session::session_user_input_reply_request(
-            self, session_id, options, reply,
-        )
-        .await?;
+        let request =
+            crate::session::session_user_input_reply_request(self, session_id, options, reply)
+                .await?;
         let outcome = self
             .session_execution_services()?
             .commands
@@ -349,8 +346,8 @@ impl Application {
         session_id: i64,
         options: RunOptions,
     ) -> Result<SessionExecutionResource, ApplicationError> {
-        let options = crate::session::resolve_session_run_options(self, session_id, options)
-            .await?;
+        let options =
+            crate::session::resolve_session_run_options(self, session_id, options).await?;
         let outcome = self
             .session_execution_services()?
             .commands

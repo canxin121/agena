@@ -5,7 +5,6 @@
 //! unified registry; the application-facing [`RuntimeActivityService`]
 //! implementation reads the same state.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use agena_domain::{
@@ -14,11 +13,11 @@ use agena_domain::{
     ProcessStream, ProcessSummary, SubtaskStatus,
 };
 use agena_failure::{
-    Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
-    RecoveryDirective, RetryDirective, UserPresentation, UserProblem,
+    Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
+    RetryDirective, UserPresentation, UserProblem,
 };
 use agena_plugin_sdk::activity::ActivitySourceAdapter;
-use agena_runtime_contracts::part_content::{self, SystemNotificationContent};
+use agena_runtime_contracts::part_content::SystemNotificationContent;
 use agena_runtime_session::SessionManager;
 use agena_storage::store::{Part, PartState, SessionMeta};
 
@@ -90,8 +89,11 @@ pub(crate) struct MonitorActivityBridge {
     /// Projected per-event (everything-is-a-part Monitor: every event is a
     /// `system_notification` part). Populated after the runtime is assembled,
     /// like `on_finished`.
-    pub(crate) on_event:
-        Arc<std::sync::Mutex<Option<Arc<dyn Fn(&ProcessEvent, &ProcessSummary) + Send + Sync + 'static>>>>,
+    pub(crate) on_event: Arc<
+        std::sync::Mutex<
+            Option<Arc<dyn Fn(&ProcessEvent, &ProcessSummary) + Send + Sync + 'static>>,
+        >,
+    >,
 }
 
 impl std::fmt::Debug for MonitorActivityBridge {
@@ -297,35 +299,25 @@ pub(crate) fn upsert_task_activity_from_meta(registry: &ActivityRegistry, meta: 
 
 /// Correlates launched-in-background operations (a monitored shell process or
 /// a delegated task) with their owning session so the session layer can
-/// terminalize the transcript part when the work actually settles.
+/// route completion into the durable operation coordinator.
 ///
 /// Two completion signals arrive here:
 /// - the facade's `SessionMetaUpdated` carries the child session id and its
 ///   terminal subtask status → terminalize the parent's `task` part;
-/// - [`crate::MonitorListener::on_finished`] carries a `ProcessSummary` whose
-///   id was stamped on the parent's `shell` part at launch; the bridge's
-///   in-memory `(kind, id) → session_id` index (built from `PartAdded` /
-///   `PartUpdated` events carrying the `agena.background` marker) maps it back
-///   to the session.
+/// - [`crate::MonitorListener::on_finished`] carries a `ProcessSummary`; its
+///   stable id resolves through the database's unique `(kind, external_id)`
+///   index. No observer event or process-local correlation map is required.
 #[derive(Clone)]
 pub(crate) struct BackgroundCompletionBridge {
     /// Late-bound: the session manager is assembled after the initial
     /// snapshot, so the slot starts empty and is set once the runtime exists.
     manager: Arc<Mutex<Option<Arc<SessionManager>>>>,
-    /// `(kind, id) → session_id` for launched-but-unfinished background ops.
-    index: Arc<Mutex<HashMap<(String, String), i64>>>,
-    /// Unified activity registry; part-backed operations are hidden from its
-    /// panel because they are already visible on their transcript part
-    /// ("everything is a part").
-    registry: ActivityRegistry,
 }
 
 impl BackgroundCompletionBridge {
-    pub(crate) fn new(manager: Option<Arc<SessionManager>>, registry: ActivityRegistry) -> Self {
+    pub(crate) fn new(manager: Option<Arc<SessionManager>>) -> Self {
         Self {
             manager: Arc::new(Mutex::new(manager)),
-            index: Arc::new(Mutex::new(HashMap::new())),
-            registry,
         }
     }
 
@@ -334,36 +326,23 @@ impl BackgroundCompletionBridge {
         *self.manager.lock().expect("background manager lock") = manager;
     }
 
-    /// Facade observer subscription for this bridge: `PartAdded`/`PartUpdated`
-    /// events build the `(kind, id) → session_id` index (and prune it when a
-    /// part terminalizes), `SessionMetaUpdated` events terminalize task parts.
+    /// Facade observer subscription for low-latency task completion. Durable
+    /// maintenance reconciliation remains authoritative when this event is
+    /// dropped; part events carry no operational control state.
     pub(crate) fn observer(&self) -> agena_storage::store::SessionObserver {
         let bridge = self.clone();
         Arc::new(move |change| match change {
-            agena_storage::store::SessionChange::PartAdded { session_id, part }
-            | agena_storage::store::SessionChange::PartUpdated { session_id, part } => {
-                if let Some(marker) = background_marker_from_part(&part) {
-                    let mut index = bridge.index.lock().expect("background index lock");
-                    if part.state == PartState::InProgress {
-                        index.insert(marker.clone(), session_id);
-                        // The operation is now a transcript part; stop showing
-                        // it in the background-activity panel.
-                        bridge.registry.hide(&activity_id_for_marker(&marker));
-                    } else {
-                        index.remove(&marker);
-                    }
-                }
-            }
             agena_storage::store::SessionChange::SessionMetaUpdated { meta, .. } => {
                 terminalize_task_part(&bridge, meta);
             }
-            agena_storage::store::SessionChange::PartRemoved { .. } => {}
+            agena_storage::store::SessionChange::PartAdded { .. }
+            | agena_storage::store::SessionChange::PartUpdated { .. }
+            | agena_storage::store::SessionChange::PartRemoved { .. } => {}
         })
     }
 
-    /// Terminalize the `shell` transcript part for a monitored process that
-    /// just reached a terminal state. The session id is resolved through the
-    /// runtime-side index because a `ProcessSummary` carries no session id.
+    /// Settle the durable shell/monitor aggregate for a process that just
+    /// reached a terminal state.
     pub(crate) fn complete_shell(&self, summary: &ProcessSummary) {
         let terminal = match summary.status {
             ProcessStatus::Exited => PartState::Completed,
@@ -409,25 +388,22 @@ impl BackgroundCompletionBridge {
             .unwrap_or_else(|failure| failure.user.fallback.as_str())
             .to_string();
         tokio::spawn(async move {
-            // The tool part's marker update is buffered and only committed when
-            // the owning run terminalizes (turn end), so a process finishing
-            // mid-turn can beat the index — resolve with a bounded retry. The
-            // process registry indexes `shell.run` under `("shell", id)` and
-            // `monitor.start` under `("monitor", id)`, and the terminal event
-            // does not say which, so fall back across both kinds.
             let Some((session_id, kind)) = bridge
                 .resolve_background_session_either(&["shell", "monitor"], &process_id)
                 .await
             else {
                 return;
             };
-            let Some(manager) = bridge.manager.lock().expect("background manager lock").clone()
+            let Some(manager) = bridge
+                .manager
+                .lock()
+                .expect("background manager lock")
+                .clone()
             else {
                 return;
             };
-            // The operation settled: terminalize the tool part, append the
-            // Assistant-role completion notification onto the launching run,
-            // and wake the model — all in one atomic settle.
+            // The operation settle atomically appends a Runtime ingress
+            // notification and its durable wake delivery.
             let result = manager
                 .settle_background_operation(
                     session_id,
@@ -455,9 +431,8 @@ impl BackgroundCompletionBridge {
         });
     }
 
-    /// Project one monitor event as a `system_notification` part onto the
-    /// launching run — the everything-is-a-part Monitor's per-event path
-    /// (§7.3). Only `kind:"monitor"` markers (the Monitor tool) project
+    /// Project one monitor event as a Runtime ingress `system_notification`.
+    /// Only `kind:"monitor"` operations (the Monitor tool) project
     /// events; plain/monitored shells keep their logs in the streaming buffer
     /// (queryable via `shell.logs`).
     pub(crate) fn settle_monitor_event(&self, event: &ProcessEvent, summary: &ProcessSummary) {
@@ -476,7 +451,11 @@ impl BackgroundCompletionBridge {
             else {
                 return;
             };
-            let Some(manager) = bridge.manager.lock().expect("background manager lock").clone()
+            let Some(manager) = bridge
+                .manager
+                .lock()
+                .expect("background manager lock")
+                .clone()
             else {
                 return;
             };
@@ -507,29 +486,36 @@ impl BackgroundCompletionBridge {
         });
     }
 
-    /// Resolve the session for a background marker, retrying briefly
-    /// so a part whose marker update is still buffered (committed only at its
-    /// run's terminalization) has time to land.
+    /// Resolve exclusively through the durable operation aggregate.
     async fn resolve_background_session(&self, kind: &str, id: &str) -> Option<i64> {
-        let key = (kind.to_string(), id.to_string());
-        for _ in 0..60 {
-            if let Some(session_id) = self
-                .index
-                .lock()
-                .expect("background index lock")
-                .get(&key)
-                .copied()
-            {
-                return Some(session_id);
+        let manager = self
+            .manager
+            .lock()
+            .expect("background manager lock")
+            .clone()?;
+        let operation_kind = agena_storage::store::BackgroundOperationKind::parse(kind)?;
+        match manager
+            .background_operation_owner_for_external(&[operation_kind], id)
+            .await
+        {
+            Ok(Some((session_id, _))) => Some(session_id),
+            Ok(None) => {
+                tracing::error!(
+                    target: "agena_background",
+                    %kind, %id,
+                    "background signal has no durable operation owner"
+                );
+                None
             }
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            Err(error) => {
+                tracing::error!(
+                    target: "agena_background",
+                    %kind, %id, %error,
+                    "failed to query durable background operation owner"
+                );
+                None
+            }
         }
-        tracing::warn!(
-            target: "agena_background",
-            %kind, %id,
-            "no transcript part indexed for background operation; leaving the part spinning"
-        );
-        None
     }
 
     /// Resolve the session for a background marker whose launch kind is
@@ -544,27 +530,37 @@ impl BackgroundCompletionBridge {
         kinds: &[&str],
         id: &str,
     ) -> Option<(i64, String)> {
-        let keys: Vec<(String, String)> = kinds
+        let durable_kinds = kinds
             .iter()
-            .map(|kind| (kind.to_string(), id.to_string()))
-            .collect();
-        for _ in 0..60 {
-            {
-                let index = self.index.lock().expect("background index lock");
-                for key in &keys {
-                    if let Some(session_id) = index.get(key).copied() {
-                        return Some((session_id, key.0.clone()));
-                    }
-                }
+            .filter_map(|kind| agena_storage::store::BackgroundOperationKind::parse(kind))
+            .collect::<Vec<_>>();
+        let manager = self
+            .manager
+            .lock()
+            .expect("background manager lock")
+            .clone()?;
+        match manager
+            .background_operation_owner_for_external(&durable_kinds, id)
+            .await
+        {
+            Ok(Some((session_id, kind))) => Some((session_id, kind.as_str().to_owned())),
+            Ok(None) => {
+                tracing::error!(
+                    target: "agena_background",
+                    ?kinds, %id,
+                    "background completion has no durable operation owner"
+                );
+                None
             }
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            Err(error) => {
+                tracing::error!(
+                    target: "agena_background",
+                    ?kinds, %id, %error,
+                    "failed to query durable background completion owner"
+                );
+                None
+            }
         }
-        tracing::warn!(
-            target: "agena_background",
-            ?kinds, %id,
-            "no transcript part indexed for background operation; leaving the part spinning"
-        );
-        None
     }
 }
 
@@ -586,35 +582,6 @@ fn background_failure(status: ProcessStatus, fallback: String) -> Failure {
             detail_key: None,
         },
     )
-}
-
-/// Decode the `agena.background` marker from a `tool_call` part's operation.
-/// Returns `Some((kind, id))` when the operation is a launched-in-background
-/// launch.
-fn background_marker_from_part(part: &Part) -> Option<(String, String)> {
-    if part.kind != "tool_call" {
-        return None;
-    }
-    let content = part_content::decode(&part.kind, &part.content).ok()?;
-    let part_content::TypedContent::ToolCall(tool_call) = content else {
-        return None;
-    };
-    let operation = part_content::operation_from_tool_call(&tool_call);
-    operation
-        .background_operation()
-        .map(|marker| (marker.kind, marker.id))
-}
-
-/// The unified-activity id that a background-operation marker would project to,
-/// so the bridge can hide the panel row that duplicates the transcript part.
-/// Shells use the process id directly (`proc_…`); tasks are prefixed with
-/// `task_` (mirroring `shell_activity` / `subtask_activity`).
-fn activity_id_for_marker(marker: &(String, String)) -> String {
-    match marker.0.as_str() {
-        "shell" => marker.1.clone(),
-        "task" => format!("task_{}", marker.1),
-        _ => marker.1.clone(),
-    }
 }
 
 /// Terminalize the parent's `task` part once the child session settles. The
@@ -683,24 +650,27 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
     } else {
         format!("\"{}\"", meta.title.trim())
     };
-    let Some(manager) = bridge.manager.lock().expect("background manager lock").clone() else {
+    let Some(manager) = bridge
+        .manager
+        .lock()
+        .expect("background manager lock")
+        .clone()
+    else {
         return;
     };
     let child_session_id = meta.id;
     let notification_status = match status {
         SubtaskStatus::Completed => "completed",
         SubtaskStatus::Failed => "failed",
-        SubtaskStatus::Cancelled | SubtaskStatus::Interrupted => "cancelled",
+        SubtaskStatus::Cancelled => "cancelled",
+        SubtaskStatus::Interrupted => "interrupted",
         SubtaskStatus::TimedOut => "timed_out",
         SubtaskStatus::Created | SubtaskStatus::Running => unreachable!("terminal status"),
     }
     .to_string();
     let (summary_ok, summary_failed) = match status {
         SubtaskStatus::Completed => (format!("Task {task_label} finished"), String::new()),
-        SubtaskStatus::Failed => (
-            String::new(),
-            format!("Task {task_label} failed"),
-        ),
+        SubtaskStatus::Failed => (String::new(), format!("Task {task_label} failed")),
         SubtaskStatus::Cancelled | SubtaskStatus::Interrupted => {
             (format!("Task {task_label} cancelled"), String::new())
         }
@@ -890,91 +860,5 @@ fn empty_task_logs(task_id: &str, cursor: i64) -> BackgroundActivityLogRead {
         dropped_lines: 0,
         exit_code: None,
         completion_reason: None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use tokio::sync::mpsc;
-
-    use super::BackgroundCompletionBridge;
-    use crate::activity::ActivityRegistry;
-
-    fn bridge_with_index(entries: &[(&str, &str, i64)]) -> BackgroundCompletionBridge {
-        let (tx, _rx) = mpsc::channel(16);
-        let registry = ActivityRegistry::new(tx);
-        let bridge = BackgroundCompletionBridge::new(None, registry);
-        let mut index = bridge.index.lock().expect("background index lock");
-        for (kind, id, session_id) in entries {
-            index.insert((kind.to_string(), id.to_string()), *session_id);
-        }
-        drop(index);
-        bridge
-    }
-
-    /// The terminal settle for a process resolves the launching session through
-    /// the `(kind, id)` index. A monitored shell (`shell.run` + `monitor`)
-    /// indexes under `"monitor"` while a plain background shell uses
-    /// `"shell"`, and the terminal `ProcessSummary` does not say which — the
-    /// fallback across both kinds is what lets a monitor's natural end / stop /
-    /// timeout settle instead of leaving its part spinning forever.
-    #[tokio::test]
-    async fn resolve_across_shell_and_monitor_kinds_finds_the_monitor_entry() {
-        let bridge = bridge_with_index(&[("monitor", "proc_m", 42), ("shell", "proc_s", 7)]);
-        let resolved = bridge
-            .resolve_background_session_either(&["shell", "monitor"], "proc_m")
-            .await;
-        assert_eq!(
-            resolved,
-            Some((42, "monitor".to_string())),
-            "a monitor-indexed process resolves with the monitor kind"
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_across_shell_and_monitor_kinds_prefers_the_shell_entry() {
-        let bridge = bridge_with_index(&[("monitor", "proc_m", 42), ("shell", "proc_s", 7)]);
-        let resolved = bridge
-            .resolve_background_session_either(&["shell", "monitor"], "proc_s")
-            .await;
-        assert_eq!(
-            resolved,
-            Some((7, "shell".to_string())),
-            "a shell-indexed process resolves with the shell kind"
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_across_shell_and_monitor_kinds_misses_without_an_entry() {
-        let bridge = bridge_with_index(&[]);
-        let resolved = bridge
-            .resolve_background_session_either(&["shell", "monitor"], "absent")
-            .await;
-        assert_eq!(resolved, None, "no index entry means no settling session");
-    }
-
-    #[tokio::test]
-    async fn resolve_across_shell_and_monitor_kinds_retries_until_an_entry_lands() {
-        // The part's marker update is committed only when its owning run
-        // terminalizes, so a process finishing mid-turn can beat the index. The
-        // bounded retry must pick the entry up once it lands.
-        let bridge = bridge_with_index(&[]);
-        let bridge_for_insert = bridge.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            let mut index = bridge_for_insert
-                .index
-                .lock()
-                .expect("background index lock");
-            index.insert(("monitor".to_string(), "proc_late".to_string()), 9);
-        });
-        let resolved = bridge
-            .resolve_background_session_either(&["shell", "monitor"], "proc_late")
-            .await;
-        assert_eq!(
-            resolved,
-            Some((9, "monitor".to_string())),
-            "a late-arriving marker is picked up by the retry loop"
-        );
     }
 }

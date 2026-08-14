@@ -549,7 +549,7 @@ mod interaction_part_routing_tests {
         part::RequestPartResource,
         resource::{
             ExecutionAccess, PendingInteractiveRequest, PendingInteractiveRequestResource,
-            SessionExecutionResource, SessionExecutionContextResource, SessionLifecycleState,
+            SessionExecutionContextResource, SessionExecutionResource, SessionLifecycleState,
             SessionRelationKind, SessionResource, SessionTranscriptPart, SessionUsageResource,
             WorkflowState,
         },
@@ -817,8 +817,9 @@ mod interaction_part_routing_tests {
         })
         .await
         .expect("build test runtime");
-        let application = Application::from_composed_runtime_services(runtime.application_services())
-            .expect("compose test application");
+        let application =
+            Application::from_composed_runtime_services(runtime.application_services())
+                .expect("compose test application");
         let mut app = App::new(application, LaunchOptions::default(), I18n::english());
         app.layout.transcript_body = Rect::new(0, 0, WIDTH, HEIGHT);
         app.transcript.session_id = Some(SESSION_ID);
@@ -867,8 +868,11 @@ mod interaction_part_routing_tests {
     /// is 1-indexed, so the target line number is `start_line + 2 + body_offset`.
     fn move_cursor_to_body_offset(app: &mut App, body_offset: usize) {
         let start_line = interaction_node_start(app);
-        app.transcript
-            .move_cursor_to_visual_line_number(WIDTH, HEIGHT, Some(start_line + 2 + body_offset));
+        app.transcript.move_cursor_to_visual_line_number(
+            WIDTH,
+            HEIGHT,
+            Some(start_line + 2 + body_offset),
+        );
     }
 
     /// A two-question ask-user request: Q0 "Flavor" (single-pick, 2 options,
@@ -1052,10 +1056,8 @@ mod interaction_part_routing_tests {
     /// blocks never drift the tests.
     fn q_landing_offset(app: &App, question_index: usize) -> usize {
         let view = wizard_view(app);
-        let layouts = agena_tui_transcript::interaction_question_layouts(
-            &dialog(app).request,
-            &view.answers,
-        );
+        let layouts =
+            agena_tui_transcript::interaction_question_layouts(&dialog(app).request, &view.answers);
         agena_tui_transcript::ask_user_question_landing_offset(
             view.plan_body_lines,
             &layouts,
@@ -1066,10 +1068,8 @@ mod interaction_part_routing_tests {
     /// Body offset of a question's 其他 (custom) row in the live body.
     fn q_custom_row_offset(app: &App, question_index: usize) -> usize {
         let view = wizard_view(app);
-        let layouts = agena_tui_transcript::interaction_question_layouts(
-            &dialog(app).request,
-            &view.answers,
-        );
+        let layouts =
+            agena_tui_transcript::interaction_question_layouts(&dialog(app).request, &view.answers);
         let start = agena_tui_transcript::ask_user_question_body_start(
             view.plan_body_lines,
             &layouts,
@@ -1132,7 +1132,9 @@ mod interaction_part_routing_tests {
         // at the part headline (the part's own top boundary).
         app.handle_transcript_key(char_key('k'));
         assert!(
-            app.transcript.navigation_cursor_line().is_some_and(|line| line >= start_line),
+            app.transcript
+                .navigation_cursor_line()
+                .is_some_and(|line| line >= start_line),
             "k must not move the cursor above the part headline"
         );
 
@@ -1383,16 +1385,14 @@ mod interaction_part_routing_tests {
             "a pending ask auto-expands the operation activity on arrival"
         );
         assert!(
-            app.transcript
-                .navigation_cursor_line()
-                .is_some_and(|line| {
-                    app.transcript
-                        .rendered(WIDTH)
-                        .nodes
-                        .iter()
-                        .find(|node| node.key == key)
-                        .is_some_and(|node| line >= node.start_line && line < node.end_line)
-                }),
+            app.transcript.navigation_cursor_line().is_some_and(|line| {
+                app.transcript
+                    .rendered(WIDTH)
+                    .nodes
+                    .iter()
+                    .find(|node| node.key == key)
+                    .is_some_and(|node| line >= node.start_line && line < node.end_line)
+            }),
             "the reveal lands the cursor inside the operation activity"
         );
     }
@@ -1615,7 +1615,9 @@ mod interaction_part_routing_tests {
         );
 
         // Right again jumps to Q1's first option row.
-        assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)));
+        assert!(
+            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+        );
         assert_eq!(
             app.transcript.navigation_cursor_line(),
             Some(start_line + 1 + q_landing_offset(&app, 1)),
@@ -1623,7 +1625,9 @@ mod interaction_part_routing_tests {
         );
 
         // Right at the last question is a no-op but still consumed.
-        assert!(app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)));
+        assert!(
+            app.handle_active_interaction_action(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+        );
         assert_eq!(
             app.transcript.navigation_cursor_line(),
             Some(start_line + 1 + q_landing_offset(&app, 1)),
@@ -1703,10 +1707,11 @@ mod interaction_part_routing_tests {
             "Space on an option row is owned"
         );
         assert_eq!(
-            dialog(&app)
-                .presentation
-                .answer(0)
-                .map(|answer| answer.option_indexes.iter().copied().collect::<Vec<_>>()),
+            dialog(&app).presentation.answer(0).map(|answer| answer
+                .option_indexes
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()),
             Some(vec![0]),
             "Space selects the option under the cursor"
         );
@@ -1715,7 +1720,10 @@ mod interaction_part_routing_tests {
         // Space again (single-pick) unselects it: select/unselect.
         assert!(app.handle_active_interaction_action(space_key()));
         assert_eq!(
-            dialog(&app).presentation.answer(0).map(|answer| answer.option_indexes.len()),
+            dialog(&app)
+                .presentation
+                .answer(0)
+                .map(|answer| answer.option_indexes.len()),
             Some(0),
             "single-pick Space unselects the already-picked option"
         );
@@ -1886,7 +1894,10 @@ mod interaction_part_routing_tests {
         assert!(app.paste_into_active_interaction("mint"));
         assert!(app.handle_active_interaction_action(enter()));
         assert_eq!(
-            dialog(&app).presentation.answer(0).map(|answer| answer.custom_values.clone()),
+            dialog(&app)
+                .presentation
+                .answer(0)
+                .map(|answer| answer.custom_values.clone()),
             Some(vec!["mint".to_owned()]),
             "the editor commit stores the custom value"
         );
@@ -2007,7 +2018,9 @@ mod interaction_part_routing_tests {
             .map(|position| position.column);
         app.handle_transcript_key(char_key('l'));
         assert_ne!(
-            app.transcript.cursor_text_position(WIDTH).map(|position| position.column),
+            app.transcript
+                .cursor_text_position(WIDTH)
+                .map(|position| position.column),
             before,
             "plain chat navigation still moves the cursor within the line"
         );
@@ -5481,8 +5494,9 @@ mod new_session_model_stack_tests {
         })
         .await
         .expect("build test runtime");
-        let application = Application::from_composed_runtime_services(runtime.application_services())
-            .expect("compose test application");
+        let application =
+            Application::from_composed_runtime_services(runtime.application_services())
+                .expect("compose test application");
         let mut app = App::new(application, LaunchOptions::default(), I18n::english());
         app.layout.transcript_body = Rect::new(0, 0, 80, 24);
         app
@@ -5513,7 +5527,10 @@ mod new_session_model_stack_tests {
         app.handle_session_created(Some(draft), None, Some(model_stack), Ok(session_resource()));
 
         assert_eq!(
-            app.run_options.model.as_ref().map(|model| model.model_id.to_string()),
+            app.run_options
+                .model
+                .as_ref()
+                .map(|model| model.model_id.to_string()),
             Some("acme-fast".to_owned()),
             "the first submit of the auto-created session must use the switched model, not the default"
         );

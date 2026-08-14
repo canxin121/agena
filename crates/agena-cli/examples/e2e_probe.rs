@@ -53,6 +53,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .execution_commands
         .clone()
         .expect("execution commands present");
+    let execution_control = services
+        .execution_control
+        .clone()
+        .expect("execution control present");
+    let session_store = services
+        .session_store
+        .clone()
+        .expect("session store present");
 
     let model = providers
         .default_model()?
@@ -97,33 +105,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     eprintln!("probe: user run submitted; waiting for quiescence...");
 
-    // Poll until the assistant run marker reaches a terminal state. A freshly
-    // submitted session is momentarily Quiescent before the spawned execution
-    // task persists anything, and workflow_state does not reflect an in-flight
-    // model call, so we wait on the run marker itself.
+    // Wait for actual quiescence, not for one arbitrarily selected assistant
+    // marker. A Runtime notification creates a fresh assistant response run;
+    // treating the first completed assistant run as "the session finished"
+    // races runtime shutdown against that response. Conversely, a freshly
+    // submitted command is momentarily inactive before its spawned execution
+    // registers, so require evidence that execution began before accepting a
+    // quiescent snapshot.
     let started = std::time::Instant::now();
+    let mut observed_execution = false;
+    let mut last_snapshot = None;
     loop {
         let runs = queries.list_projected_runs(session_id, true).await?;
-        let assistant_run = runs
+        let assistant_seen = runs
             .iter()
-            .find(|run| run.role == agena_domain::Role::Assistant);
-        let state = assistant_run.map(|run| format!("{:?}", run.state));
-        eprintln!("probe: run state -> {state:?}");
-        if let Some(ref state) = state {
-            let terminal = state == "Completed"
-                || state == "Cancelled"
-                || state == "Failed"
-                || state == "TimedOut"
-                || state.ends_with("Denied")
-                || state.ends_with("Unavailable")
-                || state.ends_with("Aborted")
-                || state.ends_with("Interrupted");
-            if terminal {
-                break;
-            }
+            .any(|run| run.role == agena_domain::Role::Assistant);
+        let all_runs_terminal = !runs.is_empty() && runs.iter().all(|run| run.state.is_terminal());
+        let active_execution = execution_control.active_execution(session_id).await;
+        observed_execution |= active_execution.is_some() || assistant_seen;
+        let active_background = session_store
+            .active_background_operations(None, 1_024)
+            .await?
+            .into_iter()
+            .filter(|operation| operation.session_id == session_id)
+            .count();
+        let pending_deliveries = session_store
+            .pending_background_deliveries(1_024)
+            .await?
+            .into_iter()
+            .filter(|delivery| delivery.session_id == session_id)
+            .count();
+        let session_state = session_store.session_state(session_id).await?;
+        let snapshot = format!(
+            "active={} runs={} all_terminal={} background={} deliveries={} session={:?}",
+            active_execution.is_some(),
+            runs.len(),
+            all_runs_terminal,
+            active_background,
+            pending_deliveries,
+            session_state.state,
+        );
+        if last_snapshot.as_deref() != Some(snapshot.as_str()) {
+            eprintln!("probe: {snapshot}");
+            last_snapshot = Some(snapshot);
+        }
+        if observed_execution
+            && active_execution.is_none()
+            && all_runs_terminal
+            && active_background == 0
+            && pending_deliveries == 0
+            && session_state.state == agena_storage::store::SessionState::Ready
+        {
+            break;
         }
         if started.elapsed() > Duration::from_secs(240) {
-            eprintln!("probe: TIMEOUT waiting for terminal run state (last={state:?})");
+            eprintln!(
+                "probe: TIMEOUT waiting for true quiescence (last={})",
+                last_snapshot.as_deref().unwrap_or("no snapshot")
+            );
             break;
         }
         tokio::time::sleep(Duration::from_millis(300)).await;

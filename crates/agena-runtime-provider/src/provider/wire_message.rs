@@ -243,15 +243,21 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
                     arguments_json: arguments_json.clone(),
                 });
 
-                if is_terminal_result_status(status) {
-                    wire.push(WirePart::ToolResult {
-                        tool_call_id: call_id,
-                        function,
-                        arguments_json,
-                        status: completion_input_result_status(status),
-                        output_json: project_operation_output(status, &exec),
-                    });
-                }
+                // Every persisted assistant tool call projects its paired
+                // result — even a call whose turn was interrupted before the
+                // execution settled (Pending/InProgress). A provider-visible
+                // `function_call` with no matching `function_call_output` is
+                // rejected by gateways that translate the Responses input into
+                // Chat messages ("No tool output found for tool call N"), so
+                // an interrupted call must replay as a closed call/result pair
+                // rather than an orphaned call.
+                wire.push(WirePart::ToolResult {
+                    tool_call_id: call_id,
+                    function,
+                    arguments_json,
+                    status: completion_input_result_status(status),
+                    output_json: project_operation_output(status, &exec),
+                });
             }
             TypedContent::Think(think) => {
                 let text = reasoning_preferred_text(&think);
@@ -857,9 +863,15 @@ pub(crate) fn model_tool_function_for_invocation(
 
 pub fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -> String {
     match status {
-        ExecutionStatus::Pending | ExecutionStatus::InProgress | ExecutionStatus::Cancelled => {
-            String::new()
+        // A call whose turn was interrupted before the execution settled. The
+        // result must still carry a non-empty output: gateways that translate
+        // the Responses input into Chat messages reject an empty tool message,
+        // and a placeholder tells the model the call never completed instead
+        // of pretending it produced nothing.
+        ExecutionStatus::Pending | ExecutionStatus::InProgress => {
+            "Tool call was interrupted before producing a result.".to_string()
         }
+        ExecutionStatus::Cancelled => String::new(),
         ExecutionStatus::Completed
         | ExecutionStatus::PolicyDenied
         | ExecutionStatus::UserDeclined
@@ -1411,6 +1423,70 @@ mod tests {
             projected.as_slice(),
             [WirePart::Text { text }] if text.len() == 1_000 && text.chars().all(|ch| ch == 'x')
         ));
+    }
+
+    #[test]
+    fn interrupted_tool_call_projects_as_a_closed_call_result_pair() {
+        // A tool call whose turn was interrupted before the execution settled
+        // must replay as a call/result pair. A provider-visible
+        // `function_call` with no matching `function_call_output` is rejected
+        // by gateways that translate the Responses input into Chat messages
+        // ("No tool output found for tool call N") — the failure seen in
+        // session 48, where the provider died mid-turn and left an orphaned
+        // call behind.
+        let mut invocation = ToolInvocation::new(
+            ToolApiFunction::Call.function_name(),
+            StructuredObject::try_from(serde_json::json!({
+                "tool": "fs.read",
+                "input": { "path": "README.md" }
+            }))
+            .expect("structured Tool API payload"),
+        );
+        invocation.tool_api_call = Some(agena_domain::ToolApiCall {
+            function: ToolApiFunction::Call,
+            arguments: invocation.input.clone(),
+        });
+        invocation.name = "fs.read".to_owned();
+        invocation.input =
+            StructuredObject::try_from(serde_json::json!({ "path": "README.md" }))
+                .expect("target input");
+        let pending = OperationPart::pending(
+            1396,
+            invocation,
+            "Read README.md",
+            TimeRange::default(),
+        );
+        let tool_call = part(
+            "tool_call",
+            PartRole::Assistant,
+            PartState::Completed,
+            tool_call_content(&pending),
+        );
+
+        let projected = project_persisted(&[tool_call]);
+        assert_eq!(projected.len(), 2, "a call must never replay orphaned");
+        let WirePart::ToolCall { id, .. } = &projected[0] else {
+            panic!("expected ToolCall");
+        };
+        let WirePart::ToolResult {
+            tool_call_id,
+            output_json,
+            status,
+            ..
+        } = &projected[1]
+        else {
+            panic!("expected the paired ToolResult");
+        };
+        assert_eq!(tool_call_id, id, "call and result must share the call id");
+        assert!(
+            output_json.contains("interrupted"),
+            "the model must learn the call never completed, got {output_json:?}"
+        );
+        assert_eq!(
+            *status,
+            agena_provider::CompletionInputToolResultStatus::Cancelled,
+            "an interrupted call replays as a cancelled result"
+        );
     }
 
     #[test]

@@ -404,6 +404,7 @@ fn prompt_part_has_visible_payload(part: &CompletionInputPart) -> bool {
     match part {
         CompletionInputPart::Text { text } => !text.trim().is_empty(),
         CompletionInputPart::Reasoning { text } => !text.trim().is_empty(),
+        CompletionInputPart::SystemMessage { text } => !text.trim().is_empty(),
         CompletionInputPart::Attachment { .. } => true,
         CompletionInputPart::ToolCall { .. } => true,
         CompletionInputPart::ToolResult { output_json, .. } => !output_json.trim().is_empty(),
@@ -525,6 +526,12 @@ fn runs_to_provider_transcript(items: &[WindowItem]) -> ProviderTranscript {
                             if !text.is_empty() {
                                 content_blocks
                                     .push(TranscriptBlock::Reasoning { text: text.clone() });
+                            }
+                        }
+                        CompletionInputPart::SystemMessage { text } => {
+                            had_any = true;
+                            if !text.is_empty() {
+                                content_blocks.push(TranscriptBlock::Text { text: text.clone() });
                             }
                         }
                         CompletionInputPart::Attachment { attachment } => {
@@ -1053,9 +1060,9 @@ fn approximate_run_payload_chars(run: &CompletionInputRun) -> usize {
     run.parts
         .iter()
         .map(|part| match part {
-            CompletionInputPart::Text { text } | CompletionInputPart::Reasoning { text } => {
-                text.len()
-            }
+            CompletionInputPart::Text { text }
+            | CompletionInputPart::Reasoning { text }
+            | CompletionInputPart::SystemMessage { text } => text.len(),
             CompletionInputPart::Attachment { .. } => 64,
             CompletionInputPart::ToolCall {
                 id,

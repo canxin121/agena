@@ -423,6 +423,10 @@ impl GeminiAdapter {
         let mut part = match part {
             wire_message::WirePart::Text { text } => GeminiPart::text(text.clone()),
             wire_message::WirePart::Reasoning { text } => GeminiPart::text(text.clone()),
+            // A system notice (background-operation notification) rides the
+            // model content as a text part: Gemini has no mid-conversation
+            // system message, so this is its only in-conversation carrier.
+            wire_message::WirePart::SystemMessage { text } => GeminiPart::text(text.clone()),
             wire_message::WirePart::Attachment { item } => Self::attachment_part(item),
             wire_message::WirePart::ToolCall {
                 id,

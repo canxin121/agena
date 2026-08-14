@@ -1712,6 +1712,15 @@ pub enum CompletionInputPart {
     Reasoning {
         text: String,
     },
+    /// A system-authored notice delivered to the model (the projection of a
+    /// background-operation notification). Kept distinct from [`Self::Text`] so
+    /// a notification can never be mistaken for the assistant's own reply —
+    /// the role leak that surfaced notification JSON as assistant output.
+    /// Adapters render it as a mid-conversation `system` message where the
+    /// protocol supports one, and as in-conversation text elsewhere.
+    SystemMessage {
+        text: String,
+    },
     Attachment {
         attachment: CompletionInputAttachment,
     },
@@ -1821,6 +1830,7 @@ impl CompletionInputRun {
             .map(|part| match part {
                 CompletionInputPart::Text { text } => text.clone(),
                 CompletionInputPart::Reasoning { text } => text.clone(),
+                CompletionInputPart::SystemMessage { text } => text.clone(),
                 CompletionInputPart::Attachment { attachment } => attachment_text_hint(attachment),
                 CompletionInputPart::ToolCall { id, function, .. } => {
                     format!("[tool_call:{}:{id}]", function.function_name())

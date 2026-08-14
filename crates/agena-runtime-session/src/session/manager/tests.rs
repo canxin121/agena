@@ -2772,12 +2772,43 @@ async fn continuation_without_an_assistant_reply_opens_a_fresh_continue_marker()
 }
 
 #[tokio::test]
-async fn hook_run_marker_is_an_assistant_run_completed_not_running() {
+async fn hook_runs_ride_the_launching_terminal_assistant_run() {
     use agena_plugin_host::{HookRunRecord, HookRunStatus};
 
     let (manager, _database) = test_manager_with_database().await;
     let session = create(&manager, "hook run").await;
     let session_id = session.id;
+
+    // A completed final assistant reply — the launching run for hooks that
+    // fire after the reply ends (agent.stop). Hook parts must be appended onto
+    // it (no new run marker), keeping the AI identity.
+    let run_id = manager
+        .store
+        .start_run(
+            session_id,
+            "continue",
+            run_marker_content("continue", None, None, None, None),
+        )
+        .await
+        .expect("start launching run marker");
+    manager
+        .store
+        .complete_run(
+            session_id,
+            run_id,
+            agena_storage::store::RunOutcome {
+                status: PartState::Completed,
+                abort_reason: None,
+                content: None,
+                provider_state: None,
+            },
+        )
+        .await
+        .expect("complete launching run");
+    let session = manager
+        .get_session(session_id)
+        .await
+        .expect("reload session with the terminal launching run");
 
     let runs = vec![HookRunRecord::new(
         "agent.stop",
@@ -2793,28 +2824,23 @@ async fn hook_run_marker_is_an_assistant_run_completed_not_running() {
         .await
         .expect("record hook runs");
 
-    let marker = recorded
-        .parts()
-        .iter()
-        .rev()
-        .find(|part| {
-            part.is_run_marker()
-                && part
-                    .content
-                    .get("run_kind")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("execution")
-        })
-        .expect("an execution run marker was recorded");
     assert_eq!(
-        marker.role,
-        PartRole::Assistant,
-        "hook runs are assistant activity, not a System identity"
+        recorded
+            .parts()
+            .iter()
+            .filter(|part| part.is_run_marker())
+            .count(),
+        1,
+        "hook parts ride the launching run — no new run marker"
     );
-    assert_eq!(
-        marker.state,
-        PartState::Completed,
-        "a finished hook run must not leave the session in a Running/Interrupted state"
+    assert!(
+        !recorded.parts().iter().any(|part| part.is_run_marker()
+            && part
+                .content
+                .get("run_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("execution")),
+        "no execution run marker is created"
     );
     let hook_parts = recorded
         .parts()
@@ -2822,6 +2848,21 @@ async fn hook_run_marker_is_an_assistant_run_completed_not_running() {
         .filter(|part| part.kind == "hook")
         .collect::<Vec<_>>();
     assert_eq!(hook_parts.len(), 1, "one hook part per recorded run");
+    assert_eq!(
+        hook_parts[0].role,
+        PartRole::Assistant,
+        "hook parts keep the launching run's AI identity"
+    );
+    assert_eq!(
+        hook_parts[0].state,
+        PartState::Completed,
+        "a recorded hook run is finished activity"
+    );
+    assert_eq!(
+        hook_parts[0].run_id,
+        Some(run_id),
+        "the hook rides the launching run, not a new marker"
+    );
     assert_eq!(
         hook_parts[0]
             .content
@@ -2858,7 +2899,83 @@ async fn hook_run_marker_is_an_assistant_run_completed_not_running() {
     assert_eq!(
         state.state,
         SessionState::Ready,
-        "a completed hook run leaves the session Ready, not Running"
+        "a completed launching run plus completed hook parts leaves the session Ready, not Running"
+    );
+}
+
+#[tokio::test]
+async fn hook_runs_append_to_the_in_flight_launching_run() {
+    use agena_plugin_host::{HookRunRecord, HookRunStatus};
+
+    let (manager, _database) = test_manager_with_database().await;
+    let session = create(&manager, "hook run").await;
+    let session_id = session.id;
+
+    // An in-flight assistant `continue` marker — the launching run for hooks
+    // that fire mid-turn (a tool batch, a failed model turn). Hook parts append
+    // onto it without terminalizing it or creating a new marker.
+    let run_id = manager
+        .store
+        .start_run(
+            session_id,
+            "continue",
+            run_marker_content("continue", None, None, None, None),
+        )
+        .await
+        .expect("start launching run marker");
+    let session = manager
+        .get_session(session_id)
+        .await
+        .expect("reload session with the in-flight launching run");
+
+    let runs = vec![HookRunRecord::new(
+        "command.after",
+        "test-plugin",
+        Some(session_id),
+        HookRunStatus::Applied,
+        "command.after hook ran",
+        None,
+    )];
+    let recorded = manager
+        .record_hook_runs(session, runs, manager.execution_state())
+        .await
+        .expect("record hook runs");
+
+    assert_eq!(
+        recorded
+            .parts()
+            .iter()
+            .filter(|part| part.is_run_marker())
+            .count(),
+        1,
+        "hook parts ride the in-flight launching run — no new run marker"
+    );
+    let marker = recorded
+        .parts()
+        .iter()
+        .rev()
+        .find(|part| part.is_run_marker())
+        .expect("the launching run marker");
+    assert_eq!(marker.part_id, run_id);
+    assert!(
+        marker.state.is_in_flight(),
+        "appending hook parts to an in-flight launching run must not terminalize it"
+    );
+    let hook_parts = recorded
+        .parts()
+        .iter()
+        .filter(|part| part.kind == "hook")
+        .collect::<Vec<_>>();
+    assert_eq!(hook_parts.len(), 1, "one hook part per recorded run");
+    assert_eq!(
+        hook_parts[0].role,
+        PartRole::Assistant,
+        "hook parts keep the launching run's AI identity"
+    );
+    assert_eq!(
+        hook_parts[0].run_id,
+        Some(run_id),
+        "the hook rides the in-flight launching run"
     );
 }
 
@@ -2923,8 +3040,8 @@ async fn background_completion_notification_is_committed_once_per_operation() {
     };
 
     // First delivery settles the operation: terminalizes the launching tool
-    // part and appends the Assistant-role notification onto the launching run
-    // — no new run marker (the durable claim, mirroring Claude's atomic
+    // part and appends the Assistant-role notification onto the launching run —
+    // no new run marker (the durable claim, mirroring Claude's atomic
     // `notified` flag).
     manager
         .settle_background_operation(
@@ -2937,7 +3054,6 @@ async fn background_completion_notification_is_committed_once_per_operation() {
         )
         .await
         .expect("settle background operation");
-
     let reloaded = manager
         .get_session(session_id)
         .await
@@ -2951,12 +3067,14 @@ async fn background_completion_notification_is_committed_once_per_operation() {
     assert_eq!(
         notified[0].role,
         PartRole::Assistant,
-        "the notification is an Assistant part (the model launched the operation)"
+        "the notification is an Assistant part appended onto the launching run \
+         (no new run); its body projects as a dedicated system-message wire part, \
+         never as the assistant's own reply text"
     );
     assert_eq!(
         notified[0].run_id,
         Some(run_id),
-        "the notification appends onto the launching run"
+        "the notification appends onto the launching assistant run"
     );
     assert!(super::part_records_notification(notified[0], "shell", "proc_test"));
 
@@ -3108,7 +3226,11 @@ async fn monitor_events_append_as_assistant_parts_without_terminalizing() {
         .filter(|part| part.kind == "system_notification")
         .collect::<Vec<_>>();
     assert_eq!(notified.len(), 1, "exactly one event part");
-    assert_eq!(notified[0].role, PartRole::Assistant);
+    assert_eq!(
+        notified[0].role,
+        PartRole::Assistant,
+        "the event is an Assistant part appended onto the launching run (no new run)"
+    );
     assert_eq!(
         notified[0].run_id,
         Some(run_id),

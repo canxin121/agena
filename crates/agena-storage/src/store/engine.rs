@@ -215,7 +215,9 @@ pub trait PersistenceEngine: Send + Sync {
     ///    job when a new execution genuinely takes over);
     /// 2. terminalizes the launching tool part (the operation's own part);
     /// 3. appends the result parts (`new_parts`, `PartRole::Assistant`) under
-    ///    the launching run — **no new run marker**;
+    ///    the launching run — **no new run marker**. The notification part's
+    ///    body is projected as a dedicated system-message wire part (never
+    ///    assistant reply text), so riding the assistant run is safe;
     /// 4. terminalizes the launching run marker (Completed) once no in-flight
     ///    child remains, so the session returns to Ready instead of lingering
     ///    in Interrupted.

@@ -509,6 +509,12 @@ impl AmazonBedrockAdapter {
                 wire_message::WirePart::Reasoning { text } => {
                     blocks.push(BedrockAnthropicTextBlock::text(text.clone()));
                 }
+                // A system notice (background-operation notification) rides the
+                // assistant message as a text block: Bedrock's Anthropic
+                // Messages API has no mid-conversation system message.
+                wire_message::WirePart::SystemMessage { text } => {
+                    blocks.push(BedrockAnthropicTextBlock::text(text.clone()));
+                }
                 wire_message::WirePart::Attachment { item } => {
                     blocks.extend(Self::anthropic_attachment_blocks(item));
                 }

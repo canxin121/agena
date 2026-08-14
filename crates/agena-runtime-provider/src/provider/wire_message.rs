@@ -46,6 +46,14 @@ pub enum WirePart {
     Reasoning {
         text: String,
     },
+    /// A system-authored notice (the projection of a background-operation
+    /// notification). Kept distinct from [`Self::Text`] so a notification can
+    /// never be mistaken for the assistant's own reply — the role leak that
+    /// surfaced notification JSON as assistant output. Adapters render it as a
+    /// mid-conversation `system` message where the protocol supports one.
+    SystemMessage {
+        text: String,
+    },
     Attachment {
         item: AttachmentItem,
     },
@@ -70,6 +78,7 @@ impl WirePart {
         match self {
             Self::Text { text } => text.clone(),
             Self::Reasoning { text } => text.clone(),
+            Self::SystemMessage { text } => text.clone(),
             Self::Attachment { item } => hint_text(item),
             Self::ToolCall { id, function, .. } => {
                 format!("[tool_call:{}:{id}]", function.function_name())
@@ -253,24 +262,33 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
             TypedContent::Hook(hook) => {
                 // A hook that blocked the stop carries its continuation in
                 // `message` (for example the workflow plan autorun's
-                // `<plan_context>` block). Project it as text so the next
-                // model turn sees it, exactly where the injected continuation
-                // used to land — the run's role is Assistant, and the
-                // adapters fold consecutive assistant runs.
+                // `<plan_context>` block). The continuation is System-originated
+                // (the agent.stop plugin's `continue_with_message`), so it must
+                // never project as the assistant's own reply text — that role
+                // leak is exactly how runtime content surfaces as the model's
+                // visible output. Project it as a dedicated SystemMessage wire
+                // part, which adapters deliver as a mid-conversation
+                // system/notice message. The next model turn still sees it: both
+                // Text and SystemMessage map to `TranscriptBlock::Text` in
+                // `runs_to_provider_transcript` (prompt_window.rs).
                 if let Some(message) = hook.message.as_deref().filter(|text| !text.is_empty()) {
-                    wire.push(WirePart::Text {
+                    wire.push(WirePart::SystemMessage {
                         text: message.to_owned(),
                     });
                 }
             }
             // A background-operation completion/event notification (the agena
-            // analog of Claude's `<task-notification>`). The run's role is
-            // System, so it becomes a system message in the model transcript;
+            // analog of Claude's `<task-notification>`). It stays appended onto
+            // the launching assistant run (no new run marker), but must never
+            // project as the assistant's own reply text — that role leak is
+            // exactly how notification JSON surfaced as the model's visible
+            // output. Project it as a dedicated SystemMessage wire part, which
+            // adapters deliver as a mid-conversation system/notice message;
             // `body` carries the full `<agena_notification>…</agena_notification>`
             // payload the model is taught to recognize (§3).
             TypedContent::SystemNotification(notification) => {
                 if !notification.body.trim().is_empty() {
-                    wire.push(WirePart::Text {
+                    wire.push(WirePart::SystemMessage {
                         text: notification.body.clone(),
                     });
                 }
@@ -286,6 +304,7 @@ fn wire_part_from_completion_input(part: CompletionInputPart) -> WirePart {
     match part {
         CompletionInputPart::Text { text } => WirePart::Text { text },
         CompletionInputPart::Reasoning { text } => WirePart::Reasoning { text },
+        CompletionInputPart::SystemMessage { text } => WirePart::SystemMessage { text },
         CompletionInputPart::Attachment { attachment } => WirePart::Attachment {
             item: attachment_item_from_completion_input(attachment),
         },
@@ -376,6 +395,7 @@ pub fn completion_input_part_from_wire(part: WirePart) -> CompletionInputPart {
     match part {
         WirePart::Text { text } => CompletionInputPart::Text { text },
         WirePart::Reasoning { text } => CompletionInputPart::Reasoning { text },
+        WirePart::SystemMessage { text } => CompletionInputPart::SystemMessage { text },
         WirePart::Attachment { item } => CompletionInputPart::Attachment {
             attachment: completion_input_attachment(item),
         },
@@ -763,6 +783,9 @@ pub fn parts_to_openai_content_array(parts: &[WirePart]) -> serde_json::Value {
                 serde_json::json!({ "type": "text", "text": text })
             }
             WirePart::Reasoning { text } => {
+                serde_json::json!({ "type": "text", "text": text })
+            }
+            WirePart::SystemMessage { text } => {
                 serde_json::json!({ "type": "text", "text": text })
             }
             WirePart::Attachment { item } => attachment_to_openai_content_value(item),
@@ -1211,6 +1234,83 @@ mod tests {
     }
 
     #[test]
+    fn assistant_run_notification_projects_as_system_message_never_assistant_text() {
+        // The notification-leak regression: a settled background operation
+        // appends its notification as an Assistant-role `system_notification`
+        // part onto the launching assistant run (no new run). The projection
+        // must derive Role::Assistant (the run's role) but emit the body as a
+        // dedicated SystemMessage part — never as `Text`, which is exactly how
+        // notification JSON leaked into the model's visible output before the
+        // fix.
+        let notification = agena_runtime_contracts::part_content::SystemNotificationContent {
+            operation_id: "proc_test".to_string(),
+            operation_kind: "shell".to_string(),
+            status: "completed".to_string(),
+            summary: "exit 0".to_string(),
+            body: "<agena_notification>exit 0</agena_notification>".to_string(),
+            ..Default::default()
+        };
+        let marker = run_marker(PartRole::Assistant, None);
+        let mut body_part = part(
+            "system_notification",
+            PartRole::Assistant,
+            PartState::Completed,
+            notification.as_value(),
+        );
+        body_part.run_id = Some(marker.part_id);
+
+        let input = project_completion_input(&[marker, body_part]);
+
+        assert_eq!(
+            input.role,
+            Role::Assistant,
+            "the notification rides the launching assistant run (no new run marker)"
+        );
+        assert!(
+            matches!(
+                input.parts.as_slice(),
+                [agena_provider::CompletionInputPart::SystemMessage { text }]
+                    if text == "<agena_notification>exit 0</agena_notification>"
+            ),
+            "the notification must project as a typed SystemMessage, never as assistant Text"
+        );
+    }
+
+    #[test]
+    fn persisted_notification_projects_as_system_message_wire_part() {
+        // `project_persisted` — the projection under `window_items_from_parts`
+        // — must emit the notification body as a dedicated SystemMessage wire
+        // part (never `WirePart::Text`) so adapters deliver it as a
+        // system/notice message rather than the assistant's own reply.
+        let notification = agena_runtime_contracts::part_content::SystemNotificationContent {
+            operation_id: "proc_test".to_string(),
+            operation_kind: "shell".to_string(),
+            status: "completed".to_string(),
+            summary: "exit 0".to_string(),
+            body: "<agena_notification>exit 0</agena_notification>".to_string(),
+            ..Default::default()
+        };
+        let body_part = part(
+            "system_notification",
+            PartRole::Assistant,
+            PartState::Completed,
+            notification.as_value(),
+        );
+
+        let projected = project_persisted(&[body_part]);
+        assert_eq!(projected.len(), 1);
+        assert!(
+            matches!(
+                &projected[0],
+                WirePart::SystemMessage { text }
+                    if text == "<agena_notification>exit 0</agena_notification>"
+            ),
+            "the persisted notification must project as WirePart::SystemMessage, \
+             never WirePart::Text"
+        );
+    }
+
+    #[test]
     fn completion_input_projection_keeps_role_parts_and_replay_state() {
         let marker = run_marker(
             PartRole::Assistant,
@@ -1443,10 +1543,13 @@ mod tests {
     }
 
     #[test]
-    fn hook_message_projects_as_assistant_text() {
+    fn hook_message_projects_as_system_message_never_assistant_text() {
         // A stop hook that blocked the run carries its continuation in
         // `message`; projecting the persisted hook run must surface that
-        // message as assistant text so the next model turn sees it.
+        // message as a dedicated system message — never as assistant reply
+        // text. The message is System-originated (the agent.stop plugin's
+        // `continue_with_message`), so Text would be the same role leak the
+        // notification fix closed.
         let hook_with_message = part(
             "hook",
             PartRole::Assistant,
@@ -1461,7 +1564,8 @@ mod tests {
         assert_eq!(wire_parts.len(), 1);
         assert!(matches!(
             &wire_parts[0],
-            WirePart::Text { text } if text == "<plan_context>continue with the next plan step</plan_context>"
+            WirePart::SystemMessage { text }
+                if text == "<plan_context>continue with the next plan step</plan_context>"
         ));
 
         // A hook with no message stays human-only activity: nothing projects.
@@ -1477,6 +1581,44 @@ mod tests {
         assert!(
             project_persisted(&[hook_without_message]).is_empty(),
             "a message-less hook run must not reach the model prompt"
+        );
+    }
+
+    #[test]
+    fn hook_continuation_on_an_assistant_run_projects_as_system_message_never_assistant_text() {
+        // The hook-leak regression, mirroring the notification test: an
+        // agent.stop continuation rides an Assistant-role `hook` part on the
+        // launching assistant run (no new run). The projection must derive
+        // Role::Assistant (the run's role) but emit the continuation as a
+        // dedicated SystemMessage part — never as `Text`, which is exactly how
+        // hook content would leak into the model's visible output.
+        let marker = run_marker(PartRole::Assistant, None);
+        let mut hook_part = part(
+            "hook",
+            PartRole::Assistant,
+            PartState::Completed,
+            serde_json::json!({
+                "hook": "agent.stop",
+                "summary": "agent.stop hook blocked stop: workflow plan autorun",
+                "message": "<plan_context>continue with the next plan step</plan_context>",
+            }),
+        );
+        hook_part.run_id = Some(marker.part_id);
+
+        let input = project_completion_input(&[marker, hook_part]);
+
+        assert_eq!(
+            input.role,
+            Role::Assistant,
+            "the hook rides the launching assistant run (no new run marker)"
+        );
+        assert!(
+            matches!(
+                input.parts.as_slice(),
+                [agena_provider::CompletionInputPart::SystemMessage { text }]
+                    if text == "<plan_context>continue with the next plan step</plan_context>"
+            ),
+            "the hook continuation must project as a typed SystemMessage, never as assistant Text"
         );
     }
 }

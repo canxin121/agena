@@ -200,34 +200,35 @@ impl SessionManager {
             )?);
         }
 
-        // Record the session.start hook runs observed during creation (plus
-        // any unattributed runs, such as config/provider.list, that happened
-        // before this session existed) as transcript activity.
         let hook_runs = state
             .tool_executor
             .plugin_manager()
             .drain_hook_runs(session.id);
+        // The `user_send` run must exist before hook parts can ride it:
+        // session.start records land here when no assistant run exists yet, so
+        // `record_hook_runs` needs the always-in-flight `user_send` marker as
+        // its launching run. Create it up front — empty when only hooks need a
+        // home. Persist the injected context/user parts as one `user_send` run
+        // (the same write path `drain_steer_input` uses); the parts carry
+        // their own role so the reloaded projection preserves the
+        // System/User distinction.
+        if !injected_new_parts.is_empty() || !hook_runs.is_empty() {
+            let outcome = self
+                .store
+                .submit_user_run(session.id, injected_new_parts, None)
+                .await?;
+            let mut projected = session.parts().to_vec();
+            projected.extend(outcome.parts);
+            session.install_projected_parts(projected);
+        }
+        // Record the session.start hook runs observed during creation (plus
+        // any unattributed runs, such as config/provider.list, that happened
+        // before this session existed) as transcript activity.
         if !hook_runs.is_empty() {
             session = self
                 .record_hook_runs(session, hook_runs, state.clone())
                 .await?;
         }
-
-        if injected_new_parts.is_empty() {
-            return Ok(session);
-        }
-
-        // Persist the injected context/user parts as one `user_send` run and
-        // merge the committed rows into the projection (the same write path
-        // `drain_steer_input` uses). The parts carry their own role so the
-        // reloaded projection preserves the System/User distinction.
-        let outcome = self
-            .store
-            .submit_user_run(session.id, injected_new_parts, None)
-            .await?;
-        let mut projected = session.parts().to_vec();
-        projected.extend(outcome.parts);
-        session.install_projected_parts(projected);
         Ok(session)
     }
 

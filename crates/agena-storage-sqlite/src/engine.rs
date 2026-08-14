@@ -538,6 +538,14 @@ async fn load_part_by_id<C: ConnectionTrait>(
 }
 
 /// Build a run marker `Part` ready for insertion (batch root).
+///
+/// `finished_at_ms` mirrors the schema lifecycle invariant (a terminal state
+/// must carry a finish time), exactly like `content_part`. `submit_batch_tx`
+/// normally runs with a `Pending` marker, but a terminal-state marker (e.g. a
+/// marker created by a batch that is committed already-terminal) would violate
+/// the schema CHECK
+/// `(state IN ('completed','failed','cancelled') AND finished_at_ms IS NOT NULL)`
+/// if this stayed `None`.
 fn marker_part(
     marker_id: i64,
     session_id: i64,
@@ -560,7 +568,7 @@ fn marker_part(
         origin_session_id: session_id,
         revision: 1,
         started_at_ms: now_ms,
-        finished_at_ms: None,
+        finished_at_ms: state.is_terminal().then_some(now_ms),
         created_at_ms: now_ms,
         updated_at_ms: now_ms,
         provider_state: None,
@@ -1264,7 +1272,10 @@ impl PersistenceEngine for SqliteEngine {
                 }
 
                 // Append the result parts (Assistant role) under the launching
-                // run — no new run marker.
+                // run — no new run marker. The notification part's body is
+                // projected as a dedicated system-message wire part (never
+                // assistant reply text), so it is safe to keep it on the
+                // assistant run that launched the operation.
                 let mut created = Vec::with_capacity(new_parts.len());
                 for new_part in new_parts {
                     let id = next_part_id_tx(txn).await.map_err(map_db_err)?;

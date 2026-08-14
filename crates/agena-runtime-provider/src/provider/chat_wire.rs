@@ -514,6 +514,166 @@ mod tests {
             Some(serde_json::Value::String("real reasoning".to_owned()))
         );
     }
+
+    #[test]
+    fn notification_on_an_assistant_run_wires_as_a_system_message_never_assistant_text() {
+        // The notification-leak regression at the Chat Completions boundary: a
+        // settled background operation appends its notification as an
+        // Assistant-role part onto the launching assistant run. It must wire as
+        // a genuine mid-conversation `system` message — never as the
+        // assistant's own reply content, which is exactly how notification JSON
+        // surfaced as the model's visible output before the fix.
+        let notification = agena_runtime_contracts::part_content::SystemNotificationContent {
+            operation_id: "proc_test".to_string(),
+            operation_kind: "shell".to_string(),
+            status: "completed".to_string(),
+            summary: "exit 0".to_string(),
+            body: "<agena_notification>exit 0</agena_notification>".to_string(),
+            ..Default::default()
+        };
+        let marker = run_marker(json!({}));
+        let mut body_part = part(
+            "system_notification",
+            serde_json::to_value(&notification).expect("notification serializes"),
+        );
+        body_part.run_id = Some(marker.part_id);
+
+        let source = crate::provider::project_completion_input(&[marker, body_part]);
+        assert_eq!(
+            source.role,
+            agena_domain::Role::Assistant,
+            "the notification rides the launching assistant run (no new run)"
+        );
+
+        let messages = super::request_to_chat_messages_with_assistant_reasoning_field(
+            &agena_provider::CompletionRequest {
+                model: agena_domain::ModelId::new("test-model"),
+                system: None,
+                turns: vec![source],
+                tool_api_functions: Vec::new(),
+                provider_native_tools: Default::default(),
+                disable_tools: false,
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                provider_compaction: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                response_format: None,
+                responses_api_metadata: None,
+                request_override: Default::default(),
+            },
+            None,
+        );
+
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message.role == "system")
+                .count(),
+            1,
+            "the notification must reach the wire as its own system message"
+        );
+        let system = messages
+            .iter()
+            .find(|message| message.role == "system")
+            .expect("the notification system message");
+        assert_eq!(
+            system.content,
+            Some(Value::String("<agena_notification>exit 0</agena_notification>".to_owned()))
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|message| message.role == "assistant"),
+            "the notification must never wire as assistant reply content"
+        );
+    }
+
+    #[test]
+    fn hook_continuation_on_an_assistant_run_wires_as_a_system_message_never_assistant_text() {
+        // The hook-leak regression at the Chat Completions boundary, mirroring
+        // the notification test: an agent.stop continuation rides an
+        // Assistant-role `hook` part on the launching assistant run. It must
+        // wire as a genuine mid-conversation `system` message — never as the
+        // assistant's own reply content, which is exactly how hook content
+        // would surface as the model's visible output before the fix.
+        let marker = run_marker(json!({}));
+        let mut hook_part = part(
+            "hook",
+            serde_json::json!({
+                "hook": "agent.stop",
+                "summary": "agent.stop hook blocked stop: workflow plan autorun",
+                "message": "<plan_context>continue with the next plan step</plan_context>",
+            }),
+        );
+        hook_part.run_id = Some(marker.part_id);
+
+        let source = crate::provider::project_completion_input(&[marker, hook_part]);
+        assert_eq!(
+            source.role,
+            agena_domain::Role::Assistant,
+            "the hook rides the launching assistant run (no new run)"
+        );
+
+        let messages = super::request_to_chat_messages_with_assistant_reasoning_field(
+            &agena_provider::CompletionRequest {
+                model: agena_domain::ModelId::new("test-model"),
+                system: None,
+                turns: vec![source],
+                tool_api_functions: Vec::new(),
+                provider_native_tools: Default::default(),
+                disable_tools: false,
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                provider_compaction: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                response_format: None,
+                responses_api_metadata: None,
+                request_override: Default::default(),
+            },
+            None,
+        );
+
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message.role == "system")
+                .count(),
+            1,
+            "the hook continuation must reach the wire as its own system message"
+        );
+        let system = messages
+            .iter()
+            .find(|message| message.role == "system")
+            .expect("the hook continuation system message");
+        assert_eq!(
+            system.content,
+            Some(Value::String(
+                "<plan_context>continue with the next plan step</plan_context>".to_owned()
+            ))
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|message| message.role == "assistant"),
+            "the hook continuation must never wire as assistant reply content"
+        );
+    }
 }
 
 pub fn extract_reasoning_text_from_delta_or_message(value: &ChatDeltaOrMessage) -> Option<String> {
@@ -751,11 +911,17 @@ fn assistant_messages_from_parts(
     let assistant_reasoning_field =
         assistant_reasoning_field_from_message_metadata(run).or(assistant_reasoning_field);
     let assistant_reasoning_text = assistant_reasoning_text(run);
-    let has_tool_result = parts
-        .iter()
-        .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }));
-    if !has_tool_result {
-        let (content, tool_calls) = assistant_content_and_tool_calls(run, parts);
+
+    // Accumulated assistant content, flushed as an assistant ChatMessage each
+    // time the stream is interrupted by a tool result or a system notice.
+    let mut messages = Vec::new();
+    let mut buffered = Vec::new();
+    let flush = |messages: &mut Vec<ChatMessage>,
+                     buffered: &mut Vec<wire_message::WirePart>| {
+        if buffered.is_empty() {
+            return;
+        }
+        let (content, tool_calls) = assistant_content_and_tool_calls(run, buffered);
         let mut chat_message =
             ChatMessage::assistant(content, (!tool_calls.is_empty()).then_some(tool_calls));
         apply_assistant_reasoning_field(
@@ -764,37 +930,28 @@ fn assistant_messages_from_parts(
             assistant_reasoning_text.as_str(),
         );
         apply_raw_assistant_reasoning_state(run, &mut chat_message, &assistant_reasoning_text);
-        return vec![chat_message];
-    }
+        messages.push(chat_message);
+        buffered.clear();
+    };
 
-    let mut messages = Vec::new();
-    let mut buffered = Vec::new();
     for part in parts {
         match part {
+            // A system notice (background-operation notification) is a genuine
+            // mid-conversation `system` message, never the assistant's reply.
+            // Split the stream so the notice lands as its own system message,
+            // keeping the surrounding assistant content in role.
+            wire_message::WirePart::SystemMessage { text } => {
+                flush(&mut messages, &mut buffered);
+                if !text.trim().is_empty() {
+                    messages.push(ChatMessage::system(text.clone()));
+                }
+            }
             wire_message::WirePart::ToolResult {
                 tool_call_id,
                 output_json,
                 ..
             } if !tool_call_id.trim().is_empty() => {
-                if !buffered.is_empty() {
-                    let (content, tool_calls) = assistant_content_and_tool_calls(run, &buffered);
-                    let mut chat_message = ChatMessage::assistant(
-                        content,
-                        (!tool_calls.is_empty()).then_some(tool_calls),
-                    );
-                    apply_assistant_reasoning_field(
-                        &mut chat_message,
-                        assistant_reasoning_field,
-                        assistant_reasoning_text.as_str(),
-                    );
-                    apply_raw_assistant_reasoning_state(
-                        run,
-                        &mut chat_message,
-                        &assistant_reasoning_text,
-                    );
-                    messages.push(chat_message);
-                    buffered.clear();
-                }
+                flush(&mut messages, &mut buffered);
                 messages.push(ChatMessage::tool_result(
                     tool_call_id.clone(),
                     Value::String(output_json.clone()),
@@ -808,19 +965,7 @@ fn assistant_messages_from_parts(
             other => buffered.push(other.clone()),
         }
     }
-
-    if !buffered.is_empty() {
-        let (content, tool_calls) = assistant_content_and_tool_calls(run, &buffered);
-        let mut chat_message =
-            ChatMessage::assistant(content, (!tool_calls.is_empty()).then_some(tool_calls));
-        apply_assistant_reasoning_field(
-            &mut chat_message,
-            assistant_reasoning_field,
-            assistant_reasoning_text.as_str(),
-        );
-        apply_raw_assistant_reasoning_state(run, &mut chat_message, &assistant_reasoning_text);
-        messages.push(chat_message);
-    }
+    flush(&mut messages, &mut buffered);
 
     messages
 }
@@ -929,6 +1074,11 @@ fn assistant_content_and_tool_calls(
                 // Reasoning is replayed through the dedicated reasoning field
                 // (see `assistant_reasoning_text`), never as visible content.
             }
+            // Defensive fallback: `assistant_content_and_tool_calls` only ever
+            // sees assistant-content parts (SystemMessage is intercepted and
+            // split out in `assistant_messages_from_parts`), but keep the match
+            // total so a notice can never be silently dropped.
+            wire_message::WirePart::SystemMessage { text } => text_chunks.push(text.clone()),
             wire_message::WirePart::ToolCall {
                 id,
                 function,

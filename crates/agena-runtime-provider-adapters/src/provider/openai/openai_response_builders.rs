@@ -513,6 +513,24 @@ impl OpenAiTransport {
                                 // `Reasoning` input item (see the openai_reasoning_items
                                 // replay above), never as visible output text.
                             }
+                            // A system notice (background-operation notification)
+                            // is a genuine mid-conversation `system` message —
+                            // never the assistant's own reply text. Flush the
+                            // accumulated assistant turn (text, calls, outputs)
+                            // first so the notice lands after it in order, then
+                            // open a fresh assistant grouping.
+                            wire_message::WirePart::SystemMessage { text } => {
+                                if let Some(output) = pending_output.take() {
+                                    Self::flush_responses_function_output(
+                                        &mut outputs,
+                                        &mut Some(output),
+                                    );
+                                }
+                                Self::flush_assistant_responses_text(input, &mut text_chunks);
+                                input.append(&mut calls);
+                                input.append(&mut outputs);
+                                Self::push_responses_text_message(input, "system", text);
+                            }
                             wire_message::WirePart::Attachment { item } => {
                                 if let Some((_, _, extra_parts)) = pending_output.as_mut() {
                                     extra_parts.push(wire_message::WirePart::Attachment { item });
@@ -618,6 +636,9 @@ impl OpenAiTransport {
                     OpenAiInputContent::InputText { text: text.clone() }
                 }
                 wire_message::WirePart::Reasoning { text } => {
+                    OpenAiInputContent::InputText { text: text.clone() }
+                }
+                wire_message::WirePart::SystemMessage { text } => {
                     OpenAiInputContent::InputText { text: text.clone() }
                 }
                 wire_message::WirePart::Attachment { item } => {
@@ -1560,6 +1581,71 @@ mod tool_api_history_tests {
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|text| text.contains("tools_call.arguments.tool")),
             "the repair reasoning text must be passed back verbatim"
+        );
+    }
+
+    #[test]
+    fn notification_under_an_assistant_run_wires_as_a_system_input_item_never_assistant_output() {
+        // The notification-leak regression at the OpenAI Responses boundary: a
+        // settled background operation appends its notification as an
+        // Assistant-role part onto the launching assistant run. It must wire as
+        // a mid-conversation `system` message — never as assistant output text,
+        // which is exactly how notification JSON surfaced as the model's
+        // visible output before the fix.
+        let notification = agena_runtime_contracts::part_content::SystemNotificationContent {
+            operation_id: "proc_test".to_string(),
+            operation_kind: "shell".to_string(),
+            status: "completed".to_string(),
+            summary: "exit 0".to_string(),
+            body: "<agena_notification>exit 0</agena_notification>".to_string(),
+            ..Default::default()
+        };
+        let marker = run_marker(PartRole::Assistant, None);
+        let mut body_part = part(
+            "system_notification",
+            PartRole::Assistant,
+            PartState::Completed,
+            serde_json::to_value(&notification).expect("notification serializes"),
+        );
+        body_part.run_id = Some(marker.part_id);
+
+        let input = crate::provider::project_completion_input(&[marker, body_part]);
+        assert_eq!(
+            input.role,
+            agena_domain::Role::Assistant,
+            "the notification rides the launching assistant run (no new run)"
+        );
+
+        let mut items = Vec::new();
+        OpenAiTransport::append_responses_items_for_message(&mut items, &input);
+        validate_responses_input(items.as_slice()).expect("provider-safe replay input");
+
+        let value = serde_json::to_value(&items).expect("serialize responses input");
+        let system_messages = value
+            .as_array()
+            .expect("responses input array")
+            .iter()
+            .filter(|item| item.pointer("/role").and_then(serde_json::Value::as_str) == Some("system"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            system_messages.len(),
+            1,
+            "the notification must reach the wire as its own system message"
+        );
+        assert_eq!(
+            system_messages[0]
+                .pointer("/content/0/text")
+                .and_then(serde_json::Value::as_str),
+            Some("<agena_notification>exit 0</agena_notification>")
+        );
+        assert!(
+            !value
+                .as_array()
+                .expect("responses input array")
+                .iter()
+                .any(|item| item.pointer("/role").and_then(serde_json::Value::as_str)
+                    == Some("assistant")),
+            "the notification must never wire as assistant output content"
         );
     }
 }

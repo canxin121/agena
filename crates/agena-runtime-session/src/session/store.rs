@@ -220,12 +220,12 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
-    /// Submit a system-notification run (marker + content parts), written with
-    /// the System role so the content projects as a system message.
     /// Atomically settle a background operation against its launching run:
     /// steal-safe lease refresh, tool-part terminalization, and appending the
     /// result parts (`PartRole::Assistant`) onto the launching run — no new
-    /// run marker.
+    /// run marker. The notification part's body is projected as a dedicated
+    /// system-message wire part (never assistant reply text), so riding the
+    /// assistant run is safe.
     pub(crate) async fn settle_background_run(
         &self,
         session_id: i64,

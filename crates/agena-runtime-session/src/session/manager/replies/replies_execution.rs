@@ -27,7 +27,7 @@ use agena_domain::{
     PromptCompactionTrigger, RunAbortReason,
 };
 use agena_runtime_contracts::part_content::{ToolResultContent, TypedContent, operation_from_tool_call};
-use agena_storage::store::{Part, PartDelta, PartRole, PartState, RunOutcome};
+use agena_storage::store::{Part, PartDelta, PartRole, PartState};
 use tracing::Instrument;
 
 use super::super::StableRunContext;
@@ -132,8 +132,8 @@ fn should_continue_turn(
 /// The id (run-marker part_id) of the most recent input message in the
 /// session, if any. "Input" is any marker carrying an external arrival into
 /// the conversation: a user-authored run (`PartRole::User`) or a
-/// background-completion notification run (`PartRole::System`). Used to detect
-/// new steer input across model turns.
+/// system-authored run (`PartRole::System`). Used to detect new steer input
+/// across model turns.
 fn last_input_message_id(parts: &[Part]) -> Option<i64> {
     parts
         .iter()
@@ -1098,24 +1098,20 @@ impl SessionManager {
     /// `PluginHost::drain_hook_runs` (session.start, user.prompt.submit,
     /// chat.params, command.before/after, agent.stop) records through here.
     ///
-    /// v2 (design 4.1): hook parts are ordinary parts under an assistant run
-    /// marker (kind `hook`, run_kind `execution`), persisted through the
-    /// facade like any other message; there is no separate content-node
-    /// projection to mirror into.
+    /// v2 (design 4.1): hook parts are ordinary parts appended onto the run
+    /// that launched the hooks (kind `hook`, role Assistant) — no new run
+    /// marker. The launching run is the last run marker in the session: an
+    /// in-flight assistant `continue` marker, a terminal (Completed/Failed/
+    /// Cancelled) final reply, or the always-in-flight `user_send` run when no
+    /// assistant run exists yet (session.start). A hook's `message` (an
+    /// agent.stop continuation) projects as a dedicated system-message wire
+    /// part, never as assistant reply text.
     pub(in crate::session::manager) async fn record_hook_runs(
         &self,
         mut session: Session,
         runs: Vec<agena_plugin_host::HookRunRecord>,
         _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        // v2 (design 4.1): start an assistant-side run marker (`run_kind`
-        // `execution`) and append one `hook` part per observed run through the
-        // facade, then extend the projection with the marker + created parts.
-        let run_marker_content_value = run_marker_content("execution", None, None, None, None);
-        let run_id = self
-            .store
-            .start_run(session.id, "execution", run_marker_content_value.clone())
-            .await?;
         let new_parts = runs
             .iter()
             .map(|run| {
@@ -1134,57 +1130,51 @@ impl SessionManager {
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let created = self
-            .store
-            .append_parts(session.id, run_id, new_parts)
-            .await?;
-        // The hook run is finished as soon as its parts are recorded; terminalize
-        // the marker so a finished hook run does not leave the session stuck in
-        // the Running/Interrupted state (any in-flight run marker forces it).
-        // `complete_run` preserves the marker content (stamping `abort_reason:
-        // null`) and the facade's `start_run` role map maps `run_kind ==
-        // "execution"` to the Assistant role, so the hook run is an assistant
-        // run like any other activity.
-        self.store
-            .complete_run(
-                session.id,
-                run_id,
-                RunOutcome {
-                    status: PartState::Completed,
-                    abort_reason: None,
-                    content: None,
-                    provider_state: None,
-                },
-            )
-            .await?;
-        // `start_run`/`complete_run` return only the marker id; rebuild the
-        // terminal marker in the projection exactly as the engine finalized it.
-        let now_ms = Utc::now().timestamp_millis();
-        let mut marker_content_value = run_marker_content_value;
-        if let serde_json::Value::Object(map) = &mut marker_content_value {
-            map.insert("abort_reason".to_owned(), serde_json::Value::Null);
-        }
-        let marker = Part {
-            part_id: run_id,
-            kind: "run".to_owned(),
-            role: PartRole::Assistant,
-            state: PartState::Completed,
-            content: marker_content_value,
-            summary: None,
-            visibility: agena_storage::store::PartVisibility::Both,
-            rendered_markdown: None,
-            parent_part_id: None,
-            run_id: None,
-            origin_session_id: session.id,
-            revision: 1,
-            started_at_ms: now_ms,
-            finished_at_ms: Some(now_ms),
-            created_at_ms: now_ms,
-            updated_at_ms: now_ms,
-            provider_state: None,
+        // Resolve the launching run from the session's persisted parts (the
+        // caller passes a loaded/projected session, so markers are visible).
+        // The LAST run marker is the launching run at every drain site: the
+        // freshly-submitted `user_send` or the current turn's `continue`
+        // marker, or the final (terminal) reply after a stop/failure.
+        let launching = session.parts().iter().rev().find(|part| part.is_run_marker());
+        let created = match launching {
+            // In-flight assistant run (mid-turn continue marker): the guarded
+            // append accepts it.
+            Some(marker) if marker.role == PartRole::Assistant && marker.state.is_in_flight() => {
+                self.store
+                    .append_parts(session.id, marker.part_id, new_parts)
+                    .await?
+            }
+            // Terminal assistant run (Completed/Failed/Cancelled final reply):
+            // settle appends under terminal markers without touching their
+            // state; the in-flight-only terminalize branch is skipped.
+            Some(marker) if marker.role == PartRole::Assistant => {
+                self.store
+                    .settle_background_run(session.id, marker.part_id, None, new_parts)
+                    .await?
+            }
+            // No assistant run yet (session.start / pre-turn): the always
+            // in-flight `user_send` run.
+            Some(marker)
+                if marker.role == PartRole::User
+                    && marker.state.is_in_flight()
+                    && marker
+                        .content
+                        .get("run_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("user_send") =>
+            {
+                self.store
+                    .append_parts(session.id, marker.part_id, new_parts)
+                    .await?
+            }
+            _ => {
+                return Err(AppError::Internal(format!(
+                    "no launching run marker found to record hook runs for session {}",
+                    session.id
+                )))
+            }
         };
         let mut projected = session.parts().to_vec();
-        projected.push(marker);
         projected.extend(created);
         session.install_projected_parts(projected);
         Ok(session)

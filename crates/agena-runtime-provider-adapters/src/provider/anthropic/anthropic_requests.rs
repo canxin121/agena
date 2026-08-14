@@ -62,6 +62,14 @@ impl AnthropicAdapter {
                 wire_message::WirePart::Reasoning { text } => {
                     blocks.push(AnthropicTextBlock::text(text.clone()));
                 }
+                // A system notice (background-operation notification) rides the
+                // assistant message as a text block: Anthropic has no
+                // mid-conversation system message, so this is its only
+                // in-conversation carrier. It stays out of the `system` hoist
+                // (which is prompt-level only), preserving the launch order.
+                wire_message::WirePart::SystemMessage { text } => {
+                    blocks.push(AnthropicTextBlock::text(text.clone()));
+                }
                 wire_message::WirePart::Attachment { item } => {
                     blocks.extend(Self::attachment_blocks(item));
                 }

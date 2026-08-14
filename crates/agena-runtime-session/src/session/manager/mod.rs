@@ -1827,7 +1827,9 @@ impl SessionManager {
                 // The launching run is the assistant run that called the tool
                 // (the tool part's `run_id`). The notification result belongs
                 // to that run: append it as an Assistant-role part under the
-                // SAME marker — no new run.
+                // SAME marker — no new run. Its body projects as a dedicated
+                // system-message wire part (never assistant reply text), so it
+                // cannot leak into the assistant's own visible output.
                 let run_id = session
                     .parts()
                     .iter()
@@ -1963,7 +1965,9 @@ impl SessionManager {
                 // The launching run is the assistant run that started the
                 // monitor (the tool part's `run_id`). The event belongs to
                 // that run: append it as an Assistant-role part under the
-                // SAME marker — no new run.
+                // SAME marker — no new run. Its body projects as a dedicated
+                // system-message wire part (never assistant reply text), so it
+                // cannot leak into the assistant's own visible output.
                 let run_id = session
                     .parts()
                     .iter()

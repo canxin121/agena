@@ -2043,6 +2043,151 @@ impl SessionManager {
         .await?;
         Ok(())
     }
+
+    /// Deliver a scheduled job's prompt as an **Assistant-role**
+    /// `system_notification` part appended onto the existing run — no new run
+    /// marker — and wake the model over it. This is the AI-identity
+    /// counterpart of a background operation's completion notification: the
+    /// prompt rides the launching assistant run as a typed part, projected as
+    /// a dedicated system-message wire part (never assistant reply text, never
+    /// a User-role `user_send` run).
+    ///
+    /// The durable `system_notification` part (`operation_kind`
+    /// "scheduled_delivery", `operation_id` = delivery key) is the idempotency
+    /// claim, so a re-delivered job (e.g. after a process crash) is a no-op.
+    /// Returns true when newly delivered, false when the claim already existed.
+    pub async fn deliver_scheduled_job(
+        &self,
+        session_id: i64,
+        job_id: String,
+        delivery_key: String,
+        prompt: String,
+    ) -> Result<bool, AppError> {
+        let notification = SystemNotificationContent {
+            operation_id: delivery_key.clone(),
+            operation_kind: "scheduled_delivery".to_string(),
+            status: "submitted".to_string(),
+            summary: format!("Scheduled job {job_id} fired"),
+            body: prompt.clone(),
+            ..Default::default()
+        };
+        let committed = self
+            .session_mutations
+            .run(session_id, async {
+                let session = self.store.load_session(session_id).await?;
+                if session
+                    .parts()
+                    .iter()
+                    .any(|part| part_records_notification(part, "scheduled_delivery", &delivery_key))
+                {
+                    // The durable part is the claim; a re-delivered job is a
+                    // no-op.
+                    return Ok(false);
+                }
+                // The delivery belongs to the existing assistant run: append
+                // it as an Assistant-role part under the SAME marker — no new
+                // run. Its body projects as a dedicated system-message wire
+                // part (never assistant reply text), so it cannot leak into
+                // the assistant's own visible output or masquerade as a user
+                // message.
+                let launching = session.parts().iter().rev().find(|part| part.is_run_marker());
+                let new_part = new_part_from_content(
+                    "system_notification",
+                    PartRole::Assistant,
+                    &TypedContent::SystemNotification(notification.clone()),
+                    PartState::Completed,
+                )?;
+                match launching {
+                    // In-flight assistant run → guarded append.
+                    Some(marker) if marker.role == PartRole::Assistant
+                        && marker.state.is_in_flight() => {
+                        self.store
+                            .append_parts(session.id, marker.part_id, vec![new_part])
+                            .await?;
+                    }
+                    // Terminal assistant run (Completed/Failed/Cancelled) →
+                    // settle appends under terminal markers without closing
+                    // anything.
+                    Some(marker) if marker.role == PartRole::Assistant => {
+                        self.store
+                            .settle_background_run(session.id, marker.part_id, None, vec![new_part])
+                            .await?;
+                    }
+                    // Appending an Assistant notification under a User run
+                    // would project its prompt as *user* content — the exact
+                    // identity regression being fixed. Unreachable: the
+                    // scheduler skips while the session is running, so no
+                    // `user_send` marker can be last.
+                    Some(marker) => {
+                        return Err(AppError::Internal(format!(
+                            "scheduled delivery for session {session_id} found a {:?} run marker to ride",
+                            marker.role
+                        )))
+                    }
+                    None => {
+                        return Err(AppError::Internal(format!(
+                            "scheduled delivery for session {session_id} found no run marker to ride"
+                        )))
+                    }
+                }
+                Ok(true)
+            })
+            .await?;
+        if !committed {
+            return Ok(false);
+        }
+        // Wake the model over the delivered prompt (the agena analog of Claude
+        // Code's `<task-notification>` waking the launching turn).
+        if self.execution_registry.is_active(session_id).await {
+            // Mid-turn: the running execution must take a fresh model turn over
+            // the appended notification. Steer it; `drain_steer_input` reloads
+            // the session and the stable-run loop's notification detection
+            // re-triggers. If the execution already returned (a narrow race
+            // between the steer send and the loop's final drain), fall back to
+            // an idle wake execution.
+            if let Err(error) = self
+                .steer_input(
+                    session_id,
+                    vec![TypedContent::SystemNotification(notification.clone())],
+                )
+                .await
+            {
+                tracing::debug!(
+                    target: "agena_background",
+                    %session_id, %delivery_key, %error,
+                    "mid-turn scheduled-delivery steer missed the active execution; waking idle"
+                );
+                self.execute_registered(
+                    session_id,
+                    ExecutionSource::User,
+                    ExecutionConversationTarget::NewTurn,
+                    "notification execution",
+                    move |manager, control, steer_rx| async move {
+                        manager
+                            .notification_run_inner(session_id, control, steer_rx)
+                            .await
+                    },
+                )
+                .await?;
+            }
+            return Ok(true);
+        }
+        // Idle: start a fresh execution that picks the delivered prompt up as
+        // its first input.
+        self.execute_registered(
+            session_id,
+            ExecutionSource::User,
+            ExecutionConversationTarget::NewTurn,
+            "notification execution",
+            move |manager, control, steer_rx| async move {
+                manager
+                    .notification_run_inner(session_id, control, steer_rx)
+                    .await
+            },
+        )
+        .await?;
+        Ok(true)
+    }
 }
 
 /// True when a `system_notification` part records the given operation's

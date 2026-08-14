@@ -3349,3 +3349,217 @@ async fn monitor_events_append_as_assistant_parts_without_terminalizing() {
         "the terminal settle terminalizes the launching run marker"
     );
 }
+
+#[tokio::test]
+async fn scheduled_delivery_appends_onto_the_terminal_assistant_run_as_an_assistant_part() {
+    let provider = Arc::new(FakeProvider {
+        provider_id: "fake",
+        model: ModelId::new("fake-model"),
+        deltas: vec!["acknowledged the scheduled job".to_owned()],
+        thinking_deltas: Vec::new(),
+        finish_reason: Some(CompletionFinishReason::Stop),
+    });
+    let manager = manager_with_provider(provider).await;
+    let session = create(&manager, "scheduled delivery").await;
+    let session_id = session.id;
+
+    // A completed final assistant reply — the launching run an idle-fired
+    // scheduled job appends onto (the last run marker of an idle session).
+    let run_id = manager
+        .store
+        .start_run(
+            session_id,
+            "continue",
+            run_marker_content("continue", None, None, None, None),
+        )
+        .await
+        .expect("start launching run marker");
+    manager
+        .store
+        .complete_run(
+            session_id,
+            run_id,
+            agena_storage::store::RunOutcome {
+                status: PartState::Completed,
+                abort_reason: None,
+                content: None,
+                provider_state: None,
+            },
+        )
+        .await
+        .expect("complete launching run");
+
+    // First delivery: appends the prompt as an Assistant-role
+    // `system_notification` part onto the launching run — no new run marker,
+    // no User-role `user_send` run. The durable part is the idempotency claim.
+    let delivered = manager
+        .deliver_scheduled_job(
+            session_id,
+            "job-1".to_owned(),
+            "delivery-key-1".to_owned(),
+            "check the background task list and report".to_owned(),
+        )
+        .await
+        .expect("deliver scheduled job");
+    assert!(delivered, "first delivery is new");
+    let reloaded = manager
+        .get_session(session_id)
+        .await
+        .expect("reload session");
+    let parts = reloaded.parts();
+    let notifications = parts
+        .iter()
+        .filter(|part| part.kind == "system_notification")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        notifications.len(),
+        1,
+        "exactly one delivery part appended onto the existing run"
+    );
+    assert_eq!(
+        notifications[0].role,
+        PartRole::Assistant,
+        "the delivery rides the launching assistant run with AI identity, never \
+         as a User-role user_send run"
+    );
+    assert_eq!(
+        notifications[0].run_id,
+        Some(run_id),
+        "the delivery appends onto the existing assistant run (no new run)"
+    );
+    let content =
+        typed_content_from_value(&notifications[0].kind, &notifications[0].content).expect("decode");
+    let TypedContent::SystemNotification(notification) = content else {
+        panic!("delivery part is a system_notification");
+    };
+    assert_eq!(notification.operation_kind, "scheduled_delivery");
+    assert_eq!(notification.operation_id, "delivery-key-1");
+    assert_eq!(notification.status, "submitted");
+    assert_eq!(
+        notification.body, "check the background task list and report",
+        "the job prompt is the model-visible body"
+    );
+    assert!(super::part_records_notification(
+        notifications[0],
+        "scheduled_delivery",
+        "delivery-key-1"
+    ));
+    assert!(
+        !parts.iter().any(|part| part.is_run_marker()
+            && part.role == PartRole::User
+            && part
+                .content
+                .get("run_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("user_send")),
+        "no user_send run is created for a scheduled delivery"
+    );
+    let state = manager
+        .session_store()
+        .session_state(session_id)
+        .await
+        .expect("derive session state");
+    assert_eq!(
+        state.state,
+        SessionState::Ready,
+        "the delivery leaves the session Ready once the wake turn finishes"
+    );
+
+    // A re-delivered job is a no-op: the durable part is the claim.
+    let redelivered = manager
+        .deliver_scheduled_job(
+            session_id,
+            "job-1".to_owned(),
+            "delivery-key-1".to_owned(),
+            "check the background task list and report".to_owned(),
+        )
+        .await
+        .expect("re-deliver scheduled job");
+    assert!(!redelivered, "re-delivery is a no-op");
+    let reloaded = manager
+        .get_session(session_id)
+        .await
+        .expect("reload session after dedup");
+    assert_eq!(
+        reloaded
+            .parts()
+            .iter()
+            .filter(|part| part.kind == "system_notification")
+            .count(),
+        1,
+        "dedup keeps a single delivery part"
+    );
+}
+
+#[tokio::test]
+async fn scheduled_delivery_appends_onto_the_in_flight_assistant_run() {
+    let provider = Arc::new(FakeProvider {
+        provider_id: "fake",
+        model: ModelId::new("fake-model"),
+        deltas: vec!["acknowledged the scheduled job".to_owned()],
+        thinking_deltas: Vec::new(),
+        finish_reason: Some(CompletionFinishReason::Stop),
+    });
+    let manager = manager_with_provider(provider).await;
+    let session = create(&manager, "scheduled delivery in-flight").await;
+    let session_id = session.id;
+
+    // An in-flight launching assistant run (a turn still open).
+    let run_id = manager
+        .store
+        .start_run(
+            session_id,
+            "continue",
+            run_marker_content("continue", None, None, None, None),
+        )
+        .await
+        .expect("start launching run marker");
+
+    let delivered = manager
+        .deliver_scheduled_job(
+            session_id,
+            "job-2".to_owned(),
+            "delivery-key-2".to_owned(),
+            "summarize what changed".to_owned(),
+        )
+        .await
+        .expect("deliver scheduled job");
+    assert!(delivered, "first delivery is new");
+    let reloaded = manager
+        .get_session(session_id)
+        .await
+        .expect("reload session");
+    let parts = reloaded.parts();
+    let notifications = parts
+        .iter()
+        .filter(|part| part.kind == "system_notification")
+        .collect::<Vec<_>>();
+    assert_eq!(notifications.len(), 1, "exactly one delivery part");
+    assert_eq!(notifications[0].role, PartRole::Assistant);
+    assert_eq!(
+        notifications[0].run_id,
+        Some(run_id),
+        "the delivery appends onto the existing in-flight assistant run"
+    );
+    assert!(
+        !parts.iter().any(|part| part.is_run_marker()
+            && part.role == PartRole::User
+            && part
+                .content
+                .get("run_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("user_send")),
+        "no user_send run is created for a scheduled delivery"
+    );
+    // The delivery itself creates no run marker; the wake then opens a fresh
+    // assistant marker for the model's response (a new turn), which is
+    // expected — the response is a new turn, the delivery part is not.
+    let launching_marker = parts
+        .iter()
+        .find(|part| part.is_run_marker() && part.part_id == run_id)
+        .expect("launching run marker");
+    assert!(
+        launching_marker.state.is_in_flight(),
+        "the in-flight launching run stays in-flight (append, don't terminalize)"
+    );
+}

@@ -398,7 +398,7 @@ pub struct SystemNotificationContent {
     /// The background operation id (task id or process id).
     #[serde(default)]
     pub operation_id: String,
-    /// "task" | "shell" | "workflow" | "monitor".
+    /// "task" | "shell" | "workflow" | "monitor" | "scheduled_delivery".
     #[serde(default)]
     pub operation_kind: String,
     /// The launching tool_call's provider operation id (`agena.operation_id`).

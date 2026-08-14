@@ -1621,4 +1621,80 @@ mod tests {
             "the hook continuation must project as a typed SystemMessage, never as assistant Text"
         );
     }
+
+    #[test]
+    fn scheduled_delivery_projects_as_system_message_never_assistant_text() {
+        // The cron-identity regression: a scheduled job's prompt is delivered
+        // as an Assistant-role `system_notification` part (`operation_kind`
+        // "scheduled_delivery") appended onto the existing run — never a
+        // User-role `user_send` run. The projection must derive Role::Assistant
+        // (the run's role) but emit the prompt as a dedicated SystemMessage
+        // part — never as `Text`, which is exactly how a scheduled prompt could
+        // leak into the model's visible output.
+        let notification = agena_runtime_contracts::part_content::SystemNotificationContent {
+            operation_id: "delivery-key-1".to_string(),
+            operation_kind: "scheduled_delivery".to_string(),
+            status: "submitted".to_string(),
+            summary: "Scheduled job job-1 fired".to_string(),
+            body: "check the background task list and report".to_string(),
+            ..Default::default()
+        };
+        let marker = run_marker(PartRole::Assistant, None);
+        let mut body_part = part(
+            "system_notification",
+            PartRole::Assistant,
+            PartState::Completed,
+            notification.as_value(),
+        );
+        body_part.run_id = Some(marker.part_id);
+
+        let input = project_completion_input(&[marker, body_part]);
+
+        assert_eq!(
+            input.role,
+            Role::Assistant,
+            "the scheduled delivery rides the existing assistant run (no new run marker)"
+        );
+        assert!(
+            matches!(
+                input.parts.as_slice(),
+                [agena_provider::CompletionInputPart::SystemMessage { text }]
+                    if text == "check the background task list and report"
+            ),
+            "the scheduled prompt must project as a typed SystemMessage, never as assistant Text"
+        );
+    }
+
+    #[test]
+    fn persisted_scheduled_delivery_projects_as_system_message_wire_part() {
+        // `project_persisted` must emit the scheduled prompt as a dedicated
+        // SystemMessage wire part (never `WirePart::Text`), so adapters deliver
+        // it as a system/notice message rather than the assistant's own reply.
+        let notification = agena_runtime_contracts::part_content::SystemNotificationContent {
+            operation_id: "delivery-key-1".to_string(),
+            operation_kind: "scheduled_delivery".to_string(),
+            status: "submitted".to_string(),
+            summary: "Scheduled job job-1 fired".to_string(),
+            body: "check the background task list and report".to_string(),
+            ..Default::default()
+        };
+        let body_part = part(
+            "system_notification",
+            PartRole::Assistant,
+            PartState::Completed,
+            notification.as_value(),
+        );
+
+        let projected = project_persisted(&[body_part]);
+        assert_eq!(projected.len(), 1);
+        assert!(
+            matches!(
+                &projected[0],
+                WirePart::SystemMessage { text }
+                    if text == "check the background task list and report"
+            ),
+            "the persisted scheduled prompt must project as WirePart::SystemMessage, \
+             never WirePart::Text"
+        );
+    }
 }

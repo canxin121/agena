@@ -3148,7 +3148,7 @@ Cron-style and one-shot wakeup scheduling tools.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Schedule a one-shot or recurring job with a standard 5-field cron expression (minute hour day-of-month month day-of-week). The job fires while the session is idle and submits its prompt as a new user message, waking you again; never use it to poll. Jobs are session-only and recurring jobs auto-expire after seven days. When the exact time does not matter, pick a minute that is not :00 or :30 to avoid clumping.
+> Schedule a one-shot or recurring job with a standard 5-field cron expression (minute hour day-of-month month day-of-week). The job fires while the session is idle and delivers its prompt to you as a system_notification appended onto the current run, waking you again; never use it to poll. Jobs are session-only and recurring jobs auto-expire after seven days. When the exact time does not matter, pick a minute that is not :00 or :30 to avoid clumping.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -3297,7 +3297,7 @@ Cron-style and one-shot wakeup scheduling tools.
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Read the bounded delivery history (fire times, outcome, last error) for scheduled jobs. Never poll this waiting for a job to fire — the firing itself submits a new message and wakes you.
+> Read the bounded delivery history (fire times, outcome, last error) for scheduled jobs. Never poll this waiting for a job to fire — the firing itself appends its prompt to the session and wakes you.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |

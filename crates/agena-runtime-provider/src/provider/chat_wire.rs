@@ -674,6 +674,93 @@ mod tests {
             "the hook continuation must never wire as assistant reply content"
         );
     }
+
+    #[test]
+    fn scheduled_delivery_wires_as_a_system_message_never_assistant_text() {
+        // The cron-identity regression at the Chat Completions boundary: a
+        // scheduled job's prompt is delivered as an Assistant-role
+        // `system_notification` part (`operation_kind` "scheduled_delivery")
+        // appended onto the existing run. It must wire as a genuine
+        // mid-conversation `system` message — never as the assistant's own
+        // reply content, and never as a user message.
+        let notification = agena_runtime_contracts::part_content::SystemNotificationContent {
+            operation_id: "delivery-key-1".to_string(),
+            operation_kind: "scheduled_delivery".to_string(),
+            status: "submitted".to_string(),
+            summary: "Scheduled job job-1 fired".to_string(),
+            body: "check the background task list and report".to_string(),
+            ..Default::default()
+        };
+        let marker = run_marker(json!({}));
+        let mut body_part = part(
+            "system_notification",
+            serde_json::to_value(&notification).expect("notification serializes"),
+        );
+        body_part.run_id = Some(marker.part_id);
+
+        let source = crate::provider::project_completion_input(&[marker, body_part]);
+        assert_eq!(
+            source.role,
+            agena_domain::Role::Assistant,
+            "the scheduled delivery rides the existing assistant run (no new run)"
+        );
+
+        let messages = super::request_to_chat_messages_with_assistant_reasoning_field(
+            &agena_provider::CompletionRequest {
+                model: agena_domain::ModelId::new("test-model"),
+                system: None,
+                turns: vec![source],
+                tool_api_functions: Vec::new(),
+                provider_native_tools: Default::default(),
+                disable_tools: false,
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                provider_compaction: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                response_format: None,
+                responses_api_metadata: None,
+                request_override: Default::default(),
+            },
+            None,
+        );
+
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message.role == "system")
+                .count(),
+            1,
+            "the scheduled prompt must reach the wire as its own system message"
+        );
+        let system = messages
+            .iter()
+            .find(|message| message.role == "system")
+            .expect("the scheduled prompt system message");
+        assert_eq!(
+            system.content,
+            Some(Value::String("check the background task list and report".to_owned()))
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|message| message.role == "assistant"),
+            "the scheduled prompt must never wire as assistant reply content"
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|message| message.role == "user"),
+            "the scheduled prompt must never wire as a user message"
+        );
+    }
 }
 
 pub fn extract_reasoning_text_from_delta_or_message(value: &ChatDeltaOrMessage) -> Option<String> {

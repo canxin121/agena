@@ -581,30 +581,6 @@ impl SessionManager {
         self.execution_registry.is_active(session_id).await
     }
 
-    pub async fn resolve_scheduled_run_options(
-        &self,
-        session_id: i64,
-    ) -> Result<SessionRunOptions, AppError> {
-        let session = self.get_session(session_id).await?;
-        let state = self.execution_state();
-        let model = self.model_from_session_or_default(&session, &state)?;
-        self.apply_execution_context_to_run_options_async(
-            &session,
-            SessionRunOptions {
-                model,
-                thinking_mode: None,
-                speed_mode: None,
-                verbosity: None,
-                thinking: None,
-                request_override: Default::default(),
-                system: None,
-                temperature: None,
-                max_output_tokens: None,
-            },
-        )
-        .await
-    }
-
     pub async fn workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {
         let workspace_id = self.current_workspace_id().await?;
         let summaries = self
@@ -634,36 +610,6 @@ impl SessionManager {
         let _ = include_full_parts;
         let session = self.store.load_session(session_id).await?;
         super::history::projected_runs_from_parts(session.parts())
-    }
-
-    /// Returns whether a persisted user message already owns an external
-    /// idempotency key. Scheduler/connector sinks call this before replaying a
-    /// delivery that may have been submitted just before a process crash.
-    ///
-    /// The key is not a column on the parts schema; when a submit recorded it
-    /// on the user run marker's content, it is recovered there. (The storage
-    /// engine additionally keeps the key in its idempotency table and dedups
-    /// re-submits by it, so a miss here is still safe at submit time.)
-    pub async fn has_user_message_idempotency_key(
-        &self,
-        session_id: i64,
-        key: &str,
-    ) -> Result<bool, AppError> {
-        if key.trim().is_empty() {
-            return Ok(false);
-        }
-        let session = self.store.load_session(session_id).await?;
-        Ok(session
-            .parts()
-            .iter()
-            .filter(|part| part.is_run_marker() && part.role == PartRole::User)
-            .any(|marker| {
-                marker
-                    .content
-                    .get("idempotency_key")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(key)
-            }))
     }
 
     pub async fn broadcast_session_end(

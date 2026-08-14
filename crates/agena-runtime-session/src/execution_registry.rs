@@ -10,7 +10,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc,
+        Arc, Mutex as StdMutex,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -19,7 +19,7 @@ use std::{
 use agena_domain::{
     CancellationResult, ExecutionId, ExecutionLifecycle, ExecutionOutcome, ExecutionPhase,
 };
-use tokio::sync::{Mutex, Notify, mpsc};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 /// Errors surfaced by cancellation, steering, and exclusive registration.
@@ -128,6 +128,13 @@ impl<T> ExecutionControl<T> {
 /// Registry of active executions.
 pub struct ExecutionRegistry<T> {
     inner: Mutex<HashMap<i64, Arc<ExecutionControl<T>>>>,
+    /// Delivery handshake for steered background notifications: `(session_id,
+    /// notification part_id)` → the settle's one-shot. The stable-run loop
+    /// fires it the moment its notification cursor observes the appended part
+    /// ([`Self::ack_notification`]); the settle awaits it (or the execution's
+    /// release) before concluding the wake landed, so a steer dropped at the
+    /// end of a turn cannot leave the session silent.
+    notification_acks: StdMutex<HashMap<(i64, i64), oneshot::Sender<()>>>,
 }
 
 impl<T: Send + 'static> Default for ExecutionRegistry<T> {
@@ -143,6 +150,7 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
+            notification_acks: StdMutex::new(HashMap::new()),
         }
     }
 
@@ -277,6 +285,53 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
 
     pub async fn is_active(&self, session_id: i64) -> bool {
         self.inner.lock().await.contains_key(&session_id)
+    }
+
+    /// Register the delivery handshake for a notification part the settle just
+    /// appended and steered. The returned receiver resolves when the stable-run
+    /// loop's notification cursor observes the part
+    /// ([`Self::ack_notification`]) — the confirmation that the steer reached
+    /// a live loop that will take a fresh model turn over it.
+    pub fn register_notification_ack(
+        &self,
+        session_id: i64,
+        part_id: i64,
+    ) -> oneshot::Receiver<()> {
+        let (tx, rx) = oneshot::channel();
+        self.notification_acks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert((session_id, part_id), tx);
+        rx
+    }
+
+    /// Acknowledge that the loop's notification cursor observed `part_id` —
+    /// fired by the stable-run loop for every newly-seen `system_notification`
+    /// part, confirming the corresponding settle's wake steer was delivered.
+    pub fn ack_notification(&self, session_id: i64, part_id: i64) {
+        if let Some(tx) = self
+            .notification_acks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(session_id, part_id))
+        {
+            let _ = tx.send(());
+        }
+    }
+
+    /// Wait until `session_id` has no active execution. The notification settle
+    /// uses this to distinguish "the steered execution is alive and will drain
+    /// the steer" (stays pending until the loop acks) from "the execution
+    /// exited without observing the notification" (returns, and the settle
+    /// starts a fresh wake over the appended part). Polls like
+    /// [`Self::wait_until_cancelled_released`]; this is a rare settle path.
+    pub async fn wait_until_released(&self, session_id: i64) {
+        loop {
+            if !self.is_active(session_id).await {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     /// Wake the active execution that owns a canonical assistant reply after

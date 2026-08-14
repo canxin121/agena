@@ -409,6 +409,21 @@ impl SessionManager {
                 // notification part itself already lives under the launching
                 // run (no new run); the model's response opens a fresh
                 // assistant marker like any new input.
+                //
+                // Acknowledge every newly-seen notification part to its
+                // settle: the settle steers and then waits for this
+                // acknowledgment (or this execution's release) before
+                // concluding the wake landed. A settle that landed after our
+                // final steer drain would otherwise be silently dropped —
+                // notification appended, model never woken.
+                for part in session.parts() {
+                    if part.kind == "system_notification"
+                        && part.part_id > observed_notification_id.unwrap_or(0)
+                    {
+                        self.execution_registry
+                            .ack_notification(session.id, part.part_id);
+                    }
+                }
                 observed_notification_id = latest_notification;
                 model_requested = true;
                 turn_run_id = None;

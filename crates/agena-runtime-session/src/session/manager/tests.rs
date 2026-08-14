@@ -3563,3 +3563,177 @@ async fn scheduled_delivery_appends_onto_the_in_flight_assistant_run() {
         "the in-flight launching run stays in-flight (append, don't terminalize)"
     );
 }
+
+#[tokio::test]
+async fn a_settle_whose_steer_reaches_a_turn_that_never_drains_it_still_wakes_the_model() {
+    // Regression for the monitor-mode completion that went silent (QA session
+    // 50, test F): the completion settle landed while the launching turn was
+    // already in its final stop path — the execution was still registered, so
+    // the steer send succeeded, but the loop's final `drain_steer_input` had
+    // already passed and never polled again. The notification part existed;
+    // the model was never woken. The settle must detect the unobserved steer
+    // and start a fresh wake execution.
+    let provider = Arc::new(FakeProvider {
+        provider_id: "fake",
+        model: ModelId::new("fake-model"),
+        deltas: vec!["acknowledged the finished background operation".to_owned()],
+        thinking_deltas: Vec::new(),
+        finish_reason: Some(CompletionFinishReason::Stop),
+    });
+    let manager = manager_with_provider(provider).await;
+    let session = create(&manager, "steer-drop regression").await;
+    let session_id = session.id;
+
+    // A launching assistant run with a background `shell` tool part in-flight.
+    let run_id = manager
+        .store
+        .start_run(
+            session_id,
+            "continue",
+            run_marker_content("continue", Some("fake"), Some("fake-model"), None, None),
+        )
+        .await
+        .expect("start launching run marker");
+    let mut operation = agena_runtime_contracts::part::OperationPart::pending(
+        1,
+        ToolInvocation::new("shell.run", StructuredObject::default()),
+        "Background shell",
+        TimeRange {
+            start_ms: 1,
+            end_ms: None,
+        },
+    );
+    operation.set_background_operation(&agena_runtime_contracts::part::BackgroundOperation {
+        kind: "shell".to_owned(),
+        id: "proc_dropped".to_owned(),
+    });
+    let tool_part = new_part_from_content(
+        "tool_call",
+        PartRole::Assistant,
+        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        PartState::InProgress,
+    )
+    .expect("build background tool part");
+    manager
+        .store
+        .append_parts(session_id, run_id, vec![tool_part])
+        .await
+        .expect("append background tool part");
+
+    // An "active" execution that never drains its steer and exits only when
+    // the test signals it — the exact post-final-drain window of the bug.
+    let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
+    let owner = manager.background_handle();
+    let stuck_execution = tokio::spawn(async move {
+        owner
+            .execute_registered(
+                session_id,
+                agena_domain::ExecutionSource::User,
+                ExecutionConversationTarget::NewTurn,
+                "steer-drop fixture",
+                move |_manager, _control, steer_rx| async move {
+                    // Never poll the steer: the loop's final drain already
+                    // passed. Dropping the receiver on exit is what closes the
+                    // steer channel.
+                    let _steer_rx = steer_rx;
+                    let _ = exit_rx.await;
+                    Ok::<(), crate::AppError>(())
+                },
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !manager.execution_registry.is_active(session_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("stuck execution registers");
+
+    // The settle lands mid-"turn": it appends the notification and steers the
+    // active execution, then must verify the steer landed.
+    let notification = SystemNotificationContent {
+        operation_id: "proc_dropped".to_string(),
+        operation_kind: "shell".to_string(),
+        status: "completed".to_string(),
+        summary: "exit 0".to_string(),
+        body: "exit 0".to_string(),
+        ..Default::default()
+    };
+    let settle = tokio::spawn({
+        let manager = manager.background_handle();
+        async move {
+            manager
+                .settle_background_operation(
+                    session_id,
+                    "shell",
+                    "proc_dropped",
+                    PartState::Completed,
+                    Ok("exit 0".to_owned()),
+                    notification.clone(),
+                )
+                .await
+        }
+    });
+    // Let the settle commit the notification part and send its steer.
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let session = manager.get_session(session_id).await.expect("reload session");
+            if session
+                .parts()
+                .iter()
+                .any(|part| part.kind == "system_notification")
+            {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("settle appends the notification part");
+
+    // The "turn" exits without ever draining the steer.
+    let _ = exit_tx.send(());
+    let stuck_result = tokio::time::timeout(std::time::Duration::from_secs(2), stuck_execution)
+        .await
+        .expect("stuck execution exits")
+        .expect("stuck execution joins");
+    assert!(stuck_result.is_ok(), "stuck execution ends cleanly");
+
+    // The settle must detect the unobserved steer and start a fresh wake
+    // execution over the appended notification.
+    let settled = tokio::time::timeout(std::time::Duration::from_secs(5), settle)
+        .await
+        .expect("settle completes")
+        .expect("settle task joins");
+    assert!(settled.is_ok(), "settle reports success: {:?}", settled.err());
+
+    let state = manager
+        .session_store()
+        .session_state(session_id)
+        .await
+        .expect("derive session state");
+    assert_eq!(
+        state.state,
+        SessionState::Ready,
+        "the session is woken and Ready, not left silent after the dropped steer"
+    );
+    let reloaded = manager
+        .get_session(session_id)
+        .await
+        .expect("reload session");
+    let runs = parts_into_runs(reloaded.parts());
+    let wake_text = runs
+        .iter()
+        .rev()
+        .find_map(|run| {
+            let visible = run_visible_text_lossy(run);
+            (!visible.trim().is_empty()).then_some(visible)
+        })
+        .expect("the wake turn produced a reply");
+    assert_eq!(
+        wake_text.trim(),
+        "acknowledged the finished background operation",
+        "the fresh wake execution ran a model turn over the notification"
+    );
+}

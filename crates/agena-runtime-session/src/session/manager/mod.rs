@@ -1736,7 +1736,7 @@ impl SessionManager {
                     // The durable part is the claim; a re-delivered completion
                     // signal is a no-op. The operation was already settled and
                     // notified on first delivery.
-                    return Ok(false);
+                    return Ok((false, None));
                 }
                 let part_index = session
                     .parts()
@@ -1842,7 +1842,8 @@ impl SessionManager {
                     &TypedContent::SystemNotification(notification.clone()),
                     PartState::Completed,
                 )?;
-                self.store
+                let created = self
+                    .store
                     .settle_background_run(
                         session_id,
                         run_id,
@@ -1850,63 +1851,17 @@ impl SessionManager {
                         vec![new_part],
                     )
                     .await?;
-                Ok(true)
+                Ok((true, created.first().map(|part| part.part_id)))
             })
             .await?;
+        let (committed, notification_part_id) = committed;
         if !committed {
             return Ok(());
         }
         // Wake the model over the settled result (the agena analog of Claude
         // Code's `<task-notification>` waking the launching turn).
-        if self.execution_registry.is_active(session_id).await {
-            // Mid-turn: the running execution must take a fresh model turn over
-            // the appended notification. Steer it; `drain_steer_input` reloads
-            // the session and the stable-run loop's notification detection
-            // re-triggers. If the execution already returned (a narrow race
-            // between the steer send and the loop's final drain), fall back to
-            // an idle wake execution.
-            if let Err(error) = self
-                .steer_input(
-                    session_id,
-                    vec![TypedContent::SystemNotification(notification.clone())],
-                )
-                .await
-            {
-                tracing::debug!(
-                    target: "agena_background",
-                    %session_id, operation_kind = %kind, operation_id = %id, %error,
-                    "mid-turn notification steer missed the active execution; waking idle"
-                );
-                self.execute_registered(
-                    session_id,
-                    ExecutionSource::User,
-                    ExecutionConversationTarget::NewTurn,
-                    "notification execution",
-                    move |manager, control, steer_rx| async move {
-                        manager
-                            .notification_run_inner(session_id, control, steer_rx)
-                            .await
-                    },
-                )
-                .await?;
-            }
-            return Ok(());
-        }
-        // Idle: start a fresh execution that picks the appended result up as
-        // its first input.
-        self.execute_registered(
-            session_id,
-            ExecutionSource::User,
-            ExecutionConversationTarget::NewTurn,
-            "notification execution",
-            move |manager, control, steer_rx| async move {
-                manager
-                    .notification_run_inner(session_id, control, steer_rx)
-                    .await
-            },
-        )
-        .await?;
-        Ok(())
+        self.wake_after_notification(session_id, notification_part_id, notification)
+            .await
     }
 
     /// Append one monitor event as a `system_notification` part onto the
@@ -1941,7 +1896,7 @@ impl SessionManager {
                 {
                     // The durable part is the claim; a re-delivered event
                     // signal for an already-recorded seq is a no-op.
-                    return Ok(false);
+                    return Ok((false, None));
                 }
                 let part_index = session
                     .parts()
@@ -1982,66 +1937,21 @@ impl SessionManager {
                 )?;
                 // `tool_part: None`: the monitor stays InProgress and its run
                 // marker stays in-flight — settle, don't terminalize.
-                self.store
+                let created = self
+                    .store
                     .settle_background_run(session_id, run_id, None, vec![new_part])
                     .await?;
-                Ok(true)
+                Ok((true, created.first().map(|part| part.part_id)))
             })
             .await?;
+        let (committed, notification_part_id) = committed;
         if !committed {
             return Ok(());
         }
         // Wake the model over the settled event (the agena analog of Claude
         // Code's `<task-notification>` waking the launching turn).
-        if self.execution_registry.is_active(session_id).await {
-            // Mid-turn: the running execution must take a fresh model turn over
-            // the appended event. Steer it; `drain_steer_input` reloads the
-            // session and the stable-run loop's notification detection
-            // re-triggers. If the execution already returned (a narrow race
-            // between the steer send and the loop's final drain), fall back to
-            // an idle wake execution.
-            if let Err(error) = self
-                .steer_input(
-                    session_id,
-                    vec![TypedContent::SystemNotification(notification.clone())],
-                )
-                .await
-            {
-                tracing::debug!(
-                    target: "agena_background",
-                    %session_id, operation_kind = %kind, operation_id = %id, event_seq, %error,
-                    "mid-turn event steer missed the active execution; waking idle"
-                );
-                self.execute_registered(
-                    session_id,
-                    ExecutionSource::User,
-                    ExecutionConversationTarget::NewTurn,
-                    "notification execution",
-                    move |manager, control, steer_rx| async move {
-                        manager
-                            .notification_run_inner(session_id, control, steer_rx)
-                            .await
-                    },
-                )
-                .await?;
-            }
-            return Ok(());
-        }
-        // Idle: start a fresh execution that picks the appended event up as
-        // its first input.
-        self.execute_registered(
-            session_id,
-            ExecutionSource::User,
-            ExecutionConversationTarget::NewTurn,
-            "notification execution",
-            move |manager, control, steer_rx| async move {
-                manager
-                    .notification_run_inner(session_id, control, steer_rx)
-                    .await
-            },
-        )
-        .await?;
-        Ok(())
+        self.wake_after_notification(session_id, notification_part_id, notification)
+            .await
     }
 
     /// Deliver a scheduled job's prompt as an **Assistant-role**
@@ -2082,7 +1992,7 @@ impl SessionManager {
                 {
                     // The durable part is the claim; a re-delivered job is a
                     // no-op.
-                    return Ok(false);
+                    return Ok((false, None));
                 }
                 // The delivery belongs to the existing assistant run: append
                 // it as an Assistant-role part under the SAME marker — no new
@@ -2097,21 +2007,30 @@ impl SessionManager {
                     &TypedContent::SystemNotification(notification.clone()),
                     PartState::Completed,
                 )?;
-                match launching {
+                let notification_part_id = match launching {
                     // In-flight assistant run → guarded append.
                     Some(marker) if marker.role == PartRole::Assistant
                         && marker.state.is_in_flight() => {
-                        self.store
+                        let created = self
+                            .store
                             .append_parts(session.id, marker.part_id, vec![new_part])
                             .await?;
+                        created.first().map(|part| part.part_id)
                     }
                     // Terminal assistant run (Completed/Failed/Cancelled) →
                     // settle appends under terminal markers without closing
                     // anything.
                     Some(marker) if marker.role == PartRole::Assistant => {
-                        self.store
-                            .settle_background_run(session.id, marker.part_id, None, vec![new_part])
+                        let created = self
+                            .store
+                            .settle_background_run(
+                                session.id,
+                                marker.part_id,
+                                None,
+                                vec![new_part],
+                            )
                             .await?;
+                        created.first().map(|part| part.part_id)
                     }
                     // Appending an Assistant notification under a User run
                     // would project its prompt as *user* content — the exact
@@ -2129,51 +2048,117 @@ impl SessionManager {
                             "scheduled delivery for session {session_id} found no run marker to ride"
                         )))
                     }
-                }
-                Ok(true)
+                };
+                Ok((true, notification_part_id))
             })
             .await?;
+        let (committed, notification_part_id) = committed;
         if !committed {
             return Ok(false);
         }
         // Wake the model over the delivered prompt (the agena analog of Claude
         // Code's `<task-notification>` waking the launching turn).
-        if self.execution_registry.is_active(session_id).await {
-            // Mid-turn: the running execution must take a fresh model turn over
-            // the appended notification. Steer it; `drain_steer_input` reloads
-            // the session and the stable-run loop's notification detection
-            // re-triggers. If the execution already returned (a narrow race
-            // between the steer send and the loop's final drain), fall back to
-            // an idle wake execution.
-            if let Err(error) = self
-                .steer_input(
-                    session_id,
-                    vec![TypedContent::SystemNotification(notification.clone())],
-                )
-                .await
-            {
+        self.wake_after_notification(session_id, notification_part_id, notification)
+            .await?;
+        Ok(true)
+    }
+
+    /// Wake the model over a freshly-settled notification (a background
+    /// completion, a monitor event, or a scheduled delivery), shared by the
+    /// three settle paths. The notification part was appended onto the
+    /// launching run inside the session mutation; this runs outside it.
+    ///
+    /// The mid-turn arm steers the active execution and then **verifies the
+    /// steer landed**: the stable-run loop acknowledges the notification part
+    /// the moment its cursor observes it ([`ExecutionRegistry::ack_notification`]),
+    /// so the settle awaits that acknowledgment — or, if the execution exits
+    /// without observing the part (the launch turn was already in its final
+    /// stop path when the steer was sent), falls back to a fresh idle wake
+    /// execution. Without the handshake a steer dropped at the end of a turn
+    /// was silently lost: the notification part existed, but the model was
+    /// never woken and the session went quiet.
+    async fn wake_after_notification(
+        &self,
+        session_id: i64,
+        notification_part_id: Option<i64>,
+        notification: SystemNotificationContent,
+    ) -> Result<(), AppError> {
+        if !self.execution_registry.is_active(session_id).await {
+            // Idle: start a fresh execution that picks the appended
+            // notification up as its first input.
+            self.execute_registered(
+                session_id,
+                ExecutionSource::User,
+                ExecutionConversationTarget::NewTurn,
+                "notification execution",
+                move |manager, control, steer_rx| async move {
+                    manager
+                        .notification_run_inner(session_id, control, steer_rx)
+                        .await
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+        // Mid-turn: the running execution must take a fresh model turn over
+        // the appended notification. Steer it; `drain_steer_input` reloads the
+        // session and the stable-run loop's notification detection
+        // re-triggers. Register the delivery handshake first so the loop can
+        // acknowledge the appended part.
+        let ack_rx = notification_part_id.map(|part_id| {
+            self.execution_registry
+                .register_notification_ack(session_id, part_id)
+        });
+        if let Err(error) = self
+            .steer_input(
+                session_id,
+                vec![TypedContent::SystemNotification(notification.clone())],
+            )
+            .await
+        {
+            // The receiver was already dropped: the execution's final drain
+            // passed and it is mid-unwind (still registered). Wait for it to
+            // release, then a fresh execution picks the appended notification
+            // up as its first input.
+            tracing::debug!(
+                target: "agena_background",
+                %session_id, operation_kind = %notification.operation_kind,
+                operation_id = %notification.operation_id, %error,
+                "notification steer missed the active execution; waking idle"
+            );
+            self.execution_registry.wait_until_released(session_id).await;
+            self.wake_idle_notification(session_id).await?;
+            return Ok(());
+        }
+        // The steer was queued for a live execution. Verify it lands: the loop
+        // acknowledges the appended part, or it exits without observing it
+        // (its final drain already passed) and a fresh wake takes over.
+        let Some(ack_rx) = ack_rx else {
+            // No part id captured (should not happen for the settle paths);
+            // the loop's own notification detection still picks the part up
+            // on its next reload.
+            return Ok(());
+        };
+        tokio::select! {
+            biased;
+            _ = ack_rx => {}
+            _ = self.execution_registry.wait_until_released(session_id) => {
                 tracing::debug!(
                     target: "agena_background",
-                    %session_id, %delivery_key, %error,
-                    "mid-turn scheduled-delivery steer missed the active execution; waking idle"
+                    %session_id, operation_kind = %notification.operation_kind,
+                    operation_id = %notification.operation_id,
+                    "notification steer acknowledged no new turn; waking idle"
                 );
-                self.execute_registered(
-                    session_id,
-                    ExecutionSource::User,
-                    ExecutionConversationTarget::NewTurn,
-                    "notification execution",
-                    move |manager, control, steer_rx| async move {
-                        manager
-                            .notification_run_inner(session_id, control, steer_rx)
-                            .await
-                    },
-                )
-                .await?;
+                self.wake_idle_notification(session_id).await?;
             }
-            return Ok(true);
         }
-        // Idle: start a fresh execution that picks the delivered prompt up as
-        // its first input.
+        Ok(())
+    }
+
+    /// Start a fresh notification-wake execution: a model turn over the
+    /// appended `system_notification` parts. Shared by the settle wake paths
+    /// whenever no live execution will deliver the notification.
+    async fn wake_idle_notification(&self, session_id: i64) -> Result<(), AppError> {
         self.execute_registered(
             session_id,
             ExecutionSource::User,
@@ -2186,7 +2171,7 @@ impl SessionManager {
             },
         )
         .await?;
-        Ok(true)
+        Ok(())
     }
 }
 

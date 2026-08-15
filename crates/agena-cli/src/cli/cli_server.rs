@@ -1,4 +1,4 @@
-//! Thin one-shot session commands backed by the long-lived processing center.
+//! Thin one-shot session commands backed by the long-lived server.
 //!
 //! This module deliberately depends only on the public API/client contracts.
 //! It never opens the session database, creates an Application, starts a
@@ -55,32 +55,32 @@ use super::{
     render_serialized, review_prompt, title_from_prompt, usage_stats_query_from_args,
 };
 
-struct CenterSessionClient {
+struct ServerSessionClient {
     client: AgenaClient,
     workspace_id: i64,
     workspace_root: std::path::PathBuf,
 }
 
 #[derive(serde::Deserialize)]
-struct CenterMemoryOverview {
+struct ServerMemoryOverview {
     workspace_root: String,
     directory: String,
     items: Vec<MemoryResource>,
 }
 
 #[derive(serde::Deserialize)]
-struct CenterPathResource {
+struct ServerPathResource {
     path: String,
 }
 
 #[derive(Clone)]
-pub(super) struct CenterMcpBackend {
+pub(super) struct ServerMcpBackend {
     client: AgenaClient,
     workspace_id: i64,
 }
 
 #[async_trait]
-impl McpServerBackend for CenterMcpBackend {
+impl McpServerBackend for ServerMcpBackend {
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, McpServerError> {
         let value = self
             .client
@@ -136,9 +136,9 @@ struct McpReconnectOutput {
     payload: Option<serde_json::Value>,
 }
 
-impl CenterSessionClient {
+impl ServerSessionClient {
     async fn connect(cli: &AgenaCli, workspace: Option<&Path>) -> Result<Self, AppError> {
-        let client = connect_center_client(cli).await?;
+        let client = connect_server_client(cli).await?;
         let workspace_root = workspace
             .map(Path::to_path_buf)
             .map(Ok)
@@ -151,13 +151,13 @@ impl CenterSessionClient {
             .await
             .map_err(|error| {
                 client_error(
-                    "failed to resolve the CLI workspace through the processing center",
+                    "failed to resolve the CLI workspace through the server",
                     error,
                 )
             })?;
         let CommandResult::Workspace(workspace) = workspace else {
             return Err(AppError::Internal(
-                "processing center returned the wrong workspace result".to_owned(),
+                "server returned the wrong workspace result".to_owned(),
             ));
         };
         Ok(Self {
@@ -181,13 +181,13 @@ impl CenterSessionClient {
                     .await
                     .map_err(|error| {
                         client_error(
-                            "failed to read the processing center's provider catalog",
+                            "failed to read the server's provider catalog",
                             error,
                         )
                     })?;
                 let QueryResult::Providers(providers) = providers else {
                     return Err(AppError::Internal(
-                        "processing center returned the wrong provider-list result".to_owned(),
+                        "server returned the wrong provider-list result".to_owned(),
                     ));
                 };
                 Some(resolve_model_target(providers.as_slice(), target)?)
@@ -223,11 +223,11 @@ impl CenterSessionClient {
                 }))
                 .await
                 .map_err(|error| {
-                    client_error("failed to list sessions from the processing center", error)
+                    client_error("failed to list sessions from the server", error)
                 })?;
             let QueryResult::Sessions(page) = response else {
                 return Err(AppError::Internal(
-                    "processing center returned the wrong session-list result".to_owned(),
+                    "server returned the wrong session-list result".to_owned(),
                 ));
             };
             sessions.extend(page.items);
@@ -241,7 +241,7 @@ impl CenterSessionClient {
             cursor = page.page.next_cursor;
             if cursor.is_none() {
                 return Err(AppError::Internal(
-                    "processing center returned a truncated session page without a cursor"
+                    "server returned a truncated session page without a cursor"
                         .to_owned(),
                 ));
             }
@@ -265,13 +265,13 @@ impl CenterSessionClient {
                 .await
                 .map_err(|error| {
                     client_error(
-                        "failed to list permission rules from processing center",
+                        "failed to list permission rules from server",
                         error,
                     )
                 })?;
             let QueryResult::PermissionRules(page) = response else {
                 return Err(AppError::Internal(
-                    "processing center returned the wrong permission-rule list result".to_owned(),
+                    "server returned the wrong permission-rule list result".to_owned(),
                 ));
             };
             rules.extend(page.items);
@@ -281,7 +281,7 @@ impl CenterSessionClient {
             cursor = page.page.next_cursor;
             if cursor.is_none() {
                 return Err(AppError::Internal(
-                    "processing center returned a truncated permission-rule page without a cursor"
+                    "server returned a truncated permission-rule page without a cursor"
                         .to_owned(),
                 ));
             }
@@ -312,40 +312,40 @@ impl CenterSessionClient {
         self.client
             .get_session_state(session_id)
             .await
-            .map_err(|error| client_error("failed to read session from processing center", error))
+            .map_err(|error| client_error("failed to read session from server", error))
     }
 }
 
-async fn connect_center_client(cli: &AgenaCli) -> Result<AgenaClient, AppError> {
+async fn connect_server_client(cli: &AgenaCli) -> Result<AgenaClient, AppError> {
     if cli.database_url.is_some() || cli.database_path.is_some() {
         return Err(AppError::Config(
-                "--database-url/--database-path belong to the processing center and cannot be used by thin CLI session commands"
+                "--database-url/--database-path belong to the server and cannot be used by thin CLI session commands"
                     .to_owned(),
             ));
     }
     if !cli.overrides.is_empty() {
         return Err(AppError::Config(
-                "--set overrides belong to the processing center and cannot be used by thin CLI session commands"
+                "--set overrides belong to the server and cannot be used by thin CLI session commands"
                     .to_owned(),
             ));
     }
 
-    let center_url = cli
-        .center
+    let server_url = cli
+        .server
         .as_deref()
         .filter(|url| !url.trim().is_empty())
         .unwrap_or("http://127.0.0.1:3210");
-    let client = AgenaClient::connect_center(
-        center_url,
-        cli.center_token.as_deref(),
-        cli.center_password.as_deref(),
+    let client = AgenaClient::connect_server(
+        server_url,
+        cli.server_token.as_deref(),
+        cli.server_password.as_deref(),
     )
     .await
-    .map_err(|error| client_error("processing-center readiness handshake failed", error))?;
+    .map_err(|error| client_error("server readiness handshake failed", error))?;
     Ok(client)
 }
 
-fn ensure_center_workspace_matches(
+fn ensure_server_workspace_matches(
     workspace_root: &str,
     requested_workspace: &Path,
 ) -> Result<(), AppError> {
@@ -355,33 +355,33 @@ fn ensure_center_workspace_matches(
             requested_workspace.display()
         ))
     })?;
-    let center_workspace = fs::canonicalize(workspace_root).map_err(|error| {
+    let server_workspace = fs::canonicalize(workspace_root).map_err(|error| {
         AppError::Config(format!(
-            "failed to canonicalize processing-center workspace `{workspace_root}`: {error}"
+            "failed to canonicalize server workspace `{workspace_root}`: {error}"
         ))
     })?;
-    if cli_workspace != center_workspace {
+    if cli_workspace != server_workspace {
         return Err(AppError::Config(format!(
-            "processing center is bound to workspace `{}`, but the CLI current directory is `{}`; refusing to operate on a different repository",
-            center_workspace.display(),
+            "server is bound to workspace `{}`, but the CLI current directory is `{}`; refusing to operate on a different repository",
+            server_workspace.display(),
             cli_workspace.display()
         )));
     }
     Ok(())
 }
 
-fn ensure_center_workspace_matches_cli(workspace_root: &str) -> Result<(), AppError> {
+fn ensure_server_workspace_matches_cli(workspace_root: &str) -> Result<(), AppError> {
     let current_dir = std::env::current_dir()?;
-    ensure_center_workspace_matches(workspace_root, current_dir.as_path())
+    ensure_server_workspace_matches(workspace_root, current_dir.as_path())
 }
 
-fn decode_center_resource<T>(value: serde_json::Value, resource_name: &str) -> Result<T, AppError>
+fn decode_server_resource<T>(value: serde_json::Value, resource_name: &str) -> Result<T, AppError>
 where
     T: serde::de::DeserializeOwned,
 {
     serde_json::from_value(value).map_err(|error| {
         AppError::Internal(format!(
-            "processing center returned an invalid {resource_name} response: {error}"
+            "server returned an invalid {resource_name} response: {error}"
         ))
     })
 }
@@ -389,15 +389,15 @@ where
 async fn connect_workspace_bound_client(
     cli: &AgenaCli,
     requested_workspace: &Path,
-) -> Result<CenterMcpBackend, AppError> {
-    let client = connect_center_client(cli).await?;
-    let status: GitStatusResource = decode_center_resource(
+) -> Result<ServerMcpBackend, AppError> {
+    let client = connect_server_client(cli).await?;
+    let status: GitStatusResource = decode_server_resource(
         client.git_status().await.map_err(|error| {
-            client_error("failed to verify the processing center workspace", error)
+            client_error("failed to verify the server workspace", error)
         })?,
         "git-status",
     )?;
-    ensure_center_workspace_matches(status.workspace_root.as_str(), requested_workspace)?;
+    ensure_server_workspace_matches(status.workspace_root.as_str(), requested_workspace)?;
     let workspace = client
         .command(Command::ResolveWorkspace(ResolveWorkspaceParams {
             path: requested_workspace.to_string_lossy().into_owned(),
@@ -406,23 +406,23 @@ async fn connect_workspace_bound_client(
         .await
         .map_err(|error| {
             client_error(
-                "failed to resolve the operator workspace through the processing center",
+                "failed to resolve the operator workspace through the server",
                 error,
             )
         })?;
     let CommandResult::Workspace(workspace) = workspace else {
         return Err(AppError::Internal(
-            "processing center returned the wrong operator workspace result".to_owned(),
+            "server returned the wrong operator workspace result".to_owned(),
         ));
     };
-    Ok(CenterMcpBackend {
+    Ok(ServerMcpBackend {
         client,
         workspace_id: workspace.id,
     })
 }
 
 impl AgenaCli {
-    pub(super) async fn render_center_apply_command(
+    pub(super) async fn render_server_apply_command(
         &self,
         args: ApplyArgs,
     ) -> Result<String, AppError> {
@@ -443,10 +443,10 @@ impl AgenaCli {
             )
             .await
             .map_err(|error| {
-                client_error("failed to apply patch through processing center", error)
+                client_error("failed to apply patch through server", error)
             })?;
         let summary: agena_tool::ToolExecutionSummary =
-            decode_center_resource(value, "operator-tool-result")?;
+            decode_server_resource(value, "operator-tool-result")?;
         let patch_payload = summary.payload.ok_or_else(|| {
             AppError::Internal("apply_patch tool did not return patch metadata".to_owned())
         })?;
@@ -467,10 +467,10 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn center_mcp_backend(
+    pub(super) async fn server_mcp_backend(
         &self,
         args: McpServerArgs,
-    ) -> Result<CenterMcpBackend, AppError> {
+    ) -> Result<ServerMcpBackend, AppError> {
         let requested_workspace = args
             .workspace
             .as_deref()
@@ -480,7 +480,7 @@ impl AgenaCli {
         connect_workspace_bound_client(self, requested_workspace.as_path()).await
     }
 
-    pub(super) async fn render_center_mcp_reconnect(
+    pub(super) async fn render_server_mcp_reconnect(
         &self,
         args: McpReconnectArgs,
     ) -> Result<String, AppError> {
@@ -490,10 +490,10 @@ impl AgenaCli {
                 "MCP server name must not be empty".to_owned(),
             ));
         }
-        let client = connect_center_client(self).await?;
+        let client = connect_server_client(self).await?;
         let status = client.runtime_status().await.map_err(|error| {
             client_error(
-                "failed to resolve the processing center operator workspace",
+                "failed to resolve the server operator workspace",
                 error,
             )
         })?;
@@ -505,13 +505,13 @@ impl AgenaCli {
             .await
             .map_err(|error| {
                 client_error(
-                    "failed to resolve the processing center operator workspace",
+                    "failed to resolve the server operator workspace",
                     error,
                 )
             })?;
         let CommandResult::Workspace(workspace) = workspace else {
             return Err(AppError::Internal(
-                "processing center returned the wrong operator workspace result".to_owned(),
+                "server returned the wrong operator workspace result".to_owned(),
             ));
         };
         let value = client
@@ -523,12 +523,12 @@ impl AgenaCli {
             .await
             .map_err(|error| {
                 client_error(
-                    "failed to reconnect MCP server through processing center",
+                    "failed to reconnect MCP server through server",
                     error,
                 )
             })?;
         let summary: agena_tool::ToolExecutionSummary =
-            decode_center_resource(value, "operator-tool-result")?;
+            decode_server_resource(value, "operator-tool-result")?;
         render_serialized(
             args.format,
             &McpReconnectOutput {
@@ -539,10 +539,10 @@ impl AgenaCli {
         )
     }
 
-    pub(super) async fn render_center_mcp_add(&self, args: McpAddArgs) -> Result<String, AppError> {
+    pub(super) async fn render_server_mcp_add(&self, args: McpAddArgs) -> Result<String, AppError> {
         let server = normalized_mcp_server_name(args.server.as_str())?;
         let config = mcp_server_config_value(&args)?;
-        self.mutate_center_mcp_plugin_config(
+        self.mutate_server_mcp_plugin_config(
             args.layer,
             args.dry_run,
             !args.no_reload,
@@ -556,12 +556,12 @@ impl AgenaCli {
         .await
     }
 
-    pub(super) async fn render_center_mcp_remove(
+    pub(super) async fn render_server_mcp_remove(
         &self,
         args: McpRemoveArgs,
     ) -> Result<String, AppError> {
         let server = normalized_mcp_server_name(args.server.as_str())?;
-        self.mutate_center_mcp_plugin_config(
+        self.mutate_server_mcp_plugin_config(
             args.layer,
             args.dry_run,
             !args.no_reload,
@@ -571,12 +571,12 @@ impl AgenaCli {
         .await
     }
 
-    pub(super) async fn render_center_mcp_toggle(
+    pub(super) async fn render_server_mcp_toggle(
         &self,
         args: McpPluginToggleArgs,
         enabled: bool,
     ) -> Result<String, AppError> {
-        self.mutate_center_mcp_plugin_config(
+        self.mutate_server_mcp_plugin_config(
             args.layer,
             args.dry_run,
             !args.no_reload,
@@ -586,7 +586,7 @@ impl AgenaCli {
         .await
     }
 
-    async fn mutate_center_mcp_plugin_config(
+    async fn mutate_server_mcp_plugin_config(
         &self,
         layer: McpConfigLayerArg,
         dry_run: bool,
@@ -595,7 +595,7 @@ impl AgenaCli {
         mutation: McpConfigMutation,
     ) -> Result<String, AppError> {
         let client = match layer {
-            McpConfigLayerArg::Global => connect_center_client(self).await?,
+            McpConfigLayerArg::Global => connect_server_client(self).await?,
             McpConfigLayerArg::Workspace => {
                 let current = std::env::current_dir()?;
                 connect_workspace_bound_client(self, current.as_path())
@@ -607,10 +607,10 @@ impl AgenaCli {
         let current = client
             .settings_layer_value(layer, MCP_PLUGIN_SETTINGS_PATH)
             .await
-            .map_err(|error| client_error("failed to read center MCP settings", error))?;
+            .map_err(|error| client_error("failed to read server MCP settings", error))?;
         let current = current.get("value").cloned().ok_or_else(|| {
             AppError::Internal(
-                "processing center returned an invalid settings-layer response".to_owned(),
+                "server returned an invalid settings-layer response".to_owned(),
             )
         })?;
         let mut record = mcp_plugin_record(current)?;
@@ -624,31 +624,31 @@ impl AgenaCli {
                 reload,
             )
             .await
-            .map_err(|error| client_error("failed to update center MCP settings", error))?;
+            .map_err(|error| client_error("failed to update server MCP settings", error))?;
         render_serialized(format, &response)
     }
 
-    pub(super) async fn run_center_mcp_login(&self, args: McpLoginArgs) -> Result<(), AppError> {
+    pub(super) async fn run_server_mcp_login(&self, args: McpLoginArgs) -> Result<(), AppError> {
         let server = normalized_mcp_server_name(args.server.as_str())?;
         if args.browser {
-            return self.run_center_mcp_oauth_login(args, server).await;
+            return self.run_server_mcp_oauth_login(args, server).await;
         }
         let token = read_mcp_login_token(&args)?;
         let store = mcp_credential_store_name(args.store);
-        let client = connect_center_client(self).await?;
+        let client = connect_server_client(self).await?;
         let value = client
             .set_mcp_bearer_credential(server.as_str(), token, store)
             .await
             .map_err(|error| {
-                client_error("failed to store MCP credential in processing center", error)
+                client_error("failed to store MCP credential in server", error)
             })?;
         let _: McpCredentialMutationResource =
-            decode_center_resource(value, "mcp-credential-result")?;
+            decode_server_resource(value, "mcp-credential-result")?;
         println!("MCP credential stored for {server} ({store})");
         Ok(())
     }
 
-    async fn run_center_mcp_oauth_login(
+    async fn run_server_mcp_oauth_login(
         &self,
         args: McpLoginArgs,
         server: String,
@@ -671,8 +671,8 @@ impl AgenaCli {
             .ok_or_else(|| AppError::Config("--browser requires --url MCP_ENDPOINT".to_owned()))?;
         validate_mcp_oauth_endpoint(endpoint)?;
         let redirect_uri = format!("http://127.0.0.1:{}/callback", args.port);
-        let client = connect_center_client(self).await?;
-        let start: McpOAuthStartResource = decode_center_resource(
+        let client = connect_server_client(self).await?;
+        let start: McpOAuthStartResource = decode_server_resource(
             client
                 .start_mcp_oauth(
                     server.as_str(),
@@ -682,7 +682,7 @@ impl AgenaCli {
                 )
                 .await
                 .map_err(|error| {
-                    client_error("failed to start MCP OAuth through processing center", error)
+                    client_error("failed to start MCP OAuth through server", error)
                 })?,
             "mcp-oauth-start",
         )?;
@@ -710,17 +710,17 @@ impl AgenaCli {
             .await
             .map_err(|error| {
                 client_error(
-                    "failed to finish MCP OAuth through processing center",
+                    "failed to finish MCP OAuth through server",
                     error,
                 )
             })?;
         let _: McpCredentialMutationResource =
-            decode_center_resource(value, "mcp-credential-result")?;
+            decode_server_resource(value, "mcp-credential-result")?;
         println!("MCP OAuth credential stored for {server} (keyring)");
         Ok(())
     }
 
-    pub(super) async fn run_center_mcp_logout(&self, args: McpLogoutArgs) -> Result<(), AppError> {
+    pub(super) async fn run_server_mcp_logout(&self, args: McpLogoutArgs) -> Result<(), AppError> {
         let server = normalized_mcp_server_name(args.server.as_str())?;
         if args.revoke && !args.oauth {
             return Err(AppError::Config(
@@ -733,7 +733,7 @@ impl AgenaCli {
                 "--url is only valid together with --revoke".to_owned(),
             ));
         }
-        let client = connect_center_client(self).await?;
+        let client = connect_server_client(self).await?;
         if args.oauth {
             if !matches!(args.store, McpCredentialStoreArg::Keyring) {
                 return Err(AppError::Config(
@@ -748,12 +748,12 @@ impl AgenaCli {
                 .await
                 .map_err(|error| {
                     client_error(
-                        "failed to remove MCP OAuth credential from processing center",
+                        "failed to remove MCP OAuth credential from server",
                         error,
                     )
                 })?;
             let _: McpCredentialMutationResource =
-                decode_center_resource(value, "mcp-credential-result")?;
+                decode_server_resource(value, "mcp-credential-result")?;
             if args.revoke {
                 println!(
                     "MCP OAuth credential revoked remotely and removed for {server} (keyring)"
@@ -770,17 +770,17 @@ impl AgenaCli {
             .await
             .map_err(|error| {
                 client_error(
-                    "failed to remove MCP credential from processing center",
+                    "failed to remove MCP credential from server",
                     error,
                 )
             })?;
         let _: McpCredentialMutationResource =
-            decode_center_resource(value, "mcp-credential-result")?;
+            decode_server_resource(value, "mcp-credential-result")?;
         println!("MCP credential removed for {server} ({store})");
         Ok(())
     }
 
-    pub(super) async fn render_center_memory_command(
+    pub(super) async fn render_server_memory_command(
         &self,
         command: MemoryCommand,
     ) -> Result<String, AppError> {
@@ -798,14 +798,14 @@ impl AgenaCli {
         .map(Path::to_path_buf)
         .map(Ok)
         .unwrap_or_else(std::env::current_dir)?;
-        let client = connect_center_client(self).await?;
-        let overview: CenterMemoryOverview = decode_center_resource(
+        let client = connect_server_client(self).await?;
+        let overview: ServerMemoryOverview = decode_server_resource(
             client.memory_overview().await.map_err(|error| {
-                client_error("failed to read memories from processing center", error)
+                client_error("failed to read memories from server", error)
             })?,
             "memory-overview",
         )?;
-        ensure_center_workspace_matches(
+        ensure_server_workspace_matches(
             overview.workspace_root.as_str(),
             requested_workspace.as_path(),
         )?;
@@ -837,25 +837,25 @@ impl AgenaCli {
                     .delete_memory(args.name.as_str())
                     .await
                     .map_err(|error| {
-                        client_error("failed to forget memory through processing center", error)
+                        client_error("failed to forget memory through server", error)
                     })?;
                 Ok(format!("forgot memory: {}", args.name))
             }
             MemorySubcommand::Edit(args) => match args.name {
                 Some(name) => {
-                    let memory: MemoryResource = decode_center_resource(
+                    let memory: MemoryResource = decode_server_resource(
                         client.get_memory(name.as_str()).await.map_err(|error| {
-                            client_error("failed to read memory from processing center", error)
+                            client_error("failed to read memory from server", error)
                         })?,
                         "memory",
                     )?;
                     Ok(memory.path)
                 }
                 None => {
-                    let index: CenterPathResource = decode_center_resource(
+                    let index: ServerPathResource = decode_server_resource(
                         client.ensure_memory_index().await.map_err(|error| {
                             client_error(
-                                "failed to ensure memory index through processing center",
+                                "failed to ensure memory index through server",
                                 error,
                             )
                         })?,
@@ -867,14 +867,14 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn render_center_mcp_status(
+    pub(super) async fn render_server_mcp_status(
         &self,
         args: McpStatusArgs,
         server: Option<String>,
     ) -> Result<String, AppError> {
-        let client = connect_center_client(self).await?;
+        let client = connect_server_client(self).await?;
         let runtime = client.runtime_status().await.map_err(|error| {
-            client_error("failed to read MCP status from processing center", error)
+            client_error("failed to read MCP status from server", error)
         })?;
         let mcp = runtime.operator.mcp;
         match server {
@@ -892,11 +892,11 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn render_center_config_command(
+    pub(super) async fn render_server_config_command(
         &self,
         command: ConfigCommand,
     ) -> Result<String, AppError> {
-        let client = connect_center_client(self).await?;
+        let client = connect_server_client(self).await?;
         match command
             .command
             .unwrap_or(ConfigSubcommand::Resolve(ConfigResolveArgs {
@@ -905,7 +905,7 @@ impl AgenaCli {
             ConfigSubcommand::Resolve(args) => {
                 let document = client.resolved_config().await.map_err(|error| {
                     client_error(
-                        "failed to read resolved configuration from processing center",
+                        "failed to read resolved configuration from server",
                         error,
                     )
                 })?;
@@ -913,7 +913,7 @@ impl AgenaCli {
             }
             ConfigSubcommand::Validate => {
                 let response = client.validate_config().await.map_err(|error| {
-                    client_error("failed to validate processing-center configuration", error)
+                    client_error("failed to validate server configuration", error)
                 })?;
                 let valid = response
                     .get("valid")
@@ -925,7 +925,7 @@ impl AgenaCli {
                     .unwrap_or("<unknown>");
                 if !valid {
                     return Err(AppError::Config(format!(
-                        "processing-center configuration is invalid: path={path}"
+                        "server configuration is invalid: path={path}"
                     )));
                 }
                 Ok(format!("config valid: path={path}"))
@@ -933,18 +933,18 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn render_center_diagnostics_command(
+    pub(super) async fn render_server_diagnostics_command(
         &self,
         args: DiagnosticsArgs,
     ) -> Result<String, AppError> {
-        let client = connect_center_client(self).await?;
+        let client = connect_server_client(self).await?;
         let runtime = client.runtime_status().await.map_err(|error| {
-            client_error("failed to read processing-center runtime status", error)
+            client_error("failed to read server runtime status", error)
         })?;
-        ensure_center_workspace_matches_cli(runtime.workspace_root.as_str())?;
+        ensure_server_workspace_matches_cli(runtime.workspace_root.as_str())?;
         let document = client.resolved_config().await.map_err(|error| {
             client_error(
-                "failed to read processing-center configuration metadata",
+                "failed to read server configuration metadata",
                 error,
             )
         })?;
@@ -993,24 +993,24 @@ impl AgenaCli {
         )
     }
 
-    pub(super) async fn render_center_snapshot_command(
+    pub(super) async fn render_server_snapshot_command(
         &self,
         args: SnapshotArgs,
     ) -> Result<String, AppError> {
-        let client = connect_center_client(self).await?;
-        let snapshot: SnapshotStatusResource = decode_center_resource(
+        let client = connect_server_client(self).await?;
+        let snapshot: SnapshotStatusResource = decode_server_resource(
             client.snapshot_status().await.map_err(|error| {
                 client_error(
-                    "failed to read snapshot status from processing center",
+                    "failed to read snapshot status from server",
                     error,
                 )
             })?,
             "snapshot-status",
         )?;
-        ensure_center_workspace_matches_cli(snapshot.workspace_root.as_str())?;
+        ensure_server_workspace_matches_cli(snapshot.workspace_root.as_str())?;
         if !snapshot.registry_available {
             return Err(AppError::Config(
-                "snapshot registry is not enabled in the processing center".to_owned(),
+                "snapshot registry is not enabled in the server".to_owned(),
             ));
         }
         let active = snapshot
@@ -1058,18 +1058,18 @@ impl AgenaCli {
         )
     }
 
-    pub(super) async fn render_center_git_command(
+    pub(super) async fn render_server_git_command(
         &self,
         args: GitArgs,
     ) -> Result<String, AppError> {
-        let client = connect_center_client(self).await?;
-        let status: GitStatusResource = decode_center_resource(
+        let client = connect_server_client(self).await?;
+        let status: GitStatusResource = decode_server_resource(
             client.git_status().await.map_err(|error| {
-                client_error("failed to read git status from processing center", error)
+                client_error("failed to read git status from server", error)
             })?,
             "git-status",
         )?;
-        ensure_center_workspace_matches_cli(status.workspace_root.as_str())?;
+        ensure_server_workspace_matches_cli(status.workspace_root.as_str())?;
         render_serialized(
             args.format,
             &GitOutput {
@@ -1092,35 +1092,35 @@ impl AgenaCli {
         )
     }
 
-    pub(super) async fn render_center_commit_command(
+    pub(super) async fn render_server_commit_command(
         &self,
         args: CommitArgs,
     ) -> Result<String, AppError> {
-        let client = connect_center_client(self).await?;
-        let status: GitStatusResource = decode_center_resource(
+        let client = connect_server_client(self).await?;
+        let status: GitStatusResource = decode_server_resource(
             client.git_status().await.map_err(|error| {
                 client_error(
-                    "failed to verify the processing center workspace before committing",
+                    "failed to verify the server workspace before committing",
                     error,
                 )
             })?,
             "git-status",
         )?;
-        ensure_center_workspace_matches_cli(status.workspace_root.as_str())?;
+        ensure_server_workspace_matches_cli(status.workspace_root.as_str())?;
 
-        let result: GitCommitResource = decode_center_resource(
+        let result: GitCommitResource = decode_server_resource(
             client
                 .create_git_commit(args.message)
                 .await
                 .map_err(|error| {
                     client_error(
-                        "failed to create git commit through processing center",
+                        "failed to create git commit through server",
                         error,
                     )
                 })?,
             "git-commit",
         )?;
-        ensure_center_workspace_matches_cli(result.status.workspace_root.as_str())?;
+        ensure_server_workspace_matches_cli(result.status.workspace_root.as_str())?;
         render_serialized(
             args.format,
             &CommitOutput {
@@ -1131,30 +1131,30 @@ impl AgenaCli {
         )
     }
 
-    pub(super) async fn render_center_pr_command(&self, args: PrArgs) -> Result<String, AppError> {
-        let client = connect_center_client(self).await?;
-        let status: GitStatusResource = decode_center_resource(
+    pub(super) async fn render_server_pr_command(&self, args: PrArgs) -> Result<String, AppError> {
+        let client = connect_server_client(self).await?;
+        let status: GitStatusResource = decode_server_resource(
             client.git_status().await.map_err(|error| {
                 client_error(
-                    "failed to verify the processing center workspace before creating a pull request",
+                    "failed to verify the server workspace before creating a pull request",
                     error,
                 )
             })?,
             "git-status",
         )?;
-        ensure_center_workspace_matches_cli(status.workspace_root.as_str())?;
+        ensure_server_workspace_matches_cli(status.workspace_root.as_str())?;
         let branch = args
             .head
             .clone()
             .or(status.branch)
             .ok_or_else(|| AppError::Config("could not determine current branch".to_owned()))?;
-        let created: GitPullRequestResource = decode_center_resource(
+        let created: GitPullRequestResource = decode_server_resource(
             client
                 .create_git_pull_request(args.title, args.body, args.base, args.head)
                 .await
                 .map_err(|error| {
                     client_error(
-                        "failed to create pull request through processing center",
+                        "failed to create pull request through server",
                         error,
                     )
                 })?,
@@ -1170,11 +1170,11 @@ impl AgenaCli {
         )
     }
 
-    pub(super) async fn render_center_auth_command(
+    pub(super) async fn render_server_auth_command(
         &self,
         command: AuthCommand,
     ) -> Result<String, AppError> {
-        let client = connect_center_client(self).await?;
+        let client = connect_server_client(self).await?;
         match command
             .command
             .unwrap_or(AuthSubcommand::List(AuthListArgs {
@@ -1182,11 +1182,11 @@ impl AgenaCli {
             })) {
             AuthSubcommand::List(args) => {
                 let value = client.auth_providers().await.map_err(|error| {
-                    client_error("failed to read provider authentication from center", error)
+                    client_error("failed to read provider authentication from server", error)
                 })?;
                 let items = value.as_array().ok_or_else(|| {
                     AppError::Internal(
-                        "processing center returned an invalid auth-provider list".to_owned(),
+                        "server returned an invalid auth-provider list".to_owned(),
                     )
                 })?;
                 let mut credentials = items
@@ -1199,7 +1199,7 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn run_center_login(&self, args: LoginArgs) -> Result<(), AppError> {
+    pub(super) async fn run_server_login(&self, args: LoginArgs) -> Result<(), AppError> {
         let provider_id = normalize_login_provider(args.provider_id.as_str());
         let method_count = usize::from(args.api_key.is_some())
             + usize::from(args.browser)
@@ -1209,13 +1209,13 @@ impl AgenaCli {
                 "login requires exactly one of --api-key, --browser, or --device".to_owned(),
             ));
         }
-        let client = connect_center_client(self).await?;
-        let provider: AuthProviderResource = decode_center_resource(
+        let client = connect_server_client(self).await?;
+        let provider: AuthProviderResource = decode_server_resource(
             client
                 .auth_provider(provider_id.as_str())
                 .await
                 .map_err(|error| {
-                    client_error("failed to read provider authentication from center", error)
+                    client_error("failed to read provider authentication from server", error)
                 })?,
             "auth-provider",
         )?;
@@ -1230,7 +1230,7 @@ impl AgenaCli {
                 .set_auth_api_key(provider_id.as_str(), api_key)
                 .await
                 .map_err(|error| {
-                    client_error("failed to store provider credential in center", error)
+                    client_error("failed to store provider credential in server", error)
                 })?;
             println!("logged in: {provider_id}");
             return Ok(());
@@ -1260,12 +1260,12 @@ impl AgenaCli {
             }
             .map_err(|error| {
                 client_error(
-                    "failed to start browser login through processing center",
+                    "failed to start browser login through server",
                     error,
                 )
             })?;
             let start: AuthBrowserStartResource =
-                decode_center_resource(start_value, "auth-browser-start")?;
+                decode_server_resource(start_value, "auth-browser-start")?;
             prompt_browser_login(start.authorize_url.as_str())?;
             let callback = agena_runtime::wait_for_oauth_callback_async(
                 args.port,
@@ -1299,15 +1299,15 @@ impl AgenaCli {
             }
             .map_err(|error| {
                 client_error(
-                    "failed to finish browser login through processing center",
+                    "failed to finish browser login through server",
                     error,
                 )
             })?;
             let result: AuthLoginResultResource =
-                decode_center_resource(result_value, "auth-login-result")?;
+                decode_server_resource(result_value, "auth-login-result")?;
             if !result.completed {
                 return Err(AppError::Internal(
-                    "processing center did not complete browser login".to_owned(),
+                    "server did not complete browser login".to_owned(),
                 ));
             }
             println!("logged in: {provider_id}");
@@ -1340,12 +1340,12 @@ impl AgenaCli {
         }
         .map_err(|error| {
             client_error(
-                "failed to start device login through processing center",
+                "failed to start device login through server",
                 error,
             )
         })?;
         let start: AuthDeviceStartResource =
-            decode_center_resource(start_value, "auth-device-start")?;
+            decode_server_resource(start_value, "auth-device-start")?;
         prompt_device_login(&start)?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(args.timeout_secs);
         let interval = Duration::from_secs(start.interval_seconds.max(1));
@@ -1378,12 +1378,12 @@ impl AgenaCli {
             }
             .map_err(|error| {
                 client_error(
-                    "failed to poll device login through processing center",
+                    "failed to poll device login through server",
                     error,
                 )
             })?;
             let result: AuthLoginResultResource =
-                decode_center_resource(result_value, "auth-login-result")?;
+                decode_server_resource(result_value, "auth-login-result")?;
             if result.completed {
                 println!("logged in: {provider_id}");
                 return Ok(());
@@ -1391,69 +1391,69 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn run_center_logout(&self, args: LogoutArgs) -> Result<(), AppError> {
+    pub(super) async fn run_server_logout(&self, args: LogoutArgs) -> Result<(), AppError> {
         let provider_id = normalize_login_provider(args.provider_id.as_str());
-        let client = connect_center_client(self).await?;
+        let client = connect_server_client(self).await?;
         client
             .delete_auth_provider(provider_id.as_str())
             .await
             .map_err(|error| {
-                client_error("failed to remove provider credential from center", error)
+                client_error("failed to remove provider credential from server", error)
             })?;
         println!("logged out: {provider_id}");
         Ok(())
     }
 
-    pub(super) async fn render_center_plugin_status(
+    pub(super) async fn render_server_plugin_status(
         &self,
         args: PluginStatusArgs,
     ) -> Result<String, AppError> {
-        let client = connect_center_client(self).await?;
+        let client = connect_server_client(self).await?;
         let value = client
             .plugin_statuses()
             .await
-            .map_err(|error| client_error("failed to read plugin status from center", error))?;
+            .map_err(|error| client_error("failed to read plugin status from server", error))?;
         let statuses = value
             .get("items")
             .and_then(serde_json::Value::as_array)
             .cloned()
             .ok_or_else(|| {
                 AppError::Internal(
-                    "processing center returned an invalid plugin-status response".to_owned(),
+                    "server returned an invalid plugin-status response".to_owned(),
                 )
             })?;
         render_serialized(args.format, &PluginStatusOutput { statuses })
     }
 
-    pub(super) async fn render_center_plugin_inspect(
+    pub(super) async fn render_server_plugin_inspect(
         &self,
         args: PluginInspectArgs,
     ) -> Result<String, AppError> {
-        let client = connect_center_client(self).await?;
+        let client = connect_server_client(self).await?;
         let value = client
             .plugin_inspect(args.plugin_id.as_str())
             .await
-            .map_err(|error| client_error("failed to inspect plugin through center", error))?;
+            .map_err(|error| client_error("failed to inspect plugin through server", error))?;
         let plugin = value.get("plugin").cloned().ok_or_else(|| {
             AppError::Internal(
-                "processing center returned an invalid plugin-inspect response".to_owned(),
+                "server returned an invalid plugin-inspect response".to_owned(),
             )
         })?;
         render_serialized(args.format, &PluginInspectOutput { plugin })
     }
 
-    pub(super) async fn render_center_plugin_logs(
+    pub(super) async fn render_server_plugin_logs(
         &self,
         args: PluginLogsArgs,
     ) -> Result<String, AppError> {
-        let client = connect_center_client(self).await?;
+        let client = connect_server_client(self).await?;
         let value = client
             .plugin_logs(args.plugin_id.as_str(), args.after_seq, args.limit)
             .await
-            .map_err(|error| client_error("failed to read plugin logs from center", error))?;
+            .map_err(|error| client_error("failed to read plugin logs from server", error))?;
         let output: PluginLogsOutput = serde_json::from_value(value).map_err(|error| {
             AppError::Internal(format!(
-                "processing center returned an invalid plugin-log response: {error}"
+                "server returned an invalid plugin-log response: {error}"
             ))
         })?;
         match args.format {
@@ -1464,21 +1464,21 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn render_center_debug_command(
+    pub(super) async fn render_server_debug_command(
         &self,
         command: DebugCommand,
     ) -> Result<String, AppError> {
         match command.command {
-            DebugSubcommand::Session(args) => self.render_center_debug_session(args).await,
+            DebugSubcommand::Session(args) => self.render_server_debug_session(args).await,
         }
     }
 
-    async fn render_center_debug_session(
+    async fn render_server_debug_session(
         &self,
         args: DebugSessionArgs,
     ) -> Result<String, AppError> {
-        let center = CenterSessionClient::connect(self, None).await?;
-        let execution = center.execution(args.session_id).await?;
+        let server = ServerSessionClient::connect(self, None).await?;
+        let execution = server.execution(args.session_id).await?;
         let runs = execution
             .parts
             .iter()
@@ -1488,13 +1488,13 @@ impl AgenaCli {
                     id: run.part_id,
                     role: run.role.parse().map_err(|error| {
                         AppError::Internal(format!(
-                            "processing center returned invalid run role `{}`: {error}",
+                            "server returned invalid run role `{}`: {error}",
                             run.role
                         ))
                     })?,
                     state: run.state.parse().map_err(|error| {
                         AppError::Internal(format!(
-                            "processing center returned invalid run state `{}`: {error}",
+                            "server returned invalid run state `{}`: {error}",
                             run.state
                         ))
                     })?,
@@ -1513,18 +1513,18 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn render_center_provider_command(
+    pub(super) async fn render_server_provider_command(
         &self,
         command: ProviderCommand,
     ) -> Result<String, AppError> {
-        let client = connect_center_client(self).await?;
+        let client = connect_server_client(self).await?;
         match command
             .command
             .unwrap_or(ProviderSubcommand::List(ProviderListArgs {
                 format: OutputFormat::Json,
             })) {
             ProviderSubcommand::List(args) => {
-                let providers = center_providers(&client).await?;
+                let providers = server_providers(&client).await?;
                 let mut providers = providers
                     .into_iter()
                     .map(|provider| ProviderSummary {
@@ -1539,7 +1539,7 @@ impl AgenaCli {
                 render_serialized(args.format, &ProviderListOutput { providers })
             }
             ProviderSubcommand::Models(args) => {
-                let response = center_provider_models(&client, args.provider_id.as_str()).await?;
+                let response = server_provider_models(&client, args.provider_id.as_str()).await?;
                 render_serialized(
                     args.format,
                     &ProviderModelsOutput {
@@ -1549,14 +1549,14 @@ impl AgenaCli {
                 )
             }
             ProviderSubcommand::Capabilities(args) => {
-                let providers = center_providers(&client).await?;
+                let providers = server_providers(&client).await?;
                 let model_ref = resolve_provider_model_target(
                     providers.as_slice(),
                     args.target.as_str(),
                     args.model.as_deref(),
                 )?;
                 let response =
-                    center_provider_models(&client, model_ref.provider_id.as_str()).await?;
+                    server_provider_models(&client, model_ref.provider_id.as_str()).await?;
                 let model = response
                     .models
                     .into_iter()
@@ -1593,11 +1593,11 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn render_center_permissions_command(
+    pub(super) async fn render_server_permissions_command(
         &self,
         args: PermissionsArgs,
     ) -> Result<String, AppError> {
-        let center = CenterSessionClient::connect(self, None).await?;
+        let server = ServerSessionClient::connect(self, None).await?;
         match args
             .command
             .unwrap_or(PermissionsSubcommand::List(PermissionsListArgs {
@@ -1605,7 +1605,7 @@ impl AgenaCli {
                 format: OutputFormat::Json,
             })) {
             PermissionsSubcommand::List(args) => {
-                let rules = center
+                let rules = server
                     .list_permission_rules(
                         args.search
                             .map(|search| search.trim().to_owned())
@@ -1625,17 +1625,17 @@ impl AgenaCli {
             }
             PermissionsSubcommand::Create(args) => {
                 let format = args.format;
-                let params = permission_rule_params(&center, args)?;
-                let result = center
+                let params = permission_rule_params(&server, args)?;
+                let result = server
                     .client
                     .command(Command::UpsertPermissionRule(params))
                     .await
                     .map_err(|error| {
-                        client_error("failed to create permission rule through center", error)
+                        client_error("failed to create permission rule through server", error)
                     })?;
                 let CommandResult::PermissionRule(rule) = result else {
                     return Err(AppError::Internal(
-                        "processing center returned the wrong permission-rule create result"
+                        "server returned the wrong permission-rule create result"
                             .to_owned(),
                     ));
                 };
@@ -1644,26 +1644,26 @@ impl AgenaCli {
             PermissionsSubcommand::Replace(args) => {
                 let format = args.rule.format;
                 let rule_id = args.rule_id;
-                let rule = permission_rule_params(&center, args.rule)?;
-                let result = center
+                let rule = permission_rule_params(&server, args.rule)?;
+                let result = server
                     .client
                     .command(Command::ReplacePermissionRule(
                         ReplacePermissionRuleParams { rule_id, rule },
                     ))
                     .await
                     .map_err(|error| {
-                        client_error("failed to replace permission rule through center", error)
+                        client_error("failed to replace permission rule through server", error)
                     })?;
                 let CommandResult::PermissionRule(rule) = result else {
                     return Err(AppError::Internal(
-                        "processing center returned the wrong permission-rule replace result"
+                        "server returned the wrong permission-rule replace result"
                             .to_owned(),
                     ));
                 };
                 render_serialized(format, &permission_rule_output(rule)?)
             }
             PermissionsSubcommand::Revoke(args) => {
-                let result = center
+                let result = server
                     .client
                     .command(Command::RevokePermissionRule(RevokePermissionRuleParams {
                         rule_id: args.rule_id,
@@ -1671,21 +1671,21 @@ impl AgenaCli {
                     }))
                     .await
                     .map_err(|error| {
-                        client_error("failed to revoke permission rule through center", error)
+                        client_error("failed to revoke permission rule through server", error)
                     })?;
                 let CommandResult::PermissionRule(rule) = result else {
                     return Err(AppError::Internal(
-                        "processing center returned the wrong permission-rule revoke result"
+                        "server returned the wrong permission-rule revoke result"
                             .to_owned(),
                     ));
                 };
                 render_serialized(args.format, &permission_rule_output(rule)?)
             }
             PermissionsSubcommand::Reply(args) => {
-                let session_id = center
+                let session_id = server
                     .selected_session_id(args.session_id, args.last)
                     .await?;
-                let execution = center
+                let execution = server
                     .client
                     .reply_permission(agena_api::commands::ReplyPermissionParams {
                         session_id,
@@ -1700,7 +1700,7 @@ impl AgenaCli {
                     .await
                     .map_err(|error| {
                         client_error(
-                            "failed to reply to permission request through center",
+                            "failed to reply to permission request through server",
                             error,
                         )
                     })?;
@@ -1714,11 +1714,11 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn render_center_sessions_command(
+    pub(super) async fn render_server_sessions_command(
         &self,
         command: SessionsCommand,
     ) -> Result<String, AppError> {
-        let center = CenterSessionClient::connect(self, None).await?;
+        let server = ServerSessionClient::connect(self, None).await?;
         match command
             .command
             .unwrap_or(SessionsSubcommand::List(SessionListArgs {
@@ -1729,7 +1729,7 @@ impl AgenaCli {
                 format: OutputFormat::Json,
             })) {
             SessionsSubcommand::List(args) => {
-                let resources = center.list_sessions(None).await?;
+                let resources = server.list_sessions(None).await?;
                 let summaries = resources
                     .into_iter()
                     .map(session_summary_from_resource)
@@ -1740,7 +1740,7 @@ impl AgenaCli {
                 render_serialized(args.format, &SessionListOutput { sessions })
             }
             SessionsSubcommand::Export(args) => {
-                let result = center
+                let result = server
                     .client
                     .command(Command::ExportSession(
                         agena_api::commands::ExportSessionParams {
@@ -1749,11 +1749,11 @@ impl AgenaCli {
                     ))
                     .await
                     .map_err(|error| {
-                        client_error("failed to export session from processing center", error)
+                        client_error("failed to export session from server", error)
                     })?;
                 let CommandResult::SessionExport { jsonl } = result else {
                     return Err(AppError::Internal(
-                        "processing center returned the wrong session-export result".to_owned(),
+                        "server returned the wrong session-export result".to_owned(),
                     ));
                 };
                 Ok(jsonl)
@@ -1774,14 +1774,14 @@ impl AgenaCli {
                         buffer
                     }
                 };
-                let result = center
+                let result = server
                     .client
                     .command(Command::ImportSession(ImportSessionParams {
                         jsonl: bundle,
                     }))
                     .await
                     .map_err(|error| {
-                        client_error("failed to import session through processing center", error)
+                        client_error("failed to import session through server", error)
                     })?;
                 let execution = expect_execution(result, "session-import")?;
                 render_serialized(
@@ -1792,18 +1792,18 @@ impl AgenaCli {
                 )
             }
             SessionsSubcommand::Tree(args) => {
-                let result = center
+                let result = server
                     .client
                     .command(Command::ListSessionTree(ListSessionTreeParams {
                         root_id: args.root_id,
                     }))
                     .await
                     .map_err(|error| {
-                        client_error("failed to read session tree from processing center", error)
+                        client_error("failed to read session tree from server", error)
                     })?;
                 let CommandResult::SessionTree(resources) = result else {
                     return Err(AppError::Internal(
-                        "processing center returned the wrong session-tree result".to_owned(),
+                        "server returned the wrong session-tree result".to_owned(),
                     ));
                 };
                 let mut sessions = resources
@@ -1822,15 +1822,15 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn render_center_resume_command(
+    pub(super) async fn render_server_resume_command(
         &self,
         args: ResumeArgs,
     ) -> Result<String, AppError> {
-        let center = CenterSessionClient::connect(self, None).await?;
-        let session_id = center
+        let server = ServerSessionClient::connect(self, None).await?;
+        let session_id = server
             .selected_session_id(args.session_id, args.last)
             .await?;
-        let execution = center.execution(session_id).await?;
+        let execution = server.execution(session_id).await?;
         render_serialized(
             args.format,
             &SessionOutput {
@@ -1839,28 +1839,28 @@ impl AgenaCli {
         )
     }
 
-    pub(super) async fn render_center_continue_command(
+    pub(super) async fn render_server_continue_command(
         &self,
         args: ContinueArgs,
     ) -> Result<String, AppError> {
-        let center = CenterSessionClient::connect(self, None).await?;
-        let session_id = center
+        let server = ServerSessionClient::connect(self, None).await?;
+        let session_id = server
             .selected_session_id(args.session_id, args.last)
             .await?;
-        let options = center
+        let options = server
             .run_options(
                 args.model.as_deref(),
                 args.temperature,
                 args.max_output_tokens,
             )
             .await?;
-        let execution = center
+        let execution = server
             .client
             .continue_run(session_id, options)
             .await
             .map_err(|error| {
                 client_error(
-                    "failed to continue session through processing center",
+                    "failed to continue session through server",
                     error,
                 )
             })?;
@@ -1872,21 +1872,21 @@ impl AgenaCli {
         )
     }
 
-    pub(super) async fn render_center_cost_command(
+    pub(super) async fn render_server_cost_command(
         &self,
         args: CostArgs,
     ) -> Result<String, AppError> {
-        let center = CenterSessionClient::connect(self, None).await?;
-        let session_id = center
+        let server = ServerSessionClient::connect(self, None).await?;
+        let session_id = server
             .selected_session_id(args.session_id, args.last)
             .await?;
-        let execution = center.execution(session_id).await?;
-        let summary = center
+        let execution = server.execution(session_id).await?;
+        let summary = server
             .client
             .session_cost_summary(session_id)
             .await
             .map_err(|error| {
-                client_error("failed to read session cost from processing center", error)
+                client_error("failed to read session cost from server", error)
             })?;
         render_serialized(
             args.format,
@@ -1897,14 +1897,14 @@ impl AgenaCli {
         )
     }
 
-    pub(super) async fn render_center_usage_command(
+    pub(super) async fn render_server_usage_command(
         &self,
         args: UsageArgs,
     ) -> Result<String, AppError> {
-        let center = CenterSessionClient::connect(self, None).await?;
+        let server = ServerSessionClient::connect(self, None).await?;
         let custom_range = args.from.is_some() || args.to.is_some();
         let query = usage_stats_query_from_args(&args)?;
-        let output = center
+        let output = server
             .client
             .usage_stats(
                 query.period,
@@ -1917,16 +1917,16 @@ impl AgenaCli {
                 query.timezone_offset_minutes,
             )
             .await
-            .map_err(|error| client_error("failed to read usage from processing center", error))?;
+            .map_err(|error| client_error("failed to read usage from server", error))?;
         render_serialized(args.format, &output)
     }
 
-    pub(super) async fn render_center_exec_command(
+    pub(super) async fn render_server_exec_command(
         &self,
         args: ExecArgs,
     ) -> Result<String, AppError> {
         let title = title_from_prompt(args.prompt.as_str());
-        self.render_center_prompt_command(
+        self.render_server_prompt_command(
             args.workspace.as_deref(),
             args.prompt.as_str(),
             title,
@@ -1938,12 +1938,12 @@ impl AgenaCli {
         .await
     }
 
-    pub(super) async fn render_center_review_command(
+    pub(super) async fn render_server_review_command(
         &self,
         args: ReviewArgs,
     ) -> Result<String, AppError> {
         let prompt = review_prompt(args.base.as_str());
-        self.render_center_prompt_command(
+        self.render_server_prompt_command(
             args.workspace.as_deref(),
             prompt.as_str(),
             format!("Review changes against {}", args.base),
@@ -1956,7 +1956,7 @@ impl AgenaCli {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn render_center_prompt_command(
+    async fn render_server_prompt_command(
         &self,
         workspace: Option<&Path>,
         prompt: &str,
@@ -1966,18 +1966,18 @@ impl AgenaCli {
         max_output_tokens: Option<u32>,
         json: bool,
     ) -> Result<String, AppError> {
-        let center = CenterSessionClient::connect(self, workspace).await?;
-        let options = center
+        let server = ServerSessionClient::connect(self, workspace).await?;
+        let options = server
             .run_options(model, temperature, max_output_tokens)
             .await?;
-        let session = center
+        let session = server
             .client
-            .create_session(center.workspace_id, title, None)
+            .create_session(server.workspace_id, title, None)
             .await
             .map_err(|error| {
-                client_error("failed to create session through processing center", error)
+                client_error("failed to create session through server", error)
             })?;
-        let execution = center
+        let execution = server
             .client
             .submit_message(SubmitRunParams {
                 session_id: session.id,
@@ -1988,7 +1988,7 @@ impl AgenaCli {
             })
             .await
             .map_err(|error| {
-                client_error("failed to submit run through processing center", error)
+                client_error("failed to submit run through server", error)
             })?;
         if execution.workflow_state == agena_api::resource::WorkflowState::Blocked {
             return Err(AppError::Config(
@@ -2009,12 +2009,12 @@ impl AgenaCli {
         }
     }
 
-    pub(super) async fn render_center_fork_command(
+    pub(super) async fn render_server_fork_command(
         &self,
         args: ForkArgs,
     ) -> Result<String, AppError> {
-        let center = CenterSessionClient::connect(self, None).await?;
-        let result = center
+        let server = ServerSessionClient::connect(self, None).await?;
+        let result = server
             .client
             .command(Command::ForkSession(ForkSessionParams {
                 session_id: args.session_id,
@@ -2023,7 +2023,7 @@ impl AgenaCli {
             }))
             .await
             .map_err(|error| {
-                client_error("failed to fork session through processing center", error)
+                client_error("failed to fork session through server", error)
             })?;
         let execution = expect_execution(result, "session-fork")?;
         render_serialized(
@@ -2043,7 +2043,7 @@ fn auth_summary_from_value(value: &serde_json::Value) -> Result<AuthSummary, App
         .filter(|provider_id| !provider_id.is_empty())
         .ok_or_else(|| {
             AppError::Internal(
-                "processing center returned an auth provider without an id".to_owned(),
+                "server returned an auth provider without an id".to_owned(),
             )
         })?
         .to_owned();
@@ -2071,22 +2071,22 @@ fn auth_summary_from_value(value: &serde_json::Value) -> Result<AuthSummary, App
     })
 }
 
-async fn center_providers(client: &AgenaClient) -> Result<Vec<ProviderSummaryResource>, AppError> {
+async fn server_providers(client: &AgenaClient) -> Result<Vec<ProviderSummaryResource>, AppError> {
     let response = client.query(Query::ListProviders).await.map_err(|error| {
         client_error(
-            "failed to read the processing center's provider catalog",
+            "failed to read the server's provider catalog",
             error,
         )
     })?;
     let QueryResult::Providers(providers) = response else {
         return Err(AppError::Internal(
-            "processing center returned the wrong provider-list result".to_owned(),
+            "server returned the wrong provider-list result".to_owned(),
         ));
     };
     Ok(providers)
 }
 
-async fn center_provider_models(
+async fn server_provider_models(
     client: &AgenaClient,
     provider_id: &str,
 ) -> Result<agena_api::resource::ProviderModelsResponse, AppError> {
@@ -2099,13 +2099,13 @@ async fn center_provider_models(
         .await
         .map_err(|error| {
             client_error(
-                "failed to read provider models from processing center",
+                "failed to read provider models from server",
                 error,
             )
         })?;
     let QueryResult::ProviderModels(models) = response else {
         return Err(AppError::Internal(
-            "processing center returned the wrong provider-model result".to_owned(),
+            "server returned the wrong provider-model result".to_owned(),
         ));
     };
     Ok(models)
@@ -2147,7 +2147,7 @@ fn resolve_provider_model_target(
 }
 
 fn permission_rule_params(
-    center: &CenterSessionClient,
+    server: &ServerSessionClient,
     args: PermissionsWriteArgs,
 ) -> Result<UpsertPermissionRuleParams, AppError> {
     if matches!(args.scope, PermissionScopeArg::Session) && args.session_id.is_none() {
@@ -2199,7 +2199,7 @@ fn permission_rule_params(
         .filter(|value| !value.is_empty())
         .or_else(|| {
             (subject_kind.as_deref() == Some("path_access"))
-                .then(|| center.workspace_root.to_string_lossy().into_owned())
+                .then(|| server.workspace_root.to_string_lossy().into_owned())
         });
     Ok(UpsertPermissionRuleParams {
         action_key,
@@ -2331,7 +2331,7 @@ fn validate_mcp_oauth_endpoint(endpoint: &str) -> Result<(), AppError> {
 fn oauth_state(authorization_url: &str) -> Result<String, AppError> {
     url::Url::parse(authorization_url)
         .map_err(|_| {
-            AppError::Config("processing center returned an invalid OAuth URL".to_owned())
+            AppError::Config("server returned an invalid OAuth URL".to_owned())
         })?
         .query_pairs()
         .find(|(key, _)| key == "state")
@@ -2686,7 +2686,7 @@ fn expect_execution(
 ) -> Result<SessionExecutionResource, AppError> {
     let CommandResult::Execution(execution) = result else {
         return Err(AppError::Internal(format!(
-            "processing center returned the wrong {operation} result"
+            "server returned the wrong {operation} result"
         )));
     };
     Ok(execution)
@@ -2736,13 +2736,13 @@ mod tests {
     fn workspace_guard_accepts_the_same_canonical_path_and_rejects_its_parent() {
         let current = std::env::current_dir().expect("current test directory");
         let canonical = std::fs::canonicalize(&current).expect("canonical test directory");
-        ensure_center_workspace_matches(canonical.to_string_lossy().as_ref(), current.as_path())
+        ensure_server_workspace_matches(canonical.to_string_lossy().as_ref(), current.as_path())
             .expect("same workspace must pass");
 
         let parent = canonical
             .parent()
             .expect("test directory has a parent directory");
-        let error = ensure_center_workspace_matches(canonical.to_string_lossy().as_ref(), parent)
+        let error = ensure_server_workspace_matches(canonical.to_string_lossy().as_ref(), parent)
             .expect_err("different workspace must fail");
         assert!(error.to_string().contains("refusing to operate"));
     }

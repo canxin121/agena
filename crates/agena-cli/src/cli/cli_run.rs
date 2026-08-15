@@ -47,7 +47,7 @@ impl AgenaCli {
     }
 
     pub(super) async fn run_apply(self, args: ApplyArgs) -> Result<(), AppError> {
-        let output = self.render_center_apply_command(args).await?;
+        let output = self.render_server_apply_command(args).await?;
         println!("{output}");
         Ok(())
     }
@@ -87,15 +87,15 @@ impl AgenaCli {
 
         match command.command {
             PluginSubcommand::Status(args) => {
-                println!("{}", self.render_center_plugin_status(args).await?);
+                println!("{}", self.render_server_plugin_status(args).await?);
                 Ok(())
             }
             PluginSubcommand::Inspect(args) => {
-                println!("{}", self.render_center_plugin_inspect(args).await?);
+                println!("{}", self.render_server_plugin_inspect(args).await?);
                 Ok(())
             }
             PluginSubcommand::Logs(args) => {
-                println!("{}", self.render_center_plugin_logs(args).await?);
+                println!("{}", self.render_server_plugin_logs(args).await?);
                 Ok(())
             }
             PluginSubcommand::Validate(args) => {
@@ -297,45 +297,45 @@ impl AgenaCli {
     }
 
     pub(super) async fn run_auth(self, command: AuthCommand) -> Result<(), AppError> {
-        let output = self.render_center_auth_command(command).await?;
+        let output = self.render_server_auth_command(command).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_login(self, args: LoginArgs) -> Result<(), AppError> {
-        self.run_center_login(args).await
+        self.run_server_login(args).await
     }
 
     pub(super) async fn run_logout(self, args: LogoutArgs) -> Result<(), AppError> {
-        self.run_center_logout(args).await
+        self.run_server_logout(args).await
     }
 
     pub(super) async fn run_provider(self, command: ProviderCommand) -> Result<(), AppError> {
-        let output = self.render_center_provider_command(command).await?;
+        let output = self.render_server_provider_command(command).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_memory(self, command: MemoryCommand) -> Result<(), AppError> {
-        let output = self.render_center_memory_command(command).await?;
+        let output = self.render_server_memory_command(command).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_sessions(self, command: SessionsCommand) -> Result<(), AppError> {
-        let output = self.render_center_sessions_command(command).await?;
+        let output = self.render_server_sessions_command(command).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_resume(self, args: ResumeArgs) -> Result<(), AppError> {
-        let output = self.render_center_resume_command(args).await?;
+        let output = self.render_server_resume_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_continue(self, args: ContinueArgs) -> Result<(), AppError> {
-        let output = self.render_center_continue_command(args).await?;
+        let output = self.render_server_continue_command(args).await?;
         println!("{output}");
         Ok(())
     }
@@ -346,73 +346,73 @@ impl AgenaCli {
     }
 
     pub(super) async fn run_cost(self, args: CostArgs) -> Result<(), AppError> {
-        let output = self.render_center_cost_command(args).await?;
+        let output = self.render_server_cost_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_usage(self, args: UsageArgs) -> Result<(), AppError> {
-        let output = self.render_center_usage_command(args).await?;
+        let output = self.render_server_usage_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_permissions(self, args: PermissionsArgs) -> Result<(), AppError> {
-        let output = self.render_center_permissions_command(args).await?;
+        let output = self.render_server_permissions_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_snapshot(self, args: SnapshotArgs) -> Result<(), AppError> {
-        let output = self.render_center_snapshot_command(args).await?;
+        let output = self.render_server_snapshot_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_git(self, args: GitArgs) -> Result<(), AppError> {
-        let output = self.render_center_git_command(args).await?;
+        let output = self.render_server_git_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_commit(self, args: CommitArgs) -> Result<(), AppError> {
-        let output = self.render_center_commit_command(args).await?;
+        let output = self.render_server_commit_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_pr(self, args: PrArgs) -> Result<(), AppError> {
-        let output = self.render_center_pr_command(args).await?;
+        let output = self.render_server_pr_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_debug(self, command: DebugCommand) -> Result<(), AppError> {
-        let output = self.render_center_debug_command(command).await?;
+        let output = self.render_server_debug_command(command).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_diagnostics(self, args: DiagnosticsArgs) -> Result<(), AppError> {
-        let output = self.render_center_diagnostics_command(args).await?;
+        let output = self.render_server_diagnostics_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_exec(self, args: ExecArgs) -> Result<(), AppError> {
-        let output = self.render_center_exec_command(args).await?;
+        let output = self.render_server_exec_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_fork(self, args: ForkArgs) -> Result<(), AppError> {
-        let output = self.render_center_fork_command(args).await?;
+        let output = self.render_server_fork_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_mcp_server(self, args: McpServerArgs) -> Result<(), AppError> {
-        let backend = self.center_mcp_backend(args).await?;
+        let backend = self.server_mcp_backend(args).await?;
         agena_mcp_server::serve_tools_stdio(backend)
             .await
             .map_err(|error| AppError::Config(error.to_string()))
@@ -429,27 +429,27 @@ impl AgenaCli {
             }
             McpSubcommand::Get(args) => self.run_mcp_get(args).await,
             McpSubcommand::Add(args) => {
-                println!("{}", self.render_center_mcp_add(args).await?);
+                println!("{}", self.render_server_mcp_add(args).await?);
                 Ok(())
             }
             McpSubcommand::Remove(args) => {
-                println!("{}", self.render_center_mcp_remove(args).await?);
+                println!("{}", self.render_server_mcp_remove(args).await?);
                 Ok(())
             }
             McpSubcommand::Enable(args) => {
-                println!("{}", self.render_center_mcp_toggle(args, true).await?);
+                println!("{}", self.render_server_mcp_toggle(args, true).await?);
                 Ok(())
             }
             McpSubcommand::Disable(args) => {
-                println!("{}", self.render_center_mcp_toggle(args, false).await?);
+                println!("{}", self.render_server_mcp_toggle(args, false).await?);
                 Ok(())
             }
             McpSubcommand::Reconnect(args) => {
-                println!("{}", self.render_center_mcp_reconnect(args).await?);
+                println!("{}", self.render_server_mcp_reconnect(args).await?);
                 Ok(())
             }
-            McpSubcommand::Login(args) => self.run_center_mcp_login(args).await,
-            McpSubcommand::Logout(args) => self.run_center_mcp_logout(args).await,
+            McpSubcommand::Login(args) => self.run_server_mcp_login(args).await,
+            McpSubcommand::Logout(args) => self.run_server_mcp_logout(args).await,
         }
     }
 
@@ -458,7 +458,7 @@ impl AgenaCli {
         args: McpStatusArgs,
         server: Option<String>,
     ) -> Result<(), AppError> {
-        let output = self.render_center_mcp_status(args, server).await?;
+        let output = self.render_server_mcp_status(args, server).await?;
         println!("{output}");
         Ok(())
     }
@@ -475,13 +475,13 @@ impl AgenaCli {
     }
 
     pub(super) async fn run_review(self, args: ReviewArgs) -> Result<(), AppError> {
-        let output = self.render_center_review_command(args).await?;
+        let output = self.render_server_review_command(args).await?;
         println!("{output}");
         Ok(())
     }
 
     pub(super) async fn run_config(self, command: ConfigCommand) -> Result<(), AppError> {
-        println!("{}", self.render_center_config_command(command).await?);
+        println!("{}", self.render_server_config_command(command).await?);
         Ok(())
     }
 }

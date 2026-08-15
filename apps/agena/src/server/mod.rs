@@ -1,23 +1,10 @@
 mod app;
-mod attachment;
 mod auth;
 pub(crate) mod center_record;
-mod config;
-mod cors;
 mod diagnostics;
 mod error;
-mod fs;
-mod git {
-    pub(crate) use agena_git_http::*;
-}
 mod lifecycle;
-mod path_utils;
-mod persistence;
-mod preview;
-mod providers;
-mod settings;
 mod state;
-mod terminal;
 mod user_service;
 
 use crate::error::AgenaProcessError;

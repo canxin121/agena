@@ -97,7 +97,7 @@ pub fn session_meta(i18n: &I18n, id: i64, message_count: u64, updated_at: DateTi
 
 /// Localized label for the server-derived processing state shown in session
 /// pickers. This is deliberately based on the shared API value rather than a
-/// TUI-local request flag, so reconnecting clients describe the center's
+/// TUI-local request flag, so reconnecting clients describe the server's
 /// current ownership truth.
 pub fn session_state_label(i18n: &I18n, state: SessionState) -> String {
     let key = match state {

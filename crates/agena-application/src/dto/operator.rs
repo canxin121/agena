@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Public descriptor for a Runtime tool owned by the processing center.
+/// Public descriptor for a Runtime tool owned by the server.
 pub struct OperatorToolResource {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -12,10 +12,10 @@ pub struct OperatorToolResource {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-/// Center-owned invocation of a Runtime tool outside a session lifecycle.
+/// Server-owned invocation of a Runtime tool outside a session lifecycle.
 pub struct OperatorToolInvokeRequest {
     /// Database-backed workspace identity the caller intends to operate on.
-    /// The center resolves this id and requires its canonical path to equal
+    /// The server resolves this id and requires its canonical path to equal
     /// the workspace root of the composed Runtime tool executor.
     pub workspace_id: i64,
     pub tool: String,

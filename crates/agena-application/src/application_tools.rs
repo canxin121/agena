@@ -51,13 +51,13 @@ impl Application {
                     format!("operator workspace not found: {workspace_id}"),
                 )
             })?;
-        let center_root = self.workspace_root().to_path_buf();
+        let server_root = self.workspace_root().to_path_buf();
         let requested_root = std::path::PathBuf::from(workspace.path);
-        let (center_root, requested_root) = tokio::task::spawn_blocking(move || {
-            let center_root = std::fs::canonicalize(&center_root).map_err(|error| {
+        let (server_root, requested_root) = tokio::task::spawn_blocking(move || {
+            let server_root = std::fs::canonicalize(&server_root).map_err(|error| {
                 format!(
-                    "failed to canonicalize center workspace {}: {error}",
-                    center_root.display()
+                    "failed to canonicalize server workspace {}: {error}",
+                    server_root.display()
                 )
             })?;
             let requested_root = std::fs::canonicalize(&requested_root).map_err(|error| {
@@ -66,7 +66,7 @@ impl Application {
                     requested_root.display()
                 )
             })?;
-            Ok::<_, String>((center_root, requested_root))
+            Ok::<_, String>((server_root, requested_root))
         })
         .await
         .map_err(|error| {
@@ -80,13 +80,13 @@ impl Application {
                 diagnostic,
             )
         })?;
-        if center_root != requested_root {
+        if server_root != requested_root {
             return Err(ApplicationError::conflict_with_diagnostic(
-                "The operator workspace does not match this processing center.",
+                "The operator workspace does not match this server.",
                 format!(
-                    "operator workspace mismatch: requested={}, center={}",
+                    "operator workspace mismatch: requested={}, server={}",
                     requested_root.display(),
-                    center_root.display()
+                    server_root.display()
                 ),
             ));
         }

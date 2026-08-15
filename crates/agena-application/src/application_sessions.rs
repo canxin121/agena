@@ -22,7 +22,7 @@ use crate::dto::{
 use crate::{Application, ApplicationError};
 
 impl Application {
-    /// Build the default center home view: every session needing attention,
+    /// Build the default server home view: every session needing attention,
     /// every running session, then a bounded recent tail.
     pub async fn session_overview(
         &self,

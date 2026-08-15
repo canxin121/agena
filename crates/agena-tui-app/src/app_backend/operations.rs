@@ -15,7 +15,7 @@ use agena_domain::{PermissionReplyKind, PermissionScope, UserInputReply};
 
 use super::TuiBackend;
 
-/// Load usage statistics from the processing center for the terminal's usage
+/// Load usage statistics from the server for the terminal's usage
 /// overview.
 pub(crate) async fn usage_stats(
     application: &TuiBackend,
@@ -195,7 +195,7 @@ pub(crate) async fn present_interactive_request(
         .context("failed to mark interactive request presented")
 }
 
-/// Render the terminal diagnostic summary from the processing center's runtime
+/// Render the terminal diagnostic summary from the server's runtime
 /// status projection.
 pub(crate) async fn runtime_snapshot_summary(application: &TuiBackend) -> Result<String> {
     let status = application.client().runtime_status().await?;
@@ -259,13 +259,13 @@ pub(crate) async fn delete_workspace_config_setting(
 
 /// Refresh provider client versions from the remote registry.
 ///
-/// No processing-center HTTP endpoint exposes this, so it degrades to a clear
+/// No server HTTP endpoint exposes this, so it degrades to a clear
 /// unavailable error in remote client mode.
 pub(crate) async fn refresh_provider_client_versions(
     application: &TuiBackend,
 ) -> Result<agena_provider::ProviderClientVersions> {
     let _ = application;
     anyhow::bail!(
-        "provider client version refresh is unavailable in remote TUI mode until it has a public center API"
+        "provider client version refresh is unavailable in remote TUI mode until it has a public server API"
     )
 }

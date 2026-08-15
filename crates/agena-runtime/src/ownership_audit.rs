@@ -1,7 +1,7 @@
 //! Opt-in process audit for the concrete Runtime ownership boundary.
 //!
 //! Production processes do not write an audit file by default. Process-level
-//! integration tests set [`RUNTIME_OWNERSHIP_AUDIT_PATH_ENV`] on the center and
+//! integration tests set [`RUNTIME_OWNERSHIP_AUDIT_PATH_ENV`] on the server and
 //! every candidate thin client; every successful concrete Runtime composition
 //! then appends one bounded JSON record. This makes an accidental client-local
 //! Runtime observable without exposing Runtime handles through a public API.

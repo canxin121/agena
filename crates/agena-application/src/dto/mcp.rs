@@ -10,7 +10,7 @@ pub enum McpCredentialStoreResource {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-/// Request to store a manual MCP bearer credential in the center process.
+/// Request to store a manual MCP bearer credential in the server process.
 pub struct McpBearerCredentialWriteRequest {
     pub token: String,
     #[serde(default)]
@@ -25,7 +25,7 @@ pub struct McpBearerCredentialDeleteQuery {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-/// Begin a center-owned MCP OAuth authorization-code flow.
+/// Begin a server-owned MCP OAuth authorization-code flow.
 pub struct McpOAuthStartRequest {
     pub server: String,
     pub url: String,
@@ -43,7 +43,7 @@ pub struct McpOAuthStartResource {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-/// Verified loopback callback forwarded to the center-owned OAuth flow.
+/// Verified loopback callback forwarded to the server-owned OAuth flow.
 pub struct McpOAuthFinishRequest {
     pub flow_id: uuid::Uuid,
     pub code: String,
@@ -53,7 +53,7 @@ pub struct McpOAuthFinishRequest {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-/// Options for removing a center-owned MCP OAuth credential.
+/// Options for removing a server-owned MCP OAuth credential.
 pub struct McpOAuthDeleteQuery {
     #[serde(default)]
     pub revoke: bool,
@@ -63,7 +63,7 @@ pub struct McpOAuthDeleteQuery {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-/// Kind of MCP credential changed by a center operation.
+/// Kind of MCP credential changed by a server operation.
 pub enum McpCredentialKindResource {
     Bearer,
     OAuth,

@@ -49,36 +49,36 @@ struct RemoteBackend {
     /// are synchronous in the TUI event loop.
     config_sources: tokio::sync::RwLock<Option<agena_application::dto::ConfigJsonSources>>,
     /// Cached plugin UI catalog (display contributions, theme palettes, slash
-    /// commands) fetched from the center. Plugin reads are synchronous in the
+    /// commands) fetched from the server. Plugin reads are synchronous in the
     /// TUI event loop.
     plugin_catalog: tokio::sync::RwLock<Option<agena_plugin_host::PluginUiCatalog>>,
-    /// Cached plugin statuses fetched from the center.
+    /// Cached plugin statuses fetched from the server.
     plugin_statuses: tokio::sync::RwLock<Vec<agena_plugin_host::status::PluginStatus>>,
-    /// Cached model-catalog page fetched from the center. The settings studio
+    /// Cached model-catalog page fetched from the server. The settings studio
     /// reads model counts synchronously inside the TUI event loop.
     model_catalog: tokio::sync::RwLock<Option<agena_application::dto::ModelCatalogListResponse>>,
 }
 
 impl TuiBackend {
-    /// Connect to and validate a processing center, then resolve the local
-    /// workspace path into the center's public workspace identity.
+    /// Connect to and validate a server, then resolve the local
+    /// workspace path into the server's public workspace identity.
     pub async fn connect_remote(
-        center_url: impl AsRef<str>,
+        server_url: impl AsRef<str>,
         workspace_root: PathBuf,
     ) -> Result<Self> {
-        Self::connect_remote_authenticated(center_url, workspace_root, None, None).await
+        Self::connect_remote_authenticated(server_url, workspace_root, None, None).await
     }
 
     pub async fn connect_remote_authenticated(
-        center_url: impl AsRef<str>,
+        server_url: impl AsRef<str>,
         workspace_root: PathBuf,
-        center_token: Option<&str>,
-        center_password: Option<&str>,
+        server_token: Option<&str>,
+        server_password: Option<&str>,
     ) -> Result<Self> {
         let client =
-            AgenaClient::connect_center(center_url.as_ref(), center_token, center_password)
+            AgenaClient::connect_server(server_url.as_ref(), server_token, server_password)
                 .await
-                .context("processing-center readiness/authentication handshake failed")?;
+                .context("server readiness/authentication handshake failed")?;
         let workspace = client
             .command(Command::ResolveWorkspace(
                 agena_api::commands::ResolveWorkspaceParams {
@@ -87,13 +87,13 @@ impl TuiBackend {
                 },
             ))
             .await
-            .context("failed to resolve the TUI workspace through the processing center")?;
+            .context("failed to resolve the TUI workspace through the server")?;
         let CommandResult::Workspace(workspace) = workspace else {
-            bail!("processing center returned the wrong result while resolving the workspace");
+            bail!("server returned the wrong result while resolving the workspace");
         };
         let providers = match client.query(Query::ListProviders).await? {
             QueryResult::Providers(providers) => providers,
-            _ => bail!("processing center returned the wrong provider-list result"),
+            _ => bail!("server returned the wrong provider-list result"),
         };
         let mut models = HashMap::new();
         for provider in &providers {
@@ -106,12 +106,12 @@ impl TuiBackend {
                 .await
                 .with_context(|| {
                     format!(
-                        "failed to load models for provider {} from the processing center",
+                        "failed to load models for provider {} from the server",
                         provider.provider_id
                     )
                 })?;
             let QueryResult::ProviderModels(response) = response else {
-                bail!("processing center returned the wrong provider-model result");
+                bail!("server returned the wrong provider-model result");
             };
             let provider_models = response
                 .models
@@ -164,7 +164,7 @@ impl TuiBackend {
     }
 
     /// The cached configuration-source read model, if it has been loaded from
-    /// the center. Synchronous because settings presentation is built inside
+    /// the server. Synchronous because settings presentation is built inside
     /// the TUI event loop.
     pub(crate) fn config_sources(&self) -> Option<agena_application::dto::ConfigJsonSources> {
         self.inner
@@ -174,14 +174,14 @@ impl TuiBackend {
             .and_then(|guard| guard.clone())
     }
 
-    /// The resolved UI preferences projected from the center's effective
+    /// The resolved UI preferences projected from the server's effective
     /// configuration, for launching the terminal with the same
     /// theme/graphics/locale as an embedded runtime.
     pub fn tui_preferences(&self) -> agena_application::dto::TuiPreferencesResource {
         super::config::ui_configuration(self)
     }
 
-    /// Refresh the cached configuration-source read model from the center:
+    /// Refresh the cached configuration-source read model from the server:
     /// the global config file, the workspace config file, and the resolved
     /// effective document. `applied_layers` is not exposed over HTTP and is
     /// left empty (the settings studio then reports "built-in defaults").
@@ -231,7 +231,7 @@ impl TuiBackend {
         Ok(sources)
     }
 
-    /// The cached plugin UI catalog, if loaded from the center.
+    /// The cached plugin UI catalog, if loaded from the server.
     pub(crate) fn plugin_catalog(&self) -> Option<agena_plugin_host::PluginUiCatalog> {
         self.inner
             .plugin_catalog
@@ -240,7 +240,7 @@ impl TuiBackend {
             .and_then(|guard| guard.clone())
     }
 
-    /// The cached plugin statuses, if loaded from the center.
+    /// The cached plugin statuses, if loaded from the server.
     pub(crate) fn plugin_statuses(&self) -> Vec<agena_plugin_host::status::PluginStatus> {
         self.inner
             .plugin_statuses
@@ -250,7 +250,7 @@ impl TuiBackend {
             .unwrap_or_default()
     }
 
-    /// Refresh the cached plugin snapshot from the center: statuses and the
+    /// Refresh the cached plugin snapshot from the server: statuses and the
     /// combined TUI/studio UI catalog.
     pub(crate) async fn refresh_plugin_runtime_snapshot(&self) -> Result<()> {
         let client = &self.inner.client;
@@ -260,11 +260,11 @@ impl TuiBackend {
             .cloned()
             .unwrap_or(serde_json::Value::Null);
         let catalog = serde_json::from_value::<agena_plugin_host::PluginUiCatalog>(catalog)
-            .context("the center returned an undecodable plugin UI catalog")?;
+            .context("the server returned an undecodable plugin UI catalog")?;
         let statuses = serde_json::from_value::<Vec<agena_plugin_host::status::PluginStatus>>(
             client.plugin_statuses().await?,
         )
-        .context("the center returned undecodable plugin statuses")?;
+        .context("the server returned undecodable plugin statuses")?;
         *self.inner.plugin_catalog.write().await = Some(catalog);
         *self.inner.plugin_statuses.write().await = statuses;
         Ok(())
@@ -286,7 +286,7 @@ impl TuiBackend {
             .await
             .map_err(|error| {
                 agena_application::ApplicationError::internal(format!(
-                    "failed to invoke plugin tool `{tool_name}` through the center: {error}"
+                    "failed to invoke plugin tool `{tool_name}` through the server: {error}"
                 ))
             })?;
         serde_json::from_value(response).map_err(|error| {
@@ -307,7 +307,7 @@ impl TuiBackend {
         agena_application::ApplicationError,
     > {
         Err(agena_application::ApplicationError::internal(
-            "Provider Studio draft editing is unavailable in remote client mode because it has no public center API",
+            "Provider Studio draft editing is unavailable in remote client mode because it has no public server API",
         ))
     }
 
@@ -320,7 +320,7 @@ impl TuiBackend {
         agena_application::ApplicationError,
     > {
         Err(agena_application::ApplicationError::internal(
-            "Provider Studio draft discovery is unavailable in remote client mode because it has no public center API",
+            "Provider Studio draft discovery is unavailable in remote client mode because it has no public server API",
         ))
     }
 
@@ -342,7 +342,7 @@ impl TuiBackend {
             .await
             .map_err(|error| {
                 agena_application::ApplicationError::internal(format!(
-                    "failed to list saved provider adapter models through the center: {error}"
+                    "failed to list saved provider adapter models through the server: {error}"
                 ))
             })
     }
@@ -355,7 +355,7 @@ impl TuiBackend {
         _provider_model: Option<&agena_api::resource::ProviderModelResource>,
     ) -> std::result::Result<serde_json::Value, agena_application::ApplicationError> {
         Err(agena_application::ApplicationError::internal(
-            "Provider Studio model editing is unavailable in remote client mode because it has no public center API",
+            "Provider Studio model editing is unavailable in remote client mode because it has no public server API",
         ))
     }
 
@@ -429,7 +429,7 @@ impl TuiBackend {
         Err(remote_provider_studio_error())
     }
 
-    /// Set a workspace-scoped config file setting through the center,
+    /// Set a workspace-scoped config file setting through the server,
     /// reloading the runtime when the edit requires it.
     pub async fn set_config_setting(
         &self,
@@ -445,17 +445,17 @@ impl TuiBackend {
             .await
             .map_err(|error| {
                 agena_application::ApplicationError::internal(format!(
-                    "failed to set workspace config setting `{path}` through the center: {error}"
+                    "failed to set workspace config setting `{path}` through the server: {error}"
                 ))
             })?;
         serde_json::from_value(response).map_err(|error| {
             agena_application::ApplicationError::internal(format!(
-                "the center returned an undecodable config edit response: {error}"
+                "the server returned an undecodable config edit response: {error}"
             ))
         })
     }
 
-    /// Delete a workspace-scoped config file setting through the center,
+    /// Delete a workspace-scoped config file setting through the server,
     /// reloading the runtime when the edit requires it.
     pub async fn delete_config_setting(
         &self,
@@ -470,12 +470,12 @@ impl TuiBackend {
             .await
             .map_err(|error| {
                 agena_application::ApplicationError::internal(format!(
-                    "failed to delete workspace config setting `{path}` through the center: {error}"
+                    "failed to delete workspace config setting `{path}` through the server: {error}"
                 ))
             })?;
         serde_json::from_value(response).map_err(|error| {
             agena_application::ApplicationError::internal(format!(
-                "the center returned an undecodable config edit response: {error}"
+                "the server returned an undecodable config edit response: {error}"
             ))
         })
     }
@@ -494,7 +494,7 @@ impl TuiBackend {
         self.set_config_setting("providers.default_selection", selection).await
     }
 
-    /// Set a session's selected permission policy through the center.
+    /// Set a session's selected permission policy through the server.
     pub async fn set_session_permission(
         &self,
         session_id: i64,
@@ -517,7 +517,7 @@ impl TuiBackend {
             .await
             .map_err(|error| {
                 agena_application::ApplicationError::internal(format!(
-                    "failed to update session permission through the center: {error}"
+                    "failed to update session permission through the server: {error}"
                 ))
             })
     }
@@ -590,7 +590,7 @@ impl TuiBackend {
             ))
             .await?;
         let CommandResult::SessionTree(items) = result else {
-            bail!("processing center returned the wrong session-tree result");
+            bail!("server returned the wrong session-tree result");
         };
         Ok(items)
     }
@@ -605,7 +605,7 @@ impl TuiBackend {
             }))
             .await?;
         let CommandResult::Session(session) = result else {
-            bail!("processing center returned the wrong session-update result");
+            bail!("server returned the wrong session-update result");
         };
         Ok(session)
     }
@@ -794,7 +794,7 @@ impl TuiBackend {
             .unwrap_or_default())
     }
 
-    /// The cached model-catalog page, if one has been loaded from the center.
+    /// The cached model-catalog page, if one has been loaded from the server.
     /// Synchronous because the settings studio reads model counts inside the
     /// TUI event loop. An empty response is returned when nothing is cached
     /// yet, so sync consumers can render without blocking on HTTP.
@@ -809,7 +809,7 @@ impl TuiBackend {
             .unwrap_or_else(agena_application::dto::ModelCatalogListResponse::empty)
     }
 
-    /// Fetch a model-catalog page from the center and cache it for
+    /// Fetch a model-catalog page from the server and cache it for
     /// synchronous readers.
     pub(crate) async fn refresh_model_catalog_cache(
         &self,
@@ -822,9 +822,9 @@ impl TuiBackend {
             .client
             .model_catalog(query, None, offset, limit)
             .await
-            .context("failed to load the model catalog from the center")?;
+            .context("failed to load the model catalog from the server")?;
         let response = serde_json::from_value(value)
-            .context("the center returned an undecodable model catalog")?;
+            .context("the server returned an undecodable model catalog")?;
         *self.inner.model_catalog.write().await = Some(response);
         Ok(())
     }
@@ -884,7 +884,7 @@ impl TuiBackend {
             .map(agena_domain::Model::reference)
             .ok_or_else(|| {
                 agena_application::ApplicationError::internal(
-                    "processing center exposes no configured model",
+                    "server exposes no configured model",
                 )
             })
     }
@@ -1015,7 +1015,7 @@ impl TuiBackend {
     ) -> Result<PaginatedResponse<SessionResource>> {
         let result = self.client().query(Query::ListSessions(params)).await?;
         let QueryResult::Sessions(page) = result else {
-            bail!("processing center returned the wrong session-list result");
+            bail!("server returned the wrong session-list result");
         };
         Ok(page)
     }
@@ -1026,7 +1026,7 @@ impl TuiBackend {
             .query(Query::GetSession(GetSessionParams { session_id }))
             .await?;
         let QueryResult::Session(session) = result else {
-            bail!("processing center returned the wrong session result");
+            bail!("server returned the wrong session result");
         };
         Ok(session)
     }
@@ -1054,7 +1054,7 @@ impl TuiBackend {
 
 fn execution_result(result: CommandResult, operation: &str) -> Result<SessionExecutionResource> {
     let CommandResult::Execution(execution) = result else {
-        bail!("processing center returned the wrong result for {operation}");
+        bail!("server returned the wrong result for {operation}");
     };
     Ok(execution)
 }
@@ -1113,7 +1113,7 @@ fn remote_provider_studio_error() -> agena_application::provider_studio::Provide
         agena_failure::FailureImpact::RequestRejected,
         agena_failure::UserPresentation::new(
             "tui.remote_feature_unavailable",
-            "Provider Studio is unavailable in remote TUI mode until it has a public center API.",
+            "Provider Studio is unavailable in remote TUI mode until it has a public server API.",
         ),
     );
     agena_application::provider_studio::ProviderStudioSaveError::Other(failure.into())

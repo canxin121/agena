@@ -1,5 +1,5 @@
 //! Live session event presentation: the [`LiveEvent`] value the TUI consumes
-//! and the subscription adapter that pumps center-stream events into a typed
+//! and the subscription adapter that pumps server-stream events into a typed
 //! channel.
 
 use tokio::sync::mpsc;
@@ -20,7 +20,7 @@ pub struct LiveEvent {
     pub force_refresh: bool,
 }
 
-/// Subscribe through the processing center's session event stream into a typed
+/// Subscribe through the server's session event stream into a typed
 /// channel. Generic transport events remain available separately for timeline
 /// consumers.
 pub(crate) fn subscribe_session_events(

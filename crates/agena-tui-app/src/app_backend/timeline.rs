@@ -21,7 +21,7 @@ pub struct SessionTimelineEntry {
     pub created_at_ms: i64,
 }
 
-/// Loads the visible timeline parts through the processing center's execution
+/// Loads the visible timeline parts through the server's execution
 /// resource and maps them into the TUI's presentation value.
 pub(crate) async fn list_session_timeline(
     application: &super::TuiBackend,

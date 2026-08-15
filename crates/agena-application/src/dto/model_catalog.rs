@@ -34,7 +34,7 @@ pub struct ModelCatalogListResponse {
 
 impl ModelCatalogListResponse {
     /// An empty listing used by synchronous remote-client consumers before a
-    /// catalog page has been fetched from the center.
+    /// catalog page has been fetched from the server.
     pub fn empty() -> Self {
         Self {
             summary: ModelCatalogResponse {

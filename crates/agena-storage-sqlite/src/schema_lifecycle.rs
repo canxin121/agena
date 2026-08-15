@@ -23,8 +23,7 @@
 /// v9 → v10 background-table rebuild are supported.
 ///
 /// Version history:
-/// - 5: the v2 "everything is a part" schema (design
-///   `docs/database-design-v2.md`).
+/// - 5: the v2 "everything is a part" schema.
 /// - 6: `agena_scheduler_jobs` gains `retry_at_ms`, `paused`, `completed`
 ///   columns so the scheduler due scan filters in SQL (no full-table JSON
 ///   decode every tick).

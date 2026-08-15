@@ -2371,10 +2371,10 @@ mod sse_contract_tests {
         });
 
         let client = AgenaClient::new(format!("http://{address}")).unwrap();
-        let server = client.server_identity().await.unwrap();
-        assert_eq!(server.id, server_id);
-        assert_eq!(server.pid, 4242);
-        assert_eq!(server.protocol_version, agena_api::PROTOCOL_VERSION);
+        let identity = client.server_identity().await.unwrap();
+        assert_eq!(identity.id, server_id);
+        assert_eq!(identity.pid, 4242);
+        assert_eq!(identity.protocol_version, agena_api::PROTOCOL_VERSION);
         server.await.unwrap();
     }
 

@@ -1,11 +1,11 @@
 //! Transport boundary and presentation adapters used by the TUI.
 //!
-//! After the R7 refactor, the TUI app holds [`agena_application::Application`]
-//! directly. The methods in this module are the former `Backend` methods that
-//! do **not** carry shared runtime logic (those down-moved onto
-//! `impl Application` per `docs/r7-application-signature-brief.md`); they
-//! translate runtime/API resources into UI-friendly presentation values and
-//! are implemented as free functions taking `&Application`.
+//! The TUI is a pure HTTP client. [`TuiBackend`] holds only the public API
+//! client plus client-local caches (config sources, plugin UI catalog, model
+//! catalog) and never owns a Runtime, scheduler, provider client, session
+//! store, or execution lease. The methods in this module translate
+//! center/API resources into UI-friendly presentation values, either directly
+//! over `AgenaClient` or from the synchronous caches.
 //!
 //! Hot paths that the UI calls every frame (workspace root, plugin display
 //! contributions, model display names, permission tool catalog, theme

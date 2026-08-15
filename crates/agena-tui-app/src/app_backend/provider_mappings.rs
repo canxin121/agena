@@ -4,54 +4,34 @@
 use agena_api::resource::ProviderAdapterModelsResource;
 use agena_application::dto::ModelCatalogListResponse;
 use agena_domain::Model as ProviderModel;
-use agena_domain::{ModelRef, ProviderId};
-use anyhow::{Result, anyhow};
+use agena_domain::ModelRef;
+use anyhow::{Context, Result, anyhow};
 
 use crate::app_backend::inspector::{InspectorRow, summarize_named_mode};
 
 /// Enabled adapters and their configured model ids for `provider_id`.
+///
+/// No processing-center endpoint exposes the in-process provider catalog's
+/// configured-routing projection; the Provider Studio (the only consumer) is
+/// unavailable in remote client mode, so this degrades to an empty list.
 pub(crate) fn configured_provider_model_routes(
     application: &crate::TuiBackend,
     provider_id: Option<&str>,
 ) -> Vec<(String, String)> {
-    let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Vec::new();
-    };
-    let Ok(application) = application.embedded_application() else {
-        return Vec::new();
-    };
-    application
-        .provider_catalog()
-        .configured_routing(&ProviderId::new(provider_id))
-        .into_iter()
-        .flat_map(|provider| provider.adapters)
-        .filter(|adapter| adapter.enabled)
-        .flat_map(|adapter| {
-            let adapter_id = adapter.adapter_id;
-            adapter
-                .model_ids
-                .into_iter()
-                .map(move |model_id| (adapter_id.clone(), model_id))
-        })
-        .collect()
+    let _ = (application, provider_id);
+    Vec::new()
 }
 
 /// Configured adapter model resources for `provider_id`, enriched from the
-/// model catalog so the Provider Studio draft shows complete display data on
-/// open and after save — matching the live-listing enrich path.
+/// model catalog so the Provider Studio draft shows complete display data.
+///
+/// Provider Studio has no public center API; degrade to an empty list.
 pub(crate) fn configured_provider_adapter_models(
     application: &crate::TuiBackend,
     provider_id: Option<&str>,
 ) -> Vec<ProviderAdapterModelsResource> {
-    application
-        .embedded_application()
-        .map(|application| {
-            agena_application::provider_queries::configured_provider_adapter_models_response(
-                application,
-                provider_id,
-            )
-        })
-        .unwrap_or_default()
+    let _ = (application, provider_id);
+    Vec::new()
 }
 
 pub(crate) fn list_local_provider_models(
@@ -75,15 +55,32 @@ pub(crate) fn model_display_name(
     )
 }
 
+/// The cached model-catalog listing. Synchronous: consumed while building the
+/// settings studio inside the TUI event loop. The catalog workbench refreshes
+/// the cache over HTTP (see `catalog_page`); until then this returns an empty
+/// listing.
 pub(crate) fn list_model_catalog_models(
     application: &crate::TuiBackend,
     query: &str,
     offset: usize,
     limit: usize,
 ) -> Result<ModelCatalogListResponse> {
-    Ok(application
-        .embedded_application()?
-        .list_model_catalog_with_origin(query, None, offset, limit))
+    let _ = (query, offset, limit);
+    Ok(application.model_catalog())
+}
+
+/// Fetch a model-catalog page from the center into the shared cache and return
+/// the response, for the catalog workbench's paged browsing.
+pub(crate) async fn catalog_page(
+    application: &crate::TuiBackend,
+    query: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<ModelCatalogListResponse> {
+    application
+        .refresh_model_catalog_cache(query, offset, limit)
+        .await?;
+    Ok(application.model_catalog())
 }
 
 /// Resolve the effective think-mode rows for the model implied by `request`.
@@ -167,9 +164,10 @@ pub(crate) fn model_verbosity_values(
 
 pub(crate) async fn refresh_model_catalog(application: &crate::TuiBackend) -> Result<()> {
     application
-        .embedded_application()?
+        .client()
         .refresh_model_catalog()
-        .map_err(|error| anyhow!(error.to_string()))?;
+        .await
+        .context("failed to refresh the model catalog through the center")?;
     Ok(())
 }
 

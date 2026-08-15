@@ -15,12 +15,6 @@ impl App {
     /// Open the plan viewer for the current session and fetch the full plan.
     /// Requires an active session; without one the user gets a warning flash.
     pub(crate) fn open_plan_viewer(&mut self) {
-        if self.application.is_remote() {
-            self.flash_warning(
-                "Plan viewer is unavailable in remote TUI mode until it has a public center API",
-            );
-            return;
-        }
         let Some(session_id) = self.current_or_selected_session_id() else {
             self.flash_warning(ui_text::t(&self.i18n, "flash-plan-viewer-requires-session"));
             return;
@@ -244,10 +238,6 @@ impl App {
     /// or agent stop. A read-only `agena.plan.get` re-publishes it from
     /// durable storage, healing the chip without waiting for the next run.
     pub(crate) fn heal_plan_display_refresh(&mut self) {
-        if self.application.is_remote() {
-            self.plan_display_refresh = None;
-            return;
-        }
         let Some(session_id) = self.transcript.session_id else {
             self.plan_display_refresh = None;
             return;
@@ -265,10 +255,6 @@ impl App {
     /// Fire a read-only plan display refresh for `session_id` and record the
     /// cooldown state so the periodic heal does not re-request every tick.
     pub(crate) fn request_plan_display_refresh(&mut self, session_id: i64) {
-        if self.application.is_remote() {
-            self.plan_display_refresh = None;
-            return;
-        }
         self.plan_display_refresh = Some(PlanDisplayRefreshState {
             session_id,
             requested_at: Instant::now(),

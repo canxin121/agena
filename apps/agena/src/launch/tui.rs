@@ -7,7 +7,6 @@ use std::{
 };
 
 use crate::error::AgenaProcessError;
-use agena_runtime::bootstrap_application_services;
 
 use agena_cli::TuiLaunchRequest;
 use agena_tui::i18n::I18n;
@@ -22,9 +21,6 @@ pub(crate) async fn run(request: TuiLaunchRequest) -> Result<(), AgenaProcessErr
         center_url: super::center_client::resolve_center_url(args.center),
         center_token: args.center_token,
         center_password: args.center_password,
-        embedded: args.embedded,
-        database_url: args.database_url,
-        database_path: args.database_path,
         workspace_root: args.workspace,
         session: args.session,
         search: args.search,
@@ -33,17 +29,8 @@ pub(crate) async fn run(request: TuiLaunchRequest) -> Result<(), AgenaProcessErr
         log_stderr: args.log_stderr,
         config_override_expressions: request.config_override_expressions,
     };
-    init_tui_tracing(&launch_args.config_override_expressions, &launch_args)?;
-    if launch_args.embedded {
-        run_embedded(launch_args).await
-    } else {
-        if launch_args.database_url.is_some() || launch_args.database_path.is_some() {
-            return Err(AgenaProcessError::Internal(
-                "--database-url/--database-path require explicit --embedded TUI mode".to_owned(),
-            ));
-        }
-        run_remote(launch_args).await
-    }
+    init_tui_tracing(&launch_args.config_override_expressions)?;
+    run_remote(launch_args).await
 }
 
 #[derive(Debug, Clone, Default)]
@@ -51,9 +38,6 @@ pub struct TuiLaunchArgs {
     pub center_url: String,
     pub center_token: Option<String>,
     pub center_password: Option<String>,
-    pub embedded: bool,
-    pub database_url: Option<String>,
-    pub database_path: Option<PathBuf>,
     pub workspace_root: Option<PathBuf>,
     pub session: Option<i64>,
     pub search: Option<String>,
@@ -138,22 +122,12 @@ impl<'a> MakeWriter<'a> for TuiLogWriter {
 /// The binary calls this before launching the UI; the UI library itself never
 /// installs global process state.
 pub fn init_tui_tracing(
-    config_override_expressions: &[String],
+    _config_override_expressions: &[String],
     args: &TuiLaunchArgs,
 ) -> Result<(), AgenaProcessError> {
-    let tracing = if args.embedded {
-        agena_runtime::resolve_runtime_bootstrap_preflight(
-            &agena_runtime::RuntimeBootstrapRequest {
-                config_override_expressions: config_override_expressions.to_vec(),
-                ..Default::default()
-            },
-        )
-        .ok()
-        .map(|preflight| preflight.tracing)
-        .unwrap_or_default()
-    } else {
-        agena_runtime::RuntimeTracingConfiguration::default()
-    };
+    // The TUI is a pure HTTP client; runtime-owned tracing is configured by
+    // the processing center, so the terminal uses the default runtime filter.
+    let tracing = agena_runtime::RuntimeTracingConfiguration::default();
     let log_writer = resolve_tui_log_writer(args)?;
 
     let initial_filter = agena_runtime::runtime_env_filter(&tracing).unwrap_or_else(|_| {
@@ -174,35 +148,6 @@ pub fn init_tui_tracing(
     Ok(())
 }
 
-pub async fn run_embedded(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> {
-    let workspace_root = args.workspace_root.clone().unwrap_or(env::current_dir()?);
-    let runtime = bootstrap_application_services(agena_runtime::RuntimeBootstrapRequest {
-        workspace_root: Some(workspace_root.clone()),
-        database_url: args.database_url.clone(),
-        database_path: args.database_path.clone(),
-        scheduler_database_url: None,
-        scheduler_database_path: None,
-        initialize_schema: true,
-        tracing_reload_handle: None,
-        config_override_expressions: args.config_override_expressions.clone(),
-    })
-    .await
-    .map_err(|error| AgenaProcessError::Internal(error.to_string()))?;
-
-    let application = agena_application::Application::from_composed_runtime_services(
-        runtime.application_services(),
-    )
-    .map_err(|error| AgenaProcessError::Internal(error.to_string()))?;
-    let tui_preferences = application
-        .tui_preferences()
-        .expect("Application configuration projection must provide UI preferences");
-    let i18n = I18n::resolve(args.locale.as_deref(), tui_preferences.locale.as_deref());
-    let tui_config = agena_tui_app::tui_config_from_preferences(&tui_preferences);
-    let result = run_app(TuiBackend::embedded(application), tui_config, i18n, &args).await;
-    runtime.shutdown();
-    result
-}
-
 pub async fn run_remote(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> {
     let workspace_root = args.workspace_root.clone().unwrap_or(env::current_dir()?);
     let backend = TuiBackend::connect_remote_authenticated(
@@ -218,8 +163,12 @@ pub async fn run_remote(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> {
             args.center_url
         ))
     })?;
-    let tui_config = agena_tui::presentation_config::TuiConfig::default();
-    let i18n = I18n::resolve(args.locale.as_deref(), None);
+    // The center's resolved UI preferences are cached on the backend at
+    // connect; project them into the terminal configuration so the client
+    // launches with the same theme/graphics/locale as the center's runtime.
+    let preferences = backend.tui_preferences();
+    let tui_config = agena_tui_app::tui_config_from_preferences(&preferences);
+    let i18n = I18n::resolve(args.locale.as_deref(), preferences.locale.as_deref());
     run_app(backend, tui_config, i18n, &args).await
 }
 

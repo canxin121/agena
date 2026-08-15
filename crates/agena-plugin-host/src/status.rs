@@ -45,7 +45,9 @@ impl fmt::Display for PluginRunState {
 /// Status of a plugin.
 pub struct PluginStatus {
     pub plugin_id: PluginKey,
-    pub kind: &'static str,
+    /// Owned so the status round-trips over the public API's JSON responses
+    /// (the center serializes its in-process statuses for remote clients).
+    pub kind: String,
     pub state: PluginRunState,
     pub pid: Option<u32>,
     pub restart_count: u32,
@@ -55,10 +57,10 @@ pub struct PluginStatus {
 }
 
 impl PluginStatus {
-    pub fn initial(plugin_id: &PluginKey, kind: &'static str) -> Self {
+    pub fn initial(plugin_id: &PluginKey, kind: impl Into<String>) -> Self {
         Self {
             plugin_id: plugin_id.clone(),
-            kind,
+            kind: kind.into(),
             state: PluginRunState::Running,
             pid: None,
             restart_count: 0,

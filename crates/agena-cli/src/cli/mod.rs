@@ -211,8 +211,6 @@ impl AgenaCli {
                     center: self.center,
                     center_token: self.center_token,
                     center_password: self.center_password,
-                    database_url: self.database_url,
-                    database_path: self.database_path,
                     ..TuiArgs::default()
                 },
             }),
@@ -220,8 +218,6 @@ impl AgenaCli {
                 args.center = self.center;
                 args.center_token = self.center_token;
                 args.center_password = self.center_password;
-                args.database_url = args.database_url.or(self.database_url);
-                args.database_path = args.database_path.or(self.database_path);
                 LaunchMode::Tui(TuiLaunchRequest {
                     config_override_expressions,
                     args,
@@ -1250,13 +1246,6 @@ pub struct TuiArgs {
     pub center_token: Option<String>,
     #[arg(skip)]
     pub center_password: Option<String>,
-    /// Explicit recovery/development mode that owns an in-process Runtime.
-    #[arg(long)]
-    pub embedded: bool,
-    #[arg(long, env = "AGENA_DATABASE_URL")]
-    pub database_url: Option<String>,
-    #[arg(long, env = "AGENA_DATABASE_PATH")]
-    pub database_path: Option<PathBuf>,
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
     #[arg(long)]
@@ -1657,26 +1646,19 @@ mod parser_contract_tests {
         let cli = AgenaCli::try_parse_from(["agena"]).expect("parse bare CLI invocation");
         assert!(matches!(
             cli.into_launch_mode(),
-            LaunchMode::Tui(request) if request.args.center.is_none() && !request.args.embedded
+            LaunchMode::Tui(request) if request.args.center.is_none()
         ));
     }
 
     #[test]
-    fn tui_center_and_embedded_modes_are_explicit() {
+    fn tui_center_modes_are_explicit() {
         let remote =
             AgenaCli::try_parse_from(["agena", "tui", "--center", "http://127.0.0.1:4321"])
                 .expect("parse remote TUI");
         assert!(matches!(
             remote.into_launch_mode(),
             LaunchMode::Tui(request)
-                if request.args.center.as_deref() == Some("http://127.0.0.1:4321") && !request.args.embedded
-        ));
-
-        let embedded =
-            AgenaCli::try_parse_from(["agena", "tui", "--embedded"]).expect("parse embedded TUI");
-        assert!(matches!(
-            embedded.into_launch_mode(),
-            LaunchMode::Tui(request) if request.args.embedded
+                if request.args.center.as_deref() == Some("http://127.0.0.1:4321")
         ));
     }
 

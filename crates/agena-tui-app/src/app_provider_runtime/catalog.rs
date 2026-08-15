@@ -271,12 +271,13 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = crate::app_backend::provider_mappings::list_model_catalog_models(
+            let result = crate::app_backend::provider_mappings::catalog_page(
                 &application,
                 query.as_str(),
                 offset,
                 50,
             )
+            .await
             .map_err(crate::UiFailure::internal);
             let _ = tx
                 .send(AppMessage::ModelCatalogLoaded {

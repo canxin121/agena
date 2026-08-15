@@ -18,7 +18,6 @@ agena-plugin-sdk = { workspace = true }
 agena-process = { workspace = true }
 agena-provider = { workspace = true }
 agena-runtime = { workspace = true }
-agena-storage = { workspace = true }
 agena-tui = { workspace = true }
 agena-tui-components = { workspace = true }
 agena-tui-media = { workspace = true }

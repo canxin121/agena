@@ -10,20 +10,12 @@ pub struct PermissionToolCatalogItem {
 
 /// The tool catalog shown by the permission studio. Synchronous: rendered
 /// every time the permission studio opens.
+///
+/// The plugin permission-tool catalog is an in-process host DTO with no public
+/// center endpoint, so remote client mode shows an empty catalog.
 pub(crate) fn permission_tool_catalog(
     application: &crate::TuiBackend,
 ) -> Vec<PermissionToolCatalogItem> {
-    let Ok(application) = application.embedded_application() else {
-        return Vec::new();
-    };
-    application
-        .plugin_runtime()
-        .permission_tool_catalog()
-        .into_iter()
-        .map(|tool| PermissionToolCatalogItem {
-            name: tool.name,
-            summary: tool.summary,
-            tags: tool.tags,
-        })
-        .collect()
+    let _ = application;
+    Vec::new()
 }

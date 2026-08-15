@@ -1,10 +1,9 @@
 //! Cloneable transport boundary between the TUI state machine and the owner
 //! of session execution.
 //!
-//! `Embedded` exists for tests and explicit recovery/development launches.
-//! `Remote` contains only the public API client plus client-local workspace
-//! context; it never owns a Runtime, scheduler, provider client, session store,
-//! or execution lease.
+//! The TUI is a pure HTTP client. [`TuiBackend`] contains only the public API
+//! client plus client-local workspace context; it never owns a Runtime,
+//! scheduler, provider client, session store, or execution lease.
 
 use std::{
     collections::HashMap,
@@ -23,7 +22,6 @@ use agena_api::{
         SessionOverviewResource, SessionResource, UserInputReply,
     },
 };
-use agena_application::Application;
 use agena_client::{AgenaClient, SubscriptionEvent};
 use anyhow::{Context, Result, anyhow, bail};
 use tokio::sync::mpsc;
@@ -32,19 +30,13 @@ use super::{LiveEvent, SessionRefresh};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendMode {
-    Embedded,
     Remote,
 }
 
 #[derive(Clone)]
 pub struct TuiBackend {
-    inner: Arc<Backend>,
+    inner: Arc<RemoteBackend>,
     workspace_root: Arc<PathBuf>,
-}
-
-enum Backend {
-    Embedded(Application),
-    Remote(RemoteBackend),
 }
 
 struct RemoteBackend {
@@ -52,17 +44,22 @@ struct RemoteBackend {
     workspace_id: i64,
     providers: Vec<ProviderSummaryResource>,
     models: HashMap<String, Vec<agena_domain::Model>>,
+    /// Cached configuration-source read model assembled over HTTP. Loaded at
+    /// connect and refreshed before settings-studio rebuilds; settings reads
+    /// are synchronous in the TUI event loop.
+    config_sources: tokio::sync::RwLock<Option<agena_application::dto::ConfigJsonSources>>,
+    /// Cached plugin UI catalog (display contributions, theme palettes, slash
+    /// commands) fetched from the center. Plugin reads are synchronous in the
+    /// TUI event loop.
+    plugin_catalog: tokio::sync::RwLock<Option<agena_plugin_host::PluginUiCatalog>>,
+    /// Cached plugin statuses fetched from the center.
+    plugin_statuses: tokio::sync::RwLock<Vec<agena_plugin_host::status::PluginStatus>>,
+    /// Cached model-catalog page fetched from the center. The settings studio
+    /// reads model counts synchronously inside the TUI event loop.
+    model_catalog: tokio::sync::RwLock<Option<agena_application::dto::ModelCatalogListResponse>>,
 }
 
 impl TuiBackend {
-    pub fn embedded(application: Application) -> Self {
-        let workspace_root = Arc::new(application.workspace_root().to_path_buf());
-        Self {
-            inner: Arc::new(Backend::Embedded(application)),
-            workspace_root,
-        }
-    }
-
     /// Connect to and validate a processing center, then resolve the local
     /// workspace path into the center's public workspace identity.
     pub async fn connect_remote(
@@ -129,51 +126,153 @@ impl TuiBackend {
                 })?;
             models.insert(provider.provider_id.clone(), provider_models);
         }
-        Ok(Self {
-            inner: Arc::new(Backend::Remote(RemoteBackend {
+        let backend = Self {
+            inner: Arc::new(RemoteBackend {
                 client,
                 workspace_id: workspace.id,
                 providers,
                 models,
-            })),
+                config_sources: Default::default(),
+                plugin_catalog: Default::default(),
+                plugin_statuses: Default::default(),
+                model_catalog: Default::default(),
+            }),
             workspace_root: Arc::new(workspace_root),
-        })
+        };
+        // Config/plugin snapshots are presentation metadata; a failure here
+        // must not prevent the client from connecting and driving sessions.
+        let _ = backend.refresh_config_sources().await;
+        let _ = backend.refresh_plugin_runtime_snapshot().await;
+        Ok(backend)
     }
 
     pub fn mode(&self) -> BackendMode {
-        match self.inner.as_ref() {
-            Backend::Embedded(_) => BackendMode::Embedded,
-            Backend::Remote(_) => BackendMode::Remote,
-        }
+        BackendMode::Remote
     }
 
     pub fn is_remote(&self) -> bool {
-        self.mode() == BackendMode::Remote
+        true
     }
 
     pub fn workspace_root(&self) -> &Path {
         self.workspace_root.as_path()
     }
 
-    pub(crate) fn embedded_application(&self) -> Result<&Application> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => Ok(application),
-            Backend::Remote(_) => Err(anyhow!(
-                "this feature is unavailable in remote TUI mode because it has no public center API"
-            )),
-        }
+    /// The resolved center-side workspace identity for this client.
+    pub(crate) fn workspace_id(&self) -> i64 {
+        self.inner.workspace_id
     }
 
-    fn embedded_feature(
+    /// Access to the HTTP client for operations ported to REST.
+    pub(crate) fn client(&self) -> &AgenaClient {
+        &self.inner.client
+    }
+
+    /// The cached configuration-source read model, if it has been loaded from
+    /// the center. Synchronous because settings presentation is built inside
+    /// the TUI event loop.
+    pub(crate) fn config_sources(&self) -> Option<agena_application::dto::ConfigJsonSources> {
+        self.inner
+            .config_sources
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    /// The resolved UI preferences projected from the center's effective
+    /// configuration, for launching the terminal with the same
+    /// theme/graphics/locale as an embedded runtime.
+    pub fn tui_preferences(&self) -> agena_application::dto::TuiPreferencesResource {
+        super::config::ui_configuration(self)
+    }
+
+    /// Refresh the cached configuration-source read model from the center:
+    /// the global config file, the workspace config file, and the resolved
+    /// effective document. `applied_layers` is not exposed over HTTP and is
+    /// left empty (the settings studio then reports "built-in defaults").
+    pub(crate) async fn refresh_config_sources(
         &self,
-        feature: &str,
-    ) -> std::result::Result<&Application, agena_application::ApplicationError> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => Ok(application),
-            Backend::Remote(_) => Err(agena_application::ApplicationError::internal(format!(
-                "{feature} is unavailable in remote TUI mode because it has no public center API"
-            ))),
-        }
+    ) -> Result<agena_application::dto::ConfigJsonSources> {
+        use agena_application::dto::ConfigJsonSources;
+        let client = &self.inner.client;
+        let global = client.settings_layer_value("global", "").await?;
+        let workspace = client.settings_layer_value("workspace", "").await?;
+        let effective = client.resolved_config().await?;
+        let config_path = global
+            .get("config_path")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let config_found = global
+            .get("config_found")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let project_config_path = workspace
+            .get("config_path")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let project_config_found = workspace
+            .get("config_found")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let sources = ConfigJsonSources {
+            config_path,
+            config_found,
+            project_config_path,
+            project_config_found,
+            applied_layers: Vec::new(),
+            file: global
+                .get("value")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+            project_file: workspace
+                .get("value")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+            effective,
+        };
+        *self.inner.config_sources.write().await = Some(sources.clone());
+        Ok(sources)
+    }
+
+    /// The cached plugin UI catalog, if loaded from the center.
+    pub(crate) fn plugin_catalog(&self) -> Option<agena_plugin_host::PluginUiCatalog> {
+        self.inner
+            .plugin_catalog
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    /// The cached plugin statuses, if loaded from the center.
+    pub(crate) fn plugin_statuses(&self) -> Vec<agena_plugin_host::status::PluginStatus> {
+        self.inner
+            .plugin_statuses
+            .try_read()
+            .ok()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    /// Refresh the cached plugin snapshot from the center: statuses and the
+    /// combined TUI/studio UI catalog.
+    pub(crate) async fn refresh_plugin_runtime_snapshot(&self) -> Result<()> {
+        let client = &self.inner.client;
+        let catalog_response = client.plugin_ui_catalog().await?;
+        let catalog = catalog_response
+            .get("catalog")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let catalog = serde_json::from_value::<agena_plugin_host::PluginUiCatalog>(catalog)
+            .context("the center returned an undecodable plugin UI catalog")?;
+        let statuses = serde_json::from_value::<Vec<agena_plugin_host::status::PluginStatus>>(
+            client.plugin_statuses().await?,
+        )
+        .context("the center returned undecodable plugin statuses")?;
+        *self.inner.plugin_catalog.write().await = Some(catalog);
+        *self.inner.plugin_statuses.write().await = statuses;
+        Ok(())
     }
 
     pub async fn invoke_plugin_ui_tool(
@@ -186,33 +285,48 @@ impl TuiBackend {
         agena_plugin_host::PluginUiToolInvokeResponse,
         agena_application::ApplicationError,
     > {
-        self.embedded_feature("plugin Tool API")?
+        let response = self
+            .client()
             .invoke_plugin_ui_tool(plugin_id, tool_name, input, session_id)
             .await
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "failed to invoke plugin tool `{tool_name}` through the center: {error}"
+                ))
+            })?;
+        serde_json::from_value(response).map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "plugin tool `{tool_name}` returned a response this TUI cannot decode: {error}"
+            ))
+        })
     }
 
+    /// Build the Provider Studio draft for `provider_id` (or a fresh draft for
+    /// a not-yet-configured provider). No HTTP endpoint exposes the full draft
+    /// projection, so this remains unavailable from a remote client.
     pub fn provider_config_draft(
         &self,
-        provider_id: Option<&str>,
+        _provider_id: Option<&str>,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderConfigDraft,
         agena_application::ApplicationError,
     > {
-        self.embedded_feature("Provider Studio")?
-            .provider_config_draft(provider_id)
+        Err(agena_application::ApplicationError::internal(
+            "Provider Studio draft editing is unavailable in remote client mode because it has no public center API",
+        ))
     }
 
     pub async fn list_draft_provider_adapter_models(
         &self,
-        draft: &agena_application::provider_studio::ProviderConfigDraft,
-        adapter_ids: &[String],
+        _draft: &agena_application::provider_studio::ProviderConfigDraft,
+        _adapter_ids: &[String],
     ) -> std::result::Result<
         agena_api::resource::ProviderAdapterModelsResponse,
         agena_application::ApplicationError,
     > {
-        self.embedded_feature("Provider Studio draft discovery")?
-            .list_draft_provider_adapter_models(draft, adapter_ids)
-            .await
+        Err(agena_application::ApplicationError::internal(
+            "Provider Studio draft discovery is unavailable in remote client mode because it has no public center API",
+        ))
     }
 
     pub async fn list_saved_provider_adapter_models(
@@ -223,123 +337,105 @@ impl TuiBackend {
         agena_api::resource::ProviderAdapterModelsResponse,
         agena_application::ApplicationError,
     > {
-        self.embedded_feature("Provider Studio adapter discovery")?
-            .list_saved_provider_adapter_models(provider_id, adapter_ids)
+        self.client()
+            .list_saved_provider_adapter_models(
+                provider_id,
+                agena_api::resource::SavedProviderAdapterModelsRequest {
+                    adapter_ids: adapter_ids.to_vec(),
+                },
+            )
             .await
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "failed to list saved provider adapter models through the center: {error}"
+                ))
+            })
     }
 
     pub fn provider_model_draft_value(
         &self,
-        draft: &agena_application::provider_studio::ProviderConfigDraft,
-        adapter_id: &str,
-        model_id: &str,
-        provider_model: Option<&agena_api::resource::ProviderModelResource>,
+        _draft: &agena_application::provider_studio::ProviderConfigDraft,
+        _adapter_id: &str,
+        _model_id: &str,
+        _provider_model: Option<&agena_api::resource::ProviderModelResource>,
     ) -> std::result::Result<serde_json::Value, agena_application::ApplicationError> {
-        self.embedded_feature("Provider Studio model editor")?
-            .provider_model_draft_value(draft, adapter_id, model_id, provider_model)
+        Err(agena_application::ApplicationError::internal(
+            "Provider Studio model editing is unavailable in remote client mode because it has no public center API",
+        ))
     }
 
     pub async fn save_provider_draft(
         &self,
-        draft: agena_application::provider_studio::ProviderConfigDraft,
-        adapter_model_lists: &[agena_api::resource::ProviderAdapterModelsResource],
-        selected_adapter_ids: &[String],
-        selected_model_keys: &std::collections::BTreeSet<String>,
+        _draft: agena_application::provider_studio::ProviderConfigDraft,
+        _adapter_model_lists: &[agena_api::resource::ProviderAdapterModelsResource],
+        _selected_adapter_ids: &[String],
+        _selected_model_keys: &std::collections::BTreeSet<String>,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
     > {
-        let application = self
-            .embedded_application()
-            .map_err(|_| remote_provider_studio_error())?;
-        application
-            .save_provider_draft(
-                draft,
-                adapter_model_lists,
-                selected_adapter_ids,
-                selected_model_keys,
-            )
-            .await
+        Err(remote_provider_studio_error())
     }
 
     pub async fn save_provider_adapter_matches(
         &self,
-        draft: agena_application::provider_studio::ProviderConfigDraft,
-        adapter_models: agena_api::resource::ProviderAdapterModelsResource,
+        _draft: agena_application::provider_studio::ProviderConfigDraft,
+        _adapter_models: agena_api::resource::ProviderAdapterModelsResource,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
     > {
-        let application = self
-            .embedded_application()
-            .map_err(|_| remote_provider_studio_error())?;
-        application
-            .save_provider_adapter_matches(draft, adapter_models)
-            .await
+        Err(remote_provider_studio_error())
     }
 
     pub async fn save_provider_model_value(
         &self,
-        draft: agena_application::provider_studio::ProviderConfigDraft,
-        adapter_id: &str,
-        model_id: &str,
-        model_value: serde_json::Value,
+        _draft: agena_application::provider_studio::ProviderConfigDraft,
+        _adapter_id: &str,
+        _model_id: &str,
+        _model_value: serde_json::Value,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
     > {
-        let application = self
-            .embedded_application()
-            .map_err(|_| remote_provider_studio_error())?;
-        application
-            .save_provider_model_value(draft, adapter_id, model_id, model_value)
-            .await
+        Err(remote_provider_studio_error())
     }
 
     pub async fn delete_provider_model(
         &self,
-        draft: agena_application::provider_studio::ProviderConfigDraft,
-        adapter_id: &str,
-        model_id: &str,
+        _draft: agena_application::provider_studio::ProviderConfigDraft,
+        _adapter_id: &str,
+        _model_id: &str,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
     > {
-        let application = self
-            .embedded_application()
-            .map_err(|_| remote_provider_studio_error())?;
-        application
-            .delete_provider_model(draft, adapter_id, model_id)
-            .await
+        Err(remote_provider_studio_error())
     }
 
     pub async fn delete_provider(
         &self,
-        provider_id: &str,
+        _provider_id: &str,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
     > {
-        let application = self
-            .embedded_application()
-            .map_err(|_| remote_provider_studio_error())?;
-        application.delete_provider(provider_id).await
+        Err(remote_provider_studio_error())
     }
 
     pub async fn delete_provider_adapter(
         &self,
-        draft: agena_application::provider_studio::ProviderConfigDraft,
-        adapter_id: &str,
+        _draft: agena_application::provider_studio::ProviderConfigDraft,
+        _adapter_id: &str,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
     > {
-        let application = self
-            .embedded_application()
-            .map_err(|_| remote_provider_studio_error())?;
-        application.delete_provider_adapter(draft, adapter_id).await
+        Err(remote_provider_studio_error())
     }
 
+    /// Set a workspace-scoped config file setting through the center,
+    /// reloading the runtime when the edit requires it.
     pub async fn set_config_setting(
         &self,
         path: &str,
@@ -348,11 +444,24 @@ impl TuiBackend {
         agena_runtime::ConfigSettingsEditResponse,
         agena_application::ApplicationError,
     > {
-        self.embedded_feature("runtime configuration editing")?
-            .set_config_setting(path, value)
+        let response = self
+            .client()
+            .set_settings_layer_value("workspace", path.trim(), value, false, true)
             .await
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "failed to set workspace config setting `{path}` through the center: {error}"
+                ))
+            })?;
+        serde_json::from_value(response).map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "the center returned an undecodable config edit response: {error}"
+            ))
+        })
     }
 
+    /// Delete a workspace-scoped config file setting through the center,
+    /// reloading the runtime when the edit requires it.
     pub async fn delete_config_setting(
         &self,
         path: &str,
@@ -360,11 +469,24 @@ impl TuiBackend {
         agena_runtime::ConfigSettingsEditResponse,
         agena_application::ApplicationError,
     > {
-        self.embedded_feature("runtime configuration editing")?
-            .delete_config_setting(path)
+        let response = self
+            .client()
+            .delete_settings_layer_value("workspace", path.trim(), false, true)
             .await
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "failed to delete workspace config setting `{path}` through the center: {error}"
+                ))
+            })?;
+        serde_json::from_value(response).map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "the center returned an undecodable config edit response: {error}"
+            ))
+        })
     }
 
+    /// Set the workspace's default provider selection (an alias of the
+    /// `providers.default_selection` workspace config setting).
     pub async fn set_provider_default_selection(
         &self,
         provider_id: &str,
@@ -373,19 +495,36 @@ impl TuiBackend {
         agena_runtime::ConfigSettingsEditResponse,
         agena_application::ApplicationError,
     > {
-        self.embedded_feature("provider default selection")?
-            .set_provider_default_selection(provider_id, selection)
-            .await
+        let _ = provider_id;
+        self.set_config_setting("providers.default_selection", selection).await
     }
 
+    /// Set a session's selected permission policy through the center.
     pub async fn set_session_permission(
         &self,
         session_id: i64,
         permission: agena_domain::PermissionConfig,
     ) -> std::result::Result<SessionExecutionResource, agena_application::ApplicationError> {
-        self.embedded_feature("session permission editing")?
-            .set_session_permission(session_id, permission)
+        let resource: agena_api::resource::PermissionConfigResource = serde_json::from_value(
+            serde_json::to_value(permission).map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "failed to encode session permission: {error}"
+                ))
+            })?,
+        )
+        .map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "failed to encode session permission: {error}"
+            ))
+        })?;
+        self.client()
+            .set_session_permission(session_id, resource)
             .await
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "failed to update session permission through the center: {error}"
+                ))
+            })
     }
 
     pub async fn session_overview(
@@ -393,35 +532,23 @@ impl TuiBackend {
         workspace_id: Option<i64>,
         recent_limit: u64,
     ) -> Result<SessionOverviewResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => Ok(application
-                .session_overview(workspace_id, recent_limit)
-                .await?),
-            Backend::Remote(remote) => Ok(remote
-                .client
-                .session_overview(workspace_id.or(Some(remote.workspace_id)), recent_limit)
-                .await?),
-        }
+        Ok(self
+            .client()
+            .session_overview(workspace_id.or(Some(self.inner.workspace_id)), recent_limit)
+            .await?)
     }
 
     pub async fn list_workspace_sessions(&self, roots_only: bool) -> Result<Vec<SessionResource>> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                Ok(application.list_workspace_sessions(roots_only).await?)
-            }
-            Backend::Remote(remote) => {
-                let page = remote
-                    .list_sessions(ListSessionsParams {
-                        workspace_id: Some(remote.workspace_id),
-                        roots: roots_only,
-                        exclude_subagents: true,
-                        limit: Some(200),
-                        ..Default::default()
-                    })
-                    .await?;
-                Ok(page.items)
-            }
-        }
+        let page = self
+            .list_sessions(ListSessionsParams {
+                workspace_id: Some(self.inner.workspace_id),
+                roots: roots_only,
+                exclude_subagents: true,
+                limit: Some(200),
+                ..Default::default()
+            })
+            .await?;
+        Ok(page.items)
     }
 
     pub async fn list_workspace_sessions_page(
@@ -432,95 +559,60 @@ impl TuiBackend {
         cursor: Option<String>,
         limit: u64,
     ) -> Result<PaginatedResponse<SessionResource>> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                super::operations::list_workspace_sessions_page_embedded(
-                    application,
-                    roots_only,
-                    exclude_subagents,
-                    search,
-                    cursor,
-                    limit,
-                )
-                .await
-            }
-            Backend::Remote(remote) => {
-                remote
-                    .list_sessions(ListSessionsParams {
-                        workspace_id: Some(remote.workspace_id),
-                        roots: roots_only,
-                        exclude_subagents,
-                        search: search.map(str::to_owned),
-                        cursor,
-                        limit: Some(limit),
-                        ..Default::default()
-                    })
-                    .await
-            }
-        }
+        self.list_sessions(ListSessionsParams {
+            workspace_id: Some(self.inner.workspace_id),
+            roots: roots_only,
+            exclude_subagents,
+            search: search.map(str::to_owned),
+            cursor,
+            limit: Some(limit),
+            ..Default::default()
+        })
+        .await
     }
 
     pub async fn list_child_sessions(&self, parent_id: i64) -> Result<Vec<SessionResource>> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                Ok(application.list_child_sessions(parent_id).await?)
-            }
-            Backend::Remote(remote) => Ok(remote
-                .list_sessions(ListSessionsParams {
-                    workspace_id: Some(remote.workspace_id),
-                    parent_id: Some(parent_id),
-                    limit: Some(200),
-                    ..Default::default()
-                })
-                .await?
-                .items),
-        }
+        Ok(self
+            .list_sessions(ListSessionsParams {
+                workspace_id: Some(self.inner.workspace_id),
+                parent_id: Some(parent_id),
+                limit: Some(200),
+                ..Default::default()
+            })
+            .await?
+            .items)
     }
 
     pub async fn list_session_subtree(&self, session_id: i64) -> Result<Vec<SessionResource>> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                Ok(application.list_session_subtree(session_id).await?)
-            }
-            Backend::Remote(remote) => {
-                let mut cursor = remote.get_session(session_id).await?;
-                while let Some(parent_id) = cursor.parent_id {
-                    cursor = remote.get_session(parent_id).await?;
-                }
-                let result = remote
-                    .client
-                    .command(Command::ListSessionTree(
-                        agena_api::commands::ListSessionTreeParams { root_id: cursor.id },
-                    ))
-                    .await?;
-                let CommandResult::SessionTree(items) = result else {
-                    bail!("processing center returned the wrong session-tree result");
-                };
-                Ok(items)
-            }
+        let mut cursor = self.get_session(session_id).await?;
+        while let Some(parent_id) = cursor.parent_id {
+            cursor = self.get_session(parent_id).await?;
         }
+        let result = self
+            .client()
+            .command(Command::ListSessionTree(
+                agena_api::commands::ListSessionTreeParams { root_id: cursor.id },
+            ))
+            .await?;
+        let CommandResult::SessionTree(items) = result else {
+            bail!("processing center returned the wrong session-tree result");
+        };
+        Ok(items)
     }
 
     pub async fn rename_session(&self, session_id: i64, title: String) -> Result<SessionResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                Ok(application.rename_session(session_id, title).await?)
-            }
-            Backend::Remote(remote) => {
-                let result = remote
-                    .client
-                    .command(Command::UpdateSession(UpdateSessionParams {
-                        session_id,
-                        title,
-                        expected_version: None,
-                    }))
-                    .await?;
-                let CommandResult::Session(session) = result else {
-                    bail!("processing center returned the wrong session-update result");
-                };
-                Ok(session)
-            }
-        }
+        let result = self
+            .client()
+            .command(Command::UpdateSession(UpdateSessionParams {
+                session_id,
+                title,
+                expected_version: None,
+            }))
+            .await?;
+        let CommandResult::Session(session) = result else {
+            bail!("processing center returned the wrong session-update result");
+        };
+        Ok(session)
     }
 
     pub async fn create_session(
@@ -528,24 +620,14 @@ impl TuiBackend {
         title: String,
         parent_id: Option<i64>,
     ) -> Result<SessionResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                Ok(application.create_session(title, parent_id).await?)
-            }
-            Backend::Remote(remote) => Ok(remote
-                .client
-                .create_session(remote.workspace_id, title, parent_id)
-                .await?),
-        }
+        Ok(self
+            .client()
+            .create_session(self.inner.workspace_id, title, parent_id)
+            .await?)
     }
 
     pub async fn get_session_state(&self, session_id: i64) -> Result<SessionExecutionResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                Ok(application.session_execution_resource(session_id).await?)
-            }
-            Backend::Remote(remote) => Ok(remote.client.get_session_state(session_id).await?),
-        }
+        Ok(self.client().get_session_state(session_id).await?)
     }
 
     pub async fn refresh_session(
@@ -554,33 +636,21 @@ impl TuiBackend {
         after_seq: Option<i64>,
         force: bool,
     ) -> Result<SessionRefresh> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                super::session_refresh::refresh_session_embedded(
-                    application,
-                    session_id,
-                    after_seq,
-                    force,
-                )
-                .await
-            }
-            Backend::Remote(remote) => {
-                // REST/SSE is an invalidation protocol: the snapshot is the
-                // correctness path. Reading on every refresh also converges
-                // after SSE lag or reconnect without depending on replay.
-                let execution = remote.client.get_session_state(session_id).await?;
-                let latest_event_seq = execution.latest_event_seq;
-                let event_count = after_seq
-                    .zip(latest_event_seq)
-                    .map(|(after, current)| current.saturating_sub(after).clamp(0, 256) as usize)
-                    .unwrap_or(0);
-                Ok(SessionRefresh {
-                    latest_event_seq,
-                    event_count,
-                    execution: Some(execution),
-                })
-            }
-        }
+        // REST/SSE is an invalidation protocol: the snapshot is the
+        // correctness path. Reading on every refresh also converges
+        // after SSE lag or reconnect without depending on replay.
+        let _ = force;
+        let execution = self.client().get_session_state(session_id).await?;
+        let latest_event_seq = execution.latest_event_seq;
+        let event_count = after_seq
+            .zip(latest_event_seq)
+            .map(|(after, current)| current.saturating_sub(after).clamp(0, 256) as usize)
+            .unwrap_or(0);
+        Ok(SessionRefresh {
+            latest_event_seq,
+            event_count,
+            execution: Some(execution),
+        })
     }
 
     pub async fn submit_document(
@@ -589,19 +659,14 @@ impl TuiBackend {
         document: agena_domain::ComposerDocument,
         options: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => Ok(application
-                .submit_user_run(session_id, document, options)
-                .await?),
-            Backend::Remote(remote) => Ok(remote
-                .client
-                .submit_message(agena_api::commands::SubmitRunParams {
-                    session_id,
-                    options,
-                    document,
-                })
-                .await?),
-        }
+        Ok(self
+            .client()
+            .submit_message(agena_api::commands::SubmitRunParams {
+                session_id,
+                options,
+                document,
+            })
+            .await?)
     }
 
     pub async fn continue_session(
@@ -609,12 +674,7 @@ impl TuiBackend {
         session_id: i64,
         options: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                Ok(application.continue_session(session_id, options).await?)
-            }
-            Backend::Remote(remote) => Ok(remote.client.continue_run(session_id, options).await?),
-        }
+        Ok(self.client().continue_run(session_id, options).await?)
     }
 
     pub async fn compact_session(
@@ -622,14 +682,7 @@ impl TuiBackend {
         session_id: i64,
         options: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                Ok(application.compact_session(session_id, options).await?)
-            }
-            Backend::Remote(remote) => {
-                Ok(remote.client.compact_session(session_id, options).await?)
-            }
-        }
+        Ok(self.client().compact_session(session_id, options).await?)
     }
 
     pub async fn update_session_selection(
@@ -637,15 +690,10 @@ impl TuiBackend {
         session_id: i64,
         options: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => Ok(application
-                .update_session_selection(session_id, options)
-                .await?),
-            Backend::Remote(remote) => Ok(remote
-                .client
-                .update_session_selection(session_id, options)
-                .await?),
-        }
+        Ok(self
+            .client()
+            .update_session_selection(session_id, options)
+            .await?)
     }
 
     pub async fn cancel_run(
@@ -653,14 +701,7 @@ impl TuiBackend {
         session_id: i64,
         execution_id: agena_domain::ExecutionId,
     ) -> Result<agena_domain::CancellationResult> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                Ok(application.cancel_run(session_id, execution_id).await?)
-            }
-            Backend::Remote(remote) => {
-                Ok(remote.client.cancel_run(session_id, execution_id).await?)
-            }
-        }
+        Ok(self.client().cancel_run(session_id, execution_id).await?)
     }
 
     pub async fn rewind_session_to_turn(
@@ -668,22 +709,15 @@ impl TuiBackend {
         session_id: i64,
         turn_id: agena_domain::TurnId,
     ) -> Result<SessionExecutionResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => Ok(application
-                .rewind_session_to_turn(session_id, turn_id)
-                .await?),
-            Backend::Remote(remote) => {
-                let result = remote
-                    .client
-                    .command(Command::RewindSession(RewindSessionParams {
-                        session_id,
-                        turn_id,
-                        expected_version: None,
-                    }))
-                    .await?;
-                execution_result(result, "session rewind")
-            }
-        }
+        let result = self
+            .client()
+            .command(Command::RewindSession(RewindSessionParams {
+                session_id,
+                turn_id,
+                expected_version: None,
+            }))
+            .await?;
+        execution_result(result, "session rewind")
     }
 
     pub async fn fork_session(
@@ -691,22 +725,15 @@ impl TuiBackend {
         session_id: i64,
         title: Option<String>,
     ) -> Result<SessionExecutionResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => Ok(application
-                .fork_session(session_id, None, title, None)
-                .await?),
-            Backend::Remote(remote) => {
-                let result = remote
-                    .client
-                    .command(Command::ForkSession(ForkSessionParams {
-                        session_id,
-                        at_message_id: None,
-                        title,
-                    }))
-                    .await?;
-                execution_result(result, "session fork")
-            }
-        }
+        let result = self
+            .client()
+            .command(Command::ForkSession(ForkSessionParams {
+                session_id,
+                at_message_id: None,
+                title,
+            }))
+            .await?;
+        execution_result(result, "session fork")
     }
 
     pub async fn reply_permission(
@@ -715,19 +742,14 @@ impl TuiBackend {
         options: RunOptions,
         reply: PermissionReply,
     ) -> Result<SessionExecutionResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => Ok(application
-                .reply_permission(session_id, options, reply, Some("tui".to_owned()))
-                .await?),
-            Backend::Remote(remote) => Ok(remote
-                .client
-                .reply_permission(agena_api::commands::ReplyPermissionParams {
-                    session_id,
-                    options,
-                    reply,
-                })
-                .await?),
-        }
+        Ok(self
+            .client()
+            .reply_permission(agena_api::commands::ReplyPermissionParams {
+                session_id,
+                options,
+                reply,
+            })
+            .await?)
     }
 
     pub async fn reply_user_input(
@@ -736,19 +758,14 @@ impl TuiBackend {
         options: RunOptions,
         reply: UserInputReply,
     ) -> Result<SessionExecutionResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => Ok(application
-                .reply_user_input(session_id, options, reply)
-                .await?),
-            Backend::Remote(remote) => Ok(remote
-                .client
-                .reply_user_input(agena_api::commands::ReplyUserInputParams {
-                    session_id,
-                    options,
-                    reply,
-                })
-                .await?),
-        }
+        Ok(self
+            .client()
+            .reply_user_input(agena_api::commands::ReplyUserInputParams {
+                session_id,
+                options,
+                reply,
+            })
+            .await?)
     }
 
     pub async fn mark_interactive_request_presented(
@@ -756,15 +773,10 @@ impl TuiBackend {
         session_id: i64,
         request_id: String,
     ) -> Result<SessionExecutionResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => Ok(application
-                .mark_interactive_request_presented(session_id, request_id)
-                .await?),
-            Backend::Remote(remote) => Ok(remote
-                .client
-                .mark_interactive_request_presented(session_id, request_id.as_str())
-                .await?),
-        }
+        Ok(self
+            .client()
+            .mark_interactive_request_presented(session_id, request_id.as_str())
+            .await?)
     }
 
     pub async fn list_providers(&self) -> Result<Vec<ProviderSummaryResource>> {
@@ -772,29 +784,54 @@ impl TuiBackend {
     }
 
     pub(crate) fn provider_summaries(&self) -> Vec<ProviderSummaryResource> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                super::operations::list_configured_providers_embedded(application)
-            }
-            Backend::Remote(remote) => remote.providers.clone(),
-        }
+        self.inner.providers.clone()
     }
 
     pub(crate) fn list_local_provider_models(
         &self,
         provider_id: &str,
     ) -> Result<Vec<agena_domain::Model>> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => application
-                .provider_catalog()
-                .configured_local_models(&agena_domain::ProviderId::new(provider_id.trim()))
-                .map_err(|error| anyhow!(error.to_string())),
-            Backend::Remote(remote) => Ok(remote
-                .models
-                .get(provider_id.trim())
-                .cloned()
-                .unwrap_or_default()),
-        }
+        Ok(self
+            .inner
+            .models
+            .get(provider_id.trim())
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// The cached model-catalog page, if one has been loaded from the center.
+    /// Synchronous because the settings studio reads model counts inside the
+    /// TUI event loop. An empty response is returned when nothing is cached
+    /// yet, so sync consumers can render without blocking on HTTP.
+    pub(crate) fn model_catalog(
+        &self,
+    ) -> agena_application::dto::ModelCatalogListResponse {
+        self.inner
+            .model_catalog
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .unwrap_or_else(agena_application::dto::ModelCatalogListResponse::empty)
+    }
+
+    /// Fetch a model-catalog page from the center and cache it for
+    /// synchronous readers.
+    pub(crate) async fn refresh_model_catalog_cache(
+        &self,
+        query: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<()> {
+        let value = self
+            .inner
+            .client
+            .model_catalog(query, None, offset, limit)
+            .await
+            .context("failed to load the model catalog from the center")?;
+        let response = serde_json::from_value(value)
+            .context("the center returned an undecodable model catalog")?;
+        *self.inner.model_catalog.write().await = Some(response);
+        Ok(())
     }
 
     pub(crate) fn configured_model(
@@ -817,79 +854,69 @@ impl TuiBackend {
         &self,
         request: &RunOptions,
     ) -> std::result::Result<agena_domain::ModelRef, agena_application::ApplicationError> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => application.resolved_model_for_run_options(request),
-            Backend::Remote(remote) => {
-                if let Some(model) = request.model.as_ref() {
-                    return match model.adapter_id.as_deref() {
-                        Some(adapter_id) => agena_domain::ModelRef::try_new_with_adapter(
-                            model.provider_id.as_str(),
-                            adapter_id,
-                            model.model_id.as_str(),
-                        ),
-                        None => agena_domain::ModelRef::try_new(
-                            model.provider_id.as_str(),
-                            model.model_id.as_str(),
-                        ),
-                    }
-                    .map_err(|error| {
-                        agena_application::ApplicationError::internal(format!(
-                            "run option contains an invalid model reference: {error}"
-                        ))
-                    });
-                }
-                remote
-                    .providers
-                    .first()
-                    .and_then(|provider| {
-                        remote
-                            .models
-                            .get(provider.provider_id.as_str())
-                            .and_then(|models| {
-                                models
-                                    .iter()
-                                    .find(|model| model.id.as_ref() == provider.defaults.model)
-                                    .or_else(|| models.first())
-                            })
-                    })
-                    .map(agena_domain::Model::reference)
-                    .ok_or_else(|| {
-                        agena_application::ApplicationError::internal(
-                            "processing center exposes no configured model",
-                        )
-                    })
+        if let Some(model) = request.model.as_ref() {
+            return match model.adapter_id.as_deref() {
+                Some(adapter_id) => agena_domain::ModelRef::try_new_with_adapter(
+                    model.provider_id.as_str(),
+                    adapter_id,
+                    model.model_id.as_str(),
+                ),
+                None => agena_domain::ModelRef::try_new(
+                    model.provider_id.as_str(),
+                    model.model_id.as_str(),
+                ),
             }
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "run option contains an invalid model reference: {error}"
+                ))
+            });
         }
+        self.inner
+            .providers
+            .first()
+            .and_then(|provider| {
+                self.inner
+                    .models
+                    .get(provider.provider_id.as_str())
+                    .and_then(|models| {
+                        models
+                            .iter()
+                            .find(|model| model.id.as_ref() == provider.defaults.model)
+                            .or_else(|| models.first())
+                    })
+            })
+            .map(agena_domain::Model::reference)
+            .ok_or_else(|| {
+                agena_application::ApplicationError::internal(
+                    "processing center exposes no configured model",
+                )
+            })
     }
 
     pub fn resolved_model_default_modes(
         &self,
         request: &RunOptions,
     ) -> (Option<String>, Option<String>) {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => application.resolved_model_default_modes(request),
-            Backend::Remote(_) => {
-                let Ok(model_ref) = self.resolved_model_for_run_options(request) else {
-                    return (None, None);
-                };
-                let Some(model) = self.configured_model(&model_ref) else {
-                    return (None, None);
-                };
-                let thinking = model
-                    .thinking_modes
-                    .iter()
-                    .find(|mode| mode.is_default)
-                    .or_else(|| model.thinking_modes.first())
-                    .and_then(|mode| mode.selector().map(|selector| selector.into_owned()));
-                let speed = model
-                    .speed_modes
-                    .iter()
-                    .find(|(_, mode)| mode.is_default)
-                    .or_else(|| model.speed_modes.iter().next())
-                    .map(|(name, _)| name.clone());
-                (thinking, speed)
-            }
-        }
+        let Ok(model_ref) = self.resolved_model_for_run_options(request) else {
+            return (None, None);
+        };
+        let Some(model) = self.configured_model(&model_ref) else {
+            return (None, None);
+        };
+        let thinking = model
+            .thinking_modes
+            .iter()
+            .find(|mode| mode.is_default)
+            .or_else(|| model.thinking_modes.first())
+            .and_then(|mode| mode.selector().map(|selector| selector.into_owned()));
+        let speed = model
+            .speed_modes
+            .iter()
+            .find(|(_, mode)| mode.is_default)
+            .or_else(|| model.speed_modes.iter().next())
+            .map(|(name, _)| name.clone());
+        (thinking, speed)
     }
 
     /// Start a session-scoped invalidation stream. Establishing the remote SSE
@@ -897,82 +924,13 @@ impl TuiBackend {
     /// handler never blocks. Any event causes snapshot convergence; lag and
     /// transport closure are also surfaced as forced refreshes.
     pub fn subscribe_session_events(&self, session_id: i64) -> mpsc::Receiver<LiveEvent> {
-        match self.inner.as_ref() {
-            Backend::Embedded(application) => {
-                super::live_events::subscribe_session_events_embedded(application, session_id)
-                    .unwrap_or_else(empty_live_receiver)
-            }
-            Backend::Remote(remote) => {
-                let client = remote.client.clone();
-                let (tx, rx) = mpsc::channel(256);
-                tokio::spawn(async move {
-                    loop {
-                        let connection = match client.connect_session(session_id).await {
-                            Ok(connection) => connection,
-                            Err(_) => {
-                                if tx
-                                    .send(LiveEvent {
-                                        snapshot: None,
-                                        event: None,
-                                        force_refresh: true,
-                                    })
-                                    .await
-                                    .is_err()
-                                {
-                                    return;
-                                }
-                                tokio::select! {
-                                    _ = tx.closed() => return,
-                                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
-                                }
-                                continue;
-                            }
-                        };
-                        if tx
-                            .send(LiveEvent {
-                                snapshot: Some(connection.snapshot),
-                                event: None,
-                                force_refresh: false,
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return;
-                        }
-                        let mut subscription = connection.subscription;
-                        while let Some(item) = subscription.recv().await {
-                            let force_refresh = match item {
-                                Ok(SubscriptionEvent::SessionChanged(change)) => {
-                                    if change.session_id() != session_id {
-                                        continue;
-                                    }
-                                    false
-                                }
-                                Ok(SubscriptionEvent::RuntimeSignal(signal)) => {
-                                    if signal.session_id != Some(session_id) {
-                                        continue;
-                                    }
-                                    false
-                                }
-                                Ok(SubscriptionEvent::Lagged(_)) | Err(_) => true,
-                            };
-                            if tx
-                                .send(LiveEvent {
-                                    snapshot: None,
-                                    event: None,
-                                    force_refresh,
-                                })
-                                .await
-                                .is_err()
-                            {
-                                return;
-                            }
-                            if force_refresh {
-                                break;
-                            }
-                        }
-                        // A closed/lagged stream is not replayable. Invalidate,
-                        // then establish a fresh subscribe-before-snapshot pair.
+        let client = self.client().clone();
+        let (tx, rx) = mpsc::channel(256);
+        tokio::spawn(async move {
+            loop {
+                let connection = match client.connect_session(session_id).await {
+                    Ok(connection) => connection,
+                    Err(_) => {
                         if tx
                             .send(LiveEvent {
                                 snapshot: None,
@@ -986,22 +944,81 @@ impl TuiBackend {
                         }
                         tokio::select! {
                             _ = tx.closed() => return,
-                            _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
                         }
+                        continue;
                     }
-                });
-                rx
+                };
+                if tx
+                    .send(LiveEvent {
+                        snapshot: Some(connection.snapshot),
+                        event: None,
+                        force_refresh: false,
+                    })
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                let mut subscription = connection.subscription;
+                while let Some(item) = subscription.recv().await {
+                    let force_refresh = match item {
+                        Ok(SubscriptionEvent::SessionChanged(change)) => {
+                            if change.session_id() != session_id {
+                                continue;
+                            }
+                            false
+                        }
+                        Ok(SubscriptionEvent::RuntimeSignal(signal)) => {
+                            if signal.session_id != Some(session_id) {
+                                continue;
+                            }
+                            false
+                        }
+                        Ok(SubscriptionEvent::Lagged(_)) | Err(_) => true,
+                    };
+                    if tx
+                        .send(LiveEvent {
+                            snapshot: None,
+                            event: None,
+                            force_refresh,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    if force_refresh {
+                        break;
+                    }
+                }
+                // A closed/lagged stream is not replayable. Invalidate,
+                // then establish a fresh subscribe-before-snapshot pair.
+                if tx
+                    .send(LiveEvent {
+                        snapshot: None,
+                        event: None,
+                        force_refresh: true,
+                    })
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                tokio::select! {
+                    _ = tx.closed() => return,
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+                }
             }
-        }
+        });
+        rx
     }
-}
 
-impl RemoteBackend {
     async fn list_sessions(
         &self,
         params: ListSessionsParams,
     ) -> Result<PaginatedResponse<SessionResource>> {
-        let result = self.client.query(Query::ListSessions(params)).await?;
+        let result = self.client().query(Query::ListSessions(params)).await?;
         let QueryResult::Sessions(page) = result else {
             bail!("processing center returned the wrong session-list result");
         };
@@ -1010,13 +1027,33 @@ impl RemoteBackend {
 
     async fn get_session(&self, session_id: i64) -> Result<SessionResource> {
         let result = self
-            .client
+            .client()
             .query(Query::GetSession(GetSessionParams { session_id }))
             .await?;
         let QueryResult::Session(session) = result else {
             bail!("processing center returned the wrong session result");
         };
         Ok(session)
+    }
+
+    /// Construct a backend pointed at a dead local endpoint for tests that
+    /// only exercise synchronous routing/state effects (backend round-trips
+    /// fail immediately and are surfaced as flashes).
+    #[cfg(test)]
+    pub(crate) fn remote_mock() -> Self {
+        Self {
+            inner: Arc::new(RemoteBackend {
+                client: AgenaClient::new("http://127.0.0.1:9").expect("mock client"),
+                workspace_id: 1,
+                providers: Vec::new(),
+                models: HashMap::new(),
+                config_sources: Default::default(),
+                plugin_catalog: Default::default(),
+                plugin_statuses: Default::default(),
+                model_catalog: Default::default(),
+            }),
+            workspace_root: Arc::new(PathBuf::from(std::env::temp_dir())),
+        }
     }
 }
 
@@ -1069,11 +1106,6 @@ fn provider_model_from_resource(
         "speed_modes": model.speed_modes,
     });
     serde_json::from_value(value).map_err(anyhow::Error::from)
-}
-
-fn empty_live_receiver() -> mpsc::Receiver<LiveEvent> {
-    let (_tx, rx) = mpsc::channel(1);
-    rx
 }
 
 fn remote_provider_studio_error() -> agena_application::provider_studio::ProviderStudioSaveError {
@@ -1134,7 +1166,7 @@ mod tests {
     fn remote_backend_has_no_embedded_application_fallback() {
         let model = agena_domain::Model::new("example", "model-1");
         let backend = TuiBackend {
-            inner: Arc::new(Backend::Remote(RemoteBackend {
+            inner: Arc::new(RemoteBackend {
                 client: AgenaClient::new("http://127.0.0.1:9").expect("client"),
                 workspace_id: 7,
                 providers: vec![ProviderSummaryResource {
@@ -1146,12 +1178,15 @@ mod tests {
                     adapters: Vec::new(),
                 }],
                 models: HashMap::from([("example".to_owned(), vec![model])]),
-            })),
+                config_sources: Default::default(),
+                plugin_catalog: Default::default(),
+                plugin_statuses: Default::default(),
+                model_catalog: Default::default(),
+            }),
             workspace_root: Arc::new(PathBuf::from("/workspace")),
         };
 
         assert_eq!(backend.mode(), BackendMode::Remote);
-        assert!(backend.embedded_application().is_err());
         let resolved = backend
             .resolved_model_for_run_options(&RunOptions::default())
             .expect("resolve cached remote default");

@@ -55,7 +55,7 @@ pub fn build_plugin_workbench_plugin(
         plugin_id,
         visible_tool,
         version,
-        transport: status.kind.to_owned(),
+        transport: status.kind.clone(),
         tools,
         commands,
         config_status: PluginConfigStatus {

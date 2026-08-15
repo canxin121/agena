@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Summary of the model catalog.
 pub struct ModelCatalogResponse {
     #[serde(default)]
@@ -20,7 +20,7 @@ pub struct ModelCatalogRefreshResponse {
     pub summary: ModelCatalogResponse,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Paginated listing of catalog models with a summary.
 pub struct ModelCatalogListResponse {
     pub summary: ModelCatalogResponse,
@@ -32,6 +32,27 @@ pub struct ModelCatalogListResponse {
     pub items: Vec<CatalogModelResource>,
 }
 
+impl ModelCatalogListResponse {
+    /// An empty listing used by synchronous remote-client consumers before a
+    /// catalog page has been fetched from the center.
+    pub fn empty() -> Self {
+        Self {
+            summary: ModelCatalogResponse {
+                refreshing: false,
+                last_refresh_at: None,
+                last_successful_source: None,
+                last_failure: None,
+                model_count: 0,
+            },
+            total: 0,
+            offset: 0,
+            limit: 0,
+            available_origins: Vec::new(),
+            items: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 /// Source of a catalog model entry.
@@ -40,7 +61,7 @@ pub enum ModelCatalogSourceKind {
     Cache,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// A model entry in the catalog.
 pub struct CatalogModelResource {
     pub model_id: String,

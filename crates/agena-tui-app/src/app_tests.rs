@@ -555,14 +555,12 @@ mod interaction_part_routing_tests {
             WorkflowState,
         },
     };
-    use agena_application::Application;
     use agena_domain::{UserInputKind, UserInputQuestion, UserInputSource};
-    use agena_runtime::{RuntimeBootstrapRequest, bootstrap_application_services};
     use chrono::Utc;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::layout::Rect;
 
-    use super::super::{App, I18n, LaunchOptions};
+    use super::super::{App, I18n, LaunchOptions, TuiBackend};
     use crate::app_types::{RunActivityTarget, RunOperation};
     use agena_tui_transcript::{TranscriptContentId, TranscriptEntryId, TranscriptNodeKey};
 
@@ -806,24 +804,16 @@ mod interaction_part_routing_tests {
         }
     }
 
-    /// Bootstrap a real `App` against an in-memory runtime, sized to an 80x24
-    /// transcript viewport. The runtime is required because the reply path
-    /// spawns real backend tasks; those fail against the empty in-memory
-    /// database, which is fine for these tests (they assert the synchronous
-    /// routing/state effects, not the backend round-trip).
+    /// Build an `App` against a dead local endpoint, sized to an 80x24
+    /// transcript viewport. These tests assert synchronous routing/state
+    /// effects only; backend round-trips fail immediately against the dead
+    /// endpoint and are surfaced as flashes.
     async fn seeded_app() -> App {
-        let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
-            workspace_root: Some(std::env::temp_dir()),
-            database_url: Some("sqlite::memory:".to_owned()),
-            initialize_schema: true,
-            ..RuntimeBootstrapRequest::default()
-        })
-        .await
-        .expect("build test runtime");
-        let application =
-            Application::from_composed_runtime_services(runtime.application_services())
-                .expect("compose test application");
-        let mut app = App::new(application, LaunchOptions::default(), I18n::english());
+        let mut app = App::new_with_backend(
+            TuiBackend::remote_mock(),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
         app.layout.transcript_body = Rect::new(0, 0, WIDTH, HEIGHT);
         app.transcript.session_id = Some(SESSION_ID);
         app
@@ -5456,12 +5446,10 @@ mod live_transcript_tests {
 #[cfg(test)]
 mod new_session_model_stack_tests {
     use agena_api::resource::{SessionLifecycleState, SessionRelationKind, SessionResource};
-    use agena_application::Application;
-    use agena_runtime::{RuntimeBootstrapRequest, bootstrap_application_services};
     use chrono::Utc;
     use ratatui::layout::Rect;
 
-    use super::super::{App, ComposerDraft, I18n, LaunchOptions, Route};
+    use super::super::{App, ComposerDraft, I18n, LaunchOptions, Route, TuiBackend};
 
     fn session_resource() -> SessionResource {
         SessionResource {
@@ -5490,18 +5478,11 @@ mod new_session_model_stack_tests {
     }
 
     async fn app_without_session() -> App {
-        let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
-            workspace_root: Some(std::env::temp_dir()),
-            database_url: Some("sqlite::memory:".to_owned()),
-            initialize_schema: true,
-            ..RuntimeBootstrapRequest::default()
-        })
-        .await
-        .expect("build test runtime");
-        let application =
-            Application::from_composed_runtime_services(runtime.application_services())
-                .expect("compose test application");
-        let mut app = App::new(application, LaunchOptions::default(), I18n::english());
+        let mut app = App::new_with_backend(
+            TuiBackend::remote_mock(),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
         app.layout.transcript_body = Rect::new(0, 0, 80, 24);
         app
     }

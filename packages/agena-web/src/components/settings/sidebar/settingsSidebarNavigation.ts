@@ -1,8 +1,14 @@
-export const SETTINGS_TAB_IDS = ['opencode', 'plugins', 'backends', 'appearance', 'debug'] as const
+export const SETTINGS_TAB_IDS = ['general', 'providers', 'permissions', 'activities', 'memories', 'usage'] as const
 
 export type SettingsTab = (typeof SETTINGS_TAB_IDS)[number]
 export type SettingsSidebarGroupId = 'primary' | 'secondary'
-export type SettingsSidebarIconKey = 'opencode' | 'plugins' | 'backends' | 'appearance' | 'debug'
+export type SettingsSidebarIconKey =
+  | 'general'
+  | 'providers'
+  | 'permissions'
+  | 'activities'
+  | 'memories'
+  | 'usage'
 
 export type SettingsSidebarTab = {
   id: SettingsTab
@@ -12,31 +18,12 @@ export type SettingsSidebarTab = {
   keywords?: string[]
 }
 
-export type SettingsSidebarLeafItem = {
-  id: string
-  label: string
-  keywords?: string[]
-}
-
-export type SettingsSidebarChildRow = {
-  kind: 'opencode-section' | 'plugin-section'
-  id: string
-  label: string
-  parentId: 'opencode' | 'plugins'
-  active: boolean
-}
-
 export type SettingsSidebarTabRow = {
   kind: 'tab'
   id: SettingsTab
   label: string
   icon: SettingsSidebarIconKey
   active: boolean
-  expandable: boolean
-  expanded: boolean
-  childCount: number
-  childMatchCount: number
-  children: SettingsSidebarChildRow[]
 }
 
 export type SettingsSidebarRenderGroup = {
@@ -52,39 +39,46 @@ const SETTINGS_TAB_CONFIG: Array<{
   keywords?: string[]
 }> = [
   {
-    id: 'opencode',
-    labelKey: 'settings.tabs.opencode',
-    icon: 'opencode',
+    id: 'general',
+    labelKey: 'settings.tabs.general',
+    icon: 'general',
     group: 'primary',
-    keywords: ['config', 'configuration', 'agent', 'model', 'provider'],
+    keywords: ['appearance', 'theme', 'fonts', 'language', 'chat', 'ui'],
   },
   {
-    id: 'plugins',
-    labelKey: 'settings.tabs.plugins',
-    icon: 'plugins',
+    id: 'providers',
+    labelKey: 'settings.tabs.providers',
+    icon: 'providers',
     group: 'primary',
-    keywords: ['extensions', 'integrations', 'marketplace'],
+    keywords: ['model', 'provider', 'adapter', 'llm'],
   },
   {
-    id: 'backends',
-    labelKey: 'settings.tabs.backends',
-    icon: 'backends',
-    group: 'secondary',
-    keywords: ['service', 'server', 'runtime', 'updates'],
+    id: 'permissions',
+    labelKey: 'settings.tabs.permissions',
+    icon: 'permissions',
+    group: 'primary',
+    keywords: ['rules', 'allow', 'security', 'action'],
   },
   {
-    id: 'appearance',
-    labelKey: 'settings.tabs.appearance',
-    icon: 'appearance',
+    id: 'activities',
+    labelKey: 'settings.tabs.activities',
+    icon: 'activities',
     group: 'secondary',
-    keywords: ['theme', 'fonts', 'ui'],
+    keywords: ['background', 'tasks', 'jobs', 'status'],
   },
   {
-    id: 'debug',
-    labelKey: 'settings.tabs.debug',
-    icon: 'debug',
+    id: 'memories',
+    labelKey: 'settings.tabs.memories',
+    icon: 'memories',
     group: 'secondary',
-    keywords: ['logging', 'diagnostics', 'developer'],
+    keywords: ['memory', 'context', 'knowledge', 'persist'],
+  },
+  {
+    id: 'usage',
+    labelKey: 'settings.tabs.usage',
+    icon: 'usage',
+    group: 'secondary',
+    keywords: ['billing', 'quota', 'tokens', 'count', 'stats'],
   },
 ]
 
@@ -115,28 +109,10 @@ function matchesSidebarQuery(query: string, parts: Array<string | undefined>): b
   return parts.some((part) => normalizeSettingsSidebarQuery(part || '').includes(query))
 }
 
-function buildChildRows(
-  parentId: 'opencode' | 'plugins',
-  items: SettingsSidebarLeafItem[],
-  activeId: string | null,
-): SettingsSidebarChildRow[] {
-  return items.map((item) => ({
-    kind: parentId === 'opencode' ? 'opencode-section' : 'plugin-section',
-    id: item.id,
-    label: item.label,
-    parentId,
-    active: activeId === item.id,
-  }))
-}
-
 export function buildSettingsSidebarGroups(args: {
   query: string
   tabs: SettingsSidebarTab[]
   activeTab: SettingsTab
-  activeOpencodeSection: string | null
-  activePluginsSection: string | null
-  opencodeSections: SettingsSidebarLeafItem[]
-  plugins: SettingsSidebarLeafItem[]
 }): SettingsSidebarRenderGroup[] {
   const query = normalizeSettingsSidebarQuery(args.query)
 
@@ -146,21 +122,8 @@ export function buildSettingsSidebarGroups(args: {
   ])
 
   for (const tab of args.tabs) {
-    const childSource =
-      tab.id === 'opencode'
-        ? buildChildRows('opencode', args.opencodeSections, args.activeOpencodeSection)
-        : tab.id === 'plugins'
-          ? buildChildRows('plugins', args.plugins, args.activePluginsSection)
-          : []
-
-    const matchingChildren = childSource.filter((child) => matchesSidebarQuery(query, [child.label, child.id]))
-
     const selfMatches = matchesSidebarQuery(query, [tab.label, tab.id, ...(tab.keywords || [])])
-    const visible = !query || selfMatches || matchingChildren.length > 0
-    if (!visible) continue
-
-    const expanded = childSource.length > 0 && (!query ? args.activeTab === tab.id : matchingChildren.length > 0)
-    const visibleChildren = expanded ? (!query ? childSource : matchingChildren) : []
+    if (!selfMatches) continue
 
     groups.get(tab.group)?.push({
       kind: 'tab',
@@ -168,11 +131,6 @@ export function buildSettingsSidebarGroups(args: {
       label: tab.label,
       icon: tab.icon,
       active: args.activeTab === tab.id,
-      expandable: childSource.length > 0,
-      expanded,
-      childCount: childSource.length,
-      childMatchCount: matchingChildren.length,
-      children: visibleChildren,
     })
   }
 

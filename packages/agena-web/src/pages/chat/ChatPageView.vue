@@ -18,8 +18,6 @@ import {
 
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
 import MessageList from '@/components/chat/MessageList.vue'
-import PluginChatMounts from '@/components/chat/PluginChatMounts.vue'
-import PluginChatOverlayMounts from '@/components/chat/PluginChatOverlayMounts.vue'
 import ChatHeader from '@/components/chat/ChatHeader.vue'
 import Composer from '@/components/chat/Composer.vue'
 import RenameSessionDialog from '@/components/chat/RenameSessionDialog.vue'
@@ -61,8 +59,6 @@ const {
   attachmentsBusy,
   attachmentsPanelOpen,
   draft,
-  chatSidebarPluginMounts,
-  chatOverlayBottomPluginMounts,
 
   // Message list.
   renderBlocks,
@@ -238,16 +234,6 @@ function handleAttachProjectFromPanel() {
   openProjectAttachDialog()
 }
 
-const overlayReservePx = ref(0)
-
-function handleOverlayReserve(px: number) {
-  if (!Number.isFinite(px) || px <= 0) {
-    overlayReservePx.value = 0
-    return
-  }
-  overlayReservePx.value = Math.max(0, Math.floor(px))
-}
-
 // Resolve popover anchors to the trigger button element.
 // This keeps desktop popups aligned with the button that opened them.
 function unwrapAnchorCandidate(value: unknown): unknown {
@@ -372,8 +358,6 @@ void sessionActionsMenuRef
               @clearSessionError="chat.selectedSessionId ? chat.clearSessionError(chat.selectedSessionId) : undefined"
             />
 
-            <div v-if="overlayReservePx > 0" :style="{ height: `${overlayReservePx}px` }" aria-hidden="true" />
-
             <div ref="bottomEl" class="h-px w-full" aria-hidden="true" />
           </div>
         </div>
@@ -436,18 +420,6 @@ void sessionActionsMenuRef
           </IconButton>
         </div>
 
-        <div
-          v-if="chat.selectedSessionId && !ui.isSessionSwitcherOpen && !composerFullscreenActive"
-          class="pointer-events-none absolute inset-x-0 bottom-2 z-30"
-        >
-          <div class="chat-column">
-            <PluginChatOverlayMounts
-              :mounts="chatOverlayBottomPluginMounts"
-              :is-mobile-pointer="ui.isMobilePointer"
-              @reserve-change="handleOverlayReserve"
-            />
-          </div>
-        </div>
       </template>
 
       <template #bottom>
@@ -469,7 +441,6 @@ void sessionActionsMenuRef
                 :mobile-pointer="ui.isMobilePointer"
                 @abort="abortRun"
               />
-              <PluginChatMounts :mounts="chatSidebarPluginMounts" />
 
               <Composer
                 ref="composerRef"

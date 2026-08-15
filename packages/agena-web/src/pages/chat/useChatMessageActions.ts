@@ -2,9 +2,6 @@ import { nextTick, onBeforeUnmount, ref, type Ref } from 'vue'
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
-import { apiJson } from '@/lib/api'
-import { patchSessionIdInQuery } from '@/app/navigation/sessionQuery'
-import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import type { JsonValue } from '@/types/json'
 import { buildAssistantErrorCopyText } from './assistantError'
 
@@ -55,6 +52,7 @@ type MessageLike = {
 type ChatLike = {
   selectedSessionId: string | null
   selectSession: (sessionId: string) => Promise<void>
+  forkSession: (sessionId: string, opts?: { at_message_id?: number }) => Promise<{ id?: string } | null>
   revertToMessage: (sessionId: string, messageId: string, opts?: { restoreComposer?: boolean }) => Promise<void>
   consumePendingComposer: () => PendingComposer
   refreshMessages: (sessionId: string, opts?: { silent?: boolean }) => Promise<void>
@@ -96,9 +94,7 @@ export function useChatMessageActions(opts: {
   const {
     chat,
     toasts,
-    route,
     router,
-    sessionDirectory,
     draft,
     attachedFiles,
     clearAttachments,
@@ -142,27 +138,14 @@ export function useChatMessageActions(opts: {
     }, 1200)
   }
 
-  function dirQueryForSession(): string {
-    const dir = sessionDirectory.value
-    return dir ? `?directory=${encodeURIComponent(dir)}` : ''
-  }
-
   async function handleForkFromMessage(messageId: string) {
     const sid = chat.selectedSessionId
     if (!sid) return
-    const resp = await apiJson<{ id?: string }>(`/api/session/${encodeURIComponent(sid)}/fork${dirQueryForSession()}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ messageID: messageId }),
-    })
-    const newId = typeof resp?.id === 'string' ? resp.id : ''
+    const atMessageId = Number(messageId)
+    const created = await chat.forkSession(sid, Number.isFinite(atMessageId) ? { at_message_id: atMessageId } : undefined)
+    const newId = typeof created?.id === 'string' ? created.id.trim() : ''
     if (!newId) return
-    const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
-    if (isEmbeddedWorkspacePane) {
-      await router.replace({ path: '/chat', query: patchSessionIdInQuery(route.query, newId) })
-    } else {
-      await router.replace({ path: '/chat' })
-    }
+    await router.replace({ path: '/chat' })
     await chat.selectSession(newId).catch(() => {})
     await nextTick()
     scrollToBottom('auto')

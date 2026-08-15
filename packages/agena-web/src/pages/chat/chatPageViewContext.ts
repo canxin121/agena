@@ -4,7 +4,6 @@ import type { RenderBlock } from '@/components/chat/messageList.types'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
 import type { AttachedFile } from '@/pages/chat/useChatAttachments'
-import type { ChatMount } from '@/plugins/host/mounts'
 import type { MessageEntry } from '@/types/chat'
 import type { JsonObject } from '@/types/json'
 
@@ -93,9 +92,6 @@ export type ChatPageViewContext = {
   attachmentsBusy: MaybeRef<boolean>
   attachmentsPanelOpen: MaybeRef<boolean>
   draft: MaybeRef<string>
-
-  chatSidebarPluginMounts: MaybeRef<ChatMount[]>
-  chatOverlayBottomPluginMounts: MaybeRef<ChatMount[]>
 
   renderBlocks: MaybeRef<RenderBlock[]>
   pendingInitialScrollSessionId: MaybeRef<string | null>

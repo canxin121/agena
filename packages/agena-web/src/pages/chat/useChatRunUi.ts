@@ -30,18 +30,6 @@ type ActivitySnapshotEntry = {
   type?: string
 }
 
-type SessionRuntimeLike = {
-  statusType?: string
-  phase?: string
-  displayState?: string
-  attention?: string | null
-}
-
-type DirectorySessionsRuntimeLike = {
-  runtimeBySessionId?: Record<string, SessionRuntimeLike> | null
-  isSessionRuntimeActive?: (sessionId: string, opts?: { includeCooldown?: boolean }) => boolean
-}
-
 type Phase = 'idle' | 'busy' | 'cooldown'
 
 type SessionUsage = {
@@ -140,7 +128,6 @@ function textFromMessageParts(parts: MessagePartLike[]): string {
 export function useChatRunUi(opts: {
   chat: ChatLike
   activity: ActivityLike
-  directorySessions?: DirectorySessionsRuntimeLike
   toasts: ToastsStore
   modelSelection: ModelSelectionForUsage
 
@@ -160,7 +147,6 @@ export function useChatRunUi(opts: {
   const {
     chat,
     activity,
-    directorySessions,
     toasts,
     modelSelection,
     draft,
@@ -181,46 +167,19 @@ export function useChatRunUi(opts: {
     return typeof ty === 'string' ? ty : ''
   })
 
-  const selectedSidebarRuntime = computed<SessionRuntimeLike | null>(() => {
-    const sid = String(chat.selectedSessionId || '').trim()
-    if (!sid) return null
-    const bySession = directorySessions?.runtimeBySessionId || null
-    if (!bySession || typeof bySession !== 'object') return null
-    return bySession[sid] || null
-  })
-
+  // Agena has no per-directory sidebar runtime; busy/idle comes from the session
+  // execution status and the activities snapshot.
   const sidebarRuntimeActive = computed(() => {
     const sid = String(chat.selectedSessionId || '').trim()
     if (!sid) return false
-
-    if (typeof directorySessions?.isSessionRuntimeActive === 'function') {
-      return Boolean(directorySessions.isSessionRuntimeActive(sid, { includeCooldown: false }))
-    }
-
-    const runtime = selectedSidebarRuntime.value
-    if (!runtime) return false
-
-    const displayState = String(runtime.displayState || '').trim()
-    if (displayState === 'needsPermission' || displayState === 'needsReply') return true
-    if (displayState === 'running' || displayState === 'retrying') return true
-
-    const runtimeStatus = String(runtime.statusType || '').trim()
-    if (runtimeStatus === 'busy' || runtimeStatus === 'retry') return true
-
-    const runtimePhase = String(runtime.phase || '').trim()
-    if (runtimePhase === 'busy') return true
-
-    const attention = String(runtime.attention || '').trim()
-    return Boolean(attention)
+    const snapshot = activity.snapshot || {}
+    return snapshot[sid]?.type === 'busy'
   })
 
   const currentPhase = computed<Phase>(() => {
     const sid = String(chat.selectedSessionId || '').trim()
     if (!sid) return 'idle'
 
-    const runtime = selectedSidebarRuntime.value
-    const runtimePhase = String(runtime?.phase || '').trim()
-    if (runtimePhase === 'cooldown') return 'cooldown'
     if (sidebarRuntimeActive.value) return 'busy'
 
     // session.status is authoritative; activity can be stale (missed SSE / background tab).

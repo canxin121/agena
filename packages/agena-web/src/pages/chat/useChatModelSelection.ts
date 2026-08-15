@@ -5,7 +5,6 @@ import {
   modelIdsFromProviderModels,
   useModelSelectionCatalog,
   type ModelMetaRecord,
-  type OpencodeConfigStoreLike,
 } from './modelSelectionCatalog'
 import { useModelSelectionPickerUi } from './modelSelectionPickerUi'
 import { resolveAgentSelection, resolveModelSelection, resolveVariantSelection } from './modelSelectionResolver'
@@ -33,7 +32,6 @@ type ChatLike = {
 
 export function useChatModelSelection(opts: {
   chat: ChatLike
-  opencodeConfig: OpencodeConfigStoreLike
   sessionDirectory: Ref<string>
 
   // UI refs for picker anchoring.
@@ -48,13 +46,9 @@ export function useChatModelSelection(opts: {
   modelPickerQuery: Ref<string>
   agentPickerQuery: Ref<string>
   onOpenComposerPicker: () => void
-  commandOpen: Ref<boolean>
-  commandQuery: Ref<string>
-  commandIndex: Ref<number>
 }) {
   const {
     chat,
-    opencodeConfig,
     sessionDirectory,
     composerControlsRef,
     composerPickerOpen,
@@ -65,9 +59,6 @@ export function useChatModelSelection(opts: {
     modelPickerQuery,
     agentPickerQuery,
     onOpenComposerPicker,
-    commandOpen,
-    commandQuery,
-    commandIndex,
   } = opts
 
   const {
@@ -82,7 +73,6 @@ export function useChatModelSelection(opts: {
     modelMetaFor,
     loadProvidersAndAgents: loadCatalogProvidersAndAgents,
   } = useModelSelectionCatalog({
-    opencodeConfig,
     sessionDirectory,
   })
 
@@ -225,9 +215,6 @@ export function useChatModelSelection(opts: {
     modelPickerQuery,
     agentPickerQuery,
     onOpenComposerPicker,
-    commandOpen,
-    commandQuery,
-    commandIndex,
   })
 
   function activeSessionId(): string {

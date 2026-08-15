@@ -30,7 +30,6 @@ export function useChatComposerLayout(opts: {
   composerRef: Ref<ComposerExpose | null>
 
   // Close pickers when entering fullscreen.
-  commandOpen: Ref<boolean>
   composerPickerOpen: Ref<null | 'agent' | 'model' | 'variant'>
   modelPickerQuery: Ref<string>
 
@@ -46,7 +45,6 @@ export function useChatComposerLayout(opts: {
     pageRef,
     composerBarRef,
     composerRef,
-    commandOpen,
     composerPickerOpen,
     modelPickerQuery,
     scrollToBottom,
@@ -191,7 +189,6 @@ export function useChatComposerLayout(opts: {
   }
 
   function openEditorFullscreen() {
-    commandOpen.value = false
     composerPickerOpen.value = null
     modelPickerQuery.value = ''
     editorClosing.value = false

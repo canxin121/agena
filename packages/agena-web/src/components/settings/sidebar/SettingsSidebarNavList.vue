@@ -8,20 +8,14 @@ import type { SettingsSidebarRenderGroup, SettingsTab } from './settingsSidebarN
 const props = withDefaults(
   defineProps<{
     groups?: SettingsSidebarRenderGroup[]
-    queryActive?: boolean
-    showPluginEmptyState?: boolean
   }>(),
   {
     groups: () => [],
-    queryActive: false,
-    showPluginEmptyState: false,
   },
 )
 
 const emit = defineEmits<{
   (e: 'navigate-tab', id: SettingsTab): void
-  (e: 'navigate-opencode-section', id: string): void
-  (e: 'navigate-plugins-section', id: string): void
 }>()
 
 const { t } = useI18n()
@@ -42,37 +36,7 @@ const hasRows = computed(() => visibleGroups.value.length > 0)
 
         <div class="space-y-0.5">
           <div v-for="row in group.items" :key="row.id">
-            <SettingsSidebarNavRow
-              :label="row.label"
-              :active="row.active"
-              :icon="row.icon"
-              :expandable="row.expandable"
-              :expanded="row.expanded"
-              :meta="row.expandable ? (queryActive ? row.childMatchCount : row.childCount) : null"
-              @click="emit('navigate-tab', row.id)"
-            />
-
-            <div
-              v-if="showPluginEmptyState && row.id === 'plugins' && row.active"
-              class="ml-10 mr-2 mt-1 rounded-md border border-sidebar-border/60 bg-muted/10 px-2.5 py-2 text-xs text-muted-foreground"
-            >
-              {{ t('settings.emptyPlugins') }}
-            </div>
-
-            <div v-for="child in row.children" :key="`${row.id}:${child.id}`" class="mt-0.5">
-              <SettingsSidebarNavRow
-                :label="child.label"
-                :active="child.active"
-                icon="section"
-                :depth="1"
-                density="compact"
-                @click="
-                  child.kind === 'opencode-section'
-                    ? emit('navigate-opencode-section', child.id)
-                    : emit('navigate-plugins-section', child.id)
-                "
-              />
-            </div>
+            <SettingsSidebarNavRow :label="row.label" :active="row.active" :icon="row.icon" @click="emit('navigate-tab', row.id)" />
           </div>
         </div>
       </div>

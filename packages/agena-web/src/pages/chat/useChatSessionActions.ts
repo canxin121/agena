@@ -31,9 +31,8 @@ type ChatLike = {
   selectedSession: SessionLike | null
   messages: JsonValue[]
   renameSession: (sessionId: string, title: string) => Promise<JsonValue>
-  shareSession: (sessionId: string) => Promise<JsonValue>
-  unshareSession: (sessionId: string) => Promise<JsonValue>
-  summarizeSession: (sessionId: string, provider: string, model: string) => Promise<JsonValue>
+  forkSession: (sessionId: string) => Promise<JsonValue>
+  compactSession: (sessionId: string) => Promise<JsonValue>
 }
 
 export function useChatSessionActions(opts: {
@@ -48,6 +47,9 @@ export function useChatSessionActions(opts: {
   modelSelection: ModelSelectionForSessionActions
 
   copyToClipboard: (text: string) => Promise<void>
+
+  // Navigate to a freshly created fork.
+  onSessionForked?: (sessionId: string) => void
 }) {
   const { t } = useI18n()
 
@@ -55,19 +57,17 @@ export function useChatSessionActions(opts: {
     chat,
     toasts,
     sessionTitle,
-    sessionShareUrl,
     showThinking,
     showJustification,
-    modelSelection,
     copyToClipboard,
+    onSessionForked,
   } = opts
 
   const renameDialogOpen = ref(false)
   const renameDraft = ref('')
   const renameBusy = ref(false)
 
-  const shareBusy = ref(false)
-  const unshareBusy = ref(false)
+  const forkBusy = ref(false)
   const compactBusy = ref(false)
 
   function openRenameDialog() {
@@ -158,76 +158,33 @@ export function useChatSessionActions(opts: {
     toasts.push('success', t('chat.toasts.transcriptExportedAs', { filename }))
   }
 
-  async function handleShareSession() {
+  /** Agena has no share URLs; "share" becomes "fork this session". */
+  async function handleForkSession() {
     const sid = chat.selectedSessionId
     if (!sid) return
-    if (modelSelection.shareDisabled.value) {
-      toasts.push('error', t('chat.toasts.sharingDisabledInConfig'))
-      return
-    }
-    shareBusy.value = true
+    forkBusy.value = true
     try {
-      const updated = await chat.shareSession(sid)
-      const share = asRecord(asRecord(updated).share)
-      const url = typeof share.url === 'string' ? share.url : sessionShareUrl.value
-      if (url) {
-        await copyToClipboard(url)
-        toasts.push('success', t('chat.toasts.shareLinkCopied'))
+      const created = await chat.forkSession(sid)
+      const createdId = typeof created?.id === 'string' ? created.id.trim() : ''
+      if (createdId) {
+        toasts.push('success', t('chat.toasts.sessionForked'))
+        if (typeof onSessionForked === 'function') onSessionForked(createdId)
       } else {
         toasts.push('success', t('chat.toasts.sessionShared'))
       }
     } catch (err) {
       toasts.push('error', err instanceof Error ? err.message : String(err))
     } finally {
-      shareBusy.value = false
-    }
-  }
-
-  async function copyShareLink() {
-    if (!sessionShareUrl.value) return
-    try {
-      await copyToClipboard(sessionShareUrl.value)
-      toasts.push('success', t('chat.toasts.shareLinkCopied'))
-    } catch (err) {
-      toasts.push('error', err instanceof Error ? err.message : t('common.copyFailed'))
-    }
-  }
-
-  function openShareLink() {
-    if (!sessionShareUrl.value) return
-    window.open(sessionShareUrl.value, '_blank')
-  }
-
-  async function handleUnshareSession() {
-    const sid = chat.selectedSessionId
-    if (!sid) return
-    unshareBusy.value = true
-    try {
-      await chat.unshareSession(sid)
-      toasts.push('success', t('chat.toasts.sessionUnshared'))
-    } catch (err) {
-      toasts.push('error', err instanceof Error ? err.message : String(err))
-    } finally {
-      unshareBusy.value = false
+      forkBusy.value = false
     }
   }
 
   async function handleCompactSession() {
     const sid = chat.selectedSessionId
     if (!sid) return
-    const provider = (
-      modelSelection.selectedProviderId.value ||
-      modelSelection.effectiveDefaults.value.provider ||
-      ''
-    ).trim()
-    const model = (modelSelection.selectedModelId.value || modelSelection.effectiveDefaults.value.model || '').trim()
-    if (!provider || !model) {
-      toasts.push('error', t('chat.toasts.selectModelToCompact'))
-      return
-    }
     compactBusy.value = true
     try {
-      await chat.summarizeSession(sid, provider, model)
+      await chat.compactSession(sid)
       toasts.push('success', t('chat.toasts.compactionStarted'))
     } catch (err) {
       toasts.push('error', err instanceof Error ? err.message : String(err))
@@ -240,17 +197,13 @@ export function useChatSessionActions(opts: {
     renameDialogOpen,
     renameDraft,
     renameBusy,
-    shareBusy,
-    unshareBusy,
+    forkBusy,
     compactBusy,
     openRenameDialog,
     saveRename,
     copyTranscript,
     exportTranscript,
-    handleShareSession,
-    copyShareLink,
-    openShareLink,
-    handleUnshareSession,
+    handleForkSession,
     handleCompactSession,
   }
 }

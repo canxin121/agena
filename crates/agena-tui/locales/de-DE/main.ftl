@@ -22,6 +22,13 @@ transcript-loading-older = Aeltere Nachrichten werden geladen...
 transcript-more-older = Aeltere Nachrichten sind verfuegbar. Nach oben scrollen oder PageUp druecken.
 transcript-empty-session = In dieser Sitzung gibt es noch keine Nachrichten.
 
+session-state-creating = wird erstellt
+session-state-ready = kuerzlich beendet
+session-state-running = laeuft
+session-state-awaiting-user = wartet auf Sie
+session-state-interrupted = unterbrochen
+session-state-failed = fehlgeschlagen
+
 no-session-selected = Keine Sitzung ausgewaehlt.
 no-session-selected-hint = /sessions waehlt eine Sitzung, oder tippen Sie direkt in die Eingabe, um eine neue Sitzung zu erstellen.
 composer-session-new = neue Sitzung

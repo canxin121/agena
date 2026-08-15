@@ -19,21 +19,23 @@ use agena_application::dto::{
     HealthResponse, ItemsResponse, MarketplaceInstallRequest, MarketplaceInstalledPluginResource,
     MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequest,
     MarketplaceSearchRequest, MarketplaceSearchResponse, MarketplaceUninstallRequestBody,
-    MarketplaceUpgradeRequest, MemoryWriteRequest, PermissionRuleRevokeRequest,
-    PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
-    PluginUiCatalogResponse, PluginUiInvokeToolRequest, PluginUiRequestContext,
-    RuntimeBackgroundTaskCancelResponse, RuntimeBackgroundTaskStartResponse, SearchPaginationQuery,
-    SessionCreateRequest, SessionListQuery, SessionReplyRequestBody, SessionRewindRequestBody,
-    SessionRunRequest, SessionRunRequestBody, SessionUpdateRequest, WorkspaceFileDownloadQuery,
+    MarketplaceUpgradeRequest, MemoryWriteRequest, OperatorToolInvokeRequest,
+    PermissionRuleRevokeRequest, PermissionRuleWriteRequest, PluginInspectResponse,
+    PluginLogListQuery, PluginLogListResponse, PluginUiCatalogResponse, PluginUiInvokeToolRequest,
+    PluginUiRequestContext, RuntimeBackgroundTaskCancelResponse,
+    RuntimeBackgroundTaskStartResponse, SearchPaginationQuery, SessionCreateRequest,
+    SessionListQuery, SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequest,
+    SessionRunRequestBody, SessionUpdateRequest, WorkspaceFileDownloadQuery,
     WorkspaceFileTreeQuery, WorkspaceFileUploadRequest, WorkspaceListQuery, WorkspacePathRequest,
     WorkspaceResolveRequest,
 };
 use agena_domain::{UsagePeriod, UsageStatsQuery, get_json_path};
 use agena_runtime::{
     ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
-    ConfigSettingsListInput, ConfigSettingsListResponse, ConfigSettingsPatchInput,
-    ConfigSettingsReadResponse, ConfigSettingsReloadResponse, ConfigSettingsSetInput,
-    ConfigSettingsSource, ConfigSettingsValidateInput, RuntimeConfigSettingsError, list_json_path,
+    ConfigSettingsLayer, ConfigSettingsListInput, ConfigSettingsListResponse,
+    ConfigSettingsPatchInput, ConfigSettingsReadResponse, ConfigSettingsReloadResponse,
+    ConfigSettingsSetInput, ConfigSettingsSource, ConfigSettingsValidateInput,
+    RuntimeConfigSettingsError, list_json_path,
 };
 use async_stream::stream;
 use axum::{
@@ -58,9 +60,11 @@ mod activities;
 mod auth;
 mod git;
 mod marketplace;
+mod mcp;
 mod memory;
 mod model_catalog;
 pub(crate) mod notifications;
+mod operator;
 mod permissions;
 mod plugins;
 mod providers;
@@ -77,8 +81,10 @@ pub use activities::*;
 pub use auth::*;
 pub use git::*;
 pub use marketplace::*;
+pub use mcp::*;
 pub use memory::*;
 pub use notifications::*;
+pub use operator::*;
 pub use plugins::*;
 pub use providers::*;
 
@@ -96,6 +102,16 @@ pub struct SessionPartListQuery {
 pub struct SessionChangeStreamQuery {
     #[serde(default)]
     pub since_version: Option<i64>,
+    /// Deterministic overflow control for the in-process transport contract
+    /// test. This field does not exist in production builds.
+    #[cfg(test)]
+    #[serde(default)]
+    pub test_queue_capacity: Option<usize>,
+    /// Keeps the subscription open before the initial snapshot read so the
+    /// transport test can commit changes into a deliberately tiny queue.
+    #[cfg(test)]
+    #[serde(default)]
+    pub test_snapshot_delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -143,6 +159,7 @@ pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, 
         generation: status.generation,
         loaded_at: status.loaded_at,
         database_connected: true,
+        center: Some(state.center().clone()),
     }))
 }
 

@@ -73,9 +73,10 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = Ok(crate::app_backend::operations::list_configured_providers(
-                &application,
-            ));
+            let result = application
+                .list_providers()
+                .await
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::ProvidersLoaded { purpose, result })
                 .await;
@@ -92,16 +93,41 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = crate::app_backend::operations::list_workspace_sessions_page(
-                &application,
-                mode == SessionViewMode::Roots,
-                mode == SessionViewMode::All,
-                (!query.trim().is_empty()).then_some(query.as_str()),
-                cursor,
-                50,
-            )
-            .await
-            .map_err(crate::UiFailure::internal);
+            let is_default_overview = mode == SessionViewMode::All
+                && query.trim().is_empty()
+                && page_index == 0
+                && cursor.is_none();
+            let result = if is_default_overview {
+                application
+                    .session_overview(None, 50)
+                    .await
+                    .map(|overview| {
+                        let mut items = overview.attention;
+                        items.extend(overview.running);
+                        items.extend(overview.recent);
+                        let returned = items.len() as u64;
+                        agena_api::pagination::PaginatedResponse {
+                            items,
+                            page: agena_api::pagination::PageInfo {
+                                next_cursor: None,
+                                has_more: false,
+                                returned,
+                            },
+                        }
+                    })
+                    .map_err(crate::UiFailure::internal)
+            } else {
+                crate::app_backend::operations::list_workspace_sessions_page(
+                    &application,
+                    mode == SessionViewMode::Roots,
+                    mode == SessionViewMode::All,
+                    (!query.trim().is_empty()).then_some(query.as_str()),
+                    cursor,
+                    50,
+                )
+                .await
+                .map_err(crate::UiFailure::internal)
+            };
             let _ = tx
                 .send(AppMessage::SessionSearchPageLoaded {
                     mode,
@@ -225,7 +251,7 @@ impl App {
             let result = application
                 .rewind_session_to_turn(session_id, turn_id)
                 .await
-                .map_err(|error| crate::UiFailure::from_backend(anyhow::Error::new(error)));
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionRewound {
                     session_id,

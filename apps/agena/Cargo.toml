@@ -13,10 +13,12 @@ doc = false
 path = "src/main.rs"
 
 [dependencies]
+agena-api = { workspace = true }
 agena-api-server = { workspace = true, features = ["jsonrpc"] }
 agena-application = { workspace = true }
 agena-git-http = { workspace = true }
 agena-cli = { workspace = true }
+agena-client = { workspace = true }
 agena-domain = { workspace = true }
 agena-provider = { workspace = true }
 agena-runtime = { workspace = true }
@@ -30,6 +32,7 @@ axum = { workspace = true, features = ["macros", "ws"] }
 axum-extra = { workspace = true, features = ["cookie"] }
 base64 = { workspace = true }
 bytes = "1.12.1"
+chrono = { workspace = true }
 dashmap = { workspace = true }
 clap = { workspace = true }
 futures-util = { workspace = true }
@@ -51,8 +54,12 @@ argon2 = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
 url = { workspace = true }
 urlencoding = { workspace = true }
+uuid = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

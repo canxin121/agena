@@ -438,7 +438,9 @@ pub(super) struct PlanDisplayRefreshState {
 }
 
 pub struct App {
-    pub(super) application: agena_application::Application,
+    /// Cloneable transport boundary. In remote mode this contains only an API
+    /// client and client-local workspace context, never a Runtime or store.
+    pub(super) application: crate::TuiBackend,
     /// Lazy workspace file index for file mentions. `Application` carries no
     /// file index; the TUI owns the cached directory listing.
     pub(super) file_index: Arc<OnceLock<Vec<PathBuf>>>,

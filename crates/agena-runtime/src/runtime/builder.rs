@@ -38,6 +38,7 @@ use provider_catalog::*;
 pub async fn bootstrap_application_services(
     request: agena_runtime::RuntimeBootstrapRequest,
 ) -> Result<agena_runtime::RuntimeBootstrapResult, agena_runtime::RuntimeBootstrapError> {
+    agena_runtime::ownership_audit::ensure_runtime_bootstrap_allowed()?;
     agena_runtime::compose_runtime_bootstrap(request, |config| async move {
         let runtime = AgenaRuntime::new(config)
             .await
@@ -242,6 +243,9 @@ impl AgenaRuntime {
         runtime.spawn_background_tasks();
         runtime.spawn_subtask_activity_bridge();
         runtime.spawn_background_delivery_recovery();
+        agena_runtime::ownership_audit::record_runtime_ownership(
+            runtime.inner.workspace_root.as_path(),
+        )?;
         Ok(runtime)
     }
 

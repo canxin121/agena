@@ -15,6 +15,16 @@ use crate::provider_studio::save::{
 use crate::{Application, ApplicationError};
 
 impl Application {
+    /// Exact resolved configuration document owned by the live Runtime.
+    /// Thin clients use this projection instead of composing a second Runtime
+    /// merely to inspect the center's active configuration.
+    pub fn resolved_configuration_document(&self) -> Result<serde_json::Value, ApplicationError> {
+        self.runtime_configuration()
+            .runtime_configuration()
+            .map(|configuration| configuration.configuration_document)
+            .map_err(|error| ApplicationError::internal(error.to_string()))
+    }
+
     pub async fn set_config_setting(
         &self,
         path: &str,

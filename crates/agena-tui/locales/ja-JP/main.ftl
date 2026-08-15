@@ -22,6 +22,13 @@ transcript-loading-older = 古いメッセージを読み込み中...
 transcript-more-older = さらに古いメッセージがあります。上にスクロールするか PageUp を押してください。
 transcript-empty-session = このセッションにはまだメッセージがありません。
 
+session-state-creating = 作成中
+session-state-ready = 最近完了
+session-state-running = 実行中
+session-state-awaiting-user = 入力待ち
+session-state-interrupted = 中断
+session-state-failed = 失敗
+
 no-session-selected = セッションが選択されていません。
 no-session-selected-hint = /sessions でセッションを選ぶか、入力欄に入力を始めて新しいセッションを作成してください。
 composer-session-new = 新しいセッション

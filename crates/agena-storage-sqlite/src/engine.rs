@@ -26,8 +26,8 @@ use agena_storage::store::{
     BackgroundSettleOutcome, InFlightRun, InteractionAnswerOutcome, LeaseAcquire, LeaseState,
     MaintenanceOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartDelta, PartRole,
     PartState, PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery,
-    SessionMeta, SessionSummary, SessionView, StoreError, SubmitOutcome, UsageGroup, UsageQuery,
-    UsageRecord, UsageStats, apply_part_transition,
+    SessionMeta, SessionState, SessionSummary, SessionView, StoreError, SubmitOutcome, UsageGroup,
+    UsageQuery, UsageRecord, UsageStats, apply_part_transition,
 };
 use async_trait::async_trait;
 use sea_orm::{
@@ -603,6 +603,45 @@ fn summary_from_row(row: sea_orm::QueryResult) -> Result<SessionSummary, DbErr> 
     })
 }
 
+/// SQL projection of the same precedence implemented by
+/// `agena_storage::store::derive_session_state`, scoped to the outer
+/// `agena_sessions s` row. Keeping this as one correlated batch query avoids
+/// loading every transcript separately for a session overview.
+fn session_state_projection_sql(now_ms: i64) -> String {
+    let stale_ms = agena_storage::store::LEASE_STALENESS_MS;
+    format!(
+        "CASE \
+         WHEN s.lifecycle_state = 'creating' THEN 'creating' \
+         WHEN s.lifecycle_state = 'failed' THEN 'failed' \
+         WHEN EXISTS ( \
+           SELECT 1 FROM agena_session_parts spi \
+           JOIN agena_parts pi ON pi.part_id = spi.part_id \
+           WHERE spi.session_id = s.id \
+             AND pi.state IN ('pending', 'in_progress') \
+             AND ( \
+               pi.kind = 'interaction' \
+               OR (pi.kind = 'tool_call' AND EXISTS ( \
+                 SELECT 1 \
+                 FROM json_each(pi.content, '$.operation.user_input.requests') request \
+                 WHERE json_type(request.value, '$.reply') IS NULL \
+               )) \
+             ) \
+         ) THEN 'awaiting_user' \
+         WHEN EXISTS ( \
+           SELECT 1 FROM agena_session_parts spr \
+           JOIN agena_parts pr ON pr.part_id = spr.part_id \
+           WHERE spr.session_id = s.id \
+             AND pr.kind = 'run' \
+             AND pr.state IN ('pending', 'in_progress') \
+         ) THEN CASE WHEN EXISTS ( \
+           SELECT 1 FROM agena_execution_leases lease \
+           WHERE lease.session_id = s.id \
+             AND {now_ms} - lease.heartbeat_at_ms <= {stale_ms} \
+         ) THEN 'running' ELSE 'interrupted' END \
+         ELSE 'ready' END"
+    )
+}
+
 /// Load a single part by id through any connection (db or transaction).
 async fn load_part_by_id<C: ConnectionTrait>(
     connection: &C,
@@ -1059,6 +1098,47 @@ impl PersistenceEngine for SqliteEngine {
             .map(summary_from_row)
             .collect::<Result<Vec<_>, _>>()
             .map_err(map_db_err)
+    }
+
+    async fn session_states(
+        &self,
+        session_ids: &[i64],
+        now_ms: i64,
+    ) -> Result<HashMap<i64, SessionState>, StoreError> {
+        if session_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = vec!["?"; session_ids.len()].join(", ");
+        let values = session_ids
+            .iter()
+            .copied()
+            .map(Value::from)
+            .collect::<Vec<_>>();
+        let state_projection = session_state_projection_sql(now_ms);
+        let rows = self
+            .db()
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT s.id, {state_projection} AS session_state \
+                     FROM agena_sessions s WHERE s.id IN ({placeholders})"
+                ),
+                values,
+            ))
+            .await
+            .map_err(map_db_err)?;
+        let mut states = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let session_id: i64 = row.try_get("", "id").map_err(map_db_err)?;
+            let state: String = row.try_get("", "session_state").map_err(map_db_err)?;
+            let state = SessionState::parse(state.as_str()).ok_or_else(|| {
+                StoreError::InvalidState(format!(
+                    "invalid derived session state '{state}' for session {session_id}"
+                ))
+            })?;
+            states.insert(session_id, state);
+        }
+        Ok(states)
     }
 
     async fn get_session_summary(

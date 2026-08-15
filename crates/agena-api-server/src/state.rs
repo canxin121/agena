@@ -1,6 +1,9 @@
 //! Shared application state held by the HTTP/WS/SSE/JSON-RPC transports.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicI64, Ordering},
+};
 
 use agena_application::Application;
 
@@ -10,15 +13,34 @@ use crate::error::ServerError;
 #[derive(Clone)]
 pub struct AppState {
     application: Application,
+    center: agena_api::resource::CenterIdentityResource,
+    next_operator_call_id: Arc<AtomicI64>,
 }
 
 impl AppState {
     pub fn from_application(application: Application) -> Self {
-        Self { application }
+        Self {
+            application,
+            center: agena_api::resource::CenterIdentityResource {
+                id: uuid::Uuid::new_v4(),
+                pid: std::process::id(),
+                started_at: chrono::Utc::now(),
+                protocol_version: agena_api::PROTOCOL_VERSION,
+            },
+            next_operator_call_id: Arc::new(AtomicI64::new(1)),
+        }
+    }
+
+    pub fn center(&self) -> &agena_api::resource::CenterIdentityResource {
+        &self.center
     }
 
     pub fn application(&self) -> &Application {
         &self.application
+    }
+
+    pub fn next_operator_call_id(&self) -> i64 {
+        self.next_operator_call_id.fetch_add(1, Ordering::SeqCst)
     }
 
     pub fn service(&self) -> &agena_application::service::ApplicationService {

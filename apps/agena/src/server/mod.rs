@@ -1,6 +1,7 @@
 mod app;
 mod attachment;
 mod auth;
+pub(crate) mod center_record;
 mod config;
 mod cors;
 mod diagnostics;
@@ -9,6 +10,7 @@ mod fs;
 mod git {
     pub(crate) use agena_git_http::*;
 }
+mod lifecycle;
 mod path_utils;
 mod persistence;
 mod preview;
@@ -16,6 +18,7 @@ mod providers;
 mod settings;
 mod state;
 mod terminal;
+mod user_service;
 
 use crate::error::AgenaProcessError;
 use agena_cli::{ServerArgs, ServerLaunchRequest, UiCookieSameSite};
@@ -24,9 +27,15 @@ pub(crate) use error::{ApiResult, AppError};
 pub(crate) use state::AppState;
 
 pub(crate) async fn run(request: ServerLaunchRequest) -> Result<(), AgenaProcessError> {
-    app::run(request.args)
-        .await
-        .map_err(|error| AgenaProcessError::Internal(error.to_string()))
+    let result = match request.args.action {
+        None => app::run(request.args).await,
+        Some(agena_cli::CenterLifecycleAction::Start) => lifecycle::start(request.args).await,
+        Some(agena_cli::CenterLifecycleAction::Status) => lifecycle::status().await,
+        Some(agena_cli::CenterLifecycleAction::Stop) => lifecycle::stop().await,
+        Some(agena_cli::CenterLifecycleAction::Install) => lifecycle::install(request.args).await,
+        Some(agena_cli::CenterLifecycleAction::Uninstall) => lifecycle::uninstall().await,
+    };
+    result.map_err(|error| AgenaProcessError::Internal(error.to_string()))
 }
 
 pub(crate) fn issue_token() -> String {

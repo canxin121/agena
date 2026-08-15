@@ -5,14 +5,13 @@
 //! without going through HTTP.
 
 use agena_api::resource::{BackgroundActivityLogResource, BackgroundActivityResource};
-use agena_application::Application;
 use anyhow::{Context, Result, anyhow};
 
 pub(crate) async fn list_activities(
-    application: &Application,
+    application: &crate::TuiBackend,
     filter: agena_domain::BackgroundActivityFilter,
 ) -> Result<Vec<BackgroundActivityResource>> {
-    let service = application.runtime_activities()?;
+    let service = application.embedded_application()?.runtime_activities()?;
     let activities = service
         .list_activities(&filter)
         .await
@@ -24,13 +23,13 @@ pub(crate) async fn list_activities(
 }
 
 pub(crate) async fn activity_logs(
-    application: &Application,
+    application: &crate::TuiBackend,
     activity_id: &str,
     since_seq: u64,
     limit: Option<u32>,
     wait_ms: u64,
 ) -> Result<BackgroundActivityLogResource> {
-    let service = application.runtime_activities()?;
+    let service = application.embedded_application()?.runtime_activities()?;
     let read = service
         .activity_logs(activity_id, since_seq, limit, wait_ms)
         .await
@@ -40,11 +39,11 @@ pub(crate) async fn activity_logs(
 }
 
 pub(crate) async fn control_activity(
-    application: &Application,
+    application: &crate::TuiBackend,
     activity_id: &str,
     action: &str,
 ) -> Result<BackgroundActivityResource> {
-    let service = application.runtime_activities()?;
+    let service = application.embedded_application()?.runtime_activities()?;
     let activity = match action {
         "stop" => service.stop_activity(activity_id).await,
         "pause" => service.pause_activity(activity_id).await,
@@ -64,8 +63,8 @@ pub(crate) async fn control_activity(
     ))
 }
 
-pub(crate) async fn clear_finished_activities(application: &Application) -> Result<usize> {
-    let service = application.runtime_activities()?;
+pub(crate) async fn clear_finished_activities(application: &crate::TuiBackend) -> Result<usize> {
+    let service = application.embedded_application()?.runtime_activities()?;
     service
         .clear_finished()
         .await

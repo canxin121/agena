@@ -44,7 +44,7 @@ impl App {
             let result = application
                 .create_session(title, None)
                 .await
-                .map_err(|error| crate::UiFailure::from_backend(anyhow::Error::new(error)));
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionCreated {
                     submit_draft,

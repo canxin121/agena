@@ -279,7 +279,7 @@ impl ApplicationService {
         &self,
         request: WorkspacePathRequest,
     ) -> ApplicationResult<WorkspaceResource> {
-        let path = normalize_workspace_path(request.path.as_str()).map_err(|error| {
+        let path = canonical_workspace_identity(request.path.as_str()).map_err(|error| {
             ApplicationError::bad_request_with_diagnostic("The workspace path is invalid.", error)
         })?;
         if self.workspace_id_by_path(path.as_str()).await?.is_some() {
@@ -302,9 +302,13 @@ impl ApplicationService {
         &self,
         request: WorkspaceResolveRequest,
     ) -> ApplicationResult<WorkspaceResource> {
-        let path = normalize_workspace_path(request.workspace.path.as_str()).map_err(|error| {
-            ApplicationError::bad_request_with_diagnostic("The workspace path is invalid.", error)
-        })?;
+        let path =
+            canonical_workspace_identity(request.workspace.path.as_str()).map_err(|error| {
+                ApplicationError::bad_request_with_diagnostic(
+                    "The workspace path is invalid.",
+                    error,
+                )
+            })?;
         if let Some(workspace_id) = self.workspace_id_by_path(path.as_str()).await? {
             return self.get_workspace(workspace_id).await?.ok_or_else(|| {
                 ApplicationError::internal(format!(
@@ -355,7 +359,7 @@ impl ApplicationService {
             ));
         };
 
-        let path = normalize_workspace_path(request.path.as_str()).map_err(|error| {
+        let path = canonical_workspace_identity(request.path.as_str()).map_err(|error| {
             ApplicationError::bad_request_with_diagnostic("The workspace path is invalid.", error)
         })?;
         if path != existing.path
@@ -574,6 +578,21 @@ fn normalize_workspace_path(workspace_path: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
+/// Produce the persistent identity for an existing workspace path.
+///
+/// Lexical normalization alone treats filesystem aliases such as macOS
+/// `/var` and `/private/var` (or an ordinary symlink) as different database
+/// workspaces. Canonicalize paths that exist before lookup/create so every
+/// client converges on one id. Nonexistent paths retain the historical lexical
+/// behavior and can still be registered for later creation.
+fn canonical_workspace_identity(workspace_path: &str) -> Result<String, String> {
+    let normalized = normalize_workspace_path(workspace_path)?;
+    let Ok(canonical) = fs::canonicalize(Path::new(normalized.as_str())) else {
+        return Ok(normalized);
+    };
+    normalize_workspace_path(canonical.to_string_lossy().as_ref())
+}
+
 fn is_windows_drive_root(path: &str) -> bool {
     let bytes = path.as_bytes();
     bytes.len() == 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
@@ -584,7 +603,9 @@ fn is_windows_drive_root(path: &str) -> bool {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{clean_workspace_relative_path, sanitize_upload_filename};
+    use super::{
+        canonical_workspace_identity, clean_workspace_relative_path, sanitize_upload_filename,
+    };
 
     #[test]
     fn workspace_file_paths_reject_escape_and_absolute_components() {
@@ -609,6 +630,25 @@ mod tests {
         assert_eq!(sanitize_upload_filename("  "), "");
         assert_eq!(sanitize_upload_filename("."), "");
         assert_eq!(sanitize_upload_filename(".."), "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_workspace_aliases_share_one_canonical_identity() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = tempfile::tempdir().expect("create canonical workspace fixture");
+        let workspace = fixture.path().join("workspace");
+        let alias = fixture.path().join("workspace-alias");
+        std::fs::create_dir(&workspace).expect("create canonical workspace");
+        symlink(&workspace, &alias).expect("create workspace alias");
+
+        assert_eq!(
+            canonical_workspace_identity(workspace.to_string_lossy().as_ref())
+                .expect("canonicalize workspace"),
+            canonical_workspace_identity(alias.to_string_lossy().as_ref())
+                .expect("canonicalize workspace alias")
+        );
     }
 }
 use super::{

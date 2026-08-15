@@ -1,7 +1,7 @@
 use super::{
     ApplicationError, ApplicationResult, ApplicationService, PageOrder, PaginatedResponse,
     SessionCreateRequest, SessionCursor, SessionLifecycleState, SessionRelationKind,
-    SessionResource, SessionUpdateRequest, SubtaskStatus, build_page, decode_cursor,
+    SessionResource, SessionState, SessionUpdateRequest, SubtaskStatus, build_page, decode_cursor,
     execution_access_from_domain, non_empty, normalize_limit, timestamp_millis_to_utc, trim_page,
 };
 use agena_storage::store::SessionListQuery;
@@ -42,10 +42,22 @@ impl ApplicationService {
             updated_at_ms: row.updated_at_ms,
             id: row.id,
         });
-        let resources = slice
-            .iter()
-            .map(session_resource_from_storage_summary)
-            .collect::<ApplicationResult<Vec<_>>>()?;
+        let session_ids = slice.iter().map(|summary| summary.id).collect::<Vec<_>>();
+        let states = self
+            .session_store
+            .session_states(session_ids.as_slice())
+            .await
+            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+        let mut resources = Vec::with_capacity(slice.len());
+        for summary in slice {
+            let state = states.get(&summary.id).copied().ok_or_else(|| {
+                ApplicationError::internal(format!(
+                    "session {} disappeared while listing processing states",
+                    summary.id
+                ))
+            })?;
+            resources.push(session_resource_from_storage_summary(&summary, state)?);
+        }
 
         build_page(resources, has_more, next_cursor, PageOrder::Desc, limit)
     }
@@ -62,7 +74,15 @@ impl ApplicationService {
         if summary.lifecycle_state != agena_domain::SessionLifecycleState::Ready {
             return Ok(None);
         }
-        Ok(Some(session_resource_from_storage_summary(&summary)?))
+        let state = self
+            .session_store
+            .session_state(session_id)
+            .await
+            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .state;
+        Ok(Some(session_resource_from_storage_summary(
+            &summary, state,
+        )?))
     }
 
     pub async fn create_session(
@@ -98,7 +118,7 @@ impl ApplicationService {
             })
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        session_resource_from_storage_meta(&created)
+        session_resource_from_storage_meta(&created, agena_storage::store::SessionState::Ready)
     }
 
     pub async fn replace_session(
@@ -113,12 +133,24 @@ impl ApplicationService {
             .rename(session_id, request.title)
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        session_resource_from_storage_meta(&updated)
+        let state = self
+            .session_store
+            .session_state(session_id)
+            .await
+            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .state;
+        session_resource_from_storage_meta(&updated, state)
     }
 
     pub async fn delete_session(&self, session_id: i64) -> ApplicationResult<SessionResource> {
         let summary = self.ensure_session_model(session_id).await?;
-        let resource = session_resource_from_storage_summary(&summary)?;
+        let state = self
+            .session_store
+            .session_state(session_id)
+            .await
+            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .state;
+        let resource = session_resource_from_storage_summary(&summary, state)?;
         self.session_store
             .delete(session_id)
             .await
@@ -140,6 +172,7 @@ pub(crate) fn session_resource_from_summary(
         version: summary.version,
         relation_kind: session_relation_kind_from_domain(summary.relation_kind),
         lifecycle_state: session_lifecycle_state_from_domain(summary.lifecycle_state),
+        state: session_state_from_lifecycle(summary.lifecycle_state),
         source_cutoff_seq_global: summary.source_cutoff_seq_global,
         source_message_id: summary.source_message_id,
         is_subagent: summary.relation_kind.is_subagent(),
@@ -156,6 +189,7 @@ pub(crate) fn session_resource_from_summary(
 
 fn session_resource_from_storage_summary(
     summary: &agena_storage::store::SessionSummary,
+    state: agena_storage::store::SessionState,
 ) -> ApplicationResult<SessionResource> {
     let subtask_status = if summary.relation_kind.is_subagent() {
         summary
@@ -177,6 +211,7 @@ fn session_resource_from_storage_summary(
         version: summary.version,
         relation_kind: session_relation_kind_from_domain(summary.relation_kind),
         lifecycle_state: session_lifecycle_state_from_domain(summary.lifecycle_state),
+        state: session_state_from_storage(state),
         source_cutoff_seq_global: None,
         source_message_id: None,
         is_subagent: summary.relation_kind.is_subagent(),
@@ -210,6 +245,7 @@ fn session_resource_from_storage_summary(
 /// yet, and callers re-fetch via `get_session` when they need full stats.
 fn session_resource_from_storage_meta(
     meta: &agena_storage::store::SessionMeta,
+    state: agena_storage::store::SessionState,
 ) -> ApplicationResult<SessionResource> {
     let subtask_status = if meta.relation_kind.is_subagent() {
         meta.subtask_status
@@ -230,6 +266,7 @@ fn session_resource_from_storage_meta(
         version: meta.version,
         relation_kind: session_relation_kind_from_domain(meta.relation_kind),
         lifecycle_state: session_lifecycle_state_from_domain(meta.lifecycle_state),
+        state: session_state_from_storage(state),
         source_cutoff_seq_global: None,
         source_message_id: None,
         is_subagent: meta.relation_kind.is_subagent(),
@@ -242,6 +279,25 @@ fn session_resource_from_storage_meta(
         child_session_count: 0,
         last_message_at: None,
     })
+}
+
+const fn session_state_from_lifecycle(value: agena_domain::SessionLifecycleState) -> SessionState {
+    match value {
+        agena_domain::SessionLifecycleState::Creating => SessionState::Creating,
+        agena_domain::SessionLifecycleState::Ready => SessionState::Ready,
+        agena_domain::SessionLifecycleState::Failed => SessionState::Failed,
+    }
+}
+
+const fn session_state_from_storage(value: agena_storage::store::SessionState) -> SessionState {
+    match value {
+        agena_storage::store::SessionState::Creating => SessionState::Creating,
+        agena_storage::store::SessionState::Ready => SessionState::Ready,
+        agena_storage::store::SessionState::Running => SessionState::Running,
+        agena_storage::store::SessionState::AwaitingUser => SessionState::AwaitingUser,
+        agena_storage::store::SessionState::Interrupted => SessionState::Interrupted,
+        agena_storage::store::SessionState::Failed => SessionState::Failed,
+    }
 }
 
 pub(crate) const fn session_relation_kind_from_domain(
@@ -408,6 +464,7 @@ mod tests {
         assert_eq!(resource.message_count, 2);
         assert_eq!(resource.child_session_count, 1);
         assert!(resource.last_message_at.is_some());
+        assert_eq!(resource.state, SessionState::Running);
     }
 
     #[tokio::test]

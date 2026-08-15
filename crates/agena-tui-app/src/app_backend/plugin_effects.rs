@@ -3,7 +3,6 @@
 
 use agena_api::commands::UpsertPermissionRuleParams;
 use agena_api::resource::PermissionRuleResource;
-use agena_application::Application;
 use anyhow::{Context, Result, anyhow};
 use serde_json::json;
 
@@ -158,9 +157,12 @@ fn plugin_command_input(
 /// Display contributions published by loaded plugins. Synchronous: consumed
 /// every frame by the status line and terminal title.
 pub(crate) fn plugin_display_contributions(
-    application: &Application,
+    application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::HostDisplayContribution> {
-    application.plugin_runtime().display_contributions()
+    application
+        .embedded_application()
+        .map(|application| application.plugin_runtime().display_contributions())
+        .unwrap_or_default()
 }
 
 /// Re-publish the plan progress display contribution for `session_id`.
@@ -172,7 +174,7 @@ pub(crate) fn plugin_display_contributions(
 /// mutating the plan. Returns `true` when the session has an active plan, so
 /// the caller can back off for sessions without one.
 pub(crate) async fn refresh_plan_display(
-    application: &Application,
+    application: &super::TuiBackend,
     session_id: i64,
 ) -> Result<bool> {
     let response = application
@@ -193,13 +195,16 @@ pub(crate) async fn refresh_plan_display(
 /// Plugin notifications emitted through the unified `host.notify` entry
 /// (Phase 6). Bounded recent queue; the TUI dedupes/consumes each intent.
 pub(crate) fn plugin_host_notifications(
-    application: &Application,
+    application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::HostNotification> {
-    application.plugin_runtime().host_notifications()
+    application
+        .embedded_application()
+        .map(|application| application.plugin_runtime().host_notifications())
+        .unwrap_or_default()
 }
 
 /// Human-readable workspace name derived from the workspace root's file name.
-pub(crate) fn workspace_name(application: &Application) -> String {
+pub(crate) fn workspace_name(application: &super::TuiBackend) -> String {
     let workspace_root = application.workspace_root();
     workspace_root
         .file_name()
@@ -212,38 +217,53 @@ pub(crate) fn workspace_name(application: &Application) -> String {
 /// Theme palettes contributed by plugins. Synchronous: applied at startup and
 /// whenever the runtime reloads.
 pub(crate) fn plugin_theme_palettes(
-    application: &Application,
+    application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::HostThemePalette> {
-    application.plugin_runtime().theme_palettes()
+    application
+        .embedded_application()
+        .map(|application| application.plugin_runtime().theme_palettes())
+        .unwrap_or_default()
 }
 
 pub(crate) fn plugin_statuses(
-    application: &Application,
+    application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::status::PluginStatus> {
-    application.plugin_runtime().plugin_statuses()
+    application
+        .embedded_application()
+        .map(|application| application.plugin_runtime().plugin_statuses())
+        .unwrap_or_default()
 }
 
 pub(crate) fn plugin_inspect(
-    application: &Application,
+    application: &super::TuiBackend,
     plugin_id: &str,
 ) -> Option<agena_plugin_host::PluginInspect> {
-    application.plugin_runtime().plugin_inspect(plugin_id)
+    application
+        .embedded_application()
+        .ok()
+        .and_then(|application| application.plugin_runtime().plugin_inspect(plugin_id))
 }
 
 pub(crate) fn plugin_logs(
-    application: &Application,
+    application: &super::TuiBackend,
     plugin_id: &str,
     after_seq: Option<u64>,
     limit: usize,
 ) -> Vec<agena_plugin_host::PluginLogRecord> {
+    let Ok(application) = application.embedded_application() else {
+        return Vec::new();
+    };
     application
         .plugin_runtime()
         .plugin_logs(plugin_id, after_seq, limit)
 }
 
 pub(crate) fn plugin_slash_commands(
-    application: &Application,
+    application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::PluginCommandCatalogItem> {
+    let Ok(application) = application.embedded_application() else {
+        return Vec::new();
+    };
     application
         .plugin_runtime()
         .studio_commands()
@@ -262,12 +282,15 @@ pub(crate) fn plugin_slash_commands(
 /// (message, prompt, workbench, URL, or nested tool/command invocations) with
 /// a bounded recursion depth.
 pub(crate) async fn invoke_plugin_slash_command(
-    application: &Application,
+    application: &super::TuiBackend,
     entry: &agena_plugin_host::PluginCommandCatalogItem,
     session_id: Option<i64>,
     raw: &str,
 ) -> Result<PluginCommandEffect> {
     const MAX_COMMAND_DEPTH: usize = 8;
+
+    let backend = application;
+    let application = backend.embedded_application()?;
 
     let plugin_id = entry.plugin_id.to_string();
     let slash = entry.command.slash.clone();
@@ -297,7 +320,7 @@ pub(crate) async fn invoke_plugin_slash_command(
                 submit_output_as_prompt,
             } => {
                 let output = invoke_plugin_workbench_tool(
-                    application,
+                    backend,
                     plugin_id.as_str(),
                     tool.as_str(),
                     merge_plugin_command_input(base_input, Some(input)),
@@ -389,7 +412,7 @@ pub(crate) async fn invoke_plugin_slash_command(
 /// Invoke a plugin Tool API endpoint from a user-driven TUI surface, returning
 /// the human-readable output text.
 pub(crate) async fn invoke_plugin_workbench_tool(
-    application: &Application,
+    application: &super::TuiBackend,
     plugin_id: &str,
     tool_name: &str,
     input: serde_json::Value,
@@ -402,7 +425,7 @@ pub(crate) async fn invoke_plugin_workbench_tool(
 }
 
 pub(crate) async fn create_permission_rule(
-    application: &Application,
+    application: &super::TuiBackend,
     params: UpsertPermissionRuleParams,
 ) -> Result<PermissionRuleResource> {
     let UpsertPermissionRuleParams {
@@ -421,6 +444,7 @@ pub(crate) async fn create_permission_rule(
         mode,
     } = params;
     application
+        .embedded_application()?
         .service()
         .create_permission_rule(agena_application::dto::PermissionRuleWriteRequest {
             action_key,
@@ -443,7 +467,7 @@ pub(crate) async fn create_permission_rule(
 }
 
 pub(crate) async fn replace_permission_rule(
-    application: &Application,
+    application: &super::TuiBackend,
     rule_id: i64,
     params: UpsertPermissionRuleParams,
 ) -> Result<PermissionRuleResource> {
@@ -463,6 +487,7 @@ pub(crate) async fn replace_permission_rule(
         mode,
     } = params;
     application
+        .embedded_application()?
         .service()
         .replace_permission_rule(
             rule_id,
@@ -488,10 +513,11 @@ pub(crate) async fn replace_permission_rule(
 }
 
 pub(crate) async fn revoke_permission_rule(
-    application: &Application,
+    application: &super::TuiBackend,
     rule_id: i64,
 ) -> Result<PermissionRuleResource> {
     application
+        .embedded_application()?
         .service()
         .revoke_permission_rule(rule_id, None)
         .await
@@ -500,10 +526,11 @@ pub(crate) async fn revoke_permission_rule(
 }
 
 pub(crate) async fn create_commit(
-    application: &Application,
+    application: &super::TuiBackend,
     message: String,
 ) -> Result<(String, String)> {
     let commit = application
+        .embedded_application()?
         .git_commit(agena_application::dto::GitCommitRequest { message })
         .await
         .map_err(|error| anyhow!(error.to_string()))?;
@@ -511,13 +538,14 @@ pub(crate) async fn create_commit(
 }
 
 pub(crate) async fn create_pr(
-    application: &Application,
+    application: &super::TuiBackend,
     title: String,
     body: Option<String>,
     base: Option<String>,
     head: Option<String>,
 ) -> Result<String> {
     let pull_request = application
+        .embedded_application()?
         .git_create_pull_request(agena_application::dto::GitPullRequestCreateRequest {
             title,
             body,

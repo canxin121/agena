@@ -897,6 +897,7 @@ export type SessionResource = {
   version: number
   relation_kind: 'root' | 'child' | 'fork' | 'rewind' | 'subagent'
   lifecycle_state: 'creating' | 'ready' | 'failed'
+  state: 'creating' | 'ready' | 'running' | 'awaiting_user' | 'interrupted' | 'failed'
   source_cutoff_seq_global?: number | null
   source_message_id?: number | null
   is_subagent?: boolean
@@ -912,6 +913,13 @@ export type SessionResource = {
 }
 
 export type SessionTreeResource = SessionResource
+
+export type SessionOverviewResource = {
+  attention: SessionResource[]
+  running: SessionResource[]
+  recent: SessionResource[]
+  generated_at: string
+}
 
 export type RewindCheckpointEntryResource = {
   message_id: number
@@ -1047,6 +1055,9 @@ export type UserInputRequest = {
   /** Optional Markdown body — the full plan document for plan-approval reviews. */
   body_markdown?: string
   kind?: 'review' | 'ask_user' | 'custom' | (string & {})
+  /** Pending-interaction wire projection uses this name so its outer
+   * `kind: 'user_input'` discriminator cannot collide with the ask kind. */
+  input_kind?: 'review' | 'ask_user' | 'custom' | (string & {})
   /** Origin: `host` for the runtime's own ask_user, `plugin` for tool asks. */
   source?: string | null
   presented_at?: string | null
@@ -1077,7 +1088,8 @@ export type OperationUserInput = {
 }
 
 export type PendingInteractiveRequest =
-  ({ kind: 'permission' } & PermissionRequest) | ({ kind: 'user_input' } & UserInputRequest)
+  | ({ kind: 'permission' } & PermissionRequest)
+  | ({ kind: 'user_input' } & Omit<UserInputRequest, 'kind'>)
 
 export type PendingInteractiveRequestResource = PendingInteractiveRequest & {
   session_id: number
@@ -2130,7 +2142,7 @@ export async function listSessions(
     search?: string
   },
 ): Promise<SessionResource[]> {
-  return await collectPagedItems(
+  const sessions = await collectPagedItems(
     (cursor) => {
       const params = new URLSearchParams({
         workspace_id: String(workspaceId),
@@ -2150,6 +2162,34 @@ export async function listSessions(
     },
     { resourceName: 'sessions' },
   )
+  return sessions.sort((left, right) => {
+    const priority: Record<SessionResource['state'], number> = {
+      awaiting_user: 5,
+      running: 4,
+      interrupted: 3,
+      failed: 2,
+      creating: 1,
+      ready: 0,
+    }
+    return (
+      priority[right.state] - priority[left.state] ||
+      Date.parse(right.updated_at) - Date.parse(left.updated_at) ||
+      right.id - left.id
+    )
+  })
+}
+
+/**
+ * Center-owned default session view. Unlike a paginated search result this
+ * always contains every attention/running session plus a bounded recent tail.
+ */
+export async function listSessionOverview(workspaceId: number, recentLimit = 50): Promise<SessionResource[]> {
+  const params = new URLSearchParams({
+    workspace_id: String(workspaceId),
+    recent_limit: String(recentLimit),
+  })
+  const overview = await apiJson<SessionOverviewResource>(`/api/v1/sessions/overview?${params.toString()}`)
+  return [...overview.attention, ...overview.running, ...overview.recent]
 }
 
 export async function createSession(input: {
@@ -2265,6 +2305,7 @@ export function streamSessionChanges(
   options: {
     onOpen?: () => void
     onChange: (change: SessionChange) => void
+    onInvalidate?: () => void
     onError?: (error: Error) => void
   },
 ): SessionChangeStreamHandle {
@@ -2296,6 +2337,15 @@ export function streamSessionChanges(
 
     if (parsed.event === 'error') {
       options.onError?.(new Error(parsed.data))
+      return
+    }
+
+    if (parsed.event === 'session_snapshot' || parsed.event === 'lagged') {
+      // The snapshot is authoritative current state and lag means one or more
+      // best-effort patches were dropped. The conversation controller owns the
+      // full execution-state read so it can converge parts, workflow, pending
+      // interactions, and active execution as one revision-guarded snapshot.
+      options.onInvalidate?.()
       return
     }
 
@@ -2400,6 +2450,7 @@ type LiveChangeNotification =
         }
       }
     }
+
   | {
       kind: 'session_changed'
       data: { subscription: string; change: unknown }
@@ -2412,6 +2463,121 @@ type LiveChangeNotification =
       kind: 'subscription_closed'
       data: { subscription: string; reason: string }
     }
+
+/**
+ * Subscribe to workspace-scoped invalidations for the session overview. Live
+ * frames are only a latency path; callers re-read the overview after every
+ * frame and after each reconnect/lag notification.
+ */
+export function streamSessionOverviewChanges(
+  workspaceId: number,
+  options: {
+    reconnectDelayMs?: number
+    onInvalidate: () => void
+    onError?: (error: Error) => void
+    onOpen?: () => void
+  },
+): NotificationStreamHandle {
+  let controller: AbortController | null = null
+  const decoder = new TextDecoder()
+  let closed = false
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  const reconnectDelayMs = Math.max(100, Math.trunc(options.reconnectDelayMs ?? 1000))
+
+  const scheduleReconnect = (delayMs: number) => {
+    if (closed || reconnectTimer) return
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      void connect()
+    }, delayMs)
+  }
+
+  const close = () => {
+    closed = true
+    controller?.abort()
+    controller = null
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+  }
+
+  const handleEventBlock = (block: string) => {
+    const parsed = parseSseEventBlock(block)
+    if (!parsed.data || parsed.event !== 'notification') return
+    let notification: LiveChangeNotification
+    try {
+      notification = JSON.parse(parsed.data) as LiveChangeNotification
+    } catch {
+      options.onError?.(new Error('Session overview stream delivered an unparseable frame.'))
+      return
+    }
+    if (notification.kind === 'session_changed' || notification.kind === 'lagged') {
+      options.onInvalidate()
+      return
+    }
+    if (notification.kind === 'subscription_closed') {
+      controller?.abort()
+    }
+  }
+
+  const readResponseStream = async (response: Response) => {
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('Session overview stream response body is unavailable')
+    let buffer = ''
+    while (!closed) {
+      const { done, value } = await reader.read()
+      buffer = normalizeSseBuffer(buffer + decoder.decode(value ?? new Uint8Array(), { stream: !done }))
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary >= 0) {
+        const block = buffer.slice(0, boundary).trim()
+        buffer = buffer.slice(boundary + 2)
+        if (block) handleEventBlock(block)
+        boundary = buffer.indexOf('\n\n')
+      }
+      if (done) {
+        const trailing = buffer.trim()
+        if (trailing) handleEventBlock(trailing)
+        return
+      }
+    }
+  }
+
+  const connect = async () => {
+    if (closed) return
+    controller = new AbortController()
+    try {
+      const authHeaders = buildActiveUiAuthHeaders()
+      const url = new URL(apiUrl('/api/v1/changes/stream'))
+      url.searchParams.set('scope_kind', 'workspace')
+      url.searchParams.set('workspace_id', String(workspaceId))
+      const response = await fetch(url.toString(), {
+        method: 'GET',
+        signal: controller.signal,
+        credentials: authHeaders.authorization ? 'omit' : 'include',
+        headers: {
+          accept: 'text/event-stream',
+          ...(authHeaders.authorization ? authHeaders : {}),
+        },
+      })
+      if (!response.ok) throw await apiResponseError(response, url.toString())
+      options.onOpen?.()
+      await readResponseStream(response)
+      if (!closed) scheduleReconnect(250)
+    } catch (error) {
+      if (closed) return
+      if (controller?.signal.aborted) {
+        scheduleReconnect(250)
+        return
+      }
+      options.onError?.(new Error(userErrorMessage(error, 'Session overview updates were interrupted. Reconnecting…')))
+      scheduleReconnect(reconnectDelayMs)
+    }
+  }
+
+  void connect()
+  return { close }
+}
 
 /**
  * Subscribe to the global live-change stream and report plugin tool registry

@@ -1,8 +1,4 @@
-use super::{
-    AppError, ContinueArgs, DateTime, Duration, Instant, ModelRef, Role, SessionDetail,
-    SessionRunOptions, UsageArgs, UsageStatsQuery, Utc,
-};
-use agena_provider::ProviderCatalog;
+use super::{AppError, DateTime, UsageArgs, UsageStatsQuery, Utc};
 
 pub(super) fn usage_stats_query_from_args(args: &UsageArgs) -> Result<UsageStatsQuery, AppError> {
     let has_custom_range = args.from.is_some() || args.to.is_some();
@@ -67,125 +63,6 @@ pub(super) fn parse_usage_datetime(raw: &str, end_of_day: bool) -> Result<DateTi
     )))
 }
 
-pub(super) async fn latest_event_seq(
-    queries: &dyn agena_runtime::SessionQueryService,
-    session_id: i64,
-) -> Result<Option<i64>, AppError> {
-    queries
-        .latest_event_seq(session_id)
-        .await
-        .map_err(|error| AppError::Internal(error.to_string()))
-}
-
-pub(super) fn session_detail_from_presentation(
-    session: agena_runtime::SessionPresentation,
-    latest_event_seq: Option<i64>,
-) -> SessionDetail {
-    SessionDetail {
-        id: session.id,
-        parent_id: session.parent_id,
-        workspace_id: session.workspace_id,
-        title: session.title,
-        version: session.version,
-        created_at: session.created_at,
-        updated_at: session.updated_at,
-        message_count: session.message_count,
-        status: session.workflow_state,
-        latest_event_seq,
-    }
-}
-
-pub(super) async fn resolve_continue_options(
-    providers: &dyn ProviderCatalog,
-    control: &dyn agena_runtime::SessionExecutionControl,
-    session_id: i64,
-    args: &ContinueArgs,
-) -> Result<SessionRunOptions, AppError> {
-    let model = if let Some(model) = args.model.as_deref() {
-        providers
-            .resolve_model_target(model, None)
-            .map_err(|error| AppError::Config(error.to_string()))?
-    } else if let Some(model) = control
-        .selected_model(session_id)
-        .await
-        .map_err(|error| AppError::Internal(error.to_string()))?
-    {
-        model
-    } else {
-        default_model(providers)?
-    };
-
-    Ok(SessionRunOptions {
-        model,
-        thinking_mode: None,
-        speed_mode: None,
-        verbosity: None,
-        thinking: None,
-        request_override: Default::default(),
-        system: None,
-        temperature: args.temperature,
-        max_output_tokens: args.max_output_tokens,
-    })
-}
-
-pub(super) fn resolve_run_options(
-    providers: &dyn ProviderCatalog,
-    model: Option<&str>,
-    temperature: Option<f32>,
-    max_output_tokens: Option<u32>,
-) -> Result<SessionRunOptions, AppError> {
-    let model = if let Some(model) = model {
-        providers
-            .resolve_model_target(model, None)
-            .map_err(|error| AppError::Config(error.to_string()))?
-    } else {
-        default_model(providers)?
-    };
-
-    Ok(SessionRunOptions {
-        model,
-        thinking_mode: None,
-        speed_mode: None,
-        verbosity: None,
-        thinking: None,
-        request_override: Default::default(),
-        system: None,
-        temperature,
-        max_output_tokens,
-    })
-}
-
-pub(super) fn default_model(providers: &dyn ProviderCatalog) -> Result<ModelRef, AppError> {
-    providers
-        .default_model()
-        .map_err(|error| AppError::Config(error.to_string()))?
-        .ok_or_else(|| AppError::Config("no providers configured".to_owned()))
-}
-
-pub(super) fn last_assistant_text_from_projection(
-    runs: Vec<agena_runtime::SessionProjectedRun>,
-) -> Option<String> {
-    runs.into_iter()
-        .rev()
-        .find(|run| run.role == Role::Assistant)
-        .map(|run| projected_run_visible_text(&run))
-        .filter(|text| !text.trim().is_empty())
-}
-
-pub(super) fn projected_run_visible_text(run: &agena_runtime::SessionProjectedRun) -> String {
-    run.parts
-        .iter()
-        .filter_map(|part| match part.detail.as_ref() {
-            Some(agena_runtime::SessionProjectedPartDetail::Text { text, .. }) => {
-                Some(text.clone())
-            }
-            _ => part.summary.clone(),
-        })
-        .filter(|text| !text.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 pub(super) fn title_from_prompt(prompt: &str) -> String {
     let title = prompt.trim().replace('\n', " ");
     let mut chars = title.chars();
@@ -196,30 +73,5 @@ pub(super) fn title_from_prompt(prompt: &str) -> String {
         format!("{truncated}…")
     } else {
         truncated
-    }
-}
-
-pub(super) fn session_storage_error() -> AppError {
-    AppError::Config("session storage is unavailable; configure a database URL or path".to_owned())
-}
-
-pub(super) async fn poll_until<T, F, Fut>(
-    timeout: Duration,
-    interval: Duration,
-    mut poll: F,
-) -> Result<Option<T>, AppError>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<Option<T>, AppError>>,
-{
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(value) = poll().await? {
-            return Ok(Some(value));
-        }
-        if Instant::now() >= deadline {
-            return Ok(None);
-        }
-        tokio::time::sleep(interval).await;
     }
 }

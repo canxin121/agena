@@ -8,10 +8,11 @@ use super::{
     background_operation_id, completed_lifecycle, execution_control_to_app_error,
     is_authorization_phase_title, operation_authorization, operation_blocks_from_tool_output,
     operation_from_part, operation_permission_approved_actions, pending_operation_for_resolved,
-    pending_tool_part_not_found_error, permission_action_key, push_unique_permission_action,
-    requested_background_kind, reserve_background_external_id, resolve_pending_tool,
-    responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
-    terminal_operation_title, tool_name, update_resolved_tool_message,
+    pending_tool_part_not_found_error, permission_action_key, permission_request_id,
+    push_unique_permission_action, requested_background_kind, reserve_background_external_id,
+    resolve_pending_tool, responses_api_request_metadata, run_abort_reason,
+    should_execute_pending_tools_concurrently, terminal_operation_title, tool_name,
+    update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -2012,10 +2013,11 @@ impl SessionManager {
         };
         let concurrency_safe = scoped_executor.is_concurrency_safe_invocation(&prepared_invocation);
 
+        let request_id = permission_request_id(session_id, &resolved);
         let approved_actions = operation_permission_approved_actions(
             session,
             assistant_message_id(session, &resolved.pending.part)?,
-            &resolved.operation_id,
+            request_id.as_str(),
         );
         let permission_checks = permission_checks
             .into_iter()
@@ -2266,10 +2268,11 @@ impl SessionManager {
             }
         };
 
+        let request_id = permission_request_id(session.id, &resolved);
         let approved_actions = operation_permission_approved_actions(
             &session,
             assistant_message_id(&session, &resolved.pending.part)?,
-            &resolved.operation_id,
+            request_id.as_str(),
         );
         let permission_checks = permission_checks
             .into_iter()
@@ -2922,7 +2925,7 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
-        let request_id = resolved.operation_id.clone();
+        let request_id = permission_request_id(session.id, &resolved);
         let existing_permission_replied = session
             .part(&resolved.pending.part)
             .and_then(|part| typed_content_from_value(&part.kind, &part.content).ok())

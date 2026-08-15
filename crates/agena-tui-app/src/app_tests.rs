@@ -733,6 +733,7 @@ mod interaction_part_routing_tests {
             version: 1,
             relation_kind: SessionRelationKind::Root,
             lifecycle_state: SessionLifecycleState::Ready,
+            state: Default::default(),
             source_cutoff_seq_global: None,
             source_message_id: None,
             is_subagent: false,
@@ -5460,7 +5461,7 @@ mod new_session_model_stack_tests {
     use chrono::Utc;
     use ratatui::layout::Rect;
 
-    use super::super::{App, ComposerDraft, I18n, LaunchOptions};
+    use super::super::{App, ComposerDraft, I18n, LaunchOptions, Route};
 
     fn session_resource() -> SessionResource {
         SessionResource {
@@ -5473,6 +5474,7 @@ mod new_session_model_stack_tests {
             version: 1,
             relation_kind: SessionRelationKind::Root,
             lifecycle_state: SessionLifecycleState::Ready,
+            state: Default::default(),
             source_cutoff_seq_global: None,
             source_message_id: None,
             is_subagent: false,
@@ -5502,6 +5504,16 @@ mod new_session_model_stack_tests {
         let mut app = App::new(application, LaunchOptions::default(), I18n::english());
         app.layout.transcript_body = Rect::new(0, 0, 80, 24);
         app
+    }
+
+    #[tokio::test]
+    async fn default_bootstrap_opens_the_shared_session_overview() {
+        let mut app = app_without_session().await;
+
+        app.bootstrap();
+
+        assert!(matches!(app.current_route, Route::SessionSearch(_)));
+        assert_eq!(app.transcript.session_id, None);
     }
 
     #[tokio::test]

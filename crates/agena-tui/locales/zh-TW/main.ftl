@@ -22,6 +22,13 @@ transcript-loading-older = 正在載入更早的訊息...
 transcript-more-older = 還有更早的訊息。向上捲動或按 PageUp 繼續載入。
 transcript-empty-session = 目前工作階段還沒有訊息。
 
+session-state-creating = 正在建立
+session-state-ready = 最近結束
+session-state-running = 正在執行
+session-state-awaiting-user = 等待你處理
+session-state-interrupted = 已中斷
+session-state-failed = 已失敗
+
 no-session-selected = 尚未選擇工作階段。
 no-session-selected-hint = 使用 /sessions 選擇工作階段，或直接在輸入區開始輸入以建立新工作階段。
 composer-session-new = 新工作階段

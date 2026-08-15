@@ -11,8 +11,10 @@
 //! - **Command** — one-shot CLI commands (`exec`, `config`, `provider`,
 //!   `session`, and friends).
 //!
-//! All modes are built on [`agena_runtime`] and share the same application
-//! runtime, session store, and plugin host.
+//! The processing center owns [`agena_runtime`], the session store, scheduler,
+//! plugin host, and execution leases. TUI and JSON-RPC modes are thin clients
+//! of that center; explicit embedded TUI mode remains available for recovery
+//! and development.
 
 #![allow(unused_imports)]
 

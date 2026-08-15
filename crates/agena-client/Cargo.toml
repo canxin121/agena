@@ -8,8 +8,10 @@ rust-version.workspace = true
 agena-domain = { workspace = true }
 agena-api = { workspace = true }
 agena-failure = { workspace = true }
+chrono = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
+secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -20,6 +22,9 @@ tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true, features = ["codec", "io"] }
 url = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
 
 [lints]
 workspace = true

@@ -6,7 +6,6 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use agena_application::Application;
 use anyhow::Result;
 use ignore::WalkBuilder;
 
@@ -95,7 +94,7 @@ pub(crate) fn direct_path_candidate(workspace_root: &Path, query: &str) -> Optio
 /// once per process (owned by `App`) and reused across suggestions. Kept
 /// synchronous: this runs directly inside the composer's key handler.
 pub(crate) fn search_workspace_files(
-    application: &Application,
+    application: &crate::TuiBackend,
     file_index: &Arc<OnceLock<Vec<PathBuf>>>,
     query: &str,
     limit: usize,

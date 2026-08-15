@@ -1,6 +1,5 @@
 use agena_api::resource::SessionExecutionResource;
 use agena_application::dto::{SessionCreateRequest, SessionHierarchyRequest, SessionUpdateRequest};
-use agena_application::session::session_resource_from_summary;
 
 // ─── Command dispatch ───────────────────────────────────────────────────
 
@@ -121,10 +120,7 @@ pub async fn dispatch_command(
                 .list_session_tree(root_id)
                 .await
                 .map_err(|error| ApplicationError::from_failure(*error.failure))?;
-            let resources = summaries
-                .into_iter()
-                .map(session_resource_from_summary)
-                .collect();
+            let resources = state.session_resources_from_summaries(summaries).await?;
             Ok(CommandResult::SessionTree(resources))
         }
         Command::ExportSession(ExportSessionParams { session_id }) => {

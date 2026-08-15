@@ -8,8 +8,8 @@ use std::collections::HashSet;
 
 use agena_api::queries::ListSessionsParams;
 use agena_api::resource::{
-    PermissionReply, RunOptions, SessionExecutionResource, SessionResource, UserInputReply,
-    WorkspaceResource,
+    PermissionReply, RunOptions, SessionExecutionResource, SessionOverviewResource,
+    SessionResource, UserInputReply, WorkspaceResource,
 };
 use agena_domain::{CancellationResult, ComposerDocument, ExecutionId, PermissionConfig, TurnId};
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
@@ -22,6 +22,109 @@ use crate::dto::{
 use crate::{Application, ApplicationError};
 
 impl Application {
+    /// Build the default center home view: every session needing attention,
+    /// every running session, then a bounded recent tail.
+    pub async fn session_overview(
+        &self,
+        workspace_id: Option<i64>,
+        recent_limit: u64,
+    ) -> Result<SessionOverviewResource, ApplicationError> {
+        let workspace_id = match workspace_id {
+            Some(workspace_id) => workspace_id,
+            None => self.current_workspace_id().await?,
+        };
+        let sessions = self
+            .list_sessions_query(ListSessionsParams {
+                cursor: None,
+                limit: Some(200),
+                workspace_id: Some(workspace_id),
+                parent_id: None,
+                roots: false,
+                exclude_subagents: true,
+                search: None,
+            })
+            .await?;
+        let mut attention = Vec::new();
+        let mut running = Vec::new();
+        let mut recent = Vec::new();
+        for session in sessions {
+            match session.state {
+                agena_api::resource::SessionState::AwaitingUser
+                | agena_api::resource::SessionState::Interrupted => attention.push(session),
+                agena_api::resource::SessionState::Running
+                | agena_api::resource::SessionState::Creating => running.push(session),
+                agena_api::resource::SessionState::Ready
+                | agena_api::resource::SessionState::Failed => recent.push(session),
+            }
+        }
+        let sort_recent = |left: &SessionResource, right: &SessionResource| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| right.id.cmp(&left.id))
+        };
+        attention.sort_by(|left, right| {
+            session_attention_priority(right.state)
+                .cmp(&session_attention_priority(left.state))
+                .then_with(|| sort_recent(left, right))
+        });
+        running.sort_by(sort_recent);
+        recent.sort_by(sort_recent);
+        recent.truncate(usize::try_from(recent_limit.clamp(1, 200)).unwrap_or(200));
+        Ok(SessionOverviewResource {
+            attention,
+            running,
+            recent,
+            generated_at: chrono::Utc::now(),
+        })
+    }
+
+    /// Project runtime summaries into public resources and enrich every row
+    /// with the authoritative store-derived processing state.
+    pub async fn session_resources_from_summaries(
+        &self,
+        summaries: Vec<agena_domain::SessionSummary>,
+    ) -> Result<Vec<SessionResource>, ApplicationError> {
+        let session_ids = summaries
+            .iter()
+            .map(|summary| summary.id)
+            .collect::<Vec<_>>();
+        let states = self
+            .session_store_facade()?
+            .session_states(session_ids.as_slice())
+            .await
+            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+        let mut resources = Vec::with_capacity(summaries.len());
+        for summary in summaries {
+            let mut resource = crate::session::session_resource_from_summary(summary);
+            let state = states.get(&resource.id).copied().ok_or_else(|| {
+                ApplicationError::internal(format!(
+                    "session {} disappeared while projecting processing state",
+                    resource.id
+                ))
+            })?;
+            resource.state = session_state_resource(state);
+            resources.push(resource);
+        }
+        Ok(resources)
+    }
+
+    /// Return the store-derived processing state without materializing a full
+    /// transcript. Session lists in non-HTTP transports use this same source
+    /// of truth as `SessionResource.state`.
+    pub async fn session_processing_state(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_api::resource::SessionState, ApplicationError> {
+        let state = self
+            .session_store_facade()?
+            .session_state(session_id)
+            .await
+            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .state;
+        Ok(session_state_resource(state))
+    }
+
     pub async fn list_child_sessions(
         &self,
         parent_id: i64,
@@ -529,5 +632,30 @@ impl Application {
             })?;
         }
         Ok(current)
+    }
+}
+
+fn session_state_resource(
+    state: agena_storage::store::SessionState,
+) -> agena_api::resource::SessionState {
+    match state {
+        agena_storage::store::SessionState::Creating => agena_api::resource::SessionState::Creating,
+        agena_storage::store::SessionState::Ready => agena_api::resource::SessionState::Ready,
+        agena_storage::store::SessionState::Running => agena_api::resource::SessionState::Running,
+        agena_storage::store::SessionState::AwaitingUser => {
+            agena_api::resource::SessionState::AwaitingUser
+        }
+        agena_storage::store::SessionState::Interrupted => {
+            agena_api::resource::SessionState::Interrupted
+        }
+        agena_storage::store::SessionState::Failed => agena_api::resource::SessionState::Failed,
+    }
+}
+
+const fn session_attention_priority(state: agena_api::resource::SessionState) -> u8 {
+    match state {
+        agena_api::resource::SessionState::AwaitingUser => 2,
+        agena_api::resource::SessionState::Interrupted => 1,
+        _ => 0,
     }
 }

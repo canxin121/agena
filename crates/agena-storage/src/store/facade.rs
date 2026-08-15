@@ -133,6 +133,12 @@ pub trait SessionStore: Send + Sync {
         query: SessionListQuery,
     ) -> Result<Vec<SessionSummary>, StoreError>;
 
+    /// Batch form of [`Self::session_state`] for overview/list surfaces.
+    async fn session_states(
+        &self,
+        session_ids: &[i64],
+    ) -> Result<HashMap<i64, SessionState>, StoreError>;
+
     /// Fetch one session's summary row, or `None` when it does not exist.
     /// A cheap single-row projection (13.1) for existence/lifecycle/version
     /// checks on the application path.
@@ -1184,6 +1190,13 @@ where
         query: SessionListQuery,
     ) -> Result<Vec<SessionSummary>, StoreError> {
         self.engine.list_session_summaries(query).await
+    }
+
+    async fn session_states(
+        &self,
+        session_ids: &[i64],
+    ) -> Result<HashMap<i64, SessionState>, StoreError> {
+        self.engine.session_states(session_ids, self.now()).await
     }
 
     async fn get_session_summary(
@@ -3514,6 +3527,14 @@ mod tests {
             query: SessionListQuery,
         ) -> Result<Vec<SessionSummary>, StoreError> {
             self.inner.list_session_summaries(query).await
+        }
+
+        async fn session_states(
+            &self,
+            session_ids: &[i64],
+            now_ms: i64,
+        ) -> Result<HashMap<i64, SessionState>, StoreError> {
+            self.inner.session_states(session_ids, now_ms).await
         }
 
         async fn get_session_summary(

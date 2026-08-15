@@ -22,6 +22,13 @@ transcript-loading-older = 이전 메시지를 불러오는 중...
 transcript-more-older = 더 이전 메시지가 있습니다. 위로 스크롤하거나 PageUp 을 누르세요.
 transcript-empty-session = 이 세션에는 아직 메시지가 없습니다.
 
+session-state-creating = 생성 중
+session-state-ready = 최근 완료
+session-state-running = 실행 중
+session-state-awaiting-user = 사용자 입력 대기
+session-state-interrupted = 중단됨
+session-state-failed = 실패
+
 no-session-selected = 선택된 세션이 없습니다.
 no-session-selected-hint = /sessions 로 세션을 선택하거나 입력창에 바로 입력을 시작해 새 세션을 만드세요.
 composer-session-new = 새 세션

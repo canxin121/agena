@@ -77,6 +77,7 @@ mod model_catalog_source;
 mod oauth_callback;
 mod optional;
 mod output_format;
+mod ownership_audit;
 mod periodic;
 mod plugin_composition;
 mod policy;

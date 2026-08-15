@@ -1,7 +1,12 @@
-use agena_domain::{PermissionReply, SessionListRequest};
-use std::path::PathBuf;
-
 use crate::error::AgenaProcessError;
+use agena_api::{
+    commands::{Command, CommandResult, ResolveWorkspaceParams},
+    queries::{ListSessionsParams, Query, QueryResult},
+    resource::{
+        ModelRef, PermissionReply, PermissionReplyKind, PermissionScope, ProviderSummaryResource,
+        RunOptions, SessionState, SessionTranscriptPart,
+    },
+};
 use agena_api_server::jsonrpc::protocol::{
     CancelRunParams, CancelRunResult, CreateSessionParams, CreateSessionResult,
     ListSessionsParams as AppListSessionsParams, ListSessionsResult as AppListSessionsResult,
@@ -10,92 +15,209 @@ use agena_api_server::jsonrpc::protocol::{
     SubmitRunResult,
 };
 use agena_api_server::jsonrpc::{self, AppServerError};
-use agena_cli::{AgenaCli, RpcServerRequest, RpcServerTransport};
-use agena_domain::{PermissionReplyKind, PermissionScope};
-use agena_provider::ProviderCatalog;
-use agena_runtime::bootstrap_application_services;
-use agena_runtime::{SessionPermissionReplyRequest, SessionRunOptions, SessionUserRunRequest};
+use agena_cli::{RpcServerRequest, RpcServerTransport};
+use agena_client::{AgenaClient, ClientError};
 use async_trait::async_trait;
-use clap::Parser;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-pub(crate) async fn run_command(cli: AgenaCli) -> Result<(), AgenaProcessError> {
-    let tracing = agena_runtime::resolve_runtime_bootstrap_preflight(
-        &agena_runtime::RuntimeBootstrapRequest {
-            config_override_expressions: cli.overrides.clone(),
-            ..Default::default()
-        },
-    )
-    .ok()
-    .map(|preflight| preflight.tracing)
-    .unwrap_or_default();
-
-    let initial_filter = agena_runtime::runtime_env_filter(&tracing).unwrap_or_else(|_| {
-        agena_runtime::runtime_env_filter(&agena_runtime::RuntimeTracingConfiguration::default())
-            .expect("default tracing filter should parse")
-    });
-    tracing_subscriber::registry()
-        .with(initial_filter)
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_target(false)
-                .compact()
-                .with_writer(std::io::stderr),
-        )
-        .init();
-
-    cli.run_command()
-        .await
-        .map_err(|error| AgenaProcessError::Internal(error.to_string()))
-}
 
 pub(crate) async fn run(request: RpcServerRequest) -> Result<(), AgenaProcessError> {
-    let runtime = session_runtime_with_workspace(&request, request.args.workspace.as_ref()).await?;
-    let application = agena_application::Application::from_composed_runtime_services(
-        runtime.application_services(),
+    if request.database_url.is_some() || request.database_path.is_some() {
+        return Err(AgenaProcessError::Configuration(
+            "--database-url/--database-path belong to the processing center and cannot be used by rpc-server"
+                .to_owned(),
+        ));
+    }
+    if !request.config_override_expressions.is_empty() {
+        return Err(AgenaProcessError::Configuration(
+            "--set overrides belong to the processing center and cannot be used by rpc-server"
+                .to_owned(),
+        ));
+    }
+
+    let workspace_root = request
+        .args
+        .workspace
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(std::env::current_dir)?;
+    let center_url = super::super::center_client::resolve_center_url(request.args.center.clone());
+    let backend = AgenaAppServerBackend::connect(
+        center_url.as_str(),
+        workspace_root,
+        request.args.center_token.as_deref(),
+        request.args.center_password.as_deref(),
     )
-    .map_err(|error| AgenaProcessError::Internal(error.to_string()))?;
-    let backend = AgenaAppServerBackend {
-        application,
-        runtime: runtime.clone(),
-    };
-    // Keep the result as part of the backend's server-lifetime state rather
-    // than relying on the independently-held local clone below.
-    let _ = &backend.runtime;
-    let result = match request.args.transport {
+    .await?;
+    match request.args.transport {
         RpcServerTransport::Stdio => jsonrpc::serve_stdio(backend)
             .await
             .map_err(|err| AgenaProcessError::Configuration(err.to_string())),
-    };
-    runtime.shutdown();
-    result
-}
-
-async fn session_runtime_with_workspace(
-    request: &RpcServerRequest,
-    workspace: Option<&PathBuf>,
-) -> Result<agena_runtime::RuntimeBootstrapResult, AgenaProcessError> {
-    bootstrap_application_services(agena_runtime::RuntimeBootstrapRequest {
-        workspace_root: workspace.cloned(),
-        config_override_expressions: request.config_override_expressions.clone(),
-        database_url: request.database_url.clone(),
-        database_path: request.database_path.clone(),
-        // Scheduler database follows its conventional location (override via
-        // AGENA_SCHEDULER_DATABASE_URL/PATH).
-        scheduler_database_url: None,
-        scheduler_database_path: None,
-        initialize_schema: true,
-        tracing_reload_handle: None,
-    })
-    .await
-    .map_err(|error| AgenaProcessError::Internal(error.to_string()))
+    }
 }
 
 #[derive(Clone)]
 struct AgenaAppServerBackend {
-    application: agena_application::Application,
-    // Retain Runtime lifecycle ownership for the complete RPC-server lifetime.
-    runtime: agena_runtime::RuntimeBootstrapResult,
+    client: AgenaClient,
+    workspace_id: i64,
+    providers: Vec<ProviderSummaryResource>,
+}
+
+impl AgenaAppServerBackend {
+    async fn connect(
+        center_url: &str,
+        workspace_root: std::path::PathBuf,
+        center_token: Option<&str>,
+        center_password: Option<&str>,
+    ) -> Result<Self, AgenaProcessError> {
+        let client = AgenaClient::connect_center(center_url, center_token, center_password)
+            .await
+            .map_err(|error| {
+                process_client_error(
+                    "processing-center readiness/authentication handshake failed",
+                    &error,
+                )
+            })?;
+        let workspace = client
+            .command(Command::ResolveWorkspace(ResolveWorkspaceParams {
+                path: workspace_root.to_string_lossy().into_owned(),
+                create_if_missing: true,
+            }))
+            .await
+            .map_err(|error| {
+                process_client_error(
+                    "failed to resolve the IDE workspace through the processing center",
+                    &error,
+                )
+            })?;
+        let CommandResult::Workspace(workspace) = workspace else {
+            return Err(AgenaProcessError::Internal(
+                "processing center returned the wrong result while resolving the IDE workspace"
+                    .to_owned(),
+            ));
+        };
+        let providers = client.query(Query::ListProviders).await.map_err(|error| {
+            process_client_error(
+                "failed to read the processing center's provider catalog",
+                &error,
+            )
+        })?;
+        let QueryResult::Providers(providers) = providers else {
+            return Err(AgenaProcessError::Internal(
+                "processing center returned the wrong provider-list result".to_owned(),
+            ));
+        };
+        Ok(Self {
+            client,
+            workspace_id: workspace.id,
+            providers,
+        })
+    }
+
+    fn run_options(
+        &self,
+        model: Option<&str>,
+        temperature: Option<f32>,
+        max_output_tokens: Option<u32>,
+    ) -> Result<RunOptions, AppServerError> {
+        Ok(RunOptions {
+            model: model
+                .map(|target| self.resolve_model_target(target))
+                .transpose()?,
+            temperature,
+            max_output_tokens,
+            ..RunOptions::default()
+        })
+    }
+
+    fn resolve_model_target(&self, target: &str) -> Result<ModelRef, AppServerError> {
+        let target = target.trim();
+        if target.is_empty() {
+            return Err(AppServerError::InvalidParams(
+                "provider or model reference cannot be empty".to_owned(),
+            ));
+        }
+
+        if let Some((provider_id, model_id)) = target.split_once('/') {
+            if provider_id.trim().is_empty() || model_id.trim().is_empty() {
+                return Err(AppServerError::InvalidParams(format!(
+                    "invalid model reference `{target}`; expected provider/model"
+                )));
+            }
+            let adapter_id = self
+                .providers
+                .iter()
+                .find(|provider| provider.provider_id == provider_id.trim())
+                .and_then(|provider| provider.defaults.adapter.clone());
+            return Ok(ModelRef {
+                provider_id: provider_id.trim().to_owned(),
+                adapter_id,
+                model_id: model_id.trim().to_owned(),
+            });
+        }
+
+        let provider = self
+            .providers
+            .iter()
+            .find(|provider| provider.provider_id == target)
+            .ok_or_else(|| {
+                AppServerError::InvalidParams(format!("provider not found: {target}"))
+            })?;
+        Ok(ModelRef {
+            provider_id: provider.provider_id.clone(),
+            adapter_id: provider.defaults.adapter.clone(),
+            model_id: provider.defaults.model.clone(),
+        })
+    }
+
+    async fn paginated_sessions(
+        &self,
+        offset: u64,
+        limit: Option<u64>,
+    ) -> Result<Vec<agena_api::resource::SessionResource>, AppServerError> {
+        let mut cursor = None;
+        let mut skipped = 0_u64;
+        let mut sessions = Vec::new();
+
+        loop {
+            let response = self
+                .client
+                .query(Query::ListSessions(ListSessionsParams {
+                    cursor,
+                    limit: Some(agena_api::pagination::MAX_LIMIT),
+                    workspace_id: Some(self.workspace_id),
+                    parent_id: None,
+                    roots: false,
+                    exclude_subagents: true,
+                    search: None,
+                }))
+                .await
+                .map_err(client_backend_error)?;
+            let QueryResult::Sessions(page) = response else {
+                return Err(AppServerError::Backend(
+                    "processing center returned the wrong session-list result".to_owned(),
+                ));
+            };
+            for session in page.items {
+                if skipped < offset {
+                    skipped = skipped.saturating_add(1);
+                    continue;
+                }
+                sessions.push(session);
+                if limit.is_some_and(|limit| sessions.len() as u64 >= limit) {
+                    return Ok(sessions);
+                }
+            }
+            if !page.page.has_more {
+                return Ok(sessions);
+            }
+            cursor = page.page.next_cursor;
+            if cursor.is_none() {
+                return Err(AppServerError::Backend(
+                    "processing center returned a truncated session page without a cursor"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -105,13 +227,14 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         params: CreateSessionParams,
     ) -> Result<CreateSessionResult, AppServerError> {
         let session = self
-            .application
+            .client
             .create_session(
+                self.workspace_id,
                 params.title.unwrap_or_else(|| "IDE session".to_owned()),
                 params.parent_session_id,
             )
             .await
-            .map_err(app_backend_error)?;
+            .map_err(client_backend_error)?;
         Ok(CreateSessionResult {
             session_id: session.id,
             title: session.title,
@@ -122,53 +245,25 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         &self,
         params: SubmitRunParams,
     ) -> Result<SubmitRunResult, AppServerError> {
-        let queries = self
-            .application
-            .session_query_service()
-            .map_err(app_backend_error)?;
-        let commands = self
-            .application
-            .session_execution_services()
-            .map_err(app_backend_error)?
-            .commands
-            .clone();
-        let options = resolve_run_options(
-            self.application.provider_catalog().as_ref(),
+        let options = self.run_options(
             params.model.as_deref(),
             params.temperature,
             params.max_output_tokens,
-        )
-        .map_err(app_backend_error)?;
-        let outcome = commands
-            .submit_user_run(SessionUserRunRequest::new(
-                params.session_id,
+        )?;
+        let execution = self
+            .client
+            .submit_message(agena_api::commands::SubmitRunParams {
+                session_id: params.session_id,
                 options,
-                agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
                     text: params.prompt,
                 }]),
-            ))
+            })
             .await
-            .map_err(app_backend_error)?;
-        let presentation = queries
-            .session_presentation(outcome.session_id)
-            .await
-            .map_err(app_backend_error)?;
-        let messages = queries
-            .list_projected_runs(outcome.session_id, true)
-            .await
-            .map_err(app_backend_error)?;
-        // The v2 run result: the newest run's marker plus its content parts.
-        // The just-submitted run is the last projected message (its id is the
-        // run marker part id).
-        let run_id = messages.last().map(|message| message.id);
-        let parts = match messages.last() {
-            Some(message) => agena_application::session::project_session_transcript(
-                std::slice::from_ref(message),
-            ),
-            None => Vec::new(),
-        };
+            .map_err(client_backend_error)?;
+        let (run_id, parts) = latest_run_parts(&execution.parts);
         Ok(SubmitRunResult {
-            session_id: presentation.id,
+            session_id: execution.session.id,
             run_id,
             parts,
         })
@@ -178,46 +273,23 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         &self,
         params: PermissionReplyParams,
     ) -> Result<PermissionReplyResult, AppServerError> {
-        let services = self
-            .application
-            .session_execution_services()
-            .map_err(app_backend_error)?;
-        let commands = services.commands.clone();
-        let selected_model = services
-            .execution_control
-            .selected_model(params.session_id)
-            .await
-            .map_err(app_backend_error)?;
-        let queries = self
-            .application
-            .session_query_service()
-            .map_err(app_backend_error)?;
-        let options = resolve_permission_continue_options(
-            self.application.provider_catalog().as_ref(),
-            selected_model,
-        )
-        .map_err(app_backend_error)?;
-        let outcome = commands
-            .reply_permission(SessionPermissionReplyRequest::new(
-                params.session_id,
-                options,
-                PermissionReply {
+        let execution = self
+            .client
+            .reply_permission(agena_api::commands::ReplyPermissionParams {
+                session_id: params.session_id,
+                options: RunOptions::default(),
+                reply: PermissionReply {
                     request_id: params.request_id,
                     kind: app_permission_reply_kind(params.decision, params.remember),
                     reason: params.reason,
                     scope: params.remember.map(app_permission_scope),
                 },
-                Some("app_server".to_string()),
-            ))
+            })
             .await
-            .map_err(app_backend_error)?;
-        let presentation = queries
-            .session_presentation(outcome.session_id)
-            .await
-            .map_err(app_backend_error)?;
+            .map_err(client_backend_error)?;
         Ok(PermissionReplyResult {
-            session_id: presentation.id,
-            status: format!("{:?}", presentation.workflow_state).to_ascii_lowercase(),
+            session_id: execution.session.id,
+            status: format!("{:?}", execution.workflow_state).to_ascii_lowercase(),
         })
     }
 
@@ -225,28 +297,14 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         &self,
         params: AppListSessionsParams,
     ) -> Result<AppListSessionsResult, AppServerError> {
-        let queries = self
-            .application
-            .session_query_service()
-            .map_err(app_backend_error)?;
-        let sessions = queries
-            .list_session_summaries(SessionListRequest {
-                offset: params.offset,
-                limit: params.limit,
-                include_subagents: false,
-                parent_id: None,
-                roots_only: false,
-                search: None,
-            })
-            .await
-            .map_err(app_backend_error)?;
+        let sessions = self.paginated_sessions(params.offset, params.limit).await?;
         Ok(AppListSessionsResult {
             sessions: sessions
                 .into_iter()
                 .map(|session| SessionListItem {
                     session_id: session.id,
                     title: session.title,
-                    status: "idle".to_owned(),
+                    status: session_state_name(session.state).to_owned(),
                     updated_at: session.updated_at,
                 })
                 .collect(),
@@ -257,30 +315,22 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         &self,
         params: ReadPartsParams,
     ) -> Result<ReadPartsResult, AppServerError> {
-        let queries = self
-            .application
-            .session_query_service()
-            .map_err(app_backend_error)?;
-        let messages = queries
-            .list_projected_runs(params.session_id, true)
+        let execution = self
+            .client
+            .get_session_state(params.session_id)
             .await
-            .map_err(app_backend_error)?;
+            .map_err(client_backend_error)?;
         Ok(ReadPartsResult {
-            parts: agena_application::session::project_session_transcript(&messages),
+            parts: execution.parts,
         })
     }
 
     async fn cancel_run(&self, params: CancelRunParams) -> Result<CancelRunResult, AppServerError> {
-        let execution_control = self
-            .application
-            .session_execution_services()
-            .map_err(app_backend_error)?
-            .execution_control
-            .clone();
-        let result = execution_control
-            .cancel_execution(params.session_id, params.execution_id)
+        let result = self
+            .client
+            .cancel_run(params.session_id, params.execution_id)
             .await
-            .map_err(app_backend_error)?;
+            .map_err(client_backend_error)?;
         Ok(CancelRunResult {
             session_id: params.session_id,
             result,
@@ -288,67 +338,44 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
     }
 }
 
-fn app_backend_error(error: impl ToString) -> AppServerError {
+fn process_client_error(context: &str, error: &ClientError) -> AgenaProcessError {
+    let detail = error
+        .diagnostic_message()
+        .unwrap_or_else(|| error.to_string());
+    AgenaProcessError::Configuration(format!("{context}: {detail}"))
+}
+
+fn client_backend_error(error: ClientError) -> AppServerError {
     AppServerError::Backend(error.to_string())
 }
 
-fn resolve_permission_continue_options(
-    providers: &dyn ProviderCatalog,
-    selected_model: Option<agena_domain::ModelRef>,
-) -> Result<SessionRunOptions, AgenaProcessError> {
-    let model = if let Some(model) = selected_model {
-        model
-    } else {
-        default_model(providers)?
-    };
-
-    Ok(SessionRunOptions {
-        model,
-        thinking_mode: None,
-        speed_mode: None,
-        verbosity: None,
-        thinking: None,
-        request_override: Default::default(),
-        system: None,
-        temperature: None,
-        max_output_tokens: None,
-    })
+fn latest_run_parts(parts: &[SessionTranscriptPart]) -> (Option<i64>, Vec<SessionTranscriptPart>) {
+    let run_id = parts
+        .iter()
+        .rev()
+        .find(|part| part.kind == "run")
+        .map(|part| part.part_id);
+    let selected = run_id
+        .map(|run_id| {
+            parts
+                .iter()
+                .filter(|part| part.part_id == run_id || part.run_id == Some(run_id))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    (run_id, selected)
 }
 
-fn resolve_run_options(
-    providers: &dyn ProviderCatalog,
-    model: Option<&str>,
-    temperature: Option<f32>,
-    max_output_tokens: Option<u32>,
-) -> Result<SessionRunOptions, AgenaProcessError> {
-    let model = if let Some(model) = model {
-        providers
-            .resolve_model_target(model, None)
-            .map_err(|error| AgenaProcessError::Configuration(error.to_string()))?
-    } else {
-        default_model(providers)?
-    };
-
-    Ok(SessionRunOptions {
-        model,
-        thinking_mode: None,
-        speed_mode: None,
-        verbosity: None,
-        thinking: None,
-        request_override: Default::default(),
-        system: None,
-        temperature,
-        max_output_tokens,
-    })
-}
-
-fn default_model(
-    providers: &dyn ProviderCatalog,
-) -> Result<agena_domain::ModelRef, AgenaProcessError> {
-    providers
-        .default_model()
-        .map_err(|error| AgenaProcessError::Configuration(error.to_string()))?
-        .ok_or_else(|| AgenaProcessError::Configuration("no providers configured".to_owned()))
+const fn session_state_name(state: SessionState) -> &'static str {
+    match state {
+        SessionState::Creating => "creating",
+        SessionState::Ready => "ready",
+        SessionState::Running => "running",
+        SessionState::AwaitingUser => "awaiting_user",
+        SessionState::Interrupted => "interrupted",
+        SessionState::Failed => "failed",
+    }
 }
 
 fn app_permission_reply_kind(
@@ -368,5 +395,109 @@ fn app_permission_scope(scope: PermissionRememberScope) -> PermissionScope {
         PermissionRememberScope::Session => PermissionScope::Session,
         PermissionRememberScope::Workspace => PermissionScope::Workspace,
         PermissionRememberScope::Global => PermissionScope::Global,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena_api::resource::{ProviderDefaultsResource, SessionTranscriptPart};
+
+    fn backend_with_public_provider_metadata() -> AgenaAppServerBackend {
+        AgenaAppServerBackend {
+            client: AgenaClient::new("http://127.0.0.1:3210").expect("client"),
+            workspace_id: 7,
+            providers: vec![ProviderSummaryResource {
+                provider_id: "example".to_owned(),
+                defaults: ProviderDefaultsResource {
+                    adapter: Some("openai".to_owned()),
+                    model: "default-model".to_owned(),
+                },
+                adapters: Vec::new(),
+            }],
+        }
+    }
+
+    fn part(part_id: i64, kind: &str, run_id: Option<i64>) -> SessionTranscriptPart {
+        SessionTranscriptPart {
+            part_id,
+            kind: kind.to_owned(),
+            role: "assistant".to_owned(),
+            state: "completed".to_owned(),
+            content: serde_json::json!({}),
+            summary: None,
+            created_at_ms: part_id,
+            parent_part_id: None,
+            run_id,
+        }
+    }
+
+    #[test]
+    fn rpc_backend_resolves_models_from_public_provider_metadata() {
+        let backend = backend_with_public_provider_metadata();
+        assert_eq!(
+            backend
+                .resolve_model_target("example")
+                .expect("provider default"),
+            ModelRef {
+                provider_id: "example".to_owned(),
+                adapter_id: Some("openai".to_owned()),
+                model_id: "default-model".to_owned(),
+            }
+        );
+        assert_eq!(
+            backend
+                .resolve_model_target("example/override-model")
+                .expect("qualified model"),
+            ModelRef {
+                provider_id: "example".to_owned(),
+                adapter_id: Some("openai".to_owned()),
+                model_id: "override-model".to_owned(),
+            }
+        );
+        assert!(matches!(
+            backend.resolve_model_target("missing"),
+            Err(AppServerError::InvalidParams(_))
+        ));
+    }
+
+    #[test]
+    fn submit_result_contains_only_the_newest_run_parts() {
+        let parts = vec![
+            part(1, "run", Some(1)),
+            part(2, "text", Some(1)),
+            part(3, "run", Some(3)),
+            part(4, "reasoning", Some(3)),
+            part(5, "text", Some(3)),
+        ];
+        let (run_id, latest) = latest_run_parts(&parts);
+        assert_eq!(run_id, Some(3));
+        assert_eq!(
+            latest.iter().map(|part| part.part_id).collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
+    }
+
+    #[tokio::test]
+    async fn rpc_server_rejects_database_ownership_instead_of_bootstrapping_runtime() {
+        let error = run(RpcServerRequest {
+            config_override_expressions: Vec::new(),
+            database_url: Some("sqlite::memory:".to_owned()),
+            database_path: None,
+            args: agena_cli::RpcServerArgs {
+                center: Some("http://127.0.0.1:3210".to_owned()),
+                center_token: None,
+                center_password: None,
+                workspace: None,
+                transport: RpcServerTransport::Stdio,
+            },
+        })
+        .await
+        .expect_err("database ownership must stay at the center");
+        assert!(
+            error
+                .to_string()
+                .contains("belong to the processing center")
+        );
     }
 }

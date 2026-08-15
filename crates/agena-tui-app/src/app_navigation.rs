@@ -97,12 +97,15 @@ impl App {
     }
 
     pub(crate) fn session_search_item(&self, session: SessionResource) -> SessionSearchItem {
-        let mut detail_parts = vec![ui_text::session_meta(
-            &self.i18n,
-            session.id,
-            session.message_count,
-            session.updated_at,
-        )];
+        let mut detail_parts = vec![
+            ui_text::session_state_label(&self.i18n, session.state),
+            ui_text::session_meta(
+                &self.i18n,
+                session.id,
+                session.message_count,
+                session.updated_at,
+            ),
+        ];
         if self.transcript.session_id == Some(session.id) {
             detail_parts.push(ui_text::t(&self.i18n, "session-tag-current"));
         }

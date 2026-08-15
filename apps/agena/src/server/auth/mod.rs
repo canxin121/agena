@@ -652,6 +652,12 @@ pub(crate) async fn require_ui_auth(
     match &state.ui_auth {
         UiAuth::Disabled => next.run(req).await,
         UiAuth::Enabled(inner) => {
+            // Center discovery and identity-safe lifecycle controls must work
+            // before a UI login exists. This endpoint exposes only readiness
+            // and process identity; all session/runtime APIs remain protected.
+            if req_method == Method::GET && req_path == "/api/v1/health" {
+                return next.run(req).await;
+            }
             // Plugin UI static assets are loaded by iframe/module requests where adding
             // Authorization headers is not practical. Keep this narrow to read-only asset URLs.
             if is_public_plugin_asset_request(&req_method, &req_path) {

@@ -105,6 +105,7 @@ agena-git-http = { path = "crates/agena-git-http" }
 agena-web = { path = "crates/agena-web" }
 agena-api = { path = "crates/agena-api" }
 agena-api-server = { path = "crates/agena-api-server" }
+agena-client = { path = "crates/agena-client" }
 agena-keyring-store = { path = "crates/agena-keyring-store" }
 agena-lsp = { path = "crates/agena-lsp" }
 agena-macros = { path = "crates/agena-macros" }

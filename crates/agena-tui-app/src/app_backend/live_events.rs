@@ -9,6 +9,9 @@ use tokio::sync::mpsc;
 /// Indicates whether the change requires reloading messages.
 #[derive(Debug, Clone)]
 pub struct LiveEvent {
+    /// Snapshot captured after a live subscription was established. Remote
+    /// reconnect uses this to close the subscribe/read race.
+    pub snapshot: Option<agena_api::resource::SessionExecutionResource>,
     /// Concrete event payload when the subscriber kept up with the bus.
     /// `None` means the receiver lagged and the UI should force-refresh
     /// from persisted state instead of trying to apply an incremental patch.
@@ -21,6 +24,13 @@ pub struct LiveEvent {
 /// Subscribe through the Runtime-owned typed presentation stream. Generic
 /// transport events remain available separately for timeline consumers.
 pub(crate) fn subscribe_session_events(
+    application: &super::TuiBackend,
+    session_id: i64,
+) -> Option<mpsc::Receiver<LiveEvent>> {
+    Some(application.subscribe_session_events(session_id))
+}
+
+pub(super) fn subscribe_session_events_embedded(
     application: &Application,
     session_id: i64,
 ) -> Option<mpsc::Receiver<LiveEvent>> {
@@ -55,6 +65,7 @@ pub(crate) fn subscribe_session_events(
                     }
                     if change_output
                         .send(LiveEvent {
+                            snapshot: None,
                             event: None,
                             force_refresh: true,
                         })
@@ -85,6 +96,7 @@ pub(crate) fn subscribe_session_events(
                 }
                 if change_output
                     .send(LiveEvent {
+                        snapshot: None,
                         event: None,
                         force_refresh: true,
                     })
@@ -96,6 +108,7 @@ pub(crate) fn subscribe_session_events(
                 continue;
             }
             let live = LiveEvent {
+                snapshot: None,
                 event: Some(event),
                 force_refresh: false,
             };
@@ -181,6 +194,7 @@ fn live_event_from_runtime_signal(
     let signal = match item {
         agena_runtime::RuntimeLiveSignalItem::Lagged(_) => {
             return Some(LiveEvent {
+                snapshot: None,
                 event: None,
                 force_refresh: true,
             });
@@ -221,6 +235,7 @@ fn live_event_from_runtime_signal(
         agena_runtime::RuntimeLiveSignal::ToolRegistryChanged(_) => return None,
     };
     Some(LiveEvent {
+        snapshot: None,
         event: Some(agena_runtime::RuntimePresentationEvent {
             meta: agena_runtime::RuntimePresentationEventMeta {
                 id: uuid::Uuid::new_v4(),

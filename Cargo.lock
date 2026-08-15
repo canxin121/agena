@@ -96,9 +96,11 @@ dependencies = [
 name = "agena"
 version = "0.1.0"
 dependencies = [
+ "agena-api",
  "agena-api-server",
  "agena-application",
  "agena-cli",
+ "agena-client",
  "agena-domain",
  "agena-git-http",
  "agena-provider",
@@ -114,6 +116,7 @@ dependencies = [
  "axum-extra",
  "base64",
  "bytes",
+ "chrono",
  "clap",
  "dashmap",
  "futures-util",
@@ -127,6 +130,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "sqlx 0.9.0",
+ "tempfile",
  "thiserror 2.0.19",
  "time",
  "tokio",
@@ -136,6 +140,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "urlencoding",
+ "uuid",
 ]
 
 [[package]]
@@ -159,6 +164,7 @@ version = "0.1.0"
 dependencies = [
  "agena-api",
  "agena-application",
+ "agena-client",
  "agena-domain",
  "agena-failure",
  "agena-notification",
@@ -174,10 +180,12 @@ dependencies = [
  "chrono",
  "futures-util",
  "http 1.4.2",
+ "reqwest 0.13.4",
  "semver",
  "serde",
  "serde_json",
  "smol_str",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tokio-stream",
@@ -194,6 +202,7 @@ dependencies = [
  "agena-api",
  "agena-domain",
  "agena-failure",
+ "agena-mcp-client",
  "agena-notification",
  "agena-plugin-host",
  "agena-process",
@@ -212,8 +221,10 @@ dependencies = [
  "sea-orm",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "url",
  "uuid",
 ]
 
@@ -265,16 +276,16 @@ dependencies = [
 name = "agena-cli"
 version = "0.1.0"
 dependencies = [
+ "agena-api",
  "agena-application",
  "agena-bundled-plugins",
+ "agena-client",
  "agena-domain",
  "agena-mcp-client",
  "agena-mcp-server",
  "agena-plugin-host",
  "agena-plugin-marketplace",
- "agena-provider",
  "agena-runtime",
- "agena-runtime-plugins",
  "agena-storage",
  "agena-tool",
  "async-trait",
@@ -298,8 +309,11 @@ dependencies = [
  "agena-api",
  "agena-domain",
  "agena-failure",
+ "axum",
+ "chrono",
  "futures-util",
  "reqwest 0.13.4",
+ "secrecy",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -1229,6 +1243,7 @@ version = "0.1.0"
 dependencies = [
  "agena-api",
  "agena-application",
+ "agena-client",
  "agena-domain",
  "agena-failure",
  "agena-notification",
@@ -6571,6 +6586,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nu-ansi-term"
+version = "0.50.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "num"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9009,6 +9033,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "secrecy"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
+dependencies = [
+ "serde",
+ "zeroize",
+]
+
+[[package]]
 name = "secret-service"
 version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11080,6 +11114,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
 dependencies = [
  "matchers",
+ "nu-ansi-term",
  "once_cell",
  "regex-automata",
  "sharded-slab",

@@ -2,7 +2,6 @@
 //! consumes, plus the mapping from the runtime's `SessionPartView` projection
 //! (the mapping stays in the TUI per the R7 brief).
 
-use agena_application::Application;
 use anyhow::Result;
 
 /// One human-visible v2 part in the session timeline. The terminal consumes
@@ -25,15 +24,39 @@ pub struct SessionTimelineEntry {
 /// Loads the visible timeline parts through `Application` and maps them into
 /// the TUI's presentation value.
 pub(crate) async fn list_session_timeline(
-    application: &Application,
+    application: &super::TuiBackend,
     session_id: i64,
     limit: u64,
 ) -> Result<Vec<SessionTimelineEntry>> {
-    let parts = application
-        .list_session_timeline_parts(session_id, limit)
-        .await
-        .map_err(anyhow::Error::new)?;
-    Ok(parts.into_iter().map(entry_from_part).collect())
+    if let Ok(embedded) = application.embedded_application() {
+        let parts = embedded
+            .list_session_timeline_parts(session_id, limit)
+            .await
+            .map_err(anyhow::Error::new)?;
+        return Ok(parts.into_iter().map(entry_from_part).collect());
+    }
+
+    let execution = application.get_session_state(session_id).await?;
+    let retain = usize::try_from(limit).unwrap_or(usize::MAX);
+    let skip = execution.parts.len().saturating_sub(retain);
+    Ok(execution
+        .parts
+        .into_iter()
+        .skip(skip)
+        .map(|part| SessionTimelineEntry {
+            part_id: part.part_id,
+            kind: part.kind,
+            role: part.role,
+            state: part.state,
+            summary: part.summary,
+            content: part.content,
+            rendered_markdown: None,
+            parent_part_id: part.parent_part_id,
+            run_id: part.run_id,
+            revision: 0,
+            created_at_ms: part.created_at_ms,
+        })
+        .collect())
 }
 
 fn entry_from_part(part: agena_storage::store::SessionPartView) -> SessionTimelineEntry {

@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Git status of a workspace.
 pub struct GitStatusResource {
     pub workspace_root: String,
@@ -22,7 +22,7 @@ pub struct GitStatusResource {
     pub snapshot_managed_dirs: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Whether a snapshot backend is available and why.
 pub struct SnapshotBackendSupportResource {
     pub backend: String,
@@ -30,7 +30,7 @@ pub struct SnapshotBackendSupportResource {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// An active workspace snapshot.
 pub struct ActiveSnapshotResource {
     pub session_id: i64,
@@ -40,7 +40,7 @@ pub struct ActiveSnapshotResource {
     pub created_here: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// A managed workspace snapshot.
 pub struct ManagedSnapshotResource {
     pub path: String,
@@ -55,7 +55,7 @@ pub struct ManagedSnapshotResource {
     pub stale: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Snapshot backends, active and managed snapshots.
 pub struct SnapshotStatusResource {
     pub workspace_root: String,
@@ -82,7 +82,7 @@ pub struct GitCommitRequest {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Result of a git commit.
 pub struct GitCommitResource {
     pub commit: String,
@@ -102,7 +102,7 @@ pub struct GitPullRequestCreateRequest {
     pub head: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// A created pull request.
 pub struct GitPullRequestResource {
     pub url: String,

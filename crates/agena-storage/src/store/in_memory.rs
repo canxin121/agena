@@ -24,8 +24,8 @@ use super::{
     InteractionAnswerOutcome, LEASE_STALENESS_MS, LeaseAcquire, LeaseState, MaintenanceOutcome,
     NewBackgroundOperation, NewPart, NewSession, Part, PartDelta, PartRole, PartState,
     PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
-    SessionSummary, SessionView, StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord,
-    UsageStats, apply_part_transition,
+    SessionState, SessionSummary, SessionView, StateInputs, StoreError, SubmitOutcome, UsageGroup,
+    UsageQuery, UsageRecord, UsageStats, apply_part_transition, derive_session_state,
 };
 use crate::store::jsonl;
 
@@ -724,6 +724,47 @@ impl PersistenceEngine for InMemoryEngine {
             summaries.truncate(limit.max(0) as usize);
         }
         Ok(summaries)
+    }
+
+    async fn session_states(
+        &self,
+        session_ids: &[i64],
+        now_ms: i64,
+    ) -> Result<HashMap<i64, SessionState>, StoreError> {
+        let mut states = HashMap::with_capacity(session_ids.len());
+        for &session_id in session_ids {
+            let meta = self
+                .sessions
+                .read()
+                .expect("sessions lock")
+                .get(&session_id)
+                .cloned();
+            let Some(meta) = meta else {
+                continue;
+            };
+            let lease = self
+                .leases
+                .read()
+                .expect("leases lock")
+                .get(&session_id)
+                .cloned();
+            let view = SessionView {
+                meta: meta.clone(),
+                parts: self.ordered_parts(session_id),
+            };
+            let inputs = StateInputs::from_view(&view);
+            states.insert(
+                session_id,
+                derive_session_state(
+                    Some(&meta),
+                    &inputs.in_flight_runs,
+                    &inputs.pending_interactions,
+                    lease.as_ref(),
+                    now_ms,
+                ),
+            );
+        }
+        Ok(states)
     }
 
     async fn get_session_summary(

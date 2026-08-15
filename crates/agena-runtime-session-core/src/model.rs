@@ -1019,10 +1019,12 @@ impl Session {
     /// Derive the pending operations from the parts projection:
     ///
     /// - `tool_call` parts not yet `completed`/`cancelled` and without a
-    ///   paired `tool_result` become [`SessionPendingOperation::Tool`]. A
-    ///   suspended tool whose operation carries an awaiting `user_input`
-    ///   record is also a [`SessionPendingOperation::UserInput`] — the
-    ///   single-activity shape, where the ask lives inside the operation;
+    ///   paired `tool_result` become [`SessionPendingOperation::Tool`]. Every
+    ///   unresolved authorization record on that operation also becomes a
+    ///   [`SessionPendingOperation::Permission`], and a suspended tool whose
+    ///   operation carries an awaiting `user_input` record is also a
+    ///   [`SessionPendingOperation::UserInput`] — the single-activity shape,
+    ///   where each interaction lives inside the operation;
     /// - legacy `interaction` parts in flight become
     ///   [`SessionPendingOperation::UserInput`]. Permissions are never recorded
     ///   on interaction parts: they live on the `tool_call` part's operation
@@ -1036,16 +1038,23 @@ impl Session {
                         part: SessionPartRef::new(index, part),
                     };
                     operations.push(SessionPendingOperation::Tool { tool: tool.clone() });
-                    let awaiting_user_input = operation_from_part(part)
-                        .map(|operation| operation.user_input.awaiting().next().is_some())
-                        .unwrap_or(false);
-                    if awaiting_user_input {
-                        operations.push(SessionPendingOperation::UserInput {
-                            pending: SessionPendingInteractiveRequest {
-                                request: tool.part.clone(),
-                                tool: tool.clone(),
-                            },
-                        });
+                    if let Some(operation) = operation_from_part(part) {
+                        for permission in operation.authorization.awaiting() {
+                            operations.push(SessionPendingOperation::Permission {
+                                pending: SessionPendingPermissionRequest {
+                                    request_id: permission.request.request_id.clone(),
+                                    tool: tool.clone(),
+                                },
+                            });
+                        }
+                        if operation.user_input.awaiting().next().is_some() {
+                            operations.push(SessionPendingOperation::UserInput {
+                                pending: SessionPendingInteractiveRequest {
+                                    request: tool.part.clone(),
+                                    tool: tool.clone(),
+                                },
+                            });
+                        }
                     }
                 }
                 "interaction" if part.state.is_in_flight() => {
@@ -1387,6 +1396,56 @@ mod parts_projection_tests {
         )
     }
 
+    /// A `tool_call` part whose operation carries one permission request,
+    /// awaiting (or answered when `answered` is set).
+    fn tool_call_with_permission(part_id: i64, request_id: &str, answered: bool) -> Part {
+        let mut operation = agena_runtime_contracts::part::OperationPart::pending(
+            part_id,
+            agena_domain::ToolInvocation::new("fs.read", agena_domain::StructuredObject::default()),
+            "Read fixture",
+            agena_domain::TimeRange {
+                start_ms: 1,
+                end_ms: None,
+            },
+        );
+        let request = agena_domain::PermissionRequest {
+            request_id: request_id.to_owned(),
+            session_id: Some(1),
+            action: agena_domain::PermissionAction::Tool {
+                tool_name: "fs.read".to_owned(),
+                qualifier: None,
+            },
+            related_actions: Vec::new(),
+            requested_actions: Vec::new(),
+            reason: "confirm read".to_owned(),
+            explanation: String::new(),
+            source: None,
+            scope: None,
+            operator: None,
+            trace: Vec::new(),
+            created_at: chrono::Utc::now(),
+        };
+        operation.authorization.push_pending(request);
+        if answered {
+            operation.authorization.record_reply(
+                agena_domain::PermissionReply {
+                    request_id: request_id.to_owned(),
+                    kind: agena_domain::PermissionReplyKind::AllowOnce,
+                    reason: None,
+                    scope: None,
+                },
+                1234,
+            );
+        }
+        part(
+            part_id,
+            "tool_call",
+            PartRole::Assistant,
+            PartState::Pending,
+            json!({"name": "fs.read", "input": {}, "operation": serde_json::to_value(&operation).unwrap()}),
+        )
+    }
+
     #[test]
     fn pending_interactions_gate_the_session_until_answered() {
         let ask = tool_call_with_ask(20, "host-input:1:1:0", false);
@@ -1397,6 +1456,32 @@ mod parts_projection_tests {
         assert_eq!(pending, vec![20]);
         assert_eq!(session.pending_interaction().map(|p| p.part_id), Some(20));
         assert!(session.blocked());
+    }
+
+    #[test]
+    fn pending_operation_permissions_gate_the_session_until_answered() {
+        let awaiting = tool_call_with_permission(22, "host-permission:1:22", false);
+        let answered = tool_call_with_permission(23, "host-permission:1:23", true);
+
+        let session = session_with(vec![awaiting, answered]);
+        assert_eq!(session.pending_operations.len(), 3);
+        match &session.pending_operations[0] {
+            SessionPendingOperation::Tool { tool } => assert_eq!(tool.part.part_id, 22),
+            other => panic!("expected pending tool, got {other:?}"),
+        }
+        match &session.pending_operations[1] {
+            SessionPendingOperation::Permission { pending } => {
+                assert_eq!(pending.request_id, "host-permission:1:22");
+                assert_eq!(pending.tool.part.part_id, 22);
+            }
+            other => panic!("expected pending permission, got {other:?}"),
+        }
+        match &session.pending_operations[2] {
+            SessionPendingOperation::Tool { tool } => assert_eq!(tool.part.part_id, 23),
+            other => panic!("expected answered tool to remain queued, got {other:?}"),
+        }
+        assert!(session.blocked());
+        assert_eq!(session.workflow_state(), WorkflowState::Blocked);
     }
 
     #[test]

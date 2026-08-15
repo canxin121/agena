@@ -18,6 +18,14 @@ impl App {
 
     pub fn new(
         application: agena_application::Application,
+        launch: LaunchOptions,
+        i18n: I18n,
+    ) -> Self {
+        Self::new_with_backend(crate::TuiBackend::embedded(application), launch, i18n)
+    }
+
+    pub fn new_with_backend(
+        application: crate::TuiBackend,
         mut launch: LaunchOptions,
         i18n: I18n,
     ) -> Self {
@@ -165,6 +173,9 @@ impl App {
     }
 
     pub(crate) fn refresh_tui_palette_from_runtime(&mut self) {
+        if self.application.embedded_application().is_err() {
+            return;
+        }
         self.launch.tui_config = crate::tui_config_from_preferences(
             &crate::app_backend::config::ui_configuration(&self.application),
         );
@@ -322,6 +333,16 @@ impl App {
                 session_id,
                 ui_text::session_fallback_title(&self.i18n, session_id),
             );
+        } else {
+            // The center owns sessions independently from this client. Start
+            // on the shared running/recent session view so reconnecting to an
+            // existing center never looks like a brand-new empty session.
+            let query = self
+                .launch
+                .initial_session_search
+                .clone()
+                .unwrap_or_default();
+            self.open_resume_session_picker_with_query(query.as_str());
         }
     }
 

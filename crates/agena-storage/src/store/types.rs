@@ -745,6 +745,31 @@ pub enum SessionState {
     Failed,
 }
 
+impl SessionState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Creating => "creating",
+            Self::Ready => "ready",
+            Self::Running => "running",
+            Self::AwaitingUser => "awaiting_user",
+            Self::Interrupted => "interrupted",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "creating" => Some(Self::Creating),
+            "ready" => Some(Self::Ready),
+            "running" => Some(Self::Running),
+            "awaiting_user" => Some(Self::AwaitingUser),
+            "interrupted" => Some(Self::Interrupted),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
 /// A pending interaction the UI must surface when `SessionState::AwaitingUser`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InteractionRef {

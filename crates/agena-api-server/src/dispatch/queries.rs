@@ -16,7 +16,7 @@ fn search_pagination(
 }
 
 pub async fn dispatch_query(
-    state: &Application,
+    state: &crate::AppState,
     query: Query,
 ) -> Result<QueryResult, ApplicationError> {
     match query {
@@ -67,6 +67,7 @@ pub async fn dispatch_query(
             generation: 0,
             loaded_at: chrono::Utc::now(),
             database_connected: true,
+            center: Some(state.center().clone()),
         })),
         Query::Runtime => Ok(QueryResult::Runtime(state.runtime_status_response().await)),
         Query::ListActivities(params) => {
@@ -202,7 +203,7 @@ pub async fn dispatch_query(
     }
 }
 use super::{
-    ActivityLogsParams, Application, ApplicationError, CursorPaginationQuery, GetActivityParams,
+    ActivityLogsParams, ApplicationError, CursorPaginationQuery, GetActivityParams,
     GetOperationDetailParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
     ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
     ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,

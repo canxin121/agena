@@ -1,5 +1,9 @@
 impl App {
     pub(crate) fn open_plugin_workbench_detail(&mut self, plugin_id: &str, tab: Option<&str>) {
+        if self.application.is_remote() {
+            self.flash_warning("Plugin Workbench is unavailable in remote TUI mode until it has a public center API");
+            return;
+        }
         let detail_tab = match tab {
             None => PluginDetailTab::Config,
             Some(tab) => match PluginDetailTab::from_id(tab) {

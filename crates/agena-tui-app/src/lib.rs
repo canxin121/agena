@@ -83,6 +83,7 @@ use unicode_width::UnicodeWidthChar;
 #[cfg(test)]
 use agena_api::resource::RunRole;
 
+pub use crate::app_backend::{BackendMode, TuiBackend};
 use crate::app_backend::{InspectorRow, LiveEvent, SessionPermissionStudioState, SessionRefresh};
 use agena_application::provider_studio::{
     ProviderConfigDraft, ProviderDraftAdapterRule, ProviderDraftAuthKind,

@@ -410,53 +410,7 @@ pub(super) fn apply_patch_execution_from_tool_output(
     output: &ToolOutput,
 ) -> Option<ApplyPatchExecution> {
     let payload = output.to_json_payload()?;
-    let operation_id = payload.get("operation_id")?.as_str()?.to_string();
-    let changes: Vec<agena_domain::FileChangeRecord> =
-        serde_json::from_value(payload.get("changes")?.clone()).ok()?;
-    let before_hash = payload
-        .get("before_hash")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let after_hash = payload
-        .get("after_hash")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let inverse_patch = payload.get("inverse_patch")?.as_str()?.to_string();
-    let diff = payload
-        .get("diff")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let progress = serde_json::from_value(
-        payload
-            .get("progress")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!([])),
-    )
-    .ok()?;
-    Some(ApplyPatchExecution {
-        operation_id,
-        files: changes
-            .into_iter()
-            .map(|change| AppliedFileChange {
-                path: change.path,
-                kind: match change.kind {
-                    agena_domain::FileChangeKind::Added => PatchOpKind::Add,
-                    agena_domain::FileChangeKind::Updated => PatchOpKind::Update,
-                    agena_domain::FileChangeKind::Deleted => PatchOpKind::Delete,
-                    agena_domain::FileChangeKind::Moved => PatchOpKind::Move,
-                },
-                from_path: change.from_path,
-            })
-            .collect(),
-        before_hash,
-        after_hash,
-        inverse_patch,
-        diff,
-        progress,
-    })
+    ApplyPatchExecution::from_tool_payload(&payload)
 }
 
 pub(super) fn invocation_input_json(invocation: &ToolInvocation) -> Result<String, ToolError> {
@@ -667,4 +621,4 @@ use super::{
     ToolOutput, ToolPayloadInput, fs, shell_tools,
 };
 use agena_domain::{FilesystemEffects, PluginInvocation};
-use agena_tool::{AppliedFileChange, ApplyPatchExecution, PatchOpKind};
+use agena_tool::ApplyPatchExecution;

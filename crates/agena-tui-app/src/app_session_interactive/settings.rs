@@ -116,6 +116,10 @@ impl App {
     }
 
     pub(crate) fn open_settings_studio(&mut self) {
+        if self.application.is_remote() {
+            self.flash_warning("Runtime settings are unavailable in remote TUI mode until they have a public center API");
+            return;
+        }
         self.request_settings_async_context();
         match self.build_settings_studio_overlay(None, None, SettingsStudioFocus::Navigation) {
             Ok(dialog) => {

@@ -205,13 +205,18 @@ impl ApplicationService {
         session_queries: &dyn agena_runtime::SessionQueryService,
         session_id: i64,
     ) -> ApplicationResult<SessionExecutionResource> {
-        let session_resource = self.get_session(session_id).await?.ok_or_else(|| {
-            ApplicationError::internal("session disappeared while loading execution state")
-        })?;
+        // Runtime execution_context is the public reconcile-on-open boundary:
+        // after a center restart it terminalizes a stale in-flight run before
+        // projecting workflow and transcript state. Run it before the direct
+        // storage resource read so one response cannot combine a reconciled
+        // transcript with the pre-reconcile `Interrupted` session row.
         let context = session_queries
             .execution_context(session_id)
             .await
             .map_err(session_query_error)?;
+        let session_resource = self.get_session(session_id).await?.ok_or_else(|| {
+            ApplicationError::internal("session disappeared while loading execution state")
+        })?;
 
         let scheduler_jobs = list_scheduled_jobs(execution_control).await;
         let transcript = session_transcript_parts(session_queries, session_id).await?;

@@ -31,6 +31,8 @@ pub struct Application {
     runtime_authentication: Arc<dyn agena_runtime::RuntimeAuthenticationService>,
     runtime_draft_authentication: Arc<dyn agena_runtime::RuntimeDraftAuthenticationService>,
     runtime_status: Arc<dyn agena_runtime::RuntimeStatusService>,
+    runtime_tools: Arc<dyn agena_runtime::RuntimeToolExecutionService>,
+    pub(crate) mcp_oauth_flows: Arc<crate::application_mcp::McpOAuthFlowRegistry>,
     runtime_activities: Option<Arc<dyn agena_runtime::RuntimeActivityService>>,
     live_signals: Option<Arc<dyn agena_runtime::RuntimeLiveSignalService>>,
     service: ApplicationService,
@@ -110,7 +112,7 @@ impl Application {
             draft_authentication,
             status,
             activities,
-            tools: _,
+            tools,
             live_signals,
             session_store,
             session_queries,
@@ -129,6 +131,8 @@ impl Application {
             runtime_authentication: authentication,
             runtime_draft_authentication: draft_authentication,
             runtime_status: status,
+            runtime_tools: tools,
+            mcp_oauth_flows: Arc::new(crate::application_mcp::McpOAuthFlowRegistry::default()),
             runtime_activities: activities,
             live_signals,
             workspace_root: workspace_root.clone(),
@@ -583,6 +587,16 @@ impl Application {
     /// query. Application consumers use dedicated projections instead.
     pub(crate) fn runtime_status(&self) -> &Arc<dyn agena_runtime::RuntimeStatusService> {
         &self.runtime_status
+    }
+
+    pub(crate) fn runtime_configuration(
+        &self,
+    ) -> &Arc<dyn agena_runtime::RuntimeConfigurationService> {
+        &self.runtime_configuration
+    }
+
+    pub(crate) fn runtime_tools(&self) -> &Arc<dyn agena_runtime::RuntimeToolExecutionService> {
+        &self.runtime_tools
     }
 
     /// Projects the small runtime-health summary needed by terminal

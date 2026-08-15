@@ -19,10 +19,12 @@
 
 mod application;
 mod application_config;
+mod application_mcp;
 mod application_models;
 mod application_plugins;
 mod application_provider_studio;
 mod application_sessions;
+mod application_tools;
 pub mod dto;
 mod error;
 pub mod pagination;

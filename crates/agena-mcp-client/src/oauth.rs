@@ -161,17 +161,20 @@ impl McpOAuthLoginSession {
         // in this workspace.  `url::form_urlencoded` produces the exact
         // application/x-www-form-urlencoded encoding required by RFC 7009
         // without putting a secret into an error or debug value.
-        let mut form = url::form_urlencoded::Serializer::new(String::new());
-        form.append_pair("token", token);
-        form.append_pair("token_type_hint", token_type_hint);
-        form.append_pair("client_id", credentials.client_id.as_str());
+        let body = {
+            let mut form = url::form_urlencoded::Serializer::new(String::new());
+            form.append_pair("token", token);
+            form.append_pair("token_type_hint", token_type_hint);
+            form.append_pair("client_id", credentials.client_id.as_str());
+            form.finish()
+        };
         let response = client
             .post(revocation_endpoint)
             .header(
                 reqwest::header::CONTENT_TYPE,
                 "application/x-www-form-urlencoded",
             )
-            .body(form.finish())
+            .body(body)
             .send()
             .await
             .map_err(|_| McpError::Auth("MCP OAuth revocation request failed".to_owned()))?;

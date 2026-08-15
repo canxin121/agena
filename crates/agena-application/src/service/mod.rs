@@ -30,7 +30,7 @@ use crate::{
         ScheduledJobResource, ScheduledJobRunResource, SearchPaginationQuery,
         SessionAutomationResource, SessionCreateRequest, SessionExecutionContextResource,
         SessionExecutionResource, SessionLifecycleState, SessionRelationKind, SessionResource,
-        SessionRunOptionsRequest, SessionUpdateRequest, SessionUsageResource,
+        SessionRunOptionsRequest, SessionState, SessionUpdateRequest, SessionUsageResource,
         SnapshotBackendSupportResource, SnapshotStatusResource, SubtaskStatus,
         WorkspaceFileDownloadQuery, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
         WorkspaceFileTreeResource, WorkspaceFileUploadRequest, WorkspaceFileUploadResource,

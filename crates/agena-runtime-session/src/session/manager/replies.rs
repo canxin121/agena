@@ -635,23 +635,40 @@ pub(super) fn has_finished_operation(session: &Session, operation_id: &str) -> b
     })
 }
 
+/// Stable request identity for a tool permission.
+///
+/// Most providers expose a non-empty model tool-call id, which remains the
+/// compatibility identity for permission requests. Compatible gateways may
+/// omit it, though. In that case the session-local call id is the durable,
+/// non-empty correlation key; using the provider id verbatim would collapse
+/// every id-less operation onto `""` and make an approved tool immediately
+/// re-request (then reject) the same permission.
+pub(super) fn permission_request_id(session_id: i64, resolved: &ResolvedPendingTool) -> String {
+    let provider_id = resolved.operation_id.trim();
+    if provider_id.is_empty() {
+        format!("host-permission:{session_id}:{}", resolved.call_id)
+    } else {
+        provider_id.to_owned()
+    }
+}
+
 /// The permission actions a run's tool operation accumulated Allow approvals
-/// for, keyed by the owning run marker id + operation id (mirrors the legacy
-/// `Session::operation_permission_approved_actions`).
+/// for, keyed by the owning run marker id + stable permission request id
+/// (mirrors the legacy `Session::operation_permission_approved_actions`).
 pub(super) fn operation_permission_approved_actions(
     session: &Session,
     assistant_message_id: i64,
-    operation_id: &str,
+    request_id: &str,
 ) -> Vec<agena_domain::PermissionAction> {
     session
         .parts()
         .iter()
         .filter(|part| part.run_id == Some(assistant_message_id) && part.kind == "tool_call")
         .find_map(|part| {
-            if operation_id_from_part(part).as_deref() != Some(operation_id) {
+            let operation = operation_from_part(part)?;
+            if operation.authorization.find(request_id).is_none() {
                 return None;
             }
-            let operation = operation_from_part(part)?;
             let mut approved = Vec::new();
             for permission in &operation.authorization.permissions {
                 let Some(reply) = permission.reply.as_ref() else {

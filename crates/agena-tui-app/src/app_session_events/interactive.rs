@@ -240,6 +240,11 @@ impl App {
     }
 
     pub(crate) fn handle_session_event_arrived(&mut self, session_id: i64, live: LiveEvent) {
+        if let Some(snapshot) = live.snapshot
+            && self.transcript.session_id == Some(session_id)
+        {
+            let _ = self.apply_transcript_execution(snapshot);
+        }
         // Ignore events for sessions the user has already navigated away
         // from. The forwarder is normally aborted in that case but a few
         // in-flight messages may still land.

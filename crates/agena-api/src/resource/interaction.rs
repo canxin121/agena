@@ -11,7 +11,12 @@ pub struct UserInputRequest {
     /// document for plan-approval reviews; empty for other requests).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub body_markdown: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        default,
+        rename = "input_kind",
+        alias = "kind",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub kind: String,
     /// Origin of the request: `Host` for the runtime's own `ask_user`, `Plugin`
     /// for third-party/tool asks. Absent on legacy payloads (defaults to
@@ -77,6 +82,38 @@ impl PendingInteractiveRequest {
             Self::Permission { request } => request.request_id.as_str(),
             Self::UserInput { request } => request.request_id.as_str(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_user_input_keeps_variant_and_input_kinds_distinct() {
+        let pending = PendingInteractiveRequest::UserInput {
+            request: UserInputRequest {
+                request_id: "input-1".to_owned(),
+                session_id: Some(1),
+                title: "Choose".to_owned(),
+                body_markdown: String::new(),
+                kind: "ask_user".to_owned(),
+                source: agena_domain::UserInputSource::Plugin,
+                auto_resolution_ms: None,
+                presented_at: None,
+                questions: Vec::new(),
+                created_at: Utc::now(),
+            },
+        };
+        let value = serde_json::to_value(&pending).expect("serialize pending user input");
+        assert_eq!(value["kind"], "user_input");
+        assert_eq!(value["input_kind"], "ask_user");
+        let decoded: PendingInteractiveRequest =
+            serde_json::from_value(value).expect("deserialize pending user input");
+        let PendingInteractiveRequest::UserInput { request } = decoded else {
+            panic!("expected user-input variant");
+        };
+        assert_eq!(request.kind, "ask_user");
     }
 }
 

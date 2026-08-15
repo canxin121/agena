@@ -1,4 +1,4 @@
-use super::{AppError, BTreeMap, HashSet, SessionListRequest, SessionListView, SessionSummary};
+use super::{AppError, BTreeMap, HashSet, SessionListView, SessionSummary};
 
 pub(super) fn filter_session_summaries_by_view(
     sessions: Vec<SessionSummary>,
@@ -143,32 +143,4 @@ pub(super) fn paginate_session_summaries(
         .skip(offset as usize)
         .take(limit as usize)
         .collect()
-}
-
-pub(super) async fn selected_session_id(
-    queries: &dyn agena_runtime::SessionQueryService,
-    session_id: Option<i64>,
-    last: bool,
-) -> Result<i64, AppError> {
-    if session_id.is_some() && last {
-        return Err(AppError::Config(
-            "pass either a session id or --last, not both".to_owned(),
-        ));
-    }
-    if let Some(session_id) = session_id {
-        return Ok(session_id);
-    }
-    let sessions = queries
-        .list_session_summaries(SessionListRequest {
-            offset: 0,
-            limit: Some(1),
-            include_subagents: false,
-            ..Default::default()
-        })
-        .await
-        .map_err(|error| AppError::Internal(error.to_string()))?;
-    sessions
-        .first()
-        .map(|session| session.id)
-        .ok_or_else(|| AppError::Config("no sessions found".to_owned()))
 }

@@ -10,10 +10,13 @@ import {
   listProviders,
   listProviderModelsForProviders,
   listRewindCheckpoints,
+  listSessionOverview,
   listSessions,
   listWorkspaces,
   streamPluginToolRegistryChanges,
+  streamSessionOverviewChanges,
   streamSessionChanges,
+  type NotificationStreamHandle,
   type ProviderModel,
   type ProviderSummary,
   type RewindCheckpointResource,
@@ -69,9 +72,11 @@ export type ChatSessionLifecycleDeps = {
   listProviders: typeof listProviders
   listProviderModelsForProviders: typeof listProviderModelsForProviders
   listRewindCheckpoints: typeof listRewindCheckpoints
+  listSessionOverview: typeof listSessionOverview
   listSessions: typeof listSessions
   listWorkspaces: typeof listWorkspaces
   streamPluginToolRegistryChanges: typeof streamPluginToolRegistryChanges
+  streamSessionOverviewChanges: typeof streamSessionOverviewChanges
   streamSessionChanges: typeof streamSessionChanges
 }
 
@@ -84,9 +89,11 @@ const defaultDeps: ChatSessionLifecycleDeps = {
   listProviders,
   listProviderModelsForProviders,
   listRewindCheckpoints,
+  listSessionOverview,
   listSessions,
   listWorkspaces,
   streamPluginToolRegistryChanges,
+  streamSessionOverviewChanges,
   streamSessionChanges,
 }
 
@@ -135,6 +142,63 @@ export function useChatSessionLifecycle(
       loadSessionTree,
     },
   )
+  let overviewStream: NotificationStreamHandle | null = null
+  let overviewWorkspaceId: number | null = null
+  let overviewRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  let overviewRefreshInFlight = false
+  let overviewRefreshQueued = false
+  let sessionListRevision = 0
+
+  function stopOverviewStream() {
+    overviewStream?.close()
+    overviewStream = null
+    overviewWorkspaceId = null
+    overviewRefreshQueued = false
+    if (overviewRefreshTimer) {
+      clearTimeout(overviewRefreshTimer)
+      overviewRefreshTimer = null
+    }
+  }
+
+  function scheduleOverviewRefresh(workspaceId: number, delayMs = 100) {
+    if (overviewRefreshTimer || input.selectedWorkspaceId.value !== workspaceId) return
+    overviewRefreshTimer = setTimeout(() => {
+      overviewRefreshTimer = null
+      if (input.selectedWorkspaceId.value !== workspaceId) return
+      void refreshOverview(workspaceId)
+    }, delayMs)
+  }
+
+  async function refreshOverview(workspaceId: number) {
+    if (overviewRefreshInFlight) {
+      overviewRefreshQueued = true
+      return
+    }
+    overviewRefreshInFlight = true
+    try {
+      await loadSessionsForWorkspace(workspaceId, true, false)
+    } catch (error) {
+      console.warn('session overview refresh failed', error)
+    } finally {
+      overviewRefreshInFlight = false
+      if (overviewRefreshQueued && input.selectedWorkspaceId.value === workspaceId) {
+        overviewRefreshQueued = false
+        scheduleOverviewRefresh(workspaceId, 0)
+      }
+    }
+  }
+
+  function syncOverviewStream(workspaceId: number) {
+    if (overviewStream && overviewWorkspaceId === workspaceId) return
+    stopOverviewStream()
+    if (typeof ReadableStream === 'undefined' || typeof TextDecoder === 'undefined') return
+    overviewWorkspaceId = workspaceId
+    overviewStream = deps.streamSessionOverviewChanges(workspaceId, {
+      onOpen: () => scheduleOverviewRefresh(workspaceId, 0),
+      onInvalidate: () => scheduleOverviewRefresh(workspaceId),
+      onError: (error) => console.warn('session overview stream failed', error),
+    })
+  }
 
   async function syncRunOptionsFromSelectedSession() {
     const execution = input.sessionState.value?.execution
@@ -241,20 +305,39 @@ export function useChatSessionLifecycle(
     input.rewindCheckpoints.value = await deps.listRewindCheckpoints(sessionId)
   }
 
-  async function loadSessionsForWorkspace(workspaceId: number, preserveSelection = true) {
+  async function loadSessionsForWorkspace(
+    workspaceId: number,
+    preserveSelection = true,
+    refreshCurrentSelection = true,
+  ) {
+    const revision = ++sessionListRevision
+    let nextSessions: SessionResource[]
     if (input.sessionViewMode.value === 'subtree' && input.selectedSessionId.value) {
       const tree = await deps.getSessionTree(input.selectedSessionId.value)
       const query = input.sessionSearch.value.trim().toLowerCase()
-      input.sessions.value = query
+      nextSessions = query
         ? tree.filter((session) => [session.title, String(session.id)].join(' ').toLowerCase().includes(query))
         : tree
+    } else if (input.sessionViewMode.value === 'all' && !input.sessionSearch.value.trim()) {
+      const overview = await deps.listSessionOverview(workspaceId)
+      const selectedId = input.selectedSessionId.value
+      const selected =
+        selectedId === null
+          ? null
+          : input.sessionState.value?.session.id === selectedId
+            ? input.sessionState.value.session
+            : input.sessions.value.find((session) => session.id === selectedId) ?? null
+      nextSessions = selected && !overview.some((session) => session.id === selected.id) ? [...overview, selected] : overview
     } else {
-      input.sessions.value = await deps.listSessions(workspaceId, {
+      nextSessions = await deps.listSessions(workspaceId, {
         search: input.sessionSearch.value,
         roots: input.sessionViewMode.value === 'roots',
       })
     }
+    if (revision !== sessionListRevision) return
+    input.sessions.value = nextSessions
     input.selectedWorkspaceId.value = workspaceId
+    syncOverviewStream(workspaceId)
 
     const currentSelectionStillExists =
       preserveSelection &&
@@ -262,7 +345,7 @@ export function useChatSessionLifecycle(
       input.sessions.value.some((session) => session.id === input.selectedSessionId.value)
 
     if (currentSelectionStillExists && input.selectedSessionId.value !== null) {
-      await refreshSelectedConversation()
+      if (refreshCurrentSelection) await refreshSelectedConversation()
       return
     }
 
@@ -311,7 +394,7 @@ export function useChatSessionLifecycle(
 
   const {
     clearScheduledConversationRefresh,
-    dispose,
+    dispose: disposeConversation,
     refreshConversation,
     stopChangeStream,
     stopPolling,
@@ -327,6 +410,11 @@ export function useChatSessionLifecycle(
     stopChangeStream()
     clearScheduledConversationRefresh()
     stopPolling()
+  }
+
+  function dispose() {
+    stopOverviewStream()
+    disposeConversation()
   }
 
   watch(

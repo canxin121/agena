@@ -16,12 +16,15 @@ use agena_api::resource::{
 };
 use agena_domain::{PermissionReplyKind, PermissionScope, UserInputReply};
 
+use super::TuiBackend;
+
 /// Load usage statistics for the terminal's usage overview.
 pub(crate) async fn usage_stats(
-    application: &Application,
+    application: &TuiBackend,
     query: agena_domain::UsageStatsQuery,
 ) -> Result<agena_domain::UsageStats> {
     application
+        .embedded_application()?
         .session_query_service()
         .map_err(anyhow::Error::new)?
         .usage_stats(query)
@@ -32,85 +35,79 @@ pub(crate) async fn usage_stats(
 
 /// Fetch the full session execution projection.
 pub(crate) async fn get_session_state(
-    application: &Application,
+    application: &TuiBackend,
     session_id: i64,
 ) -> Result<SessionExecutionResource> {
     application
-        .session_execution_resource(session_id)
+        .get_session_state(session_id)
         .await
-        .map_err(anyhow::Error::new)
         .context("failed to load session state")
 }
 
 /// Submit a user document (composer message) as a run.
 pub(crate) async fn submit_document_with_options(
-    application: &Application,
+    application: &TuiBackend,
     session_id: i64,
     document: agena_domain::ComposerDocument,
     request: RunOptions,
 ) -> Result<SessionExecutionResource> {
     application
-        .submit_user_run(session_id, document, request)
+        .submit_document(session_id, document, request)
         .await
-        .map_err(anyhow::Error::new)
         .context("failed to submit user message")
 }
 
 /// Update the session's selected model/options without starting a run.
 pub(crate) async fn update_session_selection(
-    application: &Application,
+    application: &TuiBackend,
     session_id: i64,
     options: RunOptions,
 ) -> Result<SessionExecutionResource> {
     application
         .update_session_selection(session_id, options)
         .await
-        .map_err(anyhow::Error::new)
         .context("failed to update session model selection")
 }
 
 /// Continue an existing session with the given run options.
 pub(crate) async fn continue_session_with_options(
-    application: &Application,
+    application: &TuiBackend,
     session_id: i64,
     request: RunOptions,
 ) -> Result<SessionExecutionResource> {
     application
         .continue_session(session_id, request)
         .await
-        .map_err(anyhow::Error::new)
         .context("failed to continue session")
 }
 
 /// Compact an existing session with the given run options.
 pub(crate) async fn compact_session_with_options(
-    application: &Application,
+    application: &TuiBackend,
     session_id: i64,
     request: RunOptions,
 ) -> Result<SessionExecutionResource> {
     application
         .compact_session(session_id, request)
         .await
-        .map_err(anyhow::Error::new)
         .context("failed to compact session")
 }
 
 /// Cancel the active run of `session_id`.
 pub(crate) async fn cancel_run(
-    application: &Application,
+    application: &TuiBackend,
     session_id: i64,
     execution_id: agena_domain::ExecutionId,
 ) -> Result<agena_domain::CancellationResult> {
     application
         .cancel_run(session_id, execution_id)
         .await
-        .map_err(anyhow::Error::new)
         .context("failed to cancel active run")
 }
 
 /// Reply to a pending permission request.
 pub(crate) async fn reply_permission_with_options(
-    application: &Application,
+    application: &TuiBackend,
     session_id: i64,
     request_id: String,
     kind: PermissionReplyKind,
@@ -137,16 +134,14 @@ pub(crate) async fn reply_permission_with_options(
                     PermissionScope::Global => ApiPermissionScope::Global,
                 }),
             },
-            Some("jsonrpc".to_string()),
         )
         .await
-        .map_err(anyhow::Error::new)
         .context("failed to reply to permission request")
 }
 
 /// Reply to a pending interactive user-input request.
 pub(crate) async fn reply_user_input_with_options(
-    application: &Application,
+    application: &TuiBackend,
     session_id: i64,
     reply: UserInputReply,
     request: RunOptions,
@@ -167,42 +162,42 @@ pub(crate) async fn reply_user_input_with_options(
             },
         )
         .await
-        .map_err(anyhow::Error::new)
         .context("failed to submit user input reply")
 }
 
 /// Clone a session's full history into a new child session — a real fork,
 /// unlike `create_session`, which starts an empty child.
 pub(crate) async fn fork_session(
-    application: &Application,
+    application: &TuiBackend,
     session_id: i64,
     title: Option<String>,
 ) -> Result<SessionExecutionResource> {
     application
-        .fork_session(session_id, None, title, None)
+        .fork_session(session_id, title)
         .await
-        .map_err(anyhow::Error::new)
         .context("failed to fork session")
 }
 
 /// Durable, idempotent acknowledgement that an interactive user-input request
 /// has been shown to the user.
 pub(crate) async fn present_interactive_request(
-    application: &Application,
+    application: &TuiBackend,
     session_id: i64,
     request_id: String,
 ) -> Result<SessionExecutionResource> {
     application
         .mark_interactive_request_presented(session_id, request_id)
         .await
-        .map_err(anyhow::Error::new)
         .context("failed to mark interactive request presented")
 }
 
 /// Render the terminal diagnostic summary from the Runtime-owned status
 /// projection through Application rather than traversing Runtime status.
-pub(crate) async fn runtime_snapshot_summary(application: &Application) -> Result<String> {
-    let status = application.runtime_snapshot_summary().await;
+pub(crate) async fn runtime_snapshot_summary(application: &TuiBackend) -> Result<String> {
+    let status = application
+        .embedded_application()?
+        .runtime_snapshot_summary()
+        .await;
     Ok(format!(
         "generation {} · loaded {} · {} providers · {} plugins",
         status.generation,
@@ -214,6 +209,19 @@ pub(crate) async fn runtime_snapshot_summary(application: &Application) -> Resul
 
 /// List a single page of workspace sessions for the session switcher.
 pub(crate) async fn list_workspace_sessions_page(
+    application: &TuiBackend,
+    roots_only: bool,
+    exclude_subagents: bool,
+    search: Option<&str>,
+    cursor: Option<String>,
+    limit: u64,
+) -> Result<agena_api::pagination::PaginatedResponse<SessionResource>> {
+    application
+        .list_workspace_sessions_page(roots_only, exclude_subagents, search, cursor, limit)
+        .await
+}
+
+pub(super) async fn list_workspace_sessions_page_embedded(
     application: &Application,
     roots_only: bool,
     exclude_subagents: bool,
@@ -247,17 +255,18 @@ pub(crate) async fn list_workspace_sessions_page(
 }
 
 /// List all known providers (without adapter detail).
-pub(crate) fn list_providers(application: &Application) -> Vec<ProviderSummaryResource> {
-    application
-        .provider_catalog()
-        .list_providers()
-        .into_iter()
-        .map(|provider| provider_summary_resource_from_catalog(provider, false))
-        .collect()
+pub(crate) fn list_providers(application: &TuiBackend) -> Vec<ProviderSummaryResource> {
+    application.provider_summaries()
 }
 
 /// List configured providers (with adapter detail).
-pub(crate) fn list_configured_providers(application: &Application) -> Vec<ProviderSummaryResource> {
+pub(crate) fn list_configured_providers(application: &TuiBackend) -> Vec<ProviderSummaryResource> {
+    application.provider_summaries()
+}
+
+pub(super) fn list_configured_providers_embedded(
+    application: &Application,
+) -> Vec<ProviderSummaryResource> {
     application
         .provider_catalog()
         .list_providers()
@@ -269,10 +278,11 @@ pub(crate) fn list_configured_providers(application: &Application) -> Vec<Provid
 /// Set a workspace-scoped config file setting, reloading the runtime when the
 /// edit requires it.
 pub(crate) async fn set_workspace_config_setting(
-    application: &Application,
+    application: &TuiBackend,
     path: &str,
     value: JsonValue,
 ) -> Result<agena_runtime::ConfigSettingsEditResponse> {
+    let application = application.embedded_application()?;
     let response = application
         .runtime_config_settings()
         .set_project_file_setting(agena_runtime::ConfigSettingsSetInput {
@@ -299,9 +309,10 @@ pub(crate) async fn set_workspace_config_setting(
 /// Delete a workspace-scoped config file setting, reloading the runtime when
 /// the edit requires it.
 pub(crate) async fn delete_workspace_config_setting(
-    application: &Application,
+    application: &TuiBackend,
     path: &str,
 ) -> Result<agena_runtime::ConfigSettingsEditResponse> {
+    let application = application.embedded_application()?;
     let response = application
         .runtime_config_settings()
         .delete_project_file_setting(agena_runtime::ConfigSettingsDeleteInput {
@@ -326,9 +337,10 @@ pub(crate) async fn delete_workspace_config_setting(
 
 /// Refresh provider client versions from the remote registry.
 pub(crate) async fn refresh_provider_client_versions(
-    application: &Application,
+    application: &TuiBackend,
 ) -> Result<agena_provider::ProviderClientVersions> {
     application
+        .embedded_application()?
         .refresh_provider_client_versions()
         .await
         .context("failed to refresh provider client versions")

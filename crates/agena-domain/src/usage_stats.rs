@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::UsagePeriod;
 
-#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 /// Total billable units for one unit kind.
 pub struct UsageBillableUnitTotal {
     pub kind: String,
@@ -14,7 +14,7 @@ pub struct UsageBillableUnitTotal {
     pub estimated_cost_usd: f64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 /// Aggregate usage totals.
 pub struct UsageTotals {
     /// Number of provider requests, including requests issued by ordinary
@@ -42,7 +42,7 @@ pub struct UsageTotals {
     pub billable_units: Vec<UsageBillableUnitTotal>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Per-day usage breakdown.
 pub struct UsageDailyBreakdown {
     pub date: String,
@@ -50,7 +50,7 @@ pub struct UsageDailyBreakdown {
     pub totals: UsageTotals,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Usage broken down by provider.
 pub struct ProviderUsageBreakdown {
     pub provider_id: String,
@@ -58,7 +58,7 @@ pub struct ProviderUsageBreakdown {
     pub totals: UsageTotals,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Usage broken down by model.
 pub struct ModelUsageBreakdown {
     pub provider_id: String,
@@ -67,7 +67,7 @@ pub struct ModelUsageBreakdown {
     pub totals: UsageTotals,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Usage broken down by session.
 pub struct SessionUsageBreakdown {
     pub session_id: i64,
@@ -79,7 +79,7 @@ pub struct SessionUsageBreakdown {
     pub totals: UsageTotals,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Full usage statistics: totals, daily, provider, model, and session breakdowns.
 pub struct UsageStats {
     pub generated_at: DateTime<Utc>,

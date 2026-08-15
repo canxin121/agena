@@ -141,9 +141,12 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         )
         .with_state(shared_state.clone());
 
-    let agena_api = agena_api_server::router(ApiV2State::from_application(application)).layer(
-        middleware::from_fn_with_state(shared_state.clone(), crate::server::auth::require_ui_auth),
-    );
+    let api_state = ApiV2State::from_application(application);
+    let center_identity = api_state.center().clone();
+    let agena_api = agena_api_server::router(api_state).layer(middleware::from_fn_with_state(
+        shared_state.clone(),
+        crate::server::auth::require_ui_auth,
+    ));
     let server_api_routes = fs_router()
         .route("/api/fs/upload", post(crate::server::fs::fs_upload))
         .route(
@@ -582,13 +585,33 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind listener on {addr}"))?;
+    let bound_addr = listener
+        .local_addr()
+        .context("failed to inspect the processing-center listener")?;
+    let advertised_ip = if bound_addr.ip().is_unspecified() {
+        if bound_addr.is_ipv6() {
+            std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+        } else {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        }
+    } else {
+        bound_addr.ip()
+    };
+    let endpoint_url = format!(
+        "http://{}",
+        SocketAddr::new(advertised_ip, bound_addr.port())
+    );
+    let center_record =
+        crate::server::center_record::publish_record(endpoint_url.clone(), &center_identity)?;
 
-    tracing::info!("Agena listening on http://{addr}");
-    axum::serve(listener, app)
+    tracing::info!(center_id = %center_identity.id, "Agena listening on {endpoint_url}");
+    let result = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
             runtime.shutdown();
         })
         .await
-        .context("server exited unexpectedly")
+        .context("server exited unexpectedly");
+    drop(center_record);
+    result
 }

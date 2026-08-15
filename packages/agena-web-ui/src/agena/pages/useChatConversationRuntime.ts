@@ -147,6 +147,10 @@ export function useChatConversationRuntime(
           scheduleConversationRefresh()
         }
       },
+      onInvalidate: () => {
+        if (input.selectedSessionId.value !== sessionId) return
+        scheduleConversationRefresh(0)
+      },
       onError: (error) => {
         if (input.selectedSessionId.value !== sessionId) return
         console.warn('session change stream failed', error)

@@ -16,6 +16,17 @@ pub struct SessionRefresh {
 /// Loads the latest event sequence and, when the session moved past
 /// `after_seq`, the full session execution snapshot.
 pub(crate) async fn refresh_session(
+    application: &super::TuiBackend,
+    session_id: i64,
+    after_seq: Option<i64>,
+    force: bool,
+) -> Result<SessionRefresh> {
+    application
+        .refresh_session(session_id, after_seq, force)
+        .await
+}
+
+pub(super) async fn refresh_session_embedded(
     application: &Application,
     session_id: i64,
     after_seq: Option<i64>,
@@ -48,8 +59,10 @@ pub(crate) async fn refresh_session(
         .map(|(after, current)| current.saturating_sub(after).clamp(0, 256) as usize)
         .unwrap_or(0);
 
-    let execution =
-        crate::app_backend::operations::get_session_state(application, session_id).await?;
+    let execution = application
+        .session_execution_resource(session_id)
+        .await
+        .map_err(anyhow::Error::new)?;
     Ok(SessionRefresh {
         latest_event_seq,
         event_count,

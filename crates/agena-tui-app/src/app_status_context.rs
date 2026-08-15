@@ -33,7 +33,7 @@ impl App {
     ) where
         T: Send + 'static,
         E: Into<anyhow::Error> + Send + 'static,
-        Op: FnOnce(agena_application::Application) -> Fut + Send + 'static,
+        Op: FnOnce(crate::TuiBackend) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = std::result::Result<T, E>> + Send + 'static,
         Complete: FnOnce(&mut App, UiResult<T>) + Send + 'static,
     {

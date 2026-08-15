@@ -508,9 +508,12 @@ fn required_provider_auth_field(
 }
 
 pub(crate) async fn start_provider_draft_auth(
-    application: &agena_application::Application,
+    application: &crate::TuiBackend,
     mut draft: ProviderConfigDraft,
 ) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
+    let application = application
+        .embedded_application()
+        .map_err(ProviderDraftAuthError::other)?;
     let auth: &dyn RuntimeDraftAuthenticationService =
         application.runtime_draft_authentication().as_ref();
     draft.normalize_shape();
@@ -637,9 +640,12 @@ pub(crate) async fn start_provider_draft_auth(
 }
 
 pub(crate) async fn continue_provider_draft_auth(
-    application: &agena_application::Application,
+    application: &crate::TuiBackend,
     mut draft: ProviderConfigDraft,
 ) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
+    let application = application
+        .embedded_application()
+        .map_err(ProviderDraftAuthError::other)?;
     let auth: &dyn RuntimeDraftAuthenticationService =
         application.runtime_draft_authentication().as_ref();
     draft.normalize_shape();

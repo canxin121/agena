@@ -29,6 +29,45 @@ pub struct HealthResponse {
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,
     pub database_connected: bool,
+    /// Identity of the long-lived processing center serving this API. Older
+    /// servers omit it, so clients must treat `None` as an unverified legacy
+    /// endpoint rather than manufacturing an identity from the URL or PID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<CenterIdentityResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Stable identity for one processing-center process lifetime.
+pub struct CenterIdentityResource {
+    pub id: Uuid,
+    pub pid: u32,
+    pub started_at: DateTime<Utc>,
+    pub protocol_version: u32,
+}
+
+/// Atomically-published local discovery record for one processing center.
+/// The record is only a hint: clients must call health and compare every
+/// identity field before using it for lifecycle operations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CenterEndpointRecord {
+    pub schema: u32,
+    pub url: String,
+    pub center_id: Uuid,
+    pub pid: u32,
+    pub started_at: DateTime<Utc>,
+    pub protocol_version: u32,
+}
+
+impl CenterEndpointRecord {
+    pub const SCHEMA: u32 = 1;
+
+    pub fn matches(&self, identity: &CenterIdentityResource) -> bool {
+        self.schema == Self::SCHEMA
+            && self.center_id == identity.id
+            && self.pid == identity.pid
+            && self.started_at == identity.started_at
+            && self.protocol_version == identity.protocol_version
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1000,6 +1039,12 @@ pub struct SessionResource {
     pub version: i64,
     pub relation_kind: SessionRelationKind,
     pub lifecycle_state: SessionLifecycleState,
+    /// Authoritative processing state derived from persisted run markers,
+    /// pending interactions, and the execution lease. Unlike a client's
+    /// request/loading flag, this survives disconnects and can therefore be
+    /// used by every client to identify work still owned by the center.
+    #[serde(default)]
+    pub state: SessionState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_cutoff_seq_global: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1040,6 +1085,59 @@ pub enum SessionLifecycleState {
     #[default]
     Ready,
     Failed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+/// Current processing state of a session.
+///
+/// This is intentionally separate from [`SessionLifecycleState`], which only
+/// describes whether the session record itself was created successfully, and
+/// from [`WorkflowState`], which describes the agent workflow inside a loaded
+/// execution view.
+pub enum SessionState {
+    Creating,
+    #[default]
+    Ready,
+    Running,
+    AwaitingUser,
+    Interrupted,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Center-owned session home view. A session occurs in exactly one group.
+pub struct SessionOverviewResource {
+    /// Sessions paused on user input or left interrupted after owner loss.
+    pub attention: Vec<SessionResource>,
+    /// Sessions whose execution lease is fresh, plus sessions still creating.
+    pub running: Vec<SessionResource>,
+    /// Most recently changed terminal/quiescent sessions.
+    pub recent: Vec<SessionResource>,
+    pub generated_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod session_state_contract_tests {
+    use super::SessionState;
+
+    #[test]
+    fn session_processing_states_have_stable_wire_names() {
+        let cases = [
+            (SessionState::Creating, "creating"),
+            (SessionState::Ready, "ready"),
+            (SessionState::Running, "running"),
+            (SessionState::AwaitingUser, "awaiting_user"),
+            (SessionState::Interrupted, "interrupted"),
+            (SessionState::Failed, "failed"),
+        ];
+        for (state, expected) in cases {
+            assert_eq!(
+                serde_json::to_string(&state).expect("serialize session state"),
+                format!("\"{expected}\"")
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

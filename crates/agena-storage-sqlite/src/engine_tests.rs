@@ -1147,6 +1147,14 @@ async fn resume_mid_stream_without_a_lease_reconciles_to_ready() {
         interrupted.state,
         agena_storage::store::SessionState::Interrupted
     );
+    assert_eq!(
+        facade
+            .session_states(&[session_id])
+            .await
+            .expect("derive interrupted overview state")
+            .get(&session_id),
+        Some(&agena_storage::store::SessionState::Interrupted)
+    );
     facade
         .reconcile(session_id)
         .await
@@ -1156,6 +1164,14 @@ async fn resume_mid_stream_without_a_lease_reconciles_to_ready() {
         .await
         .expect("derive ready");
     assert_eq!(ready.state, agena_storage::store::SessionState::Ready);
+    assert_eq!(
+        facade
+            .session_states(&[session_id])
+            .await
+            .expect("derive ready overview state")
+            .get(&session_id),
+        Some(&agena_storage::store::SessionState::Ready)
+    );
     let view = facade
         .load(session_id)
         .await
@@ -1216,6 +1232,14 @@ async fn resume_mid_ask_without_a_lease_remains_awaiting_user() {
     assert_eq!(
         awaiting.state,
         agena_storage::store::SessionState::AwaitingUser
+    );
+    assert_eq!(
+        facade
+            .session_states(&[session_id])
+            .await
+            .expect("derive awaiting-user overview state")
+            .get(&session_id),
+        Some(&agena_storage::store::SessionState::AwaitingUser)
     );
     let interaction_id = awaiting
         .pending_interaction

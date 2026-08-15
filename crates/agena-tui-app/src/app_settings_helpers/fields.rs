@@ -161,11 +161,15 @@ pub(crate) fn settings_source_rows_for_workspace_config_path(
 /// `ui.tui.transcript.activity_kinds.<id>`.
 pub(crate) fn settings_studio_activity_kind_items(
     i18n: &I18n,
-    application: &agena_application::Application,
+    application: &crate::TuiBackend,
     sources: &ConfigJsonSources,
 ) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
     let mut items = Vec::new();
-    for kind in application.activity_kind_catalog() {
+    let kinds = application
+        .embedded_application()
+        .map(agena_application::Application::activity_kind_catalog)
+        .unwrap_or_else(|_| agena_domain::builtin_activity_kinds());
+    for kind in kinds {
         let path = format!("ui.tui.transcript.activity_kinds.{}", kind.id);
         let label_key = format!("settings-activity-kind-{}-label", kind.id);
         let description_key = format!("settings-activity-kind-{}-description", kind.id);

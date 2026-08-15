@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use agena_api::resource::{
-    PendingInteractiveRequest, RunRole, RunStatus, SessionExecutionResource,
+    PendingInteractiveRequest, RunRole, RunStatus, SessionExecutionResource, SessionState,
 };
 use agena_domain::PermissionReplyKind;
 use agena_plugin_sdk::AttachmentKind;
@@ -93,6 +93,22 @@ pub fn session_meta(i18n: &I18n, id: i64, message_count: u64, updated_at: DateTi
             "updated" => format_relative_time(i18n, updated_at),
         ),
     )
+}
+
+/// Localized label for the server-derived processing state shown in session
+/// pickers. This is deliberately based on the shared API value rather than a
+/// TUI-local request flag, so reconnecting clients describe the center's
+/// current ownership truth.
+pub fn session_state_label(i18n: &I18n, state: SessionState) -> String {
+    let key = match state {
+        SessionState::Creating => "session-state-creating",
+        SessionState::Ready => "session-state-ready",
+        SessionState::Running => "session-state-running",
+        SessionState::AwaitingUser => "session-state-awaiting-user",
+        SessionState::Interrupted => "session-state-interrupted",
+        SessionState::Failed => "session-state-failed",
+    };
+    t(i18n, key)
 }
 
 pub fn transcript_search_summary(i18n: &I18n, query: &str, current: usize, total: usize) -> String {

@@ -1,6 +1,28 @@
-use agena_application::{
-    dto::SessionPermissionUpdateRequest, session::session_resource_from_summary,
-};
+use agena_application::dto::SessionPermissionUpdateRequest;
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SessionOverviewQuery {
+    #[serde(default)]
+    pub workspace_id: Option<i64>,
+    #[serde(default = "default_recent_limit")]
+    pub recent_limit: u64,
+}
+
+const fn default_recent_limit() -> u64 {
+    50
+}
+
+pub async fn session_overview(
+    State(state): State<AppState>,
+    AxumQuery(query): AxumQuery<SessionOverviewQuery>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .application()
+            .session_overview(query.workspace_id, query.recent_limit)
+            .await?,
+    ))
+}
 
 /// Thin adapter: project a session's execution resource through the shared
 /// Application read-back and wrap it in JSON.
@@ -49,6 +71,36 @@ pub async fn get_session_state(
     Path(session_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
     session_execution_json_from_id(&state, session_id).await
+}
+
+pub async fn get_session_cost(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    if state.service().get_session(session_id).await?.is_none() {
+        return Err(ServerError::not_found("The session was not found."));
+    }
+    let queries = state.application().session_query_service()?;
+    Ok(Json(
+        queries
+            .session_cost_summary(session_id)
+            .await
+            .map_err(|error| ServerError::internal(error.to_string()))?,
+    ))
+}
+
+pub async fn replace_session_selection(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    headers: HeaderMap,
+    Json(request): Json<SessionRunRequestBody>,
+) -> Result<impl IntoResponse, ServerError> {
+    assert_if_match_session_version(&state, session_id, &headers).await?;
+    Ok(Json(
+        state
+            .update_session_selection(session_id, request.options)
+            .await?,
+    ))
 }
 
 pub async fn get_operation_detail(
@@ -141,9 +193,17 @@ pub async fn stream_session_changes(
 ) -> Result<impl IntoResponse, ServerError> {
     // Subscribe before reading the snapshot so mutations committed during the
     // read remain queued. The snapshot is current state, not replay.
+    #[cfg(test)]
+    let mut subscription =
+        crate::live::subscribe_with_capacity(&state, query.test_queue_capacity.unwrap_or(256))?;
+    #[cfg(not(test))]
     let mut subscription = crate::live::subscribe(&state)?;
     let store = state.session_store()?;
     let session_queries = state.application().session_query_service()?;
+    #[cfg(test)]
+    if let Some(delay_ms) = query.test_snapshot_delay_ms.filter(|delay| *delay > 0) {
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+    }
     let initial = crate::live::session_parts(store.as_ref(), session_id).await?;
 
     let stream = stream! {
@@ -368,10 +428,10 @@ pub async fn list_session_tree(
         .list_session_tree(root_id)
         .await
         .map_err(|error| ServerError::from_failure(*error.failure))?;
-    let resources: Vec<agena_application::dto::SessionResource> = summaries
-        .into_iter()
-        .map(session_resource_from_summary)
-        .collect();
+    let resources = state
+        .application()
+        .session_resources_from_summaries(summaries)
+        .await?;
     Ok(Json(resources))
 }
 

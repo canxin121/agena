@@ -300,9 +300,12 @@ pub async fn serve_stdio<B>(backend: B) -> Result<(), McpServerError>
 where
     B: McpServerBackend,
 {
-    let running = rmcp::serve_server(BackendHandler::new(backend), rmcp::transport::stdio())
-        .await
-        .map_err(|err| McpServerError::Backend(err.to_string()))?;
+    let running =
+        match rmcp::serve_server(BackendHandler::new(backend), rmcp::transport::stdio()).await {
+            Ok(running) => running,
+            Err(rmcp::service::ServerInitializeError::ConnectionClosed(_)) => return Ok(()),
+            Err(error) => return Err(McpServerError::Backend(error.to_string())),
+        };
     running
         .waiting()
         .await
@@ -319,12 +322,16 @@ pub async fn serve_tools_stdio<B>(backend: B) -> Result<(), McpServerError>
 where
     B: McpServerBackend,
 {
-    let running = rmcp::serve_server(
+    let running = match rmcp::serve_server(
         BackendHandler::new_tools_only(backend),
         rmcp::transport::stdio(),
     )
     .await
-    .map_err(|err| McpServerError::Backend(err.to_string()))?;
+    {
+        Ok(running) => running,
+        Err(rmcp::service::ServerInitializeError::ConnectionClosed(_)) => return Ok(()),
+        Err(error) => return Err(McpServerError::Backend(error.to_string())),
+    };
     running
         .waiting()
         .await

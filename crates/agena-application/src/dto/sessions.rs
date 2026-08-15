@@ -4,7 +4,7 @@ pub use agena_api::resource::{
     ActiveExecutionResource, ExecutionPhase, PendingInteractiveRequestResource,
     RunOptions as SessionRunOptionsRequest, SessionExecutionContextResource,
     SessionExecutionResource, SessionLifecycleState, SessionRelationKind, SessionResource,
-    SessionUsageLimitBasis, SessionUsageResource, SubtaskStatus, WorkflowState,
+    SessionState, SessionUsageLimitBasis, SessionUsageResource, SubtaskStatus, WorkflowState,
 };
 
 #[derive(Debug, Clone, Deserialize, Default)]

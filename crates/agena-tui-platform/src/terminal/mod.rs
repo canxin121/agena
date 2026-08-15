@@ -14,7 +14,10 @@ use std::{
 use agena_tui_components::TerminalRgb;
 use anyhow::{Context, Result, bail};
 use crossterm::event::{self, Event, TerminalResponse, TerminalResponseCapture};
-use ratatui::{Frame, Terminal, backend::CrosstermBackend};
+use ratatui::{
+    Frame, Terminal,
+    backend::{Backend, CrosstermBackend},
+};
 
 use agena_tui::terminal_color::{
     color_refresh_transaction, detect_terminal_background, query_terminal_background,
@@ -440,12 +443,14 @@ impl TerminalRuntime {
         self.input.reset();
         self.input.restore_ready(preserved_input);
         // Editors and transfer helpers may stay open while the OS or terminal
-        // switches appearance. Refresh before the first resumed frame.
-        self.request_terminal_color_refresh();
-        self.terminal
-            .clear()
+        // switches appearance or resizes. Synchronize Ratatui before the first
+        // resumed frame without issuing a synchronous cursor-position query:
+        // the runtime input reader already owns terminal responses at this
+        // point, so Terminal::clear's CPR would race it and can time out.
+        reset_terminal_after_suspension(&mut self.terminal)
             .map_err(|error| anyhow::anyhow!(error.to_string()))
-            .with_context(|| format!("failed to clear the terminal after {reason:?}"))?;
+            .with_context(|| format!("failed to reset the terminal after {reason:?}"))?;
+        self.request_terminal_color_refresh();
         Ok(())
     }
 
@@ -523,6 +528,18 @@ impl TerminalRuntime {
         }
         Ok(())
     }
+}
+
+/// Synchronize a fullscreen terminal after an external process used the TTY.
+///
+/// `Terminal::clear` first queries and later restores the physical cursor.
+/// Once runtime input is active that synchronous CPR query competes with the
+/// sole event reader. Resizing to the backend's current area performs the same
+/// full clear and back-buffer reset for a fullscreen viewport without reading
+/// terminal input, and also accounts for resizes made while suspended.
+fn reset_terminal_after_suspension<B: Backend>(terminal: &mut Terminal<B>) -> Result<(), B::Error> {
+    let area = terminal.size()?.into();
+    terminal.resize(area)
 }
 
 fn ensure_interactive_terminal_io() -> Result<()> {
@@ -626,10 +643,16 @@ impl Drop for TerminalOwnershipGuard {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
     use std::sync::Mutex;
 
     use agena_tui::terminal_color::TerminalColorSource;
     use crossterm::event::BackgroundColorQuery;
+    use ratatui::{
+        backend::{ClearType, WindowSize},
+        buffer::Cell,
+        layout::{Position, Rect, Size},
+    };
 
     use super::*;
 
@@ -648,6 +671,93 @@ mod tests {
         assert!(!TERMINAL_MODES_ACTIVE.load(Ordering::Acquire));
         assert!(!TERMINAL_KEYBOARD_STACK_ACTIVE.load(Ordering::Acquire));
         assert!(TerminalOwnershipGuard::acquire().is_ok());
+    }
+
+    #[derive(Debug)]
+    struct CursorQueryRejectingBackend {
+        size: Size,
+        cursor_queries: usize,
+        full_clears: usize,
+    }
+
+    impl CursorQueryRejectingBackend {
+        fn new(size: Size) -> Self {
+            Self {
+                size,
+                cursor_queries: 0,
+                full_clears: 0,
+            }
+        }
+    }
+
+    impl Backend for CursorQueryRejectingBackend {
+        type Error = Infallible;
+
+        fn draw<'a, I>(&mut self, _content: I) -> Result<(), Self::Error>
+        where
+            I: Iterator<Item = (u16, u16, &'a Cell)>,
+        {
+            Ok(())
+        }
+
+        fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn show_cursor(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+            self.cursor_queries += 1;
+            panic!("terminal reset must not query the cursor position")
+        }
+
+        fn set_cursor_position<P: Into<Position>>(
+            &mut self,
+            _position: P,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn clear(&mut self) -> Result<(), Self::Error> {
+            self.full_clears += 1;
+            Ok(())
+        }
+
+        fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+            assert_eq!(clear_type, ClearType::All);
+            self.full_clears += 1;
+            Ok(())
+        }
+
+        fn size(&self) -> Result<Size, Self::Error> {
+            Ok(self.size)
+        }
+
+        fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+            Ok(WindowSize {
+                columns_rows: self.size,
+                pixels: Size::ZERO,
+            })
+        }
+
+        fn flush(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn suspended_terminal_reset_clears_without_querying_cursor_position() {
+        let backend = CursorQueryRejectingBackend::new(Size::new(80, 24));
+        let mut terminal = Terminal::new(backend).expect("create test terminal");
+        terminal.backend_mut().size = Size::new(100, 40);
+
+        reset_terminal_after_suspension(&mut terminal).expect("reset suspended terminal");
+
+        assert_eq!(terminal.backend().cursor_queries, 0);
+        assert_eq!(terminal.backend().full_clears, 1);
+        assert_eq!(terminal.get_frame().area(), Rect::new(0, 0, 100, 40));
     }
 
     #[test]

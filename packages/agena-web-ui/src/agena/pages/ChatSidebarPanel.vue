@@ -138,6 +138,7 @@ const emit = defineEmits<{
         >
           <div>
             <strong>{{ session.title }}</strong>
+            <span class="badge" style="margin-left: 8px">{{ session.state.replace('_', ' ') }}</span>
           </div>
           <div class="muted">
             {{ session.message_count }} message(s) · updated {{ props.formatMessageTime(session.updated_at) }}

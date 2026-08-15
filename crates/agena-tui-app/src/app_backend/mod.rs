@@ -1,4 +1,4 @@
-//! Pure TUI presentation logic absorbed from `agena-tui-backend`.
+//! Transport boundary and presentation adapters used by the TUI.
 //!
 //! After the R7 refactor, the TUI app holds [`agena_application::Application`]
 //! directly. The methods in this module are the former `Backend` methods that
@@ -25,6 +25,9 @@ pub(crate) mod plugin_effects;
 pub(crate) mod provider_mappings;
 pub(crate) mod session_refresh;
 pub(crate) mod timeline;
+mod transport;
+
+pub use self::transport::{BackendMode, TuiBackend};
 
 pub(crate) use self::inspector::InspectorRow;
 pub(crate) use self::live_events::LiveEvent;

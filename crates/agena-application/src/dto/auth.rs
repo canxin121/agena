@@ -1,6 +1,6 @@
 use agena_provider::{DeviceCodeStart, OAuthAuthorizeStart};
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 /// Type of stored provider credential.
 pub enum AuthCredentialType {
@@ -9,7 +9,7 @@ pub enum AuthCredentialType {
     WellKnown,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 /// Issuer of a provider credential.
 pub enum AuthCredentialIssuerResource {
@@ -32,7 +32,7 @@ impl From<agena_provider::CredentialIssuer> for AuthCredentialIssuerResource {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 /// Kind of provider login flow.
 pub enum AuthLoginKindResource {
@@ -41,7 +41,7 @@ pub enum AuthLoginKindResource {
     Gitlab,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Authentication state of a provider.
 pub struct AuthProviderResource {
     pub provider_id: String,
@@ -161,7 +161,7 @@ pub struct AuthEnterpriseDevicePollRequest {
     pub enterprise_domain: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Browser start details of an OAuth flow.
 pub struct AuthBrowserStartResource {
     pub provider_id: String,
@@ -188,7 +188,7 @@ impl AuthBrowserStartResource {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Device start details of a device flow.
 pub struct AuthDeviceStartResource {
     pub provider_id: String,
@@ -217,7 +217,7 @@ impl AuthDeviceStartResource {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Result of a provider login flow.
 pub struct AuthLoginResultResource {
     pub completed: bool,

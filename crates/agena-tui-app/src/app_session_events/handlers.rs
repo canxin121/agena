@@ -216,7 +216,13 @@ impl App {
         dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-resume-empty");
         match result {
-            Ok(page) => {
+            Ok(mut page) => {
+                page.items.sort_by(|left, right| {
+                    session_state_priority(right.state)
+                        .cmp(&session_state_priority(left.state))
+                        .then_with(|| right.updated_at.cmp(&left.updated_at))
+                        .then_with(|| right.id.cmp(&left.id))
+                });
                 let items = page
                     .items
                     .into_iter()
@@ -816,6 +822,17 @@ impl App {
                 self.flash_error(error);
             }
         }
+    }
+}
+
+const fn session_state_priority(state: agena_api::resource::SessionState) -> u8 {
+    match state {
+        agena_api::resource::SessionState::AwaitingUser => 5,
+        agena_api::resource::SessionState::Running => 4,
+        agena_api::resource::SessionState::Interrupted => 3,
+        agena_api::resource::SessionState::Failed => 2,
+        agena_api::resource::SessionState::Creating => 1,
+        agena_api::resource::SessionState::Ready => 0,
     }
 }
 use crate::view::model_catalog_presentation_item;

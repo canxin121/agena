@@ -2,7 +2,7 @@
 //! catalog lookups, and the inspector rows for think/speed/verbosity choices.
 
 use agena_api::resource::ProviderAdapterModelsResource;
-use agena_application::{Application, dto::ModelCatalogListResponse};
+use agena_application::dto::ModelCatalogListResponse;
 use agena_domain::Model as ProviderModel;
 use agena_domain::{ModelRef, ProviderId};
 use anyhow::{Result, anyhow};
@@ -11,10 +11,13 @@ use crate::app_backend::inspector::{InspectorRow, summarize_named_mode};
 
 /// Enabled adapters and their configured model ids for `provider_id`.
 pub(crate) fn configured_provider_model_routes(
-    application: &Application,
+    application: &crate::TuiBackend,
     provider_id: Option<&str>,
 ) -> Vec<(String, String)> {
     let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+    let Ok(application) = application.embedded_application() else {
         return Vec::new();
     };
     application
@@ -37,30 +40,35 @@ pub(crate) fn configured_provider_model_routes(
 /// model catalog so the Provider Studio draft shows complete display data on
 /// open and after save — matching the live-listing enrich path.
 pub(crate) fn configured_provider_adapter_models(
-    application: &Application,
+    application: &crate::TuiBackend,
     provider_id: Option<&str>,
 ) -> Vec<ProviderAdapterModelsResource> {
-    agena_application::provider_queries::configured_provider_adapter_models_response(
-        application,
-        provider_id,
-    )
+    application
+        .embedded_application()
+        .map(|application| {
+            agena_application::provider_queries::configured_provider_adapter_models_response(
+                application,
+                provider_id,
+            )
+        })
+        .unwrap_or_default()
 }
 
 pub(crate) fn list_local_provider_models(
-    application: &Application,
+    application: &crate::TuiBackend,
     provider_id: &str,
 ) -> Result<Vec<ProviderModel>> {
     let provider_id = provider_id.trim();
     if provider_id.is_empty() {
         return Ok(Vec::new());
     }
-    application
-        .provider_catalog()
-        .configured_local_models(&ProviderId::new(provider_id))
-        .map_err(|error| anyhow!(error.to_string()))
+    application.list_local_provider_models(provider_id)
 }
 
-pub(crate) fn model_display_name(application: &Application, model: &ModelRef) -> Option<String> {
+pub(crate) fn model_display_name(
+    application: &crate::TuiBackend,
+    model: &ModelRef,
+) -> Option<String> {
     preferred_model_display_name(
         list_local_provider_models(application, model.provider_id.as_ref()).ok()?,
         model,
@@ -68,17 +76,19 @@ pub(crate) fn model_display_name(application: &Application, model: &ModelRef) ->
 }
 
 pub(crate) fn list_model_catalog_models(
-    application: &Application,
+    application: &crate::TuiBackend,
     query: &str,
     offset: usize,
     limit: usize,
 ) -> Result<ModelCatalogListResponse> {
-    Ok(application.list_model_catalog_with_origin(query, None, offset, limit))
+    Ok(application
+        .embedded_application()?
+        .list_model_catalog_with_origin(query, None, offset, limit))
 }
 
 /// Resolve the effective think-mode rows for the model implied by `request`.
 pub(crate) fn runtime_thinking_mode_rows(
-    application: &Application,
+    application: &crate::TuiBackend,
     request: &agena_api::resource::RunOptions,
 ) -> Result<Vec<InspectorRow>> {
     let model = application.resolved_model_for_run_options(request)?;
@@ -86,13 +96,12 @@ pub(crate) fn runtime_thinking_mode_rows(
 }
 
 pub(crate) fn model_thinking_mode_rows(
-    application: &Application,
+    application: &crate::TuiBackend,
     model: &ModelRef,
 ) -> Result<Vec<InspectorRow>> {
     let mut modes = application
-        .provider_catalog()
-        .model_execution_options(model)
-        .map_err(|error| anyhow!(error.to_string()))?
+        .configured_model(model)
+        .ok_or_else(|| anyhow!("model is not configured"))?
         .thinking_modes;
     modes.sort_by(agena_domain::compare_thinking_mode_strength);
     Ok(modes
@@ -111,7 +120,7 @@ pub(crate) fn model_thinking_mode_rows(
 
 /// Resolve the effective speed-mode rows for the model implied by `request`.
 pub(crate) fn runtime_speed_mode_rows(
-    application: &Application,
+    application: &crate::TuiBackend,
     request: &agena_api::resource::RunOptions,
 ) -> Result<Vec<InspectorRow>> {
     let model = application.resolved_model_for_run_options(request)?;
@@ -119,13 +128,12 @@ pub(crate) fn runtime_speed_mode_rows(
 }
 
 pub(crate) fn model_speed_mode_rows(
-    application: &Application,
+    application: &crate::TuiBackend,
     model: &ModelRef,
 ) -> Result<Vec<InspectorRow>> {
     let mut rows = application
-        .provider_catalog()
-        .model_execution_options(model)
-        .map_err(|error| anyhow!(error.to_string()))?
+        .configured_model(model)
+        .ok_or_else(|| anyhow!("model is not configured"))?
         .speed_modes
         .into_iter()
         .map(|(name, mode)| InspectorRow {
@@ -139,7 +147,7 @@ pub(crate) fn model_speed_mode_rows(
 
 /// Resolve the effective verbosity values for the model implied by `request`.
 pub(crate) fn runtime_verbosity_values(
-    application: &Application,
+    application: &crate::TuiBackend,
     request: &agena_api::resource::RunOptions,
 ) -> Result<Vec<String>> {
     let model = application.resolved_model_for_run_options(request)?;
@@ -147,19 +155,19 @@ pub(crate) fn runtime_verbosity_values(
 }
 
 pub(crate) fn model_verbosity_values(
-    application: &Application,
+    application: &crate::TuiBackend,
     model: &ModelRef,
 ) -> Result<Vec<String>> {
     let metadata = application
-        .provider_catalog()
-        .model_execution_options(model)
-        .map_err(|error| anyhow!(error.to_string()))?
+        .configured_model(model)
+        .ok_or_else(|| anyhow!("model is not configured"))?
         .metadata;
     Ok(metadata.supported_verbosity_levels_for_model(&model.model_id))
 }
 
-pub(crate) async fn refresh_model_catalog(application: &Application) -> Result<()> {
+pub(crate) async fn refresh_model_catalog(application: &crate::TuiBackend) -> Result<()> {
     application
+        .embedded_application()?
         .refresh_model_catalog()
         .map_err(|error| anyhow!(error.to_string()))?;
     Ok(())

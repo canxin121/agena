@@ -60,9 +60,24 @@ impl Drop for LiveSubscription {
 pub(crate) fn subscribe(state: &AppState) -> Result<LiveSubscription, ServerError> {
     const LIVE_QUEUE_CAPACITY: usize = 256;
 
+    subscribe_with_queue_capacity(state, LIVE_QUEUE_CAPACITY)
+}
+
+#[cfg(test)]
+pub(crate) fn subscribe_with_capacity(
+    state: &AppState,
+    capacity: usize,
+) -> Result<LiveSubscription, ServerError> {
+    subscribe_with_queue_capacity(state, capacity.max(1))
+}
+
+fn subscribe_with_queue_capacity(
+    state: &AppState,
+    capacity: usize,
+) -> Result<LiveSubscription, ServerError> {
     let store = state.session_store()?;
     let signals = state.live_signals()?;
-    let (tx, rx) = mpsc::channel(LIVE_QUEUE_CAPACITY);
+    let (tx, rx) = mpsc::channel(capacity);
     let dropped = Arc::new(AtomicU64::new(0));
     let change_tx = tx.clone();
     let change_dropped = Arc::clone(&dropped);

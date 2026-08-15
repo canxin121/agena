@@ -28,7 +28,7 @@ pub mod ws;
 
 pub use agena_api;
 pub use error::ClientError;
-pub use http::{AgenaClient, NotificationSubscription};
+pub use http::{AgenaClient, NotificationSubscription, SessionConnection};
 pub use ws::{Subscription, SubscriptionEvent, WsClient};
 
 #[cfg(test)]

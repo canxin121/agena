@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// A memory document as exposed by the application.
 pub struct MemoryResource {
     pub name: String,

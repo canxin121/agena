@@ -15,8 +15,8 @@ use super::{
     BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationTransition,
     BackgroundSettleOutcome, InteractionAnswerOutcome, LeaseAcquire, NewBackgroundOperation,
     NewPart, NewSession, Part, PartDelta, PartState, ReconcileOutcome, RunOutcome,
-    SessionListQuery, SessionMeta, SessionSummary, SessionView, StoreError, SubmitOutcome,
-    UsageQuery, UsageRecord, UsageStats,
+    SessionListQuery, SessionMeta, SessionState, SessionSummary, SessionView, StoreError,
+    SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
 };
 
 /// A live-update notification derived from an operation and emitted after
@@ -137,6 +137,14 @@ pub trait PersistenceEngine: Send + Sync {
         &self,
         query: SessionListQuery,
     ) -> Result<Vec<SessionSummary>, StoreError>;
+
+    /// Derive processing states for a set of sessions in one backend read.
+    /// Missing ids are omitted from the returned map.
+    async fn session_states(
+        &self,
+        session_ids: &[i64],
+        now_ms: i64,
+    ) -> Result<HashMap<i64, SessionState>, StoreError>;
 
     /// Fetch one session's summary row, or `None` when it does not exist.
     /// A cheap single-row projection of [`Self::list_session_summaries`]

@@ -1,11 +1,12 @@
 //! Unified background-activity management.
 //!
 //! Long-running work created by Agena tools — background shell processes,
-//! delegated subagent tasks, and runtime maintenance tasks — is projected
-//! into one bounded registry ([`registry::ActivityRegistry`]) and surfaced
-//! through the application-facing [`RuntimeActivityService`] port. Every
-//! mutation publishes a `background_activity_changed` event on the runtime
-//! bus so TUI and web can follow work live.
+//! delegated subagent tasks, scheduled jobs, and runtime maintenance tasks —
+//! is surfaced through one [`RuntimeActivityService`] projection. Durable
+//! background-operation and scheduler rows own lifecycle truth; the bounded
+//! [`registry::ActivityRegistry`] contributes live log/detail state and
+//! terminal history. Every mutation publishes a `background_activity_changed`
+//! signal so TUI and web can follow work live.
 
 pub mod registry;
 pub mod service;

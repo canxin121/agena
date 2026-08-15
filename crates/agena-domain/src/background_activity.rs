@@ -17,12 +17,17 @@ use strum::{Display, EnumString};
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-/// Kind of background activity: shell, task, runtime, or browser.
+/// Kind of background activity. Durable tool work keeps the same kind from
+/// its background-operation aggregate all the way through this UI contract.
 pub enum BackgroundActivityKind {
-    /// A long-lived shell process or monitor spawned by `shell.run`.
+    /// A long-lived shell process spawned by `shell.run`.
     Shell,
+    /// A continuously emitting monitor spawned by `monitor.start`.
+    Monitor,
     /// A delegated subagent task spawned by `tasks.create` / `tasks.run`.
     Task,
+    /// A durable scheduled job owned by the scheduler.
+    Cron,
     /// A runtime-maintained maintenance task (marketplace sync, catalog
     /// refresh, runtime reload).
     Runtime,
@@ -32,12 +37,21 @@ pub enum BackgroundActivityKind {
 
 impl BackgroundActivityKind {
     /// All background activity kinds.
-    pub const ALL: [Self; 4] = [Self::Shell, Self::Task, Self::Runtime, Self::Browser];
+    pub const ALL: [Self; 6] = [
+        Self::Shell,
+        Self::Monitor,
+        Self::Task,
+        Self::Cron,
+        Self::Runtime,
+        Self::Browser,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Shell => "shell",
+            Self::Monitor => "monitor",
             Self::Task => "task",
+            Self::Cron => "cron",
             Self::Runtime => "runtime",
             Self::Browser => "browser",
         }
@@ -56,6 +70,9 @@ pub enum BackgroundActivityStatus {
     /// limits).
     Pending,
     Running,
+    /// A durable schedule that remains manageable but will not fire until
+    /// resumed.
+    Paused,
     Succeeded,
     Failed,
     /// Cancelled by an explicit operator action.
@@ -66,7 +83,7 @@ pub enum BackgroundActivityStatus {
 
 impl BackgroundActivityStatus {
     pub fn is_active(self) -> bool {
-        matches!(self, Self::Pending | Self::Running)
+        matches!(self, Self::Pending | Self::Running | Self::Paused)
     }
 
     pub fn is_terminal(self) -> bool {
@@ -77,6 +94,7 @@ impl BackgroundActivityStatus {
         match self {
             Self::Pending => "pending",
             Self::Running => "running",
+            Self::Paused => "paused",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
@@ -107,10 +125,21 @@ pub struct BackgroundActivity {
     /// Parent session for delegated child-session work.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<i64>,
+    /// Durable aggregate id when this member is backed by a background
+    /// operation. Scheduler jobs use their prefixed activity id instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    /// Tool-call part that launched this member. This is the stable bridge
+    /// from Activities back to the transcript in both TUI and Web.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_part_id: Option<i64>,
     pub created_at_ms: i64,
     pub started_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at_ms: Option<i64>,
+    /// Next scheduled wake time for cron members.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_event_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     /// Free-form status/progress message (e.g. “Installed 3 plugins”).
@@ -242,9 +271,12 @@ mod tests {
             workdir: Some("/repo".into()),
             session_id: Some(7),
             parent_session_id: None,
+            operation_id: None,
+            source_part_id: None,
             created_at_ms: 1,
             started_at_ms: 1,
             finished_at_ms: None,
+            next_event_at_ms: None,
             exit_code: None,
             message: None,
             failure: None,
@@ -259,6 +291,7 @@ mod tests {
     #[test]
     fn status_lifecycle_helpers() {
         assert!(BackgroundActivityStatus::Running.is_active());
+        assert!(BackgroundActivityStatus::Paused.is_active());
         assert!(BackgroundActivityStatus::Failed.is_terminal());
         assert_eq!(BackgroundActivityStatus::Stopped.as_str(), "stopped");
     }

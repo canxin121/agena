@@ -17,43 +17,6 @@ const ACTIVITY_REQUEST_TIMEOUT_SECS: u64 = 10;
 const ACTIVITY_LOG_LIMIT: usize = 500;
 
 impl App {
-    /// Slow-cadence background poll for the footer activity pill. Reserve the
-    /// cadence window before spawning so a slow backend cannot create one
-    /// request per UI tick.
-    pub(crate) fn refresh_background_activity_summary_if_due(&mut self, now: super::Instant) {
-        const INTERVAL_MS: u64 = 10_000;
-        if let Some((_, refreshed)) = self.background_activity_summary
-            && now.duration_since(refreshed) < super::Duration::from_millis(INTERVAL_MS)
-        {
-            return;
-        }
-        let previous_count = self
-            .background_activity_summary
-            .map_or(0, |(count, _)| count);
-        // Reserve the polling window before spawning. Otherwise every 50 ms UI
-        // tick starts another request until the first response arrives.
-        self.background_activity_summary = Some((previous_count, now));
-        let filter = agena_domain::BackgroundActivityFilter {
-            active_only: true,
-            ..Default::default()
-        };
-        let application = self.application.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let count = tokio::time::timeout(
-                super::Duration::from_secs(ACTIVITY_REQUEST_TIMEOUT_SECS),
-                crate::app_backend::activities::list_activities(&application, filter),
-            )
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .map_or(previous_count, |items| items.len());
-            let _ = tx
-                .send(AppMessage::BackgroundActivitySummaryLoaded { count })
-                .await;
-        });
-    }
-
     /// Keep a visible Activities route live without requiring manual refresh.
     /// List and log requests have independent cadence and in-flight gates.
     pub(crate) fn refresh_activities_panel_if_due(&mut self, now: super::Instant) {
@@ -68,7 +31,7 @@ impl App {
                     .detail
                     .then(|| selected_row(&state.rows, &state.presentation))
                     .flatten()
-                    .filter(|row| row.is_active())
+                    .filter(|row| row.logs_are_live())
                     .filter(|_| !state.log_loading)
                     .filter(|_| {
                         now.duration_since(state.last_log_refresh_at)
@@ -320,9 +283,6 @@ impl App {
                 return;
             }
             state.mutation_loading = false;
-            if ok && let Some(row) = state.rows.iter_mut().find(|row| row.id == activity_id) {
-                row.status = "stopped".to_owned();
-            }
             (ok && state.presentation.detail)
                 .then(|| selected_row(&state.rows, &state.presentation))
                 .flatten()
@@ -332,40 +292,8 @@ impl App {
         if let Some(activity_id) = refresh_log {
             self.spawn_activity_log_tail(activity_id);
         }
-    }
-
-    pub(crate) fn handle_activities_dismissed(
-        &mut self,
-        activity_id: String,
-        request_id: u64,
-        ok: bool,
-    ) {
-        let next_detail = {
-            let Route::Activities(state) = &mut self.current_route else {
-                return;
-            };
-            if request_id != state.mutation_request_id {
-                return;
-            }
-            state.mutation_loading = false;
-            if ok {
-                state.rows.retain(|row| row.id != activity_id);
-                let visible =
-                    agena_tui::activities::visible_rows(state.rows.as_slice(), &state.presentation)
-                        .len();
-                state.presentation.clamp_selection(visible);
-                state.log_tail = None;
-                state.log_error = None;
-                state.log_activity_id = None;
-                state.log_loading = false;
-            }
-            (ok && state.presentation.detail)
-                .then(|| selected_row(&state.rows, &state.presentation))
-                .flatten()
-                .map(|row| row.id.clone())
-        };
-        if let Some(activity_id) = next_detail {
-            self.spawn_activity_log_tail(activity_id);
+        if ok {
+            self.refresh_activities_panel();
         }
     }
 
@@ -531,13 +459,27 @@ impl App {
                 ActivitiesEffect::None
             }
             ActivitiesControl::Stop => match selected_row(&state.rows, &state.presentation) {
-                Some(row) if row.is_active() && row.cancellable => {
-                    ActivitiesEffect::Stop(row.id.clone())
-                }
+                Some(row) => row
+                    .controls
+                    .iter()
+                    .find(|control| matches!(control.as_str(), "stop" | "pause" | "resume"))
+                    .map(|action| ActivitiesEffect::Control {
+                        id: row.id.clone(),
+                        action: action.clone(),
+                    })
+                    .unwrap_or(ActivitiesEffect::None),
                 _ => ActivitiesEffect::None,
             },
             ActivitiesControl::Dismiss => match selected_row(&state.rows, &state.presentation) {
-                Some(row) if row.dismissible => ActivitiesEffect::Dismiss(row.id.clone()),
+                Some(row) => row
+                    .controls
+                    .iter()
+                    .find(|control| matches!(control.as_str(), "delete" | "dismiss"))
+                    .map(|action| ActivitiesEffect::Control {
+                        id: row.id.clone(),
+                        action: action.clone(),
+                    })
+                    .unwrap_or(ActivitiesEffect::None),
                 _ => ActivitiesEffect::None,
             },
             ActivitiesControl::ClearFinished => ActivitiesEffect::ClearFinished,
@@ -559,7 +501,10 @@ impl App {
                     state.log_loading = false;
                 }
             }
-            ActivitiesEffect::Stop(activity_id) => {
+            ActivitiesEffect::Control {
+                id: activity_id,
+                action,
+            } => {
                 let request_id = self.next_usage_request_id.saturating_add(1);
                 self.next_usage_request_id = request_id;
                 state.mutation_request_id = request_id;
@@ -569,48 +514,21 @@ impl App {
                 tokio::spawn(async move {
                     let result = match tokio::time::timeout(
                         super::Duration::from_secs(ACTIVITY_REQUEST_TIMEOUT_SECS),
-                        crate::app_backend::activities::stop_activity(&application, &activity_id),
-                    )
-                    .await
-                    {
-                        Ok(result) => result.map(|_| true).map_err(crate::UiFailure::internal),
-                        Err(_) => Err(crate::UiFailure::internal(
-                            "stopping background activity timed out after 10 seconds",
-                        )),
-                    };
-                    let _ = tx
-                        .send(AppMessage::ActivitiesStopped {
-                            activity_id,
-                            request_id,
-                            result,
-                        })
-                        .await;
-                });
-            }
-            ActivitiesEffect::Dismiss(activity_id) => {
-                let request_id = self.next_usage_request_id.saturating_add(1);
-                self.next_usage_request_id = request_id;
-                state.mutation_request_id = request_id;
-                state.mutation_loading = true;
-                let application = self.application.clone();
-                let tx = self.tx.clone();
-                tokio::spawn(async move {
-                    let result = match tokio::time::timeout(
-                        super::Duration::from_secs(ACTIVITY_REQUEST_TIMEOUT_SECS),
-                        crate::app_backend::activities::dismiss_activity(
+                        crate::app_backend::activities::control_activity(
                             &application,
                             &activity_id,
+                            &action,
                         ),
                     )
                     .await
                     {
                         Ok(result) => result.map(|_| true).map_err(crate::UiFailure::internal),
                         Err(_) => Err(crate::UiFailure::internal(
-                            "dismissing background activity timed out after 10 seconds",
+                            "controlling background activity timed out after 10 seconds",
                         )),
                     };
                     let _ = tx
-                        .send(AppMessage::ActivitiesDismissed {
+                        .send(AppMessage::ActivitiesStopped {
                             activity_id,
                             request_id,
                             result,
@@ -690,6 +608,9 @@ pub(super) fn activities_row_from_resource(activity: &BackgroundActivityResource
         finished_at_ms: activity.finished_at_ms,
         exit_code: activity.exit_code,
         message: activity.message.clone(),
+        source_part_id: activity.source_part_id,
+        next_event_at_ms: activity.next_event_at_ms,
+        controls: activity.controls.clone(),
         cancellable: activity.cancellable,
         dismissible: activity.dismissible,
     }

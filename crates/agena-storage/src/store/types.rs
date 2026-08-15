@@ -290,8 +290,10 @@ pub struct BackgroundOperationTransition {
 }
 
 /// A durable operation event. Terminal events advance the operation phase;
-/// monitor events leave it running. The notification is projected into a new
-/// runtime-ingress run in the same transaction as the unique delivery row.
+/// monitor events leave it running. An AI-launched operation appends the
+/// notification to its launching assistant run; an operation without a launch
+/// run uses a new Runtime ingress. Either write is atomic with the unique
+/// delivery row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackgroundEventRequest {
     pub operation_id: String,

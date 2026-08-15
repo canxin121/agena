@@ -347,6 +347,27 @@ impl ToolExecutor {
         call_id: i64,
         prepared_shell_command: Option<PreparedShellCommand>,
     ) -> Result<ToolInvocationExecution, ToolError> {
+        self.execute_invocation_detailed_with_launch_provenance(
+            invocation,
+            session_id,
+            call_id,
+            prepared_shell_command,
+            None,
+        )
+        .await
+    }
+
+    /// Execute a tool with the exact assistant receipt that owns any durable
+    /// child work it creates. Only model-originated tool paths provide this;
+    /// host/application calls deliberately remain provenance-free.
+    pub async fn execute_invocation_detailed_with_launch_provenance(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+        prepared_shell_command: Option<PreparedShellCommand>,
+        launch_provenance: Option<agena_scheduler::ScheduledJobLaunchProvenance>,
+    ) -> Result<ToolInvocationExecution, ToolError> {
         self.ensure_not_cancelled()?;
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
         let tool_name = plugin_invocation_name(&plugin_invocation);
@@ -363,6 +384,7 @@ impl ToolExecutor {
                 session_id: (session_id >= 0).then_some(session_id),
                 call_id: (call_id >= 0).then_some(call_id),
                 prepared_shell_command,
+                launch_provenance,
             };
             let execution = match payload {
                 ToolPayloadInput::Shell(input) => {
@@ -372,8 +394,7 @@ impl ToolExecutor {
                     crate::tool::monitor_tool::execute_async(self, &input, context).await?
                 }
                 ToolPayloadInput::CronCreate(input) => {
-                    crate::tool::cron::execute_create_async(self, &input, context.session_id)
-                        .await?
+                    crate::tool::cron::execute_create_async(self, &input, &context).await?
                 }
                 ToolPayloadInput::CronList(input) => {
                     crate::tool::cron::execute_list_async(self, &input).await?

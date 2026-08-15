@@ -3,6 +3,7 @@
 use std::str::FromStr;
 
 use chrono::{DateTime, Duration, Utc};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -211,6 +212,19 @@ impl JobDeliveryResult {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Exact assistant tool-call identity that created a scheduled job.
+///
+/// This is persisted inside the scheduler's canonical job JSON. It is not a
+/// mutable delivery cursor: recurring fires intentionally retain the same
+/// provenance for their entire lifetime.
+pub struct ScheduledJobLaunchProvenance {
+    pub session_id: i64,
+    pub run_id: i64,
+    pub tool_part_id: i64,
+    pub call_id: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// A scheduled job.
 pub struct ScheduledJob {
@@ -221,6 +235,13 @@ pub struct ScheduledJob {
     /// to spawn a fresh headless session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_session_id: Option<i64>,
+    /// Durable provenance for schedules created by an assistant tool call.
+    ///
+    /// Older and host-created jobs legitimately have no provenance and are
+    /// delivered as Runtime ingress. When present, every fire is attached to
+    /// this exact assistant run/tool part instead of creating a new run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_provenance: Option<ScheduledJobLaunchProvenance>,
     pub created_at: DateTime<Utc>,
     pub last_fired_at: Option<DateTime<Utc>>,
     pub next_fire_at: Option<DateTime<Utc>>,
@@ -262,9 +283,28 @@ impl ScheduledJob {
         prompt: impl Into<String>,
         max_age_days: u32,
     ) -> SchedulerResult<Self> {
+        Self::new_cron_in_timezone(expression, prompt, max_age_days, "UTC")
+    }
+
+    /// Create a cron schedule whose wall-clock fields are evaluated in an
+    /// explicit IANA timezone. Persisting the zone in metadata keeps the wire
+    /// shape backwards compatible while making every future recomputation
+    /// (resume, update, advance, restart recovery) deterministic.
+    pub fn new_cron_in_timezone(
+        expression: impl Into<String>,
+        prompt: impl Into<String>,
+        max_age_days: u32,
+        timezone: &str,
+    ) -> SchedulerResult<Self> {
         let expression = expression.into();
+        let timezone = parse_timezone(timezone)?;
         let now = Utc::now();
-        let next = compute_next_fire(&expression, now)?;
+        let next = compute_next_fire(&expression, now, timezone)?;
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "timezone".to_owned(),
+            serde_json::Value::String(timezone.name().to_owned()),
+        );
         Ok(Self {
             id: Uuid::new_v4(),
             kind: JobKind::Cron {
@@ -273,6 +313,7 @@ impl ScheduledJob {
             },
             prompt: prompt.into(),
             owner_session_id: None,
+            launch_provenance: None,
             created_at: now,
             last_fired_at: None,
             next_fire_at: Some(next),
@@ -284,8 +325,17 @@ impl ScheduledJob {
             completed: false,
             last_run: None,
             run_history: Vec::new(),
-            metadata: serde_json::Map::new(),
+            metadata,
         })
+    }
+
+    /// IANA timezone used by cron members. Rows created before timezone-aware
+    /// scheduling remain explicitly UTC for backwards compatibility.
+    pub fn cron_timezone(&self) -> &str {
+        self.metadata
+            .get("timezone")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("UTC")
     }
 
     pub fn new_once(at: DateTime<Utc>, prompt: impl Into<String>) -> Self {
@@ -294,6 +344,7 @@ impl ScheduledJob {
             kind: JobKind::Once { at },
             prompt: prompt.into(),
             owner_session_id: None,
+            launch_provenance: None,
             created_at: Utc::now(),
             last_fired_at: None,
             next_fire_at: Some(at),
@@ -311,6 +362,14 @@ impl ScheduledJob {
 
     pub fn set_owner(&mut self, session_id: i64) {
         self.owner_session_id = Some(session_id);
+    }
+
+    /// Bind an assistant-created schedule to the exact durable tool receipt
+    /// that created it. The owner is derived from the same value so the two
+    /// identities cannot drift apart.
+    pub fn set_launch_provenance(&mut self, provenance: ScheduledJobLaunchProvenance) {
+        self.owner_session_id = Some(provenance.session_id);
+        self.launch_provenance = Some(provenance);
     }
 
     pub fn set_recovery_policy(
@@ -337,8 +396,9 @@ impl ScheduledJob {
         self.paused = false;
         self.pending_delivery = None;
         self.retry_at = None;
+        let timezone = parse_timezone(self.cron_timezone())?;
         if let JobKind::Cron { expression, .. } = &self.kind {
-            self.next_fire_at = Some(compute_next_fire(expression, now)?);
+            self.next_fire_at = Some(compute_next_fire(expression, now, timezone)?);
         }
         Ok(true)
     }
@@ -353,6 +413,7 @@ impl ScheduledJob {
         now: DateTime<Utc>,
     ) -> SchedulerResult<bool> {
         let mut changed = false;
+        let timezone = parse_timezone(self.cron_timezone())?;
         if let Some(prompt) = prompt
             && self.prompt != prompt
         {
@@ -367,7 +428,7 @@ impl ScheduledJob {
                 if let Some(expression) = expression
                     && *current_expression != expression
                 {
-                    let next = compute_next_fire(expression.as_str(), now)?;
+                    let next = compute_next_fire(expression.as_str(), now, timezone)?;
                     *current_expression = expression;
                     if !self.paused {
                         self.next_fire_at = Some(next);
@@ -412,6 +473,7 @@ impl ScheduledJob {
     /// [`JobOutcome::Expired`] when the job is terminal and should remain
     /// available for audit but never run again.
     pub fn advance(&mut self, fired_at: DateTime<Utc>) -> SchedulerResult<JobOutcome> {
+        let timezone = parse_timezone(self.cron_timezone())?;
         self.last_fired_at = Some(fired_at);
         self.pending_delivery = None;
         self.retry_at = None;
@@ -431,7 +493,7 @@ impl ScheduledJob {
                     self.completed = true;
                     return Ok(JobOutcome::Expired);
                 }
-                let next = compute_next_fire(expression, fired_at)?;
+                let next = compute_next_fire(expression, fired_at, timezone)?;
                 self.next_fire_at = Some(next);
                 Ok(JobOutcome::Continued)
             }
@@ -602,6 +664,7 @@ impl ScheduledJob {
     }
 
     fn reschedule_after(&mut self, now: DateTime<Utc>) -> SchedulerResult<()> {
+        let timezone = parse_timezone(self.cron_timezone())?;
         self.pending_delivery = None;
         self.retry_at = None;
         self.last_fired_at = Some(now);
@@ -611,7 +674,7 @@ impl ScheduledJob {
                 self.completed = true;
             }
             JobKind::Cron { expression, .. } => {
-                self.next_fire_at = Some(compute_next_fire(expression, now)?);
+                self.next_fire_at = Some(compute_next_fire(expression, now, timezone)?);
             }
         }
         Ok(())
@@ -653,15 +716,26 @@ fn is_misfire(scheduled_for: DateTime<Utc>, now: DateTime<Utc>) -> bool {
     now.signed_duration_since(scheduled_for) > MISFIRE_GRACE
 }
 
-fn compute_next_fire(expression: &str, after: DateTime<Utc>) -> SchedulerResult<DateTime<Utc>> {
+fn parse_timezone(timezone: &str) -> SchedulerResult<Tz> {
+    timezone.parse::<Tz>().map_err(|error| {
+        SchedulerError::InvalidUpdate(format!("invalid IANA timezone `{timezone}`: {error}"))
+    })
+}
+
+fn compute_next_fire(
+    expression: &str,
+    after: DateTime<Utc>,
+    timezone: Tz,
+) -> SchedulerResult<DateTime<Utc>> {
     let schedule =
         cron::Schedule::from_str(expression).map_err(|e| SchedulerError::InvalidCron {
             expr: expression.to_string(),
             source: e,
         })?;
     schedule
-        .after(&after)
+        .after(&after.with_timezone(&timezone))
         .next()
+        .map(|time| time.with_timezone(&Utc))
         .ok_or_else(|| SchedulerError::NoFutureFire {
             expr: expression.to_string(),
         })
@@ -669,12 +743,52 @@ fn compute_next_fire(expression: &str, after: DateTime<Utc>) -> SchedulerResult<
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Duration, Utc};
+    use chrono::{Duration, TimeZone, Utc};
 
     use super::{
         ClaimDueDelivery, JobDeliveryResult, JobOutcome, JobRunStatus, MisfirePolicy, ScheduledJob,
-        scheduler_outcome_failure,
+        ScheduledJobLaunchProvenance, compute_next_fire, scheduler_outcome_failure,
     };
+
+    #[test]
+    fn assistant_launch_provenance_is_durable_and_backward_compatible() {
+        let mut job = ScheduledJob::new_once(Utc::now(), "wake");
+        let provenance = ScheduledJobLaunchProvenance {
+            session_id: 60,
+            run_id: 2150,
+            tool_part_id: 2195,
+            call_id: 2193,
+        };
+        job.set_launch_provenance(provenance);
+        let encoded = serde_json::to_value(&job).expect("encode scheduled job");
+        let decoded: ScheduledJob = serde_json::from_value(encoded.clone()).expect("decode job");
+        assert_eq!(decoded.owner_session_id, Some(60));
+        assert_eq!(decoded.launch_provenance, Some(provenance));
+
+        let mut legacy = encoded;
+        legacy
+            .as_object_mut()
+            .expect("job object")
+            .remove("launch_provenance");
+        let decoded: ScheduledJob = serde_json::from_value(legacy).expect("decode legacy job");
+        assert_eq!(decoded.launch_provenance, None);
+    }
+
+    #[test]
+    fn cron_wall_clock_is_evaluated_in_the_declared_timezone() {
+        let after = Utc
+            .with_ymd_and_hms(2026, 8, 14, 15, 27, 23)
+            .single()
+            .expect("fixed instant");
+        let timezone = "Asia/Shanghai".parse().expect("timezone");
+        let next = compute_next_fire("20 28 23 14 8 *", after, timezone).expect("next local fire");
+        assert_eq!(
+            next,
+            Utc.with_ymd_and_hms(2026, 8, 14, 15, 28, 20)
+                .single()
+                .expect("expected UTC instant")
+        );
+    }
 
     #[test]
     fn pause_resume_and_update_preserve_durable_schedule_semantics() {

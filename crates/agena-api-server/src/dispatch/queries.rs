@@ -72,7 +72,10 @@ pub async fn dispatch_query(
         Query::ListActivities(params) => {
             let service = state.runtime_activities()?;
             let filter = agena_application::service::activity_filter_from_params(&params);
-            let activities = service.list_activities(&filter);
+            let activities = service
+                .list_activities(&filter)
+                .await
+                .map_err(activity_control_error)?;
             Ok(QueryResult::Activities(
                 activities
                     .iter()
@@ -84,6 +87,7 @@ pub async fn dispatch_query(
             let service = state.runtime_activities()?;
             let activity = service
                 .get_activity(&activity_id)
+                .await
                 .map_err(activity_control_error)?;
             Ok(QueryResult::Activity(
                 agena_api::resource::BackgroundActivityResource::from(&activity),

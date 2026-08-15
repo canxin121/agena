@@ -152,10 +152,10 @@ fn last_input_message_id(parts: &[Part]) -> Option<i64> {
 }
 
 /// The part id of the newest `system_notification` content part, if any.
-/// Background events are committed as chronological Runtime ingress runs. The
-/// input-run cursor normally detects those arrivals; this content cursor is an
-/// additional durable acknowledgement key and keeps migrated/legacy
-/// notifications wakeable even when they do not have a Runtime run marker.
+/// AI-launched background events are Assistant-owned children of their launch
+/// runs, so they cannot use the external-input marker cursor. This independent
+/// content cursor is the delivery acknowledgement key. It also covers
+/// launch-less Runtime notifications.
 fn newest_notification_part_id(parts: &[Part]) -> Option<i64> {
     parts
         .iter()
@@ -379,9 +379,9 @@ impl SessionManager {
         let mut model_requested = true;
         let mut observed_input_message_id = last_input_message_id(session.parts());
         // Durable cursor for "the newest settled background-operation
-        // notification the model has seen". A chronological Runtime ingress
-        // committed mid-turn moves this cursor; the loop then re-triggers a
-        // fresh model turn over it.
+        // notification the model has seen". A hook committed mid-turn moves
+        // this cursor; the loop then requests the next provider round after
+        // the current part boundary.
         let mut observed_notification_id = newest_notification_part_id(session.parts());
         // The assistant run marker for the current turn (one user message ==
         // one run marker). Created on the turn's first model turn and reused by
@@ -466,10 +466,11 @@ impl SessionManager {
             let latest_notification = newest_notification_part_id(session.parts());
             let notification_changed = latest_notification != observed_notification_id;
             if notification_changed {
-                // A background event arrived as a Runtime ingress (or as a
-                // migrated legacy notification). The model must take a fresh
-                // turn over it — the agena analog of Claude Code's
-                // `<task-notification>` waking the launching turn.
+                // A background hook arrived. The model must take another
+                // provider round over it — the agena analog of Claude Code's
+                // `<task-notification>` waking the launching turn. The loop is
+                // between provider/tool parts here, so the active part has
+                // already reached a safe boundary.
                 //
                 // Acknowledge every newly-seen notification part to its
                 // settle: the settle steers and then waits for this
@@ -487,9 +488,31 @@ impl SessionManager {
                 }
                 observed_notification_id = latest_notification;
                 model_requested = true;
+                // A tool-calling run remains in flight and can carry the
+                // notification follow-up as another provider round on the
+                // same turn. A text-only provider part may have terminalized
+                // its marker before this queued hook was drained; terminal
+                // markers are immutable, so the follow-up opens a new
+                // Assistant run without inventing a Runtime ingress boundary.
+                if turn_run_id.is_some_and(|run_id| {
+                    session
+                        .parts()
+                        .iter()
+                        .find(|part| part.part_id == run_id)
+                        .is_some_and(|marker| marker.state.is_terminal())
+                }) {
+                    turn_run_id = None;
+                }
             }
 
-            if (input_changed || notification_changed) && turn_run_id.is_some() {
+            // User/System/Runtime input starts a new conversation turn. An
+            // AI-launched background notification is different: it is an
+            // Assistant-owned hook appended to the launch turn and merely
+            // requests another provider round after the current provider/tool
+            // part reaches this stable-loop boundary. Keeping it out of the
+            // external-input handoff prevents a mid-turn hook from closing the
+            // assistant run and producing a synthetic "resume" reply.
+            if input_changed && turn_run_id.is_some() {
                 external_input_boundary_pending = true;
             }
             if external_input_boundary_pending {
@@ -1440,6 +1463,9 @@ impl SessionManager {
                 completion,
                 next_message_id: marker_run_id,
                 marker_content,
+                input_notification_part_ids: prompt_window::provider_visible_notification_part_ids(
+                    &session,
+                ),
                 part_ids: Default::default(),
                 next_call_id: session.next_call_id(),
                 // R2: the processor persists this turn's parts itself through
@@ -2077,11 +2103,12 @@ impl SessionManager {
                     pending_tool.advertised_tool_identity.as_deref(),
                 )?;
                 scoped_executor
-                    .execute_invocation_detailed_with_prepared_shell(
+                    .execute_invocation_detailed_with_launch_provenance(
                         &pending_tool.invocation,
                         session_id,
                         pending_tool.call_id,
                         pending_tool.prepared_shell_command.clone(),
+                        Some(pending_tool.scheduled_job_launch_provenance(session_id)),
                     )
                     .await
             }));
@@ -2490,11 +2517,12 @@ impl SessionManager {
         let _host_user_input_sequence = manager
             .host_user_input_sequence_guard(execution_session_id, execution_resolved.call_id);
         let execution = scoped_executor
-            .execute_invocation_detailed_with_prepared_shell(
+            .execute_invocation_detailed_with_launch_provenance(
                 &execution_resolved.invocation,
                 execution_session_id,
                 execution_resolved.call_id,
                 execution_resolved.prepared_shell_command.clone(),
+                Some(execution_resolved.scheduled_job_launch_provenance(execution_session_id)),
             )
             .await;
 

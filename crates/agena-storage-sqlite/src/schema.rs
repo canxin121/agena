@@ -99,8 +99,8 @@ async fn schema_lock_path(db: &DatabaseConnection) -> Result<Option<PathBuf>, Db
 /// Serialized across processes by a filesystem lock so concurrent cold starts
 /// of the same database file cannot race the WAL switch or the DDL transaction.
 /// A version-0 database is created from scratch; a database already at
-/// [`CURRENT_SCHEMA_VERSION`] is left untouched. The compatible additive v8
-/// schema is migrated to v9 in one transaction; other development schemas are
+/// [`CURRENT_SCHEMA_VERSION`] is left untouched. Compatible v8 and v9
+/// schemas are migrated forward in one transaction; other development schemas are
 /// rejected (v1 databases were discarded by decision D3).
 pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     let _lock = SchemaLock::acquire(db).await?;
@@ -137,7 +137,8 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
             .await?;
             txn.commit().await
         }
-        8 => migrate_v8_to_v9(db).await,
+        8 => migrate_v8_to_current(db).await,
+        9 => migrate_v9_to_v10(db).await,
         v if v == CURRENT_SCHEMA_VERSION => Ok(()),
         v => Err(DbErr::Custom(format!(
             "database schema version {v} is incompatible with the supported version {CURRENT_SCHEMA_VERSION}; \
@@ -149,7 +150,7 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
 /// Add the background-operation aggregate without rewriting any transcript
 /// row. Existing v8 sessions remain readable; legacy in-progress markers are
 /// adopted lazily by the runtime when first observed.
-async fn migrate_v8_to_v9(db: &DatabaseConnection) -> Result<(), DbErr> {
+async fn migrate_v8_to_current(db: &DatabaseConnection) -> Result<(), DbErr> {
     let txn = db.begin().await?;
     for statement in BACKGROUND_TABLES.iter().chain(BACKGROUND_INDEXES) {
         txn.execute(Statement::from_string(
@@ -185,6 +186,43 @@ async fn migrate_v8_to_v9(db: &DatabaseConnection) -> Result<(), DbErr> {
             .to_owned(),
     ))
     .await?;
+    txn.execute(Statement::from_string(
+        txn.get_database_backend(),
+        format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"),
+    ))
+    .await?;
+    txn.commit().await
+}
+
+/// Rebuild the two background tables so scheduled deliveries can retain a
+/// paired assistant launch run/tool reference. SQLite cannot alter a CHECK
+/// constraint in place. Renaming both tables first preserves every foreign
+/// key while the canonical names are recreated and copied transactionally.
+async fn migrate_v9_to_v10(db: &DatabaseConnection) -> Result<(), DbErr> {
+    let txn = db.begin().await?;
+    for statement in [
+        "ALTER TABLE agena_background_deliveries RENAME TO agena_background_deliveries_v9",
+        "ALTER TABLE agena_background_operations RENAME TO agena_background_operations_v9",
+        BACKGROUND_TABLES[0],
+        BACKGROUND_TABLES[1],
+        "INSERT INTO agena_background_operations SELECT * FROM agena_background_operations_v9",
+        "INSERT INTO agena_background_deliveries SELECT * FROM agena_background_deliveries_v9",
+        "DROP TABLE agena_background_deliveries_v9",
+        "DROP TABLE agena_background_operations_v9",
+    ] {
+        txn.execute(Statement::from_string(
+            txn.get_database_backend(),
+            statement.to_owned(),
+        ))
+        .await?;
+    }
+    for statement in BACKGROUND_INDEXES {
+        txn.execute(Statement::from_string(
+            txn.get_database_backend(),
+            (*statement).to_owned(),
+        ))
+        .await?;
+    }
     txn.execute(Statement::from_string(
         txn.get_database_backend(),
         format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"),
@@ -230,7 +268,7 @@ const TABLES: &[&str] = &[
 ];
 
 const BACKGROUND_TABLES: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS agena_background_operations (operation_id TEXT PRIMARY KEY CHECK (length(operation_id) > 0), session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, launch_run_id INTEGER NULL REFERENCES agena_parts(part_id), launch_tool_part_id INTEGER NULL REFERENCES agena_parts(part_id), kind TEXT NOT NULL CHECK (kind IN ('shell','task','monitor','scheduled_delivery')), external_id TEXT NULL CHECK (external_id IS NULL OR length(external_id) > 0), phase TEXT NOT NULL CHECK (phase IN ('launch_requested','launching','running','completed','failed','cancelled','timed_out','interrupted')), outcome_json JSON NULL, failure_json JSON NULL, last_event_seq INTEGER NOT NULL DEFAULT 0 CHECK (last_event_seq >= 0), owner_id TEXT NULL, lease_until_ms INTEGER NULL, revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1), created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL, CHECK ((kind = 'scheduled_delivery' AND launch_run_id IS NULL AND launch_tool_part_id IS NULL) OR (kind != 'scheduled_delivery' AND launch_run_id IS NOT NULL AND launch_tool_part_id IS NOT NULL)), CHECK ((phase IN ('launch_requested','launching','running') AND finished_at_ms IS NULL) OR (phase IN ('completed','failed','cancelled','timed_out','interrupted') AND finished_at_ms IS NOT NULL)), CHECK ((owner_id IS NULL AND lease_until_ms IS NULL) OR (owner_id IS NOT NULL AND lease_until_ms IS NOT NULL)), CHECK (outcome_json IS NULL OR json_valid(outcome_json) = 1), CHECK (failure_json IS NULL OR json_valid(failure_json) = 1))",
+    "CREATE TABLE IF NOT EXISTS agena_background_operations (operation_id TEXT PRIMARY KEY CHECK (length(operation_id) > 0), session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, launch_run_id INTEGER NULL REFERENCES agena_parts(part_id), launch_tool_part_id INTEGER NULL REFERENCES agena_parts(part_id), kind TEXT NOT NULL CHECK (kind IN ('shell','task','monitor','scheduled_delivery')), external_id TEXT NULL CHECK (external_id IS NULL OR length(external_id) > 0), phase TEXT NOT NULL CHECK (phase IN ('launch_requested','launching','running','completed','failed','cancelled','timed_out','interrupted')), outcome_json JSON NULL, failure_json JSON NULL, last_event_seq INTEGER NOT NULL DEFAULT 0 CHECK (last_event_seq >= 0), owner_id TEXT NULL, lease_until_ms INTEGER NULL, revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1), created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL, CHECK ((launch_run_id IS NULL AND launch_tool_part_id IS NULL) OR (launch_run_id IS NOT NULL AND launch_tool_part_id IS NOT NULL)), CHECK (kind = 'scheduled_delivery' OR (launch_run_id IS NOT NULL AND launch_tool_part_id IS NOT NULL)), CHECK ((phase IN ('launch_requested','launching','running') AND finished_at_ms IS NULL) OR (phase IN ('completed','failed','cancelled','timed_out','interrupted') AND finished_at_ms IS NOT NULL)), CHECK ((owner_id IS NULL AND lease_until_ms IS NULL) OR (owner_id IS NOT NULL AND lease_until_ms IS NOT NULL)), CHECK (outcome_json IS NULL OR json_valid(outcome_json) = 1), CHECK (failure_json IS NULL OR json_valid(failure_json) = 1))",
     "CREATE TABLE IF NOT EXISTS agena_background_deliveries (delivery_id TEXT PRIMARY KEY CHECK (length(delivery_id) > 0), operation_id TEXT NOT NULL REFERENCES agena_background_operations(operation_id) ON UPDATE CASCADE ON DELETE CASCADE, session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, event_key TEXT NOT NULL CHECK (length(event_key) > 0), payload_json JSON NOT NULL CHECK (json_valid(payload_json) = 1), phase TEXT NOT NULL CHECK (phase IN ('pending','claimed','consumed')), claim_owner TEXT NULL, claim_until_ms INTEGER NULL, attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0), notification_part_id INTEGER NULL REFERENCES agena_parts(part_id), last_error_json JSON NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, consumed_at_ms INTEGER NULL, UNIQUE(operation_id, event_key), CHECK (last_error_json IS NULL OR json_valid(last_error_json) = 1), CHECK ((phase = 'claimed' AND claim_owner IS NOT NULL AND claim_until_ms IS NOT NULL) OR (phase != 'claimed' AND claim_owner IS NULL AND claim_until_ms IS NULL)), CHECK ((phase = 'consumed' AND consumed_at_ms IS NOT NULL) OR (phase != 'consumed' AND consumed_at_ms IS NULL)))",
 ];
 
@@ -265,7 +303,7 @@ const INDEXES: &[&str] = &[
 
 const BACKGROUND_INDEXES: &[&str] = &[
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_background_external ON agena_background_operations(kind, external_id) WHERE external_id IS NOT NULL",
-    "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_background_launch_part ON agena_background_operations(session_id, launch_tool_part_id) WHERE launch_tool_part_id IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_background_launch_part ON agena_background_operations(session_id, launch_tool_part_id) WHERE launch_tool_part_id IS NOT NULL AND kind != 'scheduled_delivery'",
     "CREATE INDEX IF NOT EXISTS idx_agena_background_delivery_pending ON agena_background_deliveries(phase, claim_until_ms, created_at_ms)",
 ];
 
@@ -457,6 +495,110 @@ mod tests {
         assert_eq!(row.try_get::<i64>("", "launch_tool_part_id").unwrap(), 11);
         assert_eq!(row.try_get::<String>("", "kind").unwrap(), "shell");
         assert_eq!(row.try_get::<String>("", "phase").unwrap(), "running");
+    }
+
+    #[tokio::test]
+    async fn v9_migration_preserves_deliveries_and_allows_scheduled_launch_provenance() {
+        let db = initialized_database().await;
+        execute(&db, "PRAGMA foreign_keys = ON")
+            .await
+            .expect("enable foreign keys");
+        execute(&db, "DROP TABLE agena_background_deliveries")
+            .await
+            .expect("drop current deliveries");
+        execute(&db, "DROP TABLE agena_background_operations")
+            .await
+            .expect("drop current operations");
+        execute(
+            &db,
+            "CREATE TABLE agena_background_operations (operation_id TEXT PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES agena_sessions(id), launch_run_id INTEGER NULL REFERENCES agena_parts(part_id), launch_tool_part_id INTEGER NULL REFERENCES agena_parts(part_id), kind TEXT NOT NULL, external_id TEXT NULL, phase TEXT NOT NULL, outcome_json JSON NULL, failure_json JSON NULL, last_event_seq INTEGER NOT NULL DEFAULT 0, owner_id TEXT NULL, lease_until_ms INTEGER NULL, revision INTEGER NOT NULL DEFAULT 1, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL, CHECK ((kind = 'scheduled_delivery' AND launch_run_id IS NULL AND launch_tool_part_id IS NULL) OR (kind != 'scheduled_delivery' AND launch_run_id IS NOT NULL AND launch_tool_part_id IS NOT NULL)))",
+        )
+        .await
+        .expect("create v9 operations");
+        execute(
+            &db,
+            "CREATE TABLE agena_background_deliveries (delivery_id TEXT PRIMARY KEY, operation_id TEXT NOT NULL REFERENCES agena_background_operations(operation_id) ON DELETE CASCADE, session_id INTEGER NOT NULL REFERENCES agena_sessions(id), event_key TEXT NOT NULL, payload_json JSON NOT NULL, phase TEXT NOT NULL, claim_owner TEXT NULL, claim_until_ms INTEGER NULL, attempts INTEGER NOT NULL DEFAULT 0, notification_part_id INTEGER NULL REFERENCES agena_parts(part_id), last_error_json JSON NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, consumed_at_ms INTEGER NULL, UNIQUE(operation_id, event_key))",
+        )
+        .await
+        .expect("create v9 deliveries");
+        execute(
+            &db,
+            "CREATE UNIQUE INDEX uq_agena_background_external ON agena_background_operations(kind, external_id) WHERE external_id IS NOT NULL",
+        )
+        .await
+        .expect("create v9 external index");
+        execute(
+            &db,
+            "CREATE UNIQUE INDEX uq_agena_background_launch_part ON agena_background_operations(session_id, launch_tool_part_id) WHERE launch_tool_part_id IS NOT NULL",
+        )
+        .await
+        .expect("create v9 launch index");
+        execute(
+            &db,
+            "CREATE INDEX idx_agena_background_delivery_pending ON agena_background_deliveries(phase, claim_until_ms, created_at_ms)",
+        )
+        .await
+        .expect("create v9 delivery index");
+        execute(
+            &db,
+            "INSERT INTO agena_background_operations (operation_id, session_id, kind, external_id, phase, last_event_seq, revision, created_at_ms, updated_at_ms) VALUES ('scheduled:1:legacy-fire', 1, 'scheduled_delivery', 'legacy-fire', 'running', 0, 2, 10, 11)",
+        )
+        .await
+        .expect("insert v9 operation");
+        execute(
+            &db,
+            "INSERT INTO agena_background_deliveries (delivery_id, operation_id, session_id, event_key, payload_json, phase, attempts, created_at_ms, updated_at_ms) VALUES ('delivery:legacy', 'scheduled:1:legacy-fire', 1, 'fire', '{}', 'pending', 0, 11, 11)",
+        )
+        .await
+        .expect("insert v9 delivery");
+        execute(
+            &db,
+            "INSERT INTO agena_parts (part_id, kind, role, state, content, origin_session_id, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms) VALUES (20, 'run', 'assistant', 'completed', '{\"run_kind\":\"continue\",\"abort_reason\":null}', 1, 20, 20, 20, 20)",
+        )
+        .await
+        .expect("insert assistant run");
+        execute(
+            &db,
+            "INSERT INTO agena_parts (part_id, kind, role, state, content, run_id, origin_session_id, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms) VALUES (21, 'tool_call', 'assistant', 'completed', '{\"operation\":{\"call_id\":19}}', 20, 1, 20, 21, 20, 21)",
+        )
+        .await
+        .expect("insert cron tool receipt");
+        execute(
+            &db,
+            "INSERT INTO agena_session_parts (session_id, part_id, added_at_ms) VALUES (1, 20, 20), (1, 21, 21)",
+        )
+        .await
+        .expect("insert part membership");
+        execute(&db, "PRAGMA user_version = 9")
+            .await
+            .expect("set v9 marker");
+
+        initialize_schema(&db).await.expect("migrate v9 to v10");
+        let delivery_count: i64 = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT count(*) AS count FROM agena_background_deliveries WHERE delivery_id = 'delivery:legacy'".to_owned(),
+            ))
+            .await
+            .expect("query delivery")
+            .expect("count row")
+            .try_get("", "count")
+            .expect("count");
+        assert_eq!(delivery_count, 1, "the v9 outbox row is preserved");
+        execute(
+            &db,
+            "INSERT INTO agena_background_operations (operation_id, session_id, launch_run_id, launch_tool_part_id, kind, phase, last_event_seq, revision, created_at_ms, updated_at_ms) VALUES ('scheduled:1:assistant-fire', 1, 20, 21, 'scheduled_delivery', 'running', 0, 1, 30, 30)",
+        )
+        .await
+        .expect("v10 accepts assistant-owned scheduled delivery");
+        let foreign_key_errors = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "PRAGMA foreign_key_check".to_owned(),
+            ))
+            .await
+            .expect("foreign key check");
+        assert!(foreign_key_errors.is_empty());
     }
 
     #[tokio::test]

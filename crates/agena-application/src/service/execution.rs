@@ -243,6 +243,7 @@ impl ApplicationService {
                 .latest_session_event_seq(session_queries, session_id)
                 .await?,
             automation: session_automation_resource(&scheduler_jobs, session_id),
+            background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
                 agent_id: context.agent_id,
                 execution_access: execution_access_from_domain(context.execution_access),
@@ -433,6 +434,8 @@ pub fn sort_jobs_for_display(jobs: &mut [agena_scheduler::ScheduledJob]) {
 }
 
 pub fn scheduled_job_resource(job: agena_scheduler::ScheduledJob) -> ScheduledJobResource {
+    let timezone = matches!(&job.kind, agena_scheduler::JobKind::Cron { .. })
+        .then(|| job.cron_timezone().to_owned());
     let (kind, expression, at) = match job.kind {
         agena_scheduler::JobKind::Cron { expression, .. } => {
             ("cron".to_string(), Some(expression), None)
@@ -443,6 +446,7 @@ pub fn scheduled_job_resource(job: agena_scheduler::ScheduledJob) -> ScheduledJo
         id: job.id.to_string(),
         kind,
         expression,
+        timezone,
         at,
         prompt: job.prompt,
         owner_session_id: job.owner_session_id,

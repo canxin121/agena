@@ -142,13 +142,33 @@ impl Application {
         session_id: i64,
     ) -> Result<SessionExecutionResource, ApplicationError> {
         let session_services = self.session_execution_services()?;
-        self.service()
+        let mut resource = self
+            .service()
             .session_execution_resource(
                 session_services.execution_control.as_ref(),
                 session_services.queries.as_ref(),
                 session_id,
             )
-            .await
+            .await?;
+        if let Ok(activities) = self.runtime_activities() {
+            let filter = agena_domain::BackgroundActivityFilter {
+                session_id: Some(session_id),
+                active_only: true,
+                ..Default::default()
+            };
+            resource.background_activities = activities
+                .list_activities(&filter)
+                .await
+                .map_err(|error| {
+                    ApplicationError::internal(format!(
+                        "failed to project background activities for session {session_id}: {error}"
+                    ))
+                })?
+                .iter()
+                .map(agena_api::resource::BackgroundActivityResource::from)
+                .collect();
+        }
+        Ok(resource)
     }
 
     pub async fn set_session_permission(

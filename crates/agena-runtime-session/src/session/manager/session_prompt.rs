@@ -91,7 +91,7 @@ pub(crate) fn render_background_section() -> String {
 
 `monitor.start` is a continuous background listener: each event is delivered as its own `system_notification` message (with a per-event sequence), so you will be notified on every event — keep working, do not poll or sleep, and do not repeatedly call `monitor.start`/`shell.list` to check for new events.
 
-`cron.create` schedules a one-shot or recurring job: it fires while the session is idle and delivers its prompt to you as a `system_notification` appended onto the current run, waking you again. Jobs are session-only and recurring jobs expire after seven days.
+`cron.create` schedules a recurring wake. Every fire is persisted as a typed `system_notification`; if you are active, it waits for the current provider/tool part to finish and is handed to you at the next safe part boundary. AI-created schedules retain the assistant run that created them instead of opening a new run. Always pass the IANA timezone from `<environment_context>` (for example `Asia/Shanghai`); cron wall-clock fields are evaluated in that timezone, while returned timestamps remain explicit RFC 3339 instants. Jobs are session-only and expire after seven days.
 
 Never poll: do not repeatedly call `shell.run`/`tasks.run` status or read logs just to wait for completion. After launching background work, continue with other useful work (or end your turn) and wait for the `system_notification`. When a `system_notification` arrives mid-task, act on it: incorporate the outcome into your ongoing work and report it when relevant. When it arrives after you finished a turn, pick up where you left off."#
         .to_string()
@@ -251,8 +251,10 @@ mod tests {
     #[test]
     fn background_section_announces_cron_scheduled_jobs() {
         let section = render_background_section();
-        assert!(section.contains("`cron.create` schedules a one-shot or recurring job"));
-        assert!(section.contains("recurring jobs expire after seven days"));
+        assert!(section.contains("`cron.create` schedules a recurring wake"));
+        assert!(section.contains("next safe part boundary"));
+        assert!(section.contains("retain the assistant run that created them"));
+        assert!(section.contains("Jobs are session-only and expire after seven days"));
     }
 
     #[test]

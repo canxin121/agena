@@ -55,10 +55,6 @@ impl ActivityStore {
             .collect()
     }
 
-    fn get(&self, id: &str) -> Option<BackgroundActivity> {
-        self.activities.get(id).cloned()
-    }
-
     fn remove(&mut self, id: &str) -> Option<BackgroundActivity> {
         let removed = self.activities.remove(id);
         if removed.is_some() {
@@ -169,10 +165,6 @@ impl ActivityRegistry {
         self.store.lock().list(filter)
     }
 
-    pub(crate) fn get(&self, id: &str) -> Option<BackgroundActivity> {
-        self.store.lock().get(id)
-    }
-
     /// Push the record and event onto the bus-facing channel. The publisher
     /// task drains this channel and persists/broadcasts each event.
     fn publish(&self, activity: BackgroundActivity, reason: BackgroundActivityEventReason) {
@@ -213,9 +205,12 @@ mod tests {
             workdir: None,
             session_id: None,
             parent_session_id: None,
+            operation_id: None,
+            source_part_id: None,
             created_at_ms: 1,
             started_at_ms: 1,
             finished_at_ms: status.is_terminal().then_some(2),
+            next_event_at_ms: None,
             exit_code: None,
             message: None,
             failure: None,
@@ -250,8 +245,8 @@ mod tests {
         store.upsert(activity("b", BackgroundActivityStatus::Failed));
         let removed = store.clear_finished();
         assert_eq!(removed, vec!["b"]);
-        assert!(store.get("a").is_some());
-        assert!(store.get("b").is_none());
+        assert!(store.activities.contains_key("a"));
+        assert!(!store.activities.contains_key("b"));
     }
 
     #[test]

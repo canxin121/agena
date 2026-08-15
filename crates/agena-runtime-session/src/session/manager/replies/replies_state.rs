@@ -523,11 +523,11 @@ impl SessionManager {
     /// Drain every pending steer message (non-blocking) and append each as
     /// a run before the next model run. Ordinary inputs become a User run
     /// (marker + content parts). A background-operation notification steer is
-    /// a pure re-trigger: `record_background_event` already committed a
-    /// chronological Runtime ingress run, so this only reloads the session;
-    /// the stable-run loop's external-input handoff then closes the preceding
-    /// assistant run and takes a fresh model turn over the notification. A
-    /// steer becomes the next input the model sees.
+    /// a pure re-trigger: `record_background_event` already appended the hook
+    /// to its assistant launch run (or committed a Runtime ingress for
+    /// launch-less scheduled work), so this only reloads the session. Because
+    /// this drain runs between provider/tool parts, the hook becomes the next
+    /// input the model sees without interrupting the active part.
     pub(in crate::session::manager) async fn drain_steer_input(
         &self,
         mut session: Session,
@@ -564,10 +564,10 @@ impl SessionManager {
                 .iter()
                 .any(|content| matches!(content, TypedContent::SystemNotification(_)))
             {
-                // The settle committed the Runtime ingress before this steer
-                // was sent. Reload so it is in the projection; the loop's
-                // input/notification cursors re-trigger the next model turn.
-                // Nothing is committed here.
+                // The settle committed the notification before this steer was
+                // sent. Reload so it is in the projection; the notification
+                // cursor requests the next provider round. Nothing is
+                // committed here.
                 session = self.store.load_session(session.id).await?;
             }
         }

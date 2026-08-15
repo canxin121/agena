@@ -361,60 +361,51 @@ pub(super) fn build_scheduler(
                 );
             };
             let result = if let Some(session_id) = job.owner_session_id {
-                if session_manager.is_run_active(session_id).await {
+                let session = match session_manager.get_session(session_id).await {
+                    Ok(session) => session,
+                    Err(err) => {
+                        let result = agena_scheduler::JobDeliveryResult::failed(
+                            Some(session_id),
+                            scheduler_failure(err),
+                        );
+                        self.notify_job_result(&session_manager, job, delivery, &result)
+                            .await;
+                        return result;
+                    }
+                };
+
+                if session.blocked() {
                     agena_scheduler::JobDeliveryResult::skipped(
                         Some(session_id),
                         scheduler_skip(
-                            "The session is already running, so this delivery was skipped.",
+                            "The session is waiting for permission or user input, so this delivery was skipped.",
                         ),
                     )
                 } else {
-                    let session = match session_manager.get_session(session_id).await {
-                        Ok(session) => session,
-                        Err(err) => {
-                            let result = agena_scheduler::JobDeliveryResult::failed(
-                                Some(session_id),
-                                scheduler_failure(err),
-                            );
-                            self.notify_job_result(&session_manager, job, delivery, &result)
-                                .await;
-                            return result;
-                        }
-                    };
-
-                    if session.blocked() {
-                        agena_scheduler::JobDeliveryResult::skipped(
-                            Some(session_id),
-                            scheduler_skip(
-                                "The session is waiting for permission or user input, so this delivery was skipped.",
-                            ),
+                    // Persist the fire even while a provider/tool part is
+                    // active. The shared delivery coordinator queues it and
+                    // hands it to the model only at the next safe part
+                    // boundary; scheduler delivery must never drop work just
+                    // because the session is currently executing.
+                    match session_manager
+                        .deliver_scheduled_job(
+                            session_id,
+                            job.id.to_string(),
+                            delivery.delivery_key.clone(),
+                            job.prompt.clone(),
+                            job.launch_provenance,
                         )
-                    } else {
-                        // Deliver with AI identity: the prompt is appended onto
-                        // the existing assistant run as a typed
-                        // `system_notification` part (never a User-role
-                        // `user_send` run) and the model is woken over it.
-                        match session_manager
-                            .deliver_scheduled_job(
-                                session_id,
-                                job.id.to_string(),
-                                delivery.delivery_key.clone(),
-                                job.prompt.clone(),
-                            )
-                            .await
-                        {
-                            Ok(true) => {
-                                agena_scheduler::JobDeliveryResult::submitted(Some(session_id))
-                            }
-                            Ok(false) => agena_scheduler::JobDeliveryResult::skipped(
-                                Some(session_id),
-                                scheduler_skip("This scheduled delivery was already delivered."),
-                            ),
-                            Err(err) => agena_scheduler::JobDeliveryResult::failed(
-                                Some(session_id),
-                                scheduler_failure(err),
-                            ),
-                        }
+                        .await
+                    {
+                        Ok(true) => agena_scheduler::JobDeliveryResult::submitted(Some(session_id)),
+                        Ok(false) => agena_scheduler::JobDeliveryResult::skipped(
+                            Some(session_id),
+                            scheduler_skip("This scheduled delivery was already delivered."),
+                        ),
+                        Err(err) => agena_scheduler::JobDeliveryResult::failed(
+                            Some(session_id),
+                            scheduler_failure(err),
+                        ),
                     }
                 }
             } else {

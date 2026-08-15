@@ -1,6 +1,6 @@
 # Agena Database Design v2 — Everything is a Part (membership-first)
 
-> Background-operation lifecycle is normalized in schema v9 rather than
+> Background-operation lifecycle is normalized in schema v10 rather than
 > encoded solely in part JSON. The authoritative extension to this design is
 > [Durable background-operation state machine](background-operation-state-machine.md).
 > The refined rule is: everything observable is a part; operational control
@@ -134,7 +134,7 @@ closed enums enforced by CHECK.
 
 | kind | role | content JSON | notes |
 |------|------|--------------|-------|
-| `run` | user / assistant / runtime | `{"run_kind":"user_send|continue|runtime_ingress","abort_reason":...}` | message/run marker; user and Runtime arrivals are terminal receipts, assistant state mirrors execution |
+| `run` | user / assistant / runtime | `{"run_kind":"user_send|continue|runtime_ingress","abort_reason":...,"rounds":[...]}` | message/run marker; each provider round records output `part_ids`, replay state, and exact `input_notification_part_ids` |
 | `text` | user / assistant / system | `{"text":"..."}` | plain text |
 | `think` | assistant | `{"summary":[...],"raw":[...]}` | reasoning |
 | `tool_call` | assistant | `{"name":"...","plugin":"...","input":{...}}` | tool invocation |
@@ -142,8 +142,9 @@ closed enums enforced by CHECK.
 | `file_ref` | user | `{"path":"...","name":"...","mime":"...","sha":"..."}` | file reference only; no blob stored, AI reads on demand |
 | `paste_ref` | user | `{"text":"..."}` | pasted text stored INLINE (full content; no blob cache) |
 | `skill_ref` | user | `{"skill":"...","args":{...}}` | skill name/args reference only |
-| `notice` | runtime | `{"kind":"...","summary":"...","detail":"..."}` | system notice (hook runs etc.) |
-| `hook` | runtime | `{"hook":"...","summary":"...","detail":"..."}` | hook activity |
+| `notice` | runtime | `{"kind":"...","summary":"...","detail":"..."}` | runtime/system notice |
+| `hook` | assistant | `{"hook":"...","summary":"...","detail":"..."}` | AI/plugin hook activity appended to the launching assistant run |
+| `system_notification` | assistant / runtime | `{"operation_id":"...","operation_kind":"shell|task|monitor|scheduled_delivery","status":"...","body":"...","delivery_protocol":"provider_round_v1"}` | AI-launched background hooks, including cron fires, append to their assistant launch run; only launch-less host/external schedules use Runtime ingress; protocol marker pins an unhandled delivery across compaction |
 | `compaction` | runtime | `{"summary":"...","window":[...]}` | compaction summary |
 | `error` | runtime | `{"category":"...","message":"...","detail":...}` | failure |
 | `interaction` | system | `{"type":"ask_user|plan_review|permission","prompt":"...","options":[...],"response":...}` | user processing point |
@@ -1115,10 +1116,12 @@ state. All other parts (text, tool calls, hooks, notices) have their own
 lifecycle but never block the session — hooks and notices are non-gating by
 construction.
 
-User and Runtime ingress markers are normally created terminal because their
-payload has already arrived. They never stay `pending` merely to imply that a
-later assistant response is still executing; that response owns its own
-assistant run marker.
+User and launch-less Runtime ingress markers are normally created terminal
+because their payload has already arrived. They never stay `pending` merely to
+imply that a later assistant response is still executing. An AI-launched
+background hook is instead a terminal Assistant content part on its existing
+launch run; when it arrives mid-stream, the next provider round waits for the
+current part boundary and remains on the current assistant turn.
 
 ### 17.4 Resume algorithm (exactly one correct next step on open)
 

@@ -156,9 +156,12 @@ fn shell_activity(summary: &ProcessSummary) -> BackgroundActivity {
         workdir: None,
         session_id: None,
         parent_session_id: None,
+        operation_id: None,
+        source_part_id: None,
         created_at_ms: summary.started_at_ms,
         started_at_ms: summary.started_at_ms,
         finished_at_ms: summary.ended_at_ms,
+        next_event_at_ms: None,
         exit_code: summary.exit_code,
         message: summary.completion_reason.clone(),
         failure: None,
@@ -203,9 +206,12 @@ fn runtime_task_activity(task: &RuntimeBackgroundTask) -> BackgroundActivity {
         workdir: None,
         session_id: None,
         parent_session_id: None,
+        operation_id: None,
+        source_part_id: None,
         created_at_ms: task.created_at.timestamp_millis(),
         started_at_ms: task.started_at.timestamp_millis(),
         finished_at_ms: task.finished_at.map(|at| at.timestamp_millis()),
+        next_event_at_ms: None,
         exit_code: None,
         message: task.message.clone(),
         failure: task.failure.as_ref().map(Into::into),
@@ -250,9 +256,12 @@ fn subtask_activity(
         workdir: None,
         session_id: Some(session_id),
         parent_session_id,
+        operation_id: None,
+        source_part_id: None,
         created_at_ms: started_at_ms,
         started_at_ms,
         finished_at_ms,
+        next_event_at_ms: None,
         exit_code: None,
         message,
         failure,
@@ -402,8 +411,8 @@ impl BackgroundCompletionBridge {
             else {
                 return;
             };
-            // The operation settle atomically appends a Runtime ingress
-            // notification and its durable wake delivery.
+            // The operation settle atomically appends an Assistant-owned
+            // notification to the launch run and its durable wake delivery.
             let result = manager
                 .settle_background_operation(
                     session_id,
@@ -431,7 +440,8 @@ impl BackgroundCompletionBridge {
         });
     }
 
-    /// Project one monitor event as a Runtime ingress `system_notification`.
+    /// Project one monitor event as an Assistant-owned `system_notification`
+    /// on the monitor's launch run.
     /// Only `kind:"monitor"` operations (the Monitor tool) project
     /// events; plain/monitored shells keep their logs in the streaming buffer
     /// (queryable via `shell.logs`).
@@ -605,22 +615,21 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
     if !status.is_terminal() {
         return;
     }
+    let persisted_failure = meta
+        .subtask_failure
+        .as_ref()
+        .and_then(|value| serde_json::from_value::<UserProblem>(value.clone()).ok())
+        .map(Failure::from);
     let (terminal, failure) = match status {
         SubtaskStatus::Completed => (PartState::Completed, None),
         SubtaskStatus::Failed => (
             PartState::Failed,
-            Some(
-                meta.subtask_failure
-                    .as_ref()
-                    .and_then(|value| serde_json::from_value::<UserProblem>(value.clone()).ok())
-                    .map(Failure::from)
-                    .unwrap_or_else(|| {
-                        background_failure(
-                            ProcessStatus::Failed,
-                            "The delegated task failed.".to_string(),
-                        )
-                    }),
-            ),
+            Some(persisted_failure.clone().unwrap_or_else(|| {
+                background_failure(
+                    ProcessStatus::Failed,
+                    "The delegated task failed.".to_string(),
+                )
+            })),
         ),
         SubtaskStatus::Cancelled => (
             PartState::Cancelled,
@@ -631,24 +640,28 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
         ),
         SubtaskStatus::TimedOut => (
             PartState::Failed,
-            Some(background_failure(
-                ProcessStatus::TimedOut,
-                "The delegated task timed out.".to_string(),
-            )),
+            Some(persisted_failure.clone().unwrap_or_else(|| {
+                background_failure(
+                    ProcessStatus::TimedOut,
+                    "The delegated task timed out.".to_string(),
+                )
+            })),
         ),
         SubtaskStatus::Interrupted => (
             PartState::Cancelled,
-            Some(background_failure(
-                ProcessStatus::Stopped,
-                "The delegated task was interrupted.".to_string(),
-            )),
+            Some(persisted_failure.unwrap_or_else(|| {
+                background_failure(
+                    ProcessStatus::Stopped,
+                    "The delegated task was interrupted.".to_string(),
+                )
+            })),
         ),
         SubtaskStatus::Created | SubtaskStatus::Running => return,
     };
     let task_label = if meta.title.trim().is_empty() {
         task_id.clone()
     } else {
-        format!("\"{}\"", meta.title.trim())
+        format!("\"{}\" ({task_id})", meta.title.trim())
     };
     let Some(manager) = bridge
         .manager
@@ -668,13 +681,12 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
         SubtaskStatus::Created | SubtaskStatus::Running => unreachable!("terminal status"),
     }
     .to_string();
-    let (summary_ok, summary_failed) = match status {
-        SubtaskStatus::Completed => (format!("Task {task_label} finished"), String::new()),
-        SubtaskStatus::Failed => (String::new(), format!("Task {task_label} failed")),
-        SubtaskStatus::Cancelled | SubtaskStatus::Interrupted => {
-            (format!("Task {task_label} cancelled"), String::new())
-        }
-        SubtaskStatus::TimedOut => (format!("Task {task_label} timed out"), String::new()),
+    let summary_base = match status {
+        SubtaskStatus::Completed => format!("Task {task_label} finished"),
+        SubtaskStatus::Failed => format!("Task {task_label} failed"),
+        SubtaskStatus::Cancelled => format!("Task {task_label} cancelled"),
+        SubtaskStatus::Interrupted => format!("Task {task_label} interrupted"),
+        SubtaskStatus::TimedOut => format!("Task {task_label} timed out"),
         SubtaskStatus::Created | SubtaskStatus::Running => unreachable!("terminal status"),
     };
     tokio::spawn(async move {
@@ -700,13 +712,13 @@ fn terminalize_task_part(bridge: &BackgroundCompletionBridge, meta: SessionMeta)
         // notification onto the launching run, and wakes the model in one
         // atomic step.
         let summary = match &outcome {
-            Ok(_) => summary_ok,
+            Ok(_) => summary_base,
             Err(failure) => {
                 let reason = failure.user.fallback.trim().trim_end_matches('.');
                 if reason.is_empty() {
-                    summary_failed
+                    summary_base
                 } else {
-                    format!("{summary_failed}: {reason}")
+                    format!("{summary_base}: {reason}")
                 }
             }
         };

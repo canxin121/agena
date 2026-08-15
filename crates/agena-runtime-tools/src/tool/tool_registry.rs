@@ -343,6 +343,9 @@ pub struct ToolRuntimeContext {
     pub session_id: Option<i64>,
     pub call_id: Option<i64>,
     pub prepared_shell_command: Option<PreparedShellCommand>,
+    /// Exact assistant tool receipt for durable child work created by this
+    /// invocation. Application/host calls leave this empty.
+    pub launch_provenance: Option<agena_scheduler::ScheduledJobLaunchProvenance>,
 }
 
 /// Handle to a streaming tool execution.

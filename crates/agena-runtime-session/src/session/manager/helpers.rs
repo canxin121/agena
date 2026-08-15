@@ -109,6 +109,12 @@ pub(super) fn resolve_pending_tool(
             normalized_pending.part.part_id
         ))
     })?;
+    let launch_run_id = part.run_id.ok_or_else(|| {
+        AppError::Internal(format!(
+            "pending tool part {} has no owning assistant run",
+            part.part_id
+        ))
+    })?;
     let operation = operation_from_part(part).ok_or_else(|| {
         AppError::Internal(format!(
             "pending tool payload missing: part={}",
@@ -121,6 +127,8 @@ pub(super) fn resolve_pending_tool(
         pending: normalized_pending,
         operation_id: operation_id_from_part(part).unwrap_or_default(),
         call_id: operation.call_id,
+        launch_run_id,
+        launch_tool_part_id: part.part_id,
         invocation: operation.invocation,
         advertised_tool_identity,
         prepared_shell_command: None,
@@ -773,6 +781,7 @@ mod tests {
             id: "job-1".to_owned(),
             kind: "cron".to_owned(),
             expression: Some("0 9 * * *".to_owned()),
+            timezone: Some("UTC".to_owned()),
             at: None,
             prompt: "run backup".to_owned(),
             next_fire_at: Some("2026-08-05T09:00:00Z".to_owned()),

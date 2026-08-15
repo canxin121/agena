@@ -2,9 +2,6 @@ impl App {
     pub(crate) fn handle_message(&mut self, message: AppMessage) {
         match message {
             AppMessage::AsyncOperationCompleted(completion) => completion(self),
-            AppMessage::BackgroundActivitySummaryLoaded { count } => {
-                self.background_activity_summary = Some((count, crate::Instant::now()));
-            }
             AppMessage::ActivitiesLoaded { request_id, result } => {
                 self.handle_activities_loaded(request_id, result)
             }
@@ -22,20 +19,6 @@ impl App {
                     self.flash_error(error.clone());
                 }
                 self.handle_activities_stopped(activity_id, request_id, result.is_ok_and(|ok| ok));
-            }
-            AppMessage::ActivitiesDismissed {
-                activity_id,
-                request_id,
-                result,
-            } => {
-                if let Err(error) = &result {
-                    self.flash_error(error.clone());
-                }
-                self.handle_activities_dismissed(
-                    activity_id,
-                    request_id,
-                    result.is_ok_and(|ok| ok),
-                );
             }
             AppMessage::ActivitiesCleared { request_id, result } => {
                 if let Err(error) = &result {

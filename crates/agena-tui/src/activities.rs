@@ -39,8 +39,7 @@ pub enum ActivitiesControl {
 pub enum ActivitiesEffect {
     None,
     Reload,
-    Stop(String),
-    Dismiss(String),
+    Control { id: String, action: String },
     ClearFinished,
     ToggleDetail,
 }
@@ -59,19 +58,28 @@ pub struct ActivitiesRow {
     pub finished_at_ms: Option<i64>,
     pub exit_code: Option<i32>,
     pub message: Option<String>,
+    pub source_part_id: Option<i64>,
+    pub next_event_at_ms: Option<i64>,
+    pub controls: Vec<String>,
     pub cancellable: bool,
     pub dismissible: bool,
 }
 
 impl ActivitiesRow {
     pub fn is_active(&self) -> bool {
-        matches!(self.status.as_str(), "pending" | "running")
+        matches!(self.status.as_str(), "pending" | "running" | "paused")
     }
 
     pub fn running_seconds(&self, now_ms: i64) -> Option<i64> {
         let start = self.started_at_ms;
         let end = self.finished_at_ms.unwrap_or(now_ms);
         (end >= start).then_some((end - start) / 1000)
+    }
+
+    /// Whether an opened detail pane should keep following this member's log
+    /// cursor. Paused schedules remain managed/active but produce no stream.
+    pub fn logs_are_live(&self) -> bool {
+        matches!(self.status.as_str(), "pending" | "running") && self.kind != "cron"
     }
 }
 
@@ -219,12 +227,14 @@ impl ActivitiesPresentation {
         }
     }
 
-    /// Cycle the kind filter across `shell`, `task`, `runtime`, `browser`, none.
+    /// Cycle the kind filter across every unified background member kind.
     pub fn cycle_kind_filter(&mut self) {
         self.kind_filter = match self.kind_filter.as_deref() {
             None => Some("shell".to_owned()),
-            Some("shell") => Some("task".to_owned()),
-            Some("task") => Some("runtime".to_owned()),
+            Some("shell") => Some("monitor".to_owned()),
+            Some("monitor") => Some("task".to_owned()),
+            Some("task") => Some("cron".to_owned()),
+            Some("cron") => Some("runtime".to_owned()),
             Some("runtime") => Some("browser".to_owned()),
             _ => None,
         };
@@ -237,7 +247,8 @@ impl ActivitiesPresentation {
         self.status_filter = match self.status_filter.as_deref() {
             None => Some("running".to_owned()),
             Some("running") => Some("pending".to_owned()),
-            Some("pending") => Some("failed".to_owned()),
+            Some("pending") => Some("paused".to_owned()),
+            Some("paused") => Some("failed".to_owned()),
             Some("failed") => Some("succeeded".to_owned()),
             Some("succeeded") => Some("cancelled".to_owned()),
             Some("cancelled") => Some("stopped".to_owned()),
@@ -261,7 +272,9 @@ pub struct ActivitiesLogTail {
 pub fn kind_label(kind: &str) -> &'static str {
     match kind {
         "shell" => "Shell",
+        "monitor" => "Monitor",
         "task" => "Task",
+        "cron" => "Cron",
         "runtime" => "Runtime",
         "browser" => "Browser",
         _ => "Activity",
@@ -272,6 +285,7 @@ pub fn status_label(status: &str) -> &'static str {
     match status {
         "pending" => "pending",
         "running" => "running",
+        "paused" => "paused",
         "succeeded" => "succeeded",
         "failed" => "failed",
         "cancelled" => "cancelled",
@@ -283,7 +297,9 @@ pub fn status_label(status: &str) -> &'static str {
 pub fn kind_icon(kind: &str) -> &'static str {
     match kind {
         "shell" => "\u{2699}",   // ⚙
+        "monitor" => "\u{224B}", // ≋
         "task" => "\u{25C8}",    // ◈
+        "cron" => "\u{25F7}",    // ◷
         "runtime" => "\u{21BB}", // ↻
         "browser" => "\u{25C9}", // ◉
         _ => "\u{2022}",         // •
@@ -293,6 +309,7 @@ pub fn kind_icon(kind: &str) -> &'static str {
 fn status_style(status: &str) -> Style {
     match status {
         "running" | "pending" => Style::default().fg(accent_color()),
+        "paused" => Style::default().fg(warning_color()),
         "succeeded" => Style::default().fg(success_color()),
         "failed" => Style::default().fg(danger_color()),
         "cancelled" | "stopped" => Style::default().fg(warning_color()),
@@ -303,7 +320,9 @@ fn status_style(status: &str) -> Style {
 fn kind_style(kind: &str) -> Style {
     match kind {
         "shell" => Style::default().fg(info_color()),
+        "monitor" => Style::default().fg(accent_color()),
         "task" => Style::default().fg(special_color()),
+        "cron" => Style::default().fg(warning_color()),
         "runtime" => Style::default().fg(warning_color()),
         "browser" => Style::default().fg(accent_color()),
         _ => muted_style(),
@@ -487,11 +506,19 @@ fn action_bar(
         "↵ detail".to_owned(),
     ];
     if let Some(row) = visible.get(presentation.selected) {
-        if row.is_active() && row.cancellable {
-            actions.push("s stop".to_owned());
+        if let Some(control) = row
+            .controls
+            .iter()
+            .find(|control| matches!(control.as_str(), "stop" | "pause" | "resume"))
+        {
+            actions.push(format!("s {control}"));
         }
-        if row.dismissible {
-            actions.push("d dismiss".to_owned());
+        if let Some(control) = row
+            .controls
+            .iter()
+            .find(|control| matches!(control.as_str(), "delete" | "dismiss"))
+        {
+            actions.push(format!("d {control}"));
         }
     }
     if finished_count > 0 {
@@ -598,6 +625,18 @@ fn render_detail_pane(
             muted_style(),
         )));
     }
+    if let Some(source_part_id) = selected.source_part_id {
+        lines.push(Line::from(Span::styled(
+            format!(" source part #{source_part_id}"),
+            muted_style(),
+        )));
+    }
+    if let Some(next_event_at_ms) = selected.next_event_at_ms {
+        lines.push(Line::from(Span::styled(
+            format!(" next wake {next_event_at_ms}"),
+            muted_style(),
+        )));
+    }
     if let Some(message) = selected.message.as_deref() {
         lines.push(Line::from(Span::styled(
             format!(" {message}"),
@@ -696,6 +735,13 @@ mod tests {
             finished_at_ms: None,
             exit_code: None,
             message: None,
+            source_part_id: None,
+            next_event_at_ms: None,
+            controls: if matches!(status, "running" | "pending") {
+                vec!["stop".to_owned()]
+            } else {
+                vec!["dismiss".to_owned()]
+            },
             cancellable: true,
             dismissible: true,
         }
@@ -764,7 +810,7 @@ mod tests {
     fn status_filter_cycles_cancelled_and_stopped() {
         let mut presentation = ActivitiesPresentation::default();
         let mut statuses = Vec::new();
-        for _ in 0..7 {
+        for _ in 0..8 {
             presentation.cycle_status_filter();
             statuses.push(presentation.status_filter.clone());
         }
@@ -773,6 +819,7 @@ mod tests {
             vec![
                 Some("running".to_owned()),
                 Some("pending".to_owned()),
+                Some("paused".to_owned()),
                 Some("failed".to_owned()),
                 Some("succeeded".to_owned()),
                 Some("cancelled".to_owned()),

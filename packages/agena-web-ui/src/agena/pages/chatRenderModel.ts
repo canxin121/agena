@@ -109,14 +109,11 @@ function canonicalRunMessage(
   key: number,
 ): MessageResource {
   const messageId = run ? `run:${run.part_id}` : `orphan:${key}`
+  const sourceRole = run?.role ?? content.find((part) => part.role)?.role
   const role: MessageResource['role'] =
-    run?.role === 'user' || run?.role === 'assistant' || run?.role === 'system'
-      ? run.role
-      : run
-        ? 'assistant'
-        : 'system'
+    sourceRole === 'user' ? 'user' : sourceRole === 'assistant' ? 'assistant' : 'system'
   const state: MessageResource['state'] = run ? run.state : 'completed'
-  const createdAtMs = run ? run.created_at_ms : content[0]?.created_at_ms ?? 0
+  const createdAtMs = run ? run.created_at_ms : (content[0]?.created_at_ms ?? 0)
   const runUsage = run ? asRecord(run.content?.usage) : null
 
   const sortedContent = [...content].sort(compareParts)
@@ -231,7 +228,10 @@ function jsonToMarkdown(value: unknown): string {
     if (value.every(isJsonScalar)) {
       return value.map((item) => `\`${String(item).replaceAll('`', '\\`')}\``).join(', ')
     }
-    return value.map((item) => jsonItemMarkdown(item, 0)).filter(Boolean).join('\n')
+    return value
+      .map((item) => jsonItemMarkdown(item, 0))
+      .filter(Boolean)
+      .join('\n')
   }
   if (value && typeof value === 'object') {
     return Object.entries(value as Record<string, unknown>)
@@ -263,7 +263,10 @@ function jsonFieldMarkdown(name: string, value: unknown, indent: number): string
     if (value.every(isJsonScalar)) {
       return `${prefix}- **${name}**: ${value.map((item) => `\`${String(item).replaceAll('`', '\\`')}\``).join(', ')}`
     }
-    const sub = value.map((item) => jsonItemMarkdown(item, indent + 1)).filter(Boolean).join('\n')
+    const sub = value
+      .map((item) => jsonItemMarkdown(item, indent + 1))
+      .filter(Boolean)
+      .join('\n')
     return `${prefix}- **${name}**:\n${sub}`
   }
   if (value && typeof value === 'object') {
@@ -364,7 +367,23 @@ export function partBody(part: MessagePart): string {
   }
 
   if (part.kind === 'hook' || type === 'hook') {
-    return readString(content.message) || readString(content.detail) || readString(content.summary) || part.summary || 'Hook activity'
+    return (
+      readString(content.message) ||
+      readString(content.detail) ||
+      readString(content.summary) ||
+      part.summary ||
+      'Hook activity'
+    )
+  }
+
+  if (part.kind === 'system_notification' || type === 'system_notification') {
+    return (
+      readString(content.body) ||
+      readString(content.detail) ||
+      readString(content.summary) ||
+      part.summary ||
+      'Background notification'
+    )
   }
 
   if (part.kind === 'compaction' || type === 'compaction') {
@@ -562,7 +581,27 @@ export function partBlocks(part: MessagePart): RenderBlock[] {
     return [
       {
         title: readString(content?.hook) || 'Hook',
-        body: readString(content?.message) || readString(content?.detail) || readString(content?.summary) || part.summary || 'Hook activity',
+        body:
+          readString(content?.message) ||
+          readString(content?.detail) ||
+          readString(content?.summary) ||
+          part.summary ||
+          'Hook activity',
+        kind: 'input_activity' as const,
+        activityLabel: 'Hook',
+      },
+    ]
+  }
+
+  if (part.kind === 'system_notification' || content?.type === 'system_notification') {
+    const operationKind = readString(content?.operation_kind) || 'background'
+    const status = readString(content?.status)
+    const summary = readString(content?.summary) || part.summary || 'Background notification'
+    return [
+      {
+        title: status ? `${operationKind} · ${status}` : operationKind,
+        body: readString(content?.body) || readString(content?.detail) || summary,
+        summary,
         kind: 'input_activity' as const,
         activityLabel: 'Hook',
       },
@@ -878,7 +917,9 @@ function storedOperationBlocks(result: Record<string, unknown>, outputText: stri
       // Runtime tables carry string columns; API tables carry {key,label}.
       const columns = Array.isArray(block.columns) ? block.columns : []
       const labels = columns.map((value) =>
-        typeof value === 'string' ? value : readString(asRecord(value)?.label) || readString(asRecord(value)?.key) || '',
+        typeof value === 'string'
+          ? value
+          : readString(asRecord(value)?.label) || readString(asRecord(value)?.key) || '',
       )
       const rows = Array.isArray(block.rows) ? block.rows : []
       if (labels.length) {
@@ -895,7 +936,8 @@ function storedOperationBlocks(result: Record<string, unknown>, outputText: stri
     }
     if (blockType === 'log') {
       const body = readString(block.text)
-      if (body) rendered.push({ body, kind: 'terminal', language: 'text', title: readString(block.stream) || undefined })
+      if (body)
+        rendered.push({ body, kind: 'terminal', language: 'text', title: readString(block.stream) || undefined })
       continue
     }
     if (blockType === 'command') {
@@ -965,9 +1007,7 @@ function storedOperationBlocks(result: Record<string, unknown>, outputText: stri
  * title — instead of a raw input dump. */
 function toolCallOutcomeBlock(part: MessagePart, content: Record<string, unknown> | null): RenderBlock | null {
   const operation = asRecord(content?.operation)
-  const outcomeTitle:
-    | { status: NonNullable<RenderBlock['outcome']>; title: string }
-    | null =
+  const outcomeTitle: { status: NonNullable<RenderBlock['outcome']>; title: string } | null =
     part.status === 'policy_denied'
       ? { status: 'policy_denied', title: 'Blocked by permission policy' }
       : part.status === 'user_declined'
@@ -1002,9 +1042,7 @@ function toolCallOutcomeBlock(part: MessagePart, content: Record<string, unknown
   }
 
   // Fall back to the failure's user-facing message (e.g. tool_unavailable).
-  const error = asRecord(operation?.result)
-    ? asRecord(asRecord(operation?.result)?.error)
-    : null
+  const error = asRecord(operation?.result) ? asRecord(asRecord(operation?.result)?.error) : null
   const failure = asRecord(error?.failure)
   const fallback = readString((failure?.user as Record<string, unknown> | null)?.fallback as string | undefined)
   if (fallback) {

@@ -7,7 +7,8 @@
 
 /// Current SQLite schema version written to `PRAGMA user_version`.
 ///
-/// Version 9 adds the durable background-operation aggregate and delivery
+/// Version 10 lets scheduled deliveries retain optional assistant launch
+/// provenance. Version 9 added the durable background-operation aggregate and delivery
 /// inbox. Version 8 added a stored generated `is_subagent` column to
 /// `agena_sessions` (derived from `relation_kind = 'subagent'`). This schema
 /// owns the chat tables —
@@ -18,7 +19,8 @@
 /// entity; runs are `kind='run'` marker parts; session state is derived from
 /// parts + leases. Background-operation control state is deliberately
 /// normalized rather than encoded only in transcript JSON. v1 databases are
-/// NOT migrated, but the compatible v8 → v9 additive migration is supported.
+/// NOT migrated, but the compatible v8 → current additive migration and the
+/// v9 → v10 background-table rebuild are supported.
 ///
 /// Version history:
 /// - 5: the v2 "everything is a part" schema (design
@@ -35,7 +37,10 @@
 /// - 9: `agena_background_operations` becomes the authoritative lifecycle for
 ///   shell/task/monitor work and `agena_background_deliveries` persists the
 ///   notification handoff so restart cannot lose a wake.
-pub const CURRENT_SCHEMA_VERSION: i64 = 9;
+/// - 10: scheduled-delivery operations may carry the same paired launch
+///   run/tool references as other AI-created work; launch-less host schedules
+///   remain valid Runtime ingress.
+pub const CURRENT_SCHEMA_VERSION: i64 = 10;
 
 #[cfg(test)]
 mod tests {

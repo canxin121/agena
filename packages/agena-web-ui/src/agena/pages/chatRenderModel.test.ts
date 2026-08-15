@@ -117,11 +117,40 @@ function operationAskContent(requestOverrides: Partial<UserInputRequest> = {}): 
 describe('v2 parts projection (partsToMessages)', () => {
   test('groups content parts under their run marker, ordered by created_at_ms then part_id', () => {
     const parts: SessionPart[] = [
-      sessionPart({ part_id: 103, kind: 'tool_call', role: 'assistant', run_id: 100, content: { name: 'fs.read' }, created_at_ms: 1_800_000_000_003 }),
-      sessionPart({ part_id: 101, kind: 'text', role: 'user', run_id: 100, content: { text: 'Fix it.' }, created_at_ms: 1_800_000_000_001 }),
+      sessionPart({
+        part_id: 103,
+        kind: 'tool_call',
+        role: 'assistant',
+        run_id: 100,
+        content: { name: 'fs.read' },
+        created_at_ms: 1_800_000_000_003,
+      }),
+      sessionPart({
+        part_id: 101,
+        kind: 'text',
+        role: 'user',
+        run_id: 100,
+        content: { text: 'Fix it.' },
+        created_at_ms: 1_800_000_000_001,
+      }),
       runPart(100),
-      sessionPart({ part_id: 102, kind: 'think', role: 'assistant', run_id: 100, content: { summary: ['Let me look.'] }, created_at_ms: 1_800_000_000_002 }),
-      sessionPart({ part_id: 104, kind: 'tool_result', role: 'tool', run_id: 100, parent_part_id: 103, content: { output: 'ok', ok: true }, created_at_ms: 1_800_000_000_004 }),
+      sessionPart({
+        part_id: 102,
+        kind: 'think',
+        role: 'assistant',
+        run_id: 100,
+        content: { summary: ['Let me look.'] },
+        created_at_ms: 1_800_000_000_002,
+      }),
+      sessionPart({
+        part_id: 104,
+        kind: 'tool_result',
+        role: 'tool',
+        run_id: 100,
+        parent_part_id: 103,
+        content: { output: 'ok', ok: true },
+        created_at_ms: 1_800_000_000_004,
+      }),
     ]
 
     const messages = partsToMessages(parts, 7)
@@ -130,20 +159,28 @@ describe('v2 parts projection (partsToMessages)', () => {
     expect(messages[0]?.id).toBe('run:100')
     expect(messages[0]?.role).toBe('user')
     expect(messages[0]?.metadata.run_part_id).toBe(100)
-    expect(messages[0]?.parts?.map((part) => part.kind)).toEqual([
-      'run',
-      'text',
-      'think',
-      'tool_call',
-      'tool_result',
-    ])
+    expect(messages[0]?.parts?.map((part) => part.kind)).toEqual(['run', 'text', 'think', 'tool_call', 'tool_result'])
   })
 
   test('produces one message per run marker and sorts run groups canonically', () => {
     const parts: SessionPart[] = [
       runPart(200, 'continue', { created_at_ms: 1_800_000_000_010 }),
-      sessionPart({ part_id: 201, kind: 'text', role: 'assistant', run_id: 200, content: { text: 'Follow-up.' }, created_at_ms: 1_800_000_000_011 }),
-      sessionPart({ part_id: 101, kind: 'text', role: 'user', run_id: 100, content: { text: 'First.' }, created_at_ms: 1_800_000_000_001 }),
+      sessionPart({
+        part_id: 201,
+        kind: 'text',
+        role: 'assistant',
+        run_id: 200,
+        content: { text: 'Follow-up.' },
+        created_at_ms: 1_800_000_000_011,
+      }),
+      sessionPart({
+        part_id: 101,
+        kind: 'text',
+        role: 'user',
+        run_id: 100,
+        content: { text: 'First.' },
+        created_at_ms: 1_800_000_000_001,
+      }),
       runPart(100, 'user_send', { created_at_ms: 1_800_000_000_000 }),
     ]
 
@@ -155,15 +192,56 @@ describe('v2 parts projection (partsToMessages)', () => {
 
   test('still renders content parts whose run marker is missing locally', () => {
     const parts: SessionPart[] = [
-      sessionPart({ part_id: 301, kind: 'text', role: 'assistant', run_id: 300, content: { text: 'Streamed before marker.' }, created_at_ms: 1_800_000_000_001 }),
-      sessionPart({ part_id: 401, kind: 'notice', role: 'runtime', content: { kind: 'hook', summary: 'done' }, created_at_ms: 1_800_000_000_002 }),
+      sessionPart({
+        part_id: 301,
+        kind: 'text',
+        role: 'assistant',
+        run_id: 300,
+        content: { text: 'Streamed before marker.' },
+        created_at_ms: 1_800_000_000_001,
+      }),
+      sessionPart({
+        part_id: 401,
+        kind: 'notice',
+        role: 'runtime',
+        content: { kind: 'hook', summary: 'done' },
+        created_at_ms: 1_800_000_000_002,
+      }),
     ]
 
     const messages = partsToMessages(parts, 7)
 
     expect(messages.length).toBe(2)
+    expect(messages.map((message) => message.role)).toEqual(['assistant', 'system'])
     expect(messages[0]?.parts?.map((part) => part.kind)).toEqual(['text'])
     expect(messages[1]?.parts?.map((part) => part.kind)).toEqual(['notice'])
+  })
+
+  test('keeps a late assistant Hook on its launch run and maps Runtime ingress to System', () => {
+    const parts: SessionPart[] = [
+      runPart(100, 'continue', { role: 'assistant' }),
+      runPart(200, 'runtime_ingress', { role: 'runtime' }),
+      sessionPart({
+        part_id: 201,
+        kind: 'system_notification',
+        role: 'runtime',
+        run_id: 200,
+        content: { type: 'system_notification', operation_id: 'external', body: 'external fire' },
+      }),
+      sessionPart({
+        part_id: 301,
+        kind: 'system_notification',
+        role: 'assistant',
+        run_id: 100,
+        content: { type: 'system_notification', operation_id: 'proc_100', body: 'finished' },
+      }),
+    ]
+
+    const messages = partsToMessages(parts, 7)
+
+    expect(messages.map((message) => message.role)).toEqual(['assistant', 'system'])
+    expect(messages[0]?.parts?.some((part) => part.id === 301)).toBe(true)
+    expect(messages[1]?.parts?.some((part) => part.id === 201)).toBe(true)
   })
 
   test('maps a terminal run state onto the message and keeps usage from run content', () => {
@@ -309,7 +387,9 @@ describe('v2 part rendering (4.1.1 kinds)', () => {
     expect(logBlock?.title).toBe('stdout')
     expect(logBlock?.body).toBe('cached 2 results')
     // The markdown block duplicating the model preview is deduplicated.
-    expect(blocks.some((block) => block.body === 'Found 3 results for agena docs.' && block !== outputBlock)).toBe(false)
+    expect(blocks.some((block) => block.body === 'Found 3 results for agena docs.' && block !== outputBlock)).toBe(
+      false,
+    )
   })
 
   test('renders a denied tool_call as a readable outcome instead of an input dump', () => {
@@ -430,6 +510,26 @@ describe('v2 part rendering (4.1.1 kinds)', () => {
     })
     expect(hook[0]?.activityLabel).toBe('Hook')
     expect(hook[0]?.body).toContain('continue with the next plan step')
+
+    const backgroundHook = partBlocks({
+      id: 41,
+      message_id: 'run:1',
+      part_index: 0,
+      status: 'completed',
+      kind: 'system_notification',
+      created_at: '2026-07-13T00:00:00Z',
+      content: {
+        type: 'system_notification',
+        operation_kind: 'task',
+        operation_id: 'task_60_2194',
+        status: 'timed_out',
+        summary: 'Task timed out',
+        body: 'Task "BG child" (task_60_2194) timed out after 1000 ms.',
+      },
+    })
+    expect(backgroundHook[0]?.activityLabel).toBe('Hook')
+    expect(backgroundHook[0]?.title).toBe('task · timed_out')
+    expect(backgroundHook[0]?.body).toContain('task_60_2194')
 
     const compaction = partBlocks({
       id: 5,

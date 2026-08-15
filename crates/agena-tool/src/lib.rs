@@ -416,6 +416,8 @@ pub struct CronJobSummary {
     pub id: String,
     pub kind: String,
     pub expression: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
     pub at: Option<String>,
     pub prompt: String,
     pub next_fire_at: Option<String>,

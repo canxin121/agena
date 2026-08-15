@@ -470,10 +470,10 @@ impl SessionManager {
     }
 
     /// The wake execution driven by `settle_background_operation` when the
-    /// session is idle: the settle already committed a chronological Runtime
-    /// ingress run, so this refreshes the session and takes a fresh model turn
-    /// over that input. Modeled on `continue_session_inner` minus the Continue
-    /// identity.
+    /// session is idle: the settle already appended the notification to its
+    /// launch run (or committed a launch-less Runtime ingress), so this
+    /// refreshes the session and takes a fresh model turn over that input.
+    /// Modeled on `continue_session_inner` minus the Continue identity.
     pub(in crate::session::manager) async fn notification_run_inner(
         &self,
         session_id: i64,
@@ -731,18 +731,19 @@ impl SessionManager {
             run.await
         };
 
+        let timeout_failure = || {
+            subtask_timeout_failure(
+                task_id.as_str(),
+                description,
+                request
+                    .timeout_ms
+                    .expect("timed_out is only set when timeout_ms is present"),
+            )
+        };
         let (status, failure, budget_exceeded, mut session) = match run_result {
             Ok(session) if timed_out => (
                 agena_domain::SubtaskStatus::TimedOut,
-                Some(Failure::new(
-                    FailureCode::new("subtask.timeout"),
-                    FailureCategory::Timeout,
-                    FailureResponsibility::System,
-                    RetryDirective::UseAlternative,
-                    RecoveryDirective::ChooseAlternative,
-                    FailureImpact::OperationFailed,
-                    UserPresentation::new("subtask-timeout", "The subtask timed out."),
-                )),
+                Some(timeout_failure()),
                 false,
                 session,
             ),
@@ -756,7 +757,15 @@ impl SessionManager {
                     agena_domain::SubtaskStatus::Failed
                 };
                 let budget_exceeded = matches!(&error, AppError::SubtaskBudgetExceeded(_));
-                let failure = (!matches!(&error, AppError::Cancelled)).then(|| error.failure());
+                // A timeout deliberately cancels the supervised child, so the
+                // returned error is commonly AppError::Cancelled. The timer is
+                // the authoritative cause: persist a complete timeout failure
+                // regardless of the cleanup future's return value.
+                let failure = if timed_out {
+                    Some(timeout_failure())
+                } else {
+                    (!matches!(&error, AppError::Cancelled)).then(|| error.failure())
+                };
                 let session = self.store.load_session(child_id).await?;
                 (status, failure, budget_exceeded, session)
             }
@@ -814,6 +823,26 @@ impl SessionManager {
             session,
         })
     }
+}
+
+fn subtask_timeout_failure(task_id: &str, description: &str, timeout_ms: u64) -> Failure {
+    let label = if description.trim().is_empty() {
+        task_id.to_owned()
+    } else {
+        format!("\"{}\" ({task_id})", description.trim())
+    };
+    Failure::new(
+        FailureCode::new("subtask.timeout"),
+        FailureCategory::Timeout,
+        FailureResponsibility::System,
+        RetryDirective::UseAlternative,
+        RecoveryDirective::ChooseAlternative,
+        FailureImpact::OperationFailed,
+        UserPresentation::validated(
+            "subtask-timeout",
+            format!("Task {label} timed out after {timeout_ms} ms."),
+        ),
+    )
 }
 
 pub(in crate::session::manager) fn non_recursive_subtask_capability_denials()

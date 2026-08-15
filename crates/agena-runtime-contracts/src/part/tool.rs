@@ -591,13 +591,20 @@ impl Default for CronRetryPolicyInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(trim("expression", "prompt"), non_empty("expression", "prompt"))]
+#[input(
+    trim("expression", "prompt", "timezone"),
+    non_empty("expression", "prompt", "timezone")
+)]
 /// Input of the cron create tool.
 pub struct CronCreateToolInput {
     /// 6-field cron expression: `<sec> <min> <hour> <day-of-month> <month> <day-of-week>`.
     pub expression: String,
     /// Prompt to enqueue when the job fires.
     pub prompt: String,
+    /// IANA timezone in which the cron expression is evaluated (for example
+    /// `Asia/Shanghai`). This is required so local wall-clock requests cannot
+    /// be silently interpreted as UTC.
+    pub timezone: String,
     #[serde(default = "default_cron_max_age")]
     pub max_age_days: u32,
     /// What to do after a restart when this fire is materially overdue.

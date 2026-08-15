@@ -82,7 +82,7 @@ impl CronPlugin {
     #[tool(
         tags(mutate, scheduler),
         summary = "Create one cron schedule.",
-        help = "Schedule a one-shot or recurring job with a standard 5-field cron expression (minute hour day-of-month month day-of-week). The job fires while the session is idle and delivers its prompt to you as a system_notification appended onto the current run, waking you again; never use it to poll. Jobs are session-only and recurring jobs auto-expire after seven days. When the exact time does not matter, pick a minute that is not :00 or :30 to avoid clumping.",
+        help = "Schedule a recurring wake with a 6-field cron expression (second minute hour day-of-month month day-of-week). Always pass the IANA timezone from environment_context; wall-clock fields are evaluated in that timezone and returned times are explicit RFC 3339 instants. When the job fires while the session is idle, its prompt is appended chronologically as a typed system_notification and wakes the model; never use it to poll. Jobs are session-only and auto-expire after seven days. When the exact time does not matter, avoid :00 and :30 to reduce clumping.",
         mutating,
         scheduler
     )]

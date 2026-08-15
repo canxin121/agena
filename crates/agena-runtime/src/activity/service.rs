@@ -57,12 +57,20 @@ impl ActivityControlError {
     }
 }
 
-/// Control surface for the unified background-activity registry.
+/// Control surface for the unified background-member projection. Durable
+/// operation/scheduler state is authoritative; the runtime registry only
+/// contributes transient detail and terminal history.
 #[async_trait]
 pub trait RuntimeActivityService: Send + Sync {
-    fn list_activities(&self, filter: &BackgroundActivityFilter) -> Vec<BackgroundActivity>;
+    async fn list_activities(
+        &self,
+        filter: &BackgroundActivityFilter,
+    ) -> Result<Vec<BackgroundActivity>, ActivityControlError>;
 
-    fn get_activity(&self, activity_id: &str) -> Result<BackgroundActivity, ActivityControlError>;
+    async fn get_activity(
+        &self,
+        activity_id: &str,
+    ) -> Result<BackgroundActivity, ActivityControlError>;
 
     /// Read incremental activity logs with the unified `since_seq` cursor.
     /// `wait_ms` blocks for fresh output when no new lines are available yet
@@ -82,6 +90,24 @@ pub trait RuntimeActivityService: Send + Sync {
         activity_id: &str,
     ) -> Result<BackgroundActivity, ActivityControlError>;
 
+    /// Pause a durable scheduled activity without deleting it.
+    async fn pause_activity(
+        &self,
+        activity_id: &str,
+    ) -> Result<BackgroundActivity, ActivityControlError>;
+
+    /// Resume a paused durable scheduled activity.
+    async fn resume_activity(
+        &self,
+        activity_id: &str,
+    ) -> Result<BackgroundActivity, ActivityControlError>;
+
+    /// Permanently remove a durable scheduled activity.
+    async fn delete_activity(
+        &self,
+        activity_id: &str,
+    ) -> Result<BackgroundActivity, ActivityControlError>;
+
     /// Remove a finished activity from the list without touching its
     /// underlying work.
     fn dismiss_activity(
@@ -89,8 +115,9 @@ pub trait RuntimeActivityService: Send + Sync {
         activity_id: &str,
     ) -> Result<BackgroundActivity, ActivityControlError>;
 
-    /// Remove every finished activity; returns the number removed.
-    fn clear_finished(&self) -> usize;
+    /// Remove every finished activity, including terminal scheduler jobs;
+    /// returns the number removed.
+    async fn clear_finished(&self) -> Result<usize, ActivityControlError>;
 }
 
 /// Convenience helper for status transitions.

@@ -1286,6 +1286,8 @@ mod tests {
         // five are hidden, the hook (index 7) falls inside the newest five so
         // it renders at its chronological position, and the newest tool
         // calls remain on screen. No activity kind is exempt from the fold.
+        assert!(text.starts_with("assistant"), "{text}");
+        assert!(!text.starts_with("system"), "{text}");
         assert!(text.contains("Hook · mid-reply hook fired"), "{text}");
         assert!(text.contains("5 older activity blocks collapsed"), "{text}");
         let notice_line = rendered

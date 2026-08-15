@@ -95,6 +95,8 @@ pub struct ScheduledJobResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expression: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<DateTime<Utc>>,
     pub prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1201,6 +1203,11 @@ pub struct SessionExecutionResource {
     pub latest_event_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automation: Option<SessionAutomationResource>,
+    /// Non-terminal background members owned by this session. This is the
+    /// single session-scoped projection consumed by both composer footers and
+    /// Web; clients must not maintain a second counter.
+    #[serde(default)]
+    pub background_activities: Vec<BackgroundActivityResource>,
     pub execution: SessionExecutionContextResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_interactive_requests: Vec<PendingInteractiveRequestResource>,

@@ -154,7 +154,6 @@ impl App {
             transcript_text_object_pending: None,
             transcript_search_forward: true,
             last_ctrl_c_at: None,
-            background_activity_summary: None,
             plan_display_refresh: None,
             double_esc_window,
             terminal_integration: TerminalIntegrationState::default(),
@@ -331,7 +330,6 @@ impl App {
         self.refresh_input_derived_state();
         self.refresh_status_line_if_due(now);
         self.poll_provider_studio_auth_if_due(now);
-        self.refresh_background_activity_summary_if_due(now);
         self.refresh_activities_panel_if_due(now);
         self.heal_plan_display_refresh();
         if let Some(error) = self.pending_draft_store_error.take() {

@@ -570,9 +570,6 @@ pub struct App {
     pub(super) last_ctrl_c_at: Option<Instant>,
     pub(super) double_esc_window: Duration,
     pub(super) terminal_integration: TerminalIntegrationState,
-    /// Most recent active background-activity count for the footer pill,
-    /// refreshed on a slow cadence while the main route is visible.
-    pub(super) background_activity_summary: Option<(usize, Instant)>,
     /// Cooldown state for healing the composer's bottom-right plan chip.
     /// The chip is backed by an in-memory display contribution that starts
     /// empty after a process restart or runtime reload; the TUI re-requests
@@ -599,9 +596,6 @@ impl Drop for App {
 
 pub(super) enum AppMessage {
     AsyncOperationCompleted(UiCompletion),
-    BackgroundActivitySummaryLoaded {
-        count: usize,
-    },
     ActivitiesLoaded {
         request_id: u64,
         result: UiResult<Vec<agena_tui::activities::ActivitiesRow>>,
@@ -612,11 +606,6 @@ pub(super) enum AppMessage {
         result: UiResult<agena_tui::activities::ActivitiesLogTail>,
     },
     ActivitiesStopped {
-        activity_id: String,
-        request_id: u64,
-        result: UiResult<bool>,
-    },
-    ActivitiesDismissed {
         activity_id: String,
         request_id: u64,
         result: UiResult<bool>,

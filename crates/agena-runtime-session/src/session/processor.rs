@@ -28,10 +28,15 @@ pub(crate) struct SessionRunRequest {
     pub next_message_id: i64,
     /// The run marker's content at turn start. Multi-round turns (one user
     /// message == one run marker) carry the accumulated round records in
-    /// `content["rounds"]`; the processor appends this round's record at the
-    /// end of a successful tool-calling turn so the next round's prompt
-    /// projection can re-split the run into per-round wire messages.
+    /// `content["rounds"]`; the processor appends one record after every
+    /// successful provider round so prompt projection can re-split the turn
+    /// and delivery recovery can prove its exact notification inputs.
     pub marker_content: Option<serde_json::Value>,
+    /// Background notification parts that were actually present in the
+    /// provider prompt for this round. Persisted into the round record so a
+    /// delivery can prove model handling without confusing a concurrently
+    /// arriving notification with output from an older in-flight request.
+    pub input_notification_part_ids: Vec<i64>,
     pub part_ids: ProcessorPartIdAllocator,
     pub next_call_id: i64,
     /// The v2 facade-backed store. R2 makes parts the only durable write

@@ -16,8 +16,9 @@ mod ui;
 /// Shared v2 parts fixtures for app tests. The wire transcript is an ordered
 /// part list (database-design-v2.md §4.1.1); these helpers build the small
 /// `run`/`text`/`error`/`think` shapes the rendering tests exercise. Content
-/// parts carry no `run_id` — `parts_entries` groups by sequence, so the tests
-/// only need the marker/content order.
+/// Most legacy fixtures carry no `run_id`; the projection retains a narrow
+/// adjacency fallback for those rows. Production v2 rows and ownership tests
+/// use `run_id`, which is always authoritative even for late Hook parts.
 #[cfg(test)]
 mod parts_fixtures {
     use agena_api::part::ErrorPartResource;
@@ -757,6 +758,7 @@ mod interaction_part_routing_tests {
             active_execution: None,
             latest_event_seq: Some(2),
             automation: None,
+            background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
                 agent_id: "test".to_owned(),
                 execution_access: ExecutionAccess::Inherit,

@@ -764,6 +764,16 @@ pub(crate) fn parts_into_runs(parts: &[Part]) -> Vec<Vec<Part>> {
         group.extend(content);
         runs.push(group);
     }
+    // A late Assistant-owned hook may be appended to its launching run after a
+    // compaction checkpoint. The active-window slice then contains the new
+    // child but not the old marker. Preserve such orphaned children as
+    // chronological singleton inputs so the provider sees the notification;
+    // the full transcript still has the marker and groups the same part under
+    // the original assistant turn for presentation.
+    for mut orphaned in content_by_run.into_values() {
+        singleton.append(&mut orphaned);
+    }
+    singleton.sort_by_key(|part| (part.created_at_ms, part.part_id));
     runs.extend(singleton.into_iter().map(|part| vec![part]));
     runs
 }
@@ -1499,6 +1509,64 @@ mod tests {
         assert_eq!(
             typed_text_from_value(&runs[1][1].content).as_deref(),
             Some("hi")
+        );
+    }
+
+    #[test]
+    fn late_assistant_hook_groups_with_launch_turn_but_survives_without_its_marker() {
+        let launch_marker = part(
+            10,
+            "run",
+            PartRole::Assistant,
+            PartState::Completed,
+            None,
+            serde_json::json!({"run_kind": "continue"}),
+            1000,
+        );
+        let later_marker = part(
+            20,
+            "run",
+            PartRole::Assistant,
+            PartState::Completed,
+            None,
+            serde_json::json!({"run_kind": "continue"}),
+            2000,
+        );
+        let notification = part(
+            30,
+            "system_notification",
+            PartRole::Assistant,
+            PartState::Completed,
+            Some(10),
+            serde_json::json!({
+                "operation_id": "proc_late",
+                "operation_kind": "shell",
+                "status": "completed",
+                "summary": "done",
+                "body": "done"
+            }),
+            3000,
+        );
+
+        let full = parts_into_runs(&[
+            launch_marker.clone(),
+            later_marker.clone(),
+            notification.clone(),
+        ]);
+        assert_eq!(full.len(), 2);
+        assert_eq!(full[0][0].part_id, launch_marker.part_id);
+        assert_eq!(full[0][1].part_id, notification.part_id);
+        assert_eq!(
+            full[1][0].part_id, later_marker.part_id,
+            "the full transcript presents the hook on its original assistant turn"
+        );
+
+        let markerless_active_window = parts_into_runs(&[later_marker, notification.clone()]);
+        assert_eq!(markerless_active_window.len(), 2);
+        assert_eq!(
+            markerless_active_window[1],
+            vec![notification],
+            "a post-compaction active window still delivers the late hook to the model"
         );
     }
 

@@ -3148,7 +3148,7 @@ Cron-style and one-shot wakeup scheduling tools.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Schedule a one-shot or recurring job with a standard 5-field cron expression (minute hour day-of-month month day-of-week). The job fires while the session is idle and delivers its prompt to you as a system_notification appended onto the current run, waking you again; never use it to poll. Jobs are session-only and recurring jobs auto-expire after seven days. When the exact time does not matter, pick a minute that is not :00 or :30 to avoid clumping.
+> Schedule a recurring wake with a 6-field cron expression (second minute hour day-of-month month day-of-week). Always pass the IANA timezone from environment_context; wall-clock fields are evaluated in that timezone and returned times are explicit RFC 3339 instants. When the job fires while the session is idle, its prompt is appended chronologically as a typed system_notification and wakes the model; never use it to poll. Jobs are session-only and auto-expire after seven days. When the exact time does not matter, avoid :00 and :30 to reduce clumping.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -3158,6 +3158,7 @@ Cron-style and one-shot wakeup scheduling tools.
 | `misfire_policy` | `CronMisfirePolicyInput` | — | `run_once_now` | What to do after a restart when this fire is materially overdue. |
 | `prompt` | `string` | ✓ | — | Prompt to enqueue when the job fires. |
 | `retry_policy` | `CronRetryPolicyInput` | — | `{"initial_delay_seconds":15,"max_attempts":3,"max_delay_seconds":300,"multiplier":2}` |  |
+| `timezone` | `string` | ✓ | — | IANA timezone in which the cron expression is evaluated (for example<br>`Asia/Shanghai`). This is required so local wall-clock requests cannot<br>be silently interpreted as UTC. |
 
 **Input schema**:
 ```json
@@ -3171,7 +3172,7 @@ Cron-style and one-shot wakeup scheduling tools.
         "reschedule"
       ],
       "type": "string",
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "CronRetryPolicyInput": {
       "additionalProperties": false,
@@ -3207,7 +3208,7 @@ Cron-style and one-shot wakeup scheduling tools.
         }
       },
       "type": "object",
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     }
   },
   "description": "Input of the cron create tool.",
@@ -3223,7 +3224,7 @@ Cron-style and one-shot wakeup scheduling tools.
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "misfire_policy": {
       "$ref": "#/$defs/CronMisfirePolicyInput",
@@ -3244,11 +3245,18 @@ Cron-style and one-shot wakeup scheduling tools.
         "max_delay_seconds": 300,
         "multiplier": 2
       }
+    },
+    "timezone": {
+      "description": "IANA timezone in which the cron expression is evaluated (for example\n`Asia/Shanghai`). This is required so local wall-clock requests cannot\nbe silently interpreted as UTC.",
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000002"
     }
   },
   "required": [
     "expression",
-    "prompt"
+    "prompt",
+    "timezone"
   ],
   "type": "object"
 }

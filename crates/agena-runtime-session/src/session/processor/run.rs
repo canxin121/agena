@@ -27,10 +27,12 @@ pub(crate) const MARKER_ROUNDS_KEY: &str = "rounds";
 fn round_record_from_parts(
     parts: &[Part],
     provider_state: Option<&serde_json::Value>,
+    input_notification_part_ids: &[i64],
 ) -> serde_json::Value {
     serde_json::json!({
         "part_ids": parts.iter().map(|part| part.part_id).collect::<Vec<_>>(),
         "provider_state": provider_state,
+        "input_notification_part_ids": input_notification_part_ids,
     })
 }
 
@@ -625,6 +627,16 @@ impl SessionProcessor {
                     .ok()
             });
         let all_parts_terminal = parts.iter().all(|part| part.state.is_terminal());
+        // Every successful provider request receives a durable round record,
+        // including its exact notification inputs. Recording terminal text
+        // rounds as well as tool-calling rounds makes the transcript itself
+        // the crash-safe delivery acknowledgment.
+        let round_record = round_record_from_parts(
+            &parts,
+            provider_state.as_ref(),
+            &run.input_notification_part_ids,
+        );
+        let merged_content = merge_round_record(run.marker_content.as_ref(), round_record);
         let run_marker = if all_parts_terminal {
             run.store
                 .complete_run(
@@ -633,14 +645,14 @@ impl SessionProcessor {
                     RunOutcome {
                         status: PartState::Completed,
                         abort_reason: None,
-                        content: None,
+                        content: merged_content,
                         provider_state,
                     },
                 )
                 .await?;
             self.collect_run_parts(&run.store, run.session_id, assistant_message_id)
                 .await?
-        } else if provider_state.is_some() {
+        } else {
             // A tool-calling turn deliberately leaves its run marker in
             // progress until the tool executor resolves every child. Provider
             // replay state belongs to that assistant turn and must already be
@@ -649,14 +661,12 @@ impl SessionProcessor {
             // reasoning payload is not passed back. `complete_run` later
             // preserves this value when its outcome has no replacement.
             //
-            // Multi-round turns accumulate a per-round record on the marker's
-            // `content["rounds"]` so the prompt-window projection can re-split
-            // the merged run into per-round wire messages (each carrying its
-            // own reasoning passback). The marker stays in-flight across every
-            // round of one turn; it is terminalized only when the whole turn
-            // finishes.
-            let round_record = round_record_from_parts(&parts, provider_state.as_ref());
-            let merged_content = merge_round_record(run.marker_content.as_ref(), round_record);
+            // Every round accumulates a record on `content["rounds"]` so the
+            // prompt-window projection can re-split the merged run into
+            // provider messages, keep each reasoning passback, and prove
+            // exactly which background hooks that request saw. The marker
+            // stays in-flight across every round of one turn; it is
+            // terminalized only when the whole turn finishes.
             run.store
                 .update_part(
                     run.session_id,
@@ -667,9 +677,6 @@ impl SessionProcessor {
                         ..PartDelta::default()
                     },
                 )
-                .await?
-        } else {
-            self.collect_run_parts(&run.store, run.session_id, assistant_message_id)
                 .await?
         };
 

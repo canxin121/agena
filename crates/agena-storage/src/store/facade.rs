@@ -229,8 +229,7 @@ pub trait SessionStore: Send + Sync {
 
     /// Atomically mutate a background operation against the run that launched
     /// it. At launch this durably checkpoints the InProgress tool part and its
-    /// correlation marker together with the guard result. At settle it
-    /// terminalizes the tool part and appends notification parts. The run is
+    /// correlation marker together with the guard result. The run is
     /// terminalized only once no in-flight child remains.
     async fn settle_background_run(
         &self,

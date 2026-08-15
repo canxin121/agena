@@ -1246,11 +1246,11 @@ mod tests {
     }
 
     #[test]
-    fn runtime_ingress_notification_projects_as_system_message_never_assistant_text() {
-        // The notification-leak regression: a settled background operation
-        // creates a chronological Runtime ingress run. Provider projection maps
-        // that explicit identity to Role::System and emits the body as a
-        // dedicated SystemMessage part — never as assistant `Text`.
+    fn assistant_launch_notification_projects_as_system_message_never_assistant_text() {
+        // An AI-launched background hook rides the assistant turn that launched
+        // it. The run keeps Assistant identity for transcript presentation,
+        // while the typed body projects as a dedicated SystemMessage part —
+        // never as the assistant's own `Text` output.
         let notification = agena_runtime_contracts::part_content::SystemNotificationContent {
             operation_id: "proc_test".to_string(),
             operation_kind: "shell".to_string(),
@@ -1259,10 +1259,10 @@ mod tests {
             body: "<agena_notification>exit 0</agena_notification>".to_string(),
             ..Default::default()
         };
-        let marker = run_marker(PartRole::Runtime, None);
+        let marker = run_marker(PartRole::Assistant, None);
         let mut body_part = part(
             "system_notification",
-            PartRole::Runtime,
+            PartRole::Assistant,
             PartState::Completed,
             notification.as_value(),
         );
@@ -1272,8 +1272,8 @@ mod tests {
 
         assert_eq!(
             input.role,
-            Role::System,
-            "the notification keeps Runtime/System identity"
+            Role::Assistant,
+            "the notification keeps its launching Assistant identity"
         );
         assert!(
             matches!(
@@ -1281,7 +1281,7 @@ mod tests {
                 [agena_provider::CompletionInputPart::SystemMessage { text }]
                     if text == "<agena_notification>exit 0</agena_notification>"
             ),
-            "the notification must project as a typed SystemMessage, never as assistant Text"
+            "the notification body must project as a typed SystemMessage, never assistant Text"
         );
     }
 
@@ -1301,7 +1301,7 @@ mod tests {
         };
         let body_part = part(
             "system_notification",
-            PartRole::Runtime,
+            PartRole::Assistant,
             PartState::Completed,
             notification.as_value(),
         );

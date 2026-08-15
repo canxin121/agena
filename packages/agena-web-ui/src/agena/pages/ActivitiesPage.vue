@@ -4,9 +4,12 @@ import { userErrorMessage } from '@/lib/api'
 
 import {
   clearFinishedActivities,
+  deleteActivity,
   dismissActivity,
   fetchActivities,
   fetchActivityLogs,
+  pauseActivity,
+  resumeActivity,
   stopActivity,
   type BackgroundActivityLogResource,
   type BackgroundActivityResource,
@@ -24,12 +27,13 @@ const statusFilter = ref('')
 const activeOnly = ref(false)
 
 let refreshTimer: ReturnType<typeof setInterval> | undefined
-let logTimer: ReturnType<typeof setInterval> | undefined
 
 const kindOptions = [
   { value: '', label: 'All kinds' },
   { value: 'shell', label: 'Shell' },
+  { value: 'monitor', label: 'Monitor' },
   { value: 'task', label: 'Task' },
+  { value: 'cron', label: 'Cron' },
   { value: 'runtime', label: 'Runtime' },
   { value: 'browser', label: 'Browser' },
 ]
@@ -38,6 +42,7 @@ const statusOptions = [
   { value: '', label: 'All statuses' },
   { value: 'running', label: 'Running' },
   { value: 'pending', label: 'Pending' },
+  { value: 'paused', label: 'Paused' },
   { value: 'succeeded', label: 'Succeeded' },
   { value: 'failed', label: 'Failed' },
   { value: 'cancelled', label: 'Cancelled' },
@@ -63,7 +68,7 @@ const activeCount = computed(() => activities.value.filter((activity) => isActiv
 const finishedCount = computed(() => activities.value.length - activeCount.value)
 
 function isActive(status: string): boolean {
-  return status === 'running' || status === 'pending'
+  return status === 'running' || status === 'pending' || status === 'paused'
 }
 
 function kindIcon(kind: string): string {
@@ -72,6 +77,10 @@ function kindIcon(kind: string): string {
       return '⚙'
     case 'task':
       return '◈'
+    case 'monitor':
+      return '≋'
+    case 'cron':
+      return '◷'
     case 'runtime':
       return '↻'
     case 'browser':
@@ -129,28 +138,15 @@ function toggleDetail(activity: BackgroundActivityResource) {
   if (selectedId.value) void loadLogs()
 }
 
-async function handleStop(activity: BackgroundActivityResource) {
+async function handleControl(activity: BackgroundActivityResource, control: string) {
   busyId.value = activity.id
   notify.clearBanner()
   try {
-    await stopActivity(activity.id)
-    await loadActivities()
-  } catch (err) {
-    notify.error(userErrorMessage(err))
-  } finally {
-    busyId.value = null
-  }
-}
-
-async function handleDismiss(activity: BackgroundActivityResource) {
-  busyId.value = activity.id
-  notify.clearBanner()
-  try {
-    await dismissActivity(activity.id)
-    if (selectedId.value === activity.id) {
-      selectedId.value = null
-      logs.value = null
-    }
+    if (control === 'stop') await stopActivity(activity.id)
+    else if (control === 'pause') await pauseActivity(activity.id)
+    else if (control === 'resume') await resumeActivity(activity.id)
+    else if (control === 'delete') await deleteActivity(activity.id)
+    else if (control === 'dismiss') await dismissActivity(activity.id)
     await loadActivities()
   } catch (err) {
     notify.error(userErrorMessage(err))
@@ -178,13 +174,13 @@ onMounted(() => {
   void loadActivities()
   refreshTimer = setInterval(() => {
     void loadActivities()
-    if (selectedId.value) void loadLogs()
+    const selected = activities.value.find((activity) => activity.id === selectedId.value)
+    if (selected && selected.kind !== 'cron' && ['pending', 'running'].includes(selected.status)) void loadLogs()
   }, 4000)
 })
 
 onBeforeUnmount(() => {
   if (refreshTimer) clearInterval(refreshTimer)
-  if (logTimer) clearInterval(logTimer)
 })
 </script>
 
@@ -194,8 +190,8 @@ onBeforeUnmount(() => {
       <div>
         <h1>Background Activities</h1>
         <p class="muted">
-          {{ activeCount }} active · {{ finishedCount }} finished — unified view of shell processes, delegated tasks,
-          runtime maintenance, and browser sessions
+          {{ activeCount }} managed · {{ finishedCount }} finished — durable shell, monitor, task, and cron state, plus
+          runtime maintenance and browser sessions
         </p>
       </div>
       <div class="button-row">
@@ -256,20 +252,14 @@ onBeforeUnmount(() => {
             <span class="muted mono duration">{{ durationLabel(activity) }}</span>
             <span class="activity-actions">
               <button
-                v-if="isActive(activity.status) && activity.cancellable"
+                v-for="control in activity.controls"
+                :key="control"
                 class="button small"
+                :class="{ danger: control === 'delete' || control === 'dismiss' }"
                 :disabled="busyId === activity.id"
-                @click.stop="handleStop(activity)"
+                @click.stop="handleControl(activity, control)"
               >
-                Stop
-              </button>
-              <button
-                v-if="activity.dismissible"
-                class="button small danger"
-                :disabled="busyId === activity.id"
-                @click.stop="handleDismiss(activity)"
-              >
-                Dismiss
+                {{ control }}
               </button>
             </span>
           </button>
@@ -277,6 +267,12 @@ onBeforeUnmount(() => {
             <div v-if="activity.message" class="muted" style="margin-bottom: 8px">{{ activity.message }}</div>
             <div v-if="activity.exit_code != null" class="muted mono" style="margin-bottom: 8px">
               exit code {{ activity.exit_code }}
+            </div>
+            <div v-if="activity.source_part_id != null" class="muted mono" style="margin-bottom: 8px">
+              source part #{{ activity.source_part_id }}
+            </div>
+            <div v-if="activity.next_event_at_ms != null" class="muted mono" style="margin-bottom: 8px">
+              next {{ new Date(activity.next_event_at_ms).toLocaleString() }}
             </div>
             <pre v-if="logs?.lines.length" class="log-tail mono">{{
               logs.lines.map((line) => line.text).join('\n')
@@ -362,6 +358,11 @@ onBeforeUnmount(() => {
 .badge.status-pending {
   background: rgba(255, 170, 0, 0.15);
   color: #d9a13b;
+}
+
+.badge.status-paused {
+  background: rgba(160, 120, 255, 0.15);
+  color: #b59bff;
 }
 
 .badge.status-succeeded {

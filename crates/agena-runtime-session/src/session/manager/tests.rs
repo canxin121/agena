@@ -841,6 +841,47 @@ struct StartupFailureProvider {
     model: ModelId,
 }
 
+struct HangingProvider {
+    model: ModelId,
+}
+
+#[async_trait::async_trait]
+impl ModelRuntime for HangingProvider {
+    fn id(&self) -> &str {
+        "hanging"
+    }
+
+    fn default_model(&self) -> &ModelId {
+        &self.model
+    }
+
+    async fn list_models(&self) -> Result<Vec<agena_domain::Model>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse, ProviderError> {
+        std::future::pending().await
+    }
+
+    async fn complete_stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures_util::Stream<Item = Result<CompletionStreamEvent, ProviderError>>
+                    + Send,
+            >,
+        >,
+        ProviderError,
+    > {
+        Ok(Box::pin(futures_util::stream::pending()))
+    }
+}
+
 #[async_trait::async_trait]
 impl ModelRuntime for StartupFailureProvider {
     fn id(&self) -> &str {
@@ -1070,6 +1111,57 @@ async fn opening_a_new_subtask_at_running_publication_cannot_mark_it_interrupted
     assert_eq!(response.status, agena_domain::SubtaskStatus::Completed);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subtask_timeout_persists_a_complete_timeout_failure_even_when_cleanup_is_cancelled() {
+    let provider = Arc::new(HangingProvider {
+        model: ModelId::new("hanging-model"),
+    });
+    let manager = manager_with_provider(provider).await;
+    let parent = create(&manager, "subtask timeout parent").await;
+
+    let response = manager
+        .run_subtask(SessionSubtaskRequest {
+            parent_session_id: parent.id,
+            description: "BG child timeout fixture".to_owned(),
+            prompt: "wait forever".to_owned(),
+            access: agena_domain::ExecutionAccess::Inherit,
+            skills: None,
+            task_id: Some("task_timeout_fixture".to_owned()),
+            requested_model_selection: agena_domain::ModelSelectionConfig {
+                provider: Some("hanging".to_owned()),
+                model: Some("hanging-model".to_owned()),
+                ..Default::default()
+            },
+            timeout_ms: Some(20),
+            max_tokens: None,
+            max_cost_microusd: None,
+        })
+        .await
+        .expect("timeout terminal state must satisfy the database invariant");
+
+    assert_eq!(response.status, agena_domain::SubtaskStatus::TimedOut);
+    let failure = response.failure.expect("timeout carries a failure");
+    assert_eq!(failure.code.as_str(), "subtask.timeout");
+    assert!(failure.user.fallback.contains("task_timeout_fixture"));
+    assert!(failure.user.fallback.contains("20 ms"));
+    let persisted = manager
+        .session_store()
+        .load(response.session.id)
+        .await
+        .expect("reload timed-out child");
+    assert_eq!(persisted.meta.subtask_status.as_deref(), Some("timed_out"));
+    let persisted_failure = persisted
+        .meta
+        .subtask_failure
+        .expect("durable timeout failure");
+    assert_eq!(
+        persisted_failure
+            .get("code")
+            .and_then(serde_json::Value::as_str),
+        Some("subtask.timeout")
+    );
+}
+
 #[derive(Default)]
 struct ToolSearchFixture;
 
@@ -1158,12 +1250,14 @@ struct ToolSearchLoopProvider {
     requests: std::sync::Mutex<Vec<CompletionRequest>>,
 }
 
-/// Holds the first provider request open so a Runtime ingress can be committed
-/// before its tool-calling turn reaches the stable-loop boundary. The second
-/// request is the notification response. This deterministically reproduces the
-/// fast-background-completion ordering observed with a real `shell.run`.
-struct ExternalBoundaryToolProvider {
+/// Holds the first provider request open so an Assistant-owned background hook
+/// can be committed before the current part reaches the stable-loop boundary.
+/// The second request is the notification response. This deterministically
+/// reproduces the fast-background-completion ordering observed with a real
+/// `shell.run`.
+struct AssistantHookBoundaryProvider {
     model: ModelId,
+    first_request_uses_tool: bool,
     requests: std::sync::Mutex<Vec<CompletionRequest>>,
     first_request_entered: tokio::sync::Notify,
     release_first_request: tokio::sync::Notify,
@@ -1182,13 +1276,21 @@ impl ToolSearchLoopProvider {
     }
 }
 
-impl ExternalBoundaryToolProvider {
+impl AssistantHookBoundaryProvider {
     fn new() -> Self {
         Self {
-            model: ModelId::new("external-boundary-model"),
+            model: ModelId::new("assistant-hook-boundary-model"),
+            first_request_uses_tool: true,
             requests: std::sync::Mutex::new(Vec::new()),
             first_request_entered: tokio::sync::Notify::new(),
             release_first_request: tokio::sync::Notify::new(),
+        }
+    }
+
+    fn text_only() -> Self {
+        Self {
+            first_request_uses_tool: false,
+            ..Self::new()
         }
     }
 
@@ -1309,9 +1411,9 @@ impl ModelRuntime for ToolSearchLoopProvider {
 }
 
 #[async_trait::async_trait]
-impl ModelRuntime for ExternalBoundaryToolProvider {
+impl ModelRuntime for AssistantHookBoundaryProvider {
     fn id(&self) -> &str {
-        "external-boundary"
+        "assistant-hook-boundary"
     }
 
     fn default_model(&self) -> &ModelId {
@@ -1366,24 +1468,42 @@ impl ModelRuntime for ExternalBoundaryToolProvider {
             0 => {
                 self.first_request_entered.notify_one();
                 self.release_first_request.notified().await;
-                vec![
-                    Ok(CompletionStreamEvent::ToolCallSnapshot {
-                        provider_id: provider_id.clone(),
-                        model: model.clone(),
-                        stream_key: "call:boundary-tool".to_owned(),
-                        id: Some("call_boundary_tool".to_owned()),
-                        name: Some("tools_search".to_owned()),
-                        arguments_json: r#"{"query":"filesystem"}"#.to_owned(),
-                    }),
-                    Ok(CompletionStreamEvent::Completed {
-                        provider_id,
-                        model,
-                        finish_reason: Some(CompletionFinishReason::ToolCalls),
-                        usage: Some(CompletionUsage::default()),
-                        provider_metadata: None,
-                        end_turn: None,
-                    }),
-                ]
+                if self.first_request_uses_tool {
+                    vec![
+                        Ok(CompletionStreamEvent::ToolCallSnapshot {
+                            provider_id: provider_id.clone(),
+                            model: model.clone(),
+                            stream_key: "call:boundary-tool".to_owned(),
+                            id: Some("call_boundary_tool".to_owned()),
+                            name: Some("tools_search".to_owned()),
+                            arguments_json: r#"{"query":"filesystem"}"#.to_owned(),
+                        }),
+                        Ok(CompletionStreamEvent::Completed {
+                            provider_id,
+                            model,
+                            finish_reason: Some(CompletionFinishReason::ToolCalls),
+                            usage: Some(CompletionUsage::default()),
+                            provider_metadata: None,
+                            end_turn: None,
+                        }),
+                    ]
+                } else {
+                    vec![
+                        Ok(CompletionStreamEvent::TextDelta {
+                            provider_id: provider_id.clone(),
+                            model: model.clone(),
+                            delta: "FIRST_PROVIDER_PART_COMPLETED".to_owned(),
+                        }),
+                        Ok(CompletionStreamEvent::Completed {
+                            provider_id,
+                            model,
+                            finish_reason: Some(CompletionFinishReason::Stop),
+                            usage: Some(CompletionUsage::default()),
+                            provider_metadata: None,
+                            end_turn: None,
+                        }),
+                    ]
+                }
             }
             1 => vec![
                 Ok(CompletionStreamEvent::TextDelta {
@@ -1400,7 +1520,9 @@ impl ModelRuntime for ExternalBoundaryToolProvider {
                     end_turn: None,
                 }),
             ],
-            other => panic!("external-boundary run made an unexpected provider request #{other}"),
+            other => {
+                panic!("assistant-hook-boundary run made an unexpected provider request #{other}")
+            }
         };
         Ok(Box::pin(futures_util::stream::iter(events)))
     }
@@ -1652,6 +1774,7 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
         },
         next_message_id: run_id,
         marker_content: Some(run_marker_content("continue", None, None, None, None)),
+        input_notification_part_ids: Vec::new(),
         part_ids: ProcessorPartIdAllocator,
         next_call_id: 0,
         store: manager.store.clone(),
@@ -3214,8 +3337,8 @@ async fn hook_runs_append_to_the_in_flight_launching_run() {
 
 /// Install the durable launch receipt plus normalized Running aggregate used
 /// by notification tests. The tool and its assistant run are already
-/// terminal: completion/events mutate only the aggregate and create new
-/// chronological Runtime ingress runs.
+/// terminal: completion/events mutate only the aggregate and append their
+/// Assistant-owned hooks to this launch run.
 async fn install_test_background_operation(
     manager: &SessionManager,
     session_id: i64,
@@ -3317,10 +3440,10 @@ async fn install_test_background_operation(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn runtime_ingress_mid_tool_turn_terminalizes_the_launch_run_before_opening_its_reply() {
-    let provider = Arc::new(ExternalBoundaryToolProvider::new());
+async fn assistant_hook_mid_model_part_waits_for_the_boundary_and_keeps_the_turn_continuous() {
+    let provider = Arc::new(AssistantHookBoundaryProvider::new());
     let manager = Arc::new(manager_with_tool_search_fixture(provider.clone()).await);
-    let session = create(&manager, "runtime ingress turn handoff").await;
+    let session = create(&manager, "assistant hook turn continuation").await;
     let session_id = session.id;
 
     // Install a previously launched background operation. Its completion will
@@ -3334,8 +3457,8 @@ async fn runtime_ingress_mid_tool_turn_terminalizes_the_launch_run_before_openin
             "continue",
             run_marker_content(
                 "continue",
-                Some("external-boundary"),
-                Some("external-boundary-model"),
+                Some("assistant-hook-boundary"),
+                Some("assistant-hook-boundary-model"),
                 None,
                 None,
             ),
@@ -3363,7 +3486,7 @@ async fn runtime_ingress_mid_tool_turn_terminalizes_the_launch_run_before_openin
     let request = SessionUserRunRequest::new(
         session_id,
         agena_runtime::SessionRunOptions {
-            model: ModelRef::new("external-boundary", "external-boundary-model"),
+            model: ModelRef::new("assistant-hook-boundary", "assistant-hook-boundary-model"),
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
@@ -3374,7 +3497,7 @@ async fn runtime_ingress_mid_tool_turn_terminalizes_the_launch_run_before_openin
             max_output_tokens: Some(256),
         },
         vec![TypedContent::Text(text_content(
-            "Start the tool call, then handle any Runtime ingress.",
+            "Start the tool call, then handle any background hook.",
         ))],
     );
     let run_manager = Arc::clone(&manager);
@@ -3388,10 +3511,10 @@ async fn runtime_ingress_mid_tool_turn_terminalizes_the_launch_run_before_openin
     .await
     .expect("first provider request entered");
 
-    // `record_background_event` is the atomic event/Runtime-ingress/outbox
-    // transaction. The SystemNotification steer is deliberately payload-only:
-    // it reloads the already-committed Runtime run and never writes a second
-    // notification.
+    // `record_background_event` atomically appends the hook to the original
+    // assistant launch run and creates the outbox delivery. The provider's
+    // first response part is still blocked, so steering may only queue the
+    // hook; it must not start another provider request until that part ends.
     let notification = SystemNotificationContent {
         operation_id: "proc_boundary_race".to_owned(),
         operation_kind: "shell".to_owned(),
@@ -3402,11 +3525,11 @@ async fn runtime_ingress_mid_tool_turn_terminalizes_the_launch_run_before_openin
     };
     let notification_part = new_part_from_content(
         "system_notification",
-        PartRole::Runtime,
+        PartRole::Assistant,
         &TypedContent::SystemNotification(notification.clone()),
         PartState::Completed,
     )
-    .expect("build Runtime notification");
+    .expect("build Assistant-owned notification");
     manager
         .store
         .record_background_event(agena_storage::store::BackgroundEventRequest {
@@ -3419,7 +3542,7 @@ async fn runtime_ingress_mid_tool_turn_terminalizes_the_launch_run_before_openin
             notification: notification_part,
         })
         .await
-        .expect("commit terminal event and Runtime ingress");
+        .expect("commit terminal event and assistant hook");
     manager
         .steer_input(
             session_id,
@@ -3427,6 +3550,11 @@ async fn runtime_ingress_mid_tool_turn_terminalizes_the_launch_run_before_openin
         )
         .await
         .expect("wake the active stable run");
+    assert_eq!(
+        provider.requests().len(),
+        1,
+        "the hook is queued while the current provider part is still active"
+    );
     provider.release_first_request.notify_one();
 
     let completed = tokio::time::timeout(std::time::Duration::from_secs(10), execution)
@@ -3460,7 +3588,7 @@ async fn runtime_ingress_mid_tool_turn_terminalizes_the_launch_run_before_openin
     assert_eq!(
         active_launch_run.state,
         PartState::Completed,
-        "the assistant run preceding Runtime ingress must be terminal before its id is discarded"
+        "the active assistant run completes normally"
     );
 
     let notifications = parts
@@ -3472,14 +3600,24 @@ async fn runtime_ingress_mid_tool_turn_terminalizes_the_launch_run_before_openin
         1,
         "one event produces one notification"
     );
-    assert_eq!(notifications[0].role, PartRole::Runtime);
-    let ingress_run_id = notifications[0].run_id.expect("Runtime ingress run id");
-    let ingress_run = parts
-        .iter()
-        .find(|part| part.part_id == ingress_run_id)
-        .expect("Runtime ingress marker");
-    assert_eq!(ingress_run.role, PartRole::Runtime);
-    assert_eq!(ingress_run.state, PartState::Completed);
+    assert_eq!(notifications[0].role, PartRole::Assistant);
+    assert_eq!(
+        notifications[0].run_id,
+        Some(prior_launch_run_id),
+        "the hook is appended directly to the assistant turn that launched the background work"
+    );
+    assert!(
+        !parts.iter().any(|part| {
+            part.is_run_marker()
+                && part.role == PartRole::Runtime
+                && part
+                    .content
+                    .get("run_kind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("runtime_ingress")
+        }),
+        "AI-launched hooks create no synthetic Runtime ingress turn"
+    );
 
     let response_text = parts
         .iter()
@@ -3490,9 +3628,9 @@ async fn runtime_ingress_mid_tool_turn_terminalizes_the_launch_run_before_openin
         })
         .expect("notification response text");
     let response_run_id = response_text.run_id.expect("response run id");
-    assert_ne!(
+    assert_eq!(
         response_run_id, active_launch_run_id,
-        "Runtime ingress opens a fresh assistant reply run"
+        "the hook response remains in the already-active assistant turn"
     );
     let response_run = parts
         .iter()
@@ -3500,19 +3638,205 @@ async fn runtime_ingress_mid_tool_turn_terminalizes_the_launch_run_before_openin
         .expect("notification response run marker");
     assert_eq!(response_run.role, PartRole::Assistant);
     assert_eq!(response_run.state, PartState::Completed);
+    let notification_part_id = notifications[0].part_id;
+    assert!(
+        response_run
+            .content
+            .get("rounds")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|rounds| rounds.iter().any(|round| {
+                round
+                    .get("input_notification_part_ids")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|ids| {
+                        ids.iter()
+                            .any(|id| id.as_i64() == Some(notification_part_id))
+                    })
+            })),
+        "the follow-up provider round durably records the hook it actually saw"
+    );
     assert!(
         parts.iter().all(|part| {
             !part.is_run_marker() || part.role != PartRole::Assistant || part.state.is_terminal()
         }),
         "no assistant run may remain in flight after the handoff"
     );
-    assert_eq!(provider.requests().len(), 2);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1].turns.last().is_some_and(|turn| {
+            matches!(
+                turn.parts.as_slice(),
+                [CompletionInputPart::SystemMessage { text }] if text == "exit 0"
+            )
+        }),
+        "the queued hook is the chronological tail input to the next provider round, not retroactively inserted before the active turn"
+    );
     let state = manager
         .session_store()
         .session_state(session_id)
         .await
         .expect("derive final session state");
     assert_eq!(state.state, SessionState::Ready);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn assistant_hook_after_a_terminal_text_part_opens_a_clean_follow_up_run() {
+    let provider = Arc::new(AssistantHookBoundaryProvider::text_only());
+    let manager = Arc::new(manager_with_tool_search_fixture(provider.clone()).await);
+    let session = create(&manager, "assistant hook after terminal text part").await;
+    let session_id = session.id;
+
+    let launch_run_id = manager
+        .store
+        .start_run(
+            session_id,
+            "continue",
+            run_marker_content(
+                "continue",
+                Some("assistant-hook-boundary"),
+                Some("assistant-hook-boundary-model"),
+                None,
+                None,
+            ),
+        )
+        .await
+        .expect("start background launch run");
+    install_test_background_operation(
+        &manager,
+        session_id,
+        launch_run_id,
+        agena_storage::store::BackgroundOperationKind::Shell,
+        "proc_text_boundary",
+    )
+    .await;
+    let operation = manager
+        .store
+        .background_operation_by_external_id(
+            agena_storage::store::BackgroundOperationKind::Shell,
+            "proc_text_boundary",
+        )
+        .await
+        .expect("load background operation")
+        .expect("background operation exists");
+
+    let request = SessionUserRunRequest::new(
+        session_id,
+        agena_runtime::SessionRunOptions {
+            model: ModelRef::new("assistant-hook-boundary", "assistant-hook-boundary-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: Some(0.0),
+            max_output_tokens: Some(256),
+        },
+        vec![TypedContent::Text(text_content(
+            "Finish this text part, then process the queued hook.",
+        ))],
+    );
+    let run_manager = Arc::clone(&manager);
+    let execution =
+        tokio::spawn(async move { run_manager.submit_subtask_user_message(request, None).await });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        provider.first_request_entered.notified(),
+    )
+    .await
+    .expect("first provider request entered");
+
+    let notification = SystemNotificationContent {
+        operation_id: "proc_text_boundary".to_owned(),
+        operation_kind: "shell".to_owned(),
+        status: "completed".to_owned(),
+        summary: "exit 0".to_owned(),
+        body: "exit 0".to_owned(),
+        ..Default::default()
+    };
+    let settled = manager
+        .store
+        .record_background_event(agena_storage::store::BackgroundEventRequest {
+            operation_id: operation.operation_id,
+            event_key: "terminal".to_owned(),
+            event_seq: None,
+            next_phase: Some(agena_storage::store::BackgroundOperationPhase::Completed),
+            outcome: Some(serde_json::json!({"text": "exit 0"})),
+            failure: None,
+            notification: new_part_from_content(
+                "system_notification",
+                PartRole::Assistant,
+                &TypedContent::SystemNotification(notification.clone()),
+                PartState::Completed,
+            )
+            .expect("build assistant hook"),
+        })
+        .await
+        .expect("commit assistant hook");
+    manager
+        .steer_input(
+            session_id,
+            vec![TypedContent::SystemNotification(notification)],
+        )
+        .await
+        .expect("queue assistant hook");
+    assert_eq!(
+        provider.requests().len(),
+        1,
+        "the hook cannot interrupt the active text part"
+    );
+    provider.release_first_request.notify_one();
+
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(10), execution)
+        .await
+        .expect("stable run must not hang")
+        .expect("stable run task joins")
+        .expect("stable run completes");
+    let first_text = completed
+        .parts()
+        .iter()
+        .find(|part| {
+            part.kind == "text"
+                && part.content.get("text").and_then(serde_json::Value::as_str)
+                    == Some("FIRST_PROVIDER_PART_COMPLETED")
+        })
+        .expect("first terminal provider text");
+    let response_text = completed
+        .parts()
+        .iter()
+        .find(|part| {
+            part.kind == "text"
+                && part.content.get("text").and_then(serde_json::Value::as_str)
+                    == Some("BG_BOUNDARY_NOTIFICATION_RECEIVED")
+        })
+        .expect("hook response text");
+    assert_ne!(
+        first_text.run_id, response_text.run_id,
+        "a terminal marker is immutable, so the queued hook opens one clean Assistant follow-up run"
+    );
+    assert_eq!(
+        settled.notification_part.role,
+        PartRole::Assistant,
+        "the hook keeps AI identity"
+    );
+    assert_eq!(settled.notification_part.run_id, Some(launch_run_id));
+    assert!(
+        completed.parts().iter().all(|part| {
+            !part.is_run_marker() || part.role != PartRole::Assistant || part.state.is_terminal()
+        }),
+        "both the completed text run and hook follow-up run are terminal"
+    );
+    assert_eq!(provider.requests().len(), 2);
+    assert!(
+        manager
+            .notification_has_completed_assistant_response(
+                session_id,
+                settled.delivery.notification_part_id,
+            )
+            .await
+            .expect("derive exact provider-round receipt")
+    );
 }
 
 #[tokio::test]
@@ -3557,9 +3881,9 @@ async fn background_completion_notification_is_committed_once_per_operation() {
         ..Default::default()
     };
 
-    // First delivery atomically terminalizes the aggregate, creates a Runtime
-    // ingress notification at the actual arrival position, and enqueues the
-    // durable wake delivery.
+    // First delivery atomically terminalizes the aggregate, appends an
+    // Assistant-owned hook to the launch turn, and enqueues the durable wake
+    // delivery.
     manager
         .settle_background_operation(
             session_id,
@@ -3583,21 +3907,13 @@ async fn background_completion_notification_is_committed_once_per_operation() {
     assert_eq!(notified.len(), 1, "exactly one notification part");
     assert_eq!(
         notified[0].role,
-        PartRole::Runtime,
-        "the notification has explicit Runtime identity and cannot masquerade as assistant text"
+        PartRole::Assistant,
+        "AI-launched work keeps the launching assistant identity"
     );
-    assert_ne!(notified[0].run_id, Some(run_id));
-    let ingress = parts
-        .iter()
-        .find(|part| part.is_run_marker() && part.part_id == notified[0].run_id.unwrap())
-        .expect("notification Runtime ingress marker");
-    assert_eq!(ingress.role, PartRole::Runtime);
     assert_eq!(
-        ingress
-            .content
-            .get("run_kind")
-            .and_then(serde_json::Value::as_str),
-        Some("runtime_ingress")
+        notified[0].run_id,
+        Some(run_id),
+        "the notification is a rich hook part on the existing launch turn"
     );
 
     let launching_marker = parts
@@ -3726,10 +4042,12 @@ async fn terminal_task_is_reconciled_from_durable_child_state_without_observer_e
         reloaded
             .parts()
             .iter()
-            .filter(|part| part.kind == "system_notification" && part.role == PartRole::Runtime)
+            .filter(|part| {
+                part.kind == "system_notification" && part.role == PartRole::Assistant
+            })
             .count(),
         1,
-        "durable reconciliation emits exactly one Runtime notification"
+        "durable reconciliation emits exactly one Assistant-owned notification"
     );
     assert_eq!(
         manager
@@ -3788,7 +4106,7 @@ async fn committed_notification_is_woken_and_consumed_after_dispatcher_restart_r
     };
     let notification_part = new_part_from_content(
         "system_notification",
-        PartRole::Runtime,
+        PartRole::Assistant,
         &TypedContent::SystemNotification(notification),
         PartState::Completed,
     )
@@ -3896,7 +4214,7 @@ async fn recovery_consumes_a_delivery_whose_response_committed_before_the_outbox
             failure: None,
             notification: new_part_from_content(
                 "system_notification",
-                PartRole::Runtime,
+                PartRole::Assistant,
                 &TypedContent::SystemNotification(notification),
                 PartState::Completed,
             )
@@ -3939,6 +4257,22 @@ async fn recovery_consumes_a_delivery_whose_response_committed_before_the_outbox
         )
         .await
         .expect("append committed response");
+    let notification_part_id = settled
+        .delivery
+        .notification_part_id
+        .expect("settled delivery notification id");
+    let mut response_marker_content = run_marker_content(
+        "continue",
+        Some("startup-failure"),
+        Some("startup-failure-model"),
+        None,
+        None,
+    );
+    response_marker_content["rounds"] = serde_json::json!([{
+        "part_ids": [],
+        "provider_state": null,
+        "input_notification_part_ids": [notification_part_id],
+    }]);
     manager
         .store
         .complete_run(
@@ -3947,7 +4281,7 @@ async fn recovery_consumes_a_delivery_whose_response_committed_before_the_outbox
             agena_storage::store::RunOutcome {
                 status: PartState::Completed,
                 abort_reason: None,
-                content: None,
+                content: Some(response_marker_content),
                 provider_state: None,
             },
         )
@@ -3955,10 +4289,7 @@ async fn recovery_consumes_a_delivery_whose_response_committed_before_the_outbox
         .expect("complete response run");
     assert!(
         manager
-            .notification_has_completed_assistant_response(
-                session.id,
-                settled.delivery.notification_part_id,
-            )
+            .notification_has_completed_assistant_response(session.id, Some(notification_part_id),)
             .await
             .expect("derive response evidence")
     );
@@ -4253,7 +4584,7 @@ async fn background_launch_receipt_is_terminal_and_needs_no_guard() {
 }
 
 #[tokio::test]
-async fn monitor_events_create_runtime_ingress_parts_without_terminalizing_the_operation() {
+async fn monitor_events_append_assistant_hooks_without_terminalizing_the_operation() {
     let provider = Arc::new(FakeProvider {
         provider_id: "fake",
         model: ModelId::new("fake-model"),
@@ -4294,8 +4625,8 @@ async fn monitor_events_create_runtime_ingress_parts_without_terminalizing_the_o
         ..Default::default()
     };
 
-    // First event: a unique Runtime ingress is committed, while the normalized
-    // monitor aggregate remains Running.
+    // First event: a unique Assistant-owned hook is appended to the launch
+    // turn, while the normalized monitor aggregate remains Running.
     manager
         .settle_background_event(session_id, "monitor", "monitor_test", 1, event(1))
         .await
@@ -4312,13 +4643,13 @@ async fn monitor_events_create_runtime_ingress_parts_without_terminalizing_the_o
     assert_eq!(notified.len(), 1, "exactly one event part");
     assert_eq!(
         notified[0].role,
-        PartRole::Runtime,
-        "the event has explicit Runtime identity"
+        PartRole::Assistant,
+        "the event keeps its AI launch identity"
     );
-    assert_ne!(
+    assert_eq!(
         notified[0].run_id,
         Some(run_id),
-        "event owns a distinct Runtime ingress run"
+        "event appends directly to the monitor launch turn"
     );
     let tool = reloaded
         .parts()
@@ -4361,7 +4692,7 @@ async fn monitor_events_create_runtime_ingress_parts_without_terminalizing_the_o
     assert_eq!(event_count, 2, "each event committed once, dedup by seq");
 
     // The terminal settle is not swallowed by event rows: it terminalizes the
-    // aggregate and commits its own terminal Runtime ingress notification.
+    // aggregate and appends its own terminal Assistant hook.
     let terminal = SystemNotificationContent {
         operation_id: "monitor_test".to_string(),
         operation_kind: "monitor".to_string(),
@@ -4397,7 +4728,8 @@ async fn monitor_events_create_runtime_ingress_parts_without_terminalizing_the_o
     );
     assert!(
         notifications.iter().any(|part| {
-            part.role == PartRole::Runtime
+            part.role == PartRole::Assistant
+                && part.run_id == Some(run_id)
                 && typed_content_from_value(&part.kind, &part.content)
                     .ok()
                     .and_then(|content| match content {
@@ -4410,7 +4742,7 @@ async fn monitor_events_create_runtime_ingress_parts_without_terminalizing_the_o
                     })
                     .is_some()
         }),
-        "the terminal Runtime notification is distinct from sequenced events"
+        "the terminal Assistant notification is distinct from sequenced events"
     );
     let tool = reloaded
         .parts()
@@ -4430,6 +4762,107 @@ async fn monitor_events_create_runtime_ingress_parts_without_terminalizing_the_o
         launching_marker.state.is_terminal(),
         "the launch run remains terminal and unchanged"
     );
+}
+
+#[tokio::test]
+async fn assistant_created_scheduled_deliveries_reuse_the_launch_run_without_runtime_ingress() {
+    let provider = Arc::new(FakeProvider {
+        provider_id: "fake",
+        model: ModelId::new("fake-model"),
+        deltas: vec!["acknowledged assistant schedule".to_owned()],
+        thinking_deltas: Vec::new(),
+        finish_reason: Some(CompletionFinishReason::Stop),
+    });
+    let manager = manager_with_provider(provider).await;
+    let session = create(&manager, "assistant scheduled delivery").await;
+    let run_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            run_marker_content("continue", None, None, None, None),
+        )
+        .await
+        .expect("start launch run");
+    let mut tool_part = NewPart::pending(
+        "tool_call",
+        PartRole::Assistant,
+        serde_json::json!({"operation": {"call_id": 77, "title": "cron.create"}}),
+    );
+    tool_part.state = PartState::Completed;
+    let tool_part_id = manager
+        .store
+        .append_parts(session.id, run_id, vec![tool_part])
+        .await
+        .expect("append cron receipt")[0]
+        .part_id;
+    manager
+        .store
+        .complete_run(
+            session.id,
+            run_id,
+            agena_storage::store::RunOutcome {
+                status: PartState::Completed,
+                abort_reason: None,
+                content: None,
+                provider_state: None,
+            },
+        )
+        .await
+        .expect("complete launch run");
+    let provenance = agena_scheduler::ScheduledJobLaunchProvenance {
+        session_id: session.id,
+        run_id,
+        tool_part_id,
+        call_id: 77,
+    };
+
+    for delivery_key in ["assistant-fire-1", "assistant-fire-2"] {
+        assert!(
+            manager
+                .deliver_scheduled_job(
+                    session.id,
+                    "job-assistant".to_owned(),
+                    delivery_key.to_owned(),
+                    format!("wake for {delivery_key}"),
+                    Some(provenance),
+                )
+                .await
+                .expect("deliver assistant schedule")
+        );
+    }
+
+    let reloaded = manager
+        .get_session(session.id)
+        .await
+        .expect("reload scheduled session");
+    let notifications = reloaded
+        .parts()
+        .iter()
+        .filter(|part| part.kind == "system_notification")
+        .collect::<Vec<_>>();
+    assert_eq!(notifications.len(), 2);
+    assert!(
+        notifications
+            .iter()
+            .all(|part| part.role == PartRole::Assistant && part.run_id == Some(run_id))
+    );
+    assert!(
+        !reloaded
+            .parts()
+            .iter()
+            .any(|part| part.is_run_marker() && part.role == PartRole::Runtime)
+    );
+    for delivery_key in ["assistant-fire-1", "assistant-fire-2"] {
+        let operation = manager
+            .store
+            .background_operation(&format!("scheduled:{}:{delivery_key}", session.id))
+            .await
+            .expect("load scheduled operation")
+            .expect("scheduled operation exists");
+        assert_eq!(operation.launch_run_id, Some(run_id));
+        assert_eq!(operation.launch_tool_part_id, Some(tool_part_id));
+    }
 }
 
 #[tokio::test]
@@ -4478,6 +4911,7 @@ async fn scheduled_delivery_creates_a_chronological_runtime_ingress() {
             "job-1".to_owned(),
             "delivery-key-1".to_owned(),
             "check the background task list and report".to_owned(),
+            None,
         )
         .await
         .expect("deliver scheduled job");
@@ -4551,6 +4985,7 @@ async fn scheduled_delivery_creates_a_chronological_runtime_ingress() {
             "job-1".to_owned(),
             "delivery-key-1".to_owned(),
             "check the background task list and report".to_owned(),
+            None,
         )
         .await
         .expect("re-deliver scheduled job");
@@ -4589,6 +5024,7 @@ async fn scheduled_delivery_works_in_a_session_with_no_prior_run() {
             "job-2".to_owned(),
             "delivery-key-2".to_owned(),
             "summarize what changed".to_owned(),
+            None,
         )
         .await
         .expect("deliver scheduled job");
@@ -4646,12 +5082,14 @@ async fn concurrent_scheduled_redelivery_commits_one_operation_event() {
             "job-concurrent".to_owned(),
             "delivery-concurrent".to_owned(),
             "run once".to_owned(),
+            None,
         ),
         right.deliver_scheduled_job(
             session.id,
             "job-concurrent".to_owned(),
             "delivery-concurrent".to_owned(),
             "run once".to_owned(),
+            None,
         ),
     );
     let created = [

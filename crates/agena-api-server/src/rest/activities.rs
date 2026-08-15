@@ -12,7 +12,8 @@ use super::{
 #[derive(Debug, Clone, Deserialize, Default)]
 /// Query for listing activities over REST.
 pub struct ListActivitiesQuery {
-    /// Comma-separated kind filters (`shell`, `task`, `runtime`, `browser`).
+    /// Comma-separated kind filters (`shell`, `monitor`, `task`, `cron`,
+    /// `runtime`, `browser`).
     #[serde(default)]
     pub kinds: Option<String>,
     /// Comma-separated status filters (`running`, `succeeded`, `failed`, …).
@@ -44,9 +45,12 @@ pub async fn list_activities(
         .runtime_activities()
         .map_err(server_error_from_application)?;
     let params: ListActivitiesParams = query.into();
-    let activities = service.list_activities(
-        &agena_application::service::activity_filter_from_params(&params),
-    );
+    let activities = service
+        .list_activities(&agena_application::service::activity_filter_from_params(
+            &params,
+        ))
+        .await
+        .map_err(activity_control_error)?;
     let resources: Vec<BackgroundActivityResource> = activities
         .iter()
         .map(BackgroundActivityResource::from)
@@ -63,6 +67,7 @@ pub async fn get_activity(
         .runtime_activities()
         .map_err(server_error_from_application)?
         .get_activity(&activity_id)
+        .await
         .map_err(activity_control_error)?;
     Ok(Json(BackgroundActivityResource::from(&activity)))
 }
@@ -109,6 +114,45 @@ pub async fn stop_activity(
     Ok(Json(BackgroundActivityResource::from(&activity)))
 }
 
+pub async fn pause_activity(
+    State(state): State<AppState>,
+    Path(activity_id): Path<String>,
+) -> Result<impl IntoResponse, ServerError> {
+    let activity = state
+        .runtime_activities()
+        .map_err(server_error_from_application)?
+        .pause_activity(&activity_id)
+        .await
+        .map_err(activity_control_error)?;
+    Ok(Json(BackgroundActivityResource::from(&activity)))
+}
+
+pub async fn resume_activity(
+    State(state): State<AppState>,
+    Path(activity_id): Path<String>,
+) -> Result<impl IntoResponse, ServerError> {
+    let activity = state
+        .runtime_activities()
+        .map_err(server_error_from_application)?
+        .resume_activity(&activity_id)
+        .await
+        .map_err(activity_control_error)?;
+    Ok(Json(BackgroundActivityResource::from(&activity)))
+}
+
+pub async fn delete_activity(
+    State(state): State<AppState>,
+    Path(activity_id): Path<String>,
+) -> Result<impl IntoResponse, ServerError> {
+    let activity = state
+        .runtime_activities()
+        .map_err(server_error_from_application)?
+        .delete_activity(&activity_id)
+        .await
+        .map_err(activity_control_error)?;
+    Ok(Json(BackgroundActivityResource::from(&activity)))
+}
+
 pub async fn dismiss_activity(
     State(state): State<AppState>,
     Path(activity_id): Path<String>,
@@ -127,7 +171,9 @@ pub async fn clear_finished_activities(
     let count = state
         .runtime_activities()
         .map_err(server_error_from_application)?
-        .clear_finished();
+        .clear_finished()
+        .await
+        .map_err(activity_control_error)?;
     Ok(Json(count))
 }
 

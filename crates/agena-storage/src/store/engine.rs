@@ -233,11 +233,12 @@ pub trait PersistenceEngine: Send + Sync {
         now_ms: i64,
     ) -> Result<BackgroundOperation, StoreError>;
 
-    /// Atomically record a unique operation event, append its notification in
-    /// a chronological runtime-ingress run, and enqueue the durable delivery.
-    /// The store serializes aggregate mutation internally; callback callers do
-    /// not perform an optimistic read/write pair that could lose concurrent
-    /// monitor events.
+    /// Atomically record a unique operation event, append its notification to
+    /// the assistant run that launched it, and enqueue the durable delivery.
+    /// Operations without an assistant launch run (scheduled/external ingress)
+    /// keep an explicit chronological Runtime run. The store serializes
+    /// aggregate mutation internally; callback callers do not perform an
+    /// optimistic read/write pair that could lose concurrent monitor events.
     async fn record_background_event(
         &self,
         request: BackgroundEventRequest,

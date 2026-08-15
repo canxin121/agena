@@ -1292,39 +1292,37 @@ impl PersistenceEngine for SqliteEngine {
                         new.operation_id
                     )));
                 }
-                match (new.kind, new.launch_run_id, new.launch_tool_part_id) {
-                    (BackgroundOperationKind::ScheduledDelivery, None, None) => {
+                match (new.launch_run_id, new.launch_tool_part_id) {
+                    (None, None) if new.kind == BackgroundOperationKind::ScheduledDelivery => {
                         session_meta_tx(txn, new.session_id).await?;
                     }
-                    (BackgroundOperationKind::ScheduledDelivery, _, _) => {
-                        return Err(StoreError::InvalidState(
-                            "scheduled deliveries cannot claim a launch tool part".to_owned(),
-                        ));
-                    }
-                    (_, Some(run_id), Some(tool_part_id)) => {
-                        if let Some(row) = txn
-                            .query_one(Statement::from_sql_and_values(
-                                DatabaseBackend::Sqlite,
-                                format!(
-                                    "SELECT {BACKGROUND_OPERATION_COLS} FROM agena_background_operations \
-                                     WHERE session_id = ? AND launch_tool_part_id = ?"
-                                ),
-                                [new.session_id.into(), tool_part_id.into()],
-                            ))
-                            .await
-                            .map_err(map_db_err)?
-                        {
-                            let existing =
-                                background_operation_from_row(row).map_err(map_db_err)?;
-                            if existing.operation_id == new.operation_id
-                                && existing.kind == new.kind
+                    (Some(run_id), Some(tool_part_id)) => {
+                        if new.kind != BackgroundOperationKind::ScheduledDelivery {
+                            if let Some(row) = txn
+                                .query_one(Statement::from_sql_and_values(
+                                    DatabaseBackend::Sqlite,
+                                    format!(
+                                        "SELECT {BACKGROUND_OPERATION_COLS} FROM agena_background_operations \
+                                         WHERE session_id = ? AND launch_tool_part_id = ? \
+                                           AND kind != 'scheduled_delivery'"
+                                    ),
+                                    [new.session_id.into(), tool_part_id.into()],
+                                ))
+                                .await
+                                .map_err(map_db_err)?
                             {
-                                return Ok(existing);
+                                let existing =
+                                    background_operation_from_row(row).map_err(map_db_err)?;
+                                if existing.operation_id == new.operation_id
+                                    && existing.kind == new.kind
+                                {
+                                    return Ok(existing);
+                                }
+                                return Err(StoreError::InvalidState(format!(
+                                    "tool part {tool_part_id} already owns background operation {}",
+                                    existing.operation_id
+                                )));
                             }
-                            return Err(StoreError::InvalidState(format!(
-                                "tool part {tool_part_id} already owns background operation {}",
-                                existing.operation_id
-                            )));
                         }
                         let run = load_part_by_id(txn, run_id).await?.ok_or_else(|| {
                             StoreError::not_found(format!("run marker {run_id}"))
@@ -1350,7 +1348,8 @@ impl PersistenceEngine for SqliteEngine {
                     }
                     _ => {
                         return Err(StoreError::InvalidState(
-                            "background tool operations require both launch ids".to_owned(),
+                            "background launch ids must be paired, and non-scheduled operations require them"
+                                .to_owned(),
                         ));
                     }
                 }
@@ -1608,27 +1607,63 @@ impl PersistenceEngine for SqliteEngine {
                     )));
                 }
                 let mut notification = request.notification;
-                notification.role = PartRole::Runtime;
                 notification.state = PartState::Completed;
-                let ingress = submit_batch_tx(
-                    txn,
-                    current.session_id,
-                    PartRole::Runtime,
-                    PartState::Completed,
-                    serde_json::json!({
-                        "run_kind": "runtime_ingress",
-                        "source": "background_operation",
-                        "operation_id": current.operation_id,
-                        "abort_reason": null,
-                    }),
-                    vec![notification],
-                    Some(delivery_id.clone()),
-                    now_ms,
-                )
-                .await?;
-                let notification_part = ingress.parts.get(1).cloned().ok_or_else(|| {
-                    StoreError::InvalidState("runtime ingress omitted notification".to_owned())
-                })?;
+                let serde_json::Value::Object(notification_content) = &mut notification.content
+                else {
+                    return Err(StoreError::InvalidState(
+                        "background notification content must be a JSON object".to_owned(),
+                    ));
+                };
+                notification_content.insert(
+                    "delivery_protocol".to_owned(),
+                    serde_json::Value::String("provider_round_v1".to_owned()),
+                );
+                let notification_part = if let Some(run_id) = current.launch_run_id {
+                    let run = load_part_by_id(txn, run_id)
+                        .await?
+                        .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
+                    if !run.is_run_marker()
+                        || run.origin_session_id != current.session_id
+                        || run.role != PartRole::Assistant
+                    {
+                        return Err(StoreError::InvalidState(format!(
+                            "background operation {} launch run {run_id} is not an assistant run owned by session {}",
+                            current.operation_id, current.session_id
+                        )));
+                    }
+                    notification.role = PartRole::Assistant;
+                    let id = next_part_id_tx(txn).await.map_err(map_db_err)?;
+                    let part = content_part(id, current.session_id, run_id, notification, now_ms);
+                    insert_part_tx(txn, &part).await.map_err(map_db_err)?;
+                    insert_membership_tx(txn, current.session_id, id, now_ms)
+                        .await
+                        .map_err(map_db_err)?;
+                    bump_session_version_tx(txn, current.session_id, now_ms).await?;
+                    part
+                } else {
+                    notification.role = PartRole::Runtime;
+                    let ingress = submit_batch_tx(
+                        txn,
+                        current.session_id,
+                        PartRole::Runtime,
+                        PartState::Completed,
+                        serde_json::json!({
+                            "run_kind": "runtime_ingress",
+                            "source": "background_operation",
+                            "operation_id": current.operation_id,
+                            "abort_reason": null,
+                        }),
+                        vec![notification],
+                        Some(delivery_id.clone()),
+                        now_ms,
+                    )
+                    .await?;
+                    ingress.parts.get(1).cloned().ok_or_else(|| {
+                        StoreError::InvalidState(
+                            "runtime ingress omitted notification".to_owned(),
+                        )
+                    })?
+                };
 
                 let next_phase = request.next_phase.unwrap_or(current.phase);
                 let outcome = request.outcome.or(current.outcome);

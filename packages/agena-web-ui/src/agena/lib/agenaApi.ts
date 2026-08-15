@@ -37,6 +37,7 @@ export type ScheduledJobResource = {
   id: string
   kind: 'cron' | 'once' | string
   expression?: string | null
+  timezone?: string | null
   at?: string | null
   prompt: string
   owner_session_id?: number | null
@@ -470,9 +471,12 @@ export type BackgroundActivityResource = {
   workdir?: string | null
   session_id?: number | null
   parent_session_id?: number | null
+  operation_id?: string | null
+  source_part_id?: number | null
   created_at_ms: number
   started_at_ms: number
   finished_at_ms?: number | null
+  next_event_at_ms?: number | null
   exit_code?: number | null
   message?: string | null
   failure?: unknown | null
@@ -481,6 +485,7 @@ export type BackgroundActivityResource = {
   dropped_lines: number
   cancellable: boolean
   dismissible: boolean
+  controls: string[]
 }
 
 export type BackgroundActivityLogLineResource = {
@@ -1130,6 +1135,7 @@ export type SessionPartKind =
   | 'skill_ref'
   | 'notice'
   | 'hook'
+  | 'system_notification'
   | 'compaction'
   | 'error'
   | 'interaction'
@@ -1217,6 +1223,7 @@ export type SessionExecutionResource = {
   } | null
   latest_event_seq?: number | null
   automation?: SessionAutomationResource | null
+  background_activities: BackgroundActivityResource[]
   execution: SessionExecutionContextResource
   pending_interactive_requests: PendingInteractiveRequestResource[]
   goal?: SessionGoalResource | null
@@ -1374,6 +1381,24 @@ export async function fetchActivityLogs(
 
 export async function stopActivity(activityId: string): Promise<BackgroundActivityResource> {
   return await apiJson<BackgroundActivityResource>(`/api/v1/activities/${encodeURIComponent(activityId)}/stop`, {
+    method: 'POST',
+  })
+}
+
+export async function pauseActivity(activityId: string): Promise<BackgroundActivityResource> {
+  return await apiJson<BackgroundActivityResource>(`/api/v1/activities/${encodeURIComponent(activityId)}/pause`, {
+    method: 'POST',
+  })
+}
+
+export async function resumeActivity(activityId: string): Promise<BackgroundActivityResource> {
+  return await apiJson<BackgroundActivityResource>(`/api/v1/activities/${encodeURIComponent(activityId)}/resume`, {
+    method: 'POST',
+  })
+}
+
+export async function deleteActivity(activityId: string): Promise<BackgroundActivityResource> {
+  return await apiJson<BackgroundActivityResource>(`/api/v1/activities/${encodeURIComponent(activityId)}/delete`, {
     method: 'POST',
   })
 }

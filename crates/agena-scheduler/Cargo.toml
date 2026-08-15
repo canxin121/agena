@@ -8,6 +8,7 @@ rust-version.workspace = true
 agena-failure = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 cron = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }

@@ -39,45 +39,70 @@ use crate::{
 /// starts an entry, except that consecutive assistant runs fold into a single
 /// entry: a multi-round tool loop emits one run marker per model turn (tool
 /// calls, then the final answer) and the user expects those to render as one
-/// assistant block. This mirrors `canonical_turn_span` (history.rs), which
-/// groups every non-user run after a user run into one canonical turn.
-/// Content parts without an enclosing marker become their own entry.
+/// assistant block. Content ownership is resolved exclusively through
+/// `run_id`, not physical row position: a background Hook may be appended much
+/// later while still belonging to the assistant run that launched it.
+/// Content parts whose referenced marker is absent become their own entry.
 pub fn parts_entries(parts: &[SessionTranscriptPart]) -> Vec<TranscriptEntry<'static>> {
-    let mut entries = Vec::new();
-    let mut current: Option<TranscriptEntry<'static>> = None;
-
-    for part in parts {
-        if part.kind == "run" {
-            let marker = run_marker_entry(part);
-            if current
-                .as_ref()
-                .is_some_and(|entry| entry.role == Some(RunRole::Assistant))
-                && marker.role == Some(RunRole::Assistant)
-            {
-                // Fold this run marker into the open assistant entry: keep the
-                // first marker's created_at for stable ordering, but fold the
-                // state to the most-terminal one (mirroring history's
-                // `more_terminal_status`), so a live block stays InProgress
-                // until the whole turn terminalizes and a mid-loop failure is
-                // not hidden by a later successful turn.
-                let entry = current.as_mut().expect("foldable assistant entry exists");
-                entry.state = fold_run_status(entry.state, marker.state);
-                continue;
-            }
-            if let Some(entry) = current.take() {
-                entries.push(finalize_run_entry(entry));
-            }
-            current = Some(marker);
-        } else if let Some(entry) = current.as_mut() {
-            entry.parts.push(entry_part(part));
-        } else {
-            entries.push(orphan_entry(part));
+    let marker_ids = parts
+        .iter()
+        .filter(|part| part.kind == "run")
+        .map(|part| part.part_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut content_by_run = std::collections::BTreeMap::<i64, Vec<&SessionTranscriptPart>>::new();
+    for part in parts.iter().filter(|part| part.kind != "run") {
+        if let Some(run_id) = part.run_id
+            && marker_ids.contains(&run_id)
+        {
+            content_by_run.entry(run_id).or_default().push(part);
         }
     }
-    if let Some(entry) = current.take() {
-        entries.push(finalize_run_entry(entry));
+
+    // Build entries in marker/orphan order, but attach content by its durable
+    // owner. This is the same projection contract used by Web.
+    let mut projected = Vec::new();
+    let mut latest_marker_index = None;
+    for part in parts {
+        if part.kind == "run" {
+            let mut entry = run_marker_entry(part);
+            if let Some(content) = content_by_run.remove(&part.part_id) {
+                entry.parts.extend(content.into_iter().map(entry_part));
+            }
+            projected.push(entry);
+            latest_marker_index = Some(projected.len() - 1);
+        } else if part.run_id.is_none() {
+            // Compatibility for pre-v2/test projections that omitted run_id:
+            // physical adjacency is used only when no owner was recorded at
+            // all. A present run_id is always authoritative, even when its
+            // part arrives much later than another run marker.
+            if let Some(index) = latest_marker_index {
+                projected[index].parts.push(entry_part(part));
+            } else {
+                projected.push(orphan_entry(part));
+            }
+        } else if part
+            .run_id
+            .is_some_and(|run_id| !marker_ids.contains(&run_id))
+        {
+            projected.push(orphan_entry(part));
+        }
     }
-    entries
+
+    let mut entries: Vec<TranscriptEntry<'static>> = Vec::new();
+    for entry in projected {
+        if let Some(previous) = entries.last_mut()
+            && previous.role == Some(RunRole::Assistant)
+            && entry.role == Some(RunRole::Assistant)
+        {
+            // Fold adjacent assistant rounds only after exact ownership has
+            // been resolved. Runtime/System ingress remains a hard boundary.
+            previous.state = fold_run_status(previous.state, entry.state);
+            previous.parts.extend(entry.parts);
+            continue;
+        }
+        entries.push(entry);
+    }
+    entries.into_iter().map(finalize_run_entry).collect()
 }
 
 /// Whether any run marker in the part list has a non-terminal state. The app
@@ -760,15 +785,15 @@ fn timestamp(created_at_ms: i64) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(created_at_ms).unwrap_or_default()
 }
 
-/// Parse the wire role string. Roles beyond the render model's set (for
-/// example `runtime`) project to no role: such entries render as activity-like
-/// rows without a message header rather than as a user/assistant message.
+/// Parse the wire role string. Runtime ingress is intentionally rendered with
+/// System identity; assistant-owned typed notifications retain Assistant via
+/// their owning run instead of being relabelled from their content kind.
 pub(crate) fn role_from_string(role: &str) -> Option<RunRole> {
     match role {
         "user" => Some(RunRole::User),
         "assistant" => Some(RunRole::Assistant),
         "tool" => Some(RunRole::Tool),
-        "system" => Some(RunRole::System),
+        "system" | "runtime" => Some(RunRole::System),
         _ => None,
     }
 }
@@ -912,6 +937,16 @@ mod tests {
         role: &str,
         content: serde_json::Value,
     ) -> SessionTranscriptPart {
+        content_part_for(1, part_id, kind, role, content)
+    }
+
+    fn content_part_for(
+        run_id: i64,
+        part_id: i64,
+        kind: &str,
+        role: &str,
+        content: serde_json::Value,
+    ) -> SessionTranscriptPart {
         SessionTranscriptPart {
             part_id,
             kind: kind.to_owned(),
@@ -921,7 +956,7 @@ mod tests {
             summary: None,
             created_at_ms: part_id * 10,
             parent_part_id: None,
-            run_id: Some(1),
+            run_id: Some(run_id),
         }
     }
 
@@ -931,13 +966,20 @@ mod tests {
             run(1, "user", "completed"),
             content_part(2, "text", "user", serde_json::json!({ "text": "hello" })),
             run(3, "assistant", "completed"),
-            content_part(
+            content_part_for(
+                3,
                 4,
                 "think",
                 "assistant",
                 serde_json::json!({ "summary": ["thinking"] }),
             ),
-            content_part(5, "text", "assistant", serde_json::json!({ "text": "hi" })),
+            content_part_for(
+                3,
+                5,
+                "text",
+                "assistant",
+                serde_json::json!({ "text": "hi" }),
+            ),
         ];
         let entries = parts_entries(&parts);
         assert_eq!(entries.len(), 2);
@@ -971,33 +1013,38 @@ mod tests {
             run(1, "user", "completed"),
             content_part(2, "text", "user", serde_json::json!({ "text": "hi" })),
             run(3, "assistant", "in_progress"),
-            content_part(
+            content_part_for(
+                3,
                 4,
                 "tool_call",
                 "assistant",
                 serde_json::json!({ "name": "tools_search", "operation": {} }),
             ),
-            content_part(
+            content_part_for(
+                3,
                 5,
                 "tool_result",
                 "tool",
                 serde_json::json!({ "output": "ok" }),
             ),
             run(7, "assistant", "in_progress"),
-            content_part(
+            content_part_for(
+                7,
                 8,
                 "tool_call",
                 "assistant",
                 serde_json::json!({ "name": "tools_help", "operation": {} }),
             ),
-            content_part(
+            content_part_for(
+                7,
                 9,
                 "tool_result",
                 "tool",
                 serde_json::json!({ "output": "ok" }),
             ),
             run(11, "assistant", "completed"),
-            content_part(
+            content_part_for(
+                11,
                 12,
                 "text",
                 "assistant",
@@ -1039,7 +1086,8 @@ mod tests {
             run(1, "user", "completed"),
             content_part(2, "text", "user", serde_json::json!({ "text": "hi" })),
             run(3, "assistant", "completed"),
-            content_part(
+            content_part_for(
+                3,
                 4,
                 "tool_call",
                 "assistant",
@@ -1047,7 +1095,8 @@ mod tests {
             ),
             run(5, "assistant", "failed"),
             run(7, "assistant", "completed"),
-            content_part(
+            content_part_for(
+                7,
                 8,
                 "text",
                 "assistant",
@@ -1067,7 +1116,8 @@ mod tests {
         let parts = vec![
             run(1, "user", "completed"),
             run(3, "assistant", "in_progress"),
-            content_part(
+            content_part_for(
+                3,
                 4,
                 "tool_call",
                 "assistant",
@@ -1075,7 +1125,8 @@ mod tests {
             ),
             run(5, "assistant", "in_progress"),
             run(7, "assistant", "completed"),
-            content_part(
+            content_part_for(
+                7,
                 8,
                 "text",
                 "assistant",
@@ -1094,16 +1145,94 @@ mod tests {
             run(1, "user", "completed"),
             content_part(2, "text", "user", serde_json::json!({ "text": "a" })),
             run(3, "assistant", "completed"),
-            content_part(4, "text", "assistant", serde_json::json!({ "text": "r1" })),
+            content_part_for(
+                3,
+                4,
+                "text",
+                "assistant",
+                serde_json::json!({ "text": "r1" }),
+            ),
             run(5, "user", "completed"),
-            content_part(6, "text", "user", serde_json::json!({ "text": "b" })),
+            content_part_for(5, 6, "text", "user", serde_json::json!({ "text": "b" })),
             run(7, "assistant", "completed"),
-            content_part(8, "text", "assistant", serde_json::json!({ "text": "r2" })),
+            content_part_for(
+                7,
+                8,
+                "text",
+                "assistant",
+                serde_json::json!({ "text": "r2" }),
+            ),
         ];
         let entries = parts_entries(&parts);
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[2].id, TranscriptEntryId::StoredMessage(5));
         assert_eq!(entries[3].id, TranscriptEntryId::StoredMessage(7));
+    }
+
+    #[test]
+    fn late_assistant_hook_stays_on_its_launch_run_and_runtime_ingress_stays_system() {
+        let notification = |operation_id: &str| {
+            serde_json::json!({
+                "type": "system_notification",
+                "operation_id": operation_id,
+                "operation_kind": "shell",
+                "status": "completed",
+                "summary": "background work completed",
+                "body": "background work completed"
+            })
+        };
+        let parts = vec![
+            run(1, "assistant", "completed"),
+            content_part(
+                2,
+                "text",
+                "assistant",
+                serde_json::json!({ "text": "launched" }),
+            ),
+            run(3, "runtime", "completed"),
+            content_part_for(
+                3,
+                4,
+                "system_notification",
+                "runtime",
+                notification("external"),
+            ),
+            run(5, "assistant", "completed"),
+            content_part_for(
+                5,
+                6,
+                "text",
+                "assistant",
+                serde_json::json!({ "text": "later" }),
+            ),
+            // This row arrives after runs 3 and 5, but its durable owner is
+            // still run 1. Physical adjacency must never relabel it System.
+            content_part_for(
+                1,
+                7,
+                "system_notification",
+                "assistant",
+                notification("proc_1"),
+            ),
+        ];
+
+        let entries = parts_entries(&parts);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].role, Some(RunRole::Assistant));
+        assert!(
+            entries[0]
+                .parts
+                .iter()
+                .any(|part| part.id == TranscriptContentId::StoredPart(7))
+        );
+        assert_eq!(entries[1].role, Some(RunRole::System));
+        assert!(
+            entries[1]
+                .parts
+                .iter()
+                .any(|part| part.id == TranscriptContentId::StoredPart(4))
+        );
+        assert_eq!(entries[2].role, Some(RunRole::Assistant));
     }
 
     #[test]
@@ -1221,10 +1350,10 @@ mod tests {
     }
 
     #[test]
-    fn runtime_role_entries_have_no_header_role() {
+    fn runtime_role_entries_render_with_explicit_system_identity() {
         let parts = vec![run(1, "runtime", "completed")];
         let entries = parts_entries(&parts);
-        assert_eq!(entries[0].role, None);
+        assert_eq!(entries[0].role, Some(RunRole::System));
     }
 
     #[test]
@@ -1274,7 +1403,13 @@ mod tests {
             run(1, "user", "completed"),
             content_part(2, "text", "user", serde_json::json!({ "text": "a" })),
             run(3, "assistant", "completed"),
-            content_part(4, "text", "assistant", serde_json::json!({ "text": "b" })),
+            content_part_for(
+                3,
+                4,
+                "text",
+                "assistant",
+                serde_json::json!({ "text": "b" }),
+            ),
             run(5, "user", "in_progress"),
         ];
         // The trailing in-progress user run has no text yet, so only the

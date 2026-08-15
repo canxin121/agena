@@ -1,8 +1,9 @@
 # agena × Claude Code 异步融合设计（历史文档，已废弃）
 
 > **2026-08-14 架构决策：**本文关于“tool part 长期 InProgress、空
-> tool_result guard、Assistant 通知追加回启动 run、observer 内存索引负责
-> completion”的方案已经被 schema v9 的持久统一状态机取代。当前权威设计见
+> tool_result guard、observer 内存索引负责 completion”的方案已经被 schema
+> v9 的持久统一状态机取代。Assistant 通知追加回启动 run 的身份原则仍保留，
+> 但其原子性、delivery 与恢复语义以当前权威设计为准：
 > [`docs/background-operation-state-machine.md`](docs/background-operation-state-machine.md)。
 > 本文仅保留为问题演进记录，不得再作为实现依据。
 
@@ -115,7 +116,7 @@ pub struct SystemNotificationContent {
 ```rust
 TypedContent::SystemNotification(notification) => {
     if !notification.body.trim().is_empty() {
-        wire.push(WirePart::Text { text: notification.body.clone() });
+        wire.push(WirePart::SystemMessage { text: notification.body.clone() });
     }
 }
 ```
@@ -132,7 +133,7 @@ Task "explore" finished
 </agena_notification>
 ```
 
-- **角色投影**:通知 part 自带 `PartRole::Assistant`(`project_persisted` 用 part 自身角色,wire_message.rs:147-157),挂在启动 run marker 下;`project_completion_input` 读 marker 角色 → 整条 assistant run(含通知文本)以 `Role::Assistant` 消息进入模型 —— 后台结果属于模型自己的 turn,与 Claude 把 `<task-notification>` 伪装成 user 消息但语义上是"任务回来了"一致,而身份是 AI 的;
+- **角色投影**:通知 part 自带 `PartRole::Assistant`,挂在启动 run marker 下,因此 transcript/UI 身份属于 AI;通知 body 则投影成 typed `SystemMessage`,不会伪装成 assistant 自己的正文。provider 时序由当前 ADR 的 provider-round receipt 决定,不再简单按旧 run marker 倒排;
 - `run_has_visible_prompt_payload`(prompt_window.rs:399-411)对非空 Text 天然放行,无需改动;
 - **`all_parts_terminal` 约束**(processor/run.rs:621-668):通知 part 生来 `Completed`(终态),不产生 spinner;
 - 通知不复制 child 全量历史——它通过 `operation_id` 引用,完整转录仍在 child session 的 parts 里(**everything is a part** 的可组合性,同 Claude 的独立 transcripts)。
@@ -209,13 +210,12 @@ pub async fn settle_background_operation(
 let latest_notification = newest_notification_part_id(session.parts());
 if latest_notification != observed_notification_id {
     observed_notification_id = latest_notification;
-    model_requested = true;      // 通知已在启动 run 里,模型响应开新 assistant run
-    turn_run_id = None;
+    model_requested = true;      // 通知已在启动 run 里,当前 part 结束后继续同一 turn
 }
 ```
 
 - 普通用户 steer 仍走 User run(`submit_user_run`),检测沿用 `last_input_message_id`(User marker);
-- 通知游标独立于 user-message 游标:通知 part 不是 run marker,不能复用 marker 检测;新通知移动游标 → 重开 turn,模型响应是**新 assistant run**(响应属于新 turn,通知本身属于启动 run —— 语义干净)。
+- 通知游标独立于 user-message 游标:通知 part 不是 run marker,不能复用 marker 检测;新通知移动游标 → 在当前 provider/tool part 完整结束的 stable-loop 边界重开 provider round,但**不**关闭当前 assistant run。这样 Hook 与 AI 后续处理保持一个连续 turn,不会生成夹在两个 Hook 之间的 synthetic resume run。
 - **turn 身份**:通知不引入新 marker,`message_id_for_turn` / `user_message_id_for_turn`(history.rs:153)的 turn 身份函数**无需改动** —— 这是相对早期 System-run 方案的一大简化。
 
 ### 4.3 幂等 claim(对应 Claude 的 `I4e`)
@@ -331,7 +331,7 @@ agena 落地方案(全部复用 §2-§5 的既有机制,零新通道;唯一新�
 
 ## 9. 实施步骤(按序,含文件锚点)
 
-> **实施状态(2026-08-13)**:Assistant-角色 + 追加启动 run 的重构(**§2.2/§3/§4/§5/§8 对应设计**)已全部落地并通过 workspace 构建 + 全套测试(storage 44+52、runtime-session 130、runtime 65,含重写的通知幂等测试)。早期 System-run 方案(步骤 2/4 的 `submit_system_run` 与 `PartRole::System`)按用户指示**作废**,由 `settle_background_run` + `settle_background_operation` 取代。§11 输入区展示按用户指示**暂缓**(`先不管 输入区显示啥的了`)。**§7.3 Monitor 工具已按 everything-is-a-part 落地**:monitor 本体是带 `agena.background {kind:"monitor",id}` 标记的 `tool_call` part(启动后保持 `InProgress`,配一个空 `tool_result` 守卫 part 使稳定循环不会把它当待执行工具重跑),每个事件 = 一条 Assistant 角色 `system_notification` part(`monitor_event_seq` 单调,逐条 claim 幂等)经 `settle_background_event` 追加到启动 run("settle 但不定终态"),终止复用 `settle_background_operation`;`monitor.start/stop` 工具 + `agena.monitor` 插件 + `ToolPayloadOutput::Monitor` 均已注册,workspace 全量检查 + 全套测试通过(runtime-session 133、bundled-plugins 含 capability 身份快照)。
+> **历史实施状态(2026-08-13，已被 schema v9 部分取代)**:本节记录当时的 Assistant 身份与启动 run 追加方案。当前实现中 launch tool part 是立即 `Completed` 的 receipt,没有空 `tool_result` guard；operation/delivery 的统一持久状态机、精确 provider-round notification receipt 与恢复语义见权威 ADR。
 
 1. **契约层**:`SystemNotificationContent` + `TypedContent::SystemNotification` + `decode` arm
    - `crates/agena-runtime-contracts/src/part_content.rs`(:577-591 枚举, :596-613 decode)

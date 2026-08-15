@@ -289,9 +289,9 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
 
     /// Register the delivery handshake for a notification part the settle just
     /// appended and steered. The returned receiver resolves when the stable-run
-    /// loop's notification cursor observes the part
+    /// loop's notification cursor observes the part at a safe part boundary
     /// ([`Self::ack_notification`]) — the confirmation that the steer reached
-    /// a live loop that will take a fresh model turn over it.
+    /// a live loop that will take the next provider round over it.
     pub fn register_notification_ack(
         &self,
         session_id: i64,

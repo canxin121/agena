@@ -25,7 +25,8 @@ pub mod store;
 pub use error::{SchedulerError, SchedulerResult};
 pub use job::{
     ClaimDueDelivery, JobDeliveryAttempt, JobDeliveryResult, JobKind, JobOutcome, JobRunRecord,
-    JobRunStatus, JobSink, MisfirePolicy, RetryPolicy, ScheduledJob, SchedulerHistoryEntry,
+    JobRunStatus, JobSink, MisfirePolicy, RetryPolicy, ScheduledJob, ScheduledJobLaunchProvenance,
+    SchedulerHistoryEntry,
 };
 pub use scheduler::Scheduler;
 pub use store::{InMemoryJobStore, JobStore, SqliteJobStore};

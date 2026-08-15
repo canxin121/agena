@@ -176,6 +176,7 @@ toml = "1.1.2"
 
 # datetime / ids
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
+chrono-tz = "0.10.4"
 comrak = { version = "=0.54.0", default-features = false, features = ["shortcodes", "attributes"] }
 time = "0.3.53"
 uuid = { version = "1.23.5", features = ["v4", "serde"] }

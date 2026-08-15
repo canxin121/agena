@@ -134,15 +134,36 @@ fn prompt_window_items(
     native_compaction_enabled: bool,
 ) -> Vec<WindowItem> {
     let compaction = session.runtime.prompt_window.compaction.as_ref();
-    project_window_items(
-        session.active_window_parts(),
+    let active_parts = session.active_window_parts();
+    let mut items = project_window_items(
+        active_parts,
         compaction,
         session,
         provider_id,
         adapter_id,
         model_id,
         native_compaction_enabled,
-    )
+    );
+    let active_ids = active_parts
+        .iter()
+        .map(|part| part.part_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    // A delivery committed before a compaction checkpoint must not disappear
+    // before the provider round that handles it. Re-append only protocol-owned
+    // notifications that are outside the active suffix and have no successful
+    // round receipt yet. Once handled, the checkpoint summary is sufficient
+    // history and the exact hook is no longer pinned.
+    for notification in session.parts().iter().filter(|part| {
+        uses_provider_round_delivery(part)
+            && !active_ids.contains(&part.part_id)
+            && !notification_has_completed_provider_round(session.parts(), part.part_id)
+    }) {
+        items.push(WindowItem {
+            id: Some(notification.part_id),
+            run: project_completion_input(&[notification.clone()]),
+        });
+    }
+    items
 }
 
 /// Project an explicit parts slice run by run into the provider input contract,
@@ -240,8 +261,122 @@ fn run_is_failed_or_cancelled_assistant(run: &[Part]) -> bool {
     })
 }
 
+/// Durable proof that a successful assistant provider round actually received
+/// `notification_part_id` in its prompt. This is shared by delivery recovery
+/// and prompt compaction pinning so both paths use one definition of handled.
+pub(crate) fn notification_has_completed_provider_round(
+    parts: &[Part],
+    notification_part_id: i64,
+) -> bool {
+    parts.iter().any(|part| {
+        part.is_run_marker()
+            && part.role == PartRole::Assistant
+            && part.state == PartState::Completed
+            && part
+                .content
+                .get("run_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("continue")
+            && part
+                .content
+                .get(crate::session::processor::MARKER_ROUNDS_KEY)
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|rounds| {
+                    rounds.iter().any(|round| {
+                        round
+                            .get("input_notification_part_ids")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(|ids| {
+                                ids.iter()
+                                    .any(|id| id.as_i64() == Some(notification_part_id))
+                            })
+                    })
+                })
+    })
+}
+
+fn uses_provider_round_delivery(part: &Part) -> bool {
+    part.kind == "system_notification"
+        && part
+            .content
+            .get("delivery_protocol")
+            .and_then(serde_json::Value::as_str)
+            == Some("provider_round_v1")
+}
+
+/// Notification ids represented in the exact prompt built for the next
+/// provider request. A newly committed delivery is normally in the active
+/// window. If compaction ran before its response, the protocol marker pins the
+/// still-unhandled notification after the checkpoint until a round receipt
+/// proves consumption.
+pub(crate) fn provider_visible_notification_part_ids(session: &Session) -> Vec<i64> {
+    let active_ids = session
+        .active_window_parts()
+        .iter()
+        .map(|part| part.part_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    session
+        .parts()
+        .iter()
+        .filter(|part| {
+            part.kind == "system_notification"
+                && (active_ids.contains(&part.part_id)
+                    || (uses_provider_round_delivery(part)
+                        && !notification_has_completed_provider_round(
+                            session.parts(),
+                            part.part_id,
+                        )))
+        })
+        .map(|part| part.part_id)
+        .collect()
+}
+
 fn window_items_from_parts(parts: &[Part]) -> Vec<WindowItem> {
-    parts_into_runs(parts)
+    // Presentation groups an AI-owned background hook under the assistant run
+    // that launched it. Provider order has a different responsibility: a hook
+    // that arrives while a later turn is active must appear at its delivery
+    // boundary, never retroactively before conversation that already happened.
+    // Remove Assistant notifications from run grouping and reinsert each one
+    // immediately before the first provider round that durably lists it as an
+    // input. An unhandled notification stays at the prompt tail. Thus the
+    // pre-response prefix is `[...existing rounds, hook]`; after the response
+    // commits it grows append-only to `[...existing rounds, hook, response]`.
+    let mut assistant_notifications = parts
+        .iter()
+        .filter(|part| part.kind == "system_notification" && part.role == PartRole::Assistant)
+        .cloned()
+        .collect::<Vec<_>>();
+    assistant_notifications.sort_by_key(|part| (part.created_at_ms, part.part_id));
+    let grouped_parts = parts
+        .iter()
+        .filter(|part| !(part.kind == "system_notification" && part.role == PartRole::Assistant))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut notification_consumers = std::collections::BTreeMap::new();
+    for marker in parts.iter().filter(|part| part.is_run_marker()) {
+        let Some(rounds) = marker
+            .content
+            .get(crate::session::processor::MARKER_ROUNDS_KEY)
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        for (round_index, round) in rounds.iter().enumerate() {
+            let Some(ids) = round
+                .get("input_notification_part_ids")
+                .and_then(serde_json::Value::as_array)
+            else {
+                continue;
+            };
+            for notification_id in ids.iter().filter_map(serde_json::Value::as_i64) {
+                notification_consumers
+                    .entry(notification_id)
+                    .or_insert((marker.part_id, round_index));
+            }
+        }
+    }
+
+    let mut items = parts_into_runs(&grouped_parts)
         .into_iter()
         .flat_map(|run| {
             let marker = run.first().expect("run group has a marker");
@@ -264,7 +399,7 @@ fn window_items_from_parts(parts: &[Part]) -> Vec<WindowItem> {
                 }];
             };
             let content_parts = &run[1..];
-            let mut items = Vec::with_capacity(rounds.len());
+            let mut items: Vec<WindowItem> = Vec::with_capacity(rounds.len());
             let mut claimed: Vec<i64> = Vec::new();
             for round in rounds {
                 let part_ids = round
@@ -325,7 +460,33 @@ fn window_items_from_parts(parts: &[Part]) -> Vec<WindowItem> {
             }
             items
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    for notification in assistant_notifications {
+        let insertion_index = notification_consumers
+            .get(&notification.part_id)
+            .and_then(|(marker_id, round_index)| {
+                let mut occurrence = 0usize;
+                items.iter().enumerate().find_map(|(index, item)| {
+                    if item.id != Some(*marker_id) {
+                        return None;
+                    }
+                    let is_target = occurrence == *round_index;
+                    occurrence += 1;
+                    is_target.then_some(index)
+                })
+            })
+            .unwrap_or(items.len());
+        let notification_id = notification.part_id;
+        items.insert(
+            insertion_index,
+            WindowItem {
+                id: Some(notification_id),
+                run: project_completion_input(&[notification]),
+            },
+        );
+    }
+    items
 }
 
 fn checkpoint_recent_run(stored: &PromptCompactionMessage) -> CompletionInputRun {
@@ -1596,6 +1757,121 @@ mod compaction_tests {
         );
     }
 
+    #[test]
+    fn unhandled_delivery_is_pinned_across_compaction_until_a_round_receipt_exists() {
+        let now = Utc::now();
+        let mut session = Session::new(7, 11, "notification pin", now);
+        let mut parts = run_parts(
+            1,
+            PartRole::Assistant,
+            "tool",
+            "launched background work",
+            now,
+        );
+        parts.push(Part {
+            part_id: 40,
+            kind: "system_notification".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: serde_json::json!({
+                "operation_id": "proc_compacted",
+                "operation_kind": "shell",
+                "status": "completed",
+                "summary": "completed after compaction",
+                "body": "completed after compaction",
+                "delivery_protocol": "provider_round_v1"
+            }),
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(1),
+            origin_session_id: 7,
+            revision: 1,
+            started_at_ms: now.timestamp_millis(),
+            finished_at_ms: Some(now.timestamp_millis()),
+            created_at_ms: now.timestamp_millis(),
+            updated_at_ms: now.timestamp_millis(),
+            provider_state: None,
+        });
+        parts.push(compaction_marker(50, "durable state", now));
+        parts.extend(run_parts(60, PartRole::User, "user", "future user", now));
+        session.install_projected_parts(parts);
+
+        let before_receipt = prompt_window_items(&session, None, None, None, false);
+        assert!(
+            matches!(
+                before_receipt.last().and_then(|item| item.run.parts.first()),
+                Some(CompletionInputPart::SystemMessage { text })
+                    if text == "completed after compaction"
+            ),
+            "an unhandled notification remains the prompt tail after its launch marker was compacted"
+        );
+        assert_eq!(
+            provider_visible_notification_part_ids(&session),
+            vec![40],
+            "the provider round durably records the pinned notification input"
+        );
+
+        let mut handled_marker = run_marker_content("continue", None, None, None, None);
+        handled_marker["rounds"] = serde_json::json!([{
+            "part_ids": [71000],
+            "provider_state": null,
+            "input_notification_part_ids": [40]
+        }]);
+        let mut handled_parts = session.parts().to_vec();
+        handled_parts.push(Part {
+            part_id: 71,
+            kind: "run".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: handled_marker,
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: None,
+            origin_session_id: 7,
+            revision: 1,
+            started_at_ms: now.timestamp_millis(),
+            finished_at_ms: Some(now.timestamp_millis()),
+            created_at_ms: now.timestamp_millis(),
+            updated_at_ms: now.timestamp_millis(),
+            provider_state: None,
+        });
+        handled_parts.push(Part {
+            part_id: 71000,
+            kind: "text".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: typed_content_to_value(&TypedContent::Text(text_content(
+                "notification handled".to_owned(),
+            )))
+            .expect("response text serializes"),
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(71),
+            origin_session_id: 7,
+            revision: 1,
+            started_at_ms: now.timestamp_millis(),
+            finished_at_ms: Some(now.timestamp_millis()),
+            created_at_ms: now.timestamp_millis(),
+            updated_at_ms: now.timestamp_millis(),
+            provider_state: None,
+        });
+        session.install_projected_parts(handled_parts);
+        assert!(provider_visible_notification_part_ids(&session).is_empty());
+        let after_receipt = prompt_window_items(&session, None, None, None, false);
+        assert!(
+            after_receipt.iter().all(|item| item.run.parts.iter().all(|part| {
+                !matches!(part, CompletionInputPart::SystemMessage { text } if text == "completed after compaction")
+            })),
+            "the exact notification is unpinned once a completed provider round receipts it"
+        );
+    }
+
     /// One multi-round assistant turn (one user message == one run marker):
     /// the marker carries `content["rounds"]` (part ids + per-round provider
     /// replay state). `window_items_from_parts` must re-split it into one wire
@@ -1612,6 +1888,7 @@ mod compaction_tests {
             },
             {
                 "part_ids": [2001, 2002, 2003],
+                "input_notification_part_ids": [1500],
                 "provider_state": { "openai_reasoning_items": [{"type": "reasoning", "id": "r2"}] }
             }
         ]);
@@ -1654,11 +1931,41 @@ mod compaction_tests {
             updated_at_ms: now.timestamp_millis(),
             provider_state: None,
         };
+        let notification_part = Part {
+            part_id: 1500,
+            kind: "system_notification".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: typed_content_to_value(&TypedContent::SystemNotification(
+                agena_runtime_contracts::part_content::SystemNotificationContent {
+                    operation_id: "proc_mid_round".to_owned(),
+                    operation_kind: "shell".to_owned(),
+                    status: "completed".to_owned(),
+                    summary: "background command completed".to_owned(),
+                    body: "background command completed".to_owned(),
+                    ..Default::default()
+                },
+            ))
+            .expect("notification content is always serializable"),
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(999),
+            origin_session_id: 7,
+            revision: 0,
+            started_at_ms: now.timestamp_millis(),
+            finished_at_ms: Some(now.timestamp_millis()),
+            created_at_ms: now.timestamp_millis(),
+            updated_at_ms: now.timestamp_millis(),
+            provider_state: None,
+        };
 
         let parts = vec![
             run_marker,
             content_part(1001, "round one thinking"),
             content_part(1002, "round one call"),
+            notification_part,
             content_part(2001, "round two thinking"),
             content_part(2002, "round two call"),
             content_part(2003, "round two final"),
@@ -1666,12 +1973,15 @@ mod compaction_tests {
         let items = window_items_from_parts(&parts);
         assert_eq!(
             items.len(),
-            2,
-            "one wire message per round, got {}",
+            3,
+            "two provider rounds plus the Assistant hook between them, got {}",
             items.len()
         );
-        // Every round item maps back to the single run marker id.
-        assert!(items.iter().all(|item| item.id == Some(999)));
+        // Both provider rounds map back to the single run marker id; the hook
+        // keeps its own ordering anchor in the provider timeline.
+        assert_eq!(items[0].id, Some(999));
+        assert_eq!(items[1].id, Some(1500));
+        assert_eq!(items[2].id, Some(999));
         // Round one carries exactly its own parts and its own reasoning replay.
         assert_eq!(
             items[0]
@@ -1690,9 +2000,17 @@ mod compaction_tests {
             1,
             "round one replays its own reasoning"
         );
+        assert!(
+            matches!(
+                items[1].run.parts.as_slice(),
+                [CompletionInputPart::SystemMessage { text }]
+                    if text == "background command completed"
+            ),
+            "the hook seen by round two is ordered after round one and before round two output"
+        );
         // Round two carries its own parts and its own (different) reasoning.
         assert_eq!(
-            items[1]
+            items[2]
                 .run
                 .parts
                 .iter()
@@ -1704,7 +2022,7 @@ mod compaction_tests {
             vec!["round two thinking", "round two call", "round two final"]
         );
         assert_eq!(
-            items[1].run.provider_state.openai_reasoning_items[0]["id"],
+            items[2].run.provider_state.openai_reasoning_items[0]["id"],
             serde_json::json!("r2"),
             "round two replays its own reasoning"
         );

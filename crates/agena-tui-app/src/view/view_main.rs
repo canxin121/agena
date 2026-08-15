@@ -666,9 +666,8 @@ impl App {
 
     /// Text for the composer's bottom-left chip: background-activity count.
     fn composer_background_activity_part(&self) -> Option<String> {
-        self.background_activity_summary
-            .filter(|(count, _)| *count > 0)
-            .map(|(count, _)| format!("● {count} background"))
+        let activities = &self.transcript.execution.as_ref()?.background_activities;
+        background_activity_summary(activities.iter().map(|activity| activity.kind.as_str()))
     }
 
     /// Text for the composer's top-right chip while history search is active.
@@ -1048,11 +1047,24 @@ fn transcript_surface_top_right_parts(activity: Option<String>, mode: String) ->
     activity.into_iter().chain(std::iter::once(mode)).collect()
 }
 
+fn background_activity_summary<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let kinds = kinds.into_iter().collect::<Vec<_>>();
+    let mut parts = Vec::new();
+    for kind in ["monitor", "cron", "shell", "task", "runtime", "browser"] {
+        let count = kinds.iter().filter(|candidate| **candidate == kind).count();
+        if count > 0 {
+            parts.push(format!("{kind} {count}"));
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        transcript_line_is_in_block, transcript_surface_top_right_parts, transcript_visible_range,
+        background_activity_summary, transcript_line_is_in_block,
+        transcript_surface_top_right_parts, transcript_visible_range,
     };
 
     #[test]
@@ -1074,6 +1086,15 @@ mod tests {
             transcript_surface_top_right_parts(None, "INSERT".to_string()),
             vec!["INSERT"]
         );
+    }
+
+    #[test]
+    fn background_summary_uses_stable_per_kind_counts() {
+        assert_eq!(
+            background_activity_summary(["shell", "cron", "monitor", "shell", "task"]),
+            Some("monitor 1 · cron 1 · shell 2 · task 1".to_owned())
+        );
+        assert_eq!(background_activity_summary([]), None);
     }
 
     #[test]

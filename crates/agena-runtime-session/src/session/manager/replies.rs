@@ -998,11 +998,12 @@ impl SessionManager {
             let host_user_input_sequence = execution_manager
                 .host_user_input_sequence_guard(session_id, execution_tool.call_id);
             let execution = scoped_executor
-                .execute_invocation_detailed_with_prepared_shell(
+                .execute_invocation_detailed_with_launch_provenance(
                     &execution_tool.invocation,
                     session_id,
                     execution_tool.call_id,
                     execution_tool.prepared_shell_command.clone(),
+                    Some(execution_tool.scheduled_job_launch_provenance(session_id)),
                 )
                 .await;
             drop(host_user_input_sequence);

@@ -13,7 +13,10 @@ pub(crate) async fn list_activities(
     filter: agena_domain::BackgroundActivityFilter,
 ) -> Result<Vec<BackgroundActivityResource>> {
     let service = application.runtime_activities()?;
-    let activities = service.list_activities(&filter);
+    let activities = service
+        .list_activities(&filter)
+        .await
+        .map_err(|error| anyhow!("{error}"))?;
     Ok(activities
         .iter()
         .map(agena_api::resource::BackgroundActivityResource::from)
@@ -36,31 +39,36 @@ pub(crate) async fn activity_logs(
     Ok(read.into())
 }
 
-pub(crate) async fn stop_activity(
+pub(crate) async fn control_activity(
     application: &Application,
     activity_id: &str,
+    action: &str,
 ) -> Result<BackgroundActivityResource> {
     let service = application.runtime_activities()?;
-    let activity = service
-        .stop_activity(activity_id)
-        .await
-        .map_err(|error| anyhow!("{error}"))
-        .context("failed to stop background activity")?;
+    let activity = match action {
+        "stop" => service.stop_activity(activity_id).await,
+        "pause" => service.pause_activity(activity_id).await,
+        "resume" => service.resume_activity(activity_id).await,
+        "delete" => service.delete_activity(activity_id).await,
+        "dismiss" => service.dismiss_activity(activity_id),
+        _ => {
+            return Err(anyhow!(
+                "unsupported background activity control `{action}`"
+            ));
+        }
+    }
+    .map_err(|error| anyhow!("{error}"))
+    .context("failed to control background activity")?;
     Ok(agena_api::resource::BackgroundActivityResource::from(
         &activity,
     ))
 }
 
-pub(crate) async fn dismiss_activity(application: &Application, activity_id: &str) -> Result<()> {
-    let service = application.runtime_activities()?;
-    service
-        .dismiss_activity(activity_id)
-        .map_err(|error| anyhow!("{error}"))
-        .context("failed to dismiss background activity")?;
-    Ok(())
-}
-
 pub(crate) async fn clear_finished_activities(application: &Application) -> Result<usize> {
     let service = application.runtime_activities()?;
-    Ok(service.clear_finished())
+    service
+        .clear_finished()
+        .await
+        .map_err(|error| anyhow!("{error}"))
+        .context("failed to clear finished background activities")
 }

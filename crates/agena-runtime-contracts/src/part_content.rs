@@ -390,9 +390,10 @@ impl TryFrom<&Value> for HookContent {
 }
 
 /// `system_notification` — a background-operation completion (or event)
-/// notification delivered to the model as an Assistant-role part appended to
-/// the launching run (no new run). This is the agena analog of Claude Code's
-/// `<task-notification>`.
+/// notification delivered to the model. AI-launched work uses an
+/// Assistant-role part appended to the launching run (no new run); launch-less
+/// scheduled delivery uses a Runtime ingress. This is the agena analog of
+/// Claude Code's `<task-notification>`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct SystemNotificationContent {
     /// The background operation id (task id or process id).

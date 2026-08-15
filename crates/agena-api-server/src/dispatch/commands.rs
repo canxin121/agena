@@ -295,7 +295,10 @@ pub async fn dispatch_command(
         Command::ClearFinishedActivities => {
             let service = state.runtime_activities()?;
             Ok(CommandResult::ActivitiesCleared {
-                count: service.clear_finished(),
+                count: service
+                    .clear_finished()
+                    .await
+                    .map_err(activity_command_error)?,
             })
         }
     }

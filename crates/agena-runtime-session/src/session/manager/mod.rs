@@ -188,11 +188,27 @@ struct ResolvedPendingTool {
     pending: SessionPendingTool,
     operation_id: String,
     call_id: i64,
+    launch_run_id: i64,
+    launch_tool_part_id: i64,
     invocation: ToolInvocation,
     advertised_tool_identity: Option<String>,
     prepared_shell_command: Option<PreparedShellCommand>,
     lifecycle: TimeRange,
     session_runtime: crate::session::SessionRuntimeState,
+}
+
+impl ResolvedPendingTool {
+    fn scheduled_job_launch_provenance(
+        &self,
+        session_id: i64,
+    ) -> agena_scheduler::ScheduledJobLaunchProvenance {
+        agena_scheduler::ScheduledJobLaunchProvenance {
+            session_id,
+            run_id: self.launch_run_id,
+            tool_part_id: self.launch_tool_part_id,
+            call_id: self.call_id,
+        }
+    }
 }
 
 struct PendingHostUserInput {
@@ -1426,10 +1442,15 @@ impl SessionManager {
         // originally created by the model. Reuse that operation's correlation
         // ids so shell output remains attached to the visible Activity.
         let outer_pending_tool = pending_tool_by_call_id(&session, call_id);
-        let command_event_sink = outer_pending_tool
+        let resolved_outer_pending = outer_pending_tool
             .as_ref()
-            .and_then(|pending| resolve_pending_tool(&session, pending).ok())
-            .map(|pending| self.command_event_sink_for_pending(session_id, &pending));
+            .and_then(|pending| resolve_pending_tool(&session, pending).ok());
+        let command_event_sink = resolved_outer_pending
+            .as_ref()
+            .map(|pending| self.command_event_sink_for_pending(session_id, pending));
+        let launch_provenance = resolved_outer_pending
+            .as_ref()
+            .map(|pending| pending.scheduled_job_launch_provenance(session_id));
         let execution_context = session.runtime.execution.clone();
         let scoped_executor = state
             .tool_executor
@@ -1507,11 +1528,12 @@ impl SessionManager {
         }
 
         scoped_executor
-            .execute_invocation_detailed_with_prepared_shell(
+            .execute_invocation_detailed_with_launch_provenance(
                 &invocation,
                 session_id,
                 call_id,
                 prepared_shell_command,
+                launch_provenance,
             )
             .await
             .map_err(tool_error_to_app_error)
@@ -1697,9 +1719,10 @@ impl SessionManager {
     }
 
     /// Settle one durable background-operation aggregate and enqueue its
-    /// unique terminal delivery. The notification is appended in a new
-    /// Runtime-role ingress run at its actual arrival position; the launch
-    /// tool part remains the immutable, already-completed launch receipt.
+    /// unique terminal delivery. AI-launched work appends the notification to
+    /// the assistant run that launched it; work with no assistant launch run
+    /// keeps an explicit Runtime ingress. The launch tool part remains the
+    /// immutable, already-completed launch receipt.
     pub async fn settle_background_operation(
         &self,
         session_id: i64,
@@ -1732,9 +1755,14 @@ impl SessionManager {
                 })),
             ),
         };
+        let notification_role = if operation.launch_run_id.is_some() {
+            PartRole::Assistant
+        } else {
+            PartRole::Runtime
+        };
         let new_part = new_part_from_content(
             "system_notification",
-            PartRole::Runtime,
+            notification_role,
             &TypedContent::SystemNotification(notification.clone()),
             PartState::Completed,
         )?;
@@ -1974,9 +2002,14 @@ impl SessionManager {
         let operation = self
             .background_operation_for_signal(session_id, operation_kind, id)
             .await?;
+        let notification_role = if operation.launch_run_id.is_some() {
+            PartRole::Assistant
+        } else {
+            PartRole::Runtime
+        };
         let new_part = new_part_from_content(
             "system_notification",
-            PartRole::Runtime,
+            notification_role,
             &TypedContent::SystemNotification(notification.clone()),
             PartState::Completed,
         )?;
@@ -1999,19 +2032,31 @@ impl SessionManager {
     /// Deliver one scheduled job through the same durable aggregate and outbox
     /// used by every other background operation.
     ///
-    /// Scheduled deliveries have no launching tool part, so their operation
-    /// uses a synthetic stable id and nullable launch references. The prompt
-    /// is committed in a new Runtime-role ingress run at its actual arrival
-    /// position; it is never appended retroactively to an assistant response.
-    /// Replaying the same delivery key is idempotent all the way through the
-    /// operation, transcript projection, and model-wake delivery.
+    /// Assistant-created schedules retain their exact launch run/tool part and
+    /// append every fire to that run. Host-created schedules have no assistant
+    /// provenance and use an explicit Runtime ingress. Replaying the same
+    /// delivery key is idempotent all the way through the operation,
+    /// transcript projection, and model-wake delivery.
     pub async fn deliver_scheduled_job(
         &self,
         session_id: i64,
         job_id: String,
         delivery_key: String,
         prompt: String,
+        launch_provenance: Option<agena_scheduler::ScheduledJobLaunchProvenance>,
     ) -> Result<bool, AppError> {
+        let (launch_run_id, launch_tool_part_id) = match launch_provenance {
+            Some(provenance) if provenance.session_id == session_id => {
+                (Some(provenance.run_id), Some(provenance.tool_part_id))
+            }
+            Some(provenance) => {
+                return Err(AppError::Internal(format!(
+                    "scheduled job {job_id} belongs to session {}, not {session_id}",
+                    provenance.session_id
+                )));
+            }
+            None => (None, None),
+        };
         let operation_id = format!("scheduled:{session_id}:{delivery_key}");
         let notification = SystemNotificationContent {
             operation_id: delivery_key.clone(),
@@ -2026,8 +2071,8 @@ impl SessionManager {
             .create_background_operation(NewBackgroundOperation {
                 operation_id: operation_id.clone(),
                 session_id,
-                launch_run_id: None,
-                launch_tool_part_id: None,
+                launch_run_id,
+                launch_tool_part_id,
                 kind: BackgroundOperationKind::ScheduledDelivery,
             })
             .await?;
@@ -2079,7 +2124,11 @@ impl SessionManager {
         }
         let new_part = new_part_from_content(
             "system_notification",
-            PartRole::Runtime,
+            if launch_run_id.is_some() {
+                PartRole::Assistant
+            } else {
+                PartRole::Runtime
+            },
             &TypedContent::SystemNotification(notification.clone()),
             PartState::Completed,
         )?;
@@ -2104,11 +2153,11 @@ impl SessionManager {
     /// claim back to Pending, so restart recovery can retry it; success marks
     /// it Consumed only after the wake execution returns.
     ///
-    /// A completed assistant `continue` run after the Runtime notification is
-    /// durable proof that an earlier dispatcher finished the wake but crashed
-    /// before consuming the outbox row. Recovery consumes that row without
-    /// invoking the model again, closing the classic response-commit / outbox-
-    /// ack crash window.
+    /// A completed provider round whose marker records this notification in
+    /// `input_notification_part_ids` is durable proof that an earlier
+    /// dispatcher finished the wake but crashed before consuming the outbox
+    /// row. Recovery consumes that row without invoking the model again,
+    /// closing the classic response-commit / outbox-ack crash window.
     async fn dispatch_background_delivery(
         &self,
         delivery: BackgroundDelivery,
@@ -2166,11 +2215,13 @@ impl SessionManager {
     /// Whether the append-only transcript proves that `notification_part_id`
     /// has already received a completed model response.
     ///
-    /// Runtime ingress is committed before its answering assistant run, and
-    /// part ids are allocated monotonically. Compaction markers are excluded:
-    /// only a completed assistant `continue` run is evidence of model handling.
-    /// This derives delivery progress from the canonical transcript instead of
-    /// adding another persisted `notified`/`responded` flag.
+    /// Each successful provider round durably lists the notification part ids
+    /// present in its actual prompt. This exact input receipt avoids the race
+    /// where an older provider request emits output after a notification was
+    /// appended but never saw that notification. Legacy Runtime ingress rows
+    /// retain the monotonic-id fallback used before round input receipts were
+    /// introduced. Delivery progress remains derived from the canonical
+    /// transcript instead of adding another mutable `notified` flag.
     async fn notification_has_completed_assistant_response(
         &self,
         session_id: i64,
@@ -2180,28 +2231,63 @@ impl SessionManager {
             return Ok(false);
         };
         let session = self.store.load_session(session_id).await?;
-        let notification_exists = session.parts().iter().any(|part| {
+        let notification = session.parts().iter().find(|part| {
             part.part_id == notification_part_id
                 && part.kind == "system_notification"
-                && part.role == PartRole::Runtime
                 && part.state == PartState::Completed
         });
-        if !notification_exists {
+        let Some(notification) = notification else {
             return Err(AppError::Internal(format!(
                 "background delivery notification part {notification_part_id} is missing or invalid in session {session_id}"
             )));
+        };
+        let notification_identity_is_valid = match notification.role {
+            PartRole::Assistant => notification.run_id.is_some_and(|run_id| {
+                session.parts().iter().any(|marker| {
+                    marker.part_id == run_id
+                        && marker.is_run_marker()
+                        && marker.role == PartRole::Assistant
+                })
+            }),
+            PartRole::Runtime => notification.run_id.is_some_and(|run_id| {
+                session.parts().iter().any(|marker| {
+                    marker.part_id == run_id
+                        && marker.is_run_marker()
+                        && marker.role == PartRole::Runtime
+                })
+            }),
+            _ => false,
+        };
+        if !notification_identity_is_valid {
+            return Err(AppError::Internal(format!(
+                "background delivery notification part {notification_part_id} has an invalid owner in session {session_id}"
+            )));
         }
-        Ok(session.parts().iter().any(|part| {
-            part.part_id > notification_part_id
-                && part.is_run_marker()
-                && part.role == PartRole::Assistant
-                && part.state == PartState::Completed
-                && part
-                    .content
-                    .get("run_kind")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("continue")
-        }))
+        let exact_round_receipt =
+            crate::session::prompt_window::notification_has_completed_provider_round(
+                session.parts(),
+                notification_part_id,
+            );
+        if exact_round_receipt {
+            return Ok(true);
+        }
+        // Backward compatibility for v9 Runtime ingress deliveries committed
+        // before exact provider-round input receipts existed. New
+        // Assistant-owned notifications never take this fallback because a
+        // pre-existing in-flight assistant round can have a lower marker id
+        // while emitting output after the notification without seeing it.
+        Ok(notification.role == PartRole::Runtime
+            && session.parts().iter().any(|part| {
+                part.part_id > notification_part_id
+                    && part.is_run_marker()
+                    && part.role == PartRole::Assistant
+                    && part.state == PartState::Completed
+                    && part
+                        .content
+                        .get("run_kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("continue")
+            }))
     }
 
     /// Restart-safe dispatcher backstop. The live bus only lowers latency;
@@ -2432,9 +2518,14 @@ impl SessionManager {
             body: reason.clone(),
             ..Default::default()
         };
+        let notification_role = if operation.launch_run_id.is_some() {
+            PartRole::Assistant
+        } else {
+            PartRole::Runtime
+        };
         let notification_part = new_part_from_content(
             "system_notification",
-            PartRole::Runtime,
+            notification_role,
             &TypedContent::SystemNotification(notification.clone()),
             PartState::Completed,
         )?;
@@ -2509,7 +2600,7 @@ impl SessionManager {
             let task_label = if title.is_empty() {
                 task_id.to_owned()
             } else {
-                format!("\"{title}\"")
+                format!("\"{title}\" ({task_id})")
             };
             let final_text = child
                 .parts()
@@ -2583,9 +2674,9 @@ impl SessionManager {
 
     /// Wake the model over a freshly-settled notification (a background
     /// completion, a monitor event, or a scheduled delivery), shared by the
-    /// three settle paths. The notification part was atomically committed in
-    /// its own chronological Runtime ingress run; this runs outside that
-    /// transaction.
+    /// three settle paths. The notification part was atomically committed to
+    /// its assistant launch run or a launch-less Runtime ingress; this runs
+    /// outside that transaction.
     ///
     /// The mid-turn arm steers the active execution and then **verifies the
     /// steer landed**: the stable-run loop acknowledges the notification part
@@ -2619,11 +2710,12 @@ impl SessionManager {
             .await?;
             return Ok(());
         }
-        // Mid-turn: the running execution must take a fresh model turn over
-        // the appended notification. Steer it; `drain_steer_input` reloads the
-        // session and the stable-run loop's notification detection
-        // re-triggers. Register the delivery handshake first so the loop can
-        // acknowledge the appended part.
+        // Mid-turn: queue the notification for the running execution. The
+        // steer receiver is drained only after the current provider/tool part
+        // reaches the stable-loop boundary; it never interrupts a streaming
+        // part. `drain_steer_input` then reloads the already-persisted hook and
+        // notification detection requests the next provider round. Register
+        // the delivery handshake first so the loop can acknowledge the part.
         let ack_rx = notification_part_id.map(|part_id| {
             self.execution_registry
                 .register_notification_ack(session_id, part_id)
@@ -2679,7 +2771,7 @@ impl SessionManager {
         }
 
         // Cursor observation only proves that the active loop loaded the
-        // Runtime ingress; it does not prove the answering model turn committed.
+        // notification; it does not prove the answering model round committed.
         // Keep the delivery claimed until that execution ends, then verify the
         // durable assistant response. A crash/failure after observation but
         // before response falls back to a fresh wake instead of consuming and

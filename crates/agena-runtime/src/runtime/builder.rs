@@ -1,6 +1,10 @@
 #![allow(unused_imports)]
 
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+    sync::Arc,
+};
 
 use agena_storage::MemoryStore;
 use tokio_util::sync::CancellationToken;
@@ -304,22 +308,371 @@ impl AgenaRuntime {
     }
 }
 
-#[async_trait::async_trait]
-impl agena_runtime::RuntimeActivityService for AgenaRuntime {
-    fn list_activities(
-        &self,
-        filter: &agena_domain::BackgroundActivityFilter,
-    ) -> Vec<agena_domain::BackgroundActivity> {
-        self.activities.registry.list(filter)
+#[cfg(test)]
+mod durable_activity_projection_tests {
+    use std::collections::BTreeMap;
+
+    use agena_domain::{BackgroundActivityKind, BackgroundActivityStatus};
+    use agena_storage::store::{
+        BackgroundOperation, BackgroundOperationKind, BackgroundOperationPhase,
+    };
+
+    use super::{durable_operation_activity, scheduled_job_activity};
+
+    #[test]
+    fn monitor_projection_keeps_durable_session_and_source_part_identity() {
+        let activity = durable_operation_activity(
+            &BTreeMap::new(),
+            BackgroundOperation {
+                operation_id: "bg_58_42".to_owned(),
+                session_id: 58,
+                launch_run_id: Some(40),
+                launch_tool_part_id: Some(42),
+                kind: BackgroundOperationKind::Monitor,
+                external_id: Some("proc_58_42".to_owned()),
+                phase: BackgroundOperationPhase::Running,
+                outcome: None,
+                failure: None,
+                last_event_seq: 3,
+                owner_id: None,
+                lease_until_ms: None,
+                revision: 2,
+                created_at_ms: 100,
+                updated_at_ms: 120,
+                finished_at_ms: None,
+            },
+        );
+        assert_eq!(activity.kind, BackgroundActivityKind::Monitor);
+        assert_eq!(activity.status, BackgroundActivityStatus::Running);
+        assert_eq!(activity.session_id, Some(58));
+        assert_eq!(activity.source_part_id, Some(42));
+        assert_eq!(activity.operation_id.as_deref(), Some("bg_58_42"));
+        assert_eq!(activity.last_seq, 3);
     }
 
-    fn get_activity(
+    #[test]
+    fn paused_cron_projection_remains_manageable_and_exposes_next_wake() {
+        let mut job = agena_scheduler::ScheduledJob::new_cron_in_timezone(
+            "*/10 * * * * *",
+            "wake me",
+            7,
+            "Asia/Shanghai",
+        )
+        .expect("cron job");
+        job.set_owner(58);
+        job.pause();
+        let next = job.next_fire_at.expect("next fire").timestamp_millis();
+        let activity = scheduled_job_activity(job, Some(77));
+        assert_eq!(activity.kind, BackgroundActivityKind::Cron);
+        assert_eq!(activity.status, BackgroundActivityStatus::Paused);
+        assert_eq!(activity.session_id, Some(58));
+        assert_eq!(activity.source_part_id, Some(77));
+        assert_eq!(activity.next_event_at_ms, Some(next));
+        assert!(activity.is_active());
+    }
+}
+
+fn durable_operation_activity(
+    live: &BTreeMap<String, agena_domain::BackgroundActivity>,
+    operation: agena_storage::store::BackgroundOperation,
+) -> agena_domain::BackgroundActivity {
+    use agena_domain::{BackgroundActivity, BackgroundActivityKind, BackgroundActivityStatus};
+    use agena_storage::store::{BackgroundOperationKind, BackgroundOperationPhase};
+
+    let external_id = operation
+        .external_id
+        .clone()
+        .unwrap_or_else(|| operation.operation_id.clone());
+    let activity_id = match operation.kind {
+        BackgroundOperationKind::Task => format!("task_{external_id}"),
+        _ => external_id.clone(),
+    };
+    let kind = match operation.kind {
+        BackgroundOperationKind::Shell => BackgroundActivityKind::Shell,
+        BackgroundOperationKind::Task => BackgroundActivityKind::Task,
+        BackgroundOperationKind::Monitor => BackgroundActivityKind::Monitor,
+        BackgroundOperationKind::ScheduledDelivery => BackgroundActivityKind::Cron,
+    };
+    let status = match operation.phase {
+        BackgroundOperationPhase::LaunchRequested | BackgroundOperationPhase::Launching => {
+            BackgroundActivityStatus::Pending
+        }
+        BackgroundOperationPhase::Running => BackgroundActivityStatus::Running,
+        BackgroundOperationPhase::Completed => BackgroundActivityStatus::Succeeded,
+        BackgroundOperationPhase::Failed | BackgroundOperationPhase::TimedOut => {
+            BackgroundActivityStatus::Failed
+        }
+        BackgroundOperationPhase::Cancelled | BackgroundOperationPhase::Interrupted => {
+            BackgroundActivityStatus::Cancelled
+        }
+    };
+    let mut activity = live.get(&activity_id).cloned().unwrap_or_else(|| {
+        let title = match kind {
+            BackgroundActivityKind::Shell => format!("Background shell · {external_id}"),
+            BackgroundActivityKind::Monitor => format!("Monitor · {external_id}"),
+            BackgroundActivityKind::Task => format!("Delegated task · {external_id}"),
+            BackgroundActivityKind::Cron => format!("Scheduled delivery · {external_id}"),
+            BackgroundActivityKind::Runtime | BackgroundActivityKind::Browser => {
+                external_id.clone()
+            }
+        };
+        BackgroundActivity {
+            id: activity_id.clone(),
+            kind,
+            status,
+            title,
+            description: external_id.clone(),
+            command: None,
+            workdir: None,
+            session_id: (kind != BackgroundActivityKind::Task).then_some(operation.session_id),
+            parent_session_id: (kind == BackgroundActivityKind::Task)
+                .then_some(operation.session_id),
+            operation_id: Some(operation.operation_id.clone()),
+            source_part_id: operation.launch_tool_part_id,
+            created_at_ms: operation.created_at_ms,
+            started_at_ms: operation.created_at_ms,
+            finished_at_ms: operation.finished_at_ms,
+            next_event_at_ms: None,
+            exit_code: None,
+            message: None,
+            failure: None,
+            last_seq: operation.last_event_seq,
+            has_more: false,
+            dropped_lines: 0,
+            cancellable: status.is_active(),
+            dismissible: status.is_terminal(),
+        }
+    });
+    activity.kind = kind;
+    activity.status = status;
+    activity.operation_id = Some(operation.operation_id);
+    activity.source_part_id = operation.launch_tool_part_id;
+    activity.created_at_ms = operation.created_at_ms;
+    activity.started_at_ms = operation.created_at_ms;
+    activity.finished_at_ms = operation.finished_at_ms;
+    activity.last_seq = activity.last_seq.max(operation.last_event_seq);
+    activity.cancellable = status.is_active();
+    activity.dismissible = status.is_terminal();
+    match kind {
+        // Durable ownership fixes the process registry's intentionally
+        // session-neutral shell record.
+        BackgroundActivityKind::Shell | BackgroundActivityKind::Monitor => {
+            activity.session_id = Some(operation.session_id);
+        }
+        // Task registry rows point at the child session; the operation owner
+        // is the parent that launched it.
+        BackgroundActivityKind::Task => {
+            activity.parent_session_id = Some(operation.session_id);
+        }
+        _ => {}
+    }
+    if activity.failure.is_none() {
+        activity.failure = operation
+            .failure
+            .and_then(|failure| serde_json::from_value(failure).ok());
+    }
+    activity
+}
+
+fn scheduled_job_activity(
+    job: agena_scheduler::ScheduledJob,
+    source_part_id: Option<i64>,
+) -> agena_domain::BackgroundActivity {
+    use agena_domain::{BackgroundActivity, BackgroundActivityKind, BackgroundActivityStatus};
+
+    let (title, description) = match &job.kind {
+        agena_scheduler::JobKind::Cron { expression, .. } => (
+            format!("Cron · {expression} · {}", job.cron_timezone()),
+            job.prompt.clone(),
+        ),
+        agena_scheduler::JobKind::Once { at } => (
+            format!("Scheduled wake · {}", at.to_rfc3339()),
+            job.prompt.clone(),
+        ),
+    };
+    let status = if job.completed {
+        match job.last_run.as_ref().map(|run| run.status) {
+            Some(agena_scheduler::JobRunStatus::Failed) => BackgroundActivityStatus::Failed,
+            _ => BackgroundActivityStatus::Succeeded,
+        }
+    } else if job.paused {
+        BackgroundActivityStatus::Paused
+    } else {
+        BackgroundActivityStatus::Running
+    };
+    let failure = job
+        .last_run
+        .as_ref()
+        .and_then(|run| run.failure.as_ref())
+        .map(Into::into);
+    BackgroundActivity {
+        id: format!("cron_{}", job.id),
+        kind: BackgroundActivityKind::Cron,
+        status,
+        title,
+        description,
+        command: None,
+        workdir: None,
+        session_id: job.owner_session_id,
+        parent_session_id: None,
+        operation_id: None,
+        source_part_id,
+        created_at_ms: job.created_at.timestamp_millis(),
+        started_at_ms: job.created_at.timestamp_millis(),
+        finished_at_ms: job.completed.then(|| {
+            job.last_run.as_ref().map_or_else(
+                || job.created_at.timestamp_millis(),
+                |run| run.finished_at.timestamp_millis(),
+            )
+        }),
+        next_event_at_ms: job.next_fire_at.map(|time| time.timestamp_millis()),
+        exit_code: None,
+        message: job.paused.then_some("Paused".to_owned()),
+        failure,
+        last_seq: job.run_history.len() as u64,
+        has_more: false,
+        dropped_lines: 0,
+        cancellable: status.is_active(),
+        dismissible: status.is_terminal(),
+    }
+}
+
+async fn cron_source_part_id(
+    manager: &SessionManager,
+    job: &agena_scheduler::ScheduledJob,
+) -> Option<i64> {
+    if let Some(provenance) = job.launch_provenance {
+        return Some(provenance.tool_part_id);
+    }
+    // Compatibility for schedules persisted before launch provenance became
+    // first-class: recover the source once from their completed cron.create
+    // receipt when it is still present.
+    let session_id = job.owner_session_id?;
+    let session = manager.session_store().load(session_id).await.ok()?;
+    let job_id = job.id.to_string();
+    session.parts.iter().rev().find_map(|part| {
+        (part.kind == "tool_call"
+            && part.content.get("name").and_then(serde_json::Value::as_str) == Some("cron.create")
+            && part
+                .content
+                .pointer("/operation/result/structured/id")
+                .and_then(serde_json::Value::as_str)
+                == Some(job_id.as_str()))
+        .then_some(part.part_id)
+    })
+}
+
+fn cron_activity_job_id(
+    activity_id: &str,
+) -> Result<uuid::Uuid, agena_runtime::ActivityControlError> {
+    activity_id
+        .strip_prefix("cron_")
+        .ok_or_else(|| agena_runtime::ActivityControlError::not_stoppable(activity_id))
+        .and_then(|id| {
+            uuid::Uuid::parse_str(id)
+                .map_err(|_| agena_runtime::ActivityControlError::not_found(activity_id))
+        })
+}
+
+fn activity_scheduler(
+    runtime: &AgenaRuntime,
+) -> Result<Arc<agena_scheduler::Scheduler>, agena_runtime::ActivityControlError> {
+    let manager = runtime
+        .current_snapshot()
+        .session_manager()
+        .ok_or_else(|| {
+            agena_runtime::ActivityControlError::internal("session runtime unavailable")
+        })?;
+    manager
+        .tool_executor()
+        .scheduler()
+        .cloned()
+        .ok_or_else(|| agena_runtime::ActivityControlError::internal("scheduler unavailable"))
+}
+
+#[async_trait::async_trait]
+impl agena_runtime::RuntimeActivityService for AgenaRuntime {
+    async fn list_activities(
+        &self,
+        filter: &agena_domain::BackgroundActivityFilter,
+    ) -> Result<Vec<agena_domain::BackgroundActivity>, agena_runtime::ActivityControlError> {
+        let mut projected = self
+            .activities
+            .registry
+            .list(&agena_domain::BackgroundActivityFilter::default())
+            .into_iter()
+            .map(|activity| (activity.id.clone(), activity))
+            .collect::<BTreeMap<_, _>>();
+
+        if let Some(manager) = self.current_snapshot().session_manager() {
+            let session_store = manager.session_store();
+            // A dropped terminal observer must not leave an in-memory Running
+            // row visible after the durable aggregate has already settled.
+            // Resolve every registry-backed durable kind first, including
+            // terminal operations, then add active aggregates that have no
+            // process-local detail (for example after restart).
+            for live_activity in projected.values().cloned().collect::<Vec<_>>() {
+                if let Some(operation) =
+                    durable_operation_for_live_activity(session_store.as_ref(), &live_activity)
+                        .await?
+                {
+                    let activity = durable_operation_activity(&projected, operation);
+                    projected.insert(activity.id.clone(), activity);
+                }
+            }
+            let operations = session_store
+                .active_background_operations(None, 4_096)
+                .await
+                .map_err(|error| {
+                    agena_runtime::ActivityControlError::internal(format!(
+                        "load durable background operations: {error}"
+                    ))
+                })?;
+            for operation in operations {
+                let activity = durable_operation_activity(&projected, operation);
+                projected.insert(activity.id.clone(), activity);
+            }
+
+            if let Some(scheduler) = manager.tool_executor().scheduler().cloned() {
+                for job in scheduler.list().await {
+                    if filter.active_only && job.completed {
+                        continue;
+                    }
+                    if filter
+                        .session_id
+                        .is_some_and(|session_id| job.owner_session_id != Some(session_id))
+                    {
+                        continue;
+                    }
+                    let source_part_id = cron_source_part_id(manager.as_ref(), &job).await;
+                    let activity = scheduled_job_activity(job, source_part_id);
+                    projected.insert(activity.id.clone(), activity);
+                }
+            }
+        }
+
+        let mut activities = projected
+            .into_values()
+            .filter(|activity| filter.matches(activity))
+            .collect::<Vec<_>>();
+        activities.sort_by(|left, right| {
+            right
+                .is_active()
+                .cmp(&left.is_active())
+                .then_with(|| right.started_at_ms.cmp(&left.started_at_ms))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(activities)
+    }
+
+    async fn get_activity(
         &self,
         activity_id: &str,
     ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
-        self.activities
-            .registry
-            .get(activity_id)
+        self.list_activities(&agena_domain::BackgroundActivityFilter::default())
+            .await?
+            .into_iter()
+            .find(|activity| activity.id == activity_id)
             .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))
     }
 
@@ -330,7 +683,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         limit: Option<u32>,
         wait_ms: u64,
     ) -> Result<agena_domain::BackgroundActivityLogRead, agena_runtime::ActivityControlError> {
-        let activity = self.get_activity(activity_id)?;
+        let activity = self.get_activity(activity_id).await?;
         // Plugin-registered activity sources own their log stream; dispatch
         // to them before any built-in behavior.
         if let Some(adapter) = self.activities.source_for(activity.kind) {
@@ -340,7 +693,8 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                 .map_err(|error| agena_runtime::ActivityControlError::internal(error.to_string()));
         }
         match activity.kind {
-            agena_domain::BackgroundActivityKind::Shell => {
+            agena_domain::BackgroundActivityKind::Shell
+            | agena_domain::BackgroundActivityKind::Monitor => {
                 let Some(monitor) = self.activities.monitor.as_ref() else {
                     return Err(agena_runtime::ActivityControlError::no_log_source(
                         activity_id,
@@ -383,7 +737,8 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             // Kinds without a registered source adapter (runtime maintenance
             // tasks today, browser sessions before the web plugin registers
             // its adapter) have no incremental log stream.
-            agena_domain::BackgroundActivityKind::Runtime
+            agena_domain::BackgroundActivityKind::Cron
+            | agena_domain::BackgroundActivityKind::Runtime
             | agena_domain::BackgroundActivityKind::Browser => {
                 Ok(agena_domain::BackgroundActivityLogRead {
                     activity_id: activity_id.to_string(),
@@ -403,7 +758,10 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         &self,
         activity_id: &str,
     ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
-        let activity = self.get_activity(activity_id)?;
+        let activity = self.get_activity(activity_id).await?;
+        if activity.kind == agena_domain::BackgroundActivityKind::Cron {
+            return self.pause_activity(activity_id).await;
+        }
         if !activity.is_active() {
             return Err(agena_runtime::ActivityControlError::not_running(
                 activity_id,
@@ -421,10 +779,11 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             adapter.stop(activity_id).await.map_err(|error| {
                 agena_runtime::ActivityControlError::internal(error.to_string())
             })?;
-            return self.get_activity(activity_id);
+            return self.get_activity(activity_id).await;
         }
         match activity.kind {
-            agena_domain::BackgroundActivityKind::Shell => {
+            agena_domain::BackgroundActivityKind::Shell
+            | agena_domain::BackgroundActivityKind::Monitor => {
                 let Some(monitor) = self.activities.monitor.as_ref() else {
                     return Err(agena_runtime::ActivityControlError::not_stoppable(
                         activity_id,
@@ -466,13 +825,76 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             }
             // Without a registered source adapter there is nothing to stop;
             // the record's `cancellable` flag is the source's responsibility.
-            agena_domain::BackgroundActivityKind::Browser => {
+            agena_domain::BackgroundActivityKind::Cron
+            | agena_domain::BackgroundActivityKind::Browser => {
                 return Err(agena_runtime::ActivityControlError::not_stoppable(
                     activity_id,
                 ));
             }
         }
-        self.get_activity(activity_id)
+        self.get_activity(activity_id).await
+    }
+
+    async fn pause_activity(
+        &self,
+        activity_id: &str,
+    ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
+        let scheduler = activity_scheduler(self)?;
+        let job_id = cron_activity_job_id(activity_id)?;
+        let job = scheduler
+            .pause(job_id)
+            .await
+            .map_err(|error| agena_runtime::ActivityControlError::internal(error.to_string()))?
+            .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))?;
+        let source_part_id = if let Some(manager) = self.current_snapshot().session_manager() {
+            cron_source_part_id(manager.as_ref(), &job).await
+        } else {
+            None
+        };
+        let activity = scheduled_job_activity(job, source_part_id);
+        self.activities.registry.upsert(activity.clone());
+        Ok(activity)
+    }
+
+    async fn resume_activity(
+        &self,
+        activity_id: &str,
+    ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
+        let scheduler = activity_scheduler(self)?;
+        let job_id = cron_activity_job_id(activity_id)?;
+        let job = scheduler
+            .resume(job_id)
+            .await
+            .map_err(|error| agena_runtime::ActivityControlError::internal(error.to_string()))?
+            .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))?;
+        let source_part_id = if let Some(manager) = self.current_snapshot().session_manager() {
+            cron_source_part_id(manager.as_ref(), &job).await
+        } else {
+            None
+        };
+        let activity = scheduled_job_activity(job, source_part_id);
+        self.activities.registry.upsert(activity.clone());
+        Ok(activity)
+    }
+
+    async fn delete_activity(
+        &self,
+        activity_id: &str,
+    ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
+        let mut activity = self.get_activity(activity_id).await?;
+        let scheduler = activity_scheduler(self)?;
+        let job_id = cron_activity_job_id(activity_id)?;
+        if !scheduler.remove(job_id).await {
+            return Err(agena_runtime::ActivityControlError::not_found(activity_id));
+        }
+        activity.status = agena_domain::BackgroundActivityStatus::Stopped;
+        activity.finished_at_ms = Some(chrono::Utc::now().timestamp_millis());
+        activity.next_event_at_ms = None;
+        activity.cancellable = false;
+        activity.dismissible = true;
+        activity.message = Some("Deleted".to_owned());
+        self.activities.registry.upsert(activity.clone());
+        Ok(activity)
     }
 
     fn dismiss_activity(
@@ -485,8 +907,60 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))
     }
 
-    fn clear_finished(&self) -> usize {
-        self.activities.registry.clear_finished().len()
+    async fn clear_finished(&self) -> Result<usize, agena_runtime::ActivityControlError> {
+        let mut removed = self.activities.registry.clear_finished().len();
+        if let Ok(scheduler) = activity_scheduler(self) {
+            for job in scheduler.list().await {
+                if job.completed && scheduler.remove(job.id).await {
+                    removed += 1;
+                }
+            }
+        }
+        Ok(removed)
+    }
+}
+
+async fn durable_operation_for_live_activity(
+    store: &dyn agena_storage::store::SessionStore,
+    activity: &agena_domain::BackgroundActivity,
+) -> Result<Option<agena_storage::store::BackgroundOperation>, agena_runtime::ActivityControlError>
+{
+    use agena_domain::BackgroundActivityKind;
+    use agena_storage::store::BackgroundOperationKind;
+
+    let query = |kind, external_id: &str| {
+        let external_id = external_id.to_owned();
+        async move {
+            store
+                .background_operation_by_external_id(kind, &external_id)
+                .await
+                .map_err(|error| {
+                    agena_runtime::ActivityControlError::internal(format!(
+                        "resolve durable background activity {}: {error}",
+                        activity.id
+                    ))
+                })
+        }
+    };
+    match activity.kind {
+        BackgroundActivityKind::Shell => {
+            if let Some(operation) = query(BackgroundOperationKind::Shell, &activity.id).await? {
+                return Ok(Some(operation));
+            }
+            query(BackgroundOperationKind::Monitor, &activity.id).await
+        }
+        BackgroundActivityKind::Monitor => {
+            query(BackgroundOperationKind::Monitor, &activity.id).await
+        }
+        BackgroundActivityKind::Task => {
+            let Some(task_id) = activity.id.strip_prefix("task_") else {
+                return Ok(None);
+            };
+            query(BackgroundOperationKind::Task, task_id).await
+        }
+        BackgroundActivityKind::Cron
+        | BackgroundActivityKind::Runtime
+        | BackgroundActivityKind::Browser => Ok(None),
     }
 }
 

@@ -31,6 +31,15 @@ const props = defineProps<{
 const activeGoal = computed(
   () => props.sessionState?.goal || props.sessionState?.session.goal || props.selectedSession?.goal || null,
 )
+
+const backgroundSummary = computed(() => {
+  const activities = props.sessionState?.background_activities || []
+  return ['monitor', 'cron', 'shell', 'task', 'runtime', 'browser']
+    .map((kind) => ({ kind, count: activities.filter((activity) => activity.kind === kind).length }))
+    .filter((item) => item.count > 0)
+    .map((item) => `${item.kind} ${item.count}`)
+    .join(' · ')
+})
 </script>
 
 <template>
@@ -50,6 +59,7 @@ const activeGoal = computed(
           props.sessionState?.active_execution?.phase || 'inactive'
         }}
       </div>
+      <div v-if="backgroundSummary" class="muted mono">background={{ backgroundSummary }}</div>
       <div v-if="activeGoal" class="goal-summary">
         <div class="page-header" style="align-items: flex-start">
           <div>
@@ -122,6 +132,9 @@ const activeGoal = computed(
         </div>
         <div v-else-if="props.sessionState.automation.latest_job?.next_fire_at" class="muted">
           next_automation={{ props.formatMessageTime(props.sessionState.automation.latest_job.next_fire_at) }}
+          <template v-if="props.sessionState.automation.latest_job.timezone">
+            · timezone={{ props.sessionState.automation.latest_job.timezone }}
+          </template>
         </div>
         <div v-if="props.sessionState.automation.latest_job?.last_run?.failure" class="muted">
           automation_error={{ props.sessionState.automation.latest_job.last_run.failure.user.fallback }}

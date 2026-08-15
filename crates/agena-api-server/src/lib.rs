@@ -353,6 +353,18 @@ pub fn router(state: AppState) -> Router {
                 post(rest::stop_activity),
             )
             .route(
+                "/api/v1/activities/{activity_id}/pause",
+                post(rest::pause_activity),
+            )
+            .route(
+                "/api/v1/activities/{activity_id}/resume",
+                post(rest::resume_activity),
+            )
+            .route(
+                "/api/v1/activities/{activity_id}/delete",
+                post(rest::delete_activity),
+            )
+            .route(
                 "/api/v1/activities/{activity_id}/dismiss",
                 post(rest::dismiss_activity),
             )

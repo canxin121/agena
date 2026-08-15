@@ -17,21 +17,36 @@ use agena_tool::CronJobSummary;
 pub(super) async fn execute_create_async(
     executor: &ToolExecutor,
     input: &CronCreateToolInput,
-    session_id: Option<i64>,
+    context: &super::ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
-    let mut job = ScheduledJob::new_cron(
+    let mut job = ScheduledJob::new_cron_in_timezone(
         input.expression.trim(),
         input.prompt.trim(),
         input.max_age_days,
+        input.timezone.trim(),
     )
     .map_err(|e| ToolError::plugin(format!("cron_create: {e}")))?;
     job.set_recovery_policy(
         scheduler_misfire_policy(input.misfire_policy),
         scheduler_retry_policy(&input.retry_policy),
     );
-    if let Some(session_id) = session_id {
-        job.set_owner(session_id);
+    match context.launch_provenance {
+        Some(provenance) => {
+            if context.session_id != Some(provenance.session_id)
+                || context.call_id != Some(provenance.call_id)
+            {
+                return Err(ToolError::plugin(
+                    "cron_create: launch provenance does not match the tool context".to_owned(),
+                ));
+            }
+            job.set_launch_provenance(provenance);
+        }
+        None => {
+            if let Some(session_id) = context.session_id {
+                job.set_owner(session_id);
+            }
+        }
     }
     let id = job.id;
     let next = job.next_fire_at.map(|t| t.to_rfc3339());
@@ -43,8 +58,9 @@ pub(super) async fn execute_create_async(
             .map(|next| format!("Next run {next}"))
             .unwrap_or_else(|| "Created · no next run".to_string()),
         format!(
-            "scheduled cron `{}` -> {:?}",
+            "scheduled cron `{}` in `{}` -> {:?}",
             input.expression,
+            input.timezone,
             next.as_deref()
         ),
     );
@@ -285,6 +301,7 @@ fn normalized_optional(value: Option<String>) -> Option<String> {
 }
 
 fn summarize(j: ScheduledJob) -> CronJobSummary {
+    let timezone = matches!(&j.kind, JobKind::Cron { .. }).then(|| j.cron_timezone().to_owned());
     let (kind, expression, at) = match &j.kind {
         JobKind::Cron { expression, .. } => ("cron", Some(expression.clone()), None),
         JobKind::Once { at } => ("once", None, Some(at.to_rfc3339())),
@@ -293,6 +310,7 @@ fn summarize(j: ScheduledJob) -> CronJobSummary {
         id: j.id.to_string(),
         kind: kind.to_string(),
         expression,
+        timezone,
         at,
         prompt: j.prompt,
         next_fire_at: j.next_fire_at.map(|t| t.to_rfc3339()),

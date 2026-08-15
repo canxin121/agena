@@ -254,20 +254,31 @@ async fn background_events_are_atomic_idempotent_and_safe_under_out_of_order_con
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let launched = engine
-        .submit_user_run(
+        .start_run(
             session_id,
             "owner-a",
+            "continue",
+            json!({"run_kind": "continue", "abort_reason": null}),
+            None,
+            1_000_000,
+        )
+        .await
+        .expect("start assistant launch run");
+    let launched_parts = engine
+        .append_parts(
+            session_id,
+            "owner-a",
+            launched.run_id,
             vec![NewPart::pending(
                 "tool_call",
                 PartRole::Assistant,
                 json!({"operation": {"title": "monitor launch receipt"}}),
             )],
-            None,
             1_000_000,
         )
         .await
         .expect("submit launch receipt");
-    let tool_part_id = launched.parts[1].part_id;
+    let tool_part_id = launched_parts[0].part_id;
     let operation_id = format!("bg_{session_id}_{tool_part_id}");
     let created = engine
         .create_background_operation(
@@ -327,7 +338,7 @@ async fn background_events_are_atomic_idempotent_and_safe_under_out_of_order_con
         notification: {
             let mut part = NewPart::pending(
                 "system_notification",
-                PartRole::Runtime,
+                PartRole::Assistant,
                 json!({
                     "operation_id": "proc_concurrent",
                     "operation_kind": "monitor",
@@ -378,17 +389,16 @@ async fn background_events_are_atomic_idempotent_and_safe_under_out_of_order_con
     assert!(
         notifications
             .iter()
-            .all(|part| part.role == PartRole::Runtime)
+            .all(|part| part.role == PartRole::Assistant)
     );
     assert!(notifications.iter().all(|part| {
-        part.run_id.is_some_and(|run_id| {
-            view.parts.iter().any(|marker| {
-                marker.part_id == run_id
+        part.run_id == Some(launched.run_id)
+            && view.parts.iter().any(|marker| {
+                marker.part_id == launched.run_id
                     && marker.is_run_marker()
-                    && marker.role == PartRole::Runtime
-                    && marker.content["run_kind"] == "runtime_ingress"
+                    && marker.role == PartRole::Assistant
+                    && marker.content["run_kind"] == "continue"
             })
-        })
     }));
 }
 

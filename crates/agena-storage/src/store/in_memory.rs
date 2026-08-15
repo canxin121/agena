@@ -1014,14 +1014,27 @@ impl PersistenceEngine for InMemoryEngine {
         {
             return Err(StoreError::not_found(format!("session {}", new.session_id)));
         }
-        match (new.kind, new.launch_run_id, new.launch_tool_part_id) {
-            (super::BackgroundOperationKind::ScheduledDelivery, None, None) => {}
-            (super::BackgroundOperationKind::ScheduledDelivery, _, _) => {
-                return Err(StoreError::InvalidState(
-                    "scheduled deliveries cannot claim a launch tool part".to_owned(),
-                ));
-            }
-            (_, Some(run_id), Some(tool_part_id)) => {
+        if new.kind != super::BackgroundOperationKind::ScheduledDelivery
+            && let Some(tool_part_id) = new.launch_tool_part_id
+            && let Some(existing) = self
+                .background_operations
+                .read()
+                .expect("background operations lock")
+                .values()
+                .find(|operation| {
+                    operation.session_id == new.session_id
+                        && operation.launch_tool_part_id == Some(tool_part_id)
+                        && operation.kind != super::BackgroundOperationKind::ScheduledDelivery
+                })
+        {
+            return Err(StoreError::InvalidState(format!(
+                "tool part {tool_part_id} already owns background operation {}",
+                existing.operation_id
+            )));
+        }
+        match (new.launch_run_id, new.launch_tool_part_id) {
+            (None, None) if new.kind == super::BackgroundOperationKind::ScheduledDelivery => {}
+            (Some(run_id), Some(tool_part_id)) => {
                 let parts = self.parts.read().expect("parts lock");
                 let run = parts
                     .get(&run_id)
@@ -1047,7 +1060,8 @@ impl PersistenceEngine for InMemoryEngine {
             }
             _ => {
                 return Err(StoreError::InvalidState(
-                    "background tool operations require both launch ids".to_owned(),
+                    "background launch ids must be paired, and non-scheduled operations require them"
+                        .to_owned(),
                 ));
             }
         }
@@ -1263,25 +1277,86 @@ impl PersistenceEngine for InMemoryEngine {
             )));
         }
         let mut notification = request.notification;
-        notification.role = PartRole::Runtime;
         notification.state = PartState::Completed;
-        let projected = self.create_batch(
-            current.session_id,
-            PartRole::Runtime,
-            PartState::Completed,
-            json!({
-                "run_kind": "runtime_ingress",
-                "source": "background_operation",
-                "operation_id": current.operation_id,
-                "abort_reason": null,
-            }),
-            vec![notification],
-            Some(delivery_id.clone()),
-            now_ms,
-        )?;
-        let notification_part = projected.parts.get(1).cloned().ok_or_else(|| {
-            StoreError::InvalidState("runtime ingress omitted notification".into())
-        })?;
+        let serde_json::Value::Object(notification_content) = &mut notification.content else {
+            return Err(StoreError::InvalidState(
+                "background notification content must be a JSON object".to_owned(),
+            ));
+        };
+        notification_content.insert(
+            "delivery_protocol".to_owned(),
+            serde_json::Value::String("provider_round_v1".to_owned()),
+        );
+        let notification_part = if let Some(run_id) = current.launch_run_id {
+            let run = self
+                .parts
+                .read()
+                .expect("parts lock")
+                .get(&run_id)
+                .cloned()
+                .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
+            if !run.is_run_marker()
+                || run.origin_session_id != current.session_id
+                || run.role != PartRole::Assistant
+            {
+                return Err(StoreError::InvalidState(format!(
+                    "background operation {} launch run {run_id} is not an assistant run owned by session {}",
+                    current.operation_id, current.session_id
+                )));
+            }
+            notification.role = PartRole::Assistant;
+            let id = self.next_part_id();
+            let part = Part {
+                part_id: id,
+                kind: notification.kind,
+                role: notification.role,
+                state: notification.state,
+                content: notification.content,
+                summary: notification.summary,
+                visibility: notification.visibility,
+                rendered_markdown: notification.rendered_markdown,
+                parent_part_id: notification.parent_part_id,
+                run_id: Some(run_id),
+                origin_session_id: current.session_id,
+                revision: 1,
+                started_at_ms: now_ms,
+                finished_at_ms: Some(now_ms),
+                created_at_ms: now_ms,
+                updated_at_ms: now_ms,
+                provider_state: None,
+            };
+            self.parts
+                .write()
+                .expect("parts lock")
+                .insert(id, part.clone());
+            self.membership
+                .write()
+                .expect("membership lock")
+                .entry(current.session_id)
+                .or_default()
+                .insert(id);
+            self.bump_session_version(current.session_id, now_ms)?;
+            part
+        } else {
+            notification.role = PartRole::Runtime;
+            let projected = self.create_batch(
+                current.session_id,
+                PartRole::Runtime,
+                PartState::Completed,
+                json!({
+                    "run_kind": "runtime_ingress",
+                    "source": "background_operation",
+                    "operation_id": current.operation_id,
+                    "abort_reason": null,
+                }),
+                vec![notification],
+                Some(delivery_id.clone()),
+                now_ms,
+            )?;
+            projected.parts.get(1).cloned().ok_or_else(|| {
+                StoreError::InvalidState("runtime ingress omitted notification".into())
+            })?
+        };
         let mut next = current;
         if let Some(next_phase) = request.next_phase {
             next.phase = next_phase;
@@ -3381,20 +3456,31 @@ mod tests {
     async fn background_aggregate_matches_sqlite_event_and_delivery_semantics() {
         let (engine, session_id) = setup().await;
         let submitted = engine
-            .submit_user_run(
+            .start_run(
                 session_id,
                 "owner-a",
+                "continue",
+                json!({"run_kind": "continue", "abort_reason": null}),
+                None,
+                engine.now_ms(),
+            )
+            .await
+            .expect("start assistant launch run");
+        let submitted_parts = engine
+            .append_parts(
+                session_id,
+                "owner-a",
+                submitted.run_id,
                 vec![NewPart::pending(
                     "tool_call",
                     PartRole::Assistant,
                     json!({"operation": {"title": "background receipt"}}),
                 )],
-                None,
                 engine.now_ms(),
             )
             .await
             .expect("submit launch receipt");
-        let tool_part_id = submitted.parts[1].part_id;
+        let tool_part_id = submitted_parts[0].part_id;
         let operation_id = format!("bg_{session_id}_{tool_part_id}");
         let created = engine
             .create_background_operation(
@@ -3444,7 +3530,7 @@ mod tests {
         let request = |seq| {
             let mut notification = NewPart::pending(
                 "system_notification",
-                PartRole::Runtime,
+                PartRole::Assistant,
                 json!({"operation_id":"proc_memory","operation_kind":"monitor","status":"event","event_seq":seq}),
             );
             notification.state = PartState::Completed;
@@ -3495,5 +3581,18 @@ mod tests {
             delivery.phase == BackgroundDeliveryPhase::Pending
                 && delivery.notification_part_id.is_some()
         }));
+        let view = engine
+            .load_session(session_id)
+            .await
+            .expect("load transcript");
+        assert!(
+            view.parts
+                .iter()
+                .filter(|part| part.kind == "system_notification")
+                .all(|part| {
+                    part.role == PartRole::Assistant && part.run_id == Some(submitted.run_id)
+                }),
+            "AI-launched events append to their assistant launch run"
+        );
     }
 }

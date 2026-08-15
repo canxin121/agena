@@ -18,9 +18,9 @@ use tracing_subscriber::{fmt::writer::MakeWriter, layer::SubscriberExt, util::Su
 pub(crate) async fn run(request: TuiLaunchRequest) -> Result<(), AgenaProcessError> {
     let args = request.args;
     let launch_args = TuiLaunchArgs {
-        center_url: super::center_client::resolve_center_url(args.center),
-        center_token: args.center_token,
-        center_password: args.center_password,
+        server_url: super::server_client::resolve_server_url(args.server),
+        server_token: args.server_token,
+        server_password: args.server_password,
         workspace_root: args.workspace,
         session: args.session,
         search: args.search,
@@ -35,9 +35,9 @@ pub(crate) async fn run(request: TuiLaunchRequest) -> Result<(), AgenaProcessErr
 
 #[derive(Debug, Clone, Default)]
 pub struct TuiLaunchArgs {
-    pub center_url: String,
-    pub center_token: Option<String>,
-    pub center_password: Option<String>,
+    pub server_url: String,
+    pub server_token: Option<String>,
+    pub server_password: Option<String>,
     pub workspace_root: Option<PathBuf>,
     pub session: Option<i64>,
     pub search: Option<String>,
@@ -126,7 +126,7 @@ pub fn init_tui_tracing(
     args: &TuiLaunchArgs,
 ) -> Result<(), AgenaProcessError> {
     // The TUI is a pure HTTP client; runtime-owned tracing is configured by
-    // the processing center, so the terminal uses the default runtime filter.
+    // the server, so the terminal uses the default runtime filter.
     let tracing = agena_runtime::RuntimeTracingConfiguration::default();
     let log_writer = resolve_tui_log_writer(args)?;
 
@@ -151,21 +151,21 @@ pub fn init_tui_tracing(
 pub async fn run_remote(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> {
     let workspace_root = args.workspace_root.clone().unwrap_or(env::current_dir()?);
     let backend = TuiBackend::connect_remote_authenticated(
-        args.center_url.as_str(),
+        args.server_url.as_str(),
         workspace_root,
-        args.center_token.as_deref(),
-        args.center_password.as_deref(),
+        args.server_token.as_deref(),
+        args.server_password.as_deref(),
     )
     .await
     .map_err(|error| {
         AgenaProcessError::Internal(format!(
-            "cannot connect TUI to processing center {}: {error:#}",
-            args.center_url
+            "cannot connect TUI to server {}: {error:#}",
+            args.server_url
         ))
     })?;
-    // The center's resolved UI preferences are cached on the backend at
+    // The server's resolved UI preferences are cached on the backend at
     // connect; project them into the terminal configuration so the client
-    // launches with the same theme/graphics/locale as the center's runtime.
+    // launches with the same theme/graphics/locale as the server's runtime.
     let preferences = backend.tui_preferences();
     let tui_config = agena_tui_app::tui_config_from_preferences(&preferences);
     let i18n = I18n::resolve(args.locale.as_deref(), preferences.locale.as_deref());

@@ -58,7 +58,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         .with_state(shared_state.clone());
 
     let api_state = ApiV2State::from_application(application);
-    let center_identity = api_state.center().clone();
+    let server_identity = api_state.server().clone();
     let agena_api = agena_api_server::router(api_state).layer(middleware::from_fn_with_state(
         shared_state.clone(),
         crate::server::auth::require_ui_auth,
@@ -82,7 +82,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         .with_context(|| format!("failed to bind listener on {addr}"))?;
     let bound_addr = listener
         .local_addr()
-        .context("failed to inspect the processing-center listener")?;
+        .context("failed to inspect the server listener")?;
     let advertised_ip = if bound_addr.ip().is_unspecified() {
         if bound_addr.is_ipv6() {
             std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
@@ -96,10 +96,10 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         "http://{}",
         SocketAddr::new(advertised_ip, bound_addr.port())
     );
-    let center_record =
-        crate::server::center_record::publish_record(endpoint_url.clone(), &center_identity)?;
+    let server_record =
+        crate::server::server_record::publish_record(endpoint_url.clone(), &server_identity)?;
 
-    tracing::info!(center_id = %center_identity.id, "Agena listening on {endpoint_url}");
+    tracing::info!(server_id = %server_identity.id, "Agena listening on {endpoint_url}");
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
@@ -107,6 +107,6 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         })
         .await
         .context("server exited unexpectedly");
-    drop(center_record);
+    drop(server_record);
     result
 }

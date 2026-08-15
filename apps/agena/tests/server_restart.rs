@@ -16,7 +16,7 @@ use std::{
 
 use agena_api::{
     commands::{Command, CommandResult, ResolveWorkspaceParams, SubmitRunParams},
-    resource::{CenterEndpointRecord, RunOptions, SessionExecutionResource, SessionState},
+    resource::{ServerEndpointRecord, RunOptions, SessionExecutionResource, SessionState},
 };
 use agena_client::AgenaClient;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -27,12 +27,12 @@ use tokio::{
     sync::mpsc,
 };
 
-struct CenterProcess {
+struct ServerProcess {
     child: Child,
     log_path: PathBuf,
 }
 
-impl CenterProcess {
+impl ServerProcess {
     fn pid(&self) -> u32 {
         self.child.id()
     }
@@ -47,7 +47,7 @@ impl CenterProcess {
     }
 }
 
-impl Drop for CenterProcess {
+impl Drop for ServerProcess {
     fn drop(&mut self) {
         self.crash();
     }
@@ -125,7 +125,7 @@ impl Drop for StdioThinClient {
 
 fn spawn_stdio_thin_client(
     kind: StdioThinClientKind,
-    center_url: &str,
+    server_url: &str,
     workspace: &Path,
     audit_path: &Path,
     log_path: &Path,
@@ -138,13 +138,13 @@ fn spawn_stdio_thin_client(
     let stderr = log.try_clone().expect("clone stdio thin-client log");
     let mut command = ProcessCommand::new(env!("CARGO_BIN_EXE_agena"));
     command
-        .arg("--center")
-        .arg(center_url)
+        .arg("--server")
+        .arg(server_url)
         .current_dir(workspace)
         .env(RUNTIME_OWNERSHIP_AUDIT_ENV, audit_path)
         .env(RUNTIME_BOOTSTRAP_FORBIDDEN_ENV, "1")
-        .env_remove("AGENA_CENTER_TOKEN")
-        .env_remove("AGENA_CENTER_PASSWORD")
+        .env_remove("AGENA_SERVER_TOKEN")
+        .env_remove("AGENA_SERVER_PASSWORD")
         .env_remove("AGENA_DATABASE_URL")
         .env_remove("AGENA_DATABASE_PATH")
         .stdin(Stdio::piped())
@@ -206,7 +206,7 @@ impl Drop for PtyThinClient {
 }
 
 fn spawn_remote_tui(
-    center_url: &str,
+    server_url: &str,
     workspace: &Path,
     session_id: i64,
     audit_path: &Path,
@@ -220,8 +220,8 @@ fn spawn_remote_tui(
         })
         .expect("open TUI integration PTY");
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_agena"));
-    command.arg("--center");
-    command.arg(center_url);
+    command.arg("--server");
+    command.arg(server_url);
     command.arg("tui");
     command.arg("--workspace");
     command.arg(workspace);
@@ -233,8 +233,8 @@ fn spawn_remote_tui(
     command.env(RUNTIME_OWNERSHIP_AUDIT_ENV, audit_path);
     command.env(RUNTIME_BOOTSTRAP_FORBIDDEN_ENV, "1");
     for name in [
-        "AGENA_CENTER_TOKEN",
-        "AGENA_CENTER_PASSWORD",
+        "AGENA_SERVER_TOKEN",
+        "AGENA_SERVER_PASSWORD",
         "AGENA_DATABASE_URL",
         "AGENA_DATABASE_PATH",
     ] {
@@ -335,7 +335,7 @@ async fn wait_for_process_output(process: &mut StdioThinClient, needle: &str, la
     }
 }
 
-fn spawn_center(
+fn spawn_server(
     workspace: &Path,
     database_path: &Path,
     record_path: &Path,
@@ -343,25 +343,25 @@ fn spawn_center(
     log_path: &Path,
     port: u16,
     extra_environment: &[(&str, &Path)],
-) -> CenterProcess {
+) -> ServerProcess {
     let log = OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_path)
-        .expect("open center integration log");
-    let stderr = log.try_clone().expect("clone center integration log");
+        .expect("open server integration log");
+    let stderr = log.try_clone().expect("clone server integration log");
     let mut command = ProcessCommand::new(env!("CARGO_BIN_EXE_agena"));
     command
         .arg("--database-path")
         .arg(database_path)
-        .arg("center")
+        .arg("server")
         .arg("--host")
         .arg("127.0.0.1")
         .arg("--port")
         .arg(port.to_string())
         .arg("--workspace")
         .arg(workspace)
-        .env("AGENA_CENTER_RECORD", record_path)
+        .env("AGENA_SERVER_RECORD", record_path)
         .env("AGENA_SERVER_DATA_DIR", server_data_dir)
         .env_remove("AGENA_SERVER_UI_PASSWORD")
         .stdin(Stdio::null())
@@ -370,32 +370,32 @@ fn spawn_center(
     for (name, value) in extra_environment {
         command.env(name, value);
     }
-    let child = command.spawn().expect("spawn foreground processing center");
-    CenterProcess {
+    let child = command.spawn().expect("spawn foreground server");
+    ServerProcess {
         child,
         log_path: log_path.to_owned(),
     }
 }
 
-async fn wait_for_center(
-    process: &CenterProcess,
+async fn wait_for_server(
+    process: &ServerProcess,
     record_path: &Path,
-) -> (AgenaClient, agena_api::resource::CenterIdentityResource) {
+) -> (AgenaClient, agena_api::resource::ServerIdentityResource) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
         if let Ok(bytes) = std::fs::read(record_path)
-            && let Ok(record) = serde_json::from_slice::<CenterEndpointRecord>(&bytes)
+            && let Ok(record) = serde_json::from_slice::<ServerEndpointRecord>(&bytes)
             && record.pid == process.pid()
             && let Ok(client) = AgenaClient::new(record.url.as_str())
-            && let Ok(identity) = client.center_identity().await
+            && let Ok(identity) = client.server_identity().await
             && identity.pid == process.pid()
-            && identity.id == record.center_id
+            && identity.id == record.server_id
         {
             return (client, identity);
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "processing center {} did not become ready; log:\n{}",
+            "server {} did not become ready; log:\n{}",
             process.pid(),
             process.log()
         );
@@ -491,7 +491,7 @@ async fn spawn_crash_recovery_provider() -> (
                 .await
                 .expect("write provider SSE headers");
             if post_index == 1 {
-                // Keep the original model turn in flight until the center is
+                // Keep the original model turn in flight until the server is
                 // killed. EOF proves the provider socket belonged to the
                 // crashed process and lets this loop serve the restarted one.
                 let mut byte = [0_u8; 1];
@@ -507,7 +507,7 @@ async fn spawn_crash_recovery_provider() -> (
             let events = VecDeque::from([
                 serde_json::json!({
                     "type": "response.output_text.delta",
-                    "delta": "recovered after center restart"
+                    "delta": "recovered after server restart"
                 }),
                 serde_json::json!({
                     "type": "response.completed",
@@ -609,28 +609,28 @@ fn execution_text(execution: &SessionExecutionResource) -> String {
 
 fn unused_loopback_port() -> u16 {
     let listener =
-        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserve center restart auth port");
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("reserve server restart auth port");
     listener
         .local_addr()
-        .expect("reserved center restart auth address")
+        .expect("reserved server restart auth address")
         .port()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn killed_center_restarts_with_interrupted_then_reconciled_session() {
-    let fixture = tempfile::tempdir().expect("create center restart fixture");
+async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
+    let fixture = tempfile::tempdir().expect("create server restart fixture");
     let workspace = fixture.path().join("workspace");
     let server_data = fixture.path().join("server-data");
     let database_path = fixture.path().join("sessions.db");
-    let record_path = fixture.path().join("center.json");
-    let log_path = fixture.path().join("center.log");
+    let record_path = fixture.path().join("server.json");
+    let log_path = fixture.path().join("server.log");
     std::fs::create_dir_all(&workspace).expect("create process-test workspace");
     std::fs::create_dir_all(&server_data).expect("create process-test server data");
 
     let (provider_url, mut provider_requests, provider) = spawn_crash_recovery_provider().await;
     write_isolated_project_config(&workspace, provider_url.as_str());
 
-    let mut first_center = spawn_center(
+    let mut first_server = spawn_server(
         &workspace,
         &database_path,
         &record_path,
@@ -639,11 +639,11 @@ async fn killed_center_restarts_with_interrupted_then_reconciled_session() {
         0,
         &[],
     );
-    let (client_a, first_identity) = wait_for_center(&first_center, &record_path).await;
+    let (client_a, first_identity) = wait_for_server(&first_server, &record_path).await;
     let status = client_a
         .runtime_status()
         .await
-        .expect("read first center runtime status");
+        .expect("read first server runtime status");
     assert_eq!(
         status
             .default_selection
@@ -658,9 +658,9 @@ async fn killed_center_restarts_with_interrupted_then_reconciled_session() {
             create_if_missing: true,
         }))
         .await
-        .expect("resolve center restart workspace");
+        .expect("resolve server restart workspace");
     let CommandResult::Workspace(workspace_resource) = workspace_result else {
-        panic!("processing center returned the wrong workspace result");
+        panic!("server returned the wrong workspace result");
     };
     let session = client_a
         .create_session(workspace_resource.id, "crash recovery", None)
@@ -671,7 +671,7 @@ async fn killed_center_restarts_with_interrupted_then_reconciled_session() {
             session_id: session.id,
             options: RunOptions::default(),
             document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
-                text: "hold until the center crashes".to_owned(),
+                text: "hold until the server crashes".to_owned(),
             }]),
         })
         .await
@@ -695,7 +695,7 @@ async fn killed_center_restarts_with_interrupted_then_reconciled_session() {
             .map(|active| active.execution_id)
     );
 
-    first_center.crash();
+    first_server.crash();
     drop(client_a);
 
     // Advance only the durable lease clock. This is equivalent to waiting
@@ -703,16 +703,16 @@ async fn killed_center_restarts_with_interrupted_then_reconciled_session() {
     let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
     let pool = sqlx::SqlitePool::connect(database_url.as_str())
         .await
-        .expect("open killed center database");
+        .expect("open killed server database");
     let aged =
         sqlx::query("UPDATE agena_execution_leases SET heartbeat_at_ms = heartbeat_at_ms - 60000")
             .execute(&pool)
             .await
-            .expect("age killed center lease");
+            .expect("age killed server lease");
     assert_eq!(aged.rows_affected(), 1, "one hanging lease must be durable");
     pool.close().await;
 
-    let mut second_center = spawn_center(
+    let mut second_server = spawn_server(
         &workspace,
         &database_path,
         &record_path,
@@ -721,14 +721,14 @@ async fn killed_center_restarts_with_interrupted_then_reconciled_session() {
         0,
         &[],
     );
-    let (client_b, second_identity) = wait_for_center(&second_center, &record_path).await;
+    let (client_b, second_identity) = wait_for_server(&second_server, &record_path).await;
     assert_ne!(first_identity.id, second_identity.id);
     assert_ne!(first_identity.pid, second_identity.pid);
 
     let overview = client_b
         .session_overview(Some(workspace_resource.id), 10)
         .await
-        .expect("read restarted center overview");
+        .expect("read restarted server overview");
     assert!(
         overview.running.iter().all(|item| item.id != session.id),
         "a stale lease must never remain visible as running after restart"
@@ -738,7 +738,7 @@ async fn killed_center_restarts_with_interrupted_then_reconciled_session() {
             .attention
             .iter()
             .any(|item| item.id == session.id && item.state == SessionState::Interrupted),
-        "the restarted center must publish the stale run as interrupted before opening it"
+        "the restarted server must publish the stale run as interrupted before opening it"
     );
 
     let reconciled = client_b
@@ -769,7 +769,7 @@ async fn killed_center_restarts_with_interrupted_then_reconciled_session() {
     let completed = wait_for_execution(&client_b, session.id, |execution| {
         execution.session.state == SessionState::Ready
             && execution.active_execution.is_none()
-            && execution_text(execution).contains("recovered after center restart")
+            && execution_text(execution).contains("recovered after server restart")
     })
     .await;
     assert!(completed.pending_interactive_requests.is_empty());
@@ -783,20 +783,20 @@ async fn killed_center_restarts_with_interrupted_then_reconciled_session() {
         "the interrupted run and explicit recovery run must remain distinct"
     );
 
-    second_center.crash();
+    second_server.crash();
     provider.abort();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center() {
+async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server() {
     let fixture = tempfile::tempdir().expect("create process-ownership fixture");
     let workspace = fixture.path().join("workspace");
     let server_data = fixture.path().join("server-data");
     let database_path = fixture.path().join("sessions.db");
     let scheduler_database_path = fixture.path().join("scheduler.db");
-    let record_path = fixture.path().join("center.json");
+    let record_path = fixture.path().join("server.json");
     let audit_path = fixture.path().join("runtime-ownership.jsonl");
-    let center_log_path = fixture.path().join("center.log");
+    let server_log_path = fixture.path().join("server.log");
     let rpc_log_path = fixture.path().join("rpc-server.log");
     let mcp_log_path = fixture.path().join("mcp-server.log");
     std::fs::create_dir_all(&workspace).expect("create ownership-test workspace");
@@ -805,23 +805,23 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center(
     let (provider_url, mut provider_requests, provider) = spawn_crash_recovery_provider().await;
     write_isolated_project_config(&workspace, provider_url.as_str());
 
-    let center_environment = [
+    let server_environment = [
         (RUNTIME_OWNERSHIP_AUDIT_ENV, audit_path.as_path()),
         (
             "AGENA_SCHEDULER_DATABASE_PATH",
             scheduler_database_path.as_path(),
         ),
     ];
-    let mut center = spawn_center(
+    let mut server = spawn_server(
         &workspace,
         &database_path,
         &record_path,
         &server_data,
-        &center_log_path,
+        &server_log_path,
         0,
-        &center_environment,
+        &server_environment,
     );
-    let (web_client, center_identity) = wait_for_center(&center, &record_path).await;
+    let (web_client, server_identity) = wait_for_server(&server, &record_path).await;
     let status = web_client
         .runtime_status()
         .await
@@ -843,7 +843,7 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center(
         .await
         .expect("resolve process-ownership workspace");
     let CommandResult::Workspace(workspace_resource) = workspace_result else {
-        panic!("processing center returned the wrong ownership workspace result");
+        panic!("server returned the wrong ownership workspace result");
     };
     let title = "ownership-process-gate";
     let session = web_client
@@ -855,11 +855,11 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center(
             session_id: session.id,
             options: RunOptions::default(),
             document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
-                text: "keep the center-owned execution running while clients attach".to_owned(),
+                text: "keep the server-owned execution running while clients attach".to_owned(),
             }]),
         })
         .await
-        .expect("submit center-owned process-ownership run");
+        .expect("submit server-owned process-ownership run");
     tokio::time::timeout(Duration::from_secs(10), provider_requests.recv())
         .await
         .expect("fake provider receives ownership-test request")
@@ -882,30 +882,30 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center(
     // This snapshot-plus-SSE attachment uses the same public transport as the
     // Web conversation runtime and remains connected while the native clients
     // below start. The submitted HTTP request itself is already detached from
-    // the center-owned execution task.
+    // the server-owned execution task.
     let web_connection = web_client
         .connect_session(session.id)
         .await
         .expect("attach Web-style session snapshot plus SSE");
     assert_eq!(web_connection.snapshot.session.state, SessionState::Running);
 
-    let center_url = record_path
+    let server_url = record_path
         .exists()
         .then(|| {
             std::fs::read(&record_path)
                 .ok()
-                .and_then(|bytes| serde_json::from_slice::<CenterEndpointRecord>(&bytes).ok())
+                .and_then(|bytes| serde_json::from_slice::<ServerEndpointRecord>(&bytes).ok())
                 .map(|record| record.url)
         })
         .flatten()
-        .expect("read ownership-test center URL");
-    let mut tui = spawn_remote_tui(center_url.as_str(), &workspace, session.id, &audit_path);
+        .expect("read ownership-test server URL");
+    let mut tui = spawn_remote_tui(server_url.as_str(), &workspace, session.id, &audit_path);
     tokio::time::sleep(Duration::from_millis(1_500)).await;
     tui.assert_running();
 
     let mut rpc = spawn_stdio_thin_client(
         StdioThinClientKind::RpcServer,
-        center_url.as_str(),
+        server_url.as_str(),
         &workspace,
         &audit_path,
         &rpc_log_path,
@@ -920,7 +920,7 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center(
 
     let mut mcp = spawn_stdio_thin_client(
         StdioThinClientKind::McpServer,
-        center_url.as_str(),
+        server_url.as_str(),
         &workspace,
         &audit_path,
         &mcp_log_path,
@@ -943,8 +943,8 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center(
     }));
 
     let cli = ProcessCommand::new(env!("CARGO_BIN_EXE_agena"))
-        .arg("--center")
-        .arg(center_url.as_str())
+        .arg("--server")
+        .arg(server_url.as_str())
         .arg("sessions")
         .arg("list")
         .arg("--format")
@@ -952,8 +952,8 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center(
         .current_dir(&workspace)
         .env(RUNTIME_OWNERSHIP_AUDIT_ENV, &audit_path)
         .env(RUNTIME_BOOTSTRAP_FORBIDDEN_ENV, "1")
-        .env_remove("AGENA_CENTER_TOKEN")
-        .env_remove("AGENA_CENTER_PASSWORD")
+        .env_remove("AGENA_SERVER_TOKEN")
+        .env_remove("AGENA_SERVER_PASSWORD")
         .env_remove("AGENA_DATABASE_URL")
         .env_remove("AGENA_DATABASE_PATH")
         .output()
@@ -973,22 +973,22 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center(
     mcp.assert_running("MCP stdio bridge");
     assert_eq!(
         web_client
-            .center_identity()
+            .server_identity()
             .await
-            .expect("center survives simultaneous clients")
+            .expect("server survives simultaneous clients")
             .id,
-        center_identity.id
+        server_identity.id
     );
 
     let records = runtime_ownership_records(&audit_path);
     assert_eq!(
         records.len(),
         1,
-        "only the processing center may compose Runtime: {records:#?}"
+        "only the server may compose Runtime: {records:#?}"
     );
     let record = &records[0];
     assert_eq!(record.schema, 1);
-    assert_eq!(record.pid, center.pid());
+    assert_eq!(record.pid, server.pid());
     assert_eq!(
         record.workspace_root,
         std::fs::canonicalize(&workspace).expect("canonical ownership-test workspace")
@@ -1008,7 +1008,7 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center(
     let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
     let pool = sqlx::SqlitePool::connect(database_url.as_str())
         .await
-        .expect("open live center database for ownership assertion");
+        .expect("open live server database for ownership assertion");
     let lease_owners = sqlx::query_scalar::<_, String>(
         "SELECT DISTINCT owner_id FROM agena_execution_leases ORDER BY owner_id",
     )
@@ -1018,7 +1018,7 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center(
     assert_eq!(
         lease_owners.len(),
         1,
-        "all active session execution must belong to one center Runtime"
+        "all active session execution must belong to one server Runtime"
     );
     let session_lease_owner = sqlx::query_scalar::<_, String>(
         "SELECT owner_id FROM agena_execution_leases WHERE session_id = ?",
@@ -1031,7 +1031,7 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center(
     pool.close().await;
 
     // Every client disconnects without sending cancel. The provider remains
-    // blocked and the same center execution/lease must still be observable.
+    // blocked and the same server execution/lease must still be observable.
     drop(web_connection);
     drop(tui);
     rpc.close("IDE rpc-server");
@@ -1058,26 +1058,26 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_center(
         "thin clients must not start a second provider continuation"
     );
 
-    center.crash();
+    server.crash();
     provider.abort();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn password_client_reauthenticates_after_center_restart_without_reconstruction() {
-    let fixture = tempfile::tempdir().expect("create center reauthentication fixture");
+async fn password_client_reauthenticates_after_server_restart_without_reconstruction() {
+    let fixture = tempfile::tempdir().expect("create server reauthentication fixture");
     let workspace = fixture.path().join("workspace");
     let server_data = fixture.path().join("server-data");
     let database_path = fixture.path().join("sessions.db");
     let scheduler_database_path = fixture.path().join("scheduler.db");
-    let record_path = fixture.path().join("center.json");
-    let log_path = fixture.path().join("center.log");
+    let record_path = fixture.path().join("server.json");
+    let log_path = fixture.path().join("server.log");
     std::fs::create_dir_all(&workspace).expect("create reauthentication workspace");
     std::fs::create_dir_all(&server_data).expect("create reauthentication server data");
 
     let (provider_url, mut provider_requests, provider) = spawn_crash_recovery_provider().await;
     write_isolated_project_config(&workspace, provider_url.as_str());
-    let password = "center-restart-password-secret";
-    let center_environment = [
+    let password = "server-restart-password-secret";
+    let server_environment = [
         ("AGENA_SERVER_UI_PASSWORD", Path::new(password)),
         (
             "AGENA_SCHEDULER_DATABASE_PATH",
@@ -1086,41 +1086,41 @@ async fn password_client_reauthenticates_after_center_restart_without_reconstruc
     ];
     let port = unused_loopback_port();
 
-    let mut first_center = spawn_center(
+    let mut first_server = spawn_server(
         &workspace,
         &database_path,
         &record_path,
         &server_data,
         &log_path,
         port,
-        &center_environment,
+        &server_environment,
     );
-    let (_, first_identity) = wait_for_center(&first_center, &record_path).await;
-    let record = std::fs::read_to_string(&record_path).expect("read first auth center record");
+    let (_, first_identity) = wait_for_server(&first_server, &record_path).await;
+    let record = std::fs::read_to_string(&record_path).expect("read first auth server record");
     assert!(!record.contains(password));
-    let center_url = format!("http://127.0.0.1:{port}");
-    let client = AgenaClient::connect_center(center_url.as_str(), None, Some(password))
+    let server_url = format!("http://127.0.0.1:{port}");
+    let client = AgenaClient::connect_server(server_url.as_str(), None, Some(password))
         .await
-        .expect("connect password client to first center");
+        .expect("connect password client to first server");
     client
         .runtime_status()
         .await
-        .expect("password token accesses first center");
+        .expect("password token accesses first server");
     let debug = format!("{client:?}");
     assert!(debug.contains("password-refreshable"));
     assert!(!debug.contains(password));
 
-    first_center.crash();
-    let mut second_center = spawn_center(
+    first_server.crash();
+    let mut second_server = spawn_server(
         &workspace,
         &database_path,
         &record_path,
         &server_data,
         &log_path,
         port,
-        &center_environment,
+        &server_environment,
     );
-    let (_, second_identity) = wait_for_center(&second_center, &record_path).await;
+    let (_, second_identity) = wait_for_server(&second_server, &record_path).await;
     assert_ne!(second_identity.id, first_identity.id);
     assert_ne!(second_identity.pid, first_identity.pid);
 
@@ -1130,12 +1130,12 @@ async fn password_client_reauthenticates_after_center_restart_without_reconstruc
     client
         .runtime_status()
         .await
-        .expect("same password client reauthenticates after center restart");
+        .expect("same password client reauthenticates after server restart");
     assert_eq!(
         client
-            .center_identity()
+            .server_identity()
             .await
-            .expect("read restarted center identity from same client")
+            .expect("read restarted server identity from same client")
             .id,
         second_identity.id
     );
@@ -1144,6 +1144,6 @@ async fn password_client_reauthenticates_after_center_restart_without_reconstruc
         "authentication refresh must not start a provider request"
     );
 
-    second_center.crash();
+    second_server.crash();
     provider.abort();
 }

@@ -11,9 +11,9 @@
 //! - **Command** — one-shot CLI commands (`exec`, `config`, `provider`,
 //!   `session`, and friends).
 //!
-//! The processing center owns [`agena_runtime`], the session store, scheduler,
+//! The server owns [`agena_runtime`], the session store, scheduler,
 //! plugin host, and execution leases. TUI and JSON-RPC modes are thin clients
-//! of that center; explicit embedded TUI mode remains available for recovery
+//! of that server; explicit embedded TUI mode remains available for recovery
 //! and development.
 
 #![allow(unused_imports)]

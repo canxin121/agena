@@ -22,13 +22,13 @@ use async_trait::async_trait;
 pub(crate) async fn run(request: RpcServerRequest) -> Result<(), AgenaProcessError> {
     if request.database_url.is_some() || request.database_path.is_some() {
         return Err(AgenaProcessError::Configuration(
-            "--database-url/--database-path belong to the processing center and cannot be used by rpc-server"
+            "--database-url/--database-path belong to the server and cannot be used by rpc-server"
                 .to_owned(),
         ));
     }
     if !request.config_override_expressions.is_empty() {
         return Err(AgenaProcessError::Configuration(
-            "--set overrides belong to the processing center and cannot be used by rpc-server"
+            "--set overrides belong to the server and cannot be used by rpc-server"
                 .to_owned(),
         ));
     }
@@ -39,12 +39,12 @@ pub(crate) async fn run(request: RpcServerRequest) -> Result<(), AgenaProcessErr
         .clone()
         .map(Ok)
         .unwrap_or_else(std::env::current_dir)?;
-    let center_url = super::super::center_client::resolve_center_url(request.args.center.clone());
+    let server_url = super::super::server_client::resolve_server_url(request.args.server.clone());
     let backend = AgenaAppServerBackend::connect(
-        center_url.as_str(),
+        server_url.as_str(),
         workspace_root,
-        request.args.center_token.as_deref(),
-        request.args.center_password.as_deref(),
+        request.args.server_token.as_deref(),
+        request.args.server_password.as_deref(),
     )
     .await?;
     match request.args.transport {
@@ -63,16 +63,16 @@ struct AgenaAppServerBackend {
 
 impl AgenaAppServerBackend {
     async fn connect(
-        center_url: &str,
+        server_url: &str,
         workspace_root: std::path::PathBuf,
-        center_token: Option<&str>,
-        center_password: Option<&str>,
+        server_token: Option<&str>,
+        server_password: Option<&str>,
     ) -> Result<Self, AgenaProcessError> {
-        let client = AgenaClient::connect_center(center_url, center_token, center_password)
+        let client = AgenaClient::connect_server(server_url, server_token, server_password)
             .await
             .map_err(|error| {
                 process_client_error(
-                    "processing-center readiness/authentication handshake failed",
+                    "server readiness/authentication handshake failed",
                     &error,
                 )
             })?;
@@ -84,25 +84,25 @@ impl AgenaAppServerBackend {
             .await
             .map_err(|error| {
                 process_client_error(
-                    "failed to resolve the IDE workspace through the processing center",
+                    "failed to resolve the IDE workspace through the server",
                     &error,
                 )
             })?;
         let CommandResult::Workspace(workspace) = workspace else {
             return Err(AgenaProcessError::Internal(
-                "processing center returned the wrong result while resolving the IDE workspace"
+                "server returned the wrong result while resolving the IDE workspace"
                     .to_owned(),
             ));
         };
         let providers = client.query(Query::ListProviders).await.map_err(|error| {
             process_client_error(
-                "failed to read the processing center's provider catalog",
+                "failed to read the server's provider catalog",
                 &error,
             )
         })?;
         let QueryResult::Providers(providers) = providers else {
             return Err(AgenaProcessError::Internal(
-                "processing center returned the wrong provider-list result".to_owned(),
+                "server returned the wrong provider-list result".to_owned(),
             ));
         };
         Ok(Self {
@@ -193,7 +193,7 @@ impl AgenaAppServerBackend {
                 .map_err(client_backend_error)?;
             let QueryResult::Sessions(page) = response else {
                 return Err(AppServerError::Backend(
-                    "processing center returned the wrong session-list result".to_owned(),
+                    "server returned the wrong session-list result".to_owned(),
                 ));
             };
             for session in page.items {
@@ -212,7 +212,7 @@ impl AgenaAppServerBackend {
             cursor = page.page.next_cursor;
             if cursor.is_none() {
                 return Err(AppServerError::Backend(
-                    "processing center returned a truncated session page without a cursor"
+                    "server returned a truncated session page without a cursor"
                         .to_owned(),
                 ));
             }
@@ -485,19 +485,19 @@ mod tests {
             database_url: Some("sqlite::memory:".to_owned()),
             database_path: None,
             args: agena_cli::RpcServerArgs {
-                center: Some("http://127.0.0.1:3210".to_owned()),
-                center_token: None,
-                center_password: None,
+                server: Some("http://127.0.0.1:3210".to_owned()),
+                server_token: None,
+                server_password: None,
                 workspace: None,
                 transport: RpcServerTransport::Stdio,
             },
         })
         .await
-        .expect_err("database ownership must stay at the center");
+        .expect_err("database ownership must stay at the server");
         assert!(
             error
                 .to_string()
-                .contains("belong to the processing center")
+                .contains("belong to the server")
         );
     }
 }

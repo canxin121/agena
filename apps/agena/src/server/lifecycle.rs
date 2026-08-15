@@ -4,12 +4,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agena_api::resource::{CenterEndpointRecord, CenterIdentityResource};
-use agena_cli::{ServerArgs, UiCookieSameSite};
+use agena_api::resource::{ServerEndpointRecord, ServerIdentityResource};
+use agena_cli::ServerArgs;
 use agena_client::AgenaClient;
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::center_record;
+use super::server_record;
 
 pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     args.action = None;
@@ -21,17 +21,17 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
             || args.ui_password.is_some()
         {
             bail!(
-                "the Agena user service is already installed; run `agena center install` with the new options to update its definition"
+                "the Agena user service is already installed; run `agena server install` with the new options to update its definition"
             );
         }
-        let record_path = center_record::record_path();
-        if let Ok(record) = center_record::read_record(record_path.as_path())
+        let record_path = server_record::record_path();
+        if let Ok(record) = server_record::read_record(record_path.as_path())
             && let Ok(client) = AgenaClient::new(record.url.as_str())
-            && let Ok(identity) = client.center_identity().await
+            && let Ok(identity) = client.server_identity().await
             && ensure_record_matches(&record, &identity).is_ok()
         {
             println!(
-                "Installed Agena processing center is already running at {} (pid {}, id {}).",
+                "Installed Agena server is already running at {} (pid {}, id {}).",
                 record.url, identity.pid, identity.id
             );
             return Ok(());
@@ -39,25 +39,25 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
         super::user_service::start()?;
         let (record, identity) = wait_for_installed_service().await?;
         println!(
-            "Started installed Agena processing center at {} (pid {}, id {}).",
+            "Started installed Agena server at {} (pid {}, id {}).",
             record.url, identity.pid, identity.id
         );
         return Ok(());
     }
     let intended_url = intended_url(&args)?;
     if let Ok(identity) = AgenaClient::new(intended_url.as_str())?
-        .center_identity()
+        .server_identity()
         .await
     {
         println!(
-            "Agena processing center is already running at {intended_url} (pid {}, id {}).",
+            "Agena server is already running at {intended_url} (pid {}, id {}).",
             identity.pid, identity.id
         );
         return Ok(());
     }
 
     let executable = std::env::current_exe().context("failed to resolve the Agena executable")?;
-    let record_path = center_record::record_path();
+    let record_path = server_record::record_path();
     let state_dir = record_path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -66,19 +66,19 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     let log_dir = state_dir.join("logs");
     fs::create_dir_all(&log_dir).with_context(|| {
         format!(
-            "failed to create center log directory {}",
+            "failed to create server log directory {}",
             log_dir.display()
         )
     })?;
-    let log_path = log_dir.join("center.log");
+    let log_path = log_dir.join("server.log");
     let stdout = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)
-        .with_context(|| format!("failed to open center log {}", log_path.display()))?;
+        .with_context(|| format!("failed to open server log {}", log_path.display()))?;
     let stderr = stdout
         .try_clone()
-        .context("failed to clone the center log handle")?;
+        .context("failed to clone the server log handle")?;
 
     let mut command = Command::new(executable);
     for expression in &args.overrides {
@@ -91,7 +91,7 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
         command.arg("--database-path").arg(database_path);
     }
     command
-        .arg("center")
+        .arg("server")
         .arg("--host")
         .arg(&args.host)
         .arg("--port")
@@ -99,23 +99,11 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     if let Some(workspace_root) = &args.workspace_root {
         command.arg("--workspace").arg(workspace_root);
     }
-    if let Some(ui_dir) = &args.ui_dir {
-        command.arg("--ui-dir").arg(ui_dir);
-    }
-    for origin in &args.cors_origin {
-        command.arg("--cors-origin").arg(origin);
-    }
-    if args.cors_allow_all {
-        command.arg("--cors-allow-all");
-    }
-    command
-        .arg("--ui-cookie-samesite")
-        .arg(cookie_same_site_name(&args.ui_cookie_samesite));
     if let Some(password) = &args.ui_password {
         command.env("AGENA_SERVER_UI_PASSWORD", password);
     }
     command
-        .env("AGENA_CENTER_RECORD", &record_path)
+        .env("AGENA_SERVER_RECORD", &record_path)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
@@ -126,21 +114,21 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     }
     let child = command
         .spawn()
-        .context("failed to spawn the processing center")?;
+        .context("failed to spawn the server")?;
     let child_pid = child.id();
     drop(child);
 
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Ok(identity) = AgenaClient::new(intended_url.as_str())?
-            .center_identity()
+            .server_identity()
             .await
             && identity.pid == child_pid
         {
-            let record = center_record::read_record(&record_path)?;
+            let record = server_record::read_record(&record_path)?;
             ensure_record_matches(&record, &identity)?;
             println!(
-                "Started Agena processing center at {} (pid {}, id {}). Logs: {}",
+                "Started Agena server at {} (pid {}, id {}). Logs: {}",
                 record.url,
                 identity.pid,
                 identity.id,
@@ -150,7 +138,7 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
         }
         if Instant::now() >= deadline {
             bail!(
-                "processing center pid {child_pid} did not become ready at {intended_url}; inspect {}",
+                "server pid {child_pid} did not become ready at {intended_url}; inspect {}",
                 log_path.display()
             );
         }
@@ -159,8 +147,8 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
 }
 
 pub(crate) async fn status() -> Result<()> {
-    let path = center_record::record_path();
-    let record = match center_record::read_record(&path) {
+    let path = server_record::record_path();
+    let record = match server_record::read_record(&path) {
         Ok(record) => record,
         Err(error)
             if error
@@ -169,12 +157,12 @@ pub(crate) async fn status() -> Result<()> {
         {
             if super::user_service::is_installed() {
                 println!(
-                    "Agena processing center user service is installed but not running (no record at {}).",
+                    "Agena server user service is installed but not running (no record at {}).",
                     path.display()
                 );
             } else {
                 println!(
-                    "Agena processing center is not running (no record at {}).",
+                    "Agena server is not running (no record at {}).",
                     path.display()
                 );
             }
@@ -183,57 +171,57 @@ pub(crate) async fn status() -> Result<()> {
         Err(error) => return Err(error),
     };
     let identity = AgenaClient::new(record.url.as_str())?
-        .center_identity()
+        .server_identity()
         .await
-        .with_context(|| format!("center record at {} is stale", path.display()))?;
+        .with_context(|| format!("server record at {} is stale", path.display()))?;
     ensure_record_matches(&record, &identity)?;
     println!(
-        "Agena processing center is running at {} (pid {}, id {}, started {}).",
-        record.url, record.pid, record.center_id, record.started_at
+        "Agena server is running at {} (pid {}, id {}, started {}).",
+        record.url, record.pid, record.server_id, record.started_at
     );
     Ok(())
 }
 
 pub(crate) async fn stop() -> Result<()> {
     if super::user_service::is_installed() {
-        let record = center_record::read_record(center_record::record_path().as_path()).ok();
+        let record = server_record::read_record(server_record::record_path().as_path()).ok();
         super::user_service::stop()?;
         if let Some(record) = record {
             wait_until_identity_stops(&record).await?;
             println!(
-                "Stopped installed Agena processing center pid {} (id {}).",
-                record.pid, record.center_id
+                "Stopped installed Agena server pid {} (id {}).",
+                record.pid, record.server_id
             );
         } else {
-            println!("Stopped installed Agena processing center user service.");
+            println!("Stopped installed Agena server user service.");
         }
         return Ok(());
     }
-    let path = center_record::record_path();
-    let record = center_record::read_record(&path)?;
+    let path = server_record::record_path();
+    let record = server_record::read_record(&path)?;
     let identity = AgenaClient::new(record.url.as_str())?
-        .center_identity()
+        .server_identity()
         .await
-        .with_context(|| format!("refusing to stop stale center record {}", path.display()))?;
+        .with_context(|| format!("refusing to stop stale server record {}", path.display()))?;
     ensure_record_matches(&record, &identity)?;
     send_interrupt(identity.pid)?;
 
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let still_same = AgenaClient::new(record.url.as_str())?
-            .center_identity()
+            .server_identity()
             .await
             .is_ok_and(|current| current.id == identity.id && current.pid == identity.pid);
         if !still_same {
             println!(
-                "Stopped Agena processing center pid {} (id {}).",
+                "Stopped Agena server pid {} (id {}).",
                 identity.pid, identity.id
             );
             return Ok(());
         }
         if Instant::now() >= deadline {
             bail!(
-                "processing center pid {} did not stop after SIGINT",
+                "server pid {} did not stop after SIGINT",
                 identity.pid
             );
         }
@@ -246,11 +234,11 @@ pub(crate) async fn install(mut args: ServerArgs) -> Result<()> {
     let intended_url = intended_url(&args)?;
     if !super::user_service::is_installed()
         && let Ok(identity) = AgenaClient::new(intended_url.as_str())?
-            .center_identity()
+            .server_identity()
             .await
     {
         bail!(
-            "a detached processing center is already running at {intended_url} (pid {}, id {}); stop it before installing the user service",
+            "a detached server is already running at {intended_url} (pid {}, id {}); stop it before installing the user service",
             identity.pid,
             identity.id
         );
@@ -273,7 +261,7 @@ pub(crate) async fn install(mut args: ServerArgs) -> Result<()> {
 }
 
 pub(crate) async fn uninstall() -> Result<()> {
-    let record = center_record::read_record(center_record::record_path().as_path()).ok();
+    let record = server_record::read_record(server_record::record_path().as_path()).ok();
     let path = super::user_service::uninstall()?;
     if let Some(record) = record {
         wait_until_identity_stops(&record).await?;
@@ -285,20 +273,20 @@ pub(crate) async fn uninstall() -> Result<()> {
     Ok(())
 }
 
-async fn wait_for_installed_service() -> Result<(CenterEndpointRecord, CenterIdentityResource)> {
-    let path = center_record::record_path();
+async fn wait_for_installed_service() -> Result<(ServerEndpointRecord, ServerIdentityResource)> {
+    let path = server_record::record_path();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        if let Ok(record) = center_record::read_record(&path)
+        if let Ok(record) = server_record::read_record(&path)
             && let Ok(client) = AgenaClient::new(record.url.as_str())
-            && let Ok(identity) = client.center_identity().await
+            && let Ok(identity) = client.server_identity().await
             && ensure_record_matches(&record, &identity).is_ok()
         {
             return Ok((record, identity));
         }
         if Instant::now() >= deadline {
             bail!(
-                "installed processing center did not become ready; inspect the user service and {}",
+                "installed server did not become ready; inspect the user service and {}",
                 path.display()
             );
         }
@@ -306,19 +294,19 @@ async fn wait_for_installed_service() -> Result<(CenterEndpointRecord, CenterIde
     }
 }
 
-async fn wait_until_identity_stops(record: &CenterEndpointRecord) -> Result<()> {
+async fn wait_until_identity_stops(record: &ServerEndpointRecord) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let still_same = AgenaClient::new(record.url.as_str())?
-            .center_identity()
+            .server_identity()
             .await
-            .is_ok_and(|current| current.id == record.center_id && current.pid == record.pid);
+            .is_ok_and(|current| current.id == record.server_id && current.pid == record.pid);
         if !still_same {
             return Ok(());
         }
         if Instant::now() >= deadline {
             bail!(
-                "processing center pid {} did not stop after the user service was stopped",
+                "server pid {} did not stop after the user service was stopped",
                 record.pid
             );
         }
@@ -327,14 +315,14 @@ async fn wait_until_identity_stops(record: &CenterEndpointRecord) -> Result<()> 
 }
 
 fn ensure_record_matches(
-    record: &CenterEndpointRecord,
-    identity: &CenterIdentityResource,
+    record: &ServerEndpointRecord,
+    identity: &ServerIdentityResource,
 ) -> Result<()> {
     if !record.matches(identity) {
         bail!(
-            "center identity mismatch: record has pid {} / id {}, endpoint has pid {} / id {}; refusing lifecycle action",
+            "server identity mismatch: record has pid {} / id {}, endpoint has pid {} / id {}; refusing lifecycle action",
             record.pid,
-            record.center_id,
+            record.server_id,
             identity.pid,
             identity.id
         );
@@ -346,7 +334,7 @@ fn intended_url(args: &ServerArgs) -> Result<String> {
     let ip = args
         .host
         .parse::<std::net::IpAddr>()
-        .with_context(|| format!("invalid center host {}", args.host))?;
+        .with_context(|| format!("invalid server host {}", args.host))?;
     let advertised = if ip.is_unspecified() {
         if ip.is_ipv6() {
             std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
@@ -362,29 +350,20 @@ fn intended_url(args: &ServerArgs) -> Result<String> {
     ))
 }
 
-fn cookie_same_site_name(value: &UiCookieSameSite) -> &'static str {
-    match value {
-        UiCookieSameSite::Auto => "auto",
-        UiCookieSameSite::Strict => "strict",
-        UiCookieSameSite::Lax => "lax",
-        UiCookieSameSite::None => "none",
-    }
-}
-
 #[cfg(unix)]
 fn send_interrupt(pid: u32) -> Result<()> {
-    let pid = i32::try_from(pid).map_err(|_| anyhow!("center pid {pid} is out of range"))?;
+    let pid = i32::try_from(pid).map_err(|_| anyhow!("server pid {pid} is out of range"))?;
     // SAFETY: `kill` is called with a positive, identity-validated PID and a
-    // non-destructive SIGINT so the center can run its graceful shutdown path.
+    // non-destructive SIGINT so the server can run its graceful shutdown path.
     let result = unsafe { libc::kill(pid, libc::SIGINT) };
     if result == 0 {
         Ok(())
     } else {
-        Err(std::io::Error::last_os_error()).context("failed to signal the processing center")
+        Err(std::io::Error::last_os_error()).context("failed to signal the server")
     }
 }
 
 #[cfg(not(unix))]
 fn send_interrupt(_pid: u32) -> Result<()> {
-    bail!("`agena center stop` is not implemented on this platform")
+    bail!("`agena server stop` is not implemented on this platform")
 }

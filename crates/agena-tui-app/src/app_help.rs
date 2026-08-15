@@ -78,6 +78,10 @@ impl App {
                 HelpPreset::Usage,
                 ui_text::t(&self.i18n, "context-help-context-usage"),
             ),
+            Route::Hub(_) => self.help_for(
+                HelpPreset::Hub,
+                ui_text::t(&self.i18n, "context-help-context-hub"),
+            ),
             Route::Activities(_) => self.help_for(
                 HelpPreset::ActionPane,
                 ui_text::t(&self.i18n, "context-help-context-activities"),

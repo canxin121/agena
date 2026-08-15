@@ -40,6 +40,7 @@ pub enum ContextHelpPreset {
     BasicList,
     Settings,
     ActionPane,
+    Hub,
     PermissionRule,
     Provider,
     ProviderModel,
@@ -486,6 +487,29 @@ pub fn preset_specs(
                     ("Esc", "context-help-key-back"),
                 ],
             )],
+            tips,
+        )),
+        Hub => Some((
+            "context-help-summary-hub",
+            vec![
+                (
+                    navigation,
+                    vec![
+                        ("Tab / Shift+Tab", "context-help-key-focus-next"),
+                        ("↑ / ↓", "context-help-key-move"),
+                        ("Enter", "context-help-key-open"),
+                        ("Esc", "context-help-key-back"),
+                    ],
+                ),
+                (
+                    actions,
+                    vec![
+                        ("Ctrl+N / c", "context-help-key-create-session"),
+                        ("l", "context-help-key-session-list"),
+                        ("Ctrl+R", "context-help-key-refresh"),
+                    ],
+                ),
+            ],
             tips,
         )),
         PermissionRule => Some((

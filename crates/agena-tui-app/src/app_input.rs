@@ -287,6 +287,7 @@ impl App {
                 self.handle_permission_rule_studio_overlay_key(key, dialog)
             }
             Route::SessionSearch(dialog) => self.handle_session_search_overlay_key(key, dialog),
+            Route::Hub(state) => self.handle_hub_key(key, state),
             Route::CommandPalette(dialog) => self.handle_command_palette_key(key, dialog),
             Route::SkillPicker(dialog) => self.handle_skill_picker_key(key, dialog),
             Route::SkillStudio(dialog) => self.handle_skill_studio_key(key, dialog),

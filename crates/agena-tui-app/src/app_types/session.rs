@@ -10,6 +10,9 @@ use super::{
 };
 #[cfg(test)]
 use agena_api::resource::RunResource;
+pub(crate) use agena_tui_session::session_hub::{
+    SessionHubItem, SessionHubPresentation, SessionHubSection, SessionHubSectionKind,
+};
 pub(crate) use agena_tui_session::session_search::{SessionSearchItem, SessionSearchOverlay};
 
 /// App-owned concrete effect map for the TUI-owned generic selection picker.

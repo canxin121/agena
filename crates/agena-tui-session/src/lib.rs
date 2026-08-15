@@ -8,11 +8,15 @@
 //! and the [`SessionController`] that tracks the active session from events.
 
 pub mod session_helpers;
+pub mod session_hub;
 pub mod session_list;
 pub mod session_navigation;
 pub mod session_search;
 pub mod session_view;
 
+pub use session_hub::{
+    SessionHubItem, SessionHubPresentation, SessionHubSection, SessionHubSectionKind,
+};
 pub use session_list::{
     SessionListAction, SessionListEffect, SessionListItem, SessionListPresentation, SessionListView,
 };

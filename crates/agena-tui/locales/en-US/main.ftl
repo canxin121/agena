@@ -39,6 +39,25 @@ session-summary-children = {$count} child
 sessions-empty = No sessions found
 sessions-loading-more = Loading more sessions...
 sessions-more = More sessions available
+hub-title = Session Hub
+hub-action-create = new session
+hub-action-list = session list
+hub-action-refresh = refresh
+hub-hint-move = move
+hub-hint-focus = focus
+hub-hint-open = open
+hub-hint-back = back
+hub-section-attention = Needs attention
+hub-section-running = Running
+hub-section-recent = Recent
+hub-empty-attention = No sessions need attention
+hub-empty-running = No sessions running
+hub-empty-recent = No recent sessions
+hub-empty = No sessions yet. Create one with Ctrl+N.
+context-help-context-hub = Session Hub
+context-help-summary-hub = See sessions needing attention, running, and recent, and create a new session.
+context-help-key-create-session = Create a new session.
+context-help-key-session-list = Open the full session list.
 
 transcript-header-lines = lines {$first}-{$last}/{$total} ({$percent}%)
 transcript-header-find = find={$query} ({$current}/{$total})

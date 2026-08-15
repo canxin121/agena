@@ -12,7 +12,8 @@ impl App {
             | Route::Activities(_)
             | Route::PlanViewer(_)
             | Route::SettingsStudio(_)
-            | Route::ClientVersionsStudio(_) => false,
+            | Route::ClientVersionsStudio(_)
+            | Route::Hub(_) => false,
             Route::PermissionStudio(dialog) => dialog.editor.is_some(),
             Route::PermissionRuleStudio(dialog) => dialog.editor.is_some(),
             Route::SessionSearch(_)
@@ -48,7 +49,8 @@ impl App {
                 | Route::Activities(_)
                 | Route::PlanViewer(_)
                 | Route::SettingsStudio(_)
-                | Route::ClientVersionsStudio(_) => {
+                | Route::ClientVersionsStudio(_)
+                | Route::Hub(_) => {
                     handled_route = true;
                 }
                 Route::PermissionStudio(dialog) => {

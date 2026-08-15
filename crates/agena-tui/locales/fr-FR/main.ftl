@@ -11,6 +11,25 @@ session-running = en cours
 sessions-empty = Aucune session trouvee
 sessions-loading-more = Chargement de sessions supplementaires...
 sessions-more = D'autres sessions sont disponibles
+hub-title = Hub de session
+hub-action-create = nouvelle session
+hub-action-list = liste des sessions
+hub-action-refresh = actualiser
+hub-hint-move = déplacer
+hub-hint-focus = focus
+hub-hint-open = ouvrir
+hub-hint-back = retour
+hub-section-attention = Nécessite une attention
+hub-section-running = En cours
+hub-section-recent = Récentes
+hub-empty-attention = Aucune session ne nécessite une attention
+hub-empty-running = Aucune session en cours
+hub-empty-recent = Aucune session récente
+hub-empty = Aucune session pour l'instant. Créez-en une avec Ctrl+N.
+context-help-context-hub = Hub de session
+context-help-summary-hub = Consultez les sessions nécessitant une attention, en cours et récentes, et créez une nouvelle session.
+context-help-key-create-session = Créer une nouvelle session.
+context-help-key-session-list = Ouvrir la liste complète des sessions.
 
 transcript-header-lines = lignes {$first}-{$last}/{$total} ({$percent}%)
 transcript-header-find = recherche={$query} ({$current}/{$total})

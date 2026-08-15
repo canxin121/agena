@@ -11,6 +11,25 @@ session-running = 実行中
 sessions-empty = セッションが見つかりません
 sessions-loading-more = さらにセッションを読み込み中...
 sessions-more = さらに読み込めるセッションがあります
+hub-title = セッションハブ
+hub-action-create = 新規セッション
+hub-action-list = セッション一覧
+hub-action-refresh = 更新
+hub-hint-move = 移動
+hub-hint-focus = フォーカス
+hub-hint-open = 開く
+hub-hint-back = 戻る
+hub-section-attention = 対応が必要
+hub-section-running = 実行中
+hub-section-recent = 最近
+hub-empty-attention = 対応が必要なセッションはありません
+hub-empty-running = 実行中のセッションはありません
+hub-empty-recent = 最近のセッションはありません
+hub-empty = まだセッションがありません。Ctrl+N で作成してください。
+context-help-context-hub = セッションハブ
+context-help-summary-hub = 対応が必要なセッション、実行中、最近のセッションを表示し、新しいセッションを作成します。
+context-help-key-create-session = 新しいセッションを作成します。
+context-help-key-session-list = セッションの完全な一覧を開きます。
 
 transcript-header-lines = 行 {$first}-{$last}/{$total} ({$percent}%)
 transcript-header-find = 検索={$query} ({$current}/{$total})

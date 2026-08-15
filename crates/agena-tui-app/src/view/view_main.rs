@@ -160,6 +160,7 @@ impl App {
                 | Route::SessionModelChooser(_)
                 | Route::Timeline(_)
                 | Route::PlanViewer(_)
+                | Route::Hub(_)
         ) {
             return 0;
         }

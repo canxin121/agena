@@ -5488,12 +5488,12 @@ mod new_session_model_stack_tests {
     }
 
     #[tokio::test]
-    async fn default_bootstrap_opens_the_shared_session_overview() {
+    async fn default_bootstrap_opens_the_session_hub() {
         let mut app = app_without_session().await;
 
         app.bootstrap();
 
-        assert!(matches!(app.current_route, Route::SessionSearch(_)));
+        assert!(matches!(app.current_route, Route::Hub(_)));
         assert_eq!(app.transcript.session_id, None);
     }
 

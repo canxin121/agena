@@ -121,6 +121,9 @@ pub(crate) async fn run_runtime_cases(
             "dsv4f runtime chain",
             &[
                 "agena.session.get",
+                "agena.session.environment",
+                "agena.session.model",
+                "agena.session.tokens",
                 "agena.session.rename",
                 "agena.interaction.ask",
                 "agena.interaction.notify",
@@ -143,6 +146,55 @@ pub(crate) async fn run_runtime_cases(
         "session.get lacks session payload"
     );
     report.pass("session.get");
+    let environment = harness
+        .run_execution_tool(
+            session,
+            "session.environment",
+            "session.environment",
+            json!({}),
+            PendingReply::None,
+            true,
+        )
+        .await?;
+    ensure!(
+        environment
+            .payload()
+            .get("workspace_root")
+            .and_then(Value::as_str)
+            .is_some(),
+        "session.environment lacks workspace_root"
+    );
+    report.pass("session.environment");
+    let model = harness
+        .run_execution_tool(
+            session,
+            "session.model",
+            "session.model",
+            json!({}),
+            PendingReply::None,
+            true,
+        )
+        .await?;
+    ensure!(
+        model.payload().get("session_id").is_some(),
+        "session.model lacks session_id"
+    );
+    report.pass("session.model");
+    let tokens = harness
+        .run_execution_tool(
+            session,
+            "session.tokens",
+            "session.tokens",
+            json!({}),
+            PendingReply::None,
+            true,
+        )
+        .await?;
+    ensure!(
+        tokens.payload().get("current_tokens").is_some(),
+        "session.tokens lacks current_tokens"
+    );
+    report.pass("session.tokens");
     let renamed = harness
         .run_execution_tool(
             session,

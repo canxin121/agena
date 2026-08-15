@@ -1279,13 +1279,13 @@ mod tests {
                 "assistant",
                 serde_json::json!({
                     "name": "tools_search",
-                    "input": { "query": "status" },
+                    "input": { "query": "model" },
                     "tool_api_call": {
                         "function": "tools_search",
                         "arguments": {
                             "fields": [{
                                 "name": "query",
-                                "value": { "kind": "text", "value": "status" }
+                                "value": { "kind": "text", "value": "model" }
                             }]
                         }
                     },
@@ -1296,7 +1296,7 @@ mod tests {
                             "input": {
                                 "fields": [{
                                     "name": "query",
-                                    "value": { "kind": "text", "value": "status" }
+                                    "value": { "kind": "text", "value": "model" }
                                 }]
                             },
                             "tool_api_call": {
@@ -1304,7 +1304,7 @@ mod tests {
                                 "arguments": { "fields": [] }
                             }
                         },
-                        "title": "tools_search · Search tools · status · 3/3",
+                        "title": "tools_search · Search tools · model · 3/3",
                         "summary": "Returned 3 of 3 matching tools; no more results.",
                         "result": {
                             "state": "completed",
@@ -1312,13 +1312,13 @@ mod tests {
                                 "id": "text",
                                 "type": "log",
                                 "stream": "stdout",
-                                "text": "Matching tools for status:\n- context.status"
+                                "text": "Matching tools for model:\n- session.model"
                             }],
                             "model_preview": {
-                                "text": "Matching tools for status:\n- context.status"
+                                "text": "Matching tools for model:\n- session.model"
                             },
                             "display": {
-                                "title": "tools_search · Search tools · status · 3/3",
+                                "title": "tools_search · Search tools · model · 3/3",
                                 "summary": "Returned 3 of 3 matching tools; no more results."
                             }
                         },
@@ -1340,7 +1340,7 @@ mod tests {
         );
         assert_eq!(
             operation.model_output.text,
-            "Matching tools for status:\n- context.status"
+            "Matching tools for model:\n- session.model"
         );
         assert_eq!(operation.blocks.len(), 1);
         assert_eq!(

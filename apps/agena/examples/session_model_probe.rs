@@ -1,3 +1,5 @@
+//! Probe the bundled `session.model` tool against an execution-ready session.
+
 use std::{path::PathBuf, time::Duration};
 
 use agena_domain::{ComposerDocument, ComposerNode, StructuredObject, ToolInvocation};
@@ -12,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
         .with_ansi(false)
         .with_env_filter(tracing_subscriber::EnvFilter::new("error"))
         .init();
-    let probe_root = PathBuf::from("/tmp/agena-context-status-probe.rpHqxW");
+    let probe_root = PathBuf::from("/tmp/agena-session-model-probe.rpHqxW");
     let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
         workspace_root: Some(PathBuf::from("/Volumes/Rc20/Projects/agena")),
         config_override_expressions: Vec::new(),
@@ -26,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     let services = runtime.application_services();
 
-    // The context.status tool must be wired in by the bundled context plugin.
+    // The session.model tool must be wired in by the bundled session plugin.
     let tool_service = services.tools.clone();
     let tool_names = tool_service
         .available_runtime_tools()
@@ -35,8 +37,8 @@ async fn main() -> anyhow::Result<()> {
         .map(|tool| tool.name)
         .collect::<Vec<_>>();
     anyhow::ensure!(
-        tool_names.iter().any(|name| name == "context.status"),
-        "context.status not available; tools = {tool_names:?}"
+        tool_names.iter().any(|name| name == "session.model"),
+        "session.model not available; tools = {tool_names:?}"
     );
 
     let commands = services
@@ -49,11 +51,11 @@ async fn main() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("session tool execution unavailable"))?;
 
     // Create a session with NO model override — the exact broken scenario
-    // where `execution.selection` is empty and `context.status` used to
-    // return null for every model field.
+    // where `execution.selection` is empty and `session.model` must still
+    // return the effective non-null model fields.
     let created = commands
         .create_session(SessionCreateRequest {
-            title: "context.status default-model probe".to_owned(),
+            title: "session.model default-model probe".to_owned(),
             parent_session_id: None,
         })
         .await?;
@@ -86,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
         .execute_session_tool(
             session_id,
             ToolInvocation::new(
-                "context.status",
+                "session.model",
                 StructuredObject::try_from(serde_json::json!({})).unwrap(),
             ),
         )
@@ -105,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
     let payload = summary
         .payload
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("context.status returned no payload"))?;
+        .ok_or_else(|| anyhow::anyhow!("session.model returned no payload"))?;
     let provider = payload
         .get("model_provider_id")
         .and_then(serde_json::Value::as_str)
@@ -116,7 +118,7 @@ async fn main() -> anyhow::Result<()> {
         .filter(|value| !value.is_empty());
     anyhow::ensure!(
         provider.is_some() && model.is_some(),
-        "context.status returned null/empty model identity; payload = {payload}"
+        "session.model returned null/empty model identity; payload = {payload}"
     );
     println!(
         "OK effective model: {} / {}",

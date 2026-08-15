@@ -15,7 +15,7 @@
 //! prefer-unless-simple anchor.
 //!
 //! Environment facts are intentionally not injected here: they are served on
-//! demand by the `context.environment` tool because they can change
+//! demand by the `session.environment` tool because they can change
 //! mid-session.
 
 use crate::session::model::Session;

@@ -63,9 +63,9 @@ async fn main() -> anyhow::Result<()> {
                 request_override: Default::default(),
                 system: Some(
                     "Execute this exact 3-round tool sequence using the Tool API.\n\
-                     ROUND 1: call tools_search twice in parallel (query \"context status\" and query \"session rename\").\n\
-                     ROUND 2: after both ROUND 1 results, call tools_help twice in parallel (tool \"context.status\" and tool \"session.rename\").\n\
-                     ROUND 3: after both ROUND 2 results, call no further tool and answer exactly REAL_TOOL_LOOP_OK context.status session.rename"
+                     ROUND 1: call tools_search twice in parallel (query \"session model\" and query \"session rename\").\n\
+                     ROUND 2: after both ROUND 1 results, call tools_help twice in parallel (tool \"session.model\" and tool \"session.rename\").\n\
+                     ROUND 3: after both ROUND 2 results, call no further tool and answer exactly REAL_TOOL_LOOP_OK session.model session.rename"
                         .to_owned(),
                 ),
                 temperature: Some(0.0),
@@ -219,7 +219,7 @@ async fn main() -> anyhow::Result<()> {
 
     anyhow::ensure!(tool_parts.len() == 4, "expected four tool calls");
     anyhow::ensure!(
-        final_text.contains("REAL_TOOL_LOOP_OK context.status session.rename"),
+        final_text.contains("REAL_TOOL_LOOP_OK session.model session.rename"),
         "final model response missing success marker"
     );
     anyhow::ensure!(error_parts.is_empty(), "execution persisted an error part");

@@ -91,7 +91,6 @@ pub(crate) fn bundled_plugin_manifests() -> Vec<(PluginManifest, Option<String>)
     add!(crate::tool::new_claude_plugin());
 
     add!(crate::tool::new_code_plugin());
-    add!(crate::tool::new_context_plugin());
     add!(crate::tool::new_cron_plugin());
     add!(crate::tool::new_fs_plugin());
     add!(crate::tool::new_interaction_plugin());

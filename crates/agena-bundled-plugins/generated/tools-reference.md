@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **24 plugins and 142 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **23 plugins and 143 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, concurrency / streaming / strict runtime flags, examples, an input parameter table, and the full input / output JSON Schema.
 - The `list` / `search` / `help` / `tags` / `call` tools of `agena.tools` are the stable Tool API gateway handlers; all other tools are ordinary execution tools.
@@ -17,7 +17,6 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.chatgpt`](#agenachatgpt) — OpenAI Responses and image service tools exposed as ordinary Agena tools. (17 tools)
 - [`agena.claude`](#agenaclaude) — Anthropic Claude server and client tools exposed as ordinary Agena tools. (11 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (2 tools)
-- [`agena.context`](#agenacontext) — Safe context-window budget, model identity, and compaction status. (2 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (9 tools)
 - [`agena.gemini`](#agenagemini) — Google Gemini Interactions and image capabilities exposed as ordinary Agena tools. (11 tools)
@@ -30,7 +29,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.plan`](#agenaplan) — Plan orchestration and plan-autorun tools. (6 tools)
 - [`agena.report`](#agenareport) — Structured review and verification findings. (1 tools)
 - [`agena.schema_lab`](#agenaschema_lab) — Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor. (2 tools)
-- [`agena.session`](#agenasession) — Runtime session tools. (2 tools)
+- [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (5 tools)
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
 - [`agena.shell`](#agenashell) — Shell command execution and background process tools. (4 tools)
 - [`agena.skills`](#agenaskills) — Discover and read plain-text skills and slash commands. (7 tools)
@@ -3089,46 +3088,6 @@ Structured code search and syntax inspection tools.
   "required": [
     "path"
   ],
-  "type": "object"
-}
-```
-
-## agena.context
-
-**Version** `0.1.0` · **Tools** 2
-
-Safe context-window budget, model identity, and compaction status.
-
-### environment
-
-`agena.context.environment` · **Summary**: Inspect the current session environment: working directory, git state, shell, OS, and session identity.
-
-**Tags**: `query` `discovery`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {},
-  "type": "object"
-}
-```
-
-### status
-
-`agena.context.status` · **Summary**: Inspect remaining context budget, model identity, and compaction health without exposing prompts.
-
-**Tags**: `query` `discovery`
-
-**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {},
   "type": "object"
 }
 ```
@@ -6748,13 +6707,47 @@ Deep built-in JSON Schema fixture used to demo and test the structured plugin co
 
 ## agena.session
 
-**Version** `0.1.0` · **Tools** 2
+**Version** `0.1.0` · **Tools** 5
 
-Runtime session tools.
+Inspect and manage the current runtime session and its environment, model, and token state.
+
+### environment
+
+`agena.session.environment` · **Summary**: Inspect the current runtime environment: working directory, git state, shell, OS, and architecture.
+
+**Tags**: `query` `discovery`
+
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "type": "object"
+}
+```
 
 ### get
 
 `agena.session.get` · **Summary**: Inspect the current session metadata.
+
+**Tags**: `query` `discovery`
+
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "type": "object"
+}
+```
+
+### model
+
+`agena.session.model` · **Summary**: Inspect the current session model identity, runtime modes, and model token limits.
 
 **Tags**: `query` `discovery`
 
@@ -6796,6 +6789,23 @@ Runtime session tools.
   "required": [
     "title"
   ],
+  "type": "object"
+}
+```
+
+### tokens
+
+`agena.session.tokens` · **Summary**: Inspect current and projected token use, effective limits, and remaining session budget.
+
+**Tags**: `query` `discovery`
+
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
   "type": "object"
 }
 ```
@@ -8514,7 +8524,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ### help
 
-`agena.tools.help` · **Tool API gateway handler** · **Summary**: Get reusable schema, examples, and usage notes for one Agena execution tool.
+`agena.tools.help` · **Tool API gateway handler** · **Summary**: Get reusable schemas, examples, and usage notes for one Agena execution tool or a batch of tools.
 
 **Tags**: `query` `discovery`
 
@@ -8523,18 +8533,35 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `tool` | `string` | ✓ | — | Exact name of the Agena execution tool to inspect, such as `fs.read`.<br>Use a name returned by `tools_list` or `tools_search`. |
+| `tool` | `ToolApiStringBatch` | ✓ | — | One exact execution-tool name, or a non-empty array of exact names, to<br>inspect. Use names returned by `tools_list` or `tools_search`. |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "ToolApiStringBatch": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ],
+      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use names returned by `tools_list` or `tools_search`.",
+      "x-agena-order": "000000"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "tool": {
-      "description": "Exact name of the Agena execution tool to inspect, such as `fs.read`.\nUse a name returned by `tools_list` or `tools_search`.",
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
+      "$ref": "#/$defs/ToolApiStringBatch",
+      "description": "One exact execution-tool name, or a non-empty array of exact names, to\ninspect. Use names returned by `tools_list` or `tools_search`."
     }
   },
   "required": [
@@ -8546,7 +8573,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ### list
 
-`agena.tools.list` · **Tool API gateway handler** · **Summary**: Enumerate current tools.
+`agena.tools.list` · **Tool API gateway handler** · **Summary**: Enumerate current tools across one plugin or a batch of plugin targets.
 
 **Tags**: `query` `discovery`
 
@@ -8557,13 +8584,30 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 | --- | --- | --- | --- | --- |
 | `limit` | `integer / null` | — | — | Maximum number of tools to return. |
 | `offset` | `integer / null` | — | — | Number of tools to skip before returning results. |
-| `plugin` | `string / null` | — | — | Optional plugin filter: only list tools published by this plugin id,<br>such as `agena.fs` or `agena.web`. |
+| `plugin` | `ToolApiStringBatch / null` | — | — | Optional plugin selector: one plugin id or a non-empty array of ids,<br>with OR semantics. It scopes tools by owner for `tools_list` and selects<br>plugin records directly for `plugins_list`. |
 | `tag` | `string / null` | — | — | Optional single tag filter such as `query` or `network`. |
 | `tags` | `array<string>` | — | — | Optional tag filters. When present, all normalized tags must match. |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "ToolApiStringBatch": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ]
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "limit": {
@@ -8587,11 +8631,15 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
       "x-agena-order": "000000"
     },
     "plugin": {
-      "description": "Optional plugin filter: only list tools published by this plugin id,\nsuch as `agena.fs` or `agena.web`.",
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ToolApiStringBatch"
+        },
+        {
+          "type": "null"
+        }
       ],
+      "description": "Optional plugin selector: one plugin id or a non-empty array of ids,\nwith OR semantics. It scopes tools by owner for `tools_list` and selects\nplugin records directly for `plugins_list`.",
       "x-agena-order": "000002"
     },
     "tag": {
@@ -8620,7 +8668,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ### plugins_list
 
-`agena.tools.plugins_list` · **Summary**: Enumerate the current live plugin inventory with version, summary, tags, and tool count.
+`agena.tools.plugins_list` · **Summary**: Enumerate one or many selected plugins with version, summary, tags, and tool count.
 
 **Tags**: `query` `discovery`
 
@@ -8631,13 +8679,30 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 | --- | --- | --- | --- | --- |
 | `limit` | `integer / null` | — | — | Maximum number of tools to return. |
 | `offset` | `integer / null` | — | — | Number of tools to skip before returning results. |
-| `plugin` | `string / null` | — | — | Optional plugin filter: only list tools published by this plugin id,<br>such as `agena.fs` or `agena.web`. |
+| `plugin` | `ToolApiStringBatch / null` | — | — | Optional plugin selector: one plugin id or a non-empty array of ids,<br>with OR semantics. It scopes tools by owner for `tools_list` and selects<br>plugin records directly for `plugins_list`. |
 | `tag` | `string / null` | — | — | Optional single tag filter such as `query` or `network`. |
 | `tags` | `array<string>` | — | — | Optional tag filters. When present, all normalized tags must match. |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "ToolApiStringBatch": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ]
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "limit": {
@@ -8661,11 +8726,15 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
       "x-agena-order": "000000"
     },
     "plugin": {
-      "description": "Optional plugin filter: only list tools published by this plugin id,\nsuch as `agena.fs` or `agena.web`.",
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ToolApiStringBatch"
+        },
+        {
+          "type": "null"
+        }
       ],
+      "description": "Optional plugin selector: one plugin id or a non-empty array of ids,\nwith OR semantics. It scopes tools by owner for `tools_list` and selects\nplugin records directly for `plugins_list`.",
       "x-agena-order": "000002"
     },
     "tag": {
@@ -8694,7 +8763,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ### plugins_search
 
-`agena.tools.plugins_search` · **Summary**: Search the loaded plugins by id, summary, or tag.
+`agena.tools.plugins_search` · **Summary**: Search loaded plugins with one or many queries and optional multi-plugin scope.
 
 **Tags**: `query` `discovery`
 
@@ -8705,14 +8774,33 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 | --- | --- | --- | --- | --- |
 | `limit` | `integer / null` | — | — | Maximum number of search results to return. |
 | `offset` | `integer / null` | — | — | Number of matching tools to skip before returning results. |
-| `plugin` | `string / null` | — | — | Optional plugin filter: only search tools published by this plugin id,<br>such as `agena.fs` or `agena.web`. |
-| `query` | `string` | — | `` | Search text used to rank matching tool names and summaries. |
+| `plugin` | `ToolApiStringBatch / null` | — | — | Optional plugin selector: one plugin id or a non-empty array of ids,<br>with OR semantics. It scopes tools by owner for `tools_search` and<br>plugin records directly for `plugins_search`. |
+| `query` | `ToolApiStringBatch` | ✓ | — | One search query, or a non-empty array of queries, used to rank matching<br>tool names and summaries. Batched queries are evaluated independently. |
 | `tag` | `string / null` | — | — | Optional single tag filter such as `query` or `network`. |
 | `tags` | `array<string>` | — | — | Optional tag filters. When present, all normalized tags must match. |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "ToolApiStringBatch": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ],
+      "description": "One search query, or a non-empty array of queries, used to rank matching\ntool names and summaries. Batched queries are evaluated independently.",
+      "x-agena-order": "000000"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "limit": {
@@ -8736,19 +8824,20 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
       "x-agena-order": "000001"
     },
     "plugin": {
-      "description": "Optional plugin filter: only search tools published by this plugin id,\nsuch as `agena.fs` or `agena.web`.",
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ToolApiStringBatch"
+        },
+        {
+          "type": "null"
+        }
       ],
+      "description": "Optional plugin selector: one plugin id or a non-empty array of ids,\nwith OR semantics. It scopes tools by owner for `tools_search` and\nplugin records directly for `plugins_search`.",
       "x-agena-order": "000003"
     },
     "query": {
-      "default": "",
-      "description": "Search text used to rank matching tool names and summaries.",
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
+      "$ref": "#/$defs/ToolApiStringBatch",
+      "description": "One search query, or a non-empty array of queries, used to rank matching\ntool names and summaries. Batched queries are evaluated independently."
     },
     "tag": {
       "description": "Optional single tag filter such as `query` or `network`.",
@@ -8770,13 +8859,16 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
       "x-agena-order": "000005"
     }
   },
+  "required": [
+    "query"
+  ],
   "type": "object"
 }
 ```
 
 ### plugins_tags
 
-`agena.tools.plugins_tags` · **Summary**: List plugin tags with pagination.
+`agena.tools.plugins_tags` · **Summary**: List plugin tags across one plugin or a batch of plugin targets.
 
 **Tags**: `query` `discovery`
 
@@ -8787,10 +8879,28 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 | --- | --- | --- | --- | --- |
 | `limit` | `integer / null` | — | — | Maximum number of tags to return. |
 | `offset` | `integer / null` | — | — | Number of tags to skip before returning results. |
+| `plugin` | `ToolApiStringBatch / null` | — | — | Optional plugin selector: one plugin id or a non-empty array of ids.<br>Only tags belonging to tools or plugins from any selected plugin are<br>counted. |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "ToolApiStringBatch": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ]
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "limit": {
@@ -8812,6 +8922,18 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
         "null"
       ],
       "x-agena-order": "000000"
+    },
+    "plugin": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ToolApiStringBatch"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional plugin selector: one plugin id or a non-empty array of ids.\nOnly tags belonging to tools or plugins from any selected plugin are\ncounted.",
+      "x-agena-order": "000002"
     }
   },
   "type": "object"
@@ -8820,7 +8942,7 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 
 ### search
 
-`agena.tools.search` · **Tool API gateway handler** · **Summary**: Search the Agena execution tools available in this session.
+`agena.tools.search` · **Tool API gateway handler** · **Summary**: Search execution tools with one or many queries across one or many plugin targets.
 
 **Tags**: `query` `discovery`
 
@@ -8831,14 +8953,33 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 | --- | --- | --- | --- | --- |
 | `limit` | `integer / null` | — | — | Maximum number of search results to return. |
 | `offset` | `integer / null` | — | — | Number of matching tools to skip before returning results. |
-| `plugin` | `string / null` | — | — | Optional plugin filter: only search tools published by this plugin id,<br>such as `agena.fs` or `agena.web`. |
-| `query` | `string` | — | `` | Search text used to rank matching tool names and summaries. |
+| `plugin` | `ToolApiStringBatch / null` | — | — | Optional plugin selector: one plugin id or a non-empty array of ids,<br>with OR semantics. It scopes tools by owner for `tools_search` and<br>plugin records directly for `plugins_search`. |
+| `query` | `ToolApiStringBatch` | ✓ | — | One search query, or a non-empty array of queries, used to rank matching<br>tool names and summaries. Batched queries are evaluated independently. |
 | `tag` | `string / null` | — | — | Optional single tag filter such as `query` or `network`. |
 | `tags` | `array<string>` | — | — | Optional tag filters. When present, all normalized tags must match. |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "ToolApiStringBatch": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ],
+      "description": "One search query, or a non-empty array of queries, used to rank matching\ntool names and summaries. Batched queries are evaluated independently.",
+      "x-agena-order": "000000"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "limit": {
@@ -8862,19 +9003,20 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
       "x-agena-order": "000001"
     },
     "plugin": {
-      "description": "Optional plugin filter: only search tools published by this plugin id,\nsuch as `agena.fs` or `agena.web`.",
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ToolApiStringBatch"
+        },
+        {
+          "type": "null"
+        }
       ],
+      "description": "Optional plugin selector: one plugin id or a non-empty array of ids,\nwith OR semantics. It scopes tools by owner for `tools_search` and\nplugin records directly for `plugins_search`.",
       "x-agena-order": "000003"
     },
     "query": {
-      "default": "",
-      "description": "Search text used to rank matching tool names and summaries.",
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
+      "$ref": "#/$defs/ToolApiStringBatch",
+      "description": "One search query, or a non-empty array of queries, used to rank matching\ntool names and summaries. Batched queries are evaluated independently."
     },
     "tag": {
       "description": "Optional single tag filter such as `query` or `network`.",
@@ -8896,13 +9038,16 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
       "x-agena-order": "000005"
     }
   },
+  "required": [
+    "query"
+  ],
   "type": "object"
 }
 ```
 
 ### tags
 
-`agena.tools.tags` · **Tool API gateway handler** · **Summary**: List tool tags with pagination.
+`agena.tools.tags` · **Tool API gateway handler** · **Summary**: List tool tags across one plugin or a batch of plugin targets.
 
 **Tags**: `query` `discovery`
 
@@ -8913,10 +9058,28 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
 | --- | --- | --- | --- | --- |
 | `limit` | `integer / null` | — | — | Maximum number of tags to return. |
 | `offset` | `integer / null` | — | — | Number of tags to skip before returning results. |
+| `plugin` | `ToolApiStringBatch / null` | — | — | Optional plugin selector: one plugin id or a non-empty array of ids.<br>Only tags belonging to tools or plugins from any selected plugin are<br>counted. |
 
 **Input schema**:
 ```json
 {
+  "$defs": {
+    "ToolApiStringBatch": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ]
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "limit": {
@@ -8938,6 +9101,18 @@ Tool API discovery functions. The runtime resolves tools_call directly to its ex
         "null"
       ],
       "x-agena-order": "000000"
+    },
+    "plugin": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ToolApiStringBatch"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional plugin selector: one plugin id or a non-empty array of ids.\nOnly tags belonging to tools or plugins from any selected plugin are\ncounted.",
+      "x-agena-order": "000002"
     }
   },
   "type": "object"

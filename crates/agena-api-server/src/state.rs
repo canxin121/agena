@@ -13,7 +13,7 @@ use crate::error::ServerError;
 #[derive(Clone)]
 pub struct AppState {
     application: Application,
-    center: agena_api::resource::CenterIdentityResource,
+    server: agena_api::resource::ServerIdentityResource,
     next_operator_call_id: Arc<AtomicI64>,
 }
 
@@ -21,7 +21,7 @@ impl AppState {
     pub fn from_application(application: Application) -> Self {
         Self {
             application,
-            center: agena_api::resource::CenterIdentityResource {
+            server: agena_api::resource::ServerIdentityResource {
                 id: uuid::Uuid::new_v4(),
                 pid: std::process::id(),
                 started_at: chrono::Utc::now(),
@@ -31,8 +31,8 @@ impl AppState {
         }
     }
 
-    pub fn center(&self) -> &agena_api::resource::CenterIdentityResource {
-        &self.center
+    pub fn server(&self) -> &agena_api::resource::ServerIdentityResource {
+        &self.server
     }
 
     pub fn application(&self) -> &Application {

@@ -76,7 +76,7 @@ impl ClientAuthentication {
         let password = password.trim();
         if password.is_empty() {
             return Err(ClientError::Protocol(
-                "processing-center password must not be empty".to_owned(),
+                "server password must not be empty".to_owned(),
             ));
         }
         Ok(Self {
@@ -90,7 +90,7 @@ impl ClientAuthentication {
     fn bearer(&self) -> Option<reqwest::header::HeaderValue> {
         self.bearer
             .read()
-            .expect("processing-center bearer lock poisoned")
+            .expect("server bearer lock poisoned")
             .clone()
     }
 
@@ -99,7 +99,7 @@ impl ClientAuthentication {
         *self
             .bearer
             .write()
-            .expect("processing-center bearer lock poisoned") = Some(token);
+            .expect("server bearer lock poisoned") = Some(token);
         self.generation.fetch_add(1, Ordering::Release);
         Ok(())
     }
@@ -119,13 +119,13 @@ fn bearer_header(token: &str) -> Result<reqwest::header::HeaderValue, ClientErro
     let token = token.trim();
     if token.is_empty() {
         return Err(ClientError::Protocol(
-            "processing-center bearer token must not be empty".to_owned(),
+            "server bearer token must not be empty".to_owned(),
         ));
     }
     let mut authorization = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
         .map_err(|_| {
             ClientError::Protocol(
-                "processing-center bearer token contains invalid header characters".to_owned(),
+                "server bearer token contains invalid header characters".to_owned(),
             )
         })?;
     authorization.set_sensitive(true);
@@ -164,7 +164,7 @@ pub struct NotificationSubscription {
     task: Option<JoinHandle<()>>,
 }
 
-/// Snapshot-plus-live attachment to one center-owned session.
+/// Snapshot-plus-live attachment to one server-owned session.
 ///
 /// The live subscription is established before the snapshot is read. Changes
 /// committed during that read are therefore queued and the caller can safely
@@ -235,22 +235,22 @@ impl AgenaClient {
         Ok(self)
     }
 
-    /// Connect to a processing center, validate its public identity, and
+    /// Connect to a server, validate its public identity, and
     /// optionally authenticate using an ephemeral bearer token or UI password.
     /// Password login exchanges the password for an in-memory session token;
     /// neither secret is written to endpoint discovery metadata.
-    pub async fn connect_center(
+    pub async fn connect_server(
         base_url: impl AsRef<str>,
         bearer_token: Option<&str>,
         password: Option<&str>,
     ) -> Result<Self, ClientError> {
         if bearer_token.is_some() && password.is_some() {
             return Err(ClientError::Protocol(
-                "pass either a processing-center token or password, not both".to_owned(),
+                "pass either a server token or password, not both".to_owned(),
             ));
         }
         let client = Self::new(base_url)?;
-        client.center_identity().await?;
+        client.server_identity().await?;
         if let Some(token) = bearer_token {
             return client.with_bearer_token(token);
         }
@@ -264,7 +264,7 @@ impl AgenaClient {
     async fn create_ui_session(&self, password: &str) -> Result<String, ClientError> {
         if password.trim().is_empty() {
             return Err(ClientError::Protocol(
-                "processing-center password must not be empty".to_owned(),
+                "server password must not be empty".to_owned(),
             ));
         }
         let response = self
@@ -277,13 +277,13 @@ impl AgenaClient {
         let body = read_response_text_bounded(
             response,
             MAX_ERROR_RESPONSE_BYTES,
-            "processing-center authentication response",
+            "server authentication response",
         )
         .await?;
         let value: serde_json::Value = serde_json::from_str(body.as_str())?;
         if !status.is_success() {
             return Err(ClientError::Api(agena_api::error::ApiError::bad_request(
-                "Processing-center authentication failed. Check the configured password or token.",
+                "server authentication failed. Check the configured password or token.",
             )));
         }
         value
@@ -293,7 +293,7 @@ impl AgenaClient {
             .map(str::to_owned)
             .ok_or_else(|| {
                 ClientError::Protocol(
-                    "processing-center authentication returned no bearer token".to_owned(),
+                    "server authentication returned no bearer token".to_owned(),
                 )
             })
     }
@@ -320,7 +320,7 @@ impl AgenaClient {
 
     /// Refresh a password-derived bearer token exactly once for a generation.
     ///
-    /// A center restart invalidates every process-local session token. Many
+    /// A server restart invalidates every process-local session token. Many
     /// concurrent TUI refreshes may observe the resulting 401 together, so a
     /// shared mutex elects one password exchange while the generation check
     /// lets the remaining requests reuse its new token without repeating the
@@ -440,7 +440,7 @@ impl AgenaClient {
                     .is_some_and(|code| code.starts_with("auth_"))
             {
                 return Err(ClientError::Api(agena_api::error::ApiError::bad_request(
-                    "Processing-center authentication is required. Set AGENA_CENTER_PASSWORD or AGENA_CENTER_TOKEN.",
+                    "server authentication is required. Set AGENA_SERVER_PASSWORD or AGENA_SERVER_TOKEN.",
                 )));
             }
             return Err(ClientError::Protocol(format!(
@@ -533,26 +533,26 @@ impl AgenaClient {
         self.get_json("/api/v1/health").await
     }
 
-    /// Validate that the endpoint is a current Agena processing center and
+    /// Validate that the endpoint is a current Agena server and
     /// return its process-lifetime identity. Legacy servers without identity
     /// metadata are reachable but cannot participate in safe discovery.
-    pub async fn center_identity(
+    pub async fn server_identity(
         &self,
-    ) -> Result<agena_api::resource::CenterIdentityResource, ClientError> {
+    ) -> Result<agena_api::resource::ServerIdentityResource, ClientError> {
         let health = self.health().await?;
-        let center = health.center.ok_or_else(|| {
+        let server = health.server.ok_or_else(|| {
             ClientError::Protocol(
-                "the endpoint does not expose a processing-center identity".to_owned(),
+                "the endpoint does not expose a server identity".to_owned(),
             )
         })?;
-        if center.protocol_version != agena_api::PROTOCOL_VERSION {
+        if server.protocol_version != agena_api::PROTOCOL_VERSION {
             return Err(ClientError::Protocol(format!(
-                "processing-center protocol {} is incompatible with client protocol {}",
-                center.protocol_version,
+                "server protocol {} is incompatible with client protocol {}",
+                server.protocol_version,
                 agena_api::PROTOCOL_VERSION
             )));
         }
-        Ok(center)
+        Ok(server)
     }
 
     pub async fn list_provider_adapter_models(
@@ -621,7 +621,7 @@ impl AgenaClient {
             .await
     }
 
-    /// Read the center-owned plugin runtime status. The plugin runtime's
+    /// Read the server-owned plugin runtime status. The plugin runtime's
     /// detailed host DTOs have not yet moved into `agena-api`, so this SDK
     /// method preserves the public REST JSON without depending on the host
     /// implementation crate.
@@ -638,7 +638,7 @@ impl AgenaClient {
     pub async fn plugin_inspect(&self, plugin_id: &str) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/plugins");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(plugin_id);
         let response = self
             .send_request(reqwest::Method::GET, url, None, None)
@@ -654,7 +654,7 @@ impl AgenaClient {
     ) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/plugins");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(plugin_id)
             .push("logs");
         {
@@ -712,7 +712,7 @@ impl AgenaClient {
     pub async fn auth_provider(&self, provider_id: &str) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/auth/providers");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(provider_id);
         let response = self
             .send_request(reqwest::Method::GET, url, None, None)
@@ -855,7 +855,7 @@ impl AgenaClient {
     ) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/auth/providers");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(provider_id)
             .push("api-key");
         let body = serde_json::json!({ "api_key": api_key });
@@ -871,7 +871,7 @@ impl AgenaClient {
     ) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/auth/providers");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(provider_id);
         let response = self
             .send_request(reqwest::Method::DELETE, url, None, None)
@@ -887,7 +887,7 @@ impl AgenaClient {
     ) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/mcp/credentials");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(server)
             .push("bearer");
         let body = serde_json::json!({"token": token, "store": store});
@@ -904,7 +904,7 @@ impl AgenaClient {
     ) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/mcp/credentials");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(server)
             .push("bearer");
         url.query_pairs_mut().append_pair("store", store);
@@ -960,7 +960,7 @@ impl AgenaClient {
     ) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/mcp/oauth");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(server);
         {
             let mut query = url.query_pairs_mut();
@@ -1005,7 +1005,7 @@ impl AgenaClient {
     ) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/settings/layers");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(layer);
         url.query_pairs_mut().append_pair("path", path);
         let response = self
@@ -1024,7 +1024,7 @@ impl AgenaClient {
     ) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/settings/layers");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(layer);
         let body = serde_json::json!({
             "path": path,
@@ -1050,7 +1050,7 @@ impl AgenaClient {
     ) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/settings/layers");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(layer);
         {
             let mut query = url.query_pairs_mut();
@@ -1124,7 +1124,7 @@ impl AgenaClient {
     pub async fn get_memory(&self, name: &str) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/memories");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(name);
         let response = self
             .send_request(reqwest::Method::GET, url, None, None)
@@ -1135,7 +1135,7 @@ impl AgenaClient {
     pub async fn delete_memory(&self, name: &str) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/memories");
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(name);
         let response = self
             .send_request(reqwest::Method::DELETE, url, None, None)
@@ -1382,7 +1382,7 @@ impl AgenaClient {
     ) -> Result<SessionExecutionResource, ClientError> {
         let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/interactive"));
         url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(request_id)
             .push("present");
         let body = serde_json::json!({});
@@ -2040,7 +2040,7 @@ mod sse_contract_tests {
             "generation": 1,
             "loaded_at": "2026-08-16T00:00:00Z",
             "database_connected": true,
-            "center": {
+            "server": {
                 "id": "b6cb9914-e388-4e90-8b40-9be12e65ecdb",
                 "pid": 4242,
                 "started_at": "2026-08-16T00:00:00Z",
@@ -2166,9 +2166,9 @@ mod sse_contract_tests {
     async fn password_client_refreshes_one_token_for_concurrent_requests_and_sse_reconnect() {
         let (url, state, server) = spawn_refresh_auth_fixture().await;
         let client =
-            AgenaClient::connect_center(url.as_str(), None, Some("refresh-password-secret"))
+            AgenaClient::connect_server(url.as_str(), None, Some("refresh-password-secret"))
                 .await
-                .expect("connect password-authenticated center client");
+                .expect("connect password-authenticated server client");
         assert_eq!(state.login_count.load(Ordering::Acquire), 1);
 
         let debug = format!("{client:?}");
@@ -2199,7 +2199,7 @@ mod sse_contract_tests {
             "one shared refresh must satisfy every concurrent clone"
         );
 
-        // Model a later center restart/session expiry. SSE reconnect uses the
+        // Model a later server restart/session expiry. SSE reconnect uses the
         // same authenticated request path and must obtain token-3 once.
         state.minimum_valid_generation.store(3, Ordering::Release);
         let subscription = client
@@ -2232,7 +2232,7 @@ mod sse_contract_tests {
     #[tokio::test]
     async fn static_bearer_is_never_reinterpreted_as_a_refreshable_password() {
         let (url, state, server) = spawn_refresh_auth_fixture().await;
-        let client = AgenaClient::connect_center(url.as_str(), Some("token-1"), None)
+        let client = AgenaClient::connect_server(url.as_str(), Some("token-1"), None)
             .await
             .expect("connect static-bearer client");
         let debug = format!("{client:?}");
@@ -2324,24 +2324,24 @@ mod sse_contract_tests {
         assert_eq!(health.loaded_at.to_rfc3339(), "2026-01-02T03:04:05+00:00");
         assert!(health.database_connected);
         assert!(
-            health.center.is_none(),
+            health.server.is_none(),
             "legacy health fixtures remain compatible"
         );
         server.await.unwrap();
     }
 
     #[tokio::test]
-    async fn center_identity_validates_the_protocol_handshake() {
+    async fn server_identity_validates_the_protocol_handshake() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let address = listener.local_addr().unwrap();
-        let center_id = uuid::Uuid::parse_str("9fe2e22b-e2b8-4e2a-92c7-40e71da2015c").unwrap();
+        let server_id = uuid::Uuid::parse_str("9fe2e22b-e2b8-4e2a-92c7-40e71da2015c").unwrap();
         let response_body = serde_json::json!({
             "status": "ok",
             "generation": 3,
             "loaded_at": "2026-08-15T01:02:03Z",
             "database_connected": true,
-            "center": {
-                "id": center_id,
+            "server": {
+                "id": server_id,
                 "pid": 4242,
                 "started_at": "2026-08-15T00:00:00Z",
                 "protocol_version": agena_api::PROTOCOL_VERSION,
@@ -2371,10 +2371,10 @@ mod sse_contract_tests {
         });
 
         let client = AgenaClient::new(format!("http://{address}")).unwrap();
-        let center = client.center_identity().await.unwrap();
-        assert_eq!(center.id, center_id);
-        assert_eq!(center.pid, 4242);
-        assert_eq!(center.protocol_version, agena_api::PROTOCOL_VERSION);
+        let server = client.server_identity().await.unwrap();
+        assert_eq!(server.id, server_id);
+        assert_eq!(server.pid, 4242);
+        assert_eq!(server.protocol_version, agena_api::PROTOCOL_VERSION);
         server.await.unwrap();
     }
 
@@ -2441,7 +2441,7 @@ mod sse_contract_tests {
             .expect_err("protected endpoint must require auth");
         match error {
             crate::ClientError::Api(api) => {
-                assert!(api.problem.user.fallback.contains("AGENA_CENTER_PASSWORD"))
+                assert!(api.problem.user.fallback.contains("AGENA_SERVER_PASSWORD"))
             }
             other => panic!("expected safe auth API error, got {other:?}"),
         }
@@ -2449,9 +2449,9 @@ mod sse_contract_tests {
     }
 
     #[tokio::test]
-    async fn center_connection_rejects_two_authentication_mechanisms() {
+    async fn server_connection_rejects_two_authentication_mechanisms() {
         let error =
-            AgenaClient::connect_center("http://127.0.0.1:9", Some("token"), Some("password"))
+            AgenaClient::connect_server("http://127.0.0.1:9", Some("token"), Some("password"))
                 .await
                 .expect_err("ambiguous auth must fail before connecting");
         assert!(matches!(error, crate::ClientError::Protocol(_)));

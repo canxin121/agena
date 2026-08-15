@@ -528,11 +528,11 @@ mod router_contract_tests {
             serde_json::from_slice(&body).expect("decode shared health response");
         assert_eq!(health.status, "ok");
         assert_eq!(health.generation, 1);
-        let center = health
-            .center
-            .expect("health identifies the processing center");
-        assert_eq!(center.pid, std::process::id());
-        assert_eq!(center.protocol_version, agena_api::PROTOCOL_VERSION);
+        let server = health
+            .server
+            .expect("health identifies the server");
+        assert_eq!(server.pid, std::process::id());
+        assert_eq!(server.protocol_version, agena_api::PROTOCOL_VERSION);
 
         let response = runtime_app
             .oneshot(
@@ -610,7 +610,7 @@ mod router_contract_tests {
                     .header(http::header::CONTENT_TYPE, "application/json")
                     .body(axum::body::Body::from(
                         serde_json::json!({
-                            "token": "center-secret-must-not-echo",
+                            "token": "server-secret-must-not-echo",
                             "store": "keyring"
                         })
                         .to_string(),
@@ -624,7 +624,7 @@ mod router_contract_tests {
             .await
             .expect("read rejected MCP credential response");
         let public_error = String::from_utf8(body.to_vec()).expect("UTF-8 API error");
-        assert!(!public_error.contains("center-secret-must-not-echo"));
+        assert!(!public_error.contains("server-secret-must-not-echo"));
 
         let response = memory_app
             .oneshot(
@@ -1049,7 +1049,7 @@ mod router_contract_tests {
             } if id == "health-query"
                 && health.status == "ok"
                 && health.database_connected
-                && health.center.is_some()
+                && health.server.is_some()
         ));
 
         let workspace_path = std::env::temp_dir().join(format!(
@@ -1458,7 +1458,7 @@ mod router_contract_tests {
         release: Option<oneshot::Receiver<()>>,
     }
 
-    struct TestCenter {
+    struct TestServer {
         _workspace: tempfile::TempDir,
         runtime: agena_runtime::RuntimeBootstrapResult,
         server: tokio::task::JoinHandle<()>,
@@ -1466,7 +1466,7 @@ mod router_contract_tests {
         workspace_id: i64,
     }
 
-    impl Drop for TestCenter {
+    impl Drop for TestServer {
         fn drop(&mut self) {
             self.server.abort();
             self.runtime.shutdown();
@@ -1703,8 +1703,8 @@ mod router_contract_tests {
         ]
     }
 
-    async fn start_test_center(provider_base_url: &str) -> TestCenter {
-        let workspace = tempfile::tempdir().expect("create center workspace");
+    async fn start_test_server(provider_base_url: &str) -> TestServer {
+        let workspace = tempfile::tempdir().expect("create server workspace");
         let project_config_dir = workspace.path().join(".agena");
         std::fs::create_dir_all(&project_config_dir).expect("create project config directory");
         let config = serde_json::json!({
@@ -1783,12 +1783,12 @@ mod router_contract_tests {
         let app = router(AppState::from_application(application_for_test(&runtime)));
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .await
-            .expect("bind processing center");
-        let address = listener.local_addr().expect("processing center address");
+            .expect("bind server");
+        let address = listener.local_addr().expect("server address");
         let server = tokio::spawn(async move {
             axum::serve(listener, app)
                 .await
-                .expect("serve processing center");
+                .expect("serve server");
         });
         let url = format!("http://{address}");
         let client = AgenaClient::new(url.as_str()).expect("build setup client");
@@ -1800,9 +1800,9 @@ mod router_contract_tests {
             .await
             .expect("resolve test workspace");
         let CommandResult::Workspace(workspace_resource) = workspace_result else {
-            panic!("processing center returned the wrong workspace result");
+            panic!("server returned the wrong workspace result");
         };
-        TestCenter {
+        TestServer {
             _workspace: workspace,
             runtime,
             server,
@@ -1870,10 +1870,10 @@ mod router_contract_tests {
     #[tokio::test]
     async fn session_sse_lag_converges_through_an_authoritative_snapshot() {
         let (provider_url, _requests, provider) = spawn_fake_responses_provider(Vec::new()).await;
-        let center = start_test_center(provider_url.as_str()).await;
-        let client = AgenaClient::new(center.url.as_str()).expect("build snapshot client");
+        let server = start_test_server(provider_url.as_str()).await;
+        let client = AgenaClient::new(server.url.as_str()).expect("build snapshot client");
         let session = client
-            .create_session(center.workspace_id, "sse lag fixture", None)
+            .create_session(server.workspace_id, "sse lag fixture", None)
             .await
             .expect("create SSE lag session");
         let session_id = session.id;
@@ -1883,7 +1883,7 @@ mod router_contract_tests {
         // initial snapshot is read. Production builds expose neither field.
         let stream_url = format!(
             "{}/api/v1/sessions/{session_id}/changes/stream?since_version=0&test_queue_capacity=1&test_snapshot_delay_ms=3000",
-            center.url
+            server.url
         );
         let http = reqwest::Client::new();
         let stream_http = http.clone();
@@ -1897,7 +1897,7 @@ mod router_contract_tests {
         });
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let update_url = format!("{}/api/v1/sessions/{session_id}", center.url);
+        let update_url = format!("{}/api/v1/sessions/{session_id}", server.url);
         let updates = (0..24).map(|index| {
             let http = http.clone();
             let update_url = update_url.clone();
@@ -2025,14 +2025,14 @@ mod router_contract_tests {
     }
 
     #[tokio::test]
-    async fn operator_invoke_is_bound_to_the_center_workspace_id() {
+    async fn operator_invoke_is_bound_to_the_server_workspace_id() {
         let (provider_url, _requests, provider) = spawn_fake_responses_provider(Vec::new()).await;
-        let center = start_test_center(provider_url.as_str()).await;
-        let client = AgenaClient::new(center.url.as_str()).expect("build operator client");
+        let server = start_test_server(provider_url.as_str()).await;
+        let client = AgenaClient::new(server.url.as_str()).expect("build operator client");
 
         let matching = client
             .invoke_operator_tool(
-                center.workspace_id,
+                server.workspace_id,
                 "fs.read",
                 Some(serde_json::json!({"path": "permission-fixture.txt"})),
             )
@@ -2053,9 +2053,9 @@ mod router_contract_tests {
             .await
             .expect("register foreign operator workspace");
         let CommandResult::Workspace(foreign) = foreign else {
-            panic!("processing center returned the wrong foreign workspace result");
+            panic!("server returned the wrong foreign workspace result");
         };
-        assert_ne!(foreign.id, center.workspace_id);
+        assert_ne!(foreign.id, server.workspace_id);
         let marker = "operator-scope-must-not-write.txt";
         let patch =
             format!("*** Begin Patch\n*** Add File: {marker}\n+scope escape\n*** End Patch");
@@ -2071,9 +2071,9 @@ mod router_contract_tests {
             mismatch
                 .problem()
                 .map(|problem| problem.user.fallback.as_str()),
-            Some("The operator workspace does not match this processing center.")
+            Some("The operator workspace does not match this server.")
         );
-        assert!(!center._workspace.path().join(marker).exists());
+        assert!(!server._workspace.path().join(marker).exists());
         assert!(!foreign_workspace.path().join(marker).exists());
 
         let missing = client
@@ -2094,7 +2094,7 @@ mod router_contract_tests {
     }
 
     #[tokio::test]
-    async fn disconnected_client_does_not_cancel_center_owned_completion() {
+    async fn disconnected_client_does_not_cancel_server_owned_completion() {
         let (release_tx, release_rx) = oneshot::channel();
         let (provider_url, mut requests, provider) =
             spawn_fake_responses_provider(vec![FakeProviderPlan {
@@ -2102,9 +2102,9 @@ mod router_contract_tests {
                 release: Some(release_rx),
             }])
             .await;
-        let center = start_test_center(provider_url.as_str()).await;
-        let client_a = AgenaClient::new(center.url.as_str()).expect("build first client");
-        let submitted = submit_test_run(&client_a, center.workspace_id, "disconnect test").await;
+        let server = start_test_server(provider_url.as_str()).await;
+        let client_a = AgenaClient::new(server.url.as_str()).expect("build first client");
+        let submitted = submit_test_run(&client_a, server.workspace_id, "disconnect test").await;
         let session_id = submitted.session.id;
         let connection = client_a
             .connect_session(session_id)
@@ -2125,14 +2125,14 @@ mod router_contract_tests {
         drop(connection);
         drop(client_a);
 
-        let client_b = AgenaClient::new(center.url.as_str()).expect("build second client");
+        let client_b = AgenaClient::new(server.url.as_str()).expect("build second client");
         let running = wait_for_execution(&client_b, session_id, |execution| {
             execution.session.state == SessionState::Running
         })
         .await;
         assert!(running.active_execution.is_some());
         let overview = client_b
-            .session_overview(Some(center.workspace_id), 10)
+            .session_overview(Some(server.workspace_id), 10)
             .await
             .expect("read second-client overview");
         assert!(
@@ -2166,9 +2166,9 @@ mod router_contract_tests {
             },
         ])
         .await;
-        let center = start_test_center(provider_url.as_str()).await;
-        let client_a = AgenaClient::new(center.url.as_str()).expect("build submitting client");
-        let submitted = submit_test_run(&client_a, center.workspace_id, "ask another client").await;
+        let server = start_test_server(provider_url.as_str()).await;
+        let client_a = AgenaClient::new(server.url.as_str()).expect("build submitting client");
+        let submitted = submit_test_run(&client_a, server.workspace_id, "ask another client").await;
         let session_id = submitted.session.id;
         tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
             .await
@@ -2176,7 +2176,7 @@ mod router_contract_tests {
             .expect("first provider request exists");
         drop(client_a);
 
-        let client_b = AgenaClient::new(center.url.as_str()).expect("build reply client B");
+        let client_b = AgenaClient::new(server.url.as_str()).expect("build reply client B");
         let pending = wait_for_execution(&client_b, session_id, |execution| {
             !execution.pending_interactive_requests.is_empty()
         })
@@ -2195,7 +2195,7 @@ mod router_contract_tests {
                 reason: None,
             },
         };
-        let client_c = AgenaClient::new(center.url.as_str()).expect("build reply client C");
+        let client_c = AgenaClient::new(server.url.as_str()).expect("build reply client C");
         let (reply_b, reply_c) = tokio::join!(
             client_b.reply_user_input(reply("Blue")),
             client_c.reply_user_input(reply("Green"))
@@ -2252,11 +2252,11 @@ mod router_contract_tests {
             },
         ])
         .await;
-        let center = start_test_center(provider_url.as_str()).await;
-        let client_a = AgenaClient::new(center.url.as_str()).expect("build submitting client");
+        let server = start_test_server(provider_url.as_str()).await;
+        let client_a = AgenaClient::new(server.url.as_str()).expect("build submitting client");
         let submitted = submit_test_run(
             &client_a,
-            center.workspace_id,
+            server.workspace_id,
             "ask another client for permission",
         )
         .await;
@@ -2267,7 +2267,7 @@ mod router_contract_tests {
             .expect("permission-producing provider request exists");
         drop(client_a);
 
-        let client_b = AgenaClient::new(center.url.as_str()).expect("build permission client B");
+        let client_b = AgenaClient::new(server.url.as_str()).expect("build permission client B");
         let pending = wait_for_execution(&client_b, session_id, |execution| {
             execution
                 .pending_interactive_requests
@@ -2282,7 +2282,7 @@ mod router_contract_tests {
             .expect("one durable permission request");
         assert!(
             pending.active_execution.is_some(),
-            "permission wait must remain owned by the original center execution: {pending:#?}"
+            "permission wait must remain owned by the original server execution: {pending:#?}"
         );
         assert_eq!(pending_permission.session_id, session_id);
         let permission = pending_permission
@@ -2306,7 +2306,7 @@ mod router_contract_tests {
                 scope: None,
             },
         };
-        let client_c = AgenaClient::new(center.url.as_str()).expect("build permission client C");
+        let client_c = AgenaClient::new(server.url.as_str()).expect("build permission client C");
         let (reply_b, reply_c) = tokio::join!(
             client_b.reply_permission(reply(PermissionReplyKind::AllowOnce, "client B allowed")),
             client_c.reply_permission(reply(PermissionReplyKind::DenyOnce, "client C denied"))
@@ -2380,9 +2380,9 @@ mod router_contract_tests {
                 release: Some(release_rx),
             }])
             .await;
-        let center = start_test_center(provider_url.as_str()).await;
-        let client_a = AgenaClient::new(center.url.as_str()).expect("build submitting client");
-        let submitted = submit_test_run(&client_a, center.workspace_id, "cancel race").await;
+        let server = start_test_server(provider_url.as_str()).await;
+        let client_a = AgenaClient::new(server.url.as_str()).expect("build submitting client");
+        let submitted = submit_test_run(&client_a, server.workspace_id, "cancel race").await;
         let session_id = submitted.session.id;
         let execution_id = submitted
             .active_execution
@@ -2395,13 +2395,13 @@ mod router_contract_tests {
             .expect("cancel-race provider request exists");
         drop(client_a);
 
-        let client_b = AgenaClient::new(center.url.as_str()).expect("build cancelling client");
+        let client_b = AgenaClient::new(server.url.as_str()).expect("build cancelling client");
         let (cancel, release) = tokio::join!(
             client_b.cancel_run(session_id, agena_domain::ExecutionId(execution_id)),
             async { release_tx.send(()) }
         );
         release.expect("release natural provider completion");
-        let cancel = cancel.expect("cancel request reaches center");
+        let cancel = cancel.expect("cancel request reaches server");
         assert!(matches!(
             cancel,
             agena_domain::CancellationResult::CancellationRequested

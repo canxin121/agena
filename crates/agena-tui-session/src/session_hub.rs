@@ -24,7 +24,7 @@ use ratatui::{
 };
 
 /// A session entry shown in a hub section.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHubItem {
     pub session_id: i64,
     pub title: String,

@@ -11,6 +11,25 @@ session-running = 執行中
 sessions-empty = 找不到工作階段
 sessions-loading-more = 正在載入更多工作階段...
 sessions-more = 還有更多工作階段可載入
+hub-title = 工作階段中心
+hub-action-create = 新增工作階段
+hub-action-list = 工作階段清單
+hub-action-refresh = 重新整理
+hub-hint-move = 移動
+hub-hint-focus = 焦點
+hub-hint-open = 開啟
+hub-hint-back = 返回
+hub-section-attention = 需要關注
+hub-section-running = 執行中
+hub-section-recent = 最近
+hub-empty-attention = 沒有需要關注的工作階段
+hub-empty-running = 沒有執行中的工作階段
+hub-empty-recent = 沒有最近的工作階段
+hub-empty = 還沒有工作階段，按 Ctrl+N 建立一個。
+context-help-context-hub = 工作階段中心
+context-help-summary-hub = 檢視需要關注、執行中和最近的工作階段，並建立新的工作階段。
+context-help-key-create-session = 建立新的工作階段。
+context-help-key-session-list = 開啟完整的工作階段清單。
 
 transcript-header-lines = 行 {$first}-{$last}/{$total} ({$percent}%)
 transcript-header-find = 搜尋={$query} ({$current}/{$total})

@@ -39,6 +39,25 @@ session-summary-children = {$count} 个子会话
 sessions-empty = 未找到会话
 sessions-loading-more = 正在加载更多会话...
 sessions-more = 还有更多会话可加载
+hub-title = 会话中心
+hub-action-create = 新建会话
+hub-action-list = 会话列表
+hub-action-refresh = 刷新
+hub-hint-move = 移动
+hub-hint-focus = 焦点
+hub-hint-open = 打开
+hub-hint-back = 返回
+hub-section-attention = 需要关注
+hub-section-running = 运行中
+hub-section-recent = 最近
+hub-empty-attention = 没有需要关注的会话
+hub-empty-running = 没有运行中的会话
+hub-empty-recent = 没有最近的会话
+hub-empty = 还没有会话，按 Ctrl+N 新建一个。
+context-help-context-hub = 会话中心
+context-help-summary-hub = 查看需要关注、运行中和最近的会话，并新建会话。
+context-help-key-create-session = 新建一个会话。
+context-help-key-session-list = 打开完整会话列表。
 
 transcript-header-lines = 行 {$first}-{$last}/{$total} ({$percent}%)
 transcript-header-find = 搜索={$query} ({$current}/{$total})

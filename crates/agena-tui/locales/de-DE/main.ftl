@@ -11,6 +11,25 @@ session-running = laeuft
 sessions-empty = Keine Sitzungen gefunden
 sessions-loading-more = Weitere Sitzungen werden geladen...
 sessions-more = Weitere Sitzungen verfuegbar
+hub-title = Sitzungs-Hub
+hub-action-create = neue Sitzung
+hub-action-list = Sitzungsliste
+hub-action-refresh = aktualisieren
+hub-hint-move = bewegen
+hub-hint-focus = Fokus
+hub-hint-open = öffnen
+hub-hint-back = zurück
+hub-section-attention = Benötigt Aufmerksamkeit
+hub-section-running = Läuft
+hub-section-recent = Zuletzt
+hub-empty-attention = Keine Sitzungen benötigen Aufmerksamkeit
+hub-empty-running = Keine Sitzungen laufen
+hub-empty-recent = Keine kürzlichen Sitzungen
+hub-empty = Noch keine Sitzungen. Erstellen Sie eine mit Ctrl+N.
+context-help-context-hub = Sitzungs-Hub
+context-help-summary-hub = Zeigt Sitzungen mit Aufmerksamkeitsbedarf, laufende und kürzliche Sitzungen, und erstellt neue Sitzungen.
+context-help-key-create-session = Eine neue Sitzung erstellen.
+context-help-key-session-list = Die vollständige Sitzungsliste öffnen.
 
 transcript-header-lines = Zeilen {$first}-{$last}/{$total} ({$percent}%)
 transcript-header-find = suche={$query} ({$current}/{$total})

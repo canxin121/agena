@@ -11,6 +11,25 @@ session-running = 실행 중
 sessions-empty = 세션을 찾을 수 없습니다
 sessions-loading-more = 더 많은 세션을 불러오는 중...
 sessions-more = 더 불러올 세션이 있습니다
+hub-title = 세션 허브
+hub-action-create = 새 세션
+hub-action-list = 세션 목록
+hub-action-refresh = 새로고침
+hub-hint-move = 이동
+hub-hint-focus = 포커스
+hub-hint-open = 열기
+hub-hint-back = 뒤로
+hub-section-attention = 주의 필요
+hub-section-running = 실행 중
+hub-section-recent = 최근
+hub-empty-attention = 주의가 필요한 세션이 없습니다
+hub-empty-running = 실행 중인 세션이 없습니다
+hub-empty-recent = 최근 세션이 없습니다
+hub-empty = 아직 세션이 없습니다. Ctrl+N으로 만드세요.
+context-help-context-hub = 세션 허브
+context-help-summary-hub = 주의가 필요한 세션, 실행 중인 세션, 최근 세션을 확인하고 새 세션을 만듭니다.
+context-help-key-create-session = 새 세션을 만듭니다.
+context-help-key-session-list = 전체 세션 목록을 엽니다.
 
 transcript-header-lines = 줄 {$first}-{$last}/{$total} ({$percent}%)
 transcript-header-find = 찾기={$query} ({$current}/{$total})

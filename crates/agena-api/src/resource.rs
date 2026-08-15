@@ -29,41 +29,41 @@ pub struct HealthResponse {
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,
     pub database_connected: bool,
-    /// Identity of the long-lived processing center serving this API. Older
+    /// Identity of the long-lived server serving this API. Older
     /// servers omit it, so clients must treat `None` as an unverified legacy
     /// endpoint rather than manufacturing an identity from the URL or PID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub center: Option<CenterIdentityResource>,
+    pub server: Option<ServerIdentityResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// Stable identity for one processing-center process lifetime.
-pub struct CenterIdentityResource {
+/// Stable identity for one server process lifetime.
+pub struct ServerIdentityResource {
     pub id: Uuid,
     pub pid: u32,
     pub started_at: DateTime<Utc>,
     pub protocol_version: u32,
 }
 
-/// Atomically-published local discovery record for one processing center.
+/// Atomically-published local discovery record for one server.
 /// The record is only a hint: clients must call health and compare every
 /// identity field before using it for lifecycle operations.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CenterEndpointRecord {
+pub struct ServerEndpointRecord {
     pub schema: u32,
     pub url: String,
-    pub center_id: Uuid,
+    pub server_id: Uuid,
     pub pid: u32,
     pub started_at: DateTime<Utc>,
     pub protocol_version: u32,
 }
 
-impl CenterEndpointRecord {
+impl ServerEndpointRecord {
     pub const SCHEMA: u32 = 1;
 
-    pub fn matches(&self, identity: &CenterIdentityResource) -> bool {
+    pub fn matches(&self, identity: &ServerIdentityResource) -> bool {
         self.schema == Self::SCHEMA
-            && self.center_id == identity.id
+            && self.server_id == identity.id
             && self.pid == identity.pid
             && self.started_at == identity.started_at
             && self.protocol_version == identity.protocol_version
@@ -1042,7 +1042,7 @@ pub struct SessionResource {
     /// Authoritative processing state derived from persisted run markers,
     /// pending interactions, and the execution lease. Unlike a client's
     /// request/loading flag, this survives disconnects and can therefore be
-    /// used by every client to identify work still owned by the center.
+    /// used by every client to identify work still owned by the server.
     #[serde(default)]
     pub state: SessionState,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1106,7 +1106,7 @@ pub enum SessionState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Center-owned session home view. A session occurs in exactly one group.
+/// Server-owned session home view. A session occurs in exactly one group.
 pub struct SessionOverviewResource {
     /// Sessions paused on user input or left interrupted after owner loss.
     pub attention: Vec<SessionResource>,

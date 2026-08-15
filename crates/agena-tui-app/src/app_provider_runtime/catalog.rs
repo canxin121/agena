@@ -110,7 +110,7 @@ impl App {
 
     pub(crate) fn open_provider_studio(&mut self, initial_provider: Option<&str>) {
         if self.application.is_remote() {
-            self.flash_warning("Provider Studio is unavailable in remote TUI mode until it has a public center API");
+            self.flash_warning("Provider Studio is unavailable in remote TUI mode until it has a public server API");
             return;
         }
         let providers =

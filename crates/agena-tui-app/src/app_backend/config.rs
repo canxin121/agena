@@ -1,7 +1,7 @@
 //! Configuration-source presentation: where the config file lives, what JSON
 //! sources it resolves to, and the persisted UI preferences.
 //!
-//! The config read model is assembled by the center and cached on the
+//! The config read model is assembled by the server and cached on the
 //! [`crate::TuiBackend`] at connect time and before settings rebuilds; these
 //! helpers are synchronous because settings presentation runs in the TUI event
 //! loop.
@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Absolute path to the resolved global configuration file. In remote mode the
-/// path comes from the center's settings read model; when that is not yet
+/// path comes from the server's settings read model; when that is not yet
 /// loaded, a workspace-anchored placeholder is returned.
 pub(crate) fn config_path(application: &crate::TuiBackend) -> PathBuf {
     application
@@ -32,7 +32,7 @@ pub(crate) fn config_path(application: &crate::TuiBackend) -> PathBuf {
 pub(crate) fn config_json_sources(application: &crate::TuiBackend) -> Result<ConfigJsonSources> {
     application
         .config_sources()
-        .context("configuration sources have not been loaded from the center yet")
+        .context("configuration sources have not been loaded from the server yet")
 }
 
 /// Persisted UI preferences (theme, graphics mode, …), projected from the

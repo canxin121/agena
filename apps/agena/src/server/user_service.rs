@@ -1,4 +1,4 @@
-//! OS-native user-service installation for the processing center.
+//! OS-native user-service installation for the server.
 //!
 //! launchd and systemd receive an argument vector directly. No generated
 //! service definition invokes a shell, and the definition is written with
@@ -16,9 +16,9 @@ use agena_cli::ServerArgs;
 use anyhow::{Context, Result, bail};
 
 #[cfg(target_os = "macos")]
-const SERVICE_LABEL: &str = "com.agena.center";
+const SERVICE_LABEL: &str = "com.agena.server";
 #[cfg(target_os = "linux")]
-const SYSTEMD_UNIT_NAME: &str = "agena-center.service";
+const SYSTEMD_UNIT_NAME: &str = "agena-server.service";
 
 pub(crate) fn is_installed() -> bool {
     service_file_path().is_ok_and(|path| path.is_file())
@@ -27,12 +27,12 @@ pub(crate) fn is_installed() -> bool {
 pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
     let path = service_file_path()?;
     let executable = std::env::current_exe().context("failed to resolve Agena executable")?;
-    let record_path = super::center_record::record_path();
+    let record_path = super::server_record::record_path();
     let state_dir = record_path
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let log_path = state_dir.join("logs").join("center-service.log");
+    let log_path = state_dir.join("logs").join("server-service.log");
     if let Some(parent) = log_path.parent() {
         fs::create_dir_all(parent).with_context(|| {
             format!(
@@ -41,7 +41,7 @@ pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
             )
         })?;
     }
-    let arguments = center_arguments(args)?;
+    let arguments = server_arguments(args)?;
 
     #[cfg(target_os = "macos")]
     let contents = launchd_plist(
@@ -70,7 +70,7 @@ pub(crate) fn start() -> Result<()> {
     let path = service_file_path()?;
     if !path.is_file() {
         bail!(
-            "Agena user service is not installed at {}; run `agena center install` first",
+            "Agena user service is not installed at {}; run `agena server install` first",
             path.display()
         );
     }
@@ -94,7 +94,7 @@ pub(crate) fn uninstall() -> Result<PathBuf> {
     Ok(path)
 }
 
-fn center_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
+fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
     let mut arguments = Vec::new();
     for expression in &args.overrides {
         arguments.push("--set".into());
@@ -108,7 +108,7 @@ fn center_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
         arguments.push("--database-path".into());
         arguments.push(database_path.as_os_str().to_owned());
     }
-    arguments.push("center".into());
+    arguments.push("server".into());
     arguments.push("--host".into());
     arguments.push(args.host.as_str().into());
     arguments.push("--port".into());
@@ -123,29 +123,7 @@ fn center_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
     arguments.push("--workspace".into());
     arguments.push(workspace.into_os_string());
 
-    if let Some(ui_dir) = &args.ui_dir {
-        arguments.push("--ui-dir".into());
-        arguments.push(ui_dir.into());
-    }
-    for origin in &args.cors_origin {
-        arguments.push("--cors-origin".into());
-        arguments.push(origin.into());
-    }
-    if args.cors_allow_all {
-        arguments.push("--cors-allow-all".into());
-    }
-    arguments.push("--ui-cookie-samesite".into());
-    arguments.push(cookie_same_site_name(&args.ui_cookie_samesite).into());
     Ok(arguments)
-}
-
-fn cookie_same_site_name(value: &agena_cli::UiCookieSameSite) -> &'static str {
-    match value {
-        agena_cli::UiCookieSameSite::Auto => "auto",
-        agena_cli::UiCookieSameSite::Strict => "strict",
-        agena_cli::UiCookieSameSite::Lax => "lax",
-        agena_cli::UiCookieSameSite::None => "none",
-    }
 }
 
 fn home_dir() -> Result<PathBuf> {
@@ -227,8 +205,8 @@ fn launchd_plist(
         program_arguments.push(os_text(argument.as_os_str(), "service argument")?);
     }
     let mut environment = vec![(
-        "AGENA_CENTER_RECORD",
-        path_text(record_path, "center record path")?,
+        "AGENA_SERVER_RECORD",
+        path_text(record_path, "server record path")?,
     )];
     if let Some(password) = ui_password.filter(|password| !password.trim().is_empty()) {
         environment.push(("AGENA_SERVER_UI_PASSWORD", password.to_owned()));
@@ -302,8 +280,8 @@ fn systemd_unit(
         "Environment={}",
         systemd_quote(
             format!(
-                "AGENA_CENTER_RECORD={}",
-                path_text(record_path, "center record path")?
+                "AGENA_SERVER_RECORD={}",
+                path_text(record_path, "server record path")?
             )
             .as_str()
         )?
@@ -316,7 +294,7 @@ fn systemd_unit(
     }
     Ok(format!(
         "[Unit]\n\
-Description=Agena processing center\n\
+Description=Agena server\n\
 After=network-online.target\n\
 Wants=network-online.target\n\n\
 [Service]\n\
@@ -417,7 +395,7 @@ fn stop_service(path: &Path) -> Result<()> {
         .arg(path)
         .status()
         .context("failed to execute launchctl bootout")?;
-    if !status.success() && super::center_record::record_path().exists() {
+    if !status.success() && super::server_record::record_path().exists() {
         bail!("launchctl bootout failed with status {status}");
     }
     Ok(())
@@ -450,7 +428,7 @@ fn stop_service(_path: &Path) -> Result<()> {
         .args(["--user", "stop", SYSTEMD_UNIT_NAME])
         .status()
         .context("failed to execute systemctl --user stop")?;
-    if !status.success() && super::center_record::record_path().exists() {
+    if !status.success() && super::server_record::record_path().exists() {
         bail!("systemctl --user stop failed with status {status}");
     }
     Ok(())
@@ -497,8 +475,8 @@ mod tests {
     fn launchd_definition_is_shell_free_private_service_contract() {
         let plist = launchd_plist(
             OsStr::new("/Applications/Agena & Tools/agena"),
-            &[OsString::from("center"), OsString::from("--workspace=a&b")],
-            Path::new("/tmp/agena & state/center.json"),
+            &[OsString::from("server"), OsString::from("--workspace=a&b")],
+            Path::new("/tmp/agena & state/server.json"),
             Path::new("/tmp/agena.log"),
             Some("p<&>\"'"),
         )
@@ -510,7 +488,7 @@ mod tests {
         assert!(!plist.contains("/bin/sh"));
 
         let directory = tempfile::tempdir().expect("temporary launchd directory");
-        let path = directory.path().join("com.agena.center.plist");
+        let path = directory.path().join("com.agena.server.plist");
         write_private_file(path.as_path(), plist.as_bytes()).expect("write private plist");
         let permissions = fs::metadata(&path).expect("plist metadata").permissions();
         use std::os::unix::fs::PermissionsExt as _;
@@ -527,8 +505,8 @@ mod tests {
     fn systemd_definition_is_shell_free_restart_contract() {
         let unit = systemd_unit(
             OsStr::new("/opt/Agena Tools/agena"),
-            &[OsString::from("center"), OsString::from("100%")],
-            Path::new("/tmp/agena state/center.json"),
+            &[OsString::from("server"), OsString::from("100%")],
+            Path::new("/tmp/agena state/server.json"),
             Some("secret value"),
         )
         .expect("render systemd unit");

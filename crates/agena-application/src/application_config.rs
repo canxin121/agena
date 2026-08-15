@@ -17,7 +17,7 @@ use crate::{Application, ApplicationError};
 impl Application {
     /// Exact resolved configuration document owned by the live Runtime.
     /// Thin clients use this projection instead of composing a second Runtime
-    /// merely to inspect the center's active configuration.
+    /// merely to inspect the server's active configuration.
     pub fn resolved_configuration_document(&self) -> Result<serde_json::Value, ApplicationError> {
         self.runtime_configuration()
             .runtime_configuration()

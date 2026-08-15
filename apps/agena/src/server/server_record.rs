@@ -5,17 +5,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use agena_api::resource::{CenterEndpointRecord, CenterIdentityResource};
+use agena_api::resource::{ServerEndpointRecord, ServerIdentityResource};
 use anyhow::{Context, Result};
 
-pub(crate) struct PublishedCenterRecord {
+pub(crate) struct PublishedServerRecord {
     path: PathBuf,
-    center_id: uuid::Uuid,
+    server_id: uuid::Uuid,
     pid: u32,
 }
 
 pub(crate) fn record_path() -> PathBuf {
-    if let Some(path) = env::var_os("AGENA_CENTER_RECORD") {
+    if let Some(path) = env::var_os("AGENA_SERVER_RECORD") {
         return PathBuf::from(path);
     }
     let mut base = env::var_os("HOME")
@@ -23,18 +23,18 @@ pub(crate) fn record_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     base.push("agena");
-    base.push("center.json");
+    base.push("server.json");
     base
 }
 
-pub(crate) fn read_record(path: &Path) -> Result<CenterEndpointRecord> {
+pub(crate) fn read_record(path: &Path) -> Result<ServerEndpointRecord> {
     let bytes = fs::read(path)
-        .with_context(|| format!("failed to read center record {}", path.display()))?;
-    let record = serde_json::from_slice::<CenterEndpointRecord>(&bytes)
-        .with_context(|| format!("failed to decode center record {}", path.display()))?;
+        .with_context(|| format!("failed to read server record {}", path.display()))?;
+    let record = serde_json::from_slice::<ServerEndpointRecord>(&bytes)
+        .with_context(|| format!("failed to decode server record {}", path.display()))?;
     anyhow::ensure!(
-        record.schema == CenterEndpointRecord::SCHEMA,
-        "unsupported center record schema {}",
+        record.schema == ServerEndpointRecord::SCHEMA,
+        "unsupported server record schema {}",
         record.schema
     );
     Ok(record)
@@ -42,32 +42,32 @@ pub(crate) fn read_record(path: &Path) -> Result<CenterEndpointRecord> {
 
 pub(crate) fn publish_record(
     url: String,
-    identity: &CenterIdentityResource,
-) -> Result<PublishedCenterRecord> {
+    identity: &ServerIdentityResource,
+) -> Result<PublishedServerRecord> {
     publish_record_at(record_path(), url, identity)
 }
 
 fn publish_record_at(
     path: PathBuf,
     url: String,
-    identity: &CenterIdentityResource,
-) -> Result<PublishedCenterRecord> {
+    identity: &ServerIdentityResource,
+) -> Result<PublishedServerRecord> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
         fs::create_dir_all(parent).with_context(|| {
             format!(
-                "failed to create center record directory {}",
+                "failed to create server record directory {}",
                 parent.display()
             )
         })?;
     }
     let temp_path = path.with_extension(format!("json.{}.{}.tmp", identity.pid, identity.id));
-    let record = CenterEndpointRecord {
-        schema: CenterEndpointRecord::SCHEMA,
+    let record = ServerEndpointRecord {
+        schema: ServerEndpointRecord::SCHEMA,
         url,
-        center_id: identity.id,
+        server_id: identity.id,
         pid: identity.pid,
         started_at: identity.started_at,
         protocol_version: identity.protocol_version,
@@ -81,20 +81,20 @@ fn publish_record_at(
     }
     let file = options.open(&temp_path).with_context(|| {
         format!(
-            "failed to create temporary center record {}",
+            "failed to create temporary server record {}",
             temp_path.display()
         )
     })?;
     let write_result = (|| -> Result<()> {
         let mut writer = BufWriter::new(file);
         serde_json::to_writer_pretty(&mut writer, &record)
-            .context("failed to serialize center record")?;
+            .context("failed to serialize server record")?;
         writer.write_all(b"\n")?;
         writer.flush()?;
         writer.get_ref().sync_all()?;
         fs::rename(&temp_path, &path).with_context(|| {
             format!(
-                "failed to atomically publish center record {}",
+                "failed to atomically publish server record {}",
                 path.display()
             )
         })?;
@@ -104,19 +104,19 @@ fn publish_record_at(
         let _ = fs::remove_file(&temp_path);
     }
     write_result?;
-    Ok(PublishedCenterRecord {
+    Ok(PublishedServerRecord {
         path,
-        center_id: identity.id,
+        server_id: identity.id,
         pid: identity.pid,
     })
 }
 
-impl Drop for PublishedCenterRecord {
+impl Drop for PublishedServerRecord {
     fn drop(&mut self) {
         let Ok(record) = read_record(&self.path) else {
             return;
         };
-        if record.center_id == self.center_id && record.pid == self.pid {
+        if record.server_id == self.server_id && record.pid == self.pid {
             let _ = fs::remove_file(&self.path);
         }
     }
@@ -129,8 +129,8 @@ mod tests {
     #[test]
     fn published_record_is_removed_only_by_its_owner() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let path = temp.path().join("center.json");
-        let identity = CenterIdentityResource {
+        let path = temp.path().join("server.json");
+        let identity = ServerIdentityResource {
             id: uuid::Uuid::new_v4(),
             pid: std::process::id(),
             started_at: chrono::Utc::now(),
@@ -138,12 +138,12 @@ mod tests {
         };
         let guard = publish_record_at(path.clone(), "http://127.0.0.1:3210".to_owned(), &identity)
             .expect("publish record");
-        assert_eq!(read_record(&path).expect("read").center_id, identity.id);
+        assert_eq!(read_record(&path).expect("read").server_id, identity.id);
 
-        let replacement = CenterEndpointRecord {
-            schema: CenterEndpointRecord::SCHEMA,
+        let replacement = ServerEndpointRecord {
+            schema: ServerEndpointRecord::SCHEMA,
             url: "http://127.0.0.1:4321".to_owned(),
-            center_id: uuid::Uuid::new_v4(),
+            server_id: uuid::Uuid::new_v4(),
             pid: identity.pid,
             started_at: chrono::Utc::now(),
             protocol_version: agena_api::PROTOCOL_VERSION,
@@ -155,8 +155,8 @@ mod tests {
         .expect("replace record");
         drop(guard);
         assert_eq!(
-            read_record(&path).expect("replacement survives").center_id,
-            replacement.center_id
+            read_record(&path).expect("replacement survives").server_id,
+            replacement.server_id
         );
     }
 }

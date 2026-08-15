@@ -1,6 +1,6 @@
 //! One-shot command dispatch.
 //!
-//! Center-backed commands and explicitly unavailable compatibility commands
+//! Server-backed commands and explicitly unavailable compatibility commands
 //! skip Runtime bootstrap preflight. Pure local presentation/marketplace
 //! commands may still read local configuration, but the CLI crate has no
 //! Runtime bootstrap or execution-lease path.
@@ -63,8 +63,8 @@ pub(crate) async fn run_command(mut cli: AgenaCli) -> Result<(), AgenaProcessErr
         .map(|preflight| preflight.tracing)
         .unwrap_or_default()
     };
-    cli.center = Some(super::super::center_client::resolve_center_url(
-        cli.center.take(),
+    cli.server = Some(super::super::server_client::resolve_server_url(
+        cli.server.take(),
     ));
 
     let initial_filter = agena_runtime::runtime_env_filter(&tracing).unwrap_or_else(|_| {

@@ -19,7 +19,7 @@ use agena_tool::ApplyPatchExecution;
 use async_trait::async_trait;
 
 mod cli_auth_helpers;
-mod cli_center;
+mod cli_server;
 mod cli_permissions;
 mod cli_run;
 mod cli_runtime_helpers;
@@ -60,7 +60,7 @@ use self::cli_validation::*;
     about = "Agena unified CLI and terminal UI",
     long_about = "Agena is an LLM-agent runtime with a unified CLI/TUI. \
                   Running `agena` starts the terminal UI directly; use \
-                  subcommands like `center`, `exec`, `sessions`, `plugin`, \
+                  subcommands like `server`, `exec`, `sessions`, `plugin`, \
                   `mcp-server`, or `rpc-server` for non-TUI workflows.\n\n\
                   Quick start:\n  \
                   agena\n  \
@@ -80,9 +80,9 @@ use self::cli_validation::*;
                   agena resume\n\n  \
                   Show effective config:\n    \
                   agena config resolve --format json\n\n  \
-                  Expose center-owned tools over MCP stdio:\n    \
+                  Expose server-owned tools over MCP stdio:\n    \
                   agena mcp-server --workspace .\n\n  \
-                  Inspect the processing center:\n    \
+                  Inspect the server:\n    \
                   agena diagnostics"
 )]
 /// Top-level CLI entry point.
@@ -91,30 +91,30 @@ pub struct AgenaCli {
     /// Raw `--set` expressions. Their schema-specific parsing belongs to the
     /// Runtime bootstrap composition boundary, not the CLI's public launch intent.
     pub overrides: Vec<String>,
-    /// Base URL of the long-lived processing center used by thin clients and
+    /// Base URL of the long-lived server used by thin clients and
     /// session-critical one-shot commands.
-    #[arg(long, env = "AGENA_CENTER_URL", global = true)]
-    pub center: Option<String>,
-    /// Ephemeral bearer token for a password-protected processing center.
-    /// Prefer AGENA_CENTER_TOKEN so the secret is not exposed in process args.
+    #[arg(long, env = "AGENA_SERVER_URL", global = true)]
+    pub server: Option<String>,
+    /// Ephemeral bearer token for a password-protected server.
+    /// Prefer AGENA_SERVER_TOKEN so the secret is not exposed in process args.
     #[arg(
         long,
-        env = "AGENA_CENTER_TOKEN",
+        env = "AGENA_SERVER_TOKEN",
         global = true,
         hide_env_values = true,
-        conflicts_with = "center_password"
+        conflicts_with = "server_password"
     )]
-    pub center_token: Option<String>,
-    /// UI password exchanged for an in-memory center bearer token.
-    /// Prefer AGENA_CENTER_PASSWORD so the secret is not exposed in process args.
+    pub server_token: Option<String>,
+    /// UI password exchanged for an in-memory server bearer token.
+    /// Prefer AGENA_SERVER_PASSWORD so the secret is not exposed in process args.
     #[arg(
         long,
-        env = "AGENA_CENTER_PASSWORD",
+        env = "AGENA_SERVER_PASSWORD",
         global = true,
         hide_env_values = true,
-        conflicts_with = "center_token"
+        conflicts_with = "server_token"
     )]
-    pub center_password: Option<String>,
+    pub server_password: Option<String>,
     #[arg(long, env = "AGENA_DATABASE_URL", global = true)]
     pub database_url: Option<String>,
     #[arg(long, env = "AGENA_DATABASE_PATH", global = true)]
@@ -127,8 +127,7 @@ pub struct AgenaCli {
 /// Top-level CLI commands.
 pub enum AgenaCommand {
     RpcServer(RpcServerArgs),
-    /// Run the long-lived processing center (legacy name: `server`).
-    #[command(name = "center", visible_alias = "server")]
+    /// Run the long-lived Agena server.
     Server(ServerArgs),
     Apply(ApplyArgs),
     Auth(AuthCommand),
@@ -208,25 +207,25 @@ impl AgenaCli {
             None => LaunchMode::Tui(TuiLaunchRequest {
                 config_override_expressions,
                 args: TuiArgs {
-                    center: self.center,
-                    center_token: self.center_token,
-                    center_password: self.center_password,
+                    server: self.server,
+                    server_token: self.server_token,
+                    server_password: self.server_password,
                     ..TuiArgs::default()
                 },
             }),
             Some(AgenaCommand::Tui(mut args)) => {
-                args.center = self.center;
-                args.center_token = self.center_token;
-                args.center_password = self.center_password;
+                args.server = self.server;
+                args.server_token = self.server_token;
+                args.server_password = self.server_password;
                 LaunchMode::Tui(TuiLaunchRequest {
                     config_override_expressions,
                     args,
                 })
             }
             Some(AgenaCommand::RpcServer(mut args)) => {
-                args.center = self.center.clone();
-                args.center_token = self.center_token.clone();
-                args.center_password = self.center_password.clone();
+                args.server = self.server.clone();
+                args.server_token = self.server_token.clone();
+                args.server_password = self.server_password.clone();
                 LaunchMode::RpcServer(RpcServerRequest {
                     config_override_expressions,
                     database_url: self.database_url.clone(),
@@ -699,14 +698,14 @@ pub struct SessionsCommand {
 #[derive(Debug, Clone, Args)]
 /// Arguments for the RPC server.
 pub struct RpcServerArgs {
-    /// Processing-center base URL. The IDE bridge is a remote client and does
+    /// Base URL of the remote server. The IDE bridge is a remote client and does
     /// not create an in-process Runtime.
     #[arg(skip)]
-    pub center: Option<String>,
+    pub server: Option<String>,
     #[arg(skip)]
-    pub center_token: Option<String>,
+    pub server_token: Option<String>,
     #[arg(skip)]
-    pub center_password: Option<String>,
+    pub server_password: Option<String>,
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
     #[arg(long, default_value_t = RpcServerTransport::Stdio, value_enum)]
@@ -722,9 +721,9 @@ pub enum RpcServerTransport {
 #[derive(Debug, Clone, Args)]
 /// Arguments for the HTTP server.
 pub struct ServerArgs {
-    /// Optional lifecycle operation. Omit to run the center in the foreground.
+    /// Optional lifecycle operation. Omit to run the server in the foreground.
     #[arg(value_enum)]
-    pub action: Option<CenterLifecycleAction>,
+    pub action: Option<ServerLifecycleAction>,
     #[arg(skip)]
     pub overrides: Vec<String>,
     #[arg(skip)]
@@ -739,29 +738,11 @@ pub struct ServerArgs {
     pub ui_password: Option<String>,
     #[arg(long = "workspace", env = "AGENA_WORKSPACE_ROOT", value_name = "PATH")]
     pub workspace_root: Option<PathBuf>,
-    #[arg(long, env = "AGENA_SERVER_UI_DIR", value_name = "PATH")]
-    pub ui_dir: Option<String>,
-    #[arg(
-        long,
-        env = "AGENA_SERVER_CORS_ORIGINS",
-        value_delimiter = ',',
-        value_name = "ORIGIN"
-    )]
-    pub cors_origin: Vec<String>,
-    #[arg(long, env = "AGENA_SERVER_CORS_ALLOW_ALL", default_value_t = false)]
-    pub cors_allow_all: bool,
-    #[arg(
-        long,
-        env = "AGENA_SERVER_UI_COOKIE_SAMESITE",
-        value_enum,
-        default_value = "auto"
-    )]
-    pub ui_cookie_samesite: UiCookieSameSite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab_case")]
-pub enum CenterLifecycleAction {
+pub enum ServerLifecycleAction {
     Start,
     Status,
     Stop,
@@ -769,22 +750,12 @@ pub enum CenterLifecycleAction {
     Uninstall,
 }
 
-#[derive(Clone, Debug, ValueEnum)]
-#[value(rename_all = "kebab_case")]
-/// SameSite policy of the UI cookie.
-pub enum UiCookieSameSite {
-    Auto,
-    Strict,
-    Lax,
-    None,
-}
-
 #[derive(Debug, Clone, Args)]
 #[command(
-    about = "Expose center-owned runtime tools over MCP stdio",
-    long_about = "Run a tools-only MCP stdio bridge backed by the long-lived processing center. \
-                  Tool discovery and invocation cross the public center API; this client never \
-                  starts or shuts down a Runtime, and stdio EOF does not cancel center-owned work."
+    about = "Expose server-owned runtime tools over MCP stdio",
+    long_about = "Run a tools-only MCP stdio bridge backed by the long-lived server. \
+                  Tool discovery and invocation cross the public server API; this client never \
+                  starts or shuts down a Runtime, and stdio EOF does not cancel server-owned work."
 )]
 /// Arguments for the thin-client MCP stdio bridge.
 pub struct McpServerArgs {
@@ -1203,7 +1174,7 @@ pub struct ContinueArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-/// Apply a patch through the processing center's workspace-bound tool bridge.
+/// Apply a patch through the server's workspace-bound tool bridge.
 pub struct ApplyArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
@@ -1239,13 +1210,13 @@ pub struct ExecArgs {
 #[derive(Debug, Clone, Args, Default)]
 /// Arguments for the TUI.
 pub struct TuiArgs {
-    /// Processing-center base URL. The TUI is a remote client by default.
+    /// Base URL of the remote server. The TUI is a remote client by default.
     #[arg(skip)]
-    pub center: Option<String>,
+    pub server: Option<String>,
     #[arg(skip)]
-    pub center_token: Option<String>,
+    pub server_token: Option<String>,
     #[arg(skip)]
-    pub center_password: Option<String>,
+    pub server_password: Option<String>,
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
     #[arg(long)]
@@ -1636,7 +1607,7 @@ type PluginValidationMessages = (Vec<PluginValidationMessage>, Vec<PluginValidat
 #[cfg(test)]
 mod parser_contract_tests {
     use super::{
-        AgenaCli, AgenaCommand, CenterLifecycleAction, LaunchMode, McpCredentialStoreArg,
+        AgenaCli, AgenaCommand, ServerLifecycleAction, LaunchMode, McpCredentialStoreArg,
         McpSubcommand, UsageArgs,
     };
     use clap::Parser;
@@ -1646,28 +1617,28 @@ mod parser_contract_tests {
         let cli = AgenaCli::try_parse_from(["agena"]).expect("parse bare CLI invocation");
         assert!(matches!(
             cli.into_launch_mode(),
-            LaunchMode::Tui(request) if request.args.center.is_none()
+            LaunchMode::Tui(request) if request.args.server.is_none()
         ));
     }
 
     #[test]
-    fn tui_center_modes_are_explicit() {
+    fn tui_server_modes_are_explicit() {
         let remote =
-            AgenaCli::try_parse_from(["agena", "tui", "--center", "http://127.0.0.1:4321"])
+            AgenaCli::try_parse_from(["agena", "tui", "--server", "http://127.0.0.1:4321"])
                 .expect("parse remote TUI");
         assert!(matches!(
             remote.into_launch_mode(),
             LaunchMode::Tui(request)
-                if request.args.center.as_deref() == Some("http://127.0.0.1:4321")
+                if request.args.server.as_deref() == Some("http://127.0.0.1:4321")
         ));
     }
 
     #[test]
-    fn rpc_server_is_an_explicit_processing_center_client() {
+    fn rpc_server_is_an_explicit_remote_client() {
         let cli = AgenaCli::try_parse_from([
             "agena",
             "rpc-server",
-            "--center",
+            "--server",
             "http://127.0.0.1:4321",
             "--workspace",
             ".",
@@ -1676,7 +1647,7 @@ mod parser_contract_tests {
         assert!(matches!(
             cli.into_launch_mode(),
             LaunchMode::RpcServer(request)
-                if request.args.center.as_deref() == Some("http://127.0.0.1:4321")
+                if request.args.server.as_deref() == Some("http://127.0.0.1:4321")
                     && request.args.workspace.as_deref() == Some(std::path::Path::new("."))
         ));
     }
@@ -1706,10 +1677,10 @@ mod parser_contract_tests {
     }
 
     #[test]
-    fn center_is_the_canonical_long_lived_server_command() {
-        for command in ["center", "server"] {
+    fn server_is_the_canonical_long_lived_server_command() {
+        for command in ["server"] {
             let cli = AgenaCli::try_parse_from(["agena", command, "--port", "4321"])
-                .expect("parse processing center command");
+                .expect("parse server command");
             assert!(matches!(
                 cli.into_launch_mode(),
                 LaunchMode::Server(request) if request.args.port == 4321
@@ -1718,16 +1689,16 @@ mod parser_contract_tests {
     }
 
     #[test]
-    fn center_lifecycle_actions_route_without_entering_command_runtime() {
+    fn server_lifecycle_actions_route_without_entering_command_runtime() {
         for (name, expected) in [
-            ("start", CenterLifecycleAction::Start),
-            ("status", CenterLifecycleAction::Status),
-            ("stop", CenterLifecycleAction::Stop),
-            ("install", CenterLifecycleAction::Install),
-            ("uninstall", CenterLifecycleAction::Uninstall),
+            ("start", ServerLifecycleAction::Start),
+            ("status", ServerLifecycleAction::Status),
+            ("stop", ServerLifecycleAction::Stop),
+            ("install", ServerLifecycleAction::Install),
+            ("uninstall", ServerLifecycleAction::Uninstall),
         ] {
-            let cli = AgenaCli::try_parse_from(["agena", "center", name])
-                .expect("parse center lifecycle action");
+            let cli = AgenaCli::try_parse_from(["agena", "server", name])
+                .expect("parse server lifecycle action");
             assert!(matches!(
                 cli.into_launch_mode(),
                 LaunchMode::Server(request) if request.args.action == Some(expected)

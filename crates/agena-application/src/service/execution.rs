@@ -206,7 +206,7 @@ impl ApplicationService {
         session_id: i64,
     ) -> ApplicationResult<SessionExecutionResource> {
         // Runtime execution_context is the public reconcile-on-open boundary:
-        // after a center restart it terminalizes a stale in-flight run before
+        // after a server restart it terminalizes a stale in-flight run before
         // projecting workflow and transcript state. Run it before the direct
         // storage resource read so one response cannot combine a reconciled
         // transcript with the pre-reconcile `Interrupted` session row.

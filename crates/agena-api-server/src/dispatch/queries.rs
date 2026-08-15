@@ -67,7 +67,7 @@ pub async fn dispatch_query(
             generation: 0,
             loaded_at: chrono::Utc::now(),
             database_connected: true,
-            center: Some(state.center().clone()),
+            server: Some(state.server().clone()),
         })),
         Query::Runtime => Ok(QueryResult::Runtime(state.runtime_status_response().await)),
         Query::ListActivities(params) => {

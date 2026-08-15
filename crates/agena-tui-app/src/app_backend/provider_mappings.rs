@@ -11,7 +11,7 @@ use crate::app_backend::inspector::{InspectorRow, summarize_named_mode};
 
 /// Enabled adapters and their configured model ids for `provider_id`.
 ///
-/// No processing-center endpoint exposes the in-process provider catalog's
+/// No server endpoint exposes the in-process provider catalog's
 /// configured-routing projection; the Provider Studio (the only consumer) is
 /// unavailable in remote client mode, so this degrades to an empty list.
 pub(crate) fn configured_provider_model_routes(
@@ -25,7 +25,7 @@ pub(crate) fn configured_provider_model_routes(
 /// Configured adapter model resources for `provider_id`, enriched from the
 /// model catalog so the Provider Studio draft shows complete display data.
 ///
-/// Provider Studio has no public center API; degrade to an empty list.
+/// Provider Studio has no public server API; degrade to an empty list.
 pub(crate) fn configured_provider_adapter_models(
     application: &crate::TuiBackend,
     provider_id: Option<&str>,
@@ -69,7 +69,7 @@ pub(crate) fn list_model_catalog_models(
     Ok(application.model_catalog())
 }
 
-/// Fetch a model-catalog page from the center into the shared cache and return
+/// Fetch a model-catalog page from the server into the shared cache and return
 /// the response, for the catalog workbench's paged browsing.
 pub(crate) async fn catalog_page(
     application: &crate::TuiBackend,
@@ -167,7 +167,7 @@ pub(crate) async fn refresh_model_catalog(application: &crate::TuiBackend) -> Re
         .client()
         .refresh_model_catalog()
         .await
-        .context("failed to refresh the model catalog through the center")?;
+        .context("failed to refresh the model catalog through the server")?;
     Ok(())
 }
 

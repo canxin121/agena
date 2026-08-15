@@ -161,7 +161,7 @@ fn plugin_command_input(
 
 /// Display contributions published by loaded plugins. Synchronous: consumed
 /// every frame by the status line and terminal title. In remote client mode
-/// these come from the cached plugin UI catalog fetched from the center.
+/// these come from the cached plugin UI catalog fetched from the server.
 pub(crate) fn plugin_display_contributions(
     application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::HostDisplayContribution> {
@@ -199,7 +199,7 @@ pub(crate) async fn refresh_plan_display(
 }
 
 /// Plugin notifications emitted through the unified `host.notify` entry.
-/// Notifications are push events; no processing-center HTTP endpoint exposes
+/// Notifications are push events; no server HTTP endpoint exposes
 /// the host's in-memory notification queue, so remote client mode degrades to
 /// an empty queue.
 pub(crate) fn plugin_host_notifications(
@@ -222,7 +222,7 @@ pub(crate) fn workspace_name(application: &super::TuiBackend) -> String {
 
 /// Theme palettes contributed by plugins. Synchronous: applied at startup and
 /// whenever the runtime reloads. In remote client mode these come from the
-/// cached plugin UI catalog fetched from the center.
+/// cached plugin UI catalog fetched from the server.
 pub(crate) fn plugin_theme_palettes(
     application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::HostThemePalette> {
@@ -244,7 +244,7 @@ pub(crate) fn plugin_inspect(
 ) -> Option<agena_plugin_host::PluginInspect> {
     let _ = (application, plugin_id);
     // `PluginInspect` is a Serialize-only host DTO whose members are not all
-    // deserializable; no public center response reproduces it. Degrade to
+    // deserializable; no public server response reproduces it. Degrade to
     // None in remote client mode.
     None
 }
@@ -286,7 +286,7 @@ pub(crate) fn plugin_slash_commands(
 /// Invoke a plugin command from a `/` slash command, resolving its effect
 /// (message, prompt, workbench, URL, or a tool invocation) over HTTP.
 ///
-/// Nested in-process command dispatch has no public center endpoint and is
+/// Nested in-process command dispatch has no public server endpoint and is
 /// refused with a clear error.
 pub(crate) async fn invoke_plugin_slash_command(
     application: &super::TuiBackend,
@@ -334,7 +334,7 @@ pub(crate) async fn invoke_plugin_slash_command(
             })
         }
         agena_plugin_host::PluginUiAction::InvokeCommand { .. } => Err(anyhow!(
-            "nested plugin command dispatch is unavailable in remote TUI mode until it has a public center API"
+            "nested plugin command dispatch is unavailable in remote TUI mode until it has a public server API"
         )),
     }
 }
@@ -363,7 +363,7 @@ pub(crate) async fn create_permission_rule(
         .command(Command::UpsertPermissionRule(params))
         .await?;
     let CommandResult::PermissionRule(rule) = result else {
-        bail!("processing center returned the wrong permission-rule result");
+        bail!("server returned the wrong permission-rule result");
     };
     Ok(rule)
 }
@@ -381,7 +381,7 @@ pub(crate) async fn replace_permission_rule(
         }))
         .await?;
     let CommandResult::PermissionRule(rule) = result else {
-        bail!("processing center returned the wrong permission-rule result");
+        bail!("server returned the wrong permission-rule result");
     };
     Ok(rule)
 }
@@ -398,7 +398,7 @@ pub(crate) async fn revoke_permission_rule(
         }))
         .await?;
     let CommandResult::PermissionRule(rule) = result else {
-        bail!("processing center returned the wrong permission-rule result");
+        bail!("server returned the wrong permission-rule result");
     };
     Ok(rule)
 }
@@ -410,7 +410,7 @@ pub(crate) async fn create_commit(
     let commit: agena_application::dto::GitCommitResource = serde_json::from_value(
         application.client().create_git_commit(message).await?,
     )
-    .context("the center returned an undecodable git commit result")?;
+    .context("the server returned an undecodable git commit result")?;
     Ok((commit.commit, commit.summary))
 }
 
@@ -427,6 +427,6 @@ pub(crate) async fn create_pr(
             .create_git_pull_request(title, body, base, head)
             .await?,
     )
-    .context("the center returned an undecodable git pull-request result")?;
+    .context("the server returned an undecodable git pull-request result")?;
     Ok(pull_request.url)
 }

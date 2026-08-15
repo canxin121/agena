@@ -1,7 +1,7 @@
 //! Backend adapters for the unified background-activities panel.
 //!
 //! The TUI is a pure HTTP client; these adapters route activity operations
-//! through the processing center's query/command surface.
+//! through the server's query/command surface.
 
 use agena_api::{
     commands::{
@@ -50,7 +50,7 @@ pub(crate) async fn list_activities(
         }))
         .await?;
     let QueryResult::Activities(activities) = result else {
-        bail!("processing center returned the wrong activity-list result");
+        bail!("server returned the wrong activity-list result");
     };
     Ok(activities)
 }
@@ -73,7 +73,7 @@ pub(crate) async fn activity_logs(
         .await
         .map_err(|error| anyhow!("failed to read background activity logs: {error}"))?;
     let QueryResult::ActivityLogs(logs) = result else {
-        bail!("processing center returned the wrong activity-log result");
+        bail!("server returned the wrong activity-log result");
     };
     Ok(logs)
 }
@@ -93,7 +93,7 @@ pub(crate) async fn control_activity(
                 .await
                 .map_err(|error| anyhow!("{error}"))?;
             let CommandResult::Activity(activity) = result else {
-                bail!("processing center returned the wrong activity-control result");
+                bail!("server returned the wrong activity-control result");
             };
             Ok(activity)
         }
@@ -106,7 +106,7 @@ pub(crate) async fn control_activity(
                 .await
                 .map_err(|error| anyhow!("{error}"))?;
             let CommandResult::Activity(activity) = result else {
-                bail!("processing center returned the wrong activity-control result");
+                bail!("server returned the wrong activity-control result");
             };
             Ok(activity)
         }
@@ -128,7 +128,7 @@ pub(crate) async fn clear_finished_activities(application: &crate::TuiBackend) -
         .await
         .map_err(|error| anyhow!("{error}"))?;
     let CommandResult::ActivitiesCleared { count } = result else {
-        bail!("processing center returned the wrong clear-finished result");
+        bail!("server returned the wrong clear-finished result");
     };
     Ok(count)
 }

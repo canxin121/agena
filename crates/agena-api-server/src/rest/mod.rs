@@ -159,7 +159,7 @@ pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, 
         generation: status.generation,
         loaded_at: status.loaded_at,
         database_connected: true,
-        center: Some(state.center().clone()),
+        server: Some(state.server().clone()),
     }))
 }
 

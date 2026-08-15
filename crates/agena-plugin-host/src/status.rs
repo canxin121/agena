@@ -46,7 +46,7 @@ impl fmt::Display for PluginRunState {
 pub struct PluginStatus {
     pub plugin_id: PluginKey,
     /// Owned so the status round-trips over the public API's JSON responses
-    /// (the center serializes its in-process statuses for remote clients).
+    /// (the server serializes its in-process statuses for remote clients).
     pub kind: String,
     pub state: PluginRunState,
     pub pid: Option<u32>,

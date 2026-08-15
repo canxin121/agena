@@ -11,7 +11,7 @@ use agena_api::{
     pagination::PaginatedResponse,
     resource::{
         ProviderAdapterModelsResponse, ProviderSummaryResource, SessionExecutionResource,
-        SessionResource,
+        SessionOverviewResource, SessionResource,
     },
 };
 use agena_domain::ModelRef;
@@ -540,6 +540,9 @@ pub struct App {
     /// a late response from an older, closed dashboard matching a newly
     /// opened dashboard that is also on its first request.
     pub(super) next_usage_request_id: u64,
+    /// Monotonic id for session-hub overview loads. Kept on the app so a late
+    /// response from an older hub cannot overwrite a freshly refreshed one.
+    pub(super) next_hub_request_id: u64,
     /// Forwarder task that pumps `app_backend::live_events::subscribe_session_events` into
     /// [`AppMessage::SessionEventArrived`]. Aborted whenever the active
     /// session changes so we don't accumulate stale subscriptions.
@@ -631,6 +634,10 @@ pub(super) enum AppMessage {
     UsageStatsLoaded {
         request_id: u64,
         result: UiResult<UsageStats>,
+    },
+    HubOverviewLoaded {
+        request_id: u64,
+        result: UiResult<SessionOverviewResource>,
     },
     SessionsLoaded {
         scope: SessionLoadScope,
@@ -937,6 +944,7 @@ pub(super) enum Route {
     PermissionStudio(PermissionStudioOverlay),
     PermissionRuleStudio(PermissionRuleStudioOverlay),
     SessionSearch(SessionSearchOverlay),
+    Hub(HubState),
     CommandPalette(CommandPaletteOverlay),
     SkillPicker(SkillPickerOverlay),
     SkillStudio(SkillStudioOverlay),
@@ -947,6 +955,26 @@ pub(super) enum Route {
     PluginWorkbench(Box<PluginWorkbenchOverlay>),
     ProviderStudio(Box<ProviderStudioOverlay>),
     ModelCatalogStudio(ModelCatalogStudioOverlay),
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct HubState {
+    pub(super) presentation: SessionHubPresentation,
+    pub(super) loading: bool,
+    pub(super) request_id: u64,
+    pub(super) error: Option<String>,
+}
+
+impl HubState {
+    pub(super) fn new() -> Self {
+        use agena_tui_components::SectionedListFocus;
+        Self {
+            presentation: SessionHubPresentation::empty(SectionedListFocus::Items),
+            loading: true,
+            request_id: 0,
+            error: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

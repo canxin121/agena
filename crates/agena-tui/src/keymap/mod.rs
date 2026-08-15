@@ -92,6 +92,7 @@ pub enum KeyContext {
     Usage,
     Activities,
     PlanViewer,
+    Hub,
     SettingsStudio,
     PermissionStudio,
     PermissionRuleStudio,
@@ -130,6 +131,8 @@ pub enum KeyAction {
     New,
     Continue,
     OpenUsage,
+    HubCreateSession,
+    HubOpenSessionList,
     OpenPlan,
     ModeAll,
     ModeRoots,
@@ -257,7 +260,8 @@ pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
         | KeyContext::PermissionPrompt
         | KeyContext::UserInputQuestion
         | KeyContext::UserInputReview
-        | KeyContext::PlanViewer => core::resolve(context, key),
+        | KeyContext::PlanViewer
+        | KeyContext::Hub => core::resolve(context, key),
         KeyContext::Usage => usage::resolve(key),
         KeyContext::Activities => activities::resolve(key),
         KeyContext::SettingsStudio

@@ -224,6 +224,7 @@ mod app_composer;
 mod app_composer_helpers;
 mod app_composer_state;
 mod app_help;
+mod app_hub;
 mod app_input;
 mod app_lifecycle;
 mod app_mouse;

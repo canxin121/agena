@@ -155,7 +155,6 @@ function readMatchQueryValue(record: Record<string, string> | null | undefined, 
 
 function defaultMatchKeysForMainTab(tab: MainTab): string[] {
   if (tab === 'chat') return ['sessionId']
-  if (tab === 'files') return ['filePath']
   return []
 }
 

@@ -8,7 +8,8 @@ import { apiJson } from '@/lib/api'
 import { useChatStore } from '@/stores/chat'
 import { useToastsStore } from '@/stores/toasts'
 import Button from '@/components/ui/Button.vue'
-import SessionHubRow, { type HubRowKind, type SessionResource } from '@/components/hub/SessionHubRow.vue'
+import SessionHubRow from '@/components/hub/SessionHubRow.vue'
+import type { HubRowKind, SessionResource } from '@/components/hub/types'
 
 /** Response of GET /api/v1/sessions/overview. */
 interface SessionOverview {

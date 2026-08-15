@@ -2,10 +2,10 @@
 import { computed } from 'vue'
 import {
   RiBarChartLine,
-  RiMemoryLine,
+  RiBrain2Line,
   RiServerLine,
   RiShieldCheckLine,
-  RiSlidersLine,
+  RiSettingsLine,
   RiTimerLine,
 } from '@remixicon/vue'
 
@@ -32,9 +32,9 @@ const topLevelIcon = computed(() => {
   if (props.icon === 'providers') return RiServerLine
   if (props.icon === 'permissions') return RiShieldCheckLine
   if (props.icon === 'activities') return RiTimerLine
-  if (props.icon === 'memories') return RiMemoryLine
+  if (props.icon === 'memories') return RiBrain2Line
   if (props.icon === 'usage') return RiBarChartLine
-  return RiSlidersLine
+  return RiSettingsLine
 })
 </script>
 

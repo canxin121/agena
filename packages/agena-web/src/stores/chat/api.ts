@@ -118,10 +118,6 @@ function asRecord(value: JsonValue): JsonObject {
   return isRecord(value) ? value : {}
 }
 
-function num(v: unknown): number | undefined {
-  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
-}
-
 function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
 }

@@ -13,7 +13,6 @@ import { STORAGE_RUN_CONFIG } from './chat/storeKeys'
 import { ApiError } from '../lib/api'
 import { setLocalJson, getLocalJson } from '../lib/persist'
 import { useToastsStore } from './toasts'
-import { useSettingsStore } from './settings'
 import type { SseEvent } from '../lib/sse'
 import type {
   AttentionEvent,
@@ -21,8 +20,6 @@ import type {
   MessageInfo,
   MessagePart,
   Session,
-  SessionError,
-  SessionErrorClassification,
   SessionErrorEvent,
   SessionRunConfig,
   SessionStatus,
@@ -35,21 +32,6 @@ import type { JsonObject, JsonValue } from '../types/json'
 const SESSION_PAGE_SIZE = 30
 const MESSAGE_PAGE_SIZE = 200
 const STORAGE_SELECTED_SESSION = 'agena.chat.selected-session-id.v1'
-
-function clampText(input: JsonValue, max = 260): string {
-  const raw = typeof input === 'string' ? input : ''
-  const t = raw.trim()
-  if (!t) return ''
-  return t.length > max ? `${t.slice(0, max - 1)}…` : t
-}
-
-function safeJson(value: JsonValue): string {
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
-}
 
 function isRecord(value: JsonValue): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -77,7 +59,6 @@ function firstNonEmpty(values: Array<string | null | undefined>): string {
 
 export const useChatStore = defineStore('chat', () => {
   const toasts = useToastsStore()
-  const settings = useSettingsStore()
 
   // ─── sessions ─────────────────────────────────────────────────────────────
   const sessions = ref<Session[]>([])
@@ -115,12 +96,10 @@ export const useChatStore = defineStore('chat', () => {
 
   // ─── timers / inflight guards ─────────────────────────────────────────────
   let refreshTimer: number | null = null
-  let refreshMessagesTimer: number | null = null
   const refreshMessagesRetryTimerBySession = new Map<string, number>()
   const refreshMessagesRequestSeqBySession = new Map<string, number>()
   const attentionRefreshTimerBySession = new Map<string, number>()
   let createSessionInFlight: Promise<Session | null> | null = null
-  let lastGlobalErrorToastAt = 0
   const lastSessionErrorToastByKey = new Map<string, { at: number; message: string }>()
 
   function loadStoredSelectedSession(): string | null {
@@ -954,11 +933,6 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   // ─── composer helpers ─────────────────────────────────────────────────────
-
-  function setPendingComposer(text: string, parts?: JsonValue[]) {
-    pendingInputText.value = (text || '').trim()
-    pendingInputParts.value = Array.isArray(parts) ? parts : []
-  }
 
   function consumePendingComposer(): { text: string; parts: JsonValue[] } {
     const value = { text: pendingInputText.value, parts: pendingInputParts.value }

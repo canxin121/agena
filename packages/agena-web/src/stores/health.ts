@@ -21,7 +21,7 @@ export type Health = {
   generation?: number
   loaded_at?: string
   database_connected?: boolean
-  center?: { id?: string; pid?: number; started_at?: string; protocol_version?: number }
+  server?: { id?: string; pid?: number; started_at?: string; protocol_version?: number }
 }
 
 export const useHealthStore = defineStore('health', () => {

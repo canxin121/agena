@@ -283,7 +283,7 @@ export function useAppRuntime() {
 
     applyDeviceClasses(info)
     ui.setIsCompactLayout(info.isCompactLayout)
-    ui.setIsMobileDevice(info.isMobileDevice)
+    ui.setIsMobileDevice(info.isMobile)
     ui.setIsTouchPointer(info.isTouchPointer)
     ui.setIsMobilePointer(info.isMobilePointer)
   }

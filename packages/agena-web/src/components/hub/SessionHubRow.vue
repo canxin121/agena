@@ -1,36 +1,10 @@
-<script lang="ts">
-/**
- * SessionResource shape as returned by GET /api/v1/sessions/overview.
- * Shared (via this normal <script> block's type export) with SessionHubPage.
- */
-export type SessionResource = {
-  id: number
-  parent_id?: number | null
-  depth: number
-  root_id: number
-  workspace_id: number
-  title?: string | null
-  version: number
-  relation_kind: 'root' | 'child' | 'fork' | 'rewind' | 'subagent'
-  lifecycle_state: string
-  state: 'creating' | 'ready' | 'running' | 'awaiting_user' | 'interrupted' | 'failed'
-  is_subagent: boolean
-  message_count: number
-  child_session_count: number
-  last_message_at?: string | null
-  created_at: string
-  updated_at: string
-}
-
-export type HubRowKind = 'attention' | 'running' | 'recent'
-</script>
-
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiArrowRightSLine, RiGitBranchLine, RiLoader4Line, RiMessageLine } from '@remixicon/vue'
 
 import { getIntlLocale } from '@/i18n/intl'
+import type { HubRowKind, SessionResource } from './types'
 
 const props = withDefaults(
   defineProps<{

@@ -21,7 +21,6 @@ import MessageList from '@/components/chat/MessageList.vue'
 import ChatHeader from '@/components/chat/ChatHeader.vue'
 import Composer from '@/components/chat/Composer.vue'
 import RenameSessionDialog from '@/components/chat/RenameSessionDialog.vue'
-import AttachProjectDialog from '@/components/chat/AttachProjectDialog.vue'
 import AttachmentsPanel from '@/components/chat/AttachmentsPanel.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
@@ -114,10 +113,8 @@ const {
   removeAttachment,
   clearAttachments,
   openFilePicker,
-  openProjectAttachDialog,
   toggleAttachmentsPanel,
   setAttachmentsPanelOpen,
-  closeAttachmentsPanel,
 
   // Header actions.
   canAbort,
@@ -177,10 +174,6 @@ const {
   renameDraft,
   renameBusy,
   saveRename,
-  attachProjectDialogOpen,
-  attachProjectPath,
-  sessionDirectory,
-  addProjectAttachment,
 
   // Message actions.
   isStreamingAssistantMessage,
@@ -228,11 +221,6 @@ const attachmentsCountLabel = computed(() => {
   if (n > 99) return '99+'
   return String(n)
 })
-
-function handleAttachProjectFromPanel() {
-  closeAttachmentsPanel()
-  openProjectAttachDialog()
-}
 
 // Resolve popover anchors to the trigger button element.
 // This keeps desktop popups aligned with the button that opened them.
@@ -685,15 +673,6 @@ void sessionActionsMenuRef
     @save="saveRename"
   />
 
-  <AttachProjectDialog
-    :open="attachProjectDialogOpen"
-    v-model:path="attachProjectPath"
-    :base-path="sessionDirectory"
-    :attached-count="attachedFiles.length"
-    @update:open="(v) => (attachProjectDialogOpen = v)"
-    @add="addProjectAttachment"
-  />
-
   <AttachmentsPanel
     :open="attachmentsPanelOpen"
     :is-mobile-pointer="ui.isMobilePointer"
@@ -708,7 +687,6 @@ void sessionActionsMenuRef
     @remove="removeAttachment"
     @clear="clearAttachments"
     @attachLocal="openFilePicker"
-    @attachProject="handleAttachProjectFromPanel"
   />
 </template>
 

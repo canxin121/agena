@@ -146,7 +146,6 @@ export type ChatPageViewContext = {
   removeAttachment: (id: string) => void
   clearAttachments: () => void
   openFilePicker: () => void
-  openProjectAttachDialog: () => void
   toggleAttachmentsPanel: () => void
   setAttachmentsPanelOpen: (open: boolean) => void | Promise<void>
   closeAttachmentsPanel: () => void
@@ -203,10 +202,7 @@ export type ChatPageViewContext = {
   renameDraft: MaybeRef<string>
   renameBusy: MaybeRef<boolean>
   saveRename: () => void | Promise<void>
-  attachProjectDialogOpen: MaybeRef<boolean>
-  attachProjectPath: MaybeRef<string>
   sessionDirectory: MaybeRef<string>
-  addProjectAttachment: () => void | Promise<void>
 
   isStreamingAssistantMessage: (message: MessageRecordLike | null | undefined) => boolean
   handleCopySessionError: () => void | Promise<void>

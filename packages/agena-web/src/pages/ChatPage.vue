@@ -89,8 +89,6 @@ const attachments = useChatAttachments({ toasts, composerRef })
 const {
   attachedFiles,
   attachmentsBusy,
-  attachProjectDialogOpen,
-  attachProjectPath,
   formatBytes,
   handleDrop,
   handlePaste,
@@ -98,8 +96,6 @@ const {
   removeAttachment,
   clearAttachments,
   openFilePicker,
-  openProjectAttachDialog,
-  addProjectAttachment,
 } = attachments
 
 const editorFullscreen = ref(false)
@@ -962,9 +958,6 @@ function handleSessionActionRequest(actionId: string) {
     case 'attach-local':
       openFilePicker()
       break
-    case 'attach-project':
-      openProjectAttachDialog()
-      break
     default:
       break
   }
@@ -1269,7 +1262,6 @@ const viewCtx = {
   removeAttachment,
   clearAttachments,
   openFilePicker,
-  openProjectAttachDialog,
   toggleAttachmentsPanel,
   setAttachmentsPanelOpen,
   closeAttachmentsPanel,
@@ -1371,10 +1363,7 @@ const viewCtx = {
   renameDraft,
   renameBusy,
   saveRename,
-  attachProjectDialogOpen,
-  attachProjectPath,
   sessionDirectory,
-  addProjectAttachment,
 } satisfies ChatPageViewContext
 
 onBeforeUnmount(() => {

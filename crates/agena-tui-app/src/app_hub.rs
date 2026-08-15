@@ -49,16 +49,12 @@ impl App {
         request_id: u64,
         result: super::UiResult<SessionOverviewResource>,
     ) {
-        let Route::Hub(state) = &mut self.current_route else {
-            return;
-        };
-        if request_id != state.request_id {
-            return;
-        }
-        state.loading = false;
-        match result {
-            Ok(overview) => {
-                let sections = vec![
+        let (valid, loading, error, sections) = match result {
+            Ok(overview) => (
+                true,
+                false,
+                None,
+                Some(vec![
                     SessionHubSection::new(
                         SessionHubSectionKind::Attention,
                         overview
@@ -83,11 +79,23 @@ impl App {
                             .map(|session| self.hub_session_item(session))
                             .collect(),
                     ),
-                ];
-                state.presentation.set_sections(sections);
-                state.presentation.clamp_selection();
-            }
-            Err(error) => state.error = Some(error.to_string()),
+                ]),
+            ),
+            Err(error) => (false, false, Some(error.to_string()), None),
+        };
+        let Route::Hub(state) = &mut self.current_route else {
+            return;
+        };
+        if !valid || request_id != state.request_id {
+            return;
+        }
+        state.loading = loading;
+        if let Some(error) = error {
+            state.error = Some(error);
+        }
+        if let Some(sections) = sections {
+            state.presentation.set_sections(sections);
+            state.presentation.clamp_selection();
         }
     }
 

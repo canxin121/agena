@@ -274,12 +274,12 @@ fn split_section_areas(area: Rect, sections: &[SessionHubSection]) -> Vec<Rect> 
     }
     let total = sections
         .iter()
-        .map(|section| section.items.len().max(1) as u16)
-        .sum::<u16>()
+        .map(|section| section.items.len().max(1) as u32)
+        .sum::<u32>()
         .max(1);
     let constraints = sections
         .iter()
-        .map(|section| Constraint::Ratio(section.items.len().max(1) as u16, total))
+        .map(|section| Constraint::Ratio(section.items.len().max(1) as u32, total))
         .collect::<Vec<_>>();
     Layout::default()
         .direction(Direction::Vertical)

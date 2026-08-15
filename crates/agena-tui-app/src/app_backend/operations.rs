@@ -240,7 +240,7 @@ pub(crate) async fn set_workspace_config_setting(
     value: serde_json::Value,
 ) -> Result<agena_runtime::ConfigSettingsEditResponse> {
     application
-        .set_config_setting(path, value)
+        .set_workspace_config_setting(path, value)
         .await
         .context("failed to set workspace config setting")
 }
@@ -252,7 +252,7 @@ pub(crate) async fn delete_workspace_config_setting(
     path: &str,
 ) -> Result<agena_runtime::ConfigSettingsEditResponse> {
     application
-        .delete_config_setting(path)
+        .delete_workspace_config_setting(path)
         .await
         .context("failed to delete workspace config setting")
 }

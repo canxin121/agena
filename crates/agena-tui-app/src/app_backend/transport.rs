@@ -429,9 +429,61 @@ impl TuiBackend {
         Err(remote_provider_studio_error())
     }
 
-    /// Set a workspace-scoped config file setting through the server,
-    /// reloading the runtime when the edit requires it.
+    /// Set a GLOBAL config file setting through the server, reloading the
+    /// runtime when the edit requires it. The server validates the edit
+    /// against the full composed configuration and owns the file write.
     pub async fn set_config_setting(
+        &self,
+        path: &str,
+        value: serde_json::Value,
+    ) -> std::result::Result<
+        agena_runtime::ConfigSettingsEditResponse,
+        agena_application::ApplicationError,
+    > {
+        let response = self
+            .client()
+            .set_settings_layer_value("global", path.trim(), value, false, true)
+            .await
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "failed to set global config setting `{path}` through the server: {error}"
+                ))
+            })?;
+        serde_json::from_value(response).map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "the server returned an undecodable config edit response: {error}"
+            ))
+        })
+    }
+
+    /// Delete a GLOBAL config file setting through the server, reloading the
+    /// runtime when the edit requires it.
+    pub async fn delete_config_setting(
+        &self,
+        path: &str,
+    ) -> std::result::Result<
+        agena_runtime::ConfigSettingsEditResponse,
+        agena_application::ApplicationError,
+    > {
+        let response = self
+            .client()
+            .delete_settings_layer_value("global", path.trim(), false, true)
+            .await
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "failed to delete global config setting `{path}` through the server: {error}"
+                ))
+            })?;
+        serde_json::from_value(response).map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "the server returned an undecodable config edit response: {error}"
+            ))
+        })
+    }
+
+    /// Set a WORKSPACE-scoped config file setting through the server,
+    /// reloading the runtime when the edit requires it.
+    pub async fn set_workspace_config_setting(
         &self,
         path: &str,
         value: serde_json::Value,
@@ -455,9 +507,9 @@ impl TuiBackend {
         })
     }
 
-    /// Delete a workspace-scoped config file setting through the server,
+    /// Delete a WORKSPACE-scoped config file setting through the server,
     /// reloading the runtime when the edit requires it.
-    pub async fn delete_config_setting(
+    pub async fn delete_workspace_config_setting(
         &self,
         path: &str,
     ) -> std::result::Result<
@@ -480,8 +532,11 @@ impl TuiBackend {
         })
     }
 
-    /// Set the workspace's default provider selection (an alias of the
-    /// `providers.default_selection` workspace config setting).
+    /// Set the global default provider selection through the server. The
+    /// server atomically patches `providers.default` and
+    /// `providers.default_selection` on the global config and reloads the
+    /// runtime, mirroring the canonical embedded
+    /// `Application::set_provider_default_selection`.
     pub async fn set_provider_default_selection(
         &self,
         provider_id: &str,
@@ -490,8 +545,30 @@ impl TuiBackend {
         agena_runtime::ConfigSettingsEditResponse,
         agena_application::ApplicationError,
     > {
-        let _ = provider_id;
-        self.set_config_setting("providers.default_selection", selection).await
+        let provider_id = provider_id.trim();
+        if provider_id.is_empty() {
+            return Err(agena_application::ApplicationError::internal(
+                "provider id is required",
+            ));
+        }
+        let changes = serde_json::json!({
+            "default": provider_id,
+            "default_selection": selection,
+        });
+        let response = self
+            .client()
+            .patch_settings("providers", changes, false, true)
+            .await
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "failed to set provider default selection through the server: {error}"
+                ))
+            })?;
+        serde_json::from_value(response).map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "the server returned an undecodable config edit response: {error}"
+            ))
+        })
     }
 
     /// Set a session's selected permission policy through the server.

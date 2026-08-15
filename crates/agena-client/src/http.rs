@@ -1014,6 +1014,32 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
+    /// Patch values in the global config file through `PATCH /api/v1/settings`.
+    /// The server owns the write: it validates against the full composed
+    /// configuration, persists to the global file layer, and reloads the
+    /// runtime when the edit requires it. `changes` is a JSON object merged
+    /// at the given `path` (e.g. `"providers"` with `{default, default_selection}`).
+    pub async fn patch_settings(
+        &self,
+        path: &str,
+        changes: serde_json::Value,
+        dry_run: bool,
+        reload: bool,
+    ) -> Result<serde_json::Value, ClientError> {
+        let url = self.endpoint("/api/v1/settings");
+        let body = serde_json::json!({
+            "path": path,
+            "changes": changes,
+            "dry_run": dry_run,
+            "validate": true,
+            "reload": reload,
+        });
+        let response = self
+            .send_request(reqwest::Method::PATCH, url, Some(&body), None)
+            .await?;
+        self.parse_json(response).await
+    }
+
     pub async fn set_settings_layer_value(
         &self,
         layer: &str,

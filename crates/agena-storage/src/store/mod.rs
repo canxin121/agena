@@ -1,6 +1,5 @@
 //! The v2 parts-first store: pure types, the engine contract, the sealed
-//! `SessionStore` facade, and the in-memory backend. See
-//! `docs/database-design-v2.md` sections 14-15.
+//! `SessionStore` facade, and the in-memory backend.
 //!
 //! The facade composes either [`PersistenceEngine`] backend — [`InMemoryEngine`]
 //! here or the SQLite engine in `agena-storage-sqlite` — and is the only public

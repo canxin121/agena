@@ -3,7 +3,7 @@
 //! After the R7 refactor, the TUI app holds [`agena_application::Application`]
 //! directly. The methods in this module are the former `Backend` methods that
 //! do **not** carry shared runtime logic (those down-moved onto
-//! `impl Application` per `docs/r7-application-signature-brief.md`); they
+//! `impl Application`); they
 //! translate runtime/API resources into UI-friendly presentation values and
 //! are implemented as free functions taking `&Application`.
 //!

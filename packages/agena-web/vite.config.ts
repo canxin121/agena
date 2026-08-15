@@ -21,5 +21,14 @@ export default defineConfig(({ mode }) => {
       cssMinify: isRustDebugBuild ? false : undefined,
       sourcemap: isRustDebugBuild ? true : false,
     },
+    server: {
+      // The SPA talks to the single agena server via same-origin paths; forward
+      // the API/auth/health routes there (see src/lib/backend.ts).
+      proxy: {
+        '/api': 'http://127.0.0.1:3210',
+        '/auth': 'http://127.0.0.1:3210',
+        '/health': 'http://127.0.0.1:3210',
+      },
+    },
   }
 })

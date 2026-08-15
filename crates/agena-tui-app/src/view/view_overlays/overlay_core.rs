@@ -99,6 +99,7 @@ impl App {
             Route::SessionSearch(dialog) => {
                 agena_tui_session::session_search::render_overlay(frame, area, dialog, &self.i18n);
             }
+            Route::Hub(state) => self.render_hub(frame, area, state, SurfaceMode::Route),
             Route::CommandPalette(dialog) => {
                 agena_tui::command_palette::render_overlay(
                     frame,

@@ -139,6 +139,7 @@ impl App {
             current_lineage: None,
             side_sessions: HashMap::new(),
             next_usage_request_id: 0,
+            next_hub_request_id: 0,
             active_subscription: None,
             queue: ComposerQueue::new(),
             status_line,
@@ -322,16 +323,17 @@ impl App {
                 session_id,
                 ui_text::session_fallback_title(&self.i18n, session_id),
             );
-        } else {
-            // The center owns sessions independently from this client. Start
-            // on the shared running/recent session view so reconnecting to an
-            // existing center never looks like a brand-new empty session.
-            let query = self
-                .launch
-                .initial_session_search
-                .clone()
-                .unwrap_or_default();
+        } else if let Some(query) = self.launch.initial_session_search.clone() {
+            // An explicit --search launch keeps opening the resume picker so
+            // the requested session list is visible immediately.
             self.open_resume_session_picker_with_query(query.as_str());
+        } else {
+            // The server owns sessions independently from this client. Land
+            // on the session hub home screen (attention / running / recent,
+            // create-new-session) instead of opening straight into a session
+            // list, so reconnecting to an existing server never looks like a
+            // brand-new empty session and the user can pick where to go.
+            self.open_hub();
         }
     }
 

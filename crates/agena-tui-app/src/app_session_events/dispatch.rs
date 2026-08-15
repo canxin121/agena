@@ -38,6 +38,9 @@ impl App {
             AppMessage::UsageStatsLoaded { request_id, result } => {
                 self.handle_usage_stats_loaded(request_id, result)
             }
+            AppMessage::HubOverviewLoaded { request_id, result } => {
+                self.handle_hub_overview_loaded(request_id, result)
+            }
             AppMessage::SessionsLoaded {
                 scope,
                 subtree_root_id,

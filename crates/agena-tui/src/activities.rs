@@ -67,7 +67,10 @@ pub struct ActivitiesRow {
 
 impl ActivitiesRow {
     pub fn is_active(&self) -> bool {
-        matches!(self.status.as_str(), "pending" | "running" | "paused")
+        matches!(
+            self.status.as_str(),
+            "pending" | "running" | "waiting" | "paused"
+        )
     }
 
     pub fn running_seconds(&self, now_ms: i64) -> Option<i64> {
@@ -246,7 +249,8 @@ impl ActivitiesPresentation {
     pub fn cycle_status_filter(&mut self) {
         self.status_filter = match self.status_filter.as_deref() {
             None => Some("running".to_owned()),
-            Some("running") => Some("pending".to_owned()),
+            Some("running") => Some("waiting".to_owned()),
+            Some("waiting") => Some("pending".to_owned()),
             Some("pending") => Some("paused".to_owned()),
             Some("paused") => Some("failed".to_owned()),
             Some("failed") => Some("succeeded".to_owned()),
@@ -285,6 +289,7 @@ pub fn status_label(status: &str) -> &'static str {
     match status {
         "pending" => "pending",
         "running" => "running",
+        "waiting" => "waiting",
         "paused" => "paused",
         "succeeded" => "succeeded",
         "failed" => "failed",
@@ -309,6 +314,7 @@ pub fn kind_icon(kind: &str) -> &'static str {
 fn status_style(status: &str) -> Style {
     match status {
         "running" | "pending" => Style::default().fg(accent_color()),
+        "waiting" => Style::default().fg(info_color()),
         "paused" => Style::default().fg(warning_color()),
         "succeeded" => Style::default().fg(success_color()),
         "failed" => Style::default().fg(danger_color()),
@@ -810,7 +816,7 @@ mod tests {
     fn status_filter_cycles_cancelled_and_stopped() {
         let mut presentation = ActivitiesPresentation::default();
         let mut statuses = Vec::new();
-        for _ in 0..8 {
+        for _ in 0..9 {
             presentation.cycle_status_filter();
             statuses.push(presentation.status_filter.clone());
         }
@@ -818,6 +824,7 @@ mod tests {
             statuses,
             vec![
                 Some("running".to_owned()),
+                Some("waiting".to_owned()),
                 Some("pending".to_owned()),
                 Some("paused".to_owned()),
                 Some("failed".to_owned()),

@@ -41,6 +41,7 @@ const kindOptions = [
 const statusOptions = [
   { value: '', label: 'All statuses' },
   { value: 'running', label: 'Running' },
+  { value: 'waiting', label: 'Waiting' },
   { value: 'pending', label: 'Pending' },
   { value: 'paused', label: 'Paused' },
   { value: 'succeeded', label: 'Succeeded' },
@@ -68,7 +69,7 @@ const activeCount = computed(() => activities.value.filter((activity) => isActiv
 const finishedCount = computed(() => activities.value.length - activeCount.value)
 
 function isActive(status: string): boolean {
-  return status === 'running' || status === 'pending' || status === 'paused'
+  return status === 'running' || status === 'waiting' || status === 'pending' || status === 'paused'
 }
 
 function kindIcon(kind: string): string {
@@ -353,6 +354,11 @@ onBeforeUnmount(() => {
 .badge.status-running {
   background: rgba(0, 122, 255, 0.15);
   color: #5aa8ff;
+}
+
+.badge.status-waiting {
+  background: rgba(70, 160, 210, 0.15);
+  color: #71c4e8;
 }
 
 .badge.status-pending {

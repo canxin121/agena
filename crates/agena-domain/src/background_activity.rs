@@ -70,6 +70,9 @@ pub enum BackgroundActivityStatus {
     /// limits).
     Pending,
     Running,
+    /// An active durable schedule that is armed but is not currently
+    /// delivering a wake. This includes waiting for its next fire or retry.
+    Waiting,
     /// A durable schedule that remains manageable but will not fire until
     /// resumed.
     Paused,
@@ -83,7 +86,10 @@ pub enum BackgroundActivityStatus {
 
 impl BackgroundActivityStatus {
     pub fn is_active(self) -> bool {
-        matches!(self, Self::Pending | Self::Running | Self::Paused)
+        matches!(
+            self,
+            Self::Pending | Self::Running | Self::Waiting | Self::Paused
+        )
     }
 
     pub fn is_terminal(self) -> bool {
@@ -94,6 +100,7 @@ impl BackgroundActivityStatus {
         match self {
             Self::Pending => "pending",
             Self::Running => "running",
+            Self::Waiting => "waiting",
             Self::Paused => "paused",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
@@ -291,8 +298,10 @@ mod tests {
     #[test]
     fn status_lifecycle_helpers() {
         assert!(BackgroundActivityStatus::Running.is_active());
+        assert!(BackgroundActivityStatus::Waiting.is_active());
         assert!(BackgroundActivityStatus::Paused.is_active());
         assert!(BackgroundActivityStatus::Failed.is_terminal());
+        assert_eq!(BackgroundActivityStatus::Waiting.as_str(), "waiting");
         assert_eq!(BackgroundActivityStatus::Stopped.as_str(), "stopped");
     }
 

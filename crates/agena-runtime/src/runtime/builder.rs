@@ -370,6 +370,75 @@ mod durable_activity_projection_tests {
         assert_eq!(activity.next_event_at_ms, Some(next));
         assert!(activity.is_active());
     }
+
+    #[test]
+    fn armed_cron_projection_waits_without_claiming_to_be_running() {
+        let mut job = agena_scheduler::ScheduledJob::new_cron_in_timezone(
+            "*/10 * * * * *",
+            "wake me",
+            7,
+            "Asia/Shanghai",
+        )
+        .expect("cron job");
+        job.set_owner(58);
+        let next = job.next_fire_at.expect("next fire").timestamp_millis();
+
+        let activity = scheduled_job_activity(job, Some(77));
+
+        assert_eq!(activity.status, BackgroundActivityStatus::Waiting);
+        assert_eq!(activity.next_event_at_ms, Some(next));
+        assert!(activity.is_active());
+        assert!(activity.cancellable);
+        assert!(!activity.dismissible);
+    }
+
+    #[test]
+    fn claimed_cron_projection_is_running_while_delivery_is_in_flight() {
+        let mut job = agena_scheduler::ScheduledJob::new_cron_in_timezone(
+            "*/10 * * * * *",
+            "wake me",
+            7,
+            "Asia/Shanghai",
+        )
+        .expect("cron job");
+        let now = chrono::Utc::now();
+        job.next_fire_at = Some(now - chrono::Duration::seconds(1));
+        let delivery = job.claim_due_delivery(now).expect("claim due delivery");
+        assert!(matches!(
+            delivery,
+            agena_scheduler::ClaimDueDelivery::Deliver(_)
+        ));
+
+        let activity = scheduled_job_activity(job, Some(77));
+
+        assert_eq!(activity.status, BackgroundActivityStatus::Running);
+        assert_eq!(activity.next_event_at_ms, None);
+    }
+
+    #[test]
+    fn cron_retry_backoff_projection_waits_until_retry_deadline() {
+        let mut job = agena_scheduler::ScheduledJob::new_cron_in_timezone(
+            "*/10 * * * * *",
+            "wake me",
+            7,
+            "Asia/Shanghai",
+        )
+        .expect("cron job");
+        let now = chrono::Utc::now();
+        job.next_fire_at = Some(now - chrono::Duration::seconds(1));
+        let delivery = job.claim_due_delivery(now).expect("claim due delivery");
+        assert!(matches!(
+            delivery,
+            agena_scheduler::ClaimDueDelivery::Deliver(_)
+        ));
+        let retry_at = now + chrono::Duration::seconds(15);
+        job.retry_at = Some(retry_at);
+
+        let activity = scheduled_job_activity(job, Some(77));
+
+        assert_eq!(activity.status, BackgroundActivityStatus::Waiting);
+        assert_eq!(activity.next_event_at_ms, Some(retry_at.timestamp_millis()));
+    }
 }
 
 fn durable_operation_activity(
@@ -497,8 +566,10 @@ fn scheduled_job_activity(
         }
     } else if job.paused {
         BackgroundActivityStatus::Paused
-    } else {
+    } else if job.pending_delivery.is_some() && job.retry_at.is_none() {
         BackgroundActivityStatus::Running
+    } else {
+        BackgroundActivityStatus::Waiting
     };
     let failure = job
         .last_run
@@ -525,7 +596,13 @@ fn scheduled_job_activity(
                 |run| run.finished_at.timestamp_millis(),
             )
         }),
-        next_event_at_ms: job.next_fire_at.map(|time| time.timestamp_millis()),
+        next_event_at_ms: if status == BackgroundActivityStatus::Running {
+            None
+        } else {
+            job.retry_at
+                .or(job.next_fire_at)
+                .map(|time| time.timestamp_millis())
+        },
         exit_code: None,
         message: job.paused.then_some("Paused".to_owned()),
         failure,

@@ -29,7 +29,7 @@ pub(crate) async fn run(request: TuiLaunchRequest) -> Result<(), AgenaProcessErr
         log_stderr: args.log_stderr,
         config_override_expressions: request.config_override_expressions,
     };
-    init_tui_tracing(&launch_args.config_override_expressions)?;
+    init_tui_tracing(&launch_args.config_override_expressions, &launch_args)?;
     run_remote(launch_args).await
 }
 

@@ -1239,7 +1239,6 @@ dependencies = [
  "agena-process",
  "agena-provider",
  "agena-runtime",
- "agena-storage",
  "agena-tui",
  "agena-tui-components",
  "agena-tui-media",

@@ -28,10 +28,10 @@ use agena_api::{
         QueryResult,
     },
     resource::{
-        BackgroundActivityResource, HealthResponse, PermissionConfigResource,
-        PermissionRuleResource, ProviderAdapterModelsRequest, ProviderAdapterModelsResponse,
-        RunOptions, SavedProviderAdapterModelsRequest, SessionExecutionResource,
-        SessionOverviewResource, SessionResource, WorkspaceResource,
+        BackgroundActivityResource, HealthResponse, PermissionRuleResource,
+        ProviderAdapterModelsRequest, ProviderAdapterModelsResponse, RunOptions,
+        SavedProviderAdapterModelsRequest, SessionExecutionResource, SessionOverviewResource,
+        SessionResource, WorkspaceResource,
     },
 };
 use futures_util::{StreamExt, TryStreamExt as _};

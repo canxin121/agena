@@ -149,12 +149,12 @@ pub struct ConfigSettingsListResponse {
     pub items: Vec<ConfigSettingsListItem>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Response of a settings edit.
 pub struct ConfigSettingsEditResponse {
     pub config_path: PathBuf,
     pub config_found: bool,
-    pub operation: &'static str,
+    pub operation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     pub dry_run: bool,
@@ -170,7 +170,7 @@ pub struct ConfigSettingsEditResponse {
     pub current: JsonValue,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Response of a settings reload.
 pub struct ConfigSettingsReloadResponse {
     pub previous_generation: u64,
@@ -486,8 +486,7 @@ fn finish_runtime_settings_edit(
     created: bool,
     deleted: bool,
     validator: Option<&RuntimeSettingsDocumentValidator>,
-) -> Result<ConfigSettingsEditResponse, RuntimeConfigSettingsError> {
-    let text = serde_json::to_string_pretty(&document)
+) -> Result<ConfigSettingsEditResponse, RuntimeConfigSettingsError> {    let text = serde_json::to_string_pretty(&document)
         .map_err(|error| RuntimeConfigSettingsError::internal(error.to_string()))?;
     if options.validate {
         let validator = validator.ok_or_else(|| {
@@ -506,7 +505,7 @@ fn finish_runtime_settings_edit(
     Ok(ConfigSettingsEditResponse {
         config_path,
         config_found,
-        operation,
+        operation: operation.to_string(),
         path,
         dry_run: options.dry_run,
         changed,

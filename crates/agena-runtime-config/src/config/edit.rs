@@ -353,7 +353,7 @@ fn finish_edit(
     Ok(ConfigSettingsEditResponse {
         config_path,
         config_found,
-        operation,
+        operation: operation.to_string(),
         path,
         dry_run,
         changed,

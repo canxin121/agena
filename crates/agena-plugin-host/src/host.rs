@@ -372,7 +372,7 @@ pub enum PluginUiToolInvokeStatus {
     ToolUnavailable,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Response of a plugin UI tool invocation.
 pub struct PluginUiToolInvokeResponse {
     pub plugin_id: PluginKey,

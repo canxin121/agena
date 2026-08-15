@@ -5,8 +5,7 @@
 
 use agena_api::{
     commands::{
-        ClearFinishedActivities, Command, CommandResult, DismissActivityParams,
-        StopActivityParams,
+        Command, CommandResult, DismissActivityParams, StopActivityParams,
     },
     queries::{ActivityLogsParams, ListActivitiesParams, Query, QueryResult},
     resource::{BackgroundActivityLogResource, BackgroundActivityResource},

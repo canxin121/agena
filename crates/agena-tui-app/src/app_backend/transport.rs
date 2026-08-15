@@ -23,7 +23,7 @@ use agena_api::{
     },
 };
 use agena_client::{AgenaClient, SubscriptionEvent};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use tokio::sync::mpsc;
 
 use super::{LiveEvent, SessionRefresh};
@@ -156,11 +156,6 @@ impl TuiBackend {
 
     pub fn workspace_root(&self) -> &Path {
         self.workspace_root.as_path()
-    }
-
-    /// The resolved center-side workspace identity for this client.
-    pub(crate) fn workspace_id(&self) -> i64 {
-        self.inner.workspace_id
     }
 
     /// Access to the HTTP client for operations ported to REST.

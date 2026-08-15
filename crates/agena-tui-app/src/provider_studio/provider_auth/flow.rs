@@ -477,7 +477,7 @@ pub(crate) fn provider_studio_auth_details_summary(
 // Interactive OAuth (`start_provider_draft_auth` /
 // `continue_provider_draft_auth`) drives the runtime's in-process draft
 // authentication service. The TUI is a pure HTTP client with no embedded
-// runtime and no public center endpoint for the interactive auth session, so
+// runtime and no public server endpoint for the interactive auth session, so
 // these degrade to a clear error; the Provider Studio itself is unavailable in
 // remote client mode.
 
@@ -485,9 +485,9 @@ pub(crate) async fn start_provider_draft_auth(
     application: &crate::TuiBackend,
     draft: ProviderConfigDraft,
 ) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
-    let _ = application;
+    let _ = (application, draft);
     Err(ProviderDraftAuthError::other(
-        "interactive provider authentication is unavailable in remote TUI mode until it has a public center API",
+        "interactive provider authentication is unavailable in remote TUI mode until it has a public server API",
     ))
 }
 
@@ -495,8 +495,8 @@ pub(crate) async fn continue_provider_draft_auth(
     application: &crate::TuiBackend,
     draft: ProviderConfigDraft,
 ) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
-    let _ = application;
+    let _ = (application, draft);
     Err(ProviderDraftAuthError::other(
-        "interactive provider authentication is unavailable in remote TUI mode until it has a public center API",
+        "interactive provider authentication is unavailable in remote TUI mode until it has a public server API",
     ))
 }

@@ -2,7 +2,6 @@ mod app;
 mod auth;
 pub(crate) mod center_record;
 mod diagnostics;
-mod error;
 mod lifecycle;
 mod state;
 mod user_service;
@@ -10,7 +9,6 @@ mod user_service;
 use crate::error::AgenaProcessError;
 use agena_cli::{ServerArgs, ServerLaunchRequest, UiCookieSameSite};
 
-pub(crate) use error::{ApiResult, AppError};
 pub(crate) use state::AppState;
 
 pub(crate) async fn run(request: ServerLaunchRequest) -> Result<(), AgenaProcessError> {

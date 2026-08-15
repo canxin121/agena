@@ -22,11 +22,9 @@ function Get-HostTriple {
 }
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
-$ScriptsDir = Split-Path -Parent $PSCommandPath
 $ServerManifest = Join-Path $RepoRoot "Cargo.toml"
 $ServerTargetDir = Join-Path $RepoRoot "target"
 $ReleaseDir = Join-Path $RepoRoot "artifacts/agena"
-$WebDistDir = Join-Path $RepoRoot "packages/agena-web-ui/dist"
 
 if (-not $TargetTriple) {
   $TargetTriple = Get-HostTriple
@@ -50,12 +48,7 @@ if ($TargetTriple -match 'windows') {
   $ArchiveExt = ".zip"
 }
 
-& (Join-Path $ScriptsDir "build-frontend-dist.ps1")
-if ($LASTEXITCODE -ne 0) {
-  throw "build-frontend-dist.ps1 failed"
-}
-
-Write-Host "Building agena backend for $TargetTriple..."
+Write-Host "Building agena for $TargetTriple..."
 & cargo build `
   --manifest-path "$ServerManifest" `
   --release `
@@ -69,7 +62,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $BinPath = Join-Path $ServerTargetDir "$TargetTriple/release/agena$Ext"
 if (-not (Test-Path -LiteralPath $BinPath)) {
-  throw "Built backend binary not found at $BinPath"
+  throw "Built binary not found at $BinPath"
 }
 
 $StageDir = Join-Path $ReleaseDir "backend/$TargetTriple"
@@ -78,25 +71,17 @@ if (Test-Path -LiteralPath $StageDir) {
 }
 
 $StageBinDir = Join-Path $StageDir "bin"
-$StageWebDir = Join-Path $StageDir "web-dist"
-New-Item -ItemType Directory -Force -Path $StageBinDir, $StageWebDir | Out-Null
+New-Item -ItemType Directory -Force -Path $StageBinDir | Out-Null
 
 Copy-Item -LiteralPath $BinPath -Destination (Join-Path $StageBinDir "agena$Ext") -Force
-Get-ChildItem -LiteralPath $WebDistDir | ForEach-Object {
-  Copy-Item -LiteralPath $_.FullName -Destination $StageWebDir -Recurse -Force
-}
 
 $Readme = @"
-Agena server package
+Agena package
 Version: $Version
 Target: $TargetTriple
 
 Contents:
 - bin/agena$Ext
-- web-dist/
-
-Example:
-  agena server --ui-dir .\web-dist
 "@
 Set-Content -LiteralPath (Join-Path $StageDir "README.txt") -Value $Readme
 
@@ -123,4 +108,4 @@ else {
   }
 }
 
-Write-Host "Backend package ready: $ArchivePath"
+Write-Host "Package ready: $ArchivePath"

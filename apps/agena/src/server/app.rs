@@ -20,7 +20,6 @@ use serde_json::{Value, json};
 use tokio::sync::RwLock;
 use tower_http::{
     cors::{AllowOrigin, Any, CorsLayer},
-    services::{ServeDir, ServeFile},
     trace::TraceLayer,
 };
 use url::Url;
@@ -531,27 +530,6 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
                 crate::server::auth::require_ui_auth,
             ));
 
-    let ui_dir_path = args.ui_dir.as_ref().map(PathBuf::from);
-    let (has_ui, asset_files, static_files) = match &ui_dir_path {
-        None => {
-            tracing::info!("UI disabled (API-only mode)");
-            (false, None, None)
-        }
-        Some(dir) => {
-            let index_file = dir.join("index.html");
-            let has_ui = index_file.is_file();
-            tracing::info!(
-                "UI dir resolved to {} (index.html exists: {})",
-                dir.display(),
-                has_ui
-            );
-
-            let asset_files = ServeDir::new(dir.join("assets"));
-            let static_files = ServeDir::new(dir).fallback(ServeFile::new(index_file));
-            (has_ui, Some(asset_files), Some(static_files))
-        }
-    };
-
     let mut app = public_router
         .merge(agena_api)
         .merge(server_api_routes)
@@ -566,18 +544,12 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         app = app.layer(cors);
     }
 
-    app = if has_ui {
-        app.nest_service("/assets", asset_files.expect("assets service"))
-            .fallback_service(static_files.expect("static service"))
-    } else {
-        app.fallback(|| async {
-            Json(serde_json::json!({
-                "service": "agena",
-                "ui": false,
-                "message": "Agena server is running in API-only mode. Pass --ui-dir <dist> to serve the bundled UI.",
-            }))
-        })
-    };
+    app = app.fallback(|| async {
+        Json(serde_json::json!({
+            "service": "agena",
+            "message": "Agena server is running. The TUI and CLI clients connect over the HTTP API.",
+        }))
+    });
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)
         .parse()

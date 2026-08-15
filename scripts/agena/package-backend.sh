@@ -6,7 +6,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SERVER_MANIFEST="$REPO_ROOT/Cargo.toml"
 SERVER_TARGET_DIR="$REPO_ROOT/target"
 RELEASE_DIR="$REPO_ROOT/artifacts/agena"
-WEB_DIST_DIR="$REPO_ROOT/packages/agena-web-ui/dist"
 
 detect_host_triple() {
   if rustc --print host-tuple >/dev/null 2>&1; then
@@ -35,9 +34,7 @@ case "$TARGET_TRIPLE" in
   *-pc-windows-*) EXT=".exe"; ARCHIVE_EXT="zip" ;;
 esac
 
-bash "$SCRIPT_DIR/build-frontend-dist.sh"
-
-echo "Building agena backend for ${TARGET_TRIPLE}..."
+echo "Building agena for ${TARGET_TRIPLE}..."
 cargo build \
   --manifest-path "$SERVER_MANIFEST" \
   --release \
@@ -47,28 +44,23 @@ cargo build \
 
 BIN_PATH="$SERVER_TARGET_DIR/$TARGET_TRIPLE/release/agena$EXT"
 if [[ ! -f "$BIN_PATH" ]]; then
-  echo "ERROR: built backend binary not found at $BIN_PATH" >&2
+  echo "ERROR: built binary not found at $BIN_PATH" >&2
   exit 1
 fi
 
 STAGE_DIR="$RELEASE_DIR/backend/$TARGET_TRIPLE"
 rm -rf "$STAGE_DIR"
-mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/web-dist"
+mkdir -p "$STAGE_DIR/bin"
 
 cp "$BIN_PATH" "$STAGE_DIR/bin/agena$EXT"
-cp -R "$WEB_DIST_DIR/." "$STAGE_DIR/web-dist/"
 
 cat > "$STAGE_DIR/README.txt" <<EOF
-Agena server package
+Agena package
 Version: $VERSION
 Target: $TARGET_TRIPLE
 
 Contents:
 - bin/agena$EXT
-- web-dist/
-
-Example:
-  agena server --ui-dir ./web-dist
 EOF
 
 ARCHIVE_NAME="agena-backend-${TARGET_TRIPLE}-v${VERSION}.${ARCHIVE_EXT}"
@@ -96,4 +88,4 @@ else
   tar -C "$STAGE_DIR" -czf "$RELEASE_DIR/$ARCHIVE_NAME" .
 fi
 
-echo "Backend package ready: $RELEASE_DIR/$ARCHIVE_NAME"
+echo "Package ready: $RELEASE_DIR/$ARCHIVE_NAME"

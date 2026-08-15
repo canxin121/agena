@@ -1859,6 +1859,11 @@ mod tests {
             content_id: TranscriptContentId::Activity(activity_id),
             section: crate::TranscriptActivitySection::Input,
         };
+        let result_key = crate::TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+            section: crate::TranscriptActivitySection::Result,
+        };
         let collapsed = crate::render_entry_detailed(
             &entry,
             100,
@@ -1920,7 +1925,10 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(expanded_text.contains("Output\n"), "{expanded_text}");
+        assert!(
+            expanded_text.contains("▸ Output · 2 fields"),
+            "{expanded_text}"
+        );
         assert!(
             expanded_text.contains("▸ Input · limit: 33"),
             "{expanded_text}"
@@ -1934,9 +1942,9 @@ mod tests {
             expanded
                 .lines
                 .iter()
-                .any(|line| line.text.contains("repo.status"))
+                .all(|line| !line.text.contains("repo.status"))
         );
-        assert!(node.copy_text.contains("fs.read"));
+        assert!(!node.copy_text.contains("fs.read"));
         assert!(!node.copy_text.contains("Structured result"));
         let input_node = expanded
             .nodes
@@ -1946,6 +1954,48 @@ mod tests {
         assert!(input_node.toggleable);
         assert!(!input_node.expanded);
         assert!(input_node.copy_text.contains("- **limit**: 33"));
+        let result_node = expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == result_key)
+            .expect("collapsed nested Output node");
+        assert!(result_node.toggleable);
+        assert!(!result_node.expanded);
+
+        let output_expanded = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
+            },
+            &std::collections::BTreeMap::from([(key.clone(), true), (result_key.clone(), true)]),
+        );
+        let output_expanded_text = output_expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            output_expanded_text.contains("▾ Output"),
+            "{output_expanded_text}"
+        );
+        assert!(
+            output_expanded_text.contains("repo.status"),
+            "{output_expanded_text}"
+        );
+        assert!(
+            !output_expanded_text.contains("• limit: 33"),
+            "{output_expanded_text}"
+        );
+        let output_parent = output_expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("expanded tools_list Activity node");
+        assert!(output_parent.copy_text.contains("fs.read"));
 
         let input_expanded = crate::render_entry_detailed(
             &entry,
@@ -1970,6 +2020,10 @@ mod tests {
         );
         assert!(
             input_expanded_text.contains("• limit: 33"),
+            "{input_expanded_text}"
+        );
+        assert!(
+            !input_expanded_text.contains("repo.status"),
             "{input_expanded_text}"
         );
         let input_node = input_expanded
@@ -2043,6 +2097,11 @@ mod tests {
             content_id: TranscriptContentId::Activity(activity_id),
             section: crate::TranscriptActivitySection::Input,
         };
+        let result_key = crate::TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+            section: crate::TranscriptActivitySection::Result,
+        };
 
         let collapsed = crate::render_entry_detailed(
             &entry,
@@ -2084,8 +2143,8 @@ mod tests {
             .expect("expanded Activity node");
         assert!(expanded_node.expanded);
         assert!(
-            expanded_node.copy_text.contains("fs.read"),
-            "expanded Output section belongs in copy text: {}",
+            !expanded_node.copy_text.contains("fs.read"),
+            "a default-collapsed Output section must not leak into copy text: {}",
             expanded_node.copy_text
         );
         assert!(
@@ -2114,6 +2173,37 @@ mod tests {
             input_expanded_node.copy_text.contains("- **limit**: 33"),
             "an expanded Input section belongs in copy text: {}",
             input_expanded_node.copy_text
+        );
+        assert!(
+            !input_expanded_node.copy_text.contains("fs.read"),
+            "expanding Input must not expand Output: {}",
+            input_expanded_node.copy_text
+        );
+
+        let output_expanded = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
+            },
+            &std::collections::BTreeMap::from([(key.clone(), true), (result_key, true)]),
+        );
+        let output_expanded_node = output_expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("expanded Activity node");
+        assert!(
+            output_expanded_node.copy_text.contains("fs.read"),
+            "an explicitly expanded Output section belongs in copy text: {}",
+            output_expanded_node.copy_text
+        );
+        assert!(
+            !output_expanded_node.copy_text.contains("\"limit\": 33"),
+            "expanding Output must not expand Input: {}",
+            output_expanded_node.copy_text
         );
     }
 
@@ -2242,26 +2332,28 @@ mod tests {
             "{expanded_text}"
         );
         assert!(!expanded_text.contains("┌─ json"), "{expanded_text}");
-        assert!(expanded_text.contains("▾ Output"), "{expanded_text}");
-        assert!(expanded_text.contains("── Checks"), "{expanded_text}");
         assert!(
-            expanded_text.contains("Passed: cargo test"),
+            expanded_text.contains("▸ Output · Checks"),
             "{expanded_text}"
         );
-        assert!(expanded_text.contains("┌─ rust"), "{expanded_text}");
-        assert!(expanded_text.contains("│ Metric"), "{expanded_text}");
+        assert!(
+            !expanded_text.contains("Passed: cargo test"),
+            "{expanded_text}"
+        );
+        assert!(!expanded_text.contains("┌─ rust"), "{expanded_text}");
+        assert!(!expanded_text.contains("│ Metric"), "{expanded_text}");
         assert!(!expanded_text.contains("**Passed**"), "{expanded_text}");
         assert!(!expanded_text.contains("```"), "{expanded_text}");
-        assert!(node.copy_text.contains(markdown_result));
+        assert!(!node.copy_text.contains(markdown_result));
         let result_node = expanded
             .nodes
             .iter()
             .find(|node| node.key == result_key)
-            .expect("default-expanded Output section");
+            .expect("default-collapsed Output section");
         assert!(result_node.toggleable);
-        assert!(result_node.expanded);
+        assert!(!result_node.expanded);
 
-        let result_collapsed = crate::render_entry_detailed(
+        let result_expanded = crate::render_entry_detailed(
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
@@ -2269,37 +2361,41 @@ mod tests {
                 activity_default_expanded: false,
                 kind_defaults: std::collections::BTreeMap::new(),
             },
-            &std::collections::BTreeMap::from([(key.clone(), true), (result_key.clone(), false)]),
+            &std::collections::BTreeMap::from([(key.clone(), true), (result_key.clone(), true)]),
         );
-        let result_collapsed_text = result_collapsed
+        let result_expanded_text = result_expanded
             .lines
             .iter()
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            result_collapsed_text.contains("▸ Output · Checks"),
-            "{result_collapsed_text}"
+            result_expanded_text.contains("▾ Output"),
+            "{result_expanded_text}"
         );
         assert!(
-            !result_collapsed_text.contains("##"),
-            "{result_collapsed_text}"
+            result_expanded_text.contains("── Checks"),
+            "{result_expanded_text}"
         );
         assert!(
-            !result_collapsed_text.contains("Passed: cargo test"),
-            "{result_collapsed_text}"
+            result_expanded_text.contains("Passed: cargo test"),
+            "{result_expanded_text}"
         );
         assert!(
-            !result_collapsed_text.contains("┌─ rust"),
-            "{result_collapsed_text}"
+            result_expanded_text.contains("┌─ rust"),
+            "{result_expanded_text}"
         );
-        let result_node = result_collapsed
+        assert!(
+            result_expanded_text.contains("│ Metric"),
+            "{result_expanded_text}"
+        );
+        let result_node = result_expanded
             .nodes
             .iter()
             .find(|node| node.key == result_key)
-            .expect("collapsed Output section");
+            .expect("expanded Output section");
         assert!(result_node.toggleable);
-        assert!(!result_node.expanded);
+        assert!(result_node.expanded);
 
         let input_expanded = crate::render_entry_detailed(
             &entry,
@@ -2325,6 +2421,29 @@ mod tests {
             input_expanded_text.contains("• command: cargo test -p agena-tui-transcript"),
             "{input_expanded_text}"
         );
+        assert!(
+            input_expanded_text.contains("▸ Output · Checks"),
+            "{input_expanded_text}"
+        );
+        assert!(
+            !input_expanded_text.contains("Passed: cargo test"),
+            "{input_expanded_text}"
+        );
+
+        let export_text = crate::render_entry_export(
+            &entry,
+            &agena_tui::i18n::I18n::english(),
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: true,
+                kind_defaults: std::collections::BTreeMap::new(),
+            },
+        )
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert!(export_text.contains("Passed: cargo test"), "{export_text}");
+        assert!(export_text.contains("┌─ rust"), "{export_text}");
     }
 
     #[test]
@@ -2532,6 +2651,11 @@ mod tests {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
         };
+        let result_key = crate::TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+            section: crate::TranscriptActivitySection::Result,
+        };
         let rendered = crate::render_entry_detailed(
             &entry,
             200,
@@ -2554,7 +2678,10 @@ mod tests {
             .find(|node| node.key == key)
             .expect("partially completed shell.run Activity node");
 
-        assert!(expanded_text.contains("Output\n"), "{expanded_text}");
+        assert!(
+            expanded_text.contains("▸ Output · Compiled"),
+            "{expanded_text}"
+        );
         assert!(expanded_text.contains("Error\n"), "{expanded_text}");
         assert_eq!(
             expanded_text.matches(partial_output).count(),
@@ -2573,8 +2700,57 @@ mod tests {
             1,
             "{expanded_text}"
         );
-        assert_eq!(node.copy_text.matches(partial_output).count(), 1);
+        assert_eq!(node.copy_text.matches(partial_output).count(), 0);
         assert_eq!(node.copy_text.matches(full_error).count(), 1);
+
+        let output_expanded = crate::render_entry_detailed(
+            &entry,
+            200,
+            &agena_tui::i18n::I18n::english(),
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
+            },
+            &std::collections::BTreeMap::from([(key.clone(), true), (result_key, true)]),
+        );
+        let output_expanded_text = output_expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let output_expanded_node = output_expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("partially completed shell.run Activity node");
+        assert!(
+            output_expanded_text.contains("▾ Output"),
+            "{output_expanded_text}"
+        );
+        assert_eq!(
+            output_expanded_text.matches(partial_output).count(),
+            1,
+            "{output_expanded_text}"
+        );
+        assert_eq!(
+            output_expanded_text
+                .matches("The linker could not resolve symbol")
+                .count(),
+            1,
+            "{output_expanded_text}"
+        );
+        assert_eq!(
+            output_expanded_node
+                .copy_text
+                .matches(partial_output)
+                .count(),
+            1
+        );
+        assert_eq!(
+            output_expanded_node.copy_text.matches(full_error).count(),
+            1
+        );
     }
 
     #[test]
@@ -2771,6 +2947,11 @@ mod tests {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
         };
+        let result_key = crate::TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+            section: crate::TranscriptActivitySection::Result,
+        };
 
         let collapsed = crate::render_entry_detailed(
             &entry,
@@ -2803,7 +2984,7 @@ mod tests {
                 activity_default_expanded: false,
                 kind_defaults: std::collections::BTreeMap::new(),
             },
-            &std::collections::BTreeMap::from([(key, true)]),
+            &std::collections::BTreeMap::from([(key.clone(), true)]),
         );
         let expanded_text = expanded
             .lines
@@ -2812,20 +2993,48 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(expanded_text.contains("Matches"), "{expanded_text}");
-        assert!(expanded_text.contains("src/activity.rs"), "{expanded_text}");
-        assert_eq!(
-            expanded_text.matches("src/activity.rs").count(),
-            1,
+        assert!(
+            !expanded_text.contains("src/activity.rs"),
             "{expanded_text}"
         );
         assert!(
-            !expanded_text.contains("Structured result"),
+            expanded_text.contains("▸ Output · Matches"),
             "{expanded_text}"
+        );
+
+        let result_expanded = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
+            },
+            &std::collections::BTreeMap::from([(key, true), (result_key, true)]),
+        );
+        let result_expanded_text = result_expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            result_expanded_text.contains("src/activity.rs"),
+            "{result_expanded_text}"
+        );
+        assert_eq!(
+            result_expanded_text.matches("src/activity.rs").count(),
+            1,
+            "{result_expanded_text}"
+        );
+        assert!(
+            !result_expanded_text.contains("Structured result"),
+            "{result_expanded_text}"
         );
         // The summary is collapsed-only; expanded shows the derived detail.
         assert!(
-            expanded_text.contains("src/tool_result.rs"),
-            "{expanded_text}"
+            result_expanded_text.contains("src/tool_result.rs"),
+            "{result_expanded_text}"
         );
     }
 

@@ -43,8 +43,9 @@ pub enum TranscriptNodeKey {
         content_id: crate::TranscriptContentId,
     },
     /// One independently navigable section inside an expanded Activity.
-    /// `Input` has its own stable key because its expansion state must survive
-    /// outer Activity toggles and streamed Activity revisions.
+    /// Input and result sections have stable keys because their independent
+    /// expansion state must survive outer Activity toggles and streamed
+    /// Activity revisions.
     ActivitySection {
         entry_id: crate::TranscriptEntryId,
         content_id: crate::TranscriptContentId,

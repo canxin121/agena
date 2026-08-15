@@ -11,7 +11,7 @@ use super::super::{
     tool_output_copy_text, transcript_message_parts, transcript_part_content,
     transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
 };
-use super::operation_render::render_tool_execution;
+use super::operation_render::render_tool_execution_with_sections;
 use super::request_render::{preview_for_part, render_user_input_request};
 use crate::snapshot::activity_presentation;
 use crate::ui_text;
@@ -35,13 +35,40 @@ pub fn render_entry_export(
     i18n: &I18n,
     defaults: &TranscriptDetailDefaults,
 ) -> Vec<RenderedLine> {
+    // UI sections default to folded, but exports are durable documents rather
+    // than viewport state. Preserve the previous export projection: legacy
+    // Operations include both input and output, while canonical Operations
+    // include their result body (canonical input was already folded).
+    let mut expansions = std::collections::BTreeMap::new();
+    for part in transcript_message_parts(message) {
+        let sections = match transcript_part_content(part) {
+            TranscriptPartContent::Activity(TranscriptActivityContent::Operation(_)) => &[
+                TranscriptActivitySection::Input,
+                TranscriptActivitySection::Result,
+            ][..],
+            TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(
+                agena_domain::ActivityPayload::Operation(_),
+            )) => &[TranscriptActivitySection::Result][..],
+            _ => &[],
+        };
+        for section in sections {
+            expansions.insert(
+                TranscriptNodeKey::ActivitySection {
+                    entry_id: message.id,
+                    content_id: part.id,
+                    section: *section,
+                },
+                true,
+            );
+        }
+    }
     agena_tui_media::with_text_math_rendering(|| {
         render_entry_detailed(
             message,
             TRANSCRIPT_EXPORT_WIDTH,
             i18n,
             defaults,
-            &std::collections::BTreeMap::new(),
+            &expansions,
         )
         .lines
     })
@@ -383,7 +410,7 @@ fn canonical_activity_details(
                         "Output",
                         operation.markdown.clone(),
                         CanonicalActivityDetailFormat::Markdown,
-                        true,
+                        false,
                     ));
                     has_result_presentation = true;
                 } else if !operation.data.is_null()
@@ -394,7 +421,7 @@ fn canonical_activity_details(
                         "Output",
                         output,
                         CanonicalActivityDetailFormat::Json,
-                        true,
+                        false,
                     ));
                     has_result_presentation = true;
                 }
@@ -416,7 +443,7 @@ fn canonical_activity_details(
                     "Output",
                     summary,
                     CanonicalActivityDetailFormat::Auto,
-                    true,
+                    false,
                 ));
             }
             details
@@ -1353,21 +1380,79 @@ pub(crate) fn render_part_node(
             // user input.
             let user_input_rendered =
                 render_operation_user_input(part, tool, out, width, i18n, expanded, interactions);
-            if !user_input_rendered {
-                render_tool_execution(part, tool, out, width, i18n, expanded);
+            if user_input_rendered {
+                return RenderedNodeDraft {
+                    key,
+                    kind: TranscriptNodeKind::Activity,
+                    copy_text: if expanded {
+                        tool_output_copy_text(part, tool, i18n)
+                    } else {
+                        String::new()
+                    },
+                    toggleable: true,
+                    expanded,
+                    end_line: None,
+                    children: Vec::new(),
+                };
+            }
+
+            let input_key = TranscriptNodeKey::ActivitySection {
+                entry_id: message.id,
+                content_id: part.id,
+                section: TranscriptActivitySection::Input,
+            };
+            let output_key = TranscriptNodeKey::ActivitySection {
+                entry_id: message.id,
+                content_id: part.id,
+                section: TranscriptActivitySection::Result,
+            };
+            let input_expanded = expansions.get(&input_key).copied().unwrap_or(false);
+            let output_expanded = expansions.get(&output_key).copied().unwrap_or(false);
+            let execution = render_tool_execution_with_sections(
+                part,
+                input_expanded,
+                output_expanded,
+                tool,
+                out,
+                width,
+                i18n,
+                expanded,
+            );
+            let mut children = Vec::new();
+            if let Some(section) = execution.input
+                && let Some(child) = rendered_activity_section_node(
+                    input_key,
+                    section.start_line,
+                    section.end_line,
+                    section.copy_text,
+                    true,
+                    section.expanded,
+                    out,
+                )
+            {
+                children.push(child);
+            }
+            if let Some(section) = execution.output
+                && let Some(child) = rendered_activity_section_node(
+                    output_key,
+                    section.start_line,
+                    section.end_line,
+                    section.copy_text,
+                    true,
+                    section.expanded,
+                    out,
+                )
+            {
+                children.push(child);
             }
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
-                copy_text: if expanded {
-                    tool_output_copy_text(part, tool, i18n)
-                } else {
-                    String::new()
-                },
+                copy_text: execution.visible_copy_text,
                 toggleable: true,
                 expanded,
-                end_line: None,
-                children: Vec::new(),
+                end_line: Some(execution.headline_end),
+                children,
             }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {

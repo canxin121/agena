@@ -1949,13 +1949,187 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("› Input"), "{text}");
+        assert!(text.contains("▾ Input"), "{text}");
         // Markdown bullets render as terminal list markers; `**` emphasis and
         // backticks are styling, not literal text.
         assert!(text.contains("• path: README.md"), "{text}");
         assert!(text.contains("• line_count: 5"), "{text}");
         assert!(text.contains("• options:"), "{text}");
         assert!(text.contains("◦ follow_symlinks: true"), "{text}");
+    }
+
+    #[test]
+    fn legacy_operation_input_and_output_are_independent_and_default_collapsed() {
+        let now = Utc::now();
+        let operation = OperationPartResource {
+            call_id: 7,
+            invocation: ToolInvocationResource {
+                name: "agena.shell.run".to_owned(),
+                input: agena_api::part::StructuredObjectResource {
+                    fields: vec![agena_api::part::StructuredFieldResource {
+                        name: "script".to_owned(),
+                        value: agena_api::part::StructuredValueResource::Text {
+                            value: "private input sentinel".to_owned(),
+                        },
+                    }],
+                },
+                ..Default::default()
+            },
+            title: "shell.run · Execute command".to_owned(),
+            model_output: agena_api::part::ModelVisibleOutputResource {
+                text: "model output sentinel".to_owned(),
+                ..Default::default()
+            },
+            blocks: vec![agena_api::part::OperationBlockResource::Command {
+                command: "printf output".to_owned(),
+                cwd: None,
+                exit_code: Some(0),
+                stdout: Some("stdout sentinel".to_owned()),
+                stderr: Some("stderr sentinel".to_owned()),
+            }],
+            ..Default::default()
+        };
+        let part =
+            TranscriptFixture::operation_part(9, 3, now, ExecutionStatus::Completed, operation);
+        let message = entry(
+            3,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
+            now,
+            vec![part],
+        );
+        let activity_key = TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::StoredMessage(3),
+            content_id: TranscriptContentId::StoredPart(9),
+        };
+        let input_key = TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::StoredMessage(3),
+            content_id: TranscriptContentId::StoredPart(9),
+            section: crate::TranscriptActivitySection::Input,
+        };
+        let output_key = TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::StoredMessage(3),
+            content_id: TranscriptContentId::StoredPart(9),
+            section: crate::TranscriptActivitySection::Result,
+        };
+        let defaults = TranscriptDetailDefaults {
+            activity_default_expanded: true,
+            kind_defaults: std::collections::BTreeMap::new(),
+        };
+
+        let folded = render_entry_detailed(
+            &message,
+            100,
+            &I18n::english(),
+            &defaults,
+            &Default::default(),
+        );
+        let folded_text = folded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(folded_text.contains("▸ Input"), "{folded_text}");
+        assert!(folded_text.contains("▸ Output"), "{folded_text}");
+        assert!(
+            !folded_text.contains("private input sentinel"),
+            "{folded_text}"
+        );
+        assert!(
+            !folded_text.contains("model output sentinel"),
+            "{folded_text}"
+        );
+        assert!(!folded_text.contains("stdout sentinel"), "{folded_text}");
+        for key in [&input_key, &output_key] {
+            let node = folded
+                .nodes
+                .iter()
+                .find(|node| &node.key == key)
+                .expect("folded legacy operation section node");
+            assert!(node.toggleable);
+            assert!(!node.expanded);
+        }
+        let parent = folded
+            .nodes
+            .iter()
+            .find(|node| node.key == activity_key)
+            .expect("legacy operation Activity node");
+        assert!(!parent.copy_text.contains("private input sentinel"));
+        assert!(!parent.copy_text.contains("stdout sentinel"));
+
+        let input_expanded = render_entry_detailed(
+            &message,
+            100,
+            &I18n::english(),
+            &defaults,
+            &std::collections::BTreeMap::from([(input_key.clone(), true)]),
+        );
+        let input_text = input_expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(input_text.contains("▾ Input"), "{input_text}");
+        assert!(
+            input_text.contains("private input sentinel"),
+            "{input_text}"
+        );
+        assert!(input_text.contains("▸ Output"), "{input_text}");
+        assert!(
+            !input_text.contains("model output sentinel"),
+            "{input_text}"
+        );
+        assert!(!input_text.contains("stdout sentinel"), "{input_text}");
+
+        let output_expanded = render_entry_detailed(
+            &message,
+            100,
+            &I18n::english(),
+            &defaults,
+            &std::collections::BTreeMap::from([(output_key.clone(), true)]),
+        );
+        let output_text = output_expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(output_text.contains("▸ Input"), "{output_text}");
+        assert!(
+            !output_text.contains("private input sentinel"),
+            "{output_text}"
+        );
+        assert!(output_text.contains("▾ Output"), "{output_text}");
+        assert!(
+            output_text.contains("model output sentinel"),
+            "{output_text}"
+        );
+        assert!(output_text.contains("stdout sentinel"), "{output_text}");
+        assert!(output_text.contains("stderr sentinel"), "{output_text}");
+        let parent = output_expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == activity_key)
+            .expect("legacy operation Activity node");
+        assert!(parent.copy_text.contains("stdout sentinel"));
+        assert!(!parent.copy_text.contains("private input sentinel"));
+
+        let export_text = render_entry_export(&message, &I18n::english(), &defaults)
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            export_text.contains("private input sentinel"),
+            "{export_text}"
+        );
+        assert!(
+            export_text.contains("model output sentinel"),
+            "{export_text}"
+        );
+        assert!(export_text.contains("stdout sentinel"), "{export_text}");
     }
 
     #[test]

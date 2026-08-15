@@ -1,8 +1,8 @@
 use super::super::transcript_ast::render_attachment_image;
 use super::super::{
     I18n, Modifier, RenderedLine, Style, apply_patch_details, compact_json_cell,
-    compact_tool_identity, diff_stats, json_value_to_markdown, push_activity_headline,
-    push_collapsible_text, push_expanded_diff_text, push_expanded_markdown,
+    compact_tool_identity, diff_stats, json_value_to_markdown, operation_block_copy_text,
+    push_activity_headline, push_collapsible_text, push_expanded_diff_text, push_expanded_markdown,
     push_expanded_tool_text, push_label_value, push_multiline, push_section_heading,
     push_single_line, render_expanded_tool_text_block, should_render_tool_model_output,
     tool_display_label,
@@ -13,6 +13,23 @@ use crate::{
     OperationBlockResource, OperationPartResource, PartExecutionStatusResource, TranscriptEntryPart,
 };
 
+#[derive(Debug, Clone)]
+pub(crate) struct ToolExecutionSectionRender {
+    pub start_line: usize,
+    pub end_line: usize,
+    pub copy_text: String,
+    pub expanded: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ToolExecutionRender {
+    pub headline_end: usize,
+    pub input: Option<ToolExecutionSectionRender>,
+    pub output: Option<ToolExecutionSectionRender>,
+    pub visible_copy_text: String,
+}
+
+#[cfg(test)]
 pub(crate) fn render_tool_execution(
     part: &TranscriptEntryPart,
     tool: &OperationPartResource,
@@ -21,9 +38,30 @@ pub(crate) fn render_tool_execution(
     i18n: &I18n,
     expanded: bool,
 ) {
+    let _ = render_tool_execution_with_sections(
+        part, expanded, expanded, tool, out, width, i18n, expanded,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_tool_execution_with_sections(
+    part: &TranscriptEntryPart,
+    input_expanded: bool,
+    output_expanded: bool,
+    tool: &OperationPartResource,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    expanded: bool,
+) -> ToolExecutionRender {
     if part.status == PartExecutionStatusResource::Completed && is_interaction_notification(tool) {
         render_interaction_notification(tool, out, width, expanded);
-        return;
+        return ToolExecutionRender {
+            headline_end: out.len(),
+            input: None,
+            output: None,
+            visible_copy_text: tool_display_label(tool),
+        };
     }
     let label = tool_display_label(tool);
     if !expanded {
@@ -36,7 +74,12 @@ pub(crate) fn render_tool_execution(
             tool.summary.as_str(),
             width,
         );
-        return;
+        return ToolExecutionRender {
+            headline_end: out.len(),
+            input: None,
+            output: None,
+            visible_copy_text: String::new(),
+        };
     }
     push_activity_headline(
         out,
@@ -47,6 +90,8 @@ pub(crate) fn render_tool_execution(
         tool.summary.as_str(),
         width,
     );
+    let headline_end = out.len();
+    let mut visible_copy_sections = vec![label];
 
     let failure_text = if part.status == PartExecutionStatusResource::Failed {
         tool.error_message()
@@ -71,83 +116,119 @@ pub(crate) fn render_tool_execution(
             &mut out[error_start..],
             Style::default().fg(agena_tui_components::theme::danger_color()),
         );
+        visible_copy_sections.push(format!("Error\n{error_message}"));
     }
 
     // Tool arguments, presented as a nested Markdown bullet list instead of the
     // raw JSON dump. `compact_tool_identity` also unwraps a `tools.call` wrapper
     // to the inner tool + its real input.
     let tool_input = compact_tool_identity(&tool.invocation).1;
-    if !tool_input.is_null()
+    let input = if !tool_input.is_null()
         && tool_input
             .as_object()
             .is_none_or(|fields| !fields.is_empty())
     {
+        let input_markdown = json_value_to_markdown(&tool_input);
+        let section_start = out.len();
         push_section_heading(
             out,
-            "    › Input",
+            if input_expanded {
+                "    ▾ Input"
+            } else {
+                "    ▸ Input"
+            },
             Style::default()
                 .fg(agena_tui_components::theme::special_color())
                 .add_modifier(Modifier::BOLD),
             width,
         );
-        if expanded {
-            push_expanded_markdown(
-                out,
-                "      ",
-                json_value_to_markdown(&tool_input).as_str(),
-                width,
-            );
-        } else {
-            push_collapsible_text(
-                out,
-                "      ",
-                json_value_to_markdown(&tool_input).as_str(),
-                Style::default(),
-                width,
-                i18n,
-            );
+        if input_expanded {
+            push_expanded_markdown(out, "      ", input_markdown.as_str(), width);
+            visible_copy_sections.push(format!("Input\n{input_markdown}"));
         }
-    }
+        Some(ToolExecutionSectionRender {
+            start_line: section_start,
+            end_line: out.len(),
+            copy_text: format!("Input\n{input_markdown}"),
+            expanded: input_expanded,
+        })
+    } else {
+        None
+    };
 
+    // All result-facing material belongs to one independently collapsible
+    // Output section. This includes human/model output, stdout/stderr, rich
+    // operation blocks, attachments, file changes, and diffs.
+    let output_copy_text = tool_output_section_copy_text(tool, i18n, failure_text);
+    let has_output = !output_copy_text.trim().is_empty()
+        || tool
+            .attachments
+            .iter()
+            .chain(tool.model_output.attachments.iter())
+            .chain(tool.result.attachments.iter())
+            .next()
+            .is_some()
+        || apply_patch_details(&tool.details)
+            .is_some_and(|payload| !payload.changes.is_empty() || !payload.diff.trim().is_empty());
+    let output = if !has_output {
+        None
+    } else {
+        let section_start = out.len();
+        push_section_heading(
+            out,
+            if output_expanded {
+                "    ▾ Output"
+            } else {
+                "    ▸ Output"
+            },
+            Style::default()
+                .fg(agena_tui_components::theme::special_color())
+                .add_modifier(Modifier::BOLD),
+            width,
+        );
+        if output_expanded {
+            let mut output_body = Vec::new();
+            render_tool_output_body(tool, &mut output_body, width, i18n, failure_text);
+            out.append(&mut output_body);
+            if !output_copy_text.trim().is_empty() {
+                visible_copy_sections.push(format!("Output\n{output_copy_text}"));
+            }
+        }
+        Some(ToolExecutionSectionRender {
+            start_line: section_start,
+            end_line: out.len(),
+            copy_text: format!("Output\n{output_copy_text}"),
+            expanded: output_expanded,
+        })
+    };
+
+    ToolExecutionRender {
+        headline_end,
+        input,
+        output,
+        visible_copy_text: visible_copy_sections
+            .into_iter()
+            .filter(|section| !section.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    }
+}
+
+fn render_tool_output_body(
+    tool: &OperationPartResource,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    failure_text: Option<&str>,
+) {
     // The human view is a single Markdown document the tool produced; it takes
     // precedence over the flat model preview. The model preview stays available
     // below only when there is no richer human presentation.
     let human_markdown = tool.result.human.markdown.as_str();
     if !human_markdown.trim().is_empty() && failure_text.is_none() {
-        push_section_heading(
-            out,
-            "    › Output",
-            Style::default()
-                .fg(agena_tui_components::theme::special_color())
-                .add_modifier(Modifier::BOLD),
-            width,
-        );
-        if expanded {
-            push_expanded_markdown(out, "      ", human_markdown, width);
-        } else {
-            push_collapsible_text(out, "      ", human_markdown, Style::default(), width, i18n);
-        }
+        push_expanded_markdown(out, "      ", human_markdown, width);
     } else if should_render_tool_model_output(tool, failure_text) {
-        push_section_heading(
-            out,
-            "    › Output",
-            Style::default()
-                .fg(agena_tui_components::theme::special_color())
-                .add_modifier(Modifier::BOLD),
-            width,
-        );
-        if expanded {
-            render_expanded_tool_text_block(out, "      ", tool.model_output.text.as_str(), width);
-        } else {
-            push_collapsible_text(
-                out,
-                "      ",
-                tool.model_output.text.as_str(),
-                Style::default(),
-                width,
-                i18n,
-            );
-        }
+        render_expanded_tool_text_block(out, "      ", tool.model_output.text.as_str(), width);
     }
 
     render_presentation_sections(tool, out, width);
@@ -196,12 +277,63 @@ pub(crate) fn render_tool_execution(
         out,
         width,
         i18n,
-        expanded,
+        true,
         failure_text,
         apply_patch
             .as_ref()
             .is_some_and(|payload| !payload.changes.is_empty()),
     );
+}
+
+fn tool_output_section_copy_text(
+    tool: &OperationPartResource,
+    i18n: &I18n,
+    failure_text: Option<&str>,
+) -> String {
+    let human_markdown = tool.result.human.markdown.trim();
+    let model_output = tool.model_output.text.trim();
+    let mut sections = Vec::new();
+    if !human_markdown.is_empty() && failure_text.is_none() {
+        sections.push(human_markdown.to_owned());
+    } else if should_render_tool_model_output(tool, failure_text) && !model_output.is_empty() {
+        sections.push(model_output.to_owned());
+    }
+
+    let summary = tool.summary.trim();
+    for section in &tool.result.display.sections {
+        let title = section.title.trim();
+        let text = section.text.trim();
+        if title.is_empty()
+            || text.is_empty()
+            || text == model_output
+            || text == summary
+            || sections.iter().any(|existing| existing == text)
+        {
+            continue;
+        }
+        sections.push(format!("{title}\n{text}"));
+    }
+
+    if let Some(diff) = apply_patch_details(&tool.details)
+        .map(|payload| payload.diff)
+        .filter(|diff| !diff.trim().is_empty())
+    {
+        sections.push(diff.trim().to_owned());
+    }
+    sections.extend(
+        tool.blocks
+            .iter()
+            .map(|block| operation_block_copy_text(block, i18n))
+            .filter(|text| {
+                !text.trim().is_empty()
+                    && failure_text.is_none_or(|failure| text.trim() != failure.trim())
+            }),
+    );
+    sections
+        .into_iter()
+        .filter(|section| !section.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn patch_rendered_lines_style(lines: &mut [RenderedLine], style: Style) {

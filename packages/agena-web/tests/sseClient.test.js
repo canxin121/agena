@@ -110,26 +110,35 @@ test('connectSse: reports onSequenceGap when first reconnect id resets backward'
   assert.equal(cursor, '2')
 })
 
-test('connectSse: coalesces message.part.updated deltas within a frame', async () => {
+test('connectSse: coalesces session_changed part_updated events within a frame', async () => {
   installDomLikeGlobals()
   const originalFetch = globalThis.fetch
 
-  const payload1 = {
-    type: 'message.part.updated',
-    properties: {
-      part: { sessionID: 's1', messageID: 'm1', id: 'p1' },
-      delta: 'Hello ',
+  // Wire shape is the agena Notification envelope: kind + data.change (SessionChangeResource).
+  const notification1 = {
+    kind: 'session_changed',
+    data: {
+      subscription: {},
+      change: {
+        kind: 'part_updated',
+        session_id: 1,
+        part: { part_id: 101, kind: 'text', session_id: 1, message_id: 11, text: 'Hello ' },
+      },
     },
   }
-  const payload2 = {
-    type: 'message.part.updated',
-    properties: {
-      part: { sessionID: 's1', messageID: 'm1', id: 'p1' },
-      delta: 'world',
+  const notification2 = {
+    kind: 'session_changed',
+    data: {
+      subscription: {},
+      change: {
+        kind: 'part_updated',
+        session_id: 1,
+        part: { part_id: 101, kind: 'text', session_id: 1, message_id: 11, text: 'world' },
+      },
     },
   }
   const chunk =
-    'id: 1\n' + `data: ${JSON.stringify(payload1)}\n\n` + 'id: 2\n' + `data: ${JSON.stringify(payload2)}\n\n`
+    'id: 1\n' + `data: ${JSON.stringify(notification1)}\n\n` + 'id: 2\n' + `data: ${JSON.stringify(notification2)}\n\n`
 
   globalThis.fetch = async () => {
     let sent = false
@@ -162,9 +171,11 @@ test('connectSse: coalesces message.part.updated deltas within a frame', async (
   client.close()
   globalThis.fetch = originalFetch
 
+  // Same session/part key coalesces into one event; the latest complete part wins.
   assert.equal(received.length, 1)
-  assert.equal(received[0].type, 'message.part.updated')
-  assert.equal(received[0].properties.delta, 'Hello world')
+  assert.equal(received[0].type, 'session_changed')
+  assert.equal(received[0].properties.kind, 'part_updated')
+  assert.equal(received[0].properties.part.text, 'world')
 })
 
 test('connectSse: does not coalesce chat-sidebar.delta events', async () => {

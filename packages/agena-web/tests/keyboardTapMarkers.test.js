@@ -35,9 +35,7 @@ test('Keyboard tap markers stay limited to allowed controls', async () => {
 
   const expected = [
     'components/chat/Composer.vue',
-    'components/chat/PluginChatOverlayMounts.vue',
     'components/ui/OptionMenu.vue',
-    'components/TerminalKeybar.vue',
     'pages/chat/ChatPageView.vue',
   ].sort()
 
@@ -46,10 +44,6 @@ test('Keyboard tap markers stay limited to allowed controls', async () => {
 
   const composer = await readFile(path.join(srcDir, 'components/chat/Composer.vue'), 'utf8')
   assert.match(composer, /data-oc-keyboard-tap=("|')keep\1/)
-  const terminal = await readFile(path.join(srcDir, 'components/TerminalKeybar.vue'), 'utf8')
-  assert.match(terminal, /data-oc-keyboard-tap=("|')keep\1/)
-  const pluginOverlays = await readFile(path.join(srcDir, 'components/chat/PluginChatOverlayMounts.vue'), 'utf8')
-  assert.match(pluginOverlays, /data-oc-keyboard-tap=("|')keep\1/)
   const optionMenu = await readFile(path.join(srcDir, 'components/ui/OptionMenu.vue'), 'utf8')
   assert.match(optionMenu, /data-oc-keyboard-tap=("|')keep\1/)
   const chatView = await readFile(path.join(srcDir, 'pages/chat/ChatPageView.vue'), 'utf8')

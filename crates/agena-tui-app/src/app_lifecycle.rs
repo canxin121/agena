@@ -16,14 +16,6 @@ impl App {
         }
     }
 
-    pub fn new(
-        application: agena_application::Application,
-        launch: LaunchOptions,
-        i18n: I18n,
-    ) -> Self {
-        Self::new_with_backend(crate::TuiBackend::embedded(application), launch, i18n)
-    }
-
     pub fn new_with_backend(
         application: crate::TuiBackend,
         mut launch: LaunchOptions,
@@ -173,9 +165,6 @@ impl App {
     }
 
     pub(crate) fn refresh_tui_palette_from_runtime(&mut self) {
-        if self.application.embedded_application().is_err() {
-            return;
-        }
         self.launch.tui_config = crate::tui_config_from_preferences(
             &crate::app_backend::config::ui_configuration(&self.application),
         );

@@ -21,21 +21,13 @@ pub struct SessionTimelineEntry {
     pub created_at_ms: i64,
 }
 
-/// Loads the visible timeline parts through `Application` and maps them into
-/// the TUI's presentation value.
+/// Loads the visible timeline parts through the processing center's execution
+/// resource and maps them into the TUI's presentation value.
 pub(crate) async fn list_session_timeline(
     application: &super::TuiBackend,
     session_id: i64,
     limit: u64,
 ) -> Result<Vec<SessionTimelineEntry>> {
-    if let Ok(embedded) = application.embedded_application() {
-        let parts = embedded
-            .list_session_timeline_parts(session_id, limit)
-            .await
-            .map_err(anyhow::Error::new)?;
-        return Ok(parts.into_iter().map(entry_from_part).collect());
-    }
-
     let execution = application.get_session_state(session_id).await?;
     let retain = usize::try_from(limit).unwrap_or(usize::MAX);
     let skip = execution.parts.len().saturating_sub(retain);
@@ -57,20 +49,4 @@ pub(crate) async fn list_session_timeline(
             created_at_ms: part.created_at_ms,
         })
         .collect())
-}
-
-fn entry_from_part(part: agena_storage::store::SessionPartView) -> SessionTimelineEntry {
-    SessionTimelineEntry {
-        part_id: part.part_id,
-        kind: part.kind,
-        role: part.role.as_str().to_owned(),
-        state: part.state.as_str().to_owned(),
-        summary: part.summary,
-        content: part.content,
-        rendered_markdown: part.rendered_markdown,
-        parent_part_id: part.parent_part_id,
-        run_id: part.run_id,
-        revision: part.revision,
-        created_at_ms: part.created_at_ms,
-    }
 }

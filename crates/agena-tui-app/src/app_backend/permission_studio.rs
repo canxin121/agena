@@ -24,21 +24,11 @@ pub(crate) async fn get_session_permission_studio_state(
             .context("failed to serialize effective permission resource")?,
     )
     .context("failed to decode effective permission resource")?;
-    let permission = if let Ok(embedded) = application.embedded_application() {
-        embedded
-            .session_execution_services()?
-            .queries
-            .execution_context(session_id)
-            .await
-            .map_err(anyhow::Error::new)
-            .with_context(|| format!("failed to load execution context for session {session_id}"))?
-            .selected_permission
-    } else {
-        // The current public execution resource exposes the effective policy,
-        // not the pre-resolution selected policy. Remote mode therefore opens
-        // this view read-only from the authoritative effective projection.
-        effective_permission.clone()
-    };
+    // The current public execution resource exposes the effective policy, not
+    // the pre-resolution selected policy. The TUI is a pure HTTP client, so
+    // the permission studio opens read-only from the authoritative effective
+    // projection.
+    let permission = effective_permission.clone();
     Ok(SessionPermissionStudioState {
         session_id,
         session_title: execution.session.title.clone(),

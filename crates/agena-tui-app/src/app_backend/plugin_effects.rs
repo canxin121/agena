@@ -1,9 +1,14 @@
 //! Plugin-driven TUI effects: display contributions, notifications, theme
 //! palettes, statuses, slash commands and their effect values.
 
-use agena_api::commands::UpsertPermissionRuleParams;
-use agena_api::resource::PermissionRuleResource;
-use anyhow::{Context, Result, anyhow};
+use agena_api::{
+    commands::{
+        Command, CommandResult, ReplacePermissionRuleParams, RevokePermissionRuleParams,
+        UpsertPermissionRuleParams,
+    },
+    resource::PermissionRuleResource,
+};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
 
 /// Effect of a plugin command.
@@ -155,13 +160,14 @@ fn plugin_command_input(
 }
 
 /// Display contributions published by loaded plugins. Synchronous: consumed
-/// every frame by the status line and terminal title.
+/// every frame by the status line and terminal title. In remote client mode
+/// these come from the cached plugin UI catalog fetched from the center.
 pub(crate) fn plugin_display_contributions(
     application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::HostDisplayContribution> {
     application
-        .embedded_application()
-        .map(|application| application.plugin_runtime().display_contributions())
+        .plugin_catalog()
+        .map(|catalog| catalog.tui.display)
         .unwrap_or_default()
 }
 
@@ -192,15 +198,15 @@ pub(crate) async fn refresh_plan_display(
         .is_some_and(|plan| !plan.is_null()))
 }
 
-/// Plugin notifications emitted through the unified `host.notify` entry
-/// (Phase 6). Bounded recent queue; the TUI dedupes/consumes each intent.
+/// Plugin notifications emitted through the unified `host.notify` entry.
+/// Notifications are push events; no processing-center HTTP endpoint exposes
+/// the host's in-memory notification queue, so remote client mode degrades to
+/// an empty queue.
 pub(crate) fn plugin_host_notifications(
     application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::HostNotification> {
-    application
-        .embedded_application()
-        .map(|application| application.plugin_runtime().host_notifications())
-        .unwrap_or_default()
+    let _ = application;
+    Vec::new()
 }
 
 /// Human-readable workspace name derived from the workspace root's file name.
@@ -215,33 +221,32 @@ pub(crate) fn workspace_name(application: &super::TuiBackend) -> String {
 }
 
 /// Theme palettes contributed by plugins. Synchronous: applied at startup and
-/// whenever the runtime reloads.
+/// whenever the runtime reloads. In remote client mode these come from the
+/// cached plugin UI catalog fetched from the center.
 pub(crate) fn plugin_theme_palettes(
     application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::HostThemePalette> {
     application
-        .embedded_application()
-        .map(|application| application.plugin_runtime().theme_palettes())
+        .plugin_catalog()
+        .map(|catalog| catalog.tui.themes)
         .unwrap_or_default()
 }
 
 pub(crate) fn plugin_statuses(
     application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::status::PluginStatus> {
-    application
-        .embedded_application()
-        .map(|application| application.plugin_runtime().plugin_statuses())
-        .unwrap_or_default()
+    application.plugin_statuses()
 }
 
 pub(crate) fn plugin_inspect(
     application: &super::TuiBackend,
     plugin_id: &str,
 ) -> Option<agena_plugin_host::PluginInspect> {
-    application
-        .embedded_application()
-        .ok()
-        .and_then(|application| application.plugin_runtime().plugin_inspect(plugin_id))
+    let _ = (application, plugin_id);
+    // `PluginInspect` is a Serialize-only host DTO whose members are not all
+    // deserializable; no public center response reproduces it. Degrade to
+    // None in remote client mode.
+    None
 }
 
 pub(crate) fn plugin_logs(
@@ -250,162 +255,87 @@ pub(crate) fn plugin_logs(
     after_seq: Option<u64>,
     limit: usize,
 ) -> Vec<agena_plugin_host::PluginLogRecord> {
-    let Ok(application) = application.embedded_application() else {
-        return Vec::new();
-    };
-    application
-        .plugin_runtime()
-        .plugin_logs(plugin_id, after_seq, limit)
+    let _ = (application, plugin_id, after_seq, limit);
+    // Log reading is synchronous in the TUI event loop and the workbench has
+    // no async load path; degrade to an empty log view in remote client mode.
+    Vec::new()
 }
 
 pub(crate) fn plugin_slash_commands(
     application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::PluginCommandCatalogItem> {
-    let Ok(application) = application.embedded_application() else {
-        return Vec::new();
-    };
     application
-        .plugin_runtime()
-        .studio_commands()
-        .into_iter()
-        .filter(|entry| {
-            entry
-                .command
-                .slash
-                .as_deref()
-                .is_some_and(|slash| !slash.trim().trim_start_matches('/').is_empty())
+        .plugin_catalog()
+        .map(|catalog| {
+            catalog
+                .studio
+                .commands
+                .into_iter()
+                .filter(|entry| {
+                    entry
+                        .command
+                        .slash
+                        .as_deref()
+                        .is_some_and(|slash| !slash.trim().trim_start_matches('/').is_empty())
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default()
 }
 
 /// Invoke a plugin command from a `/` slash command, resolving its effect
-/// (message, prompt, workbench, URL, or nested tool/command invocations) with
-/// a bounded recursion depth.
+/// (message, prompt, workbench, URL, or a tool invocation) over HTTP.
+///
+/// Nested in-process command dispatch has no public center endpoint and is
+/// refused with a clear error.
 pub(crate) async fn invoke_plugin_slash_command(
     application: &super::TuiBackend,
     entry: &agena_plugin_host::PluginCommandCatalogItem,
     session_id: Option<i64>,
     raw: &str,
 ) -> Result<PluginCommandEffect> {
-    const MAX_COMMAND_DEPTH: usize = 8;
-
     let backend = application;
-    let application = backend.embedded_application()?;
 
     let plugin_id = entry.plugin_id.to_string();
-    let slash = entry.command.slash.clone();
-    let mut action = entry.command.action.clone();
-    let mut input = plugin_command_input(&entry.command, raw)?;
-    let mut depth = 0usize;
+    let action = entry.command.action.clone();
+    let input = plugin_command_input(&entry.command, raw)?;
 
-    loop {
-        if depth > MAX_COMMAND_DEPTH {
-            return Err(anyhow!("plugin command recursion limit exceeded"));
+    match action {
+        agena_plugin_host::PluginUiAction::None => Ok(PluginCommandEffect::None),
+        agena_plugin_host::PluginUiAction::SubmitPrompt { prompt } => {
+            Ok(PluginCommandEffect::SubmitPrompt(prompt))
         }
-
-        match action {
-            agena_plugin_host::PluginUiAction::None => return Ok(PluginCommandEffect::None),
-            agena_plugin_host::PluginUiAction::SubmitPrompt { prompt } => {
-                return Ok(PluginCommandEffect::SubmitPrompt(prompt));
-            }
-            agena_plugin_host::PluginUiAction::OpenPluginWorkbench { tab } => {
-                return Ok(PluginCommandEffect::OpenPluginWorkbench { plugin_id, tab });
-            }
-            agena_plugin_host::PluginUiAction::OpenUrl { url } => {
-                return Ok(PluginCommandEffect::OpenUrl(url));
-            }
-            agena_plugin_host::PluginUiAction::InvokeTool {
-                tool,
-                input: base_input,
-                submit_output_as_prompt,
-            } => {
-                let output = invoke_plugin_workbench_tool(
-                    backend,
-                    plugin_id.as_str(),
-                    tool.as_str(),
-                    merge_plugin_command_input(base_input, Some(input)),
-                    session_id,
-                )
-                .await?;
-                if output.trim().is_empty() {
-                    return Ok(PluginCommandEffect::None);
-                }
-                return if submit_output_as_prompt {
-                    Ok(PluginCommandEffect::SubmitPrompt(output))
-                } else {
-                    Ok(PluginCommandEffect::Message(output))
-                };
-            }
-            agena_plugin_host::PluginUiAction::InvokeCommand {
-                command,
-                input: base_input,
-            } => {
-                let session_id = session_id.ok_or_else(|| {
-                    anyhow!("plugin command invocation requires an active session")
-                })?;
-                let output = application
-                    .session_execution_services()
-                    .map_err(|error| anyhow!(error.to_string()))?
-                    .plugin_commands
-                    .invoke_session_plugin_command(agena_runtime::SessionPluginCommandRequest {
-                        session_id,
-                        plugin_id: plugin_id.clone(),
-                        command_id: command.clone(),
-                        input: merge_plugin_command_input(base_input, Some(input)),
-                        slash: slash.clone(),
-                        raw: raw.to_string(),
-                        workspace_root: Some(
-                            application.workspace_root().to_string_lossy().into_owned(),
-                        ),
-                    })
-                    .await
-                    .map_err(|error| anyhow!(error.to_string()))?;
-
-                match output {
-                    agena_plugin_host::PluginCommandOutput::None => {
-                        return Ok(PluginCommandEffect::None);
-                    }
-                    agena_plugin_host::PluginCommandOutput::Message { text } => {
-                        return Ok(PluginCommandEffect::Message(text));
-                    }
-                    agena_plugin_host::PluginCommandOutput::SubmitPrompt { prompt } => {
-                        return Ok(PluginCommandEffect::SubmitPrompt(prompt));
-                    }
-                    agena_plugin_host::PluginCommandOutput::OpenPluginWorkbench { tab } => {
-                        return Ok(PluginCommandEffect::OpenPluginWorkbench { plugin_id, tab });
-                    }
-                    agena_plugin_host::PluginCommandOutput::OpenUrl { url } => {
-                        return Ok(PluginCommandEffect::OpenUrl(url));
-                    }
-                    agena_plugin_host::PluginCommandOutput::InvokeTool {
-                        tool,
-                        input: next_input,
-                        submit_output_as_prompt,
-                    } => {
-                        action = agena_plugin_host::PluginUiAction::InvokeTool {
-                            tool,
-                            input: next_input,
-                            submit_output_as_prompt,
-                        };
-                        input = serde_json::json!({});
-                    }
-                    agena_plugin_host::PluginCommandOutput::InvokeCommand {
-                        command,
-                        input: next_input,
-                    } => {
-                        action = application
-                            .plugin_runtime()
-                            .resolve_studio_action(plugin_id.as_str(), command.as_str())
-                            .unwrap_or(agena_plugin_host::PluginUiAction::InvokeCommand {
-                                command,
-                                input: next_input.clone(),
-                            });
-                        input = next_input.unwrap_or_else(|| serde_json::json!({}));
-                    }
-                }
-                depth += 1;
-            }
+        agena_plugin_host::PluginUiAction::OpenPluginWorkbench { tab } => {
+            Ok(PluginCommandEffect::OpenPluginWorkbench { plugin_id, tab })
         }
+        agena_plugin_host::PluginUiAction::OpenUrl { url } => {
+            Ok(PluginCommandEffect::OpenUrl(url))
+        }
+        agena_plugin_host::PluginUiAction::InvokeTool {
+            tool,
+            input: base_input,
+            submit_output_as_prompt,
+        } => {
+            let output = invoke_plugin_workbench_tool(
+                backend,
+                plugin_id.as_str(),
+                tool.as_str(),
+                merge_plugin_command_input(base_input, Some(input)),
+                session_id,
+            )
+            .await?;
+            if output.trim().is_empty() {
+                return Ok(PluginCommandEffect::None);
+            }
+            Ok(if submit_output_as_prompt {
+                PluginCommandEffect::SubmitPrompt(output)
+            } else {
+                PluginCommandEffect::Message(output)
+            })
+        }
+        agena_plugin_host::PluginUiAction::InvokeCommand { .. } => Err(anyhow!(
+            "nested plugin command dispatch is unavailable in remote TUI mode until it has a public center API"
+        )),
     }
 }
 
@@ -428,42 +358,14 @@ pub(crate) async fn create_permission_rule(
     application: &super::TuiBackend,
     params: UpsertPermissionRuleParams,
 ) -> Result<PermissionRuleResource> {
-    let UpsertPermissionRuleParams {
-        action_key,
-        subject_kind,
-        tool_name,
-        qualifier,
-        path_access_kind,
-        workspace_root,
-        target_path,
-        network_target,
-        network_host,
-        network_port,
-        scope,
-        session_id,
-        mode,
-    } = params;
-    application
-        .embedded_application()?
-        .service()
-        .create_permission_rule(agena_application::dto::PermissionRuleWriteRequest {
-            action_key,
-            subject_kind,
-            tool_name,
-            qualifier,
-            path_access_kind,
-            workspace_root,
-            target_path,
-            network_target,
-            network_host,
-            network_port,
-            scope,
-            session_id,
-            mode,
-        })
-        .await
-        .map_err(anyhow::Error::new)
-        .context("failed to create permission rule")
+    let result = application
+        .client()
+        .command(Command::UpsertPermissionRule(params))
+        .await?;
+    let CommandResult::PermissionRule(rule) = result else {
+        bail!("processing center returned the wrong permission-rule result");
+    };
+    Ok(rule)
 }
 
 pub(crate) async fn replace_permission_rule(
@@ -471,69 +373,44 @@ pub(crate) async fn replace_permission_rule(
     rule_id: i64,
     params: UpsertPermissionRuleParams,
 ) -> Result<PermissionRuleResource> {
-    let UpsertPermissionRuleParams {
-        action_key,
-        subject_kind,
-        tool_name,
-        qualifier,
-        path_access_kind,
-        workspace_root,
-        target_path,
-        network_target,
-        network_host,
-        network_port,
-        scope,
-        session_id,
-        mode,
-    } = params;
-    application
-        .embedded_application()?
-        .service()
-        .replace_permission_rule(
+    let result = application
+        .client()
+        .command(Command::ReplacePermissionRule(ReplacePermissionRuleParams {
             rule_id,
-            agena_application::dto::PermissionRuleWriteRequest {
-                action_key,
-                subject_kind,
-                tool_name,
-                qualifier,
-                path_access_kind,
-                workspace_root,
-                target_path,
-                network_target,
-                network_host,
-                network_port,
-                scope,
-                session_id,
-                mode,
-            },
-        )
-        .await
-        .map_err(anyhow::Error::new)
-        .context("failed to replace permission rule")
+            rule: params,
+        }))
+        .await?;
+    let CommandResult::PermissionRule(rule) = result else {
+        bail!("processing center returned the wrong permission-rule result");
+    };
+    Ok(rule)
 }
 
 pub(crate) async fn revoke_permission_rule(
     application: &super::TuiBackend,
     rule_id: i64,
 ) -> Result<PermissionRuleResource> {
-    application
-        .embedded_application()?
-        .service()
-        .revoke_permission_rule(rule_id, None)
-        .await
-        .map_err(anyhow::Error::new)
-        .context("failed to revoke permission rule")
+    let result = application
+        .client()
+        .command(Command::RevokePermissionRule(RevokePermissionRuleParams {
+            rule_id,
+            reason: None,
+        }))
+        .await?;
+    let CommandResult::PermissionRule(rule) = result else {
+        bail!("processing center returned the wrong permission-rule result");
+    };
+    Ok(rule)
 }
 
 pub(crate) async fn create_commit(
     application: &super::TuiBackend,
     message: String,
 ) -> Result<(String, String)> {
-    let commit = application
-        .embedded_application()?
-        .git_commit(agena_application::dto::GitCommitRequest { message })
-        .await
-        .map_err(|error| anyhow!(error.to_string()))?;
+    let commit: agena_application::dto::GitCommitResource = serde_json::from_value(
+        application.client().create_git_commit(message).await?,
+    )
+    .context("the center returned an undecodable git commit result")?;
     Ok((commit.commit, commit.summary))
 }
 
@@ -544,15 +421,12 @@ pub(crate) async fn create_pr(
     base: Option<String>,
     head: Option<String>,
 ) -> Result<String> {
-    let pull_request = application
-        .embedded_application()?
-        .git_create_pull_request(agena_application::dto::GitPullRequestCreateRequest {
-            title,
-            body,
-            base,
-            head,
-        })
-        .await
-        .map_err(|error| anyhow!(error.to_string()))?;
+    let pull_request: agena_application::dto::GitPullRequestResource = serde_json::from_value(
+        application
+            .client()
+            .create_git_pull_request(title, body, base, head)
+            .await?,
+    )
+    .context("the center returned an undecodable git pull-request result")?;
     Ok(pull_request.url)
 }

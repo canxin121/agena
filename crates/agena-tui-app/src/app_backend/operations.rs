@@ -1,35 +1,39 @@
 //! Session and workspace operations the terminal drives through
-//! `Application`. These are presentation-facing entry points that build on
-//! the application service/session layer (the down-moved frozen methods live
-//! on `Application` itself; this module holds everything else).
+//! `TuiBackend`. These are presentation-facing entry points that build on
+//! the HTTP client (the down-moved frozen methods live on `TuiBackend`
+//! itself; this module holds everything else).
 
-use agena_application::Application;
 use anyhow::{Context, Result};
-use serde_json::Value as JsonValue;
 
 use agena_api::resource::{
     PermissionReply as ApiPermissionReply, PermissionReplyKind as ApiPermissionReplyKind,
-    PermissionScope as ApiPermissionScope, ProviderAdapterSummaryResource,
-    ProviderDefaultsResource, ProviderSummaryResource, RunOptions, SessionExecutionResource,
-    SessionResource, UserInputReply as ApiUserInputReply,
+    PermissionScope as ApiPermissionScope, ProviderSummaryResource, RunOptions,
+    SessionExecutionResource, SessionResource, UserInputReply as ApiUserInputReply,
     UserInputReplyKind as ApiUserInputReplyKind,
 };
 use agena_domain::{PermissionReplyKind, PermissionScope, UserInputReply};
 
 use super::TuiBackend;
 
-/// Load usage statistics for the terminal's usage overview.
+/// Load usage statistics from the processing center for the terminal's usage
+/// overview.
 pub(crate) async fn usage_stats(
     application: &TuiBackend,
     query: agena_domain::UsageStatsQuery,
 ) -> Result<agena_domain::UsageStats> {
     application
-        .embedded_application()?
-        .session_query_service()
-        .map_err(anyhow::Error::new)?
-        .usage_stats(query)
+        .client()
+        .usage_stats(
+            query.period,
+            query.from,
+            query.to,
+            &query.provider_ids,
+            &query.model_ids,
+            &query.session_ids,
+            query.include_subagents,
+            query.timezone_offset_minutes,
+        )
         .await
-        .map_err(anyhow::Error::new)
         .context("failed to load usage statistics")
 }
 
@@ -191,18 +195,15 @@ pub(crate) async fn present_interactive_request(
         .context("failed to mark interactive request presented")
 }
 
-/// Render the terminal diagnostic summary from the Runtime-owned status
-/// projection through Application rather than traversing Runtime status.
+/// Render the terminal diagnostic summary from the processing center's runtime
+/// status projection.
 pub(crate) async fn runtime_snapshot_summary(application: &TuiBackend) -> Result<String> {
-    let status = application
-        .embedded_application()?
-        .runtime_snapshot_summary()
-        .await;
+    let status = application.client().runtime_status().await?;
     Ok(format!(
         "generation {} · loaded {} · {} providers · {} plugins",
         status.generation,
         status.loaded_at.to_rfc3339(),
-        status.provider_count,
+        status.provider_ids.len(),
         status.plugin_count,
     ))
 }
@@ -221,39 +222,6 @@ pub(crate) async fn list_workspace_sessions_page(
         .await
 }
 
-pub(super) async fn list_workspace_sessions_page_embedded(
-    application: &Application,
-    roots_only: bool,
-    exclude_subagents: bool,
-    search: Option<&str>,
-    cursor: Option<String>,
-    limit: u64,
-) -> Result<agena_api::pagination::PaginatedResponse<SessionResource>> {
-    let workspace_id = current_workspace_id(application).await?;
-    let page = application
-        .service()
-        .list_sessions(agena_application::dto::SessionListQuery {
-            pagination: agena_application::dto::SearchPaginationQuery {
-                pagination: agena_application::dto::CursorPaginationQuery {
-                    cursor,
-                    limit: Some(limit),
-                },
-                search: search.map(str::to_string),
-            },
-            workspace_id: Some(workspace_id),
-            parent_id: None,
-            roots: roots_only,
-            exclude_subagents,
-        })
-        .await
-        .map_err(anyhow::Error::new)
-        .context("failed to list workspace sessions page")?;
-    Ok(agena_application::pagination::api_page_from_application(
-        page,
-        |item| item,
-    ))
-}
-
 /// List all known providers (without adapter detail).
 pub(crate) fn list_providers(application: &TuiBackend) -> Vec<ProviderSummaryResource> {
     application.provider_summaries()
@@ -264,46 +232,17 @@ pub(crate) fn list_configured_providers(application: &TuiBackend) -> Vec<Provide
     application.provider_summaries()
 }
 
-pub(super) fn list_configured_providers_embedded(
-    application: &Application,
-) -> Vec<ProviderSummaryResource> {
-    application
-        .provider_catalog()
-        .list_providers()
-        .into_iter()
-        .map(|provider| provider_summary_resource_from_catalog(provider, true))
-        .collect()
-}
-
 /// Set a workspace-scoped config file setting, reloading the runtime when the
 /// edit requires it.
 pub(crate) async fn set_workspace_config_setting(
     application: &TuiBackend,
     path: &str,
-    value: JsonValue,
+    value: serde_json::Value,
 ) -> Result<agena_runtime::ConfigSettingsEditResponse> {
-    let application = application.embedded_application()?;
-    let response = application
-        .runtime_config_settings()
-        .set_project_file_setting(agena_runtime::ConfigSettingsSetInput {
-            path: path.trim().to_owned(),
-            value,
-            options: agena_runtime::ConfigSettingsEditOptions {
-                dry_run: false,
-                validate: true,
-                reload: true,
-            },
-        })
-        .context("failed to set workspace config setting")?;
-
-    if response.reload_required {
-        application
-            .runtime_control()
-            .reload()
-            .await
-            .context("failed to reload runtime after workspace config change")?;
-    }
-    Ok(response)
+    application
+        .set_config_setting(path, value)
+        .await
+        .context("failed to set workspace config setting")
 }
 
 /// Delete a workspace-scoped config file setting, reloading the runtime when
@@ -312,76 +251,21 @@ pub(crate) async fn delete_workspace_config_setting(
     application: &TuiBackend,
     path: &str,
 ) -> Result<agena_runtime::ConfigSettingsEditResponse> {
-    let application = application.embedded_application()?;
-    let response = application
-        .runtime_config_settings()
-        .delete_project_file_setting(agena_runtime::ConfigSettingsDeleteInput {
-            path: path.trim().to_owned(),
-            options: agena_runtime::ConfigSettingsEditOptions {
-                dry_run: false,
-                validate: true,
-                reload: true,
-            },
-        })
-        .context("failed to delete workspace config setting")?;
-
-    if response.reload_required {
-        application
-            .runtime_control()
-            .reload()
-            .await
-            .context("failed to reload runtime after workspace config change")?;
-    }
-    Ok(response)
+    application
+        .delete_config_setting(path)
+        .await
+        .context("failed to delete workspace config setting")
 }
 
 /// Refresh provider client versions from the remote registry.
+///
+/// No processing-center HTTP endpoint exposes this, so it degrades to a clear
+/// unavailable error in remote client mode.
 pub(crate) async fn refresh_provider_client_versions(
     application: &TuiBackend,
 ) -> Result<agena_provider::ProviderClientVersions> {
-    application
-        .embedded_application()?
-        .refresh_provider_client_versions()
-        .await
-        .context("failed to refresh provider client versions")
-}
-
-async fn current_workspace_id(application: &Application) -> Result<i64> {
-    Ok(application
-        .service()
-        .resolve_workspace(agena_application::dto::WorkspaceResolveRequest {
-            workspace: agena_application::dto::WorkspacePathRequest {
-                path: application.workspace_root().to_string_lossy().to_string(),
-            },
-            create_if_missing: true,
-        })
-        .await
-        .map_err(anyhow::Error::new)
-        .context("failed to resolve current workspace")?
-        .id)
-}
-
-fn provider_summary_resource_from_catalog(
-    provider: agena_provider::ProviderCatalogEntry,
-    include_adapters: bool,
-) -> ProviderSummaryResource {
-    ProviderSummaryResource {
-        provider_id: provider.provider_id.to_string(),
-        defaults: ProviderDefaultsResource {
-            adapter: provider.defaults.adapter,
-            model: provider.defaults.model,
-        },
-        adapters: if include_adapters {
-            provider.adapters
-        } else {
-            Vec::new()
-        }
-        .into_iter()
-        .map(|adapter| ProviderAdapterSummaryResource {
-            adapter_id: adapter.adapter_id,
-            enabled: adapter.enabled,
-            configured_model_count: adapter.configured_model_count,
-        })
-        .collect(),
-    }
+    let _ = application;
+    anyhow::bail!(
+        "provider client version refresh is unavailable in remote TUI mode until it has a public center API"
+    )
 }

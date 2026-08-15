@@ -1,25 +1,59 @@
 //! Backend adapters for the unified background-activities panel.
 //!
-//! The TUI is an in-process consumer of the runtime activity service; these
-//! adapters map runtime activity results to the presentation resources
-//! without going through HTTP.
+//! The TUI is a pure HTTP client; these adapters route activity operations
+//! through the processing center's query/command surface.
 
-use agena_api::resource::{BackgroundActivityLogResource, BackgroundActivityResource};
-use anyhow::{Context, Result, anyhow};
+use agena_api::{
+    commands::{
+        ClearFinishedActivities, Command, CommandResult, DismissActivityParams,
+        StopActivityParams,
+    },
+    queries::{ActivityLogsParams, ListActivitiesParams, Query, QueryResult},
+    resource::{BackgroundActivityLogResource, BackgroundActivityResource},
+};
+use anyhow::{Result, anyhow, bail};
 
 pub(crate) async fn list_activities(
     application: &crate::TuiBackend,
     filter: agena_domain::BackgroundActivityFilter,
 ) -> Result<Vec<BackgroundActivityResource>> {
-    let service = application.embedded_application()?.runtime_activities()?;
-    let activities = service
-        .list_activities(&filter)
-        .await
-        .map_err(|error| anyhow!("{error}"))?;
-    Ok(activities
-        .iter()
-        .map(agena_api::resource::BackgroundActivityResource::from)
-        .collect())
+    let kinds = if filter.kinds.is_empty() {
+        None
+    } else {
+        Some(
+            filter
+                .kinds
+                .iter()
+                .map(|kind| kind.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+    };
+    let statuses = if filter.statuses.is_empty() {
+        None
+    } else {
+        Some(
+            filter
+                .statuses
+                .iter()
+                .map(|status| status.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+    };
+    let result = application
+        .client()
+        .query(Query::ListActivities(ListActivitiesParams {
+            kinds,
+            statuses,
+            session_id: filter.session_id,
+            active_only: filter.active_only,
+        }))
+        .await?;
+    let QueryResult::Activities(activities) = result else {
+        bail!("processing center returned the wrong activity-list result");
+    };
+    Ok(activities)
 }
 
 pub(crate) async fn activity_logs(
@@ -29,13 +63,20 @@ pub(crate) async fn activity_logs(
     limit: Option<u32>,
     wait_ms: u64,
 ) -> Result<BackgroundActivityLogResource> {
-    let service = application.embedded_application()?.runtime_activities()?;
-    let read = service
-        .activity_logs(activity_id, since_seq, limit, wait_ms)
+    let result = application
+        .client()
+        .query(Query::ActivityLogs(ActivityLogsParams {
+            activity_id: activity_id.to_owned(),
+            since_seq,
+            limit,
+            wait_ms,
+        }))
         .await
-        .map_err(|error| anyhow!("{error}"))
-        .context("failed to read background activity logs")?;
-    Ok(read.into())
+        .map_err(|error| anyhow!("failed to read background activity logs: {error}"))?;
+    let QueryResult::ActivityLogs(logs) = result else {
+        bail!("processing center returned the wrong activity-log result");
+    };
+    Ok(logs)
 }
 
 pub(crate) async fn control_activity(
@@ -43,31 +84,52 @@ pub(crate) async fn control_activity(
     activity_id: &str,
     action: &str,
 ) -> Result<BackgroundActivityResource> {
-    let service = application.embedded_application()?.runtime_activities()?;
-    let activity = match action {
-        "stop" => service.stop_activity(activity_id).await,
-        "pause" => service.pause_activity(activity_id).await,
-        "resume" => service.resume_activity(activity_id).await,
-        "delete" => service.delete_activity(activity_id).await,
-        "dismiss" => service.dismiss_activity(activity_id),
-        _ => {
-            return Err(anyhow!(
-                "unsupported background activity control `{action}`"
-            ));
+    match action {
+        "stop" => {
+            let result = application
+                .client()
+                .command(Command::StopActivity(StopActivityParams {
+                    activity_id: activity_id.to_owned(),
+                }))
+                .await
+                .map_err(|error| anyhow!("{error}"))?;
+            let CommandResult::Activity(activity) = result else {
+                bail!("processing center returned the wrong activity-control result");
+            };
+            Ok(activity)
         }
+        "dismiss" => {
+            let result = application
+                .client()
+                .command(Command::DismissActivity(DismissActivityParams {
+                    activity_id: activity_id.to_owned(),
+                }))
+                .await
+                .map_err(|error| anyhow!("{error}"))?;
+            let CommandResult::Activity(activity) = result else {
+                bail!("processing center returned the wrong activity-control result");
+            };
+            Ok(activity)
+        }
+        "pause" | "resume" | "delete" => application
+            .client()
+            .control_activity(activity_id, action)
+            .await
+            .map_err(|error| anyhow!("{error}")),
+        _ => Err(anyhow!(
+            "unsupported background activity control `{action}`"
+        )),
     }
-    .map_err(|error| anyhow!("{error}"))
-    .context("failed to control background activity")?;
-    Ok(agena_api::resource::BackgroundActivityResource::from(
-        &activity,
-    ))
 }
 
 pub(crate) async fn clear_finished_activities(application: &crate::TuiBackend) -> Result<usize> {
-    let service = application.embedded_application()?.runtime_activities()?;
-    service
-        .clear_finished()
+    let result = application
+        .client()
+        .command(Command::ClearFinishedActivities)
         .await
-        .map_err(|error| anyhow!("{error}"))
-        .context("failed to clear finished background activities")
+        .map_err(|error| anyhow!("{error}"))?;
+    let CommandResult::ActivitiesCleared { count } = result else {
+        bail!("processing center returned the wrong clear-finished result");
+    };
+    Ok(count)
 }

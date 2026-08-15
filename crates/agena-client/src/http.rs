@@ -28,10 +28,10 @@ use agena_api::{
         QueryResult,
     },
     resource::{
-        BackgroundActivityResource, HealthResponse, PermissionRuleResource,
-        ProviderAdapterModelsRequest, ProviderAdapterModelsResponse, RunOptions,
-        SavedProviderAdapterModelsRequest, SessionExecutionResource, SessionOverviewResource,
-        SessionResource, WorkspaceResource,
+        BackgroundActivityResource, HealthResponse, PermissionConfigResource,
+        PermissionRuleResource, ProviderAdapterModelsRequest, ProviderAdapterModelsResponse,
+        RunOptions, SavedProviderAdapterModelsRequest, SessionExecutionResource,
+        SessionOverviewResource, SessionResource, WorkspaceResource,
     },
 };
 use futures_util::{StreamExt, TryStreamExt as _};
@@ -629,6 +629,12 @@ impl AgenaClient {
         self.get_json("/api/v1/plugins").await
     }
 
+    /// Fetch the combined TUI/studio plugin UI catalog (display contributions,
+    /// theme palettes, slash commands).
+    pub async fn plugin_ui_catalog(&self) -> Result<serde_json::Value, ClientError> {
+        self.get_json("/api/v1/plugins/ui").await
+    }
+
     pub async fn plugin_inspect(&self, plugin_id: &str) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/plugins");
         url.path_segments_mut()
@@ -662,6 +668,41 @@ impl AgenaClient {
             .send_request(reqwest::Method::GET, url, None, None)
             .await?;
         self.parse_json(response).await
+    }
+
+    /// Invoke a plugin Tool API endpoint through `POST /api/v1/plugins/ui/invoke-tool`,
+    /// returning the raw plugin tool invoke response JSON.
+    pub async fn invoke_plugin_ui_tool(
+        &self,
+        plugin_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+        session_id: Option<i64>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.post_json(
+            "/api/v1/plugins/ui/invoke-tool",
+            serde_json::json!({
+                "plugin_id": plugin_id,
+                "tool": tool_name,
+                "input": input,
+                "session_id": session_id,
+            }),
+        )
+        .await
+    }
+
+    /// Control a background activity (`pause`, `resume`, or `delete`) through
+    /// `POST /api/v1/activities/{activity_id}/{action}`.
+    pub async fn control_activity(
+        &self,
+        activity_id: &str,
+        action: &str,
+    ) -> Result<agena_api::resource::BackgroundActivityResource, ClientError> {
+        self.post_json(
+            &format!("/api/v1/activities/{activity_id}/{action}"),
+            serde_json::json!({}),
+        )
+        .await
     }
 
     pub async fn auth_providers(&self) -> Result<serde_json::Value, ClientError> {
@@ -996,6 +1037,84 @@ impl AgenaClient {
             .send_request(reqwest::Method::PUT, url, Some(&body), None)
             .await?;
         self.parse_json(response).await
+    }
+
+    /// Delete a value from a settings layer (`global` or `workspace`) and
+    /// return the settings edit response.
+    pub async fn delete_settings_layer_value(
+        &self,
+        layer: &str,
+        path: &str,
+        dry_run: bool,
+        reload: bool,
+    ) -> Result<serde_json::Value, ClientError> {
+        let mut url = self.endpoint("/api/v1/settings/layers");
+        url.path_segments_mut()
+            .map_err(|()| ClientError::Protocol("center URL cannot carry path segments".into()))?
+            .push(layer);
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("path", path);
+            if dry_run {
+                query.append_pair("dry_run", "true");
+            }
+            query.append_pair("validate", "true");
+            if reload {
+                query.append_pair("reload", "true");
+            }
+        }
+        let response = self
+            .send_request(reqwest::Method::DELETE, url, None, None)
+            .await?;
+        self.parse_json(response).await
+    }
+
+    /// List the resolved model catalog (optionally filtered by query and
+    /// paginated) through `GET /api/v1/model-catalog`.
+    pub async fn model_catalog(
+        &self,
+        query: &str,
+        origin: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<serde_json::Value, ClientError> {
+        let mut url = self.endpoint("/api/v1/model-catalog");
+        {
+            let mut params = url.query_pairs_mut();
+            if !query.is_empty() {
+                params.append_pair("q", query);
+            }
+            if let Some(origin) = origin.filter(|origin| !origin.is_empty()) {
+                params.append_pair("origin", origin);
+            }
+            params.append_pair("offset", &offset.to_string());
+            params.append_pair("limit", &limit.to_string());
+        }
+        let response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        self.parse_json(response).await
+    }
+
+    /// Request the server to refresh its model catalog through
+    /// `POST /api/v1/model-catalog/refresh`.
+    pub async fn refresh_model_catalog(&self) -> Result<serde_json::Value, ClientError> {
+        self.post_json("/api/v1/model-catalog/refresh", serde_json::json!({}))
+            .await
+    }
+
+    /// Set the session's selected permission policy through
+    /// `PUT /api/v1/sessions/{session_id}/permission`.
+    pub async fn set_session_permission(
+        &self,
+        session_id: i64,
+        permission: agena_api::resource::PermissionConfigResource,
+    ) -> Result<SessionExecutionResource, ClientError> {
+        self.put_json(
+            &format!("/api/v1/sessions/{session_id}/permission"),
+            serde_json::json!({ "permission": permission }),
+        )
+        .await
     }
 
     pub async fn memory_overview(&self) -> Result<serde_json::Value, ClientError> {

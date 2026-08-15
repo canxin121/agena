@@ -27,12 +27,6 @@ impl App {
     /// to an active session so its writes keep the ordinary Agena permission
     /// and event/audit path instead of bypassing the execution layer.
     pub(crate) fn open_skill_studio(&mut self) {
-        if self.application.is_remote() {
-            self.flash_warning(
-                "Skill Studio is unavailable in remote TUI mode until it has a public center API",
-            );
-            return;
-        }
         if self.skill_studio_session_id().is_err() {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;

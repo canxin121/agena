@@ -48,7 +48,7 @@ impl ToolApiPlugin {
 
     #[tool(
         tags(query, discovery),
-        summary = "Enumerate current tools.",
+        summary = "Enumerate current tools across one plugin or a batch of plugin targets.",
         read_only,
         discovery,
         concurrency_safe
@@ -59,7 +59,7 @@ impl ToolApiPlugin {
 
     #[tool(
         tags(query, discovery),
-        summary = "Search the Agena execution tools available in this session.",
+        summary = "Search execution tools with one or many queries across one or many plugin targets.",
         read_only,
         discovery,
         concurrency_safe
@@ -70,7 +70,7 @@ impl ToolApiPlugin {
 
     #[tool(
         tags(query, discovery),
-        summary = "Get reusable schema, examples, and usage notes for one Agena execution tool.",
+        summary = "Get reusable schemas, examples, and usage notes for one Agena execution tool or a batch of tools.",
         read_only,
         discovery,
         concurrency_safe
@@ -81,7 +81,7 @@ impl ToolApiPlugin {
 
     #[tool(
         tags(query, discovery),
-        summary = "List tool tags with pagination.",
+        summary = "List tool tags across one plugin or a batch of plugin targets.",
         read_only,
         discovery,
         concurrency_safe
@@ -92,7 +92,7 @@ impl ToolApiPlugin {
 
     #[tool(
         tags(query, discovery),
-        summary = "Enumerate the current live plugin inventory with version, summary, tags, and tool count.",
+        summary = "Enumerate one or many selected plugins with version, summary, tags, and tool count.",
         read_only,
         discovery,
         concurrency_safe
@@ -103,7 +103,7 @@ impl ToolApiPlugin {
 
     #[tool(
         tags(query, discovery),
-        summary = "Search the loaded plugins by id, summary, or tag.",
+        summary = "Search loaded plugins with one or many queries and optional multi-plugin scope.",
         read_only,
         discovery,
         concurrency_safe
@@ -114,7 +114,7 @@ impl ToolApiPlugin {
 
     #[tool(
         tags(query, discovery),
-        summary = "List plugin tags with pagination.",
+        summary = "List plugin tags across one plugin or a batch of plugin targets.",
         read_only,
         discovery,
         concurrency_safe
@@ -153,7 +153,8 @@ mod tests {
             .pointer("/properties/tool/description")
             .and_then(serde_json::Value::as_str)
             .expect("help tool-name description");
-        assert!(help_tool_description.contains("Exact name"));
+        assert!(help_tool_description.contains("exact execution-tool name"));
+        assert!(help_tool_description.contains("non-empty array"));
         assert!(help_tool_description.contains("`tools_list` or `tools_search`"));
     }
 }

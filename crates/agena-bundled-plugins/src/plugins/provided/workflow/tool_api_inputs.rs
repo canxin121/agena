@@ -1,12 +1,27 @@
 use agena_macros::ToolInput;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub(crate) enum ToolApiStringBatch {
+    One(#[schemars(length(min = 1))] String),
+    Many(#[schemars(length(min = 1))] Vec<String>),
+}
+
+impl ToolApiStringBatch {
+    pub(crate) fn as_slice(&self) -> &[String] {
+        match self {
+            Self::One(value) => std::slice::from_ref(value),
+            Self::Many(values) => values,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(non_empty("tool"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolApiHelpInput {
-    /// Exact name of the Agena execution tool to inspect, such as `fs.read`.
-    /// Use a name returned by `tools_list` or `tools_search`.
-    pub tool: String,
+    /// One exact execution-tool name, or a non-empty array of exact names, to
+    /// inspect. Use names returned by `tools_list` or `tools_search`.
+    pub tool: ToolApiStringBatch,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -18,10 +33,11 @@ pub(crate) struct ToolApiListInput {
     /// Maximum number of tools to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
-    /// Optional plugin filter: only list tools published by this plugin id,
-    /// such as `agena.fs` or `agena.web`.
+    /// Optional plugin selector: one plugin id or a non-empty array of ids,
+    /// with OR semantics. It scopes tools by owner for `tools_list` and selects
+    /// plugin records directly for `plugins_list`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin: Option<String>,
+    pub plugin: Option<ToolApiStringBatch>,
     /// Optional single tag filter such as `query` or `network`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
@@ -31,22 +47,22 @@ pub(crate) struct ToolApiListInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolApiSearchInput {
-    /// Search text used to rank matching tool names and summaries.
-    #[serde(default)]
-    pub query: String,
+    /// One search query, or a non-empty array of queries, used to rank matching
+    /// tool names and summaries. Batched queries are evaluated independently.
+    pub query: ToolApiStringBatch,
     /// Number of matching tools to skip before returning results.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
     /// Maximum number of search results to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
-    /// Optional plugin filter: only search tools published by this plugin id,
-    /// such as `agena.fs` or `agena.web`.
+    /// Optional plugin selector: one plugin id or a non-empty array of ids,
+    /// with OR semantics. It scopes tools by owner for `tools_search` and
+    /// plugin records directly for `plugins_search`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin: Option<String>,
+    pub plugin: Option<ToolApiStringBatch>,
     /// Optional single tag filter such as `query` or `network`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
@@ -64,6 +80,11 @@ pub(crate) struct ToolApiTagsInput {
     /// Maximum number of tags to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// Optional plugin selector: one plugin id or a non-empty array of ids.
+    /// Only tags belonging to tools or plugins from any selected plugin are
+    /// counted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<ToolApiStringBatch>,
 }
 
 use super::{Deserialize, JsonSchema, Serialize};

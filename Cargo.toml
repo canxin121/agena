@@ -230,7 +230,6 @@ globset = "0.4.18"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
 notify = "8.2.0"
-nucleo-matcher = "0.3.1"
 html_escape = { package = "html-escape", version = "0.2.14" }
 ignore = "0.4.28"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }

@@ -13,7 +13,12 @@ impl WorkflowPlugin {
                     "get" | "set" | "edit" | "phase" | "review" | "clear"
                 );
             }
-            "agena.session" => return matches!(input.tool_name(), "get" | "rename"),
+            "agena.session" => {
+                return matches!(
+                    input.tool_name(),
+                    "get" | "environment" | "model" | "tokens" | "rename"
+                );
+            }
             "agena.interaction" => return matches!(input.tool_name(), "ask" | "notify"),
             "agena.tools" => {
                 return matches!(
@@ -618,25 +623,16 @@ impl WorkflowPlugin {
         &self,
         input: &ToolApiSearchInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let query = input.query.as_str();
         let config = self.config()?;
+        validate_plugin_selector(input.plugin.as_ref())?;
         let max_query_length = config.tool_discovery.search.max_query_length as usize;
-        if query.chars().count() > max_query_length {
-            return Err(PluginError::invalid_params(format!(
-                "search query is too long: {} characters (max {})",
-                query.chars().count(),
-                max_query_length
-            )));
-        }
-        let limit = input
-            .limit
-            .unwrap_or(config.tool_discovery.search.default_limit)
-            .clamp(1, config.tool_discovery.search.max_limit);
+        let queries = validated_search_queries(&input.query, max_query_length)?;
+        let limit = discovery_limit(input.limit, config.tool_discovery.search.default_limit);
         let max_summary_chars = config.tool_discovery.search.max_summary_chars as usize;
         let records = Self::filter_available_tools_by_tag(
             Self::filter_available_tools_by_plugin(
                 self.available_tool_records().await?,
-                input.plugin.as_deref(),
+                input.plugin.as_ref(),
             ),
             input.tag.as_deref(),
             input.tags.as_deref(),
@@ -645,56 +641,80 @@ impl WorkflowPlugin {
             .iter()
             .map(Self::tool_search_document)
             .collect::<Vec<_>>();
-        let results = search_tools(&documents, query, documents.len());
-        let (results, total, offset) = Self::paginate(&results, input.offset, Some(limit));
-        let mut lines = vec![format!(
-            "Matching tools for {}: returned {} of {} starting at offset {}.",
-            serde_json::to_string(query).unwrap_or_else(|_| "\"\"".to_owned()),
-            results.len(),
-            total,
-            offset,
-        )];
-        for tool in &results {
-            let summary = compact_tool_summary(&tool.description, max_summary_chars);
-            if summary.is_empty() {
+        let mut pages = Vec::with_capacity(queries.len());
+        let mut total_matches = 0usize;
+        let mut total_returned = 0usize;
+        for query in &queries {
+            let results = search_tools(&documents, query, documents.len());
+            let (results, total, offset) = Self::paginate(&results, input.offset, Some(limit));
+            let mut lines = vec![format!(
+                "Matching tools for {}: returned {} of {} starting at offset {}.",
+                serde_json::to_string(query).unwrap_or_else(|_| "\"\"".to_owned()),
+                results.len(),
+                total,
+                offset,
+            )];
+            for tool in &results {
+                let summary = compact_tool_summary(&tool.description, max_summary_chars);
+                if summary.is_empty() {
+                    lines.push(format!(
+                        "- {} [{}]",
+                        tool.name,
+                        tags_summary(tool.tags.as_slice())
+                    ));
+                } else {
+                    lines.push(format!(
+                        "- {} [{}]: {}",
+                        tool.name,
+                        tags_summary(tool.tags.as_slice()),
+                        summary
+                    ));
+                }
+            }
+            if !results.is_empty() {
                 lines.push(format!(
-                    "- {} [{}]",
-                    tool.name,
-                    tags_summary(tool.tags.as_slice())
-                ));
-            } else {
-                lines.push(format!(
-                    "- {} [{}]: {}",
-                    tool.name,
-                    tags_summary(tool.tags.as_slice()),
-                    summary
+                    "Call `{}` with exact tool names for detailed usage; it accepts a batch.",
+                    agena_runtime_tools::tool::tools_help_function_name()
                 ));
             }
-        }
-        if !results.is_empty() {
-            lines.push(format!(
-                "Call `{}` with an exact tool name for detailed usage.",
-                agena_runtime_tools::tool::tools_help_function_name()
-            ));
-        }
-        append_discovery_page_hint(
-            &mut lines,
-            agena_domain::ToolApiFunction::Search.function_name(),
-            total,
-            offset,
-            results.len(),
-        );
-        let title_query = compact_tool_summary(query, 80);
-        Ok(discovery_text_output(
-            format!(
-                "Search tools · {} · {}/{}",
-                title_query,
+            append_discovery_page_hint(
+                &mut lines,
+                agena_domain::ToolApiFunction::Search.function_name(),
+                total,
+                offset,
                 results.len(),
-                total
-            ),
-            discovery_page_summary("matching tools", total, offset, results.len()),
-            lines.join("\n"),
-        ))
+            );
+            total_matches = total_matches.saturating_add(total);
+            total_returned = total_returned.saturating_add(results.len());
+            pages.push(lines.join("\n"));
+        }
+        let (title, summary) = if let [query] = queries.as_slice() {
+            (
+                format!(
+                    "Search tools · {} · {}/{}",
+                    compact_tool_summary(query, 80),
+                    total_returned,
+                    total_matches
+                ),
+                discovery_page_summary(
+                    "matching tools",
+                    total_matches,
+                    input.offset.unwrap_or(0) as usize,
+                    total_returned,
+                ),
+            )
+        } else {
+            (
+                format!("Search tools · {} queries", queries.len()),
+                format!(
+                    "Searched {} queries; returned {} of {} aggregate matches.",
+                    queries.len(),
+                    total_returned,
+                    total_matches
+                ),
+            )
+        };
+        Ok(discovery_text_output(title, summary, pages.join("\n\n")))
     }
 
     pub(crate) async fn invoke_tool_api_list(
@@ -702,15 +722,13 @@ impl WorkflowPlugin {
         input: &ToolApiListInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let config = self.config()?;
-        let limit = input
-            .limit
-            .unwrap_or(config.tool_discovery.list.default_limit)
-            .clamp(1, config.tool_discovery.list.max_limit);
+        validate_plugin_selector(input.plugin.as_ref())?;
+        let limit = discovery_limit(input.limit, config.tool_discovery.list.default_limit);
         let max_summary_chars = config.tool_discovery.list.max_summary_chars as usize;
         let records = Self::filter_available_tools_by_tag(
             Self::filter_available_tools_by_plugin(
                 self.available_tool_records().await?,
-                input.plugin.as_deref(),
+                input.plugin.as_ref(),
             ),
             input.tag.as_deref(),
             input.tags.as_deref(),
@@ -756,12 +774,13 @@ impl WorkflowPlugin {
         input: &ToolApiTagsInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let config = self.config()?;
-        let limit = input
-            .limit
-            .unwrap_or(config.tool_discovery.tags.default_limit)
-            .clamp(1, config.tool_discovery.tags.max_limit);
-        let tags =
-            Self::available_tool_tag_records(self.available_tool_records().await?.as_slice());
+        validate_plugin_selector(input.plugin.as_ref())?;
+        let limit = discovery_limit(input.limit, config.tool_discovery.tags.default_limit);
+        let records = Self::filter_available_tools_by_plugin(
+            self.available_tool_records().await?,
+            input.plugin.as_ref(),
+        );
+        let tags = Self::available_tool_tag_records(records.as_slice());
         let (tags, total, offset) = Self::paginate(&tags, input.offset, Some(limit));
         let mut lines = vec![format!(
             "Available tool tags: returned {} of {} starting at offset {}.",
@@ -809,13 +828,14 @@ impl WorkflowPlugin {
         input: &ToolApiListInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let config = self.config()?;
-        let limit = input
-            .limit
-            .unwrap_or(config.tool_discovery.list.default_limit)
-            .clamp(1, config.tool_discovery.list.max_limit);
+        validate_plugin_selector(input.plugin.as_ref())?;
+        let limit = discovery_limit(input.limit, config.tool_discovery.list.default_limit);
         let max_summary_chars = config.tool_discovery.list.max_summary_chars as usize;
         let records = Self::filter_available_plugins_by_tag(
-            self.available_plugin_records().await?,
+            Self::filter_available_plugins_by_id(
+                self.available_plugin_records().await?,
+                input.plugin.as_ref(),
+            ),
             input.tag.as_deref(),
             input.tags.as_deref(),
         );
@@ -863,23 +883,17 @@ impl WorkflowPlugin {
         &self,
         input: &ToolApiSearchInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let query = input.query.as_str();
         let config = self.config()?;
+        validate_plugin_selector(input.plugin.as_ref())?;
         let max_query_length = config.tool_discovery.search.max_query_length as usize;
-        if query.chars().count() > max_query_length {
-            return Err(PluginError::invalid_params(format!(
-                "search query is too long: {} characters (max {})",
-                query.chars().count(),
-                max_query_length
-            )));
-        }
-        let limit = input
-            .limit
-            .unwrap_or(config.tool_discovery.search.default_limit)
-            .clamp(1, config.tool_discovery.search.max_limit);
+        let queries = validated_search_queries(&input.query, max_query_length)?;
+        let limit = discovery_limit(input.limit, config.tool_discovery.search.default_limit);
         let max_summary_chars = config.tool_discovery.search.max_summary_chars as usize;
         let records = Self::filter_available_plugins_by_tag(
-            self.available_plugin_records().await?,
+            Self::filter_available_plugins_by_id(
+                self.available_plugin_records().await?,
+                input.plugin.as_ref(),
+            ),
             input.tag.as_deref(),
             input.tags.as_deref(),
         );
@@ -887,36 +901,61 @@ impl WorkflowPlugin {
             .iter()
             .map(Self::plugin_search_document)
             .collect::<Vec<_>>();
-        let results = search_tools(&documents, query, documents.len());
-        let (results, total, offset) = Self::paginate(&results, input.offset, Some(limit));
-        let mut lines = vec![format!(
-            "Matching plugins for {}: returned {} of {} starting at offset {}.",
-            serde_json::to_string(query).unwrap_or_else(|_| "\"\"".to_owned()),
-            results.len(),
-            total,
-            offset,
-        )];
-        for result in &results {
-            let summary = compact_tool_summary(&result.description, max_summary_chars);
-            lines.push(format!(
-                "- {} [{}]: {}",
-                result.name,
-                tags_summary(&result.tags),
-                summary
-            ));
+        let mut pages = Vec::with_capacity(queries.len());
+        let mut total_matches = 0usize;
+        let mut total_returned = 0usize;
+        for query in &queries {
+            let results = search_tools(&documents, query, documents.len());
+            let (results, total, offset) = Self::paginate(&results, input.offset, Some(limit));
+            let mut lines = vec![format!(
+                "Matching plugins for {}: returned {} of {} starting at offset {}.",
+                serde_json::to_string(query).unwrap_or_else(|_| "\"\"".to_owned()),
+                results.len(),
+                total,
+                offset,
+            )];
+            for result in &results {
+                let summary = compact_tool_summary(&result.description, max_summary_chars);
+                lines.push(format!(
+                    "- {} [{}]: {}",
+                    result.name,
+                    tags_summary(&result.tags),
+                    summary
+                ));
+            }
+            append_discovery_page_hint(
+                &mut lines,
+                agena_domain::ToolApiFunction::PluginsSearch.function_name(),
+                total,
+                offset,
+                results.len(),
+            );
+            total_matches = total_matches.saturating_add(total);
+            total_returned = total_returned.saturating_add(results.len());
+            pages.push(lines.join("\n"));
         }
-        append_discovery_page_hint(
-            &mut lines,
-            agena_domain::ToolApiFunction::PluginsSearch.function_name(),
-            total,
-            offset,
-            results.len(),
-        );
-        Ok(discovery_text_output(
-            format!("Search plugins · {}/{}", results.len(), total),
-            discovery_page_summary("matching plugins", total, offset, results.len()),
-            lines.join("\n"),
-        ))
+        let (title, summary) = if queries.len() == 1 {
+            (
+                format!("Search plugins · {total_returned}/{total_matches}"),
+                discovery_page_summary(
+                    "matching plugins",
+                    total_matches,
+                    input.offset.unwrap_or(0) as usize,
+                    total_returned,
+                ),
+            )
+        } else {
+            (
+                format!("Search plugins · {} queries", queries.len()),
+                format!(
+                    "Searched {} queries; returned {} of {} aggregate matches.",
+                    queries.len(),
+                    total_returned,
+                    total_matches
+                ),
+            )
+        };
+        Ok(discovery_text_output(title, summary, pages.join("\n\n")))
     }
 
     pub(crate) async fn invoke_plugins_tags(
@@ -924,11 +963,12 @@ impl WorkflowPlugin {
         input: &ToolApiTagsInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let config = self.config()?;
-        let limit = input
-            .limit
-            .unwrap_or(config.tool_discovery.tags.default_limit)
-            .clamp(1, config.tool_discovery.tags.max_limit);
-        let records = self.available_plugin_records().await?;
+        validate_plugin_selector(input.plugin.as_ref())?;
+        let limit = discovery_limit(input.limit, config.tool_discovery.tags.default_limit);
+        let records = Self::filter_available_plugins_by_id(
+            self.available_plugin_records().await?,
+            input.plugin.as_ref(),
+        );
         let mut counts = std::collections::BTreeMap::<String, usize>::new();
         for plugin in &records {
             for tag in &plugin.tags {
@@ -975,8 +1015,20 @@ impl WorkflowPlugin {
         &self,
         input: &ToolApiHelpInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let requested = input.tool.as_str();
-        Self::ensure_execution_tool_target(requested)?;
+        let requested = input.tool.as_slice();
+        if requested.is_empty() {
+            return Err(PluginError::invalid_params(
+                "tools_help.tool must contain at least one execution-tool name",
+            ));
+        }
+        for tool_name in requested {
+            if tool_name.is_empty() {
+                return Err(PluginError::invalid_params(
+                    "tools_help.tool cannot contain an empty execution-tool name",
+                ));
+            }
+            Self::ensure_execution_tool_target(tool_name)?;
+        }
         let tools = self.host()?.list_tools().await?;
         let tag_index = self
             .available_tool_records()
@@ -984,10 +1036,27 @@ impl WorkflowPlugin {
             .into_iter()
             .map(|record| (record.name, record.tags))
             .collect::<HashMap<_, _>>();
-        let descriptor = Self::resolve_tool_descriptor(requested, &tools)?;
-        Ok(Self::render_tool_api_help(
-            descriptor,
-            tag_index.get(descriptor.name.as_str()).map(Vec::as_slice),
+        let outputs = requested
+            .iter()
+            .map(|tool_name| {
+                let descriptor = Self::resolve_tool_descriptor(tool_name, &tools)?;
+                Ok(Self::render_tool_api_help(
+                    descriptor,
+                    tag_index.get(descriptor.name.as_str()).map(Vec::as_slice),
+                ))
+            })
+            .collect::<SdkResult<Vec<_>>>()?;
+        if let [output] = outputs.as_slice() {
+            return Ok(output.clone());
+        }
+        Ok(discovery_text_output(
+            format!("Inspect {} tools", outputs.len()),
+            format!("Usage and input contracts for {} tools.", outputs.len()),
+            outputs
+                .iter()
+                .map(|output| output.output_text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n---\n\n"),
         ))
     }
 
@@ -1138,6 +1207,65 @@ use super::{
     WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin, ask_user,
     compact_tool_summary, search_tools, snapshot_enter_permission_paths, tags_summary,
 };
+
+fn validated_search_queries<'a>(
+    batch: &'a super::ToolApiStringBatch,
+    max_query_length: usize,
+) -> SdkResult<Vec<&'a str>> {
+    let queries = batch.as_slice();
+    if queries.is_empty() {
+        return Err(PluginError::invalid_params(
+            "search query batch must contain at least one query",
+        ));
+    }
+    queries
+        .iter()
+        .map(|query| {
+            let query = query.trim();
+            if query.is_empty() {
+                return Err(PluginError::invalid_params(
+                    "search queries must not be empty",
+                ));
+            }
+            if query.chars().count() > max_query_length {
+                return Err(PluginError::invalid_params(format!(
+                    "search query is too long: {} characters (max {})",
+                    query.chars().count(),
+                    max_query_length
+                )));
+            }
+            Ok(query)
+        })
+        .collect()
+}
+
+fn validate_plugin_selector(plugin: Option<&super::ToolApiStringBatch>) -> SdkResult<()> {
+    let Some(plugin) = plugin else {
+        return Ok(());
+    };
+    if plugin.as_slice().is_empty() {
+        return Err(PluginError::invalid_params(
+            "plugin selector batch must contain at least one plugin id",
+        ));
+    }
+    if plugin
+        .as_slice()
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return Err(PluginError::invalid_params(
+            "plugin selectors must not contain empty plugin ids",
+        ));
+    }
+    Ok(())
+}
+
+pub(in crate::plugins::provided::workflow) fn discovery_limit(
+    requested: Option<u32>,
+    default_limit: u32,
+) -> u32 {
+    requested.unwrap_or(default_limit).max(1)
+}
 
 fn append_discovery_page_hint(
     lines: &mut Vec<String>,

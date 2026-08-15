@@ -171,6 +171,22 @@ impl WorkflowPlugin {
         records
     }
 
+    pub(in crate::plugins::provided::workflow) fn filter_available_plugins_by_id(
+        mut records: Vec<AvailablePluginRecord>,
+        plugin: Option<&ToolApiStringBatch>,
+    ) -> Vec<AvailablePluginRecord> {
+        let filters = normalized_plugin_filters(plugin);
+        if filters.is_empty() {
+            return records;
+        }
+        records.retain(|record| {
+            filters
+                .iter()
+                .any(|filter| plugin_id_matches(record.plugin_id.as_str(), filter))
+        });
+        records
+    }
+
     pub(in crate::plugins::provided::workflow) fn normalized_tag_filters(
         tag: Option<&str>,
         tags: Option<&[String]>,
@@ -242,21 +258,18 @@ impl WorkflowPlugin {
     /// or trailing plugin segment (e.g. `agena.fs`, `fs`).
     pub(in crate::plugins::provided::workflow) fn filter_available_tools_by_plugin(
         records: Vec<AvailableToolRecord>,
-        plugin: Option<&str>,
+        plugin: Option<&ToolApiStringBatch>,
     ) -> Vec<AvailableToolRecord> {
-        let Some(plugin) = plugin.map(str::trim).filter(|value| !value.is_empty()) else {
+        let filters = normalized_plugin_filters(plugin);
+        if filters.is_empty() {
             return records;
-        };
-        let normalized = plugin.trim_end_matches('.');
+        }
         records
             .into_iter()
             .filter(|record| {
-                let id = record.plugin_id.as_str();
-                id == normalized
-                    || id
-                        .strip_suffix(normalized)
-                        .is_some_and(|prefix| prefix.ends_with('.'))
-                    || id.rsplit('.').next() == Some(normalized)
+                filters
+                    .iter()
+                    .any(|filter| plugin_id_matches(record.plugin_id.as_str(), filter))
             })
             .collect()
     }
@@ -1424,8 +1437,30 @@ use super::{
     PLAN_REVIEW_DECISION_KEEP_PLANNING, PLAN_REVIEW_DECISION_REJECT, Path, PathBuf, PlanEditInput,
     PlanEditTarget, PlanGetView, PlanPhaseInput, PlanReviewKind, PluginDisplayContent,
     PluginDisplayContribution, PluginError, RwLock, SdkResult, SessionRenameToolInput,
-    SessionToolResponse, ToolDescriptor, ToolInvokeOutput, ToolSearchDocument, ToolTagRecord,
-    WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase,
+    SessionToolResponse, ToolApiStringBatch, ToolDescriptor, ToolInvokeOutput, ToolSearchDocument,
+    ToolTagRecord, WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase,
     WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus, WorkflowPlugin,
     WorkflowPluginConfig,
 };
+
+fn normalized_plugin_filters(plugin: Option<&ToolApiStringBatch>) -> Vec<String> {
+    let mut filters = plugin
+        .map(ToolApiStringBatch::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|value| value.trim().trim_end_matches('.'))
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    filters.sort();
+    filters.dedup();
+    filters
+}
+
+fn plugin_id_matches(plugin_id: &str, filter: &str) -> bool {
+    plugin_id == filter
+        || plugin_id
+            .strip_suffix(filter)
+            .is_some_and(|prefix| prefix.ends_with('.'))
+        || plugin_id.rsplit('.').next() == Some(filter)
+}

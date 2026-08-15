@@ -49,7 +49,6 @@ pub(crate) struct ToolDiscoveryConfig {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ToolListConfig {
     pub(crate) default_limit: u32,
-    pub(crate) max_limit: u32,
     pub(crate) max_summary_chars: u32,
 }
 
@@ -57,7 +56,6 @@ impl Default for ToolListConfig {
     fn default() -> Self {
         Self {
             default_limit: 20,
-            max_limit: 50,
             max_summary_chars: 160,
         }
     }
@@ -67,7 +65,6 @@ impl Default for ToolListConfig {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ToolSearchConfig {
     pub(crate) default_limit: u32,
-    pub(crate) max_limit: u32,
     pub(crate) max_query_length: u32,
     pub(crate) max_summary_chars: u32,
 }
@@ -76,7 +73,6 @@ impl Default for ToolSearchConfig {
     fn default() -> Self {
         Self {
             default_limit: 5,
-            max_limit: 20,
             max_query_length: 512,
             max_summary_chars: 160,
         }
@@ -87,15 +83,11 @@ impl Default for ToolSearchConfig {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ToolTagsConfig {
     pub(crate) default_limit: u32,
-    pub(crate) max_limit: u32,
 }
 
 impl Default for ToolTagsConfig {
     fn default() -> Self {
-        Self {
-            default_limit: 20,
-            max_limit: 50,
-        }
+        Self { default_limit: 20 }
     }
 }
 
@@ -134,11 +126,6 @@ pub(crate) fn tool_discovery_config_schema() -> serde_json::Value {
             "Number of tools returned when tools_list omits limit.",
         ),
         (
-            "/properties/list/properties/max_limit",
-            "Max Limit",
-            "Upper bound enforced for tools_list results.",
-        ),
-        (
             "/properties/list/properties/max_summary_chars",
             "Max Summary Characters",
             "Maximum single-line summary length for each listed tool.",
@@ -152,11 +139,6 @@ pub(crate) fn tool_discovery_config_schema() -> serde_json::Value {
             "/properties/search/properties/default_limit",
             "Default Limit",
             "Number of tool search results returned when the caller omits limit.",
-        ),
-        (
-            "/properties/search/properties/max_limit",
-            "Max Limit",
-            "Upper bound enforced for execution-tool search results.",
         ),
         (
             "/properties/search/properties/max_query_length",
@@ -177,11 +159,6 @@ pub(crate) fn tool_discovery_config_schema() -> serde_json::Value {
             "/properties/tags/properties/default_limit",
             "Default Limit",
             "Number of tags returned when tools_tags omits limit.",
-        ),
-        (
-            "/properties/tags/properties/max_limit",
-            "Max Limit",
-            "Upper bound enforced for tools_tags results.",
         ),
     ] {
         agena_runtime_tools::tool::definition::set_schema_metadata(
@@ -235,7 +212,7 @@ pub(crate) use repo_tools::{
 };
 pub(crate) use runtime_tools::{SessionRenameToolInput, SessionToolResponse};
 pub(crate) use tool_api_inputs::{
-    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput,
+    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiStringBatch, ToolApiTagsInput,
 };
 
 const PLAN_NAMESPACE: &str = "workflow_plan";
@@ -428,33 +405,15 @@ fn compact_tool_summary(value: &str, max_chars: usize) -> String {
 fn validate_tool_discovery_config(config: &ToolDiscoveryConfig) -> SdkResult<()> {
     for (path, value) in [
         ("list.default_limit", config.list.default_limit),
-        ("list.max_limit", config.list.max_limit),
         ("list.max_summary_chars", config.list.max_summary_chars),
         ("search.default_limit", config.search.default_limit),
-        ("search.max_limit", config.search.max_limit),
         ("search.max_query_length", config.search.max_query_length),
         ("search.max_summary_chars", config.search.max_summary_chars),
         ("tags.default_limit", config.tags.default_limit),
-        ("tags.max_limit", config.tags.max_limit),
     ] {
         if value == 0 {
             return Err(PluginError::internal(format!(
                 "tools plugin config `{path}` must be greater than 0"
-            )));
-        }
-    }
-    for (path, default_limit, max_limit) in [
-        ("list", config.list.default_limit, config.list.max_limit),
-        (
-            "search",
-            config.search.default_limit,
-            config.search.max_limit,
-        ),
-        ("tags", config.tags.default_limit, config.tags.max_limit),
-    ] {
-        if default_limit > max_limit {
-            return Err(PluginError::internal(format!(
-                "tools plugin config `{path}.default_limit` must be less than or equal to `{path}.max_limit`"
             )));
         }
     }
@@ -465,13 +424,13 @@ fn validate_tool_discovery_config(config: &ToolDiscoveryConfig) -> SdkResult<()>
 mod tests {
     use std::collections::HashSet;
 
-    use super::workflow_runtime::discovery_text_output;
+    use super::workflow_runtime::{discovery_limit, discovery_text_output};
     use super::{
-        AvailableToolRecord, HostRegisteredToolDescriptor, PlanEditInput, PlanEditTarget,
-        PlanPhaseInput, ToolApiHelpInput, ToolDescriptor, ToolDiscoveryConfig, WorkflowPlan,
-        WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep,
-        WorkflowPlanStepStatus, WorkflowPlugin, compact_tool_summary,
-        validate_tool_discovery_config,
+        AvailablePluginRecord, AvailableToolRecord, HostRegisteredToolDescriptor, PlanEditInput,
+        PlanEditTarget, PlanPhaseInput, ToolApiHelpInput, ToolApiStringBatch, ToolDescriptor,
+        ToolDiscoveryConfig, WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor,
+        WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin,
+        compact_tool_summary, tool_discovery_config_schema, validate_tool_discovery_config,
     };
     use agena_plugin_host::sdk::{
         Plugin, PluginErrorKind, PluginKey, ToolDefinition, ToolKey, ToolTag,
@@ -483,28 +442,43 @@ mod tests {
     fn discovery_defaults_keep_index_results_compact() {
         let config = ToolDiscoveryConfig::default();
         assert_eq!(config.list.default_limit, 20);
-        assert_eq!(config.list.max_limit, 50);
         assert_eq!(config.list.max_summary_chars, 160);
         assert_eq!(config.search.default_limit, 5);
-        assert_eq!(config.search.max_limit, 20);
         assert_eq!(config.search.max_summary_chars, 160);
         assert_eq!(config.tags.default_limit, 20);
-        assert_eq!(config.tags.max_limit, 50);
         validate_tool_discovery_config(&config).expect("valid discovery defaults");
     }
 
     #[test]
-    fn discovery_config_rejects_zero_and_inverted_limits() {
+    fn discovery_config_rejects_zero_limits() {
         let mut config = ToolDiscoveryConfig::default();
-        config.tags.max_limit = 0;
+        config.tags.default_limit = 0;
         let error = validate_tool_discovery_config(&config).expect_err("zero limit must fail");
-        assert!(error.diagnostic.message.contains("tags.max_limit"));
+        assert!(error.diagnostic.message.contains("tags.default_limit"));
+    }
 
-        let mut config = ToolDiscoveryConfig::default();
-        config.list.default_limit = config.list.max_limit + 1;
-        let error =
-            validate_tool_discovery_config(&config).expect_err("inverted list limits must fail");
-        assert!(error.diagnostic.message.contains("list.default_limit"));
+    #[test]
+    fn requested_discovery_limits_have_no_configured_maximum() {
+        assert_eq!(discovery_limit(None, 20), 20);
+        assert_eq!(discovery_limit(Some(0), 20), 1);
+        assert_eq!(discovery_limit(Some(10_000), 20), 10_000);
+        assert_eq!(discovery_limit(Some(u32::MAX), 20), u32::MAX);
+        let schema = tool_discovery_config_schema();
+        assert!(
+            schema
+                .pointer("/properties/list/properties/max_limit")
+                .is_none()
+        );
+        assert!(
+            schema
+                .pointer("/properties/search/properties/max_limit")
+                .is_none()
+        );
+        assert!(
+            schema
+                .pointer("/properties/tags/properties/max_limit")
+                .is_none()
+        );
     }
 
     #[test]
@@ -569,6 +543,55 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "agena.fs/read");
+    }
+
+    #[test]
+    fn plugin_selectors_accept_multiple_targets_with_or_semantics() {
+        let selector = ToolApiStringBatch::Many(vec![
+            "fs".to_owned(),
+            "agena.monitor".to_owned(),
+            "fs".to_owned(),
+        ]);
+        let tools = [
+            ("fs.read", "agena.fs"),
+            ("monitor.start", "agena.monitor"),
+            ("web.fetch", "agena.web"),
+        ]
+        .into_iter()
+        .map(|(name, plugin_id)| AvailableToolRecord {
+            name: name.to_owned(),
+            summary: String::new(),
+            tags: Vec::new(),
+            plugin_id: plugin_id.to_owned(),
+        })
+        .collect();
+        let filtered = WorkflowPlugin::filter_available_tools_by_plugin(tools, Some(&selector));
+        assert_eq!(
+            filtered
+                .iter()
+                .map(|record| record.name.as_str())
+                .collect::<Vec<_>>(),
+            ["fs.read", "monitor.start"]
+        );
+
+        let plugins = ["agena.fs", "agena.monitor", "agena.web"]
+            .into_iter()
+            .map(|plugin_id| AvailablePluginRecord {
+                plugin_id: plugin_id.to_owned(),
+                summary: String::new(),
+                version: "test".to_owned(),
+                tags: Vec::new(),
+                tools: Vec::new(),
+            })
+            .collect();
+        let filtered = WorkflowPlugin::filter_available_plugins_by_id(plugins, Some(&selector));
+        assert_eq!(
+            filtered
+                .iter()
+                .map(|record| record.plugin_id.as_str())
+                .collect::<Vec<_>>(),
+            ["agena.fs", "agena.monitor"]
+        );
     }
 
     #[test]
@@ -710,7 +733,7 @@ mod tests {
         }))
         .expect("syntactically valid string payload");
 
-        assert_eq!(parsed.tool, " session.rename ");
+        assert_eq!(parsed.tool.as_slice(), [" session.rename "]);
     }
 
     #[test]

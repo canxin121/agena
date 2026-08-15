@@ -6,7 +6,6 @@ use agena_tool::tool_search::{ToolSearchDocument, search_tools};
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
 const DEFAULT_LIMIT: usize = 8;
-const MAX_LIMIT: usize = 25;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SearchableTool {
@@ -54,10 +53,7 @@ pub(crate) fn execute_with_tools(
         ));
     }
 
-    let limit = input
-        .limit
-        .unwrap_or(DEFAULT_LIMIT as u32)
-        .clamp(1, MAX_LIMIT as u32) as usize;
+    let limit = input.limit.unwrap_or(DEFAULT_LIMIT as u32).max(1) as usize;
     let documents = available_tools
         .iter()
         .map(|tool| {

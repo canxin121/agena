@@ -511,15 +511,28 @@ fn validate_tool_api_argument_semantics(
     };
     match function {
         ToolApiFunction::Help => {
-            let tool_name = arguments
-                .get("tool")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| {
-                    ProviderError::Provider(format!(
-                        "provider `{provider_id}` returned `tools_help` without a string execution-tool name in `arguments.tool`"
-                    ))
-                })?;
-            validate_execution_tool_name(provider_id, name, tool_name)
+            let tool_names = match arguments.get("tool") {
+                Some(serde_json::Value::String(tool_name)) => vec![tool_name.as_str()],
+                Some(serde_json::Value::Array(tool_names)) if !tool_names.is_empty() => tool_names
+                    .iter()
+                    .map(|tool_name| {
+                        tool_name.as_str().ok_or_else(|| {
+                            ProviderError::Provider(format!(
+                                "provider `{provider_id}` returned `tools_help` with a non-string item in `arguments.tool`"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                _ => {
+                    return Err(ProviderError::Provider(format!(
+                        "provider `{provider_id}` returned `tools_help` without a string execution-tool name or non-empty array of names in `arguments.tool`"
+                    )));
+                }
+            };
+            for tool_name in tool_names {
+                validate_execution_tool_name(provider_id, name, tool_name)?;
+            }
+            Ok(())
         }
         ToolApiFunction::Call => {
             let tool_name = arguments
@@ -2147,10 +2160,25 @@ mod tool_api_function_validation_tests {
     fn returned_tool_api_arguments_must_be_one_complete_json_object() {
         validate_tool_api_arguments("test", "tools_help", r#"{"tool":"session.get"}"#)
             .expect("valid object arguments");
+        validate_tool_api_arguments(
+            "test",
+            "tools_help",
+            r#"{"tool":["session.get","fs.read"]}"#,
+        )
+        .expect("valid batched help arguments");
         for invalid in ["", "null", "[]", r#"{} trailing"#] {
             let error = validate_tool_api_arguments("test", "tools_help", invalid)
                 .expect_err("invalid arguments must fail");
             assert!(error.to_string().contains("arguments"));
+        }
+    }
+
+    #[test]
+    fn tools_help_rejects_empty_or_malformed_batches() {
+        for invalid in [r#"{"tool":[]}"#, r#"{"tool":["fs.read",7]}"#] {
+            let error = validate_tool_api_arguments("test", "tools_help", invalid)
+                .expect_err("invalid tools_help batch must fail");
+            assert!(error.to_string().contains("tools_help"));
         }
     }
 

@@ -12,12 +12,10 @@ use axum::{
     middleware,
     response::IntoResponse,
 };
-use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-const UI_COOKIE_NAME: &str = "agena_ui_session";
 const UI_SESSION_TTL: Duration = Duration::from_secs(12 * 60 * 60);
 const UI_SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const LOGIN_FAILURE_WINDOW: Duration = Duration::from_secs(10 * 60);
@@ -86,16 +84,6 @@ fn is_false(value: &bool) -> bool {
 
 fn normalize_password(candidate: Option<&str>) -> String {
     candidate.unwrap_or("").trim().to_string()
-}
-
-fn is_secure_request(headers: &HeaderMap) -> bool {
-    // Treat requests as secure behind reverse proxies when X-Forwarded-Proto includes "https".
-    headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(|v| v.trim().eq_ignore_ascii_case("https"))
-        .unwrap_or(false)
 }
 
 fn normalize_client_key_value(raw: &str) -> Option<String> {
@@ -170,123 +158,6 @@ fn login_attempt_key(headers: &HeaderMap) -> String {
     "anonymous".to_string()
 }
 
-fn build_session_cookie(token: &str, secure: bool, same_site: SameSite) -> Cookie<'static> {
-    let mut cookie = Cookie::new(UI_COOKIE_NAME, token.to_string());
-    cookie.set_path("/");
-    cookie.set_http_only(true);
-    cookie.set_same_site(same_site);
-    // SameSite=None requires Secure cookies in modern browsers.
-    cookie.set_secure(secure || matches!(same_site, SameSite::None));
-
-    // Cookie uses time::Duration / OffsetDateTime.
-    cookie.set_expires(
-        OffsetDateTime::now_utc() + time::Duration::seconds(UI_SESSION_TTL.as_secs() as i64),
-    );
-    cookie.set_max_age(time::Duration::seconds(UI_SESSION_TTL.as_secs() as i64));
-    cookie
-}
-
-fn build_expired_cookie(secure: bool, same_site: SameSite) -> Cookie<'static> {
-    let mut cookie = Cookie::new(UI_COOKIE_NAME, "");
-    cookie.set_path("/");
-    cookie.set_http_only(true);
-    cookie.set_same_site(same_site);
-    cookie.set_secure(secure || matches!(same_site, SameSite::None));
-    cookie.set_expires(OffsetDateTime::UNIX_EPOCH);
-    cookie.set_max_age(time::Duration::seconds(0));
-    cookie
-}
-
-fn is_safe_method(method: &Method) -> bool {
-    matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
-}
-
-fn is_public_plugin_asset_request(method: &Method, path: &str) -> bool {
-    if !is_safe_method(method) {
-        return false;
-    }
-
-    let normalized = path.trim();
-    if !normalized.starts_with("/api/plugins/") {
-        return false;
-    }
-
-    normalized.contains("/assets/")
-}
-
-fn normalize_origin_header_value(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed.eq_ignore_ascii_case("null") {
-        return None;
-    }
-    let Ok(url) = url::Url::parse(trimmed) else {
-        return None;
-    };
-    let scheme = url.scheme();
-    if scheme != "http" && scheme != "https" {
-        return None;
-    }
-    Some(url.origin().ascii_serialization())
-}
-
-fn origin_matches_host(origin: &str, host: &str) -> bool {
-    let origin_url = match url::Url::parse(origin) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-    let origin_host = origin_url
-        .host_str()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    if origin_host.is_empty() {
-        return false;
-    }
-    let host_trimmed = host.trim().to_ascii_lowercase();
-    if host_trimmed.is_empty() {
-        return false;
-    }
-
-    // Accept Host header with or without default port.
-    if host_trimmed == origin_host {
-        return true;
-    }
-    if let Some(port) = origin_url.port_or_known_default() {
-        let with_port = format!("{}:{}", origin_host, port);
-        if host_trimmed == with_port {
-            return true;
-        }
-    }
-    false
-}
-
-fn is_allowed_origin(headers: &HeaderMap, allowed: &[String], allow_all: bool) -> bool {
-    let Some(raw_origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
-        return false;
-    };
-    let Some(origin) = normalize_origin_header_value(raw_origin) else {
-        return false;
-    };
-
-    if allow_all {
-        return true;
-    }
-
-    if allowed.iter().any(|o| o == &origin) {
-        return true;
-    }
-
-    // Always allow same-host origins even when no CORS allowlist is set (same-origin UI).
-    if let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) {
-        return origin_matches_host(&origin, host);
-    }
-
-    false
-}
-
 fn verify_password(phc: &str, candidate: &str) -> bool {
     let Ok(hash) = PasswordHash::new(phc) else {
         return false;
@@ -294,10 +165,6 @@ fn verify_password(phc: &str, candidate: &str) -> bool {
     Argon2::default()
         .verify_password(candidate.as_bytes(), &hash)
         .is_ok()
-}
-
-fn get_token_from_jar(jar: &CookieJar) -> Option<String> {
-    jar.get(UI_COOKIE_NAME).map(|c| c.value().to_string())
 }
 
 fn get_token_from_authorization(headers: &HeaderMap) -> Option<String> {
@@ -317,26 +184,6 @@ fn get_token_from_authorization(headers: &HeaderMap) -> Option<String> {
         return None;
     }
     Some(token.to_string())
-}
-
-fn get_token_from_query(req: &axum::http::Request<axum::body::Body>) -> Option<String> {
-    let query = req.uri().query()?;
-    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
-        let key = k.trim();
-        if key != "uiAuthToken" && key != "ui_auth_token" {
-            continue;
-        }
-        let token = v.trim();
-        if token.is_empty() {
-            continue;
-        }
-        return Some(token.to_string());
-    }
-    None
-}
-
-fn is_global_ws_path(method: &Method, path: &str) -> bool {
-    method == Method::GET && path == "/api/global/ws"
 }
 
 fn is_session_valid(inner: &UiAuthInner, token: &str) -> bool {
@@ -483,7 +330,6 @@ pub(crate) fn init_ui_auth(ui_password: Option<String>) -> UiAuth {
 pub(crate) async fn auth_session_status(
     State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
-    jar: CookieJar,
 ) -> impl IntoResponse {
     match &state.ui_auth {
         UiAuth::Disabled => Json(AuthStatusOk {
@@ -493,8 +339,6 @@ pub(crate) async fn auth_session_status(
         })
         .into_response(),
         UiAuth::Enabled(inner) => {
-            let secure = is_secure_request(&headers);
-
             if let Some(token) = get_token_from_authorization(&headers)
                 && is_session_valid(inner, &token)
             {
@@ -506,27 +350,11 @@ pub(crate) async fn auth_session_status(
                 .into_response();
             }
 
-            if let Some(token) = get_token_from_jar(&jar)
-                && is_session_valid(inner, &token)
-            {
-                return Json(AuthStatusOk {
-                    authenticated: true,
-                    disabled: false,
-                    token: None,
-                })
-                .into_response();
-            }
-
-            let jar = jar.add(build_expired_cookie(secure, state.ui_cookie_same_site));
-            (
-                StatusCode::UNAUTHORIZED,
-                jar,
-                Json(AuthStatusLocked {
-                    authenticated: false,
-                    locked: true,
-                }),
-            )
-                .into_response()
+            Json(AuthStatusLocked {
+                authenticated: false,
+                locked: true,
+            })
+            .into_response()
         }
     }
 }
@@ -534,7 +362,6 @@ pub(crate) async fn auth_session_status(
 pub(crate) async fn auth_session_create(
     State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
-    jar: CookieJar,
     Json(body): Json<CreateSessionBody>,
 ) -> impl IntoResponse {
     let candidate = normalize_password(body.password.as_deref());
@@ -551,17 +378,14 @@ pub(crate) async fn auth_session_create(
         )
             .into_response(),
         UiAuth::Enabled(inner) => {
-            let secure = is_secure_request(&headers);
             let attempt_key = login_attempt_key(&headers);
             let now = OffsetDateTime::now_utc();
 
             if let Some(retry_after_seconds) =
                 login_lockout_remaining_seconds(inner, &attempt_key, now)
             {
-                let jar = jar.add(build_expired_cookie(secure, state.ui_cookie_same_site));
                 return (
                     StatusCode::TOO_MANY_REQUESTS,
-                    jar,
                     Json(AuthErrorBody {
                         error: format!(
                             "Too many failed login attempts. Try again in {} seconds",
@@ -576,13 +400,11 @@ pub(crate) async fn auth_session_create(
             }
 
             if !verify_password(&inner.password_phc, &candidate) {
-                let jar = jar.add(build_expired_cookie(secure, state.ui_cookie_same_site));
                 if let Some(retry_after_seconds) =
                     record_failed_login_attempt(inner, &attempt_key, now)
                 {
                     return (
                         StatusCode::TOO_MANY_REQUESTS,
-                        jar,
                         Json(AuthErrorBody {
                             error: format!(
                                 "Too many failed login attempts. Try again in {} seconds",
@@ -598,7 +420,6 @@ pub(crate) async fn auth_session_create(
 
                 return (
                     StatusCode::UNAUTHORIZED,
-                    jar,
                     Json(AuthErrorBody {
                         error: "Invalid password".to_string(),
                         locked: true,
@@ -611,23 +432,13 @@ pub(crate) async fn auth_session_create(
 
             clear_failed_login_attempts(inner, &attempt_key);
 
-            if let Some(previous) = get_token_from_jar(&jar) {
-                inner.sessions.remove(&previous);
-            }
-
             let token = crate::server::issue_token();
             inner
                 .sessions
                 .insert(token.clone(), SessionRecord { last_seen: now });
 
-            let jar = jar.add(build_session_cookie(
-                &token,
-                secure,
-                state.ui_cookie_same_site,
-            ));
             (
                 StatusCode::OK,
-                jar,
                 Json(AuthStatusOk {
                     authenticated: true,
                     disabled: false,
@@ -642,7 +453,6 @@ pub(crate) async fn auth_session_create(
 pub(crate) async fn require_ui_auth(
     State(state): State<Arc<crate::AppState>>,
     headers: HeaderMap,
-    jar: CookieJar,
     req: axum::http::Request<axum::body::Body>,
     next: middleware::Next,
 ) -> impl IntoResponse {
@@ -658,11 +468,6 @@ pub(crate) async fn require_ui_auth(
             if req_method == Method::GET && req_path == "/api/v1/health" {
                 return next.run(req).await;
             }
-            // Plugin UI static assets are loaded by iframe/module requests where adding
-            // Authorization headers is not practical. Keep this narrow to read-only asset URLs.
-            if is_public_plugin_asset_request(&req_method, &req_path) {
-                return next.run(req).await;
-            }
 
             // Header token (preferred): avoids third-party cookie issues and doesn't
             // require CSRF origin enforcement because the token isn't sent automatically.
@@ -672,49 +477,8 @@ pub(crate) async fn require_ui_auth(
                 return next.run(req).await;
             }
 
-            // WebSocket API in browsers cannot set custom Authorization headers.
-            // Allow a query-token fallback only for the global WS endpoint.
-            if is_global_ws_path(&req_method, &req_path)
-                && let Some(token) = get_token_from_query(&req)
-                && is_session_valid(inner, &token)
-            {
-                return next.run(req).await;
-            }
-
-            // Cookie token sessions require Origin allowlist enforcement for unsafe
-            // methods when cookies may be sent cross-site.
-            if let Some(token) = get_token_from_jar(&jar)
-                && is_session_valid(inner, &token)
-            {
-                if !is_safe_method(req.method())
-                    && (matches!(state.ui_cookie_same_site, SameSite::None)
-                        || !state.cors_allowed_origins.is_empty()
-                        || state.cors_allow_all)
-                    && !is_allowed_origin(
-                        &headers,
-                        &state.cors_allowed_origins,
-                        state.cors_allow_all,
-                    )
-                {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(AuthErrorBody {
-                            error: "Request origin not allowed".to_string(),
-                            locked: false,
-                            code: Some("csrf_origin_forbidden".to_string()),
-                            retry_after_seconds: None,
-                        }),
-                    )
-                        .into_response();
-                }
-                return next.run(req).await;
-            }
-
-            let secure = is_secure_request(&headers);
-            let jar = jar.add(build_expired_cookie(secure, state.ui_cookie_same_site));
             (
                 StatusCode::UNAUTHORIZED,
-                jar,
                 Json(AuthErrorBody {
                     error: "UI authentication required".to_string(),
                     locked: true,

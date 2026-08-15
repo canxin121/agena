@@ -16,7 +16,6 @@ path = "src/main.rs"
 agena-api = { workspace = true }
 agena-api-server = { workspace = true, features = ["jsonrpc"] }
 agena-application = { workspace = true }
-agena-git-http = { workspace = true }
 agena-cli = { workspace = true }
 agena-client = { workspace = true }
 agena-domain = { workspace = true }
@@ -27,33 +26,20 @@ agena-tui-app = { workspace = true }
 agena-tui-platform = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-async-stream = { workspace = true }
 axum = { workspace = true, features = ["macros", "ws"] }
-axum-extra = { workspace = true, features = ["cookie"] }
 base64 = { workspace = true }
-bytes = "1.12.1"
 chrono = { workspace = true }
-dashmap = { workspace = true }
 clap = { workspace = true }
-futures-util = { workspace = true }
 getrandom = { workspace = true }
-ignore = { workspace = true }
 libc = "0.2.186"
-portable-pty = { workspace = true }
-regex = { workspace = true }
 reqwest = { version = "0.13.4", default-features = true, features = ["json", "stream", "gzip", "brotli", "deflate"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
-sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio", "tls-rustls"] }
 tokio = { workspace = true, features = ["full"] }
-tokio-tungstenite = { workspace = true }
-tower-http = { workspace = true, features = ["compression-full", "cors", "fs", "limit", "trace"] }
+tower-http = { workspace = true, features = ["trace"] }
 thiserror = { workspace = true }
 argon2 = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
-url = { workspace = true }
-urlencoding = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi"] }

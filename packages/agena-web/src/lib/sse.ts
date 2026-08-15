@@ -157,7 +157,8 @@ export function advanceSseCursor(
 }
 
 export function connectSse(opts: SseClientOptions): SseClient {
-  const urlBase = apiUrl((opts.endpoint || '/api/global/event').trim() || '/api/global/event')
+  const defaultEndpoint = '/api/v1/changes/stream?scope_kind=global'
+  const urlBase = apiUrl((opts.endpoint || defaultEndpoint).trim() || defaultEndpoint)
   const dir = typeof opts.directory === 'string' ? opts.directory.trim() : ''
   const url = dir ? `${urlBase}${urlBase.includes('?') ? '&' : '?'}directory=${encodeURIComponent(dir)}` : urlBase
 
@@ -211,25 +212,32 @@ export function connectSse(opts: SseClientOptions): SseClient {
   let timer: number | null = null
   let lastFlushAt = 0
 
+  function getNumeric(value: JsonLike, key: string): number | null {
+    if (!isRecord(value)) return null
+    const candidate = value[key]
+    return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : null
+  }
+
   function eventKey(evt: SseEvent): string | null {
-    const dir = getString(evt, 'directory') || opts.directory || 'global'
-    if (evt.type === 'session.status') {
-      const sid = getString(evt.properties, 'sessionID')
-      return sid ? `session.status:${dir}:${String(sid)}` : null
+    const props = isRecord(evt.properties) ? evt.properties : {}
+    if (evt.type === 'session_changed') {
+      const changeKind = getString(props, 'kind')
+      if (changeKind === 'part_added' || changeKind === 'part_updated') {
+        const sid = getNumeric(props, 'session_id') ?? -1
+        const part = getRecord(props, 'part')
+        const pid = getNumeric(props, 'part_id') ?? (part ? getNumeric(part, 'part_id') : null)
+        if (pid === null) return null
+        return `session_changed:part:${String(sid)}:${String(pid)}`
+      }
+      if (changeKind === 'session_meta_updated') {
+        const sid = getNumeric(props, 'session_id') ?? -1
+        return `session_changed:meta:${String(sid)}`
+      }
+      return null
     }
-    if (evt.type === 'opencode-studio:session-activity') {
-      const sid = getString(evt.properties, 'sessionID')
-      return sid ? `opencode-studio:session-activity:${dir}:${String(sid)}` : null
-    }
-    if (evt.type === 'message.part.updated') {
-      const props = isRecord(evt.properties) ? evt.properties : {}
-      const part = getRecord(props, 'part')
-      const mid = getString(part, 'messageID') || getString(props, 'messageID')
-      const pid = getString(part, 'id') || getString(part, 'partID') || getString(props, 'partID')
-      const sid = getString(part, 'sessionID') || getString(props, 'sessionID')
-      if (!mid || !pid) return null
-      const sessionKey = sid ? `:${String(sid)}` : ''
-      return `message.part.updated:${dir}${sessionKey}:${String(mid)}:${String(pid)}`
+    if (evt.type === 'runtime_signal') {
+      const sid = getNumeric(props, 'session_id') ?? -1
+      return `runtime_signal:${String(sid)}`
     }
     return null
   }
@@ -237,39 +245,27 @@ export function connectSse(opts: SseClientOptions): SseClient {
   function mergeEvent(prev: SseEvent, next: SseEvent): SseEvent {
     if (prev.type !== next.type) return next
 
-    // For session status / activity, latest wins.
-    if (next.type === 'session.status' || next.type === 'opencode-studio:session-activity') {
-      return next
-    }
-
-    if (next.type === 'message.part.updated') {
+    if (next.type === 'session_changed') {
+      // Latest part payload wins (each PartResource is complete).
       const prevProps = isRecord(prev.properties) ? prev.properties : {}
       const nextProps = isRecord(next.properties) ? next.properties : {}
-      const prevPart = getRecord(prevProps, 'part') || {}
-      const nextPart = getRecord(nextProps, 'part') || {}
       const mergedPart = {
-        ...prevPart,
-        ...nextPart,
+        ...(getRecord(prevProps, 'part') || {}),
+        ...(getRecord(nextProps, 'part') || {}),
       }
-      const prevDelta = getString(prevProps, 'delta')
-      const nextDelta = getString(nextProps, 'delta')
-
       const merged: SseEvent = {
         ...prev,
         ...next,
         properties: {
           ...prevProps,
           ...nextProps,
-          part: mergedPart,
+          ...(Object.keys(mergedPart).length ? { part: mergedPart } : {}),
         },
-      }
-      if (prevDelta || nextDelta) {
-        if (!isRecord(merged.properties)) merged.properties = {}
-        merged.properties.delta = `${prevDelta}${nextDelta}`
       }
       return merged
     }
 
+    // Runtime signals / meta updates: latest wins.
     return next
   }
 
@@ -314,38 +310,90 @@ export function connectSse(opts: SseClientOptions): SseClient {
     scheduleFlush()
   }
 
+  /**
+   * Normalize an agena Notification envelope into the SseEvent shape
+   * (type + properties) that the chat store and activity store consume.
+   *
+   * Wire: `event: notification`, body = Notification (serde tag = "kind"):
+   *   { kind: "session_changed",     data: { subscription, change: SessionChangeResource } }
+   *   { kind: "runtime_signal",      data: { subscription, signal: RuntimeSignalResource } }
+   *   { kind: "lagged",              data: { subscription, skipped } }
+   *   { kind: "subscription_closed", data: { subscription, reason } }
+   *
+   * Mapping (opencode SSE → agena):
+   *   message.part.created / .updated  → session_changed (part_added / part_updated)
+   *   message.part.removed             → session_changed (part_removed)
+   *   session.updated                  → session_changed (session_meta_updated)
+   *   session.status / idle            → runtime_signal
+   *   permission.asked / question.asked → pending_interactive_requests (state-driven)
+   */
   function normalizeAndQueue(raw: JsonLike, meta?: { directory?: string; lastEventId?: string }) {
     if (!isRecord(raw)) return
 
-    let evt: UnknownRecord = raw
-    if (typeof raw.type !== 'string') {
-      const payload = raw.payload
-      if (isRecord(payload) && typeof payload.type === 'string') {
-        evt = payload
-        const wrapperDir = getString(raw, 'directory').trim()
-        if (wrapperDir && !('directory' in evt)) {
-          evt.directory = wrapperDir
+    let evt: UnknownRecord | null = null
+
+    const kind = getString(raw, 'kind')
+    const data = getRecord(raw, 'data')
+    if (kind && data) {
+      if (kind === 'session_changed') {
+        const change = getRecord(data, 'change')
+        if (change) {
+          const changeKind = getString(change, 'kind')
+          const sid = getNumeric(change, 'session_id')
+          const props: UnknownRecord = { kind: changeKind }
+          if (sid !== null) props.session_id = sid
+          if (changeKind === 'part_added' || changeKind === 'part_updated') {
+            const part = getRecord(change, 'part')
+            if (part) props.part = part
+          } else if (changeKind === 'part_removed') {
+            const pid = getNumeric(change, 'part_id')
+            if (pid !== null) props.part_id = pid
+          } else if (changeKind === 'session_meta_updated') {
+            const version = getNumeric(change, 'version')
+            const updatedMs = getNumeric(change, 'updated_at_ms')
+            if (typeof change.title === 'string') props.title = change.title
+            if (version !== null) props.version = version
+            if (updatedMs !== null) props.updated_at_ms = updatedMs
+          }
+          evt = { type: 'session_changed', properties: props }
         }
-      } else {
-        return
+      } else if (kind === 'runtime_signal') {
+        const signal = getRecord(data, 'signal')
+        if (signal) {
+          const signalKind = getString(signal, 'kind')
+          const sid = getNumeric(signal, 'session_id')
+          const payload = signal.payload
+          const props: UnknownRecord = { kind: signalKind }
+          if (sid !== null) props.session_id = sid
+          if (isRecord(payload)) props.payload = payload
+          evt = { type: 'runtime_signal', properties: props }
+        }
+      } else if (kind === 'lagged') {
+        const skipped = getNumeric(data, 'skipped')
+        const props: UnknownRecord = {}
+        if (skipped !== null) props.skipped = skipped
+        evt = { type: 'lagged', properties: props }
+      } else if (kind === 'subscription_closed') {
+        evt = { type: 'subscription_closed', properties: {} }
       }
     }
 
-    const directory =
-      typeof evt.directory === 'string'
-        ? String(evt.directory)
-        : typeof meta?.directory === 'string' && meta.directory.trim()
-          ? meta.directory
-          : typeof opts.directory === 'string' && opts.directory.trim()
-            ? opts.directory
-            : undefined
-    if (directory && !('directory' in evt)) {
-      evt.directory = directory
+    // Legacy passthrough for any remaining {type, properties} emitters.
+    if (!evt) {
+      if (typeof raw.type === 'string') {
+        evt = raw
+      } else {
+        const payload = raw.payload
+        if (isRecord(payload) && typeof payload.type === 'string') {
+          evt = payload
+        }
+      }
     }
+
+    if (!evt || typeof evt.type !== 'string') return
     if (typeof meta?.lastEventId === 'string' && meta.lastEventId) {
       evt.lastEventId = meta.lastEventId
     }
-    if (typeof evt.type !== 'string') return
     pushEvent(evt as SseEvent)
   }
 

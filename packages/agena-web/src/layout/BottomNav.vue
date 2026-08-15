@@ -2,7 +2,7 @@
 import { computed, type Component } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { RiChat4Line, RiFolder6Line, RiTerminalBoxLine, RiGitMergeLine, RiGlobalLine } from '@remixicon/vue'
+import { RiChat4Line, RiHome4Line } from '@remixicon/vue'
 import { cn } from '@/lib/utils'
 import { MAIN_TABS, type NavigationMainTabId } from '@/app/navigation/mainTabs'
 
@@ -10,11 +10,8 @@ const route = useRoute()
 const { t } = useI18n()
 
 const TAB_ICONS: Record<NavigationMainTabId, Component> = {
+  hub: RiHome4Line,
   chat: RiChat4Line,
-  files: RiFolder6Line,
-  preview: RiGlobalLine,
-  terminal: RiTerminalBoxLine,
-  git: RiGitMergeLine,
 }
 
 const items = computed(() =>
@@ -24,6 +21,10 @@ const items = computed(() =>
     icon: TAB_ICONS[tab.id],
   })),
 )
+
+const gridStyle = computed(() => ({
+  gridTemplateColumns: `repeat(${Math.max(1, items.value.length)}, 1fr)`,
+}))
 
 function isActive(path: string) {
   return route.path.startsWith(path)
@@ -35,7 +36,7 @@ function isActive(path: string) {
     class="oc-bottom-nav fixed bottom-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-xl border-t border-border pb-[env(safe-area-inset-bottom)]"
     :aria-label="String(t('aria.primaryNavigation'))"
   >
-    <div class="grid grid-cols-5 h-[56px]">
+    <div class="grid h-[56px]" :style="gridStyle">
       <RouterLink
         v-for="item in items"
         :key="item.to"

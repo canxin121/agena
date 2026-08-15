@@ -3,7 +3,7 @@ import texmath from 'markdown-it-texmath'
 import katex from 'katex'
 
 import { highlightCodeToHtml } from '@/lib/highlight'
-import { mediaKindFromHref } from '@/lib/workspaceLinks'
+import { mediaKindFromHref } from '@/lib/mediaKind'
 
 function safeLangClass(lang: string | undefined | null): string {
   const raw = typeof lang === 'string' ? lang.trim().toLowerCase() : ''

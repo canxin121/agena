@@ -1,11 +1,5 @@
 import { createRouter, createWebHistory, type RouteLocationNormalizedLoaded, type RouteRecordRaw } from 'vue-router'
 import { sessionStorageKeys } from '@/lib/persistence/storageKeys'
-import {
-  hasEmbeddedWorkspacePaneQuery,
-  isEmbeddedWorkspacePaneContext,
-  readWindowIdFromLocation,
-  readWindowIdFromQuery,
-} from '@/app/windowScope'
 
 const CHUNK_RECOVERY_KEY = sessionStorageKeys.app.chunkRecoveryReloaded
 
@@ -28,7 +22,8 @@ function isProbablyLazyChunkError<T>(err: T): boolean {
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    redirect: (to) => ({ path: '/chat', query: to.query }),
+    component: () => import('./pages/SessionHubPage.vue'),
+    meta: { shellSidebar: 'chat', mobilePanel: 'sessions' },
   },
   {
     path: '/chat',
@@ -36,39 +31,7 @@ const routes: RouteRecordRaw[] = [
     meta: { shellSidebar: 'chat', mobilePanel: 'sessions' },
   },
   {
-    path: '/terminal',
-    component: () => import('./pages/TerminalPage.vue'),
-    meta: { shellSidebar: 'none', mobilePanel: 'terminal' },
-  },
-  {
-    path: '/files',
-    component: () => import('./pages/FilesPage.vue'),
-    meta: { shellSidebar: 'none', mobilePanel: 'files' },
-  },
-  {
-    path: '/preview',
-    component: () => import('./pages/PreviewPage.vue'),
-    meta: { shellSidebar: 'none', mobilePanel: 'preview' },
-  },
-  {
-    path: '/git',
-    component: () => import('./pages/GitPage.vue'),
-    meta: { shellSidebar: 'none', mobilePanel: 'git' },
-  },
-  { path: '/settings', redirect: '/settings/opencode/general' },
-  {
-    path: '/settings/plan/:section?',
-    redirect: (to) => {
-      const section = typeof to.params.section === 'string' ? to.params.section : ''
-      return {
-        path: section ? `/settings/plugins/${section}` : '/settings/plugins',
-        query: to.query,
-        hash: to.hash,
-      }
-    },
-  },
-  {
-    path: '/settings/:tab/:section?',
+    path: '/settings',
     component: () => import('./pages/SettingsPage.vue'),
     meta: { shellSidebar: 'none', mobilePanel: 'settings' },
   },
@@ -77,39 +40,6 @@ const routes: RouteRecordRaw[] = [
 export const router = createRouter({
   history: createWebHistory(),
   routes,
-})
-
-router.beforeEach((to, from) => {
-  const embeddedContext = isEmbeddedWorkspacePaneContext(from.query) || isEmbeddedWorkspacePaneContext(to.query)
-  if (!embeddedContext) return true
-  if (hasEmbeddedWorkspacePaneQuery(to.query)) return true
-
-  const nextQuery: Record<string, string> = {}
-  for (const [key, value] of Object.entries(to.query || {})) {
-    const normalizedKey = String(key || '').trim()
-    if (!normalizedKey) continue
-    if (normalizedKey.toLowerCase() === 'ocembed') continue
-
-    const normalizedValue = Array.isArray(value)
-      ? String(value.find((item) => String(item || '').trim()) || '').trim()
-      : String(value || '').trim()
-    if (!normalizedValue) continue
-    nextQuery[normalizedKey] = normalizedValue
-  }
-
-  nextQuery.ocEmbed = '1'
-  const scopedWindowId =
-    readWindowIdFromQuery(to.query) || readWindowIdFromQuery(from.query) || readWindowIdFromLocation()
-  if (scopedWindowId && !String(nextQuery.windowId || '').trim()) {
-    nextQuery.windowId = scopedWindowId
-  }
-
-  return {
-    path: to.path,
-    query: nextQuery,
-    hash: to.hash,
-    replace: true,
-  }
 })
 
 // In production, a service-worker update / CDN cache / rolling deploy can briefly

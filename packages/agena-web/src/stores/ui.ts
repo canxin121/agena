@@ -2,12 +2,6 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 
 import { isMainTabId, type MainTabId } from '@/app/navigation/mainTabs'
-import {
-  DEFAULT_WINDOW_SCOPE_ID,
-  isEmbeddedWorkspacePaneContext,
-  normalizeWindowScopeId,
-  resolveWindowScopeId,
-} from '@/app/windowScope'
 import { getLocalJson, getLocalString, setLocalJson, setLocalString } from '@/lib/persist'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 
@@ -268,8 +262,12 @@ const STORAGE_WORKSPACE_DOCK_PLACEMENT = localStorageKeys.ui.workspaceDockPlacem
 const STORAGE_WORKSPACE_DOCK_WIDTH = localStorageKeys.ui.workspaceDockWidth
 const STORAGE_WORKSPACE_DOCK_HEIGHT = localStorageKeys.ui.workspaceDockHeight
 
+const DEFAULT_WINDOW_SCOPE_ID = 'window-default'
+
 export const useUiStore = defineStore('ui', () => {
-  const shouldPersistWorkspaceShellState = !isEmbeddedWorkspacePaneContext()
+  // Agena runs as a standalone SPA (no embedded workspace pane), so shell state
+  // always persists.
+  const shouldPersistWorkspaceShellState = true
 
   function persistWorkspaceShellString(key: string, value: string) {
     if (!shouldPersistWorkspaceShellState) return
@@ -512,10 +510,8 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   function resolveGlobalSelectionScopeId(windowId?: string | null): string {
-    return resolveWindowScopeId({
-      fallback: windowId || activeWorkspaceWindowId.value,
-      defaultScope: DEFAULT_WINDOW_SCOPE_ID,
-    })
+    const id = String(windowId || activeWorkspaceWindowId.value || '').trim()
+    return id || DEFAULT_WINDOW_SCOPE_ID
   }
 
   const activeGlobalSelection = computed<GlobalSelectionTarget | null>(() => {
@@ -630,12 +626,12 @@ export const useUiStore = defineStore('ui', () => {
   }
 
   function retainGlobalSelectionsForWindows(windowIds: string[]) {
-    const keep = new Set((windowIds || []).map((id) => normalizeWindowScopeId(id, '')).filter(Boolean))
+    const keep = new Set((windowIds || []).map((id) => String(id || '').trim()).filter(Boolean))
     keep.add(DEFAULT_WINDOW_SCOPE_ID)
 
     const next: Record<string, GlobalSelectionTarget> = {}
     for (const [scopeIdRaw, target] of Object.entries(globalSelectionByWindow.value)) {
-      const scopeId = normalizeWindowScopeId(scopeIdRaw, '')
+      const scopeId = String(scopeIdRaw || '').trim()
       if (!scopeId) continue
       if (!keep.has(scopeId)) continue
       next[scopeId] = target
@@ -1258,7 +1254,6 @@ export const useUiStore = defineStore('ui', () => {
 
   // Global overlays
   const isHelpDialogOpen = ref(false)
-  const isMcpDialogOpen = ref(false)
   const isImageViewerOpen = ref(false)
   const imageViewerItems = ref<ImageViewerItem[]>([])
   const imageViewerActiveIndex = ref(0)
@@ -2056,9 +2051,6 @@ export const useUiStore = defineStore('ui', () => {
   function toggleHelpDialog() {
     isHelpDialogOpen.value = !isHelpDialogOpen.value
   }
-  function setMcpDialogOpen(open: boolean) {
-    isMcpDialogOpen.value = open
-  }
 
   function normalizeImageViewerItems(items: ImageViewerItem[]): ImageViewerItem[] {
     if (!Array.isArray(items)) return []
@@ -2198,7 +2190,6 @@ export const useUiStore = defineStore('ui', () => {
     activeGlobalSelection,
     activeMainTab,
     isHelpDialogOpen,
-    isMcpDialogOpen,
     isImageViewerOpen,
     imageViewerItems,
     imageViewerActiveItem,
@@ -2280,7 +2271,6 @@ export const useUiStore = defineStore('ui', () => {
     enableSessionQuery,
     disableSessionQuery,
     toggleHelpDialog,
-    setMcpDialogOpen,
     openImageViewer,
     closeImageViewer,
     setImageViewerIndex,

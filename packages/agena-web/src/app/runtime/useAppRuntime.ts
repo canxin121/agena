@@ -6,27 +6,46 @@ import { useSettingsStore } from '@/stores/settings'
 import { useSessionActivityStore } from '@/stores/sessionActivity'
 import { useChatStore } from '@/stores/chat'
 import { useUiStore } from '@/stores/ui'
-import { useUpdatesStore } from '@/stores/updates'
-import { useDirectoryStore } from '@/stores/directory'
-import { useDirectorySessionStore } from '@/stores/directorySessionStore'
-import { usePluginHostStore } from '@/stores/pluginHost'
 
-import { connectGlobalWs } from '@/lib/globalWs'
-import type { SseClientStats } from '@/lib/sse'
+import { connectSse } from '@/lib/sse'
+import type { SseClient, SseClientStats } from '@/lib/sse'
 import { subscribeAppBroadcast } from '@/lib/appBroadcast'
-import { applyDeviceClasses, getDeviceInfo } from '@/lib/device'
 import { installKeyboardInsets } from '@/lib/keyboardInsets'
 import { installKeyboardTapFix } from '@/lib/keyboardTapFix'
 import { installKeyboardShortcuts } from '@/app/runtime/installKeyboardShortcuts'
 import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
-import { isWorkspaceMainTabPath, mainTabFromPath } from '@/app/navigation/mainTabs'
-import {
-  createWorkspacePaneFocusMessage,
-  isEmbeddedWorkspacePaneContext,
-  readWindowIdFromLocation,
-  readWindowIdFromQuery,
-} from '@/app/windowScope'
-import { normalizeFsPath, trimTrailingFsSlashes } from '@/lib/path'
+
+function applyDeviceClasses(info: { isMobile: boolean; isMobilePointer: boolean; isTouchPointer: boolean }) {
+  if (typeof document === 'undefined') return
+  const root = document.documentElement
+  const hasClass = (name: string) => root.classList.contains(name)
+  const setClass = (name: string, on: boolean) => {
+    if (on && !hasClass(name)) root.classList.add(name)
+    if (!on && hasClass(name)) root.classList.remove(name)
+  }
+  setClass('device-mobile', info.isMobile)
+  setClass('device-desktop', !info.isMobile)
+  setClass('touch-pointer', info.isTouchPointer)
+  setClass('coarse-pointer', info.isMobilePointer)
+}
+
+function getDeviceInfo() {
+  const width = typeof window !== 'undefined' ? window.innerWidth : 0
+  const narrow = width > 0 && width < 768
+  let isMobile = false
+  if (typeof navigator !== 'undefined' && typeof window !== 'undefined') {
+    isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || window.matchMedia?.('(pointer: coarse)')?.matches === true
+  }
+  const touch = typeof window !== 'undefined' && (window.matchMedia?.('(pointer: coarse)')?.matches === true || navigator.maxTouchPoints > 0)
+  const coarse = isMobile || (touch && narrow)
+  return {
+    isCompactLayout: narrow,
+    isNarrow: narrow,
+    isMobile,
+    isMobilePointer: coarse,
+    isTouchPointer: touch,
+  }
+}
 
 export function useAppRuntime() {
   const route = useRoute()
@@ -36,12 +55,8 @@ export function useAppRuntime() {
   const settings = useSettingsStore()
   const activity = useSessionActivityStore()
   const chat = useChatStore()
-  const updates = useUpdatesStore()
-  const directoryStore = useDirectoryStore()
-  const directorySessions = useDirectorySessionStore()
-  const pluginHost = usePluginHostStore()
 
-  let sse: ReturnType<typeof connectGlobalWs> | null = null
+  let sse: SseClient | null = null
   let visibilityHandler: (() => void) | null = null
   let onlineHandler: (() => void) | null = null
   let focusHandler: (() => void) | null = null
@@ -54,8 +69,6 @@ export function useAppRuntime() {
   let cleanupShortcuts: (() => void) | null = null
   let cleanupKeyboardTapFix: (() => void) | null = null
   let cleanupBroadcast: (() => void) | null = null
-  let cleanupEmbeddedPaneFocusBridge: (() => void) | null = null
-  let updateTimer: number | null = null
   let sseDebugTimer: number | null = null
   let lastSseDebugAt = 0
   let lastSseDebugErrorSum = 0
@@ -93,7 +106,6 @@ export function useAppRuntime() {
     if (gapMs >= 20000) return true
 
     // If we haven't seen any SSE bytes in a long time while visible, treat it as stalled.
-    // (Some browsers keep the JS context active but stop delivering stream chunks.)
     const maxAge = sseMaxChunkAgeMs()
     if (document.visibilityState === 'visible' && maxAge >= 45000) return true
 
@@ -109,8 +121,6 @@ export function useAppRuntime() {
     if (now - lastResumeSyncAt < 1500) return
     lastResumeSyncAt = now
 
-    // Mobile/desktop browsers can pause fetch/SSE streams in the background.
-    // On resume, prefer preserving Last-Event-ID cursors but do not assume streams are still alive.
     const forceReconnect = shouldForceReconnectAfterResume({ reason, gapMs: opts?.gapMs })
     if (forceReconnect || !sse) {
       connectActivity()
@@ -124,7 +134,6 @@ export function useAppRuntime() {
       void chat.refreshMessages(sid, { silent: true }).catch(() => {})
     }
     void activity.refresh().catch(() => {})
-    directorySessions.scheduleSidebarRecoverySync(`resume:${reason}`, 80, { force: true })
 
     try {
       console.debug('[sse] resync after resume:', reason)
@@ -132,7 +141,6 @@ export function useAppRuntime() {
       // ignore
     }
 
-    // Helpful in dev when diagnosing background stalls.
     logSseStats({ force: true, reason: `resume:${reason}` })
   }
 
@@ -163,7 +171,6 @@ export function useAppRuntime() {
         : 0,
     )
 
-    // Only log periodically when something looks suspicious, or when errors increase.
     if (!opts?.force && errorSum === lastSseDebugErrorSum && maxAgeMs < 45000) return
 
     lastSseDebugAt = now
@@ -198,126 +205,15 @@ export function useAppRuntime() {
     lastVisibilityState = state
   }
 
-  function normalizeDirectoryForMatch(input: unknown): string {
-    const value = typeof input === 'string' ? input.trim() : ''
-    if (!value) return ''
-    return trimTrailingFsSlashes(normalizeFsPath(value))
-  }
-
-  function eventDirectory(evt: { directory?: unknown; properties?: unknown }): string {
-    const topLevel = normalizeDirectoryForMatch(evt.directory)
-    if (topLevel) return topLevel
-
-    const properties =
-      evt.properties && typeof evt.properties === 'object' ? (evt.properties as Record<string, unknown>) : null
-    if (!properties) return ''
-
-    return normalizeDirectoryForMatch(properties.directory) || normalizeDirectoryForMatch(properties.cwd)
-  }
-
-  function eventMatchesCurrentDirectory(evt: { directory?: unknown; properties?: unknown }): boolean {
-    const current = normalizeDirectoryForMatch(directoryStore.currentDirectory)
-    if (!current) return true
-    const evtDir = eventDirectory(evt)
-    if (!evtDir) return true
-    return evtDir === current
-  }
-
-  const crossDirectoryEventTypes = new Set([
-    'session.created',
-    'session.updated',
-    'session.deleted',
-    'session.status',
-    'session.idle',
-    'session.error',
-    'permission.asked',
-    'permission.replied',
-    'question.asked',
-    'question.replied',
-    'question.rejected',
-    'opencode-studio:session-activity',
-    'chat-sidebar.delta',
-    'chat-sidebar.patch',
-    'chat-sidebar.state',
-    'opencode-studio:replay-gap',
-    'config.settings.replace',
-  ])
-
-  function shouldBypassDirectoryFilter(evt: { type?: unknown }): boolean {
-    const ty = typeof evt.type === 'string' ? evt.type.trim().toLowerCase() : ''
-    if (!ty) return false
-    return crossDirectoryEventTypes.has(ty)
-  }
-
-  function eventSessionId(evt: { properties?: unknown }): string {
-    const props =
-      evt.properties && typeof evt.properties === 'object' ? (evt.properties as Record<string, unknown>) : null
-    if (!props) return ''
-
-    const direct =
-      (typeof props.sessionID === 'string' ? props.sessionID : '') ||
-      (typeof props.sessionId === 'string' ? props.sessionId : '') ||
-      (typeof props.session_id === 'string' ? props.session_id : '')
-    if (direct.trim()) return direct.trim()
-
-    const part = props.part && typeof props.part === 'object' ? (props.part as Record<string, unknown>) : null
-    if (!part) return ''
-
-    const nested =
-      (typeof part.sessionID === 'string' ? part.sessionID : '') ||
-      (typeof part.sessionId === 'string' ? part.sessionId : '') ||
-      (typeof part.session_id === 'string' ? part.session_id : '')
-    return nested.trim()
-  }
-
-  function syncUiWindowContextFromRoute() {
-    const normalizedPath = String(route.path || '').toLowerCase()
-    if (!isWorkspaceMainTabPath(normalizedPath)) return
-    ui.syncActiveWorkspaceWindowFromRoute(mainTabFromPath(normalizedPath), route.query)
-  }
-
-  function installEmbeddedPaneFocusBridge() {
-    cleanupEmbeddedPaneFocusBridge?.()
-    cleanupEmbeddedPaneFocusBridge = null
-
-    if (typeof window === 'undefined') return
-    if (!isEmbeddedWorkspacePaneContext(route.query)) return
-    if (window.parent === window) return
-
-    const windowId = readWindowIdFromQuery(route.query) || readWindowIdFromLocation()
-    if (!windowId) return
-    const targetOrigin = String(window.location.origin || '').trim()
-    const postTargetOrigin = targetOrigin && targetOrigin !== 'null' ? targetOrigin : '*'
-
-    const notifyParentFocus = () => {
-      const message = createWorkspacePaneFocusMessage(windowId)
-      if (!message) return
-      window.parent.postMessage(message, postTargetOrigin)
-    }
-
-    document.addEventListener('pointerdown', notifyParentFocus, true)
-    document.addEventListener('mousedown', notifyParentFocus, true)
-    document.addEventListener('focusin', notifyParentFocus, true)
-
-    cleanupEmbeddedPaneFocusBridge = () => {
-      document.removeEventListener('pointerdown', notifyParentFocus, true)
-      document.removeEventListener('mousedown', notifyParentFocus, true)
-      document.removeEventListener('focusin', notifyParentFocus, true)
-    }
-  }
-
   function connectActivity() {
     sse?.close()
     sse = null
 
     try {
-      sse = connectGlobalWs({
-        endpoint: '/api/global/ws',
-        // Multi-window desktop mode must receive cross-directory runtime/status events
-        // so all windows stay consistent for the same session.
-        directory: null,
+      sse = connectSse({
+        endpoint: '/api/v1/changes/stream?scope_kind=global',
         initialLastEventId: globalSseCursor,
-        debugLabel: 'ws:global',
+        debugLabel: 'sse:global',
         onCursor: (lastEventId) => {
           globalSseCursor = lastEventId
         },
@@ -332,19 +228,11 @@ export function useAppRuntime() {
           }
           void settings.refresh().catch(() => {})
           void activity.refresh().catch(() => {})
-          directorySessions.scheduleSidebarRecoverySync('sequence-gap', 160)
         },
         onEvent: (evt) => {
-          const selectedSessionId = String(chat.selectedSessionId || '').trim()
-          const isSelectedSessionEvent = selectedSessionId && eventSessionId(evt) === selectedSessionId
-
-          if (!isSelectedSessionEvent && !shouldBypassDirectoryFilter(evt) && !eventMatchesCurrentDirectory(evt)) return
-
-          if (evt.type === 'config.settings.replace') {
-            void settings.refresh().catch(() => {})
-            return
-          }
-          if (evt.type === 'opencode-studio:replay-gap') {
+          // Agena global SSE frames are tagged `event: notification` with a JSON
+          // body carrying `kind: session_changed | runtime_signal | lagged`.
+          if (evt.type === 'lagged') {
             const now = Date.now()
             if (now - lastSseGapAt >= 1500) {
               lastSseGapAt = now
@@ -354,32 +242,25 @@ export function useAppRuntime() {
               }
               void settings.refresh().catch(() => {})
               void activity.refresh().catch(() => {})
-              directorySessions.scheduleSidebarRecoverySync('replay-gap', 180)
             }
             return
           }
           activity.applyEvent(evt)
           chat.applyEvent(evt)
-          directorySessions.applyGlobalEvent(evt)
-          directoryStore.applyGlobalEvent(evt)
         },
         onError: (err) => {
           // When the stream drops mid-run the UI can get stuck on partial output.
-          // Throttle a best-effort resync.
           const now = Date.now()
           if (now - lastSseErrorAt < 1500) return
           lastSseErrorAt = now
 
-          // Keep this silent to avoid UI flicker while reconnecting.
           const sid = chat.selectedSessionId
           if (sid) {
             void chat.refreshMessages(sid, { silent: true }).catch(() => {})
           }
           void settings.refresh().catch(() => {})
           void activity.refresh().catch(() => {})
-          directorySessions.scheduleSidebarRecoverySync('connection-error', 220)
 
-          // Surface in devtools for debugging.
           try {
             console.warn('[sse] connection error', err)
           } catch {
@@ -400,16 +281,6 @@ export function useAppRuntime() {
   function applyDevice() {
     const info = getDeviceInfo()
 
-    // Embedded workspace panes (split iframes) should keep desktop-style layout
-    // even when the frame width is narrow.
-    const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
-    if (isEmbeddedWorkspacePane) {
-      info.isCompactLayout = false
-      info.isNarrow = false
-      info.isMobile = false
-      info.isMobilePointer = false
-    }
-
     applyDeviceClasses(info)
     ui.setIsCompactLayout(info.isCompactLayout)
     ui.setIsMobileDevice(info.isMobileDevice)
@@ -422,22 +293,16 @@ export function useAppRuntime() {
   applyDevice()
 
   async function ensureSelectedSessionFromQuery() {
-    syncUiWindowContextFromRoute()
-    const routeWindowId = readWindowIdFromQuery(route.query) || null
-    const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
-    const sid = isEmbeddedWorkspacePane
-      ? readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
-      : ''
+    const sid = readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
 
     // If the URL includes a session id, treat it as an explicit deep link.
-    // Don't strip it just because the in-memory flag wasn't restored yet.
     if (sid && !ui.sessionQueryEnabled) {
       ui.enableSessionQuery()
     }
 
     if (sid) {
       if (sid !== chat.selectedSessionId) {
-        await chat.selectSession(sid, { windowId: routeWindowId })
+        await chat.selectSession(sid)
       }
       return
     }
@@ -447,14 +312,12 @@ export function useAppRuntime() {
     const selected = chat.selectedSessionId
     const selectedExists = selected ? !!chat.selectedSession : false
     if (!selectedExists) {
-      await chat.selectSession(null, { windowId: routeWindowId })
+      await chat.selectSession(null)
     }
   }
 
   onMounted(async () => {
     window.addEventListener('resize', applyDevice)
-    syncUiWindowContextFromRoute()
-    installEmbeddedPaneFocusBridge()
 
     cleanupKeyboard = installKeyboardInsets({ enabled: true })
     cleanupShortcuts = installKeyboardShortcuts()
@@ -462,28 +325,12 @@ export function useAppRuntime() {
 
     await Promise.all([
       health.refresh().catch(() => {}),
-      directoryStore.refreshHome().catch(() => {}),
       settings.refresh().catch(() => {}),
       activity.refresh().catch(() => {}),
-      directorySessions.bootstrapWithStaleWhileRevalidate().catch(() => {}),
     ])
-
-    await pluginHost.bootstrap().catch(() => {})
-
-    // Check for updates a few seconds after mount.
-    updateTimer = window.setTimeout(() => {
-      if (!updates.autoCheckEnabled) return
-      void updates.checkForUpdates({ notify: true })
-    }, 3000)
 
     // Keep sessions available for all views.
     await chat.refreshSessions().catch(() => {})
-    if (
-      isEmbeddedWorkspacePaneContext(route.query) &&
-      (readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath))
-    ) {
-      ui.enableSessionQuery()
-    }
     await ensureSelectedSessionFromQuery().catch(() => {})
 
     connectActivity()
@@ -493,10 +340,6 @@ export function useAppRuntime() {
       if (!msg?.type) return
       if (msg.type === 'settings.updated') {
         void settings.refresh().catch(() => {})
-        return
-      }
-      if (msg.type === 'opencodeConfig.updated') {
-        void pluginHost.bootstrap().catch(() => {})
         return
       }
     })
@@ -515,17 +358,13 @@ export function useAppRuntime() {
 
     // BFCache: pageshow can resume without a visibilitychange transition.
     pageShowHandler = (evt) => {
-      // When restored from BFCache, network connections are not preserved.
-      // Always force a reconnect + reconcile.
       if (evt && (evt as { persisted?: boolean }).persisted) {
         resyncAfterResume('pageshow', { gapMs: 60000 })
       } else if (document.visibilityState === 'visible') {
-        // Cheap best-effort reconcile on normal pageshow (Safari quirks).
         resyncAfterResume('pageshow')
       }
     }
     pageHideHandler = (evt) => {
-      // When entering BFCache, proactively close streams.
       if (evt && (evt as { persisted?: boolean }).persisted) {
         sse?.close()
       }
@@ -557,13 +396,11 @@ export function useAppRuntime() {
         const now = Date.now()
         const delta = now - lastClockWatchdogAt
         lastClockWatchdogAt = now
-
         if (delta < jumpThresholdMs) return
         const reason = 'clock-jump'
         if (document.visibilityState === 'visible') {
           resyncAfterResume(reason, { gapMs: delta })
         } else {
-          // Defer until we become visible.
           pendingResumeReason = reason
           pendingResumeGapMs = Math.max(pendingResumeGapMs, delta)
         }
@@ -587,42 +424,11 @@ export function useAppRuntime() {
   })
 
   watch(
-    () => directoryStore.currentDirectory,
-    async () => {
-      await chat.refreshSessions().catch(() => {})
-      await ensureSelectedSessionFromQuery().catch(() => {})
-    },
-  )
-
-  watch(
     () => ({ path: route.path, query: route.query }),
     () => {
-      syncUiWindowContextFromRoute()
+      void ensureSelectedSessionFromQuery().catch(() => {})
     },
     { immediate: true, deep: true },
-  )
-
-  watch(
-    () =>
-      `${readWindowIdFromQuery(route.query)}|${readSessionIdFromQuery(route.query)}|${readSessionIdFromFullPath(route.fullPath)}`,
-    () => {
-      void ensureSelectedSessionFromQuery()
-    },
-  )
-
-  watch(
-    () => isEmbeddedWorkspacePaneContext(route.query),
-    () => {
-      applyDevice()
-      installEmbeddedPaneFocusBridge()
-    },
-  )
-
-  watch(
-    () => readWindowIdFromQuery(route.query),
-    () => {
-      installEmbeddedPaneFocusBridge()
-    },
   )
 
   onBeforeUnmount(() => {
@@ -634,12 +440,6 @@ export function useAppRuntime() {
     cleanupShortcuts = null
     cleanupKeyboardTapFix?.()
     cleanupKeyboardTapFix = null
-    cleanupEmbeddedPaneFocusBridge?.()
-    cleanupEmbeddedPaneFocusBridge = null
-    if (updateTimer !== null) {
-      window.clearTimeout(updateTimer)
-      updateTimer = null
-    }
     if (sseDebugTimer !== null) {
       window.clearInterval(sseDebugTimer)
       sseDebugTimer = null
@@ -662,7 +462,6 @@ export function useAppRuntime() {
       window.removeEventListener('online', onlineHandler)
       onlineHandler = null
     }
-
     if (pageShowHandler) {
       window.removeEventListener('pageshow', pageShowHandler)
       pageShowHandler = null
@@ -683,7 +482,6 @@ export function useAppRuntime() {
       window.clearInterval(clockWatchdogTimer)
       clockWatchdogTimer = null
     }
-
     cleanupBroadcast?.()
     cleanupBroadcast = null
   })

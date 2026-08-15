@@ -1,12 +1,9 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type Component, type ComponentPublicInstance } from 'vue'
-import { RiClipboardLine, RiEditLine, RiFileUploadLine, RiLinkM, RiShareLine } from '@remixicon/vue'
+import { RiClipboardLine, RiEditLine, RiFileUploadLine, RiGitBranchLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
-
-import type { DirectoryEntry } from '@/features/sessions/model/types'
 
 type SessionLike = {
   id: string
-  share?: { url?: string | null } | null
 }
 
 export type SessionActionItem = {
@@ -19,20 +16,13 @@ export type SessionActionItem = {
 
 type TFunction = (key: string, params?: Record<string, unknown>) => string
 
-function shareUrlForSession(session: SessionLike | null | undefined): string {
-  return typeof session?.share?.url === 'string' ? String(session.share.url) : ''
-}
-
 export function buildSessionActionItemsForSession(session: SessionLike | null | undefined): SessionActionItem[] {
+  void session
   const { t } = useI18n()
-  return buildSessionActionItemsForSessionI18n(t, session)
+  return buildSessionActionItemsForSessionI18n(t)
 }
 
-export function buildSessionActionItemsForSessionI18n(
-  t: TFunction,
-  session: SessionLike | null | undefined,
-): SessionActionItem[] {
-  const shareUrl = shareUrlForSession(session)
+export function buildSessionActionItemsForSessionI18n(t: TFunction): SessionActionItem[] {
   return [
     {
       id: 'rename',
@@ -53,32 +43,10 @@ export function buildSessionActionItemsForSessionI18n(
       icon: RiFileUploadLine,
     },
     {
-      id: 'share',
-      label: String(t('chat.sidebar.sessionActions.share.label')),
-      description: String(t('chat.sidebar.sessionActions.share.description')),
-      icon: RiShareLine,
-      disabled: Boolean(shareUrl),
-    },
-    {
-      id: 'unshare',
-      label: String(t('chat.sidebar.sessionActions.unshare.label')),
-      description: String(t('chat.sidebar.sessionActions.unshare.description')),
-      icon: RiLinkM,
-      disabled: !shareUrl,
-    },
-    {
-      id: 'copy-share',
-      label: String(t('chat.sidebar.sessionActions.copyShareLink.label')),
-      description: String(t('chat.sidebar.sessionActions.copyShareLink.description')),
-      icon: RiClipboardLine,
-      disabled: !shareUrl,
-    },
-    {
-      id: 'open-share',
-      label: String(t('chat.sidebar.sessionActions.openShareLink.label')),
-      description: String(t('chat.sidebar.sessionActions.openShareLink.description')),
-      icon: RiLinkM,
-      disabled: !shareUrl,
+      id: 'fork',
+      label: 'Fork',
+      description: 'Create a fork of this session',
+      icon: RiGitBranchLine,
     },
   ]
 }
@@ -94,8 +62,8 @@ export function useSessionActionMenu(opts: {
   type MaybeMenuComponent = ComponentPublicInstance<{ $el?: Element | null }> &
     Partial<{ containsTarget: (target: Node | null) => boolean; focusSearch: () => void }>
 
-  // Session action menu (desktop-only trigger)
-  const sessionActionMenuTarget = ref<{ directory: DirectoryEntry; session: SessionLike } | null>(null)
+  // Session action menu (desktop-only trigger).
+  const sessionActionMenuTarget = ref<SessionLike | null>(null)
   const sessionActionMenuQuery = ref('')
   const sessionActionMenuRef = ref<MenuRefLike | null>(null)
   const sessionActionMenuAnchorRef = ref<HTMLElement | null>(null)
@@ -104,9 +72,7 @@ export function useSessionActionMenu(opts: {
   let sessionActionMenuPointerHandler: ((event: MouseEvent | TouchEvent) => void) | null = null
   let sessionActionMenuClickHandler: ((event: MouseEvent) => void) | null = null
 
-  const sessionActionItems = computed<SessionActionItem[]>(() =>
-    buildSessionActionItemsForSessionI18n(t, sessionActionMenuTarget.value?.session),
-  )
+  const sessionActionItems = computed<SessionActionItem[]>(() => buildSessionActionItemsForSessionI18n(t))
 
   const filteredSessionActionItems = computed<SessionActionItem[]>(() => {
     const q = sessionActionMenuQuery.value.trim().toLowerCase()
@@ -119,15 +85,15 @@ export function useSessionActionMenu(opts: {
     })
   })
 
-  function openSessionActionMenu(directory: DirectoryEntry, session: SessionLike, event?: MouseEvent | PointerEvent) {
+  function openSessionActionMenu(session: SessionLike, event?: MouseEvent | PointerEvent) {
     const sid = String(session?.id || '').trim()
     if (!sid) return
-    if (sessionActionMenuTarget.value?.session?.id === sid) {
+    if (sessionActionMenuTarget.value?.id === sid) {
       sessionActionMenuTarget.value = null
       sessionActionMenuAnchorRef.value = null
       return
     }
-    sessionActionMenuTarget.value = { directory, session }
+    sessionActionMenuTarget.value = session
     sessionActionMenuAnchorRef.value = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null
     sessionActionMenuQuery.value = ''
     void nextTick(() => sessionActionMenuRef.value?.focusSearch?.())
@@ -176,7 +142,7 @@ export function useSessionActionMenu(opts: {
     sessionActionMenuTarget.value = null
     sessionActionMenuAnchorRef.value = null
     sessionActionMenuQuery.value = ''
-    const targetSessionId = typeof target?.session?.id === 'string' ? target.session.id.trim() : ''
+    const targetSessionId = typeof target?.id === 'string' ? target.id.trim() : ''
     if (targetSessionId && targetSessionId !== opts.chat.selectedSessionId) {
       await opts.selectSession(targetSessionId)
     }

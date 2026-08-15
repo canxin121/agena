@@ -17,7 +17,6 @@ import { i18n, ensureDefaultLocale, setAppLocale } from './i18n'
 import { DEFAULT_LOCALE, normalizeAppLocale } from './i18n/locale'
 import { useToastsStore } from './stores/toasts'
 import { useAuthStore } from './stores/auth'
-import { syncDesktopBackendTarget } from './lib/backend'
 import { sessionStorageKeys } from './lib/persistence/storageKeys'
 import {
   OC_AUTH_REQUIRED_EVENT,
@@ -37,8 +36,6 @@ try {
 } catch {
   // ignore
 }
-
-void syncDesktopBackendTarget().catch(() => {})
 
 const app = createApp(App)
 const pinia = createPinia()

@@ -1,299 +1,114 @@
+// Agena REST API client for the chat subsystem.
+//
+// All endpoints live under /api/v1. Ids are numeric; timestamps are RFC3339
+// UTC. Error responses are {problem:{id, code, category, ...}} envelopes;
+// apiJson throws ApiError with .status / .code on non-2xx.
+//
+// Endpoint mapping (opencode → agena):
+//   GET    /api/session?directory=          → GET    /api/v1/sessions?limit=&cursor=
+//   POST   /api/session                     → POST   /api/v1/sessions            {workspace_id?}
+//   DELETE /api/session/:id                 → DELETE /api/v1/sessions/{id}
+//   PATCH  /api/session/:id {title}         → PUT    /api/v1/sessions/{id}      {title}
+//   POST   /api/session/:id/message         → POST   /api/v1/sessions/{id}/messages  {document, options}
+//   GET    /api/session/:id/message         → GET    /api/v1/sessions/{id}/parts?limit=
+//   POST   /api/session/:id/abort           → POST   /api/v1/sessions/{id}/cancel    {execution_id}
+//   POST   /api/session/:id/revert          → POST   /api/v1/sessions/{id}/rewind    {turn_id}
+//   POST   /api/session/:id/summarize       → POST   /api/v1/sessions/{id}/compact   {options}
+//   POST   /api/permission/:id/reply        → POST   /api/v1/sessions/{id}/permission-replies {reply}
+//   POST   /api/question/:id/reply          → POST   /api/v1/sessions/{id}/user-input-replies {reply}
+//   GET    /api/session-activity            → GET    /api/v1/activities
+//   GET    /api/session/:id/diff            → (no agena endpoint — removed)
+//   POST   /api/session/:id/share           → (no agena endpoint — fork instead)
+//   GET    /api/session/status              → derived from GET /api/v1/sessions/{id}/state
+
 import { apiJson } from '../../lib/api'
-import { parseSessionPayloadConsistency, type SessionPayloadConsistency } from '../sessionConsistency'
-
-import type { MessageEntry, Session, SessionFileDiff } from '../../types/chat'
-import type { GitDiffMeta } from '@/types/git'
 import type { JsonObject, JsonValue } from '@/types/json'
+import type { MessageEntry, MessagePart, MessageInfo, Session } from '../../types/chat'
 
-type SessionListOptions = {
-  offset?: number
-  limit?: number
-  includeTotal?: boolean
-  roots?: boolean
-  includeChildren?: boolean
-  scope?: 'directory' | 'project'
-  ids?: string[]
-  focusSessionId?: string
-  search?: string
-  signal?: AbortSignal
+// --- agena wire projections ------------------------------------------------
+
+/** SessionResource — GET /api/v1/sessions, overview items, etc. */
+export type AgenaSession = {
+  id: number
+  parent_id?: number | null
+  depth?: number
+  root_id?: number
+  workspace_id?: number
+  title?: string
+  version?: number
+  relation_kind?: string
+  lifecycle_state?: string
+  state?: string
+  is_subagent?: boolean
+  message_count?: number
+  child_session_count?: number
+  last_message_at?: string | null
+  created_at?: string
+  updated_at?: string
+  [k: string]: JsonValue
+}
+
+/** PartResource / SessionTranscriptPart — the shared part wire shape. */
+export type AgenaPart = {
+  part_id: number
+  kind: string
+  role: string
+  state: string
+  content: JsonValue
+  summary?: string | null
+  created_at_ms?: number
+  started_at_ms?: number
+  finished_at_ms?: number | null
+  parent_part_id?: number | null
+  run_id?: number | null
+  [k: string]: JsonValue
+}
+
+/** SessionPartsResource — GET /api/v1/sessions/{id}/parts. */
+export type AgenaSessionParts = {
+  session_id: number
+  version: number
+  parts: AgenaPart[]
+}
+
+/** SessionExecutionResource — GET /api/v1/sessions/{id}/state. */
+export type AgenaExecutionState = {
+  session: AgenaSession
+  parts: AgenaPart[]
+  workflow_state: 'quiescent' | 'tool_pending' | 'blocked' | string
+  active_execution?: { execution_id: string; phase?: string } | null
+  latest_event_seq?: number | null
+  pending_interactive_requests?: JsonValue[]
+  usage?: JsonValue
+  [k: string]: JsonValue
 }
 
 export type SessionListResponse = {
   sessions: Session[]
   total?: number
-  offset?: number
-  limit?: number
   hasMore?: boolean
-  nextOffset?: number
-  focusRootId?: string
-  focusRootIndex?: number
-  consistency?: ApiConsistency
+  nextCursor?: string | null
 }
-
-export type ApiConsistency = SessionPayloadConsistency
 
 export type MessageListResponse = {
   entries: MessageEntry[]
-  total?: number
-  offset?: number
-  limit?: number
   hasMore?: boolean
-  nextOffset?: number
-  consistency?: ApiConsistency
+  nextCursor?: string | null
 }
 
-export type SessionDiffPageResponse = {
-  items: SessionFileDiff[]
-  total?: number
-  offset: number
-  limit: number
-  hasMore: boolean
-  nextOffset?: number
+export type SendMessageResponse = {
+  queued?: boolean
 }
 
-function toTextTrimmed(value: JsonValue): string {
-  return typeof value === 'string' ? value.trim() : ''
+export type SessionExecutionStatus = {
+  state: string
+  workflow_state: string
+  active_execution?: { execution_id?: string; phase?: string } | null
+  pending_interactive_requests?: JsonValue[]
+  running: boolean
 }
 
-function firstText(record: JsonObject, keys: string[]): string {
-  for (const key of keys) {
-    const text = toTextTrimmed(record[key])
-    if (text) return text
-  }
-  return ''
-}
-
-function firstString(record: JsonObject, keys: string[]): string {
-  const parseTextLike = (value: JsonValue, depth = 0): string | null => {
-    if (depth > 4 || value == null) return null
-    if (typeof value === 'string') return value
-    if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-    if (Array.isArray(value)) {
-      const lines: string[] = []
-      for (const entry of value) {
-        const text = parseTextLike(entry, depth + 1)
-        if (text == null || !text.length) continue
-        lines.push(text)
-      }
-      return lines.length ? lines.join('\n') : ''
-    }
-    const nested = asRecord(value)
-    if (!Object.keys(nested).length) return null
-
-    for (const key of ['text', 'content', 'value', 'line', 'raw']) {
-      const text = parseTextLike(nested[key], depth + 1)
-      if (text != null) return text
-    }
-    if (Object.prototype.hasOwnProperty.call(nested, 'lines')) {
-      const text = parseTextLike(nested.lines, depth + 1)
-      if (text != null) return text
-    }
-    return null
-  }
-
-  for (const key of keys) {
-    const text = parseTextLike(record[key])
-    if (text != null) return text
-  }
-  return ''
-}
-
-function firstCount(record: JsonObject, keys: string[]): number {
-  for (const key of keys) {
-    const value = record[key]
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return Math.max(0, Math.floor(value))
-    }
-  }
-  return 0
-}
-
-function readDiffMeta(record: JsonObject): GitDiffMeta | null {
-  const candidate = record.meta ?? record.diffMeta ?? record.diff_meta
-  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
-    return candidate as unknown as GitDiffMeta
-  }
-  if (Array.isArray(record.fileHeader) || Array.isArray(record.hunks)) {
-    return record as unknown as GitDiffMeta
-  }
-  return null
-}
-
-function looksLikeSessionFileDiffRecord(record: JsonObject): boolean {
-  const hasBeforeAfter =
-    typeof record.before === 'string' ||
-    typeof record.after === 'string' ||
-    Array.isArray(record.before) ||
-    Array.isArray(record.after) ||
-    Array.isArray(record.old) ||
-    Array.isArray(record.new) ||
-    Array.isArray(record.beforeLines) ||
-    Array.isArray(record.afterLines)
-  return Boolean(
-    firstText(record, ['file', 'path', 'filename', 'name', 'target', 'filePath', 'filepath', 'relativePath']) ||
-    hasBeforeAfter ||
-    typeof record.patch === 'string' ||
-    typeof record.diff === 'string' ||
-    Array.isArray(record.patch) ||
-    Array.isArray(record.diff) ||
-    typeof record.additions === 'number' ||
-    typeof record.deletions === 'number',
-  )
-}
-
-function readSessionDiffItems(value: JsonValue, depth = 0): JsonValue[] {
-  if (depth > 4) return []
-  if (Array.isArray(value)) return value
-
-  const record = asRecord(value)
-  if (!Object.keys(record).length) return []
-
-  if (looksLikeSessionFileDiffRecord(record)) return [record]
-
-  const wrapperKeys = [
-    'files',
-    'changes',
-    'diff',
-    'diffs',
-    'entries',
-    'items',
-    'list',
-    'value',
-    'data',
-    'payload',
-    'result',
-  ]
-  for (const key of wrapperKeys) {
-    const items = readSessionDiffItems(record[key], depth + 1)
-    if (items.length) return items
-  }
-
-  for (const nested of Object.values(record)) {
-    if (!Array.isArray(nested)) continue
-    if (
-      nested.some((entry) => {
-        const row = asRecord(entry)
-        return Object.keys(row).length > 0 && looksLikeSessionFileDiffRecord(row)
-      })
-    ) {
-      return nested
-    }
-  }
-
-  return []
-}
-
-function parseSessionFileDiff(value: JsonValue): SessionFileDiff | null {
-  const record = asRecord(value)
-  const file = firstText(record, ['file', 'path', 'filename', 'name', 'target', 'filePath', 'filepath', 'relativePath'])
-  if (!file) return null
-  const diff = firstString(record, ['diff', 'patch'])
-  const meta = readDiffMeta(record)
-  return {
-    file,
-    before: firstString(record, [
-      'before',
-      'old',
-      'oldText',
-      'beforeLines',
-      'oldLines',
-      'original',
-      'previous',
-      'prev',
-      'from',
-      'left',
-      'a',
-    ]),
-    after: firstString(record, [
-      'after',
-      'new',
-      'newText',
-      'afterLines',
-      'newLines',
-      'modified',
-      'current',
-      'next',
-      'to',
-      'right',
-      'b',
-    ]),
-    additions: firstCount(record, ['additions', 'added', 'insertions', 'linesAdded', 'add']),
-    deletions: firstCount(record, ['deletions', 'deleted', 'removed', 'linesDeleted', 'del']),
-    ...(diff ? { diff } : {}),
-    ...(meta ? { meta } : {}),
-  }
-}
-
-export function normalizeSessionDiffPayload(payload: JsonValue): SessionFileDiff[] {
-  const items = readSessionDiffItems(payload)
-  if (!items.length) return []
-  return items.map((item) => parseSessionFileDiff(item)).filter((item): item is SessionFileDiff => Boolean(item))
-}
-
-function readBoolean(value: JsonValue): boolean | undefined {
-  if (typeof value === 'boolean') return value
-  return undefined
-}
-
-function readOptionalInt(value: JsonValue): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
-  return Math.max(0, Math.floor(value))
-}
-
-export function normalizeSessionDiffPagePayload(
-  payload: JsonValue,
-  opts?: { fallbackOffset?: number; fallbackLimit?: number },
-): SessionDiffPageResponse {
-  const fallbackOffset =
-    typeof opts?.fallbackOffset === 'number' && Number.isFinite(opts.fallbackOffset)
-      ? Math.max(0, Math.floor(opts.fallbackOffset))
-      : 0
-  const fallbackLimit =
-    typeof opts?.fallbackLimit === 'number' && Number.isFinite(opts.fallbackLimit)
-      ? Math.max(1, Math.floor(opts.fallbackLimit))
-      : 100
-
-  const body = asRecord(payload)
-  const items = normalizeSessionDiffPayload(payload)
-
-  const offsetRaw = readOptionalInt(body.offset ?? body.start)
-  const limitRaw = readOptionalInt(body.limit ?? body.pageSize)
-  const totalRaw = readOptionalInt(body.total)
-  const nextOffsetRaw = readOptionalInt(body.nextOffset ?? body.next_offset ?? body.next)
-  const hasMoreRaw = readBoolean(body.hasMore ?? body.has_more)
-
-  const offset = offsetRaw ?? fallbackOffset
-  const limit = Math.max(1, limitRaw ?? fallbackLimit)
-  const inferredNextOffset = offset + items.length
-  const inferredHasMoreFromTotal = typeof totalRaw === 'number' ? inferredNextOffset < totalRaw : undefined
-  const inferredHasMoreFromPage = items.length >= limit
-  const nextOffset = nextOffsetRaw ?? (inferredHasMoreFromPage ? inferredNextOffset : undefined)
-
-  let hasMore =
-    hasMoreRaw ??
-    (typeof nextOffsetRaw === 'number' ? nextOffsetRaw > inferredNextOffset : undefined) ??
-    inferredHasMoreFromTotal ??
-    inferredHasMoreFromPage
-
-  if (!items.length || (typeof nextOffset === 'number' && nextOffset <= offset)) {
-    hasMore = false
-  }
-
-  return {
-    items,
-    ...(typeof totalRaw === 'number' ? { total: totalRaw } : {}),
-    offset,
-    limit,
-    hasMore,
-    ...(hasMore && typeof nextOffset === 'number' ? { nextOffset } : {}),
-  }
-}
-
-type AttentionListOptions = {
-  sessionId?: string
-  offset?: number
-  limit?: number
-}
+// --- helpers ---------------------------------------------------------------
 
 function isRecord(value: JsonValue): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -303,354 +118,549 @@ function asRecord(value: JsonValue): JsonObject {
   return isRecord(value) ? value : {}
 }
 
-function toNonNegativeInt(value: JsonValue): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
-  return Math.max(0, Math.floor(value))
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
 }
 
-function directoryQuery(directory?: string | null): string {
-  const dir = typeof directory === 'string' ? directory.trim() : ''
-  return dir ? `?directory=${encodeURIComponent(dir)}` : ''
+function str(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : ''
 }
 
-export async function listSessions(directory?: string | null, opts?: SessionListOptions): Promise<SessionListResponse> {
-  const q = directoryQuery(directory)
+function toSession(s: unknown): Session | null {
+  const rec = asRecord(s as JsonValue)
+  if (!rec || typeof rec.id !== 'number') return null
+  const id = String(rec.id)
+  const title = str(rec.title)
+  const lastAt = typeof rec.last_message_at === 'string' ? (rec.last_message_at as string) : null
+  const created = str(rec.created_at)
+  const updated = str(rec.updated_at)
+  return {
+    ...(rec as unknown as Session),
+    id,
+    ...(title ? { title } : {}),
+    ...(lastAt ? { last_message_at: lastAt } : {}),
+    ...(created ? { created_at: created } : {}),
+    ...(updated ? { updated_at: updated } : {}),
+  }
+}
+
+function entriesFromParts(sessionId: string, parts: JsonValue[]): MessageEntry[] {
+  const list: MessageEntry[] = []
+  const map = new Map<string, MessageEntry>()
+  const order: string[] = []
+  const now = Date.now()
+
+  const ensure = (key: string, info: MessageInfo): MessageEntry => {
+    let entry = map.get(key)
+    if (!entry) {
+      entry = { info, parts: [] }
+      map.set(key, entry)
+      order.push(key)
+    }
+    return entry
+  }
+
+  for (const raw of parts) {
+    const part = asRecord(raw)
+    const kind = str(part.kind)
+    const partId = typeof part.part_id === 'number' ? part.part_id : undefined
+    if (typeof partId !== 'number') continue
+    const partIdStr = String(partId)
+    const role = str(part.role) || 'assistant'
+    const content = isRecord(part.content) ? part.content : {}
+    const createdMs = typeof part.created_at_ms === 'number' ? part.created_at_ms : now
+    const runIdRaw = typeof part.run_id === 'number' ? part.run_id : undefined
+
+    if (kind === 'run') {
+      const created = typeof part.created_at_ms === 'number' ? part.created_at_ms : now
+      const finished = typeof part.finished_at_ms === 'number' ? part.finished_at_ms : undefined
+      const info: MessageInfo = {
+        id: partIdStr,
+        sessionID: sessionId,
+        role,
+        runId: partId,
+        time: { created, ...(typeof finished === 'number' ? { completed: finished } : {}) },
+      }
+      // Run marker metadata can carry provider/model identity.
+      const providerID = str(content.provider_id)
+      const modelID = str(content.model_id)
+      const turnId = str(content.turn_id)
+      if (providerID) info.providerID = providerID
+      if (modelID) info.modelID = modelID
+      if (turnId) info.turnId = turnId
+      ensure(partIdStr, info)
+      continue
+    }
+
+    // Content part: attach to its run message (or an orphan message).
+    const key = runIdRaw != null ? String(runIdRaw) : partIdStr
+    let entry = map.get(key)
+    if (!entry) {
+      const info: MessageInfo = {
+        id: key,
+        sessionID: sessionId,
+        role,
+        runId: runIdRaw,
+        time: { created: createdMs },
+      }
+      entry = ensure(key, info)
+    }
+    if (!entry.parts) entry.parts = []
+    const normalized = normalizeAgenaPart(partIdStr, sessionId, key, raw as JsonValue)
+    if (normalized) entry.parts.push(normalized)
+  }
+
+  for (const key of order) {
+    const entry = map.get(key)
+    if (entry && entry.parts) {
+      entry.parts.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    }
+    if (entry) list.push(entry)
+  }
+  return list
+}
+
+// --- part normalization ----------------------------------------------------
+
+function asObject(value: JsonValue): JsonObject {
+  return isRecord(value) ? value : {}
+}
+
+function stringField(value: JsonValue, keys: string[]): string {
+  const rec = asObject(value)
+  for (const key of keys) {
+    const v = rec[key]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  return ''
+}
+
+function arrayStringField(value: JsonValue, key: string): string {
+  const rec = asObject(value)
+  const raw = rec[key]
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((v): v is string => typeof v === 'string')
+      .join('\n')
+      .trim()
+  }
+  return ''
+}
+
+/**
+ * Map an agena part (PartResource / SessionTranscriptPart) into the frontend
+ * MessagePart shape consumed by ToolInvocation.vue / ReasoningInvocation.vue /
+ * MessageItem.vue. Content is parsed defensively per part kind:
+ *
+ *   run           → message marker (handled by entriesFromParts)
+ *   text          → type 'text', text = content.text
+ *   think         → type 'reasoning', text = summary[] + raw[]
+ *   tool_call     → type 'tool', tool = content.name, state {status, input, output, error, metadata}
+ *   tool_result   → type 'text' (synthetic) with content.output
+ *   file_ref      → type 'file', url/filename/mime from content
+ *   paste_ref     → type 'text', text
+ *   skill_ref     → type 'tool' (tool='skill')
+ *   notice/hook   → type 'tool' (tool=hook/kind, output=summary)
+ *   compaction    → type 'compaction', text = summary
+ *   system_notification → type 'tool' (tool=operation_kind, output=summary)
+ *   unknown       → type 'text' with JSON fallback
+ */
+export function normalizeAgenaPart(
+  partIdStr: string,
+  sessionId: string,
+  messageId: string,
+  raw: JsonValue,
+): MessagePart | null {
+  const part = asRecord(raw)
+  const kind = str(part.kind)
+  const state = str(part.state) || 'completed'
+  const content = part.content
+  const createdMs = typeof part.created_at_ms === 'number' ? part.created_at_ms : Date.now()
+  const startedMs = typeof part.started_at_ms === 'number' ? part.started_at_ms : createdMs
+  const finishedMs = typeof part.finished_at_ms === 'number' ? part.finished_at_ms : undefined
+
+  const base: MessagePart = {
+    id: partIdStr,
+    sessionID: sessionId,
+    messageID: messageId,
+    type: 'text',
+    partState: state,
+    time: {
+      start: startedMs,
+      ...(typeof finishedMs === 'number' ? { end: finishedMs } : {}),
+    },
+  }
+
+  const toStatus = (s: string): 'pending' | 'running' | 'completed' | 'error' => {
+    if (s === 'pending') return 'pending'
+    if (s === 'in_progress') return 'running'
+    if (s === 'completed') return 'completed'
+    return 'error'
+  }
+
+  switch (kind) {
+    case 'text': {
+      const text = stringField(content, ['text'])
+      if (!text) return null
+      return { ...base, type: 'text', text }
+    }
+    case 'think': {
+      const summary = arrayStringField(content, 'summary')
+      const rawContent = arrayStringField(content, 'raw')
+      const text = summary || rawContent
+      if (!text) return null
+      return { ...base, type: 'reasoning', text }
+    }
+    case 'tool_call': {
+      const toolName = stringField(content, ['name', 'tool']) || 'unknown'
+      const input = asObject(content.input)
+      const output =
+        stringField(content, ['output']) ||
+        stringField(asObject(content.result), ['output', 'text']) ||
+        stringField(part.provider_state as JsonValue, ['output'])
+      const error =
+        stringField(content, ['error']) || stringField(asObject(content.result), ['error', 'message']) || ''
+      const metaCandidate = asObject(content.metadata)
+      const toolState = {
+        status: toStatus(state),
+        input,
+        ...(output ? { output } : {}),
+        ...(error ? { error } : {}),
+        ...(Object.keys(metaCandidate).length ? { metadata: metaCandidate } : {}),
+      }
+      return {
+        ...base,
+        type: 'tool',
+        tool: toolName,
+        state: toolState,
+        ...(Object.keys(metaCandidate).length ? { metadata: metaCandidate } : {}),
+      }
+    }
+    case 'tool_result': {
+      const text = stringField(content, ['output', 'text'])
+      if (!text) return null
+      return { ...base, type: 'text', text, synthetic: true }
+    }
+    case 'file_ref': {
+      const name = stringField(content, ['name'])
+      return {
+        ...base,
+        type: 'file',
+        ...(name ? { filename: name } : {}),
+        ...(stringField(content, ['path']) ? { url: stringField(content, ['path']) } : {}),
+        ...(stringField(content, ['mime']) ? { mime: stringField(content, ['mime']) } : {}),
+      }
+    }
+    case 'paste_ref': {
+      const text = stringField(content, ['text'])
+      if (!text) return null
+      return { ...base, type: 'text', text, synthetic: true }
+    }
+    case 'skill_ref': {
+      const name = stringField(content, ['skill', 'name']) || 'skill'
+      const description = stringField(content, ['description'])
+      return {
+        ...base,
+        type: 'tool',
+        tool: 'skill',
+        state: {
+          status: 'completed',
+          input: { name },
+          ...(description ? { output: description } : {}),
+        },
+      }
+    }
+    case 'notice':
+    case 'hook': {
+      const hook = stringField(content, ['hook', 'kind']) || kind
+      const summary = stringField(content, ['summary', 'detail', 'message'])
+      return {
+        ...base,
+        type: 'tool',
+        tool: hook,
+        state: {
+          status: toStatus(state),
+          input: {},
+          ...(summary ? { output: summary } : {}),
+        },
+      }
+    }
+    case 'compaction': {
+      const summary = stringField(content, ['summary', 'detail'])
+      return { ...base, type: 'compaction', ...(summary ? { text: summary } : {}) }
+    }
+    case 'system_notification': {
+      const opKind = stringField(content, ['operation_kind']) || 'background'
+      const summary = stringField(content, ['summary', 'body', 'detail'])
+      return {
+        ...base,
+        type: 'tool',
+        tool: opKind,
+        state: { status: toStatus(state), input: {}, ...(summary ? { output: summary } : {}) },
+      }
+    }
+    default: {
+      // Unknown kinds: keep as text so nothing disappears from the transcript.
+      try {
+        const text = JSON.stringify(content)
+        if (!text || text === '{}') return null
+        return { ...base, type: 'text', text, synthetic: true }
+      } catch {
+        return null
+      }
+    }
+  }
+}
+
+// --- sessions --------------------------------------------------------------
+
+/** GET /api/v1/sessions — flat recent list. */
+export async function listSessions(opts?: {
+  limit?: number
+  cursor?: string
+  search?: string
+  signal?: AbortSignal
+}): Promise<SessionListResponse> {
   const params: string[] = []
-  if (typeof opts?.offset === 'number' && Number.isFinite(opts.offset)) {
-    params.push(`offset=${encodeURIComponent(String(Math.max(0, Math.floor(opts.offset))))}`)
-  }
-  if (typeof opts?.limit === 'number' && Number.isFinite(opts.limit)) {
-    params.push(`limit=${encodeURIComponent(String(Math.max(0, Math.floor(opts.limit))))}`)
-  }
-  if (opts?.roots) {
-    params.push('roots=true')
-  }
-  if (opts?.includeChildren) {
-    params.push('includeChildren=true')
-  }
-  if (opts?.scope) {
-    params.push(`scope=${encodeURIComponent(opts.scope)}`)
-  }
+  const limit = typeof opts?.limit === 'number' && Number.isFinite(opts.limit) ? Math.floor(opts.limit) : 30
+  params.push(`limit=${encodeURIComponent(String(Math.max(1, Math.min(1000, limit))))}`)
+  const cursor = typeof opts?.cursor === 'string' ? opts.cursor.trim() : ''
+  if (cursor) params.push(`cursor=${encodeURIComponent(cursor)}`)
   const search = typeof opts?.search === 'string' ? opts.search.trim() : ''
-  if (search) {
-    params.push(`search=${encodeURIComponent(search)}`)
-  }
-  const focusId = typeof opts?.focusSessionId === 'string' ? opts.focusSessionId.trim() : ''
-  if (focusId) {
-    params.push(`focusSessionId=${encodeURIComponent(focusId)}`)
-  }
-  const ids = Array.isArray(opts?.ids) ? opts?.ids : []
-  const filteredIds = ids.map((id) => (typeof id === 'string' ? id.trim() : '')).filter((id) => id.length > 0)
-  if (filteredIds.length) {
-    params.push(`ids=${encodeURIComponent(filteredIds.join(','))}`)
-  }
-  const includeTotal = opts?.includeTotal !== false
-  if (includeTotal) {
-    params.push('includeTotal=true')
-  }
-  const sep = q && params.length ? '&' : '?'
-  const suffix = params.length ? `${sep}${params.join('&')}` : ''
-  const payload = await apiJson<JsonValue>(
-    `/api/session${q}${suffix}`,
-    opts?.signal ? { signal: opts.signal } : undefined,
-  )
-  if (Array.isArray(payload)) {
-    return { sessions: payload.filter((entry): entry is Session => isRecord(entry)) }
-  }
+  if (search) params.push(`search=${encodeURIComponent(search)}`)
+  const suffix = params.length ? `?${params.join('&')}` : ''
+
+  const payload = await apiJson<JsonValue>(`/api/v1/sessions${suffix}`, opts?.signal ? { signal: opts.signal } : undefined)
   const body = asRecord(payload)
-  const rawSessions = body.sessions
-  const sessions = Array.isArray(rawSessions) ? rawSessions.filter((entry): entry is Session => isRecord(entry)) : []
-  const total = typeof body.total === 'number' && Number.isFinite(body.total) ? Number(body.total) : undefined
+  const rawItems = body.items
+  const items = Array.isArray(rawItems) ? rawItems : []
+  const sessions = items
+    .map((s) => toSession(s))
+    .filter((s): s is Session => Boolean(s))
+  const page = asRecord(body.page)
+  const nextCursor = typeof page.next_cursor === 'string' ? (page.next_cursor as string) : null
   return {
     sessions,
-    total,
-    offset: typeof body.offset === 'number' ? body.offset : undefined,
-    limit: typeof body.limit === 'number' ? body.limit : undefined,
-    hasMore: typeof body.hasMore === 'boolean' ? body.hasMore : undefined,
-    nextOffset: typeof body.nextOffset === 'number' ? body.nextOffset : undefined,
-    focusRootId: typeof body.focusRootId === 'string' ? body.focusRootId : undefined,
-    focusRootIndex: typeof body.focusRootIndex === 'number' ? body.focusRootIndex : undefined,
-    consistency: parseSessionPayloadConsistency(body.consistency),
+    total: typeof body.total === 'number' ? Number(body.total) : undefined,
+    hasMore: page.has_more === true,
+    nextCursor,
   }
 }
 
-export async function listSessionStatus(
-  directory?: string | null,
-  opts?: { sessionId?: string; local?: boolean; preferLocal?: boolean },
-): Promise<JsonObject> {
-  const q = directoryQuery(directory)
-  const params: string[] = []
-  const sid = typeof opts?.sessionId === 'string' ? opts.sessionId.trim() : ''
-  if (sid) params.push(`sessionId=${encodeURIComponent(sid)}`)
-  if (opts?.local === true || opts?.preferLocal === true) {
-    params.push('local=true')
+/** POST /api/v1/sessions — create a session in the server workspace. */
+export async function createSession(workspaceId?: number): Promise<Session> {
+  const payload: JsonValue = {}
+  if (typeof workspaceId === 'number' && Number.isFinite(workspaceId)) {
+    ;(payload as JsonObject).workspace_id = workspaceId
   }
-  const sep = q && params.length ? '&' : '?'
-  const suffix = params.length ? `${sep}${params.join('&')}` : ''
-  return await apiJson<JsonObject>(`/api/session/status${q}${suffix}`)
-}
-
-const locateSessionInFlight = new Map<string, Promise<JsonValue>>()
-
-export async function locateSession(sessionId: string): Promise<JsonValue> {
-  const sid = String(sessionId || '').trim()
-  const key = sid || String(sessionId || '')
-  const existing = locateSessionInFlight.get(key)
-  if (existing) return await existing
-
-  const task = apiJson<JsonValue>(`/api/opencode-studio/session-locate?sessionId=${encodeURIComponent(sid)}`).finally(
-    () => {
-      locateSessionInFlight.delete(key)
-    },
-  )
-  locateSessionInFlight.set(key, task)
-  return await task
-}
-
-export async function createSession(directory?: string | null): Promise<Session> {
-  return await apiJson<Session>(`/api/session${directoryQuery(directory)}`, {
+  const created = await apiJson<JsonValue>('/api/v1/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify(payload),
   })
+  const session = toSession(created)
+  if (!session) throw new Error('Server did not return a session')
+  return session
 }
 
-export async function deleteSession(sessionId: string, directory?: string | null): Promise<void> {
-  await apiJson(`/api/session/${encodeURIComponent(sessionId)}${directoryQuery(directory)}`, { method: 'DELETE' })
+/** DELETE /api/v1/sessions/{id} */
+export async function deleteSession(sessionId: string): Promise<void> {
+  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 }
 
-export async function patchSessionTitle(sessionId: string, title: string, directory?: string | null): Promise<Session> {
-  return await apiJson<Session>(`/api/session/${encodeURIComponent(sessionId)}${directoryQuery(directory)}`, {
-    method: 'PATCH',
+/** PUT /api/v1/sessions/{id} — rename. */
+export async function patchSessionTitle(sessionId: string, title: string): Promise<Session> {
+  const updated = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ title }),
   })
+  const session = toSession(updated)
+  if (!session) throw new Error('Server did not return a session')
+  return session
 }
 
-export async function shareSession(sessionId: string, directory?: string | null): Promise<Session> {
-  return await apiJson<Session>(`/api/session/${encodeURIComponent(sessionId)}/share${directoryQuery(directory)}`, {
-    method: 'POST',
-  })
+/** GET /api/v1/sessions/{id}/state — execution + parts + pending interactions. */
+export async function getSessionExecution(sessionId: string): Promise<AgenaExecutionState> {
+  return await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/state`)
 }
 
-export async function unshareSession(sessionId: string, directory?: string | null): Promise<Session> {
-  return await apiJson<Session>(`/api/session/${encodeURIComponent(sessionId)}/share${directoryQuery(directory)}`, {
-    method: 'DELETE',
-  })
+/** GET /api/v1/sessions/{id}/parts — ordered part snapshot (reconnect catch-up). */
+export async function getSessionParts(sessionId: string, limit?: number): Promise<AgenaSessionParts> {
+  const params = typeof limit === 'number' && Number.isFinite(limit) ? `?limit=${Math.floor(limit)}` : ''
+  return await apiJson<AgenaSessionParts>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/parts${params}`)
 }
 
-export async function summarizeSession(
-  sessionId: string,
-  providerID: string,
-  modelID: string,
-  directory?: string | null,
-): Promise<void> {
-  await apiJson(`/api/session/${encodeURIComponent(sessionId)}/summarize${directoryQuery(directory)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ providerID, modelID, auto: false }),
-  })
+/**
+ * Load a session's transcript as MessageEntry[].
+ * Uses GET /parts (ordered snapshot) with a hard `limit` for the visible window.
+ */
+export async function listMessages(sessionId: string, limit: number): Promise<MessageListResponse> {
+  const sid = String(sessionId || '').trim()
+  if (!sid) return { entries: [], hasMore: false }
+  const parts = await getSessionParts(sid, Math.max(20, Math.min(1000, Math.floor(limit || 200))))
+  return { entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[]), hasMore: false }
 }
 
-export async function abortSession(sessionId: string, directory?: string | null): Promise<void> {
-  await apiJson(`/api/session/${encodeURIComponent(sessionId)}/abort${directoryQuery(directory)}`, { method: 'POST' })
+export type SendMessagePayload = {
+  document: JsonValue[]
+  options?: JsonValue
 }
 
-export type SendMessageResponse = {
-  queued?: boolean
-}
-
+/** POST /api/v1/sessions/{id}/messages — submit a composer document + run options. */
 export async function sendMessage(
   sessionId: string,
-  payload: JsonValue,
-  directory?: string | null,
+  payload: SendMessagePayload,
 ): Promise<SendMessageResponse> {
-  const resp = await apiJson<JsonValue>(
-    `/api/session/${encodeURIComponent(sessionId)}/message${directoryQuery(directory)}`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    },
-  )
+  const resp = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
   const body = asRecord(resp)
-  return {
-    queued: typeof body.queued === 'boolean' ? body.queued : undefined,
-  }
+  return { queued: body.queued === true }
 }
 
-export async function listMessages(
-  sessionId: string,
-  limit: number,
-  directory?: string | null,
-  offset?: number,
-): Promise<MessageListResponse> {
-  const q = directoryQuery(directory)
-  const sep = q ? '&' : '?'
-  const params: string[] = []
-  params.push(`limit=${encodeURIComponent(String(limit))}`)
-  params.push('includeTotal=true')
-  if (typeof offset === 'number' && Number.isFinite(offset)) {
-    params.push(`offset=${encodeURIComponent(String(Math.max(0, Math.floor(offset))))}`)
-  }
-  const payload = await apiJson<JsonValue>(
-    `/api/session/${encodeURIComponent(sessionId)}/message${q}${sep}${params.join('&')}`,
-  )
-  if (Array.isArray(payload)) {
-    return {
-      entries: payload.filter((entry): entry is MessageEntry => isRecord(entry)),
-    }
-  }
-
-  const body = asRecord(payload)
-  const rawEntries = body.entries
-  const entries = Array.isArray(rawEntries) ? rawEntries.filter((entry): entry is MessageEntry => isRecord(entry)) : []
-  return {
-    entries,
-    total: toNonNegativeInt(body.total),
-    offset: toNonNegativeInt(body.offset),
-    limit: toNonNegativeInt(body.limit),
-    hasMore: typeof body.hasMore === 'boolean' ? body.hasMore : undefined,
-    nextOffset: toNonNegativeInt(body.nextOffset),
-    consistency: parseSessionPayloadConsistency(body.consistency),
-  }
-}
-
-export async function getMessagePartDetail(
-  sessionId: string,
-  messageId: string,
-  partId: string,
-  directory?: string | null,
-): Promise<JsonValue> {
-  const sid = (sessionId || '').trim()
-  const mid = (messageId || '').trim()
-  const pid = (partId || '').trim()
-  if (!sid || !mid || !pid) throw new Error('sessionId, messageId, and partId are required')
-  return await apiJson<JsonValue>(
-    `/api/session/${encodeURIComponent(sid)}/message/${encodeURIComponent(mid)}/part/${encodeURIComponent(pid)}${directoryQuery(directory)}`,
-  )
-}
-
-export async function replyPermission(
-  requestId: string,
-  reply: 'once' | 'always' | 'reject',
-  directory?: string | null,
-  message?: string,
-): Promise<boolean> {
-  const body: { reply: 'once' | 'always' | 'reject'; message?: string } = { reply }
-  if (typeof message === 'string' && message.trim()) body.message = message.trim()
-
-  return await apiJson<boolean>(`/api/permission/${encodeURIComponent(requestId)}/reply${directoryQuery(directory)}`, {
+/** POST /api/v1/sessions/{id}/continue — resume a paused/interrupted run. */
+export async function continueSession(sessionId: string, options?: JsonValue): Promise<void> {
+  const body: JsonValue = options && Object.keys(asRecord(options)).length ? { options } : {}
+  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/continue`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
 }
 
-export async function listPermissions(directory?: string | null, opts?: AttentionListOptions): Promise<JsonObject[]> {
-  const q = directoryQuery(directory)
-  const params: string[] = []
-  const sid = typeof opts?.sessionId === 'string' ? opts.sessionId.trim() : ''
-  if (sid) params.push(`sessionId=${encodeURIComponent(sid)}`)
-  if (typeof opts?.offset === 'number' && Number.isFinite(opts.offset)) {
-    params.push(`offset=${encodeURIComponent(String(Math.max(0, Math.floor(opts.offset))))}`)
-  }
-  if (typeof opts?.limit === 'number' && Number.isFinite(opts.limit)) {
-    params.push(`limit=${encodeURIComponent(String(Math.max(0, Math.floor(opts.limit))))}`)
-  }
-  const sep = q && params.length ? '&' : '?'
-  const suffix = params.length ? `${sep}${params.join('&')}` : ''
-  const list = await apiJson<JsonValue>(`/api/permission${q}${suffix}`)
-  return Array.isArray(list) ? list.filter((entry): entry is JsonObject => isRecord(entry)) : []
+/** POST /api/v1/sessions/{id}/compact — context compaction. */
+export async function compactSession(sessionId: string, options?: JsonValue): Promise<void> {
+  const body: JsonValue = options && Object.keys(asRecord(options)).length ? { options } : {}
+  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/compact`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
 }
 
-export async function listQuestions(directory?: string | null, opts?: AttentionListOptions): Promise<JsonObject[]> {
-  const q = directoryQuery(directory)
-  const params: string[] = []
-  const sid = typeof opts?.sessionId === 'string' ? opts.sessionId.trim() : ''
-  if (sid) params.push(`sessionId=${encodeURIComponent(sid)}`)
-  if (typeof opts?.offset === 'number' && Number.isFinite(opts.offset)) {
-    params.push(`offset=${encodeURIComponent(String(Math.max(0, Math.floor(opts.offset))))}`)
-  }
-  if (typeof opts?.limit === 'number' && Number.isFinite(opts.limit)) {
-    params.push(`limit=${encodeURIComponent(String(Math.max(0, Math.floor(opts.limit))))}`)
-  }
-  const sep = q && params.length ? '&' : '?'
-  const suffix = params.length ? `${sep}${params.join('&')}` : ''
-  const list = await apiJson<JsonValue>(`/api/question${q}${suffix}`)
-  return Array.isArray(list) ? list.filter((entry): entry is JsonObject => isRecord(entry)) : []
+/** POST /api/v1/sessions/{id}/cancel — abort an active execution. */
+export async function cancelSession(sessionId: string, executionId: string): Promise<void> {
+  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/cancel`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ execution_id: executionId }),
+  })
 }
 
-export async function replyQuestion(
+/** POST /api/v1/sessions/{id}/rewind — rewind to an earlier turn. */
+export async function rewindSession(sessionId: string, turnId: string): Promise<void> {
+  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/rewind`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ turn_id: turnId }),
+  })
+}
+
+/** POST /api/v1/sessions/{id}/fork — clone history into a child session. */
+export async function forkSession(sessionId: string, opts?: { at_message_id?: number; title?: string }): Promise<Session> {
+  const body: JsonValue = {}
+  if (typeof opts?.at_message_id === 'number' && Number.isFinite(opts.at_message_id)) {
+    ;(body as JsonObject).at_message_id = opts.at_message_id
+  }
+  const title = typeof opts?.title === 'string' ? opts.title.trim() : ''
+  if (title) (body as JsonObject).title = title
+  const created = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const session = toSession(created)
+  if (!session) throw new Error('Server did not return a forked session')
+  return session
+}
+
+// --- interactive replies ---------------------------------------------------
+
+/** POST /api/v1/sessions/{id}/permission-replies */
+export async function replyPermission(
+  sessionId: string,
   requestId: string,
-  answers: string[][],
-  directory?: string | null,
+  reply: 'once' | 'always' | 'reject',
+  message?: string,
 ): Promise<boolean> {
-  return await apiJson<boolean>(`/api/question/${encodeURIComponent(requestId)}/reply${directoryQuery(directory)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ answers }),
-  })
-}
-
-export async function rejectQuestion(requestId: string, directory?: string | null): Promise<boolean> {
-  return await apiJson<boolean>(`/api/question/${encodeURIComponent(requestId)}/reject${directoryQuery(directory)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-  })
-}
-
-export async function revertSession(
-  sessionId: string,
-  messageID: string,
-  directory?: string | null,
-): Promise<JsonValue> {
-  return await apiJson<JsonValue>(`/api/session/${encodeURIComponent(sessionId)}/revert${directoryQuery(directory)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ messageID }),
-  })
-}
-
-export async function unrevertSession(sessionId: string, directory?: string | null): Promise<JsonValue> {
-  return await apiJson<JsonValue>(
-    `/api/session/${encodeURIComponent(sessionId)}/unrevert${directoryQuery(directory)}`,
-    {
-      method: 'POST',
-    },
-  )
-}
-
-export async function getSessionDiff(
-  sessionId: string,
-  directory?: string | null,
-  opts?: { messageID?: string; offset?: number; limit?: number },
-): Promise<SessionDiffPageResponse> {
-  const sid = String(sessionId || '').trim()
-  if (!sid) {
-    return {
-      items: [],
-      offset: 0,
-      limit: Math.max(1, Math.floor(opts?.limit || 100)),
-      hasMore: false,
-    }
+  const kind = reply === 'once' ? 'allow_once' : reply === 'always' ? 'allow_always' : 'deny_once'
+  const replyBody: JsonValue = { request_id: requestId, kind }
+  if (typeof message === 'string' && message.trim()) {
+    ;(replyBody as JsonObject).reason = message.trim()
   }
-
-  const q = directoryQuery(directory)
-  const params: string[] = []
-  const messageID = typeof opts?.messageID === 'string' ? opts.messageID.trim() : ''
-  const offset =
-    typeof opts?.offset === 'number' && Number.isFinite(opts.offset) ? Math.max(0, Math.floor(opts.offset)) : 0
-  const limit =
-    typeof opts?.limit === 'number' && Number.isFinite(opts.limit) ? Math.max(1, Math.floor(opts.limit)) : 100
-  if (offset > 0) params.push(`offset=${encodeURIComponent(String(offset))}`)
-  if (limit > 0) params.push(`limit=${encodeURIComponent(String(limit))}`)
-  if (messageID) params.push(`messageID=${encodeURIComponent(messageID)}`)
-  const sep = q && params.length ? '&' : '?'
-  const suffix = params.length ? `${sep}${params.join('&')}` : ''
-  const payload = await apiJson<JsonValue>(`/api/session/${encodeURIComponent(sid)}/diff${q}${suffix}`)
-  return normalizeSessionDiffPagePayload(payload, {
-    fallbackOffset: offset,
-    fallbackLimit: limit,
+  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/permission-replies`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reply: replyBody }),
   })
+  return true
 }
+
+/** POST /api/v1/sessions/{id}/user-input-replies */
+export async function replyQuestion(
+  sessionId: string,
+  requestId: string,
+  answers: Record<string, string[]>,
+): Promise<boolean> {
+  const replyBody: JsonValue = { request_id: requestId, kind: 'submit', answers }
+  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/user-input-replies`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reply: replyBody }),
+  })
+  return true
+}
+
+/** POST /api/v1/sessions/{id}/user-input-replies — cancel a question. */
+export async function rejectQuestion(sessionId: string, requestId: string): Promise<boolean> {
+  const replyBody: JsonValue = { request_id: requestId, kind: 'cancel' }
+  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/user-input-replies`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reply: replyBody }),
+  })
+  return true
+}
+
+/** POST /api/v1/interactive/{request_id}/present — ack that a prompt was shown. */
+export async function presentInteractiveRequest(requestId: string): Promise<void> {
+  try {
+    await apiJson(`/api/v1/interactive/${encodeURIComponent(requestId)}/present`, { method: 'POST' })
+  } catch {
+    // Best-effort; presentation ack is advisory.
+  }
+}
+
+// --- session execution status ----------------------------------------------
+
+/** Best-effort execution status derived from GET /state. */
+export async function getSessionExecutionStatus(sessionId: string): Promise<SessionExecutionStatus | null> {
+  const sid = String(sessionId || '').trim()
+  if (!sid) return null
+  try {
+    const state = await getSessionExecution(sid)
+    const workflow = String(state.workflow_state || '')
+    const s = String(state.session?.state || 'ready')
+    const active = state.active_execution ?? null
+    return {
+      state: s,
+      workflow_state: workflow,
+      active_execution: active,
+      pending_interactive_requests: Array.isArray(state.pending_interactive_requests)
+        ? state.pending_interactive_requests
+        : [],
+      running: s === 'running' || s === 'creating' || (active != null && typeof active.execution_id === 'string'),
+    }
+  } catch {
+    return null
+  }
+}
+
+// Re-export normalization helpers for other modules.
+export { entriesFromParts }
+
+// Shared normalizeSessionDiffPayload / SessionFileDiff types were removed:
+// agena has no per-session diff endpoint. (See MISSING endpoints in report.)

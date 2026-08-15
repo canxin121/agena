@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 
 import { apiJson } from '../lib/api'
 
@@ -16,24 +16,12 @@ function timeoutSignal(ms: number): AbortSignal | undefined {
   return undefined
 }
 
-export type OpenCodeErrorInfo = {
-  code: string
-  summary: string
-  detail?: string | null
-  hint?: string | null
-  stderrExcerpt?: string | null
-  exitCode?: number | null
-  signal?: number | null
-}
-
-type Health = {
+export type Health = {
   status: string
-  timestamp: string
-  openCodePort: number | null
-  openCodeRunning: boolean
-  isOpenCodeReady: boolean
-  lastOpenCodeError?: string | null
-  lastOpenCodeErrorInfo?: OpenCodeErrorInfo | null
+  generation?: number
+  loaded_at?: string
+  database_connected?: boolean
+  center?: { id?: string; pid?: number; started_at?: string; protocol_version?: number }
 }
 
 export const useHealthStore = defineStore('health', () => {
@@ -41,13 +29,14 @@ export const useHealthStore = defineStore('health', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  const openCodeConnected = computed(() => Boolean(data.value?.openCodeRunning))
+  const serverConnected = () => Boolean(data.value)
 
   async function refresh() {
     loading.value = true
     error.value = null
     try {
-      data.value = await apiJson<Health>('/health', { signal: timeoutSignal(HEALTH_REQUEST_TIMEOUT_MS) })
+      // GET /api/v1/health is public even when UI auth is enabled.
+      data.value = await apiJson<Health>('/api/v1/health', { signal: timeoutSignal(HEALTH_REQUEST_TIMEOUT_MS) })
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
       data.value = null
@@ -56,5 +45,5 @@ export const useHealthStore = defineStore('health', () => {
     }
   }
 
-  return { data, loading, error, openCodeConnected, refresh }
+  return { data, loading, error, serverConnected, refresh }
 })

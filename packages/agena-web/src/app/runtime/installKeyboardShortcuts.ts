@@ -1,12 +1,10 @@
 import { router } from '@/router'
 import { useChatStore } from '@/stores/chat'
-import { useDirectorySessionStore } from '@/stores/directorySessionStore'
 import { useSessionActivityStore } from '@/stores/sessionActivity'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastsStore } from '@/stores/toasts'
 import { useUiStore } from '@/stores/ui'
 import { patchSessionIdInQuery } from '@/app/navigation/sessionQuery'
-import { isEmbeddedWorkspacePaneContext, withEmbeddedWorkspaceScopeQuery } from '@/app/windowScope'
 import { i18n } from '@/i18n'
 
 type ModifierLabel = 'cmd' | 'ctrl'
@@ -30,7 +28,6 @@ function keyLower(e: KeyboardEvent): string {
 export function installKeyboardShortcuts(): () => void {
   const ui = useUiStore()
   const chat = useChatStore()
-  const directorySessions = useDirectorySessionStore()
   const settings = useSettingsStore()
   const activity = useSessionActivityStore()
   const toasts = useToastsStore()
@@ -59,11 +56,6 @@ export function installKeyboardShortcuts(): () => void {
     const sid = chat.selectedSessionId
     if (!sid) return false
 
-    // Align keyboard abort gate with sidebar/runtime authority.
-    if (directorySessions.isSessionRuntimeActive(sid, { includeCooldown: false })) {
-      return true
-    }
-
     const st = (chat as ChatStatusSource).selectedSessionStatus?.status ?? null
     const statusType = typeof st?.type === 'string' ? st.type : ''
     if (statusType === 'busy' || statusType === 'retry') return true
@@ -88,7 +80,7 @@ export function installKeyboardShortcuts(): () => void {
       if (isOnSettingsPage()) {
         void router.push('/chat')
       } else {
-        void router.push('/settings/opencode/general')
+        void router.push('/settings')
       }
       return
     }
@@ -118,18 +110,8 @@ export function installKeyboardShortcuts(): () => void {
 
         if (sid) {
           const currentQuery = router.currentRoute.value.query || {}
-          const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(currentQuery)
           const nextQuery = patchSessionIdInQuery(currentQuery, sid)
-          ui.createWorkspaceWindow('chat', {
-            activate: true,
-            query: nextQuery,
-            title: String(i18n.global.t('nav.chat')),
-          })
-          if (isEmbeddedWorkspacePane) {
-            await router.push({ path: '/chat', query: withEmbeddedWorkspaceScopeQuery(nextQuery, currentQuery) })
-          } else {
-            await router.push('/chat')
-          }
+          await router.push({ path: '/chat', query: nextQuery })
         } else {
           await router.push('/chat')
         }

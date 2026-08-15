@@ -1,61 +1,17 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 
-import { ApiError, apiJson } from '../lib/api'
-import { useDirectoryStore } from './directory'
 import { postAppBroadcast } from '@/lib/appBroadcast'
-import { fsPathEquals, trimTrailingFsSlashes } from '@/lib/path'
+import { getLocalJson, setLocalJson } from '@/lib/persist'
 
-export type Project = {
-  id: string
-  path: string
-  label?: string
-  addedAt?: number
-  lastOpenedAt?: number
-  worktreeDefaults?: {
-    branchPrefix?: string
-    baseBranch?: string
-  }
-}
-
+/**
+ * Client-side UI preferences. Agena's server-side configuration (providers,
+ * permissions, model catalog, …) is managed through the settings page panels
+ * that talk to /api/v1/* directly; appearance + chat-activity UX preferences
+ * are per-browser and persist in localStorage.
+ */
 export type Settings = {
-  projects: Project[]
-  // API compatibility alias; projects remains the persisted schema key.
-  directories?: Project[]
-  approvedDirectories?: string[]
-  pinnedDirectories?: string[]
-  securityScopedBookmarks?: string[]
-  showReasoningTraces?: boolean
-  showTextJustificationActivity?: boolean
-  showChatTimestamps?: boolean
-  chatActivitySummaryFilters?: string[]
-  chatToolActivitySummaryFilters?: string[]
-
-  // Backward compatibility aliases.
-  chatActivityFilters?: string[]
-  chatActivityToolFilters?: string[]
-  chatActivityDefaultExpanded?: string[]
-  chatActivityDefaultExpandedToolFilters?: string[]
-
-  // Chat activity UX (local UI preferences)
-  chatActivityAutoCollapseOnIdle?: boolean
-  diffLayoutPreference?: 'dynamic' | 'inline' | 'side-by-side'
-  diffViewMode?: 'single' | 'stacked'
-
-  // Files
-  directoryShowHidden?: boolean
-  filesViewShowGitignored?: boolean
-
-  githubClientId?: string
-  githubScopes?: string
-
-  // UI / appearance
-  updateAutoCheckEnabled?: boolean
-  updateAutoPromptEnabled?: boolean
-  updateAutoServiceInstallEnabled?: boolean
-  updateAutoInstallerInstallEnabled?: boolean
-  updateIgnoredReleaseTag?: string | null
-  updateReminderSnoozeUntil?: number
+  // Appearance
   useSystemTheme?: boolean
   themeVariant?: 'light' | 'dark'
   themeId?: string
@@ -76,62 +32,43 @@ export type Settings = {
     micro?: string
   }
 
-  // Retention
-  autoDeleteEnabled?: boolean
-  autoDeleteAfterDays?: number
+  // Chat message UX
+  showChatTimestamps?: boolean
+  showReasoningTraces?: boolean
+  showTextJustificationActivity?: boolean
+  chatActivityAutoCollapseOnIdle?: boolean
+  chatActivitySummaryFilters?: string[]
+  chatToolActivitySummaryFilters?: string[]
+  chatActivityDefaultExpanded?: string[]
+  chatActivityDefaultExpandedToolFilters?: string[]
+  diffLayoutPreference?: 'dynamic' | 'inline' | 'side-by-side'
+  diffViewMode?: 'single' | 'stacked'
+}
 
-  // Performance
-  memoryLimitHistorical?: number
-  memoryLimitViewport?: number
-  memoryLimitActiveSession?: number
+const STORAGE_KEY = 'agena.settings.ui-prefs.v1'
 
-  // Worktrees
-  autoCreateWorktree?: boolean
-  queueModeEnabled?: boolean
-
-  // Git
-  defaultGitIdentityId?: string
-  gitmojiEnabled?: boolean
-  gitAutoFetchEnabled?: boolean
-  gitAutoFetchIntervalMinutes?: number
-  gitAutoSyncEnabled?: boolean
-  gitAutoSyncIntervalMinutes?: number
-  gitAllowForcePush?: boolean
-  gitAllowNoVerifyCommit?: boolean
-  gitEnforceBranchProtection?: boolean
-  gitStrictPatchValidation?: boolean
-  gitBranchProtection?: string[]
-  gitBranchProtectionPrompt?: 'alwaysCommit' | 'alwaysCommitToNewBranch' | 'alwaysPrompt'
-  gitPostCommitCommand?: 'none' | 'push' | 'sync'
-
-  // Skills
-  skillCatalogs?: Array<{ id: string; label: string; source: string; subpath?: string; gitIdentityId?: string }>
+function cloneRecord(raw: unknown): Settings | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  return { ...(raw as Record<string, unknown>) } as Settings
 }
 
 export const useSettingsStore = defineStore('settings', () => {
-  const directoryStore = useDirectoryStore()
   const data = ref<Settings | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  function projectForPath(path: string | null | undefined): Project | null {
-    const dir = trimTrailingFsSlashes(typeof path === 'string' ? path : '')
-    const s = data.value
-    if (!dir || !s || s.projects.length === 0) return null
-    return s.projects.find((p) => fsPathEquals(p.path, dir)) || null
+  function hydrate() {
+    const raw = getLocalJson<unknown>(STORAGE_KEY, null)
+    data.value = cloneRecord(raw)
   }
-
-  const activeProject = computed(() => projectForPath(directoryStore.currentDirectory))
 
   async function refresh() {
     loading.value = true
     error.value = null
     try {
-      data.value = await apiJson<Settings>('/api/config/settings')
-
-      // On first load, seed currentDirectory from persisted lastDirectory.
-      if (!directoryStore.currentDirectory) {
-        directoryStore.hydrateFromStorage()
+      hydrate()
+      if (!data.value) {
+        data.value = {}
       }
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
@@ -144,82 +81,28 @@ export const useSettingsStore = defineStore('settings', () => {
   async function save(partial: Partial<Settings>) {
     error.value = null
     try {
-      const updated = await apiJson<Settings>('/api/config/settings', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(partial),
-      })
-      data.value = updated
-      // Notify other tabs to refresh settings + derived UI (projects list, labels, etc.).
+      const next: Settings = {
+        ...(data.value || {}),
+        ...partial,
+      }
+      data.value = next
+      setLocalJson(STORAGE_KEY, next)
       postAppBroadcast('settings.updated', { updatedAt: Date.now() })
     } catch (err) {
-      if (err instanceof ApiError) {
-        error.value = err.message || err.bodyText || null
+      if (err instanceof Error) {
+        error.value = err.message
       } else {
-        error.value = err instanceof Error ? err.message : String(err)
+        error.value = String(err)
       }
     }
-  }
-
-  async function addProject(path: string) {
-    const trimmed = trimTrailingFsSlashes(path)
-    if (!trimmed) return
-    const s = data.value
-    const now = Date.now()
-    const projects = (s?.projects || []).slice()
-    const existing = projects.find((p) => fsPathEquals(p.path, trimmed))
-    if (existing) {
-      existing.lastOpenedAt = now
-      await save({ projects })
-      return
-    }
-    const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${now}-${Math.random()}`
-    projects.push({ id, path: trimmed, addedAt: now, lastOpenedAt: now })
-    await save({ projects })
-  }
-
-  async function removeProject(projectId: string) {
-    const id = (projectId || '').trim()
-    if (!id) return
-    const s = data.value
-    if (!s) return
-    const nextProjects = (s.projects || []).filter((p) => p.id !== id)
-    await save({ projects: nextProjects })
-  }
-
-  async function reorderProjects(fromIndex: number, toIndex: number) {
-    const s = data.value
-    if (!s) return
-    const projects = (s.projects || []).slice()
-    if (fromIndex < 0 || toIndex < 0 || fromIndex >= projects.length || toIndex >= projects.length) return
-    if (fromIndex === toIndex) return
-    const [moved] = projects.splice(fromIndex, 1)
-    if (!moved) return
-    projects.splice(toIndex, 0, moved)
-    await save({ projects })
-  }
-
-  async function renameProject(projectId: string, label: string) {
-    const s = data.value
-    if (!s) return
-    const id = (projectId || '').trim()
-    const trimmed = (label || '').trim()
-    if (!id) return
-    const next = (s.projects || []).map((p) => (p.id === id ? { ...p, label: trimmed } : p))
-    await save({ projects: next })
   }
 
   return {
     data,
     loading,
     error,
-    activeProject,
-    projectForPath,
+    hydrate,
     refresh,
-    addProject,
-    removeProject,
-    reorderProjects,
-    renameProject,
     save,
   }
 })

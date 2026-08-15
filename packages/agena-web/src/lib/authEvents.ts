@@ -1,6 +1,6 @@
 import { sessionStorageKeys } from './persistence/storageKeys'
 
-export const OC_AUTH_REQUIRED_EVENT = 'oc.auth-required'
+export const OC_AUTH_REQUIRED_EVENT = 'agena.auth-required'
 
 export const OC_AUTH_REQUIRED_STORAGE_KEY = sessionStorageKeys.auth.authRequired
 

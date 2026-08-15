@@ -1,66 +1,30 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch, type ComponentPublicInstance } from 'vue'
-import {
-  RiArrowDownSLine,
-  RiArrowRightSLine,
-  RiCheckLine,
-  RiCloseLine,
-  RiDeleteBinLine,
-  RiLoader4Line,
-  RiStarFill,
-  RiStarLine,
-} from '@remixicon/vue'
+import { RiCheckLine, RiCloseLine, RiLoader4Line, RiMessageLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
-import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
-import ListItemSelectionIndicator from '@/components/ui/ListItemSelectionIndicator.vue'
 import ListItemOverflowActionButton from '@/components/ui/ListItemOverflowActionButton.vue'
-import { directoryEntryLabel, formatTime, sessionLabel } from '@/features/sessions/model/labels'
-import type { DirectoryEntry } from '@/features/sessions/model/types'
-import type { SessionActionItem } from '@/layout/chatSidebar/useSessionActionMenu'
-import { writeWorkspaceWindowTemplateToDataTransfer } from '@/layout/workspaceWindowDrag'
 import SidebarListItem from '@/components/ui/SidebarListItem.vue'
 import SidebarSessionActionMenu from '@/layout/chatSidebar/components/SidebarSessionActionMenu.vue'
-
-type SessionLike = {
-  id?: string | number | null
-  title?: string | null
-  slug?: string | null
-  directory?: string | null
-  time?: { updated?: number | string | null } | null
-}
+import { sessionLabel } from '@/features/sessions/model/labels'
+import { getIntlLocale } from '@/i18n/intl'
+import type { SessionActionItem } from '@/layout/chatSidebar/useSessionActionMenu'
+import type { Session } from '@/types/chat'
 
 const { t } = useI18n()
 
 const props = withDefaults(
   defineProps<{
     sessionId: string
-    session?: SessionLike | null
-    directory?: DirectoryEntry | null
+    session?: Session | null
 
     uiIsCompactLayout: boolean
     selected?: boolean
-    highlighted?: boolean
-
-    showDirectory?: boolean
-    showTime?: boolean
-    multiSelectEnabled?: boolean
-    multiSelected?: boolean
-
-    indentPx?: number
-    isParent?: boolean
-    isExpanded?: boolean
-    showThreadPlaceholder?: boolean
 
     statusLabel?: string
     statusDotClass?: string
-    attention?: 'permission' | 'question' | null
-
-    pinned?: boolean
-    actionsEnabled?: boolean
-    canPin?: boolean
-    canDelete?: boolean
+    showTime?: boolean
 
     renaming?: boolean
     renameDraft?: string
@@ -75,23 +39,11 @@ const props = withDefaults(
     menuPlacement?: 'top-start' | 'top-end' | 'bottom-start' | 'bottom-end'
   }>(),
   {
+    session: null,
     selected: false,
-    highlighted: false,
-    showDirectory: false,
-    showTime: true,
-    multiSelectEnabled: false,
-    multiSelected: false,
-    indentPx: 8,
-    isParent: false,
-    isExpanded: false,
-    showThreadPlaceholder: false,
     statusLabel: '',
     statusDotClass: '',
-    attention: null,
-    pinned: false,
-    actionsEnabled: true,
-    canPin: true,
-    canDelete: true,
+    showTime: true,
     renaming: false,
     renameDraft: '',
     renameBusy: false,
@@ -105,72 +57,126 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (e: 'open'): void
-  (e: 'toggle-select', event: MouseEvent): void
-  (e: 'toggle-thread'): void
   (e: 'open-actions'): void
-  (e: 'open-action-menu', event: MouseEvent | PointerEvent): void
-  (e: 'toggle-pin'): void
-  (e: 'delete'): void
+  (e: 'open-action-menu', event: MouseEvent): void
   (e: 'update:renameDraft', v: string): void
   (e: 'rename-save'): void
   (e: 'rename-cancel'): void
   (e: 'update:sessionActionMenuQuery', v: string): void
 }>()
 
-const hasSessionContext = computed(() => Boolean(props.session && props.directory))
 const hasSession = computed(() => Boolean(props.session))
 const rowRootEl = ref<HTMLElement | null>(null)
+const renameInputEl = ref<HTMLInputElement | null>(null)
+
+const isInlineRename = computed(() => props.renaming && !props.uiIsCompactLayout)
+const renameDraftText = computed(() => String(props.renameDraft || ''))
+const canSaveRename = computed(() => !props.renameBusy && renameDraftText.value.trim().length > 0)
+
+const titleText = computed(() => {
+  if (!props.session) return props.sessionId
+  return sessionLabel(props.session) || String(t('hub.untitled'))
+})
 
 const statusLabelText = computed(() => {
   const next = String(props.statusLabel || '').trim()
   return next.length > 0 ? next : String(t('chat.sidebar.sessionRow.status.idle'))
 })
 
-const canShowActions = computed(() => props.actionsEnabled && hasSessionContext.value)
-const canDragToWorkspace = computed(() => hasSessionContext.value && !props.multiSelectEnabled && !isInlineRename.value)
-const renameInputEl = ref<HTMLInputElement | null>(null)
+const messageCount = computed(() => Math.max(0, Number(props.session?.message_count) || 0))
 
-const isInlineRename = computed(() => props.renaming && !props.uiIsCompactLayout && hasSessionContext.value)
+function parseTs(iso?: string | null): number {
+  if (!iso) return 0
+  const ms = Date.parse(iso)
+  return Number.isFinite(ms) ? ms : 0
+}
+
+const updatedAtMs = computed(() => {
+  if (!props.session) return 0
+  return (
+    parseTs(props.session.last_message_at) ||
+    parseTs(props.session.updated_at) ||
+    parseTs(props.session.created_at) ||
+    0
+  )
+})
+
+const timeText = computed(() => formatRelativeTime(updatedAtMs.value, Date.now()))
+
+function formatRelativeTime(ms: number, now: number): string {
+  if (!ms || !Number.isFinite(ms)) return ''
+  const diffSec = Math.round((ms - now) / 1000)
+  const abs = Math.abs(diffSec)
+  let rtf: Intl.RelativeTimeFormat
+  try {
+    rtf = new Intl.RelativeTimeFormat(getIntlLocale(), { numeric: 'auto' })
+  } catch {
+    return new Date(ms).toLocaleString()
+  }
+  if (abs < 60) return rtf.format(diffSec, 'second')
+  if (abs < 3600) return rtf.format(Math.round(diffSec / 60), 'minute')
+  if (abs < 86400) return rtf.format(Math.round(diffSec / 3600), 'hour')
+  if (abs < 86400 * 30) return rtf.format(Math.round(diffSec / 86400), 'day')
+  if (abs < 86400 * 365) return rtf.format(Math.round(diffSec / (86400 * 30)), 'month')
+  return rtf.format(Math.round(diffSec / (86400 * 365)), 'year')
+}
+
+const statusIndicator = computed<{ label: string; dotClass: string; pulse: boolean } | null>(() => {
+  const dotClass = String(props.statusDotClass || '').trim()
+  if (dotClass) {
+    return {
+      label: statusLabelText.value,
+      dotClass,
+      pulse: false,
+    }
+  }
+  const state = String(props.session?.state || '').trim()
+  switch (state) {
+    case 'running':
+      return {
+        label: String(t('chat.sidebar.sessionRow.status.running')),
+        dotClass: 'bg-sky-500',
+        pulse: true,
+      }
+    case 'awaiting_user':
+      return {
+        label: String(t('chat.sidebar.sessionRow.status.needsReply')),
+        dotClass: 'bg-amber-500',
+        pulse: true,
+      }
+    case 'interrupted':
+      return {
+        label: 'Interrupted',
+        dotClass: 'bg-amber-500',
+        pulse: false,
+      }
+    case 'failed':
+      return {
+        label: 'Failed',
+        dotClass: 'bg-destructive',
+        pulse: false,
+      }
+    case 'creating':
+      return {
+        label: 'Creating',
+        dotClass: 'bg-muted-foreground',
+        pulse: true,
+      }
+    default:
+      return null
+  }
+})
+
+const canShowActions = computed(() => hasSession.value)
 const actionsAlwaysVisible = computed(() => isInlineRename.value || (props.uiIsCompactLayout && canShowActions.value))
-const renameDraftText = computed(() => String(props.renameDraft || ''))
-const canSaveRename = computed(() => !props.renameBusy && renameDraftText.value.trim().length > 0)
 
 const shouldRenderSessionActionMenu = computed(() => {
-  if (props.multiSelectEnabled) return false
+  if (props.uiIsCompactLayout) return false
   if (isInlineRename.value) return false
-  if (!props.sessionActionMenuOpen || !hasSessionContext.value) return false
+  if (!props.sessionActionMenuOpen || !hasSession.value) return false
   const anchor = props.sessionActionMenuAnchorEl
   if (!anchor) return true
   return Boolean(rowRootEl.value?.contains(anchor))
-})
-
-const titleText = computed(() => {
-  if (!props.session) return props.sessionId
-  return sessionLabel(props.session)
-})
-
-const workspaceTabTitleText = computed(() => {
-  const titled = String(props.session?.title || '').trim()
-  if (titled) return titled
-  const slug = String(props.session?.slug || '').trim()
-  if (slug) return slug
-  return ''
-})
-
-const directoryText = computed(() => {
-  if (!props.directory) return ''
-  return directoryEntryLabel(props.directory)
-})
-
-const directoryFallbackText = computed(() => {
-  const raw = props.session?.directory
-  return typeof raw === 'string' ? raw.trim() : ''
-})
-
-const updatedAt = computed(() => {
-  const session = props.session as { time?: { updated?: number | string | null } } | null | undefined
-  const next = Number(session?.time?.updated ?? 0)
-  return Number.isFinite(next) ? next : 0
 })
 
 watch(isInlineRename, (active) => {
@@ -206,43 +212,9 @@ function handleDesktopOpenActionMenu(event: MouseEvent) {
   emit('open-action-menu', event)
 }
 
-function handleRowClick(event: MouseEvent) {
+function handleRowClick() {
   if (isInlineRename.value) return
-  if (props.multiSelectEnabled) {
-    emit('toggle-select', event)
-    return
-  }
   emit('open')
-}
-
-function handleRowDragStart(event: DragEvent) {
-  if (!canDragToWorkspace.value) {
-    event.preventDefault()
-    return
-  }
-
-  const sid = String(props.sessionId || '').trim()
-  if (!sid) {
-    event.preventDefault()
-    return
-  }
-
-  const transfer = event.dataTransfer
-  if (!transfer) {
-    event.preventDefault()
-    return
-  }
-
-  transfer.effectAllowed = 'copyMove'
-  const ok = writeWorkspaceWindowTemplateToDataTransfer(transfer, {
-    tab: 'chat',
-    query: { sessionId: sid },
-    title: String(workspaceTabTitleText.value || '').trim() || undefined,
-    matchKeys: ['sessionId'],
-  })
-  if (!ok) {
-    event.preventDefault()
-  }
 }
 </script>
 
@@ -250,44 +222,19 @@ function handleRowDragStart(event: DragEvent) {
   <div ref="rowRootEl" class="group relative">
     <SidebarListItem
       :active="selected"
-      :indent="indentPx"
       :as="isInlineRename ? 'div' : 'button'"
       :actions-always-visible="actionsAlwaysVisible"
-      :draggable="canDragToWorkspace"
       class="gap-2 relative"
-      :class="highlighted ? 'ring-2 ring-primary/40 ring-inset' : ''"
-      @click="handleRowClick($event)"
-      @dragstart="handleRowDragStart"
+      @click="handleRowClick"
     >
       <template #icon>
         <div class="flex items-center gap-1.5 min-w-0">
-          <ListItemSelectionIndicator v-if="multiSelectEnabled" :selected="multiSelected" />
           <span
-            v-if="isParent"
-            role="button"
-            class="h-5 w-5 flex-shrink-0 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:dark:bg-accent/40 hover:bg-primary/6 cursor-pointer active:scale-95 transition"
-            :aria-label="
-              String(
-                t(
-                  isExpanded
-                    ? 'chat.sidebar.sessionRow.threadToggle.collapse'
-                    : 'chat.sidebar.sessionRow.threadToggle.expand',
-                ),
-              )
-            "
-            @click.stop="emit('toggle-thread')"
-          >
-            <RiArrowDownSLine v-if="isExpanded" class="h-4 w-4" />
-            <RiArrowRightSLine v-else class="h-4 w-4" />
-          </span>
-          <span v-else-if="showThreadPlaceholder" class="inline-flex h-5 w-5 flex-shrink-0" aria-hidden="true" />
-
-          <span
-            v-if="statusDotClass"
+            v-if="statusIndicator"
             class="inline-flex h-1.5 w-1.5 rounded-full flex-shrink-0"
-            :class="statusDotClass"
-            :title="statusLabelText"
-            :aria-label="statusLabelText"
+            :class="[statusIndicator.dotClass, statusIndicator.pulse ? 'animate-pulse' : '']"
+            :title="statusIndicator.label"
+            :aria-label="statusIndicator.label"
           />
         </div>
       </template>
@@ -297,9 +244,9 @@ function handleRowDragStart(event: DragEvent) {
           <div v-if="hasSession" class="flex-1 min-w-0 flex flex-col justify-center">
             <span class="truncate typography-ui-label w-full text-left">{{ titleText }}</span>
             <span
-              v-if="showDirectory && (directoryText || directoryFallbackText)"
+              v-if="showTime && timeText"
               class="truncate text-[10px] text-muted-foreground/70 w-full text-left"
-              >{{ directoryText || directoryFallbackText }}</span
+              >{{ timeText }}</span
             >
           </div>
 
@@ -308,19 +255,15 @@ function handleRowDragStart(event: DragEvent) {
               class="h-3 w-36 rounded bg-muted/30 animate-pulse"
               :aria-label="String(t('chat.sidebar.sessionRow.loading.session'))"
             />
-            <div
-              v-if="showDirectory"
-              class="mt-1 h-2.5 w-24 rounded bg-muted/20 animate-pulse"
-              :aria-label="String(t('chat.sidebar.sessionRow.loading.directory'))"
-            />
           </div>
 
-          <!-- Time -->
           <span
-            v-if="showTime && hasSessionContext"
-            class="ml-auto font-mono text-[10px] text-muted-foreground/60 flex-shrink-0"
+            v-if="messageCount > 0"
+            class="ml-auto inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground/60 flex-shrink-0"
+            :title="String(messageCount)"
           >
-            {{ formatTime(updatedAt) }}
+            <RiMessageLine class="h-3 w-3" />
+            {{ messageCount }}
           </span>
         </template>
 
@@ -368,55 +311,12 @@ function handleRowDragStart(event: DragEvent) {
           </IconButton>
         </template>
 
-        <template v-else-if="uiIsCompactLayout && canShowActions">
-          <ListItemOverflowActionButton
-            mobile
-            :label="String(t('chat.sidebar.sessionActions.menuTitle'))"
-            @trigger="handleMobileOpenActionsClick"
-          />
-        </template>
-
         <template v-else-if="canShowActions">
           <ListItemOverflowActionButton
+            :mobile="uiIsCompactLayout"
             :label="String(t('chat.sidebar.sessionActions.menuTitle'))"
-            @trigger="handleDesktopOpenActionMenu"
+            @trigger="uiIsCompactLayout ? handleMobileOpenActionsClick() : handleDesktopOpenActionMenu($event)"
           />
-
-          <IconButton
-            v-if="canPin"
-            size="xs"
-            class="hover:dark:bg-accent/40 hover:bg-primary/6"
-            :class="pinned ? 'text-amber-500' : 'text-muted-foreground hover:text-amber-500'"
-            :title="
-              String(t(pinned ? 'chat.sidebar.sessionActions.unpin.label' : 'chat.sidebar.sessionActions.pin.label'))
-            "
-            :aria-label="
-              String(t(pinned ? 'chat.sidebar.sessionActions.unpin.label' : 'chat.sidebar.sessionActions.pin.label'))
-            "
-            @click.stop="emit('toggle-pin')"
-          >
-            <component :is="pinned ? RiStarFill : RiStarLine" class="h-4 w-4" />
-          </IconButton>
-
-          <ConfirmPopover
-            v-if="canDelete"
-            :title="String(t('chat.sidebar.sessionActions.delete.confirmTitle'))"
-            :description="String(t('chat.sidebar.sessionActions.delete.confirmDescription'))"
-            :confirm-text="String(t('chat.sidebar.sessionActions.delete.confirmText'))"
-            :cancel-text="String(t('common.cancel'))"
-            variant="destructive"
-            @confirm="emit('delete')"
-          >
-            <IconButton
-              size="xs"
-              class="text-muted-foreground hover:text-destructive hover:dark:bg-accent/40 hover:bg-primary/6"
-              :title="String(t('chat.sidebar.sessionActions.delete.label'))"
-              :aria-label="String(t('chat.sidebar.sessionActions.delete.label'))"
-              @click.stop
-            >
-              <RiDeleteBinLine class="h-4 w-4" />
-            </IconButton>
-          </ConfirmPopover>
         </template>
       </template>
     </SidebarListItem>

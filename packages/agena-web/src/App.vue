@@ -1,121 +1,72 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch, watchEffect } from 'vue'
 
 import { useAuthStore } from './stores/auth'
 import { useHealthStore } from './stores/health'
 import { useSettingsStore } from './stores/settings'
-import { desktopBackendStatus, desktopOpenConfig, isDesktopRuntime } from './lib/desktopConfig'
-import type { DesktopBackendErrorInfo } from './lib/desktopConfig'
-import { syncDesktopBackendTarget } from './lib/backend'
 
 import { applyAppearanceSettingsToDom } from './lib/appearance'
-import { isEmbeddedWorkspacePaneContext } from './app/windowScope'
 
 import LoginPage from './pages/LoginPage.vue'
-import DesktopLoadingPage from './pages/DesktopLoadingPage.vue'
 import MainLayout from './layout/MainLayout.vue'
 import ToastHost from './components/ToastHost.vue'
 
 const auth = useAuthStore()
 const health = useHealthStore()
 const settings = useSettingsStore()
-const desktopRuntime = isDesktopRuntime()
-const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext()
-const embeddedBootSettled = ref(!isEmbeddedWorkspacePane)
 
-const desktopBackendReachable = computed(() => health.data !== null)
-const backendReady = computed(() => health.data !== null && health.data.isOpenCodeReady)
-const showDesktopLoading = computed(() => desktopRuntime && !desktopBackendReachable.value)
-const showEmbeddedBootPlaceholder = computed(() => isEmbeddedWorkspacePane && !embeddedBootSettled.value)
-const showLogin = computed(
-  () =>
-    !isEmbeddedWorkspacePane &&
-    !showDesktopLoading.value &&
-    !showEmbeddedBootPlaceholder.value &&
-    (auth.needsLogin || !backendReady.value),
-)
+const backendReady = computed(() => health.data !== null)
+const showLogin = computed(() => !showLoading.value && (auth.needsLogin || !backendReady.value))
+const showLoading = computed(() => health.data === null)
 
-let desktopProbeTimer: ReturnType<typeof setInterval> | null = null
-let desktopProbeBusy = false
-const desktopBackendError = ref('')
-const desktopBackendErrorInfo = ref<DesktopBackendErrorInfo | null>(null)
+let probeTimer: ReturnType<typeof setInterval> | null = null
+let probeBusy = false
 
-async function refreshDesktopBootState() {
-  if (desktopProbeBusy) return
-  desktopProbeBusy = true
+async function refreshBootState() {
+  if (probeBusy) return
+  probeBusy = true
   try {
-    if (desktopRuntime) {
-      const syncState = await syncDesktopBackendTarget().catch(() => null)
-      if (String(syncState?.last_error || '').trim()) {
-        desktopBackendError.value = String(syncState?.last_error || '').trim()
-        desktopBackendErrorInfo.value = syncState?.last_error_info || null
-      } else {
-        const status = await desktopBackendStatus().catch(() => null)
-        const err = String(status?.last_error || '').trim()
-        desktopBackendError.value = err
-        desktopBackendErrorInfo.value = status?.last_error_info || null
-      }
-    }
-
     await health.refresh().catch(() => {})
     if (health.data !== null) {
-      desktopBackendError.value = ''
-      desktopBackendErrorInfo.value = null
       await auth.refresh().catch(() => {})
     }
   } finally {
-    desktopProbeBusy = false
+    probeBusy = false
   }
 }
 
-const loadingError = computed(() => (desktopRuntime ? desktopBackendError.value : ''))
-const loadingErrorInfo = computed(() => (desktopRuntime ? desktopBackendErrorInfo.value : null))
-
-function openRuntimeConfig() {
-  if (!desktopRuntime) return
-  void desktopOpenConfig().catch(() => {})
+function clearProbeTimer() {
+  if (!probeTimer) return
+  clearInterval(probeTimer)
+  probeTimer = null
 }
 
-function clearDesktopProbeTimer() {
-  if (!desktopProbeTimer) return
-  clearInterval(desktopProbeTimer)
-  desktopProbeTimer = null
-}
-
-function scheduleDesktopProbe() {
-  if (!showDesktopLoading.value) return
-  if (desktopProbeTimer) return
-  desktopProbeTimer = setInterval(() => {
-    void refreshDesktopBootState()
+function scheduleProbe() {
+  if (!showLoading.value) return
+  if (probeTimer) return
+  probeTimer = setInterval(() => {
+    void refreshBootState()
   }, 2000)
 }
 
 onMounted(() => {
-  const authRefresh = auth.refresh().catch(() => {})
-  const healthRefresh = health.refresh().catch(() => {})
-
-  if (!isEmbeddedWorkspacePane) return
-
-  void Promise.allSettled([authRefresh, healthRefresh]).then(() => {
-    embeddedBootSettled.value = true
-  })
+  void refreshBootState()
 })
 
 watch(
-  () => showDesktopLoading.value,
+  () => showLoading.value,
   (loading) => {
     if (loading) {
-      void refreshDesktopBootState()
-      scheduleDesktopProbe()
+      scheduleProbe()
       return
     }
-    clearDesktopProbeTimer()
+    clearProbeTimer()
   },
   { immediate: true },
 )
 
 onBeforeUnmount(() => {
-  clearDesktopProbeTimer()
+  clearProbeTimer()
 })
 
 watchEffect(() => {
@@ -127,14 +78,9 @@ watchEffect(() => {
 <template>
   <div class="app-root">
     <ToastHost />
-    <DesktopLoadingPage
-      v-if="!isEmbeddedWorkspacePane && showDesktopLoading"
-      :backend-error="loadingError"
-      :backend-error-info="loadingErrorInfo"
-      @retry="refreshDesktopBootState"
-      @open-config="openRuntimeConfig"
-    />
-    <div v-else-if="showEmbeddedBootPlaceholder" class="h-full w-full bg-background" />
+    <div v-if="showLoading" class="flex h-full w-full items-center justify-center bg-background">
+      <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
+    </div>
     <LoginPage v-else-if="showLogin" />
     <MainLayout v-else />
   </div>

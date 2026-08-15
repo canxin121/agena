@@ -1,0 +1,690 @@
+import { onBeforeUnmount, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
+
+import { useHealthStore } from '@/stores/health'
+import { useSettingsStore } from '@/stores/settings'
+import { useSessionActivityStore } from '@/stores/sessionActivity'
+import { useChatStore } from '@/stores/chat'
+import { useUiStore } from '@/stores/ui'
+import { useUpdatesStore } from '@/stores/updates'
+import { useDirectoryStore } from '@/stores/directory'
+import { useDirectorySessionStore } from '@/stores/directorySessionStore'
+import { usePluginHostStore } from '@/stores/pluginHost'
+
+import { connectGlobalWs } from '@/lib/globalWs'
+import type { SseClientStats } from '@/lib/sse'
+import { subscribeAppBroadcast } from '@/lib/appBroadcast'
+import { applyDeviceClasses, getDeviceInfo } from '@/lib/device'
+import { installKeyboardInsets } from '@/lib/keyboardInsets'
+import { installKeyboardTapFix } from '@/lib/keyboardTapFix'
+import { installKeyboardShortcuts } from '@/app/runtime/installKeyboardShortcuts'
+import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
+import { isWorkspaceMainTabPath, mainTabFromPath } from '@/app/navigation/mainTabs'
+import {
+  createWorkspacePaneFocusMessage,
+  isEmbeddedWorkspacePaneContext,
+  readWindowIdFromLocation,
+  readWindowIdFromQuery,
+} from '@/app/windowScope'
+import { normalizeFsPath, trimTrailingFsSlashes } from '@/lib/path'
+
+export function useAppRuntime() {
+  const route = useRoute()
+
+  const ui = useUiStore()
+  const health = useHealthStore()
+  const settings = useSettingsStore()
+  const activity = useSessionActivityStore()
+  const chat = useChatStore()
+  const updates = useUpdatesStore()
+  const directoryStore = useDirectoryStore()
+  const directorySessions = useDirectorySessionStore()
+  const pluginHost = usePluginHostStore()
+
+  let sse: ReturnType<typeof connectGlobalWs> | null = null
+  let visibilityHandler: (() => void) | null = null
+  let onlineHandler: (() => void) | null = null
+  let focusHandler: (() => void) | null = null
+  let blurHandler: (() => void) | null = null
+  let pageShowHandler: ((evt: PageTransitionEvent) => void) | null = null
+  let pageHideHandler: ((evt: PageTransitionEvent) => void) | null = null
+  let freezeHandler: (() => void) | null = null
+  let resumeHandler: (() => void) | null = null
+  let cleanupKeyboard: (() => void) | null = null
+  let cleanupShortcuts: (() => void) | null = null
+  let cleanupKeyboardTapFix: (() => void) | null = null
+  let cleanupBroadcast: (() => void) | null = null
+  let cleanupEmbeddedPaneFocusBridge: (() => void) | null = null
+  let updateTimer: number | null = null
+  let sseDebugTimer: number | null = null
+  let lastSseDebugAt = 0
+  let lastSseDebugErrorSum = 0
+  let lastSseErrorAt = 0
+  let lastSseGapAt = 0
+
+  let globalSseCursor = ''
+
+  let lastResumeSyncAt = 0
+  let lastVisibilityState: DocumentVisibilityState | null = null
+
+  // Watchdog for system sleep/background timer throttling.
+  let clockWatchdogTimer: number | null = null
+  let lastClockWatchdogAt = Date.now()
+  let pendingResumeReason: string | null = null
+  let pendingResumeGapMs = 0
+
+  function sseMaxChunkAgeMs(): number {
+    const now = Date.now()
+    const stats = [readSseStats(sse)]
+    let maxAge = 0
+    for (const st of stats) {
+      const lastChunkAtRaw = (st as Partial<SseClientStats> | null)?.lastChunkAt
+      const lastChunkAt = typeof lastChunkAtRaw === 'number' && Number.isFinite(lastChunkAtRaw) ? lastChunkAtRaw : 0
+      if (!Number.isFinite(lastChunkAt) || lastChunkAt <= 0) continue
+      maxAge = Math.max(maxAge, now - lastChunkAt)
+    }
+    return maxAge
+  }
+
+  function shouldForceReconnectAfterResume(opts: { reason: string; gapMs?: number }) {
+    const gapMs = Math.max(0, Math.floor(opts.gapMs || 0))
+
+    // If the JS thread was paused for a while, fetch-stream SSE can silently stall.
+    if (gapMs >= 20000) return true
+
+    // If we haven't seen any SSE bytes in a long time while visible, treat it as stalled.
+    // (Some browsers keep the JS context active but stop delivering stream chunks.)
+    const maxAge = sseMaxChunkAgeMs()
+    if (document.visibilityState === 'visible' && maxAge >= 45000) return true
+
+    // BFCache restores a fully-rendered page but network connections are dead.
+    if (opts.reason === 'pageshow') return true
+    if (opts.reason === 'resume') return true
+
+    return false
+  }
+
+  function resyncAfterResume(reason: string, opts?: { gapMs?: number }) {
+    const now = Date.now()
+    if (now - lastResumeSyncAt < 1500) return
+    lastResumeSyncAt = now
+
+    // Mobile/desktop browsers can pause fetch/SSE streams in the background.
+    // On resume, prefer preserving Last-Event-ID cursors but do not assume streams are still alive.
+    const forceReconnect = shouldForceReconnectAfterResume({ reason, gapMs: opts?.gapMs })
+    if (forceReconnect || !sse) {
+      connectActivity()
+    }
+
+    // Reconcile all data sources that can drift while suspended.
+    void settings.refresh().catch(() => {})
+    void chat.refreshSessions().catch(() => {})
+    const sid = chat.selectedSessionId
+    if (sid) {
+      void chat.refreshMessages(sid, { silent: true }).catch(() => {})
+    }
+    void activity.refresh().catch(() => {})
+    directorySessions.scheduleSidebarRecoverySync(`resume:${reason}`, 80, { force: true })
+
+    try {
+      console.debug('[sse] resync after resume:', reason)
+    } catch {
+      // ignore
+    }
+
+    // Helpful in dev when diagnosing background stalls.
+    logSseStats({ force: true, reason: `resume:${reason}` })
+  }
+
+  function readSseStats(client: { getStats?: () => unknown } | null): unknown {
+    if (!client) return null
+    if (typeof client.getStats === 'function') {
+      try {
+        return client.getStats()
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
+
+  function logSseStats(opts?: { force?: boolean; reason?: string }) {
+    if (!import.meta.env.DEV) return
+    const now = Date.now()
+    if (!opts?.force && now - lastSseDebugAt < 15000) return
+
+    const globalStats = readSseStats(sse)
+
+    const errorSum = Number((globalStats as { errorCount?: number } | null)?.errorCount || 0)
+
+    const maxAgeMs = Math.max(
+      globalStats && typeof (globalStats as { lastChunkAt?: number }).lastChunkAt === 'number'
+        ? now - Number((globalStats as { lastChunkAt?: number }).lastChunkAt || 0)
+        : 0,
+    )
+
+    // Only log periodically when something looks suspicious, or when errors increase.
+    if (!opts?.force && errorSum === lastSseDebugErrorSum && maxAgeMs < 45000) return
+
+    lastSseDebugAt = now
+    lastSseDebugErrorSum = errorSum
+    try {
+      console.debug('[sse] stats', {
+        reason: opts?.reason || '',
+        visibility: document.visibilityState,
+        global: globalStats,
+      })
+    } catch {
+      // ignore
+    }
+  }
+
+  function handleVisibilityEvent() {
+    const state = document.visibilityState
+    const visible = state === 'visible'
+
+    // Only trigger a resync on hidden -> visible transitions.
+    if (visible && lastVisibilityState && lastVisibilityState !== 'visible') {
+      if (pendingResumeReason) {
+        const reason = pendingResumeReason
+        const gapMs = pendingResumeGapMs
+        pendingResumeReason = null
+        pendingResumeGapMs = 0
+        resyncAfterResume(reason, { gapMs })
+      } else {
+        resyncAfterResume('visibility')
+      }
+    }
+    lastVisibilityState = state
+  }
+
+  function normalizeDirectoryForMatch(input: unknown): string {
+    const value = typeof input === 'string' ? input.trim() : ''
+    if (!value) return ''
+    return trimTrailingFsSlashes(normalizeFsPath(value))
+  }
+
+  function eventDirectory(evt: { directory?: unknown; properties?: unknown }): string {
+    const topLevel = normalizeDirectoryForMatch(evt.directory)
+    if (topLevel) return topLevel
+
+    const properties =
+      evt.properties && typeof evt.properties === 'object' ? (evt.properties as Record<string, unknown>) : null
+    if (!properties) return ''
+
+    return normalizeDirectoryForMatch(properties.directory) || normalizeDirectoryForMatch(properties.cwd)
+  }
+
+  function eventMatchesCurrentDirectory(evt: { directory?: unknown; properties?: unknown }): boolean {
+    const current = normalizeDirectoryForMatch(directoryStore.currentDirectory)
+    if (!current) return true
+    const evtDir = eventDirectory(evt)
+    if (!evtDir) return true
+    return evtDir === current
+  }
+
+  const crossDirectoryEventTypes = new Set([
+    'session.created',
+    'session.updated',
+    'session.deleted',
+    'session.status',
+    'session.idle',
+    'session.error',
+    'permission.asked',
+    'permission.replied',
+    'question.asked',
+    'question.replied',
+    'question.rejected',
+    'opencode-studio:session-activity',
+    'chat-sidebar.delta',
+    'chat-sidebar.patch',
+    'chat-sidebar.state',
+    'opencode-studio:replay-gap',
+    'config.settings.replace',
+  ])
+
+  function shouldBypassDirectoryFilter(evt: { type?: unknown }): boolean {
+    const ty = typeof evt.type === 'string' ? evt.type.trim().toLowerCase() : ''
+    if (!ty) return false
+    return crossDirectoryEventTypes.has(ty)
+  }
+
+  function eventSessionId(evt: { properties?: unknown }): string {
+    const props =
+      evt.properties && typeof evt.properties === 'object' ? (evt.properties as Record<string, unknown>) : null
+    if (!props) return ''
+
+    const direct =
+      (typeof props.sessionID === 'string' ? props.sessionID : '') ||
+      (typeof props.sessionId === 'string' ? props.sessionId : '') ||
+      (typeof props.session_id === 'string' ? props.session_id : '')
+    if (direct.trim()) return direct.trim()
+
+    const part = props.part && typeof props.part === 'object' ? (props.part as Record<string, unknown>) : null
+    if (!part) return ''
+
+    const nested =
+      (typeof part.sessionID === 'string' ? part.sessionID : '') ||
+      (typeof part.sessionId === 'string' ? part.sessionId : '') ||
+      (typeof part.session_id === 'string' ? part.session_id : '')
+    return nested.trim()
+  }
+
+  function syncUiWindowContextFromRoute() {
+    const normalizedPath = String(route.path || '').toLowerCase()
+    if (!isWorkspaceMainTabPath(normalizedPath)) return
+    ui.syncActiveWorkspaceWindowFromRoute(mainTabFromPath(normalizedPath), route.query)
+  }
+
+  function installEmbeddedPaneFocusBridge() {
+    cleanupEmbeddedPaneFocusBridge?.()
+    cleanupEmbeddedPaneFocusBridge = null
+
+    if (typeof window === 'undefined') return
+    if (!isEmbeddedWorkspacePaneContext(route.query)) return
+    if (window.parent === window) return
+
+    const windowId = readWindowIdFromQuery(route.query) || readWindowIdFromLocation()
+    if (!windowId) return
+    const targetOrigin = String(window.location.origin || '').trim()
+    const postTargetOrigin = targetOrigin && targetOrigin !== 'null' ? targetOrigin : '*'
+
+    const notifyParentFocus = () => {
+      const message = createWorkspacePaneFocusMessage(windowId)
+      if (!message) return
+      window.parent.postMessage(message, postTargetOrigin)
+    }
+
+    document.addEventListener('pointerdown', notifyParentFocus, true)
+    document.addEventListener('mousedown', notifyParentFocus, true)
+    document.addEventListener('focusin', notifyParentFocus, true)
+
+    cleanupEmbeddedPaneFocusBridge = () => {
+      document.removeEventListener('pointerdown', notifyParentFocus, true)
+      document.removeEventListener('mousedown', notifyParentFocus, true)
+      document.removeEventListener('focusin', notifyParentFocus, true)
+    }
+  }
+
+  function connectActivity() {
+    sse?.close()
+    sse = null
+
+    try {
+      sse = connectGlobalWs({
+        endpoint: '/api/global/ws',
+        // Multi-window desktop mode must receive cross-directory runtime/status events
+        // so all windows stay consistent for the same session.
+        directory: null,
+        initialLastEventId: globalSseCursor,
+        debugLabel: 'ws:global',
+        onCursor: (lastEventId) => {
+          globalSseCursor = lastEventId
+        },
+        onSequenceGap: () => {
+          const now = Date.now()
+          if (now - lastSseGapAt < 1500) return
+          lastSseGapAt = now
+
+          const sid = chat.selectedSessionId
+          if (sid) {
+            void chat.refreshMessages(sid, { silent: true }).catch(() => {})
+          }
+          void settings.refresh().catch(() => {})
+          void activity.refresh().catch(() => {})
+          directorySessions.scheduleSidebarRecoverySync('sequence-gap', 160)
+        },
+        onEvent: (evt) => {
+          const selectedSessionId = String(chat.selectedSessionId || '').trim()
+          const isSelectedSessionEvent = selectedSessionId && eventSessionId(evt) === selectedSessionId
+
+          if (!isSelectedSessionEvent && !shouldBypassDirectoryFilter(evt) && !eventMatchesCurrentDirectory(evt)) return
+
+          if (evt.type === 'config.settings.replace') {
+            void settings.refresh().catch(() => {})
+            return
+          }
+          if (evt.type === 'opencode-studio:replay-gap') {
+            const now = Date.now()
+            if (now - lastSseGapAt >= 1500) {
+              lastSseGapAt = now
+              const sid = chat.selectedSessionId
+              if (sid) {
+                void chat.refreshMessages(sid, { silent: true }).catch(() => {})
+              }
+              void settings.refresh().catch(() => {})
+              void activity.refresh().catch(() => {})
+              directorySessions.scheduleSidebarRecoverySync('replay-gap', 180)
+            }
+            return
+          }
+          activity.applyEvent(evt)
+          chat.applyEvent(evt)
+          directorySessions.applyGlobalEvent(evt)
+          directoryStore.applyGlobalEvent(evt)
+        },
+        onError: (err) => {
+          // When the stream drops mid-run the UI can get stuck on partial output.
+          // Throttle a best-effort resync.
+          const now = Date.now()
+          if (now - lastSseErrorAt < 1500) return
+          lastSseErrorAt = now
+
+          // Keep this silent to avoid UI flicker while reconnecting.
+          const sid = chat.selectedSessionId
+          if (sid) {
+            void chat.refreshMessages(sid, { silent: true }).catch(() => {})
+          }
+          void settings.refresh().catch(() => {})
+          void activity.refresh().catch(() => {})
+          directorySessions.scheduleSidebarRecoverySync('connection-error', 220)
+
+          // Surface in devtools for debugging.
+          try {
+            console.warn('[sse] connection error', err)
+          } catch {
+            // ignore
+          }
+        },
+      })
+    } catch (err) {
+      sse = null
+      try {
+        console.error('[sse] failed to start', err)
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  function applyDevice() {
+    const info = getDeviceInfo()
+
+    // Embedded workspace panes (split iframes) should keep desktop-style layout
+    // even when the frame width is narrow.
+    const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
+    if (isEmbeddedWorkspacePane) {
+      info.isCompactLayout = false
+      info.isNarrow = false
+      info.isMobile = false
+      info.isMobilePointer = false
+    }
+
+    applyDeviceClasses(info)
+    ui.setIsCompactLayout(info.isCompactLayout)
+    ui.setIsMobileDevice(info.isMobileDevice)
+    ui.setIsTouchPointer(info.isTouchPointer)
+    ui.setIsMobilePointer(info.isMobilePointer)
+  }
+
+  // Prime device state before first paint so mobile/desktop side panels mount
+  // against the correct layout branch during refresh.
+  applyDevice()
+
+  async function ensureSelectedSessionFromQuery() {
+    syncUiWindowContextFromRoute()
+    const routeWindowId = readWindowIdFromQuery(route.query) || null
+    const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
+    const sid = isEmbeddedWorkspacePane
+      ? readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
+      : ''
+
+    // If the URL includes a session id, treat it as an explicit deep link.
+    // Don't strip it just because the in-memory flag wasn't restored yet.
+    if (sid && !ui.sessionQueryEnabled) {
+      ui.enableSessionQuery()
+    }
+
+    if (sid) {
+      if (sid !== chat.selectedSessionId) {
+        await chat.selectSession(sid, { windowId: routeWindowId })
+      }
+      return
+    }
+
+    ui.disableSessionQuery()
+
+    const selected = chat.selectedSessionId
+    const selectedExists = selected ? !!chat.selectedSession : false
+    if (!selectedExists) {
+      await chat.selectSession(null, { windowId: routeWindowId })
+    }
+  }
+
+  onMounted(async () => {
+    window.addEventListener('resize', applyDevice)
+    syncUiWindowContextFromRoute()
+    installEmbeddedPaneFocusBridge()
+
+    cleanupKeyboard = installKeyboardInsets({ enabled: true })
+    cleanupShortcuts = installKeyboardShortcuts()
+    cleanupKeyboardTapFix = installKeyboardTapFix({ enabled: true })
+
+    await Promise.all([
+      health.refresh().catch(() => {}),
+      directoryStore.refreshHome().catch(() => {}),
+      settings.refresh().catch(() => {}),
+      activity.refresh().catch(() => {}),
+      directorySessions.bootstrapWithStaleWhileRevalidate().catch(() => {}),
+    ])
+
+    await pluginHost.bootstrap().catch(() => {})
+
+    // Check for updates a few seconds after mount.
+    updateTimer = window.setTimeout(() => {
+      if (!updates.autoCheckEnabled) return
+      void updates.checkForUpdates({ notify: true })
+    }, 3000)
+
+    // Keep sessions available for all views.
+    await chat.refreshSessions().catch(() => {})
+    if (
+      isEmbeddedWorkspacePaneContext(route.query) &&
+      (readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath))
+    ) {
+      ui.enableSessionQuery()
+    }
+    await ensureSelectedSessionFromQuery().catch(() => {})
+
+    connectActivity()
+
+    cleanupBroadcast?.()
+    cleanupBroadcast = subscribeAppBroadcast((msg) => {
+      if (!msg?.type) return
+      if (msg.type === 'settings.updated') {
+        void settings.refresh().catch(() => {})
+        return
+      }
+      if (msg.type === 'opencodeConfig.updated') {
+        void pluginHost.bootstrap().catch(() => {})
+        return
+      }
+    })
+
+    if (import.meta.env.DEV && sseDebugTimer === null) {
+      sseDebugTimer = window.setInterval(() => {
+        if (document.visibilityState !== 'visible') return
+        logSseStats({ force: false, reason: 'interval' })
+      }, 20000)
+    }
+
+    lastVisibilityState = document.visibilityState
+    handleVisibilityEvent()
+    visibilityHandler = () => handleVisibilityEvent()
+    document.addEventListener('visibilitychange', visibilityHandler)
+
+    // BFCache: pageshow can resume without a visibilitychange transition.
+    pageShowHandler = (evt) => {
+      // When restored from BFCache, network connections are not preserved.
+      // Always force a reconnect + reconcile.
+      if (evt && (evt as { persisted?: boolean }).persisted) {
+        resyncAfterResume('pageshow', { gapMs: 60000 })
+      } else if (document.visibilityState === 'visible') {
+        // Cheap best-effort reconcile on normal pageshow (Safari quirks).
+        resyncAfterResume('pageshow')
+      }
+    }
+    pageHideHandler = (evt) => {
+      // When entering BFCache, proactively close streams.
+      if (evt && (evt as { persisted?: boolean }).persisted) {
+        sse?.close()
+      }
+    }
+    window.addEventListener('pageshow', pageShowHandler)
+    window.addEventListener('pagehide', pageHideHandler)
+
+    // Page Lifecycle API (Chrome, some Chromium-based browsers).
+    freezeHandler = () => {
+      try {
+        console.debug('[lifecycle] freeze')
+      } catch {
+        // ignore
+      }
+      sse?.close()
+    }
+    resumeHandler = () => {
+      resyncAfterResume('resume', { gapMs: 60000 })
+    }
+    document.addEventListener('freeze', freezeHandler as EventListener)
+    document.addEventListener('resume', resumeHandler as EventListener)
+
+    // Clock-jump watchdog: detects system sleep or heavy background throttling.
+    lastClockWatchdogAt = Date.now()
+    if (clockWatchdogTimer === null) {
+      const intervalMs = 2000
+      const jumpThresholdMs = 8000
+      clockWatchdogTimer = window.setInterval(() => {
+        const now = Date.now()
+        const delta = now - lastClockWatchdogAt
+        lastClockWatchdogAt = now
+
+        if (delta < jumpThresholdMs) return
+        const reason = 'clock-jump'
+        if (document.visibilityState === 'visible') {
+          resyncAfterResume(reason, { gapMs: delta })
+        } else {
+          // Defer until we become visible.
+          pendingResumeReason = reason
+          pendingResumeGapMs = Math.max(pendingResumeGapMs, delta)
+        }
+      }, intervalMs)
+    }
+
+    // Some mobile browsers don't reliably emit visibilitychange on resume; focus/online are cheap extra signals.
+    focusHandler = () => {
+      handleVisibilityEvent()
+      if (document.visibilityState === 'visible') resyncAfterResume('focus')
+    }
+    blurHandler = () => {
+      handleVisibilityEvent()
+    }
+    window.addEventListener('focus', focusHandler)
+    window.addEventListener('blur', blurHandler)
+    onlineHandler = () => {
+      if (document.visibilityState === 'visible') resyncAfterResume('online')
+    }
+    window.addEventListener('online', onlineHandler)
+  })
+
+  watch(
+    () => directoryStore.currentDirectory,
+    async () => {
+      await chat.refreshSessions().catch(() => {})
+      await ensureSelectedSessionFromQuery().catch(() => {})
+    },
+  )
+
+  watch(
+    () => ({ path: route.path, query: route.query }),
+    () => {
+      syncUiWindowContextFromRoute()
+    },
+    { immediate: true, deep: true },
+  )
+
+  watch(
+    () =>
+      `${readWindowIdFromQuery(route.query)}|${readSessionIdFromQuery(route.query)}|${readSessionIdFromFullPath(route.fullPath)}`,
+    () => {
+      void ensureSelectedSessionFromQuery()
+    },
+  )
+
+  watch(
+    () => isEmbeddedWorkspacePaneContext(route.query),
+    () => {
+      applyDevice()
+      installEmbeddedPaneFocusBridge()
+    },
+  )
+
+  watch(
+    () => readWindowIdFromQuery(route.query),
+    () => {
+      installEmbeddedPaneFocusBridge()
+    },
+  )
+
+  onBeforeUnmount(() => {
+    sse?.close()
+    sse = null
+    cleanupKeyboard?.()
+    cleanupKeyboard = null
+    cleanupShortcuts?.()
+    cleanupShortcuts = null
+    cleanupKeyboardTapFix?.()
+    cleanupKeyboardTapFix = null
+    cleanupEmbeddedPaneFocusBridge?.()
+    cleanupEmbeddedPaneFocusBridge = null
+    if (updateTimer !== null) {
+      window.clearTimeout(updateTimer)
+      updateTimer = null
+    }
+    if (sseDebugTimer !== null) {
+      window.clearInterval(sseDebugTimer)
+      sseDebugTimer = null
+    }
+    window.removeEventListener('resize', applyDevice)
+
+    if (visibilityHandler) {
+      document.removeEventListener('visibilitychange', visibilityHandler)
+      visibilityHandler = null
+    }
+    if (focusHandler) {
+      window.removeEventListener('focus', focusHandler)
+      focusHandler = null
+    }
+    if (blurHandler) {
+      window.removeEventListener('blur', blurHandler)
+      blurHandler = null
+    }
+    if (onlineHandler) {
+      window.removeEventListener('online', onlineHandler)
+      onlineHandler = null
+    }
+
+    if (pageShowHandler) {
+      window.removeEventListener('pageshow', pageShowHandler)
+      pageShowHandler = null
+    }
+    if (pageHideHandler) {
+      window.removeEventListener('pagehide', pageHideHandler)
+      pageHideHandler = null
+    }
+    if (freezeHandler) {
+      document.removeEventListener('freeze', freezeHandler as EventListener)
+      freezeHandler = null
+    }
+    if (resumeHandler) {
+      document.removeEventListener('resume', resumeHandler as EventListener)
+      resumeHandler = null
+    }
+    if (clockWatchdogTimer !== null) {
+      window.clearInterval(clockWatchdogTimer)
+      clockWatchdogTimer = null
+    }
+
+    cleanupBroadcast?.()
+    cleanupBroadcast = null
+  })
+}

@@ -1,0 +1,654 @@
+<script setup lang="ts">
+import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import {
+  RiPencilLine,
+  RiFileEditLine,
+  RiFileTextLine,
+  RiTerminalBoxLine,
+  RiFolder6Line,
+  RiMenuSearchLine,
+  RiFileSearchLine,
+  RiGlobalLine,
+  RiListCheck3,
+  RiBookLine,
+  RiSurveyLine,
+  RiFileList2Line,
+  RiTaskLine,
+  RiGitBranchLine,
+  RiToolsLine,
+  RiTextWrap,
+  RiCheckLine,
+  RiStopCircleLine,
+} from '@remixicon/vue'
+import ActivityDisclosureButton from '@/components/ui/ActivityDisclosureButton.vue'
+import CodeBlock from './CodeBlock.vue'
+import IconButton from '@/components/ui/IconButton.vue'
+import MonacoDiffEditor from '@/components/MonacoDiffEditor.vue'
+import { buildVirtualMonacoDiffModel } from '@/features/git/diff/unifiedDiff'
+import type { GitDiffMeta } from '@/types/git'
+import { useChatStore } from '@/stores/chat'
+import { formatTimeHM } from '@/i18n/intl'
+import { resolveToolInputDisplay } from './toolInvocationInput'
+
+type ToolValue = unknown
+type UnknownRecord = Record<string, ToolValue>
+type ToolPartLike = {
+  tool?: string
+  state?: ToolValue
+  ocLazy?: boolean
+  metadata?: ToolValue
+  time?: ToolValue
+  [k: string]: ToolValue
+}
+
+function isRecord(value: ToolValue): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function asRecord(value: ToolValue): UnknownRecord {
+  return isRecord(value) ? value : {}
+}
+
+function toDisplayString(value: ToolValue): string {
+  if (typeof value === 'string') return value
+  if (value == null) return ''
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function firstTrimmedString(record: UnknownRecord, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value !== 'string') continue
+    const text = value.trim()
+    if (text) return text
+  }
+  return ''
+}
+
+function firstRawString(record: UnknownRecord, keys: string[]): string {
+  const parseTextLike = (value: ToolValue, depth = 0): string | null => {
+    if (depth > 4 || value == null) return null
+    if (typeof value === 'string') return value
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+    if (Array.isArray(value)) {
+      const lines: string[] = []
+      for (const entry of value) {
+        const text = parseTextLike(entry, depth + 1)
+        if (text == null || !text.length) continue
+        lines.push(text)
+      }
+      return lines.length ? lines.join('\n') : ''
+    }
+    if (!isRecord(value)) return null
+
+    for (const key of ['text', 'content', 'value', 'line', 'raw']) {
+      const text = parseTextLike(value[key], depth + 1)
+      if (text != null) return text
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'lines')) {
+      const text = parseTextLike(value.lines, depth + 1)
+      if (text != null) return text
+    }
+    return null
+  }
+
+  for (const key of keys) {
+    const text = parseTextLike(record[key])
+    if (text != null) return text
+  }
+  return ''
+}
+
+function readDiffMeta(record: UnknownRecord): GitDiffMeta | null {
+  const candidate = record.meta ?? record.diffMeta ?? record.diff_meta
+  if (isRecord(candidate)) return candidate as unknown as GitDiffMeta
+  if (Array.isArray(record.fileHeader) || Array.isArray(record.hunks)) return record as unknown as GitDiffMeta
+  return null
+}
+
+function nonEmptyRecord(record: UnknownRecord): UnknownRecord | null {
+  return Object.keys(record).length ? record : null
+}
+
+function readMetadataFiles(value: ToolValue): ToolValue[] {
+  if (Array.isArray(value)) return value
+  if (isRecord(value)) return Object.values(value)
+  return []
+}
+
+const props = defineProps<{
+  part: ToolPartLike
+  initiallyExpanded?: boolean
+  // When the session has ended, pending/running tools are considered stale.
+  sessionEnded?: boolean
+  // Bump this value to force-close all tool details.
+  collapseSignal?: number
+}>()
+
+const { t } = useI18n()
+
+const isOpen = ref(Boolean(props.initiallyExpanded))
+const activityDiffWrap = ref(true)
+
+const chat = useChatStore()
+const detailLoading = ref(false)
+
+const partRecord = computed(() => asRecord(props.part))
+const isLazy = computed(() => partRecord.value.ocLazy === true)
+
+async function ensureDetail() {
+  if (detailLoading.value) return
+  if (!isLazy.value) return
+  detailLoading.value = true
+  try {
+    await chat.ensureMessagePartDetail(props.part)
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+function toggleOpen() {
+  const next = !isOpen.value
+  isOpen.value = next
+  if (next) void ensureDetail()
+}
+
+onMounted(() => {
+  if (isOpen.value) void ensureDetail()
+})
+
+watch(
+  () => props.collapseSignal,
+  () => {
+    // Don't collapse while a tool is still running; keep progress visible.
+    if (isRunning.value) return
+    isOpen.value = false
+  },
+)
+
+// --- Logic ported from toolHelpers/ToolPart ---
+
+const toolName = computed(() => {
+  const value = partRecord.value.tool
+  return typeof value === 'string' && value.trim() ? value : 'unknown'
+})
+const state = computed(() => asRecord(partRecord.value.state))
+const status = computed(() => state.value.status)
+const input = computed(() => asRecord(state.value.input))
+const output = computed(() => state.value.output)
+const error = computed(() => state.value.error)
+const metadata = computed(() => {
+  const stateMeta = nonEmptyRecord(asRecord(state.value.metadata))
+  if (stateMeta) return stateMeta
+  const partMeta = nonEmptyRecord(asRecord(partRecord.value.metadata))
+  if (partMeta) return partMeta
+  const resultMeta = nonEmptyRecord(asRecord(asRecord(state.value.result).metadata))
+  if (resultMeta) return resultMeta
+  return {}
+})
+
+const displayName = computed(() => {
+  const tool = toolName.value.toLowerCase()
+  if (tool === 'bash') return t('chat.messages.activity.toolInvocation.toolNames.bash')
+  if (tool === 'edit' || tool === 'multiedit') return t('chat.messages.activity.toolInvocation.toolNames.edit')
+  if (tool === 'apply_patch') return t('chat.messages.activity.toolInvocation.toolNames.applyPatch')
+  if (tool === 'str_replace' || tool === 'str_replace_based_edit_tool') {
+    return t('chat.messages.activity.toolInvocation.toolNames.replaceText')
+  }
+  if (tool === 'read') return t('chat.messages.activity.toolInvocation.toolNames.read')
+  if (tool === 'write') return t('chat.messages.activity.toolInvocation.toolNames.write')
+  if (tool === 'list') return t('chat.messages.activity.toolInvocation.toolNames.list')
+  if (tool === 'glob') return t('chat.messages.activity.toolInvocation.toolNames.glob')
+  if (tool === 'search') return t('chat.messages.activity.toolInvocation.toolNames.search')
+  if (tool === 'grep') return t('chat.messages.activity.toolInvocation.toolNames.grep')
+  if (tool === 'webfetch' || tool === 'fetch' || tool === 'curl' || tool === 'wget') {
+    return t('chat.messages.activity.toolInvocation.toolNames.fetch')
+  }
+  if (tool === 'question') return t('chat.messages.activity.toolInvocation.toolNames.question')
+  if (tool === 'task') return t('chat.messages.activity.toolInvocation.toolNames.task')
+  return tool.charAt(0).toUpperCase() + tool.slice(1)
+})
+
+const icon = computed(() => {
+  const t = toolName.value.toLowerCase()
+  if (['edit', 'multiedit', 'apply_patch', 'str_replace'].includes(t)) return RiPencilLine
+  if (['write', 'create', 'file_write'].includes(t)) return RiFileEditLine
+  if (['read', 'view', 'file_read', 'cat'].includes(t)) return RiFileTextLine
+  if (['bash', 'shell', 'cmd', 'terminal'].includes(t)) return RiTerminalBoxLine
+  if (['list', 'ls', 'dir', 'list_files'].includes(t)) return RiFolder6Line
+  if (['search', 'grep', 'find', 'ripgrep'].includes(t)) return RiMenuSearchLine
+  if (t === 'glob') return RiFileSearchLine
+  if (['fetch', 'curl', 'wget', 'webfetch', 'web-search', 'google'].includes(t)) return RiGlobalLine
+  if (['todowrite', 'todoread'].includes(t)) return RiListCheck3
+  if (t === 'skill') return RiBookLine
+  if (t === 'question') return RiSurveyLine
+  if (t === 'plan_enter') return RiFileList2Line
+  if (t === 'plan_exit') return RiTaskLine
+  if (t.startsWith('git')) return RiGitBranchLine
+  return RiToolsLine
+})
+
+function clipSummary(raw: string, max = 80): string {
+  const oneLine = String(raw || '')
+    .split('\n')[0]
+    ?.trim()
+  if (!oneLine) return ''
+  return oneLine.substring(0, max)
+}
+
+function summarizeUnknownInputValue(value: ToolValue): string {
+  if (typeof value === 'string') {
+    return clipSummary(value, 80)
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (Array.isArray(value)) {
+    const compact = value
+      .map((item) => {
+        if (typeof item === 'string') return clipSummary(item, 60)
+        if (typeof item === 'number' || typeof item === 'boolean') return String(item)
+        return ''
+      })
+      .filter(Boolean)
+      .slice(0, 8)
+      .join(' ')
+    return clipSummary(compact, 80)
+  }
+  return ''
+}
+
+const summary = computed(() => {
+  const inp = input.value && typeof input.value === 'object' ? input.value : {}
+  const tool = toolName.value.toLowerCase()
+
+  // Prefer upstream title/label when available.
+  const title = typeof state.value?.title === 'string' ? state.value.title.trim() : ''
+  if (title) return title.substring(0, 80)
+
+  if (tool === 'bash' && typeof inp.command === 'string') {
+    const firstLine = inp.command.split('\n')[0] || ''
+    return firstLine.substring(0, 60)
+  }
+
+  if (['edit', 'multiedit', 'read', 'write'].includes(tool)) {
+    const path = inp.filePath || inp.file_path || inp.path
+    if (typeof path === 'string') {
+      return path.split('/').pop() || path
+    }
+  }
+
+  if (tool === 'task' && typeof inp.description === 'string') {
+    return inp.description.substring(0, 50)
+  }
+
+  if (tool === 'glob' && typeof inp.pattern === 'string') {
+    return inp.pattern.substring(0, 80)
+  }
+
+  if ((tool === 'search' || tool === 'grep') && typeof inp.pattern === 'string') {
+    const where = typeof inp.path === 'string' ? inp.path : ''
+    return where ? `${inp.pattern}  in  ${where}`.substring(0, 80) : inp.pattern.substring(0, 80)
+  }
+
+  if ((tool === 'webfetch' || tool === 'fetch' || tool === 'curl' || tool === 'wget') && typeof inp.url === 'string') {
+    return inp.url.substring(0, 80)
+  }
+
+  if (tool === 'question' && Array.isArray(inp.questions)) {
+    return t('chat.messages.activity.toolInvocation.summary.askedQuestions', { count: inp.questions.length })
+  }
+
+  if (tool === 'list' && typeof inp.path === 'string') {
+    return inp.path
+  }
+
+  const fallbackKeys = [
+    'description',
+    'command',
+    'argv',
+    'query',
+    'pattern',
+    'path',
+    'filePath',
+    'file_path',
+    'url',
+    'name',
+    'title',
+    'prompt',
+  ]
+  for (const key of fallbackKeys) {
+    const summarized = summarizeUnknownInputValue(inp[key])
+    if (summarized) return summarized
+  }
+
+  for (const value of Object.values(inp)) {
+    const summarized = summarizeUnknownInputValue(value)
+    if (summarized) return summarized
+  }
+
+  return ''
+})
+
+const durationLabel = computed(() => {
+  const directTime = asRecord(partRecord.value.time)
+  const stateTime = asRecord(state.value.time)
+  const start =
+    typeof stateTime.start === 'number'
+      ? stateTime.start
+      : typeof directTime.start === 'number'
+        ? directTime.start
+        : null
+  const end =
+    typeof stateTime.end === 'number' ? stateTime.end : typeof directTime.end === 'number' ? directTime.end : null
+  if (!start || !end || end <= start) return ''
+  const ms = end - start
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+})
+
+function formatTimeShort(ms: number): string {
+  return formatTimeHM(ms)
+}
+
+const timeLabel = computed(() => {
+  const directTime = asRecord(partRecord.value.time)
+  const stateTime = asRecord(state.value.time)
+  const end =
+    typeof stateTime.end === 'number' ? stateTime.end : typeof directTime.end === 'number' ? directTime.end : null
+  const start =
+    typeof stateTime.start === 'number'
+      ? stateTime.start
+      : typeof directTime.start === 'number'
+        ? directTime.start
+        : null
+  const at = end ?? start
+  if (!at) return ''
+  return formatTimeShort(at)
+})
+
+const isStale = computed(
+  () => Boolean(props.sessionEnded) && (status.value === 'running' || status.value === 'pending'),
+)
+const isError = computed(() => status.value === 'error')
+const isRunning = computed(() => !isStale.value && (status.value === 'running' || status.value === 'pending'))
+const isSuccess = computed(() => status.value === 'completed')
+const disclosureStatus = computed(() => {
+  if (isError.value) return 'error'
+  if (isRunning.value) return 'running'
+  return 'default'
+})
+
+// Helper to determine language for CodeBlock
+const outputLang = computed(() => {
+  const t = toolName.value.toLowerCase()
+  if (t === 'read') {
+    const rawPath = input.value.filePath ?? input.value.file_path
+    const path = typeof rawPath === 'string' ? rawPath : ''
+    if (path.endsWith('.ts') || path.endsWith('.tsx')) return 'typescript'
+    if (path.endsWith('.js') || path.endsWith('.jsx')) return 'javascript'
+    if (path.endsWith('.rs')) return 'rust'
+    if (path.endsWith('.py')) return 'python'
+    if (path.endsWith('.json')) return 'json'
+    if (path.endsWith('.md')) return 'markdown'
+    if (path.endsWith('.vue')) return 'xml' // or html
+    if (path.endsWith('.html')) return 'xml'
+    if (path.endsWith('.css')) return 'css'
+    return 'text'
+  }
+  if (t === 'bash') return 'bash'
+  if (['edit', 'multiedit', 'apply_patch'].includes(t)) return 'diff'
+  return 'text'
+})
+
+const activityDiffPreview = computed(() => {
+  const t = toolName.value.toLowerCase()
+  if (!['edit', 'multiedit', 'apply_patch', 'str_replace', 'str_replace_based_edit_tool'].includes(t)) return null
+
+  const meta = metadata.value
+  const files = readMetadataFiles(meta.files)
+  let fallbackCandidate: ReturnType<typeof buildVirtualMonacoDiffModel> | null = null
+
+  const directDiff = firstRawString(meta, ['diff', 'patch'])
+  const directMeta = readDiffMeta(meta)
+  if (directDiff || directMeta) {
+    const partId = String(partRecord.value.id || partRecord.value.partID || '').trim() || 'activity'
+    const candidate = buildVirtualMonacoDiffModel({
+      modelId: `activity:${partId}`,
+      diff: directDiff,
+      meta: directMeta,
+      preferPatch: true,
+      compactSnapshots: true,
+    })
+    if (candidate.hasChanges) return candidate
+    fallbackCandidate = candidate
+  }
+
+  for (const row of files) {
+    const rec = asRecord(row)
+    const filePath = firstTrimmedString(rec, [
+      'file',
+      'path',
+      'filename',
+      'name',
+      'target',
+      'filePath',
+      'filepath',
+      'relativePath',
+    ])
+    const before = firstRawString(rec, [
+      'before',
+      'old',
+      'oldText',
+      'beforeLines',
+      'oldLines',
+      'original',
+      'previous',
+      'prev',
+      'from',
+      'left',
+      'a',
+    ])
+    const after = firstRawString(rec, [
+      'after',
+      'new',
+      'newText',
+      'afterLines',
+      'newLines',
+      'modified',
+      'current',
+      'next',
+      'to',
+      'right',
+      'b',
+    ])
+    const rowDiff = firstRawString(rec, ['diff', 'patch'])
+    const rowMeta = readDiffMeta(rec)
+    if (!before && !after && !rowDiff && !rowMeta) continue
+    const normalizedPath = filePath || 'activity.patch'
+    const candidate = buildVirtualMonacoDiffModel({
+      modelId: `activity-file:${normalizedPath}`,
+      path: normalizedPath,
+      original: before,
+      modified: after,
+      diff: rowDiff,
+      meta: rowMeta,
+      preferPatch: true,
+      compactSnapshots: true,
+    })
+    if (candidate.hasChanges) return candidate
+    if (!fallbackCandidate) fallbackCandidate = candidate
+  }
+
+  return fallbackCandidate
+})
+
+const displayOutput = computed(() => {
+  if (error.value) return toDisplayString(error.value)
+  if (output.value == null) return ''
+
+  // If output isn't a string, show JSON so we don't render an empty box.
+  if (typeof output.value !== 'string') {
+    return toDisplayString(output.value)
+  }
+
+  // Clean up output
+  let clean = output.value
+  // Remove <file> tags if present
+  clean = clean.replace(/^<file>\s*\n?/, '').replace(/\n?<\/file>\s*$/, '')
+  return clean.trim()
+})
+
+const displayInputData = computed(() => resolveToolInputDisplay(toolName.value, input.value))
+
+const shouldShowInput = computed(() => {
+  return Boolean(displayInputData.value.text)
+})
+</script>
+
+<template>
+  <div class="relative">
+    <ActivityDisclosureButton
+      :open="isOpen"
+      :icon="icon"
+      :label="displayName"
+      :summary="summary"
+      :status="disclosureStatus"
+      @toggle="toggleOpen"
+    >
+      <template #right>
+        <div class="shrink-0 flex items-center gap-1.5">
+          <span v-if="timeLabel" class="text-[10px] text-muted-foreground/70 font-mono">{{ timeLabel }}</span>
+          <span v-if="durationLabel" class="text-[10px] text-muted-foreground/70 font-mono">{{ durationLabel }}</span>
+          <div v-if="isStale" class="text-muted-foreground/80">
+            <RiStopCircleLine class="h-3.5 w-3.5" />
+          </div>
+          <div v-else-if="isError" class="text-[10px] font-semibold text-destructive">
+            {{ t('chat.messages.activity.toolInvocation.status.failed') }}
+          </div>
+          <div v-else-if="isSuccess && !isOpen" class="text-emerald-500/80">
+            <RiCheckLine class="h-3.5 w-3.5" />
+          </div>
+        </div>
+      </template>
+    </ActivityDisclosureButton>
+
+    <Transition name="toolreveal">
+      <div v-show="isOpen" class="pl-6 pt-0.5 pb-1">
+        <div class="space-y-2">
+          <div v-if="detailLoading" class="text-[11px] text-muted-foreground/70 italic">
+            {{ t('chat.messages.activity.toolInvocation.status.loadingDetails') }}
+          </div>
+
+          <div v-if="shouldShowInput" class="text-xs">
+            <div class="text-muted-foreground/80 mb-1 font-medium flex justify-between items-center">
+              <span>{{ t('chat.messages.activity.toolInvocation.sections.input') }}</span>
+              <span class="text-[10px] uppercase tracking-wider opacity-70">{{ displayInputData.lang }}</span>
+            </div>
+            <CodeBlock :code="displayInputData.text" :lang="displayInputData.lang" :compact="true" class="my-0" />
+          </div>
+
+          <div v-if="activityDiffPreview" class="text-xs">
+            <div class="text-muted-foreground/80 mb-1 font-medium flex justify-between items-center">
+              <span>{{ t('chat.messages.activity.toolInvocation.sections.diff') }}</span>
+              <div class="flex items-center gap-2">
+                <IconButton
+                  variant="outline"
+                  size="xs"
+                  class="h-6 w-6 transition-colors"
+                  :class="
+                    activityDiffWrap
+                      ? 'bg-secondary/70 text-foreground shadow-inner'
+                      : 'text-muted-foreground opacity-80 hover:bg-secondary/40 hover:text-foreground hover:opacity-100'
+                  "
+                  :title="
+                    activityDiffWrap
+                      ? t('chat.messages.activity.toolInvocation.wrap.disable')
+                      : t('chat.messages.activity.toolInvocation.wrap.enable')
+                  "
+                  :aria-label="
+                    activityDiffWrap
+                      ? t('chat.messages.activity.toolInvocation.wrap.disable')
+                      : t('chat.messages.activity.toolInvocation.wrap.enable')
+                  "
+                  :aria-pressed="activityDiffWrap"
+                  @click="activityDiffWrap = !activityDiffWrap"
+                >
+                  <RiTextWrap class="h-4 w-4" />
+                </IconButton>
+                <span class="text-[10px] uppercase tracking-wider opacity-70">
+                  {{ t('chat.messages.activity.toolInvocation.sections.diffCode') }}
+                </span>
+              </div>
+            </div>
+            <div class="oc-activity-detail h-96 overflow-hidden">
+              <MonacoDiffEditor
+                class="h-full"
+                :path="activityDiffPreview.path"
+                :language-path="activityDiffPreview.path"
+                :model-id="activityDiffPreview.modelId"
+                :original-model-id="`${activityDiffPreview.modelId}:base`"
+                :original-value="activityDiffPreview.original"
+                :modified-value="activityDiffPreview.modified"
+                :initial-top-line="activityDiffPreview.initialTopLine"
+                :original-start-line="activityDiffPreview.originalStartLine"
+                :modified-start-line="activityDiffPreview.modifiedStartLine"
+                :original-line-numbers="activityDiffPreview.originalLineNumbers"
+                :modified-line-numbers="activityDiffPreview.modifiedLineNumbers"
+                :use-files-theme="true"
+                :read-only="true"
+                :wrap="activityDiffWrap"
+              />
+            </div>
+          </div>
+
+          <div v-if="displayOutput || error" class="text-xs">
+            <div v-if="error" class="text-destructive mb-1 font-medium">
+              {{ t('chat.messages.activity.toolInvocation.sections.error') }}
+            </div>
+            <div v-else class="text-muted-foreground/80 mb-1 font-medium flex justify-between items-center">
+              <span>{{ t('chat.messages.activity.toolInvocation.sections.output') }}</span>
+              <span class="text-[10px] uppercase tracking-wider opacity-70">{{ outputLang }}</span>
+            </div>
+            <CodeBlock v-if="displayOutput" :code="displayOutput" :lang="outputLang" :compact="true" class="my-0" />
+          </div>
+
+          <div
+            v-else-if="!detailLoading && !isLazy && !shouldShowInput && !isRunning && isSuccess"
+            class="text-[11px] text-muted-foreground/70 italic"
+          >
+            {{ t('chat.messages.activity.toolInvocation.status.completedWithoutOutput') }}
+          </div>
+
+          <div v-else-if="isStale" class="text-[11px] text-muted-foreground/70 italic">
+            {{ t('chat.messages.activity.toolInvocation.status.stoppedSessionEnded') }}
+          </div>
+
+          <div v-else-if="isRunning" class="text-[11px] text-muted-foreground/70 italic">
+            {{ t('chat.messages.activity.toolInvocation.status.running') }}
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </div>
+</template>
+
+<style scoped>
+.toolreveal-enter-active,
+.toolreveal-leave-active {
+  transition:
+    opacity 140ms ease,
+    transform 160ms ease;
+}
+
+.toolreveal-enter-from,
+.toolreveal-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+</style>

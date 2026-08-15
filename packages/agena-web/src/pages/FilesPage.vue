@@ -1,0 +1,4594 @@
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
+import Button from '@/components/ui/Button.vue'
+import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
+import FormDialog from '@/components/ui/FormDialog.vue'
+import IconButton from '@/components/ui/IconButton.vue'
+import Input from '@/components/ui/Input.vue'
+import SearchInput from '@/components/ui/SearchInput.vue'
+import SegmentedButton from '@/components/ui/SegmentedButton.vue'
+import SegmentedControl from '@/components/ui/SegmentedControl.vue'
+
+import FileViewerPane from './files/components/FileViewerPane.vue'
+import FilesExplorerPane from './files/components/FilesExplorerPane.vue'
+
+import {
+  extensionFromPath,
+  isHiddenName,
+  languageForPath,
+  shouldIgnoreEntryName,
+  shouldIgnorePath,
+} from './files/fileKinds'
+import { detectPreviewMode, isMermaidPath } from './files/previewKinds'
+import type {
+  DialogKind,
+  FileNode,
+  FlatRow,
+  ListEntry,
+  ListResponse,
+  MarkdownViewMode,
+  SearchFile,
+  SearchResponse,
+  SelectionRange,
+  ViewerMode,
+} from './files/types'
+import type {
+  GitBlameLine,
+  GitBlameResponse,
+  GitDiffMeta,
+  GitCommitFileContentResponse,
+  GitLogCommit,
+  GitLogResponse,
+} from '@/types/git'
+import type { JsonValue } from '@/types/json'
+
+type GitDiffMode = 'working' | 'staged'
+type GitPatchMode = 'stage' | 'unstage' | 'discard'
+type CreateKind = 'createFile' | 'createFolder'
+type ExplorerSidebarMode = 'tree' | 'search'
+type ExplorerSearchMode = 'files' | 'content'
+type ContentSearchScopeMode = 'workspace' | 'selected' | 'active-file'
+type ExplorerNodeClickOptions = { toggle: boolean; range: boolean }
+type FileRefreshSource = 'manual' | 'auto'
+type FileRefreshPayload =
+  | {
+      kind: 'text'
+      content: string
+      totalBytes: number
+      loadedBytes: number
+      nextOffset: number
+      hasMore: boolean
+    }
+  | {
+      kind: 'large'
+      totalBytes: number
+    }
+type FileRefreshConflictState = {
+  source: FileRefreshSource
+  path: string
+  remote: FileRefreshPayload
+}
+
+import { ApiError, apiBlob } from '@/lib/api'
+import { copyTextToClipboard } from '@/lib/clipboard'
+import { gitJson } from '@/lib/gitApi'
+import { buildWorkspaceRawFileUrl } from '@/lib/workspaceLinks'
+import {
+  applyGitPatch as applyGitPatchApi,
+  deletePath as deletePathApi,
+  getGitBlame,
+  getGitDiff,
+  replaceFileContent,
+  listDirectory,
+  makeDirectory,
+  readFileChunk,
+  renamePath,
+  searchFileContent,
+  searchFiles,
+  uploadFile,
+  writeFile,
+} from '@/features/files/api/filesApi'
+import type { FsContentSearchFileResult, FsContentSearchMatch } from '@/features/files/api/filesApi'
+import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
+import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
+import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
+import { localStorageKeys } from '@/lib/persistence/storageKeys'
+import { useChatStore } from '@/stores/chat'
+import { useSettingsStore } from '@/stores/settings'
+import type { Settings } from '@/stores/settings'
+import { useToastsStore } from '@/stores/toasts'
+import { useDirectoryStore } from '@/stores/directory'
+import { useUiStore, type ImageViewerItem } from '@/stores/ui'
+
+const props = withDefaults(
+  defineProps<{
+    embedded?: boolean
+  }>(),
+  {
+    embedded: false,
+  },
+)
+
+const STORAGE_FILES_SHOW_HIDDEN = localStorageKeys.files.showHidden
+const STORAGE_FILES_RESPECT_GITIGNORE = localStorageKeys.files.respectGitignore
+const STORAGE_FILES_AUTOSAVE = localStorageKeys.files.autosave
+const STORAGE_FILES_VIEWER_BLAME_VISIBLE = localStorageKeys.files.viewerBlameVisible
+const STORAGE_FILES_VIEWER_TIMELINE_VISIBLE = localStorageKeys.files.viewerTimelineVisible
+const STORAGE_FILES_SIDEBAR_MODE = localStorageKeys.files.sidebarMode
+const STORAGE_FILES_SEARCH_MODE = localStorageKeys.files.searchMode
+const STORAGE_FILES_CONTENT_SCOPE_MODE = localStorageKeys.files.contentScopeMode
+const STORAGE_FILES_EXPLORER_UI_PREFIX = localStorageKeys.files.explorerUiPrefix
+const STORAGE_FILES_EXPLORER_CACHE_PREFIX = localStorageKeys.files.explorerCachePrefix
+const DIRECTORY_PAGE_SIZE = 400
+const FILE_CHUNK_BYTES = 256 * 1024
+const LARGE_FILE_WARNING_BYTES = 1024 * 1024
+const FILE_AUTO_REFRESH_INTERVAL_MS = 9_000
+const FILE_AUTO_REFRESH_EDIT_IDLE_MS = 4_500
+const HIDDEN_FILE_RELATIVE_PATHS = new Set(['web/src/data/directorySessionSnapshotDb.ts'])
+
+const chat = useChatStore()
+const settings = useSettingsStore()
+const toasts = useToastsStore()
+const directoryStore = useDirectoryStore()
+const ui = useUiStore()
+const route = useRoute()
+const router = useRouter()
+const { t } = useI18n()
+const filesMultiSelect = useUnifiedMultiSelect()
+
+const preferredProjectRoot = computed(() => directoryStore.currentDirectory || '')
+const configuredProjectRoots = computed(() => {
+  const projects = Array.isArray(settings.data?.projects) ? settings.data?.projects : []
+  return projects.map((entry) => trimTrailingSlashes(normalizePath(String(entry?.path || '').trim()))).filter(Boolean)
+})
+const explorerRootPath = ref('')
+const root = computed(() => trimTrailingSlashes(normalizePath((explorerRootPath.value || '').trim())))
+const isCompactLayout = computed(() => ui.isCompactLayout)
+const isMobileFormFactor = computed(() => ui.isMobilePointer)
+const embeddedView = ref<'list' | 'viewer'>(
+  isEmbeddedWorkspacePaneContext(route.query) || props.embedded ? 'list' : 'viewer',
+)
+
+const showHidden = ref(localStorage.getItem(STORAGE_FILES_SHOW_HIDDEN) === 'true')
+const respectGitignore = ref(localStorage.getItem(STORAGE_FILES_RESPECT_GITIGNORE) !== 'false')
+const autoSaveEnabled = ref(localStorage.getItem(STORAGE_FILES_AUTOSAVE) === 'true')
+const showGitignored = computed({
+  get: () => !respectGitignore.value,
+  set: (v) => {
+    respectGitignore.value = !v
+  },
+})
+
+const expandedDirs = ref<Set<string>>(new Set())
+const loadedDirs = ref<Set<string>>(new Set())
+const inFlightDirs = ref<Set<string>>(new Set())
+const entriesByDir = ref<Record<string, ListEntry[]>>({})
+const childrenByDir = ref<Record<string, FileNode[]>>({})
+
+type FilesExplorerUiState = {
+  v: 1
+  root: string
+  showHidden: boolean
+  respectGitignore: boolean
+  expandedDirs: string[]
+  highlightedPath?: string
+  selectedPath?: string
+  selectedDirectoryPath?: string
+}
+
+type FilesExplorerCacheState = {
+  v: 1
+  root: string
+  showHidden: boolean
+  respectGitignore: boolean
+  at: number
+  loadedDirs: string[]
+  entriesByDir: Record<string, ListEntry[]>
+}
+
+function storageKey(prefix: string, rootPath: string): string {
+  const base = trimTrailingSlashes(normalizePath((rootPath || '').trim()))
+  return `${prefix}${base}`
+}
+
+function readJson<T>(st: Storage, key: string, fallback: T): T {
+  try {
+    const raw = st.getItem(key)
+    if (!raw) return fallback
+    return JSON.parse(raw) as T
+  } catch {
+    return fallback
+  }
+}
+
+function writeJson(st: Storage, key: string, value: JsonValue) {
+  try {
+    st.setItem(key, JSON.stringify(value))
+  } catch {
+    // ignore quota/unavailable
+  }
+}
+
+let persistExplorerTimer: number | null = null
+function persistExplorerSoon() {
+  if (!root.value) return
+  if (persistExplorerTimer !== null) return
+  persistExplorerTimer = window.setTimeout(() => {
+    persistExplorerTimer = null
+    persistExplorerNow()
+  }, 120)
+}
+
+function persistExplorerNow() {
+  const rootPath = root.value
+  if (!rootPath) return
+
+  const base = trimTrailingSlashes(normalizePath(rootPath))
+  const flags = { showHidden: showHidden.value, respectGitignore: respectGitignore.value }
+
+  // UI state (localStorage): expanded dirs + current focus.
+  const uiState: FilesExplorerUiState = {
+    v: 1,
+    root: base,
+    ...flags,
+    expandedDirs: Array.from(expandedDirs.value),
+    highlightedPath: highlightedPath.value || undefined,
+    selectedPath: selectedFile.value?.path || undefined,
+    selectedDirectoryPath: selectedDirectoryPath.value || undefined,
+  }
+  writeJson(localStorage, storageKey(STORAGE_FILES_EXPLORER_UI_PREFIX, base), uiState)
+
+  // Cache state (sessionStorage): directory listings (keep it bounded).
+  const keepDirs = new Set<string>()
+  keepDirs.add(base)
+  for (const d of expandedDirs.value) keepDirs.add(normalizePath(String(d || '').trim()))
+
+  const nextEntries: Record<string, ListEntry[]> = {}
+  const nextLoaded: string[] = []
+  for (const d of loadedDirs.value) {
+    const dir = normalizePath(String(d || '').trim())
+    if (!dir) continue
+    if (!keepDirs.has(dir)) continue
+    nextLoaded.push(dir)
+    nextEntries[dir] = entriesByDir.value[dir] || []
+  }
+
+  const cacheState: FilesExplorerCacheState = {
+    v: 1,
+    root: base,
+    ...flags,
+    at: Date.now(),
+    loadedDirs: nextLoaded,
+    entriesByDir: nextEntries,
+  }
+  writeJson(sessionStorage, storageKey(STORAGE_FILES_EXPLORER_CACHE_PREFIX, base), cacheState)
+}
+
+function restoreExplorerState(rootPath: string): boolean {
+  const base = trimTrailingSlashes(normalizePath((rootPath || '').trim()))
+  if (!base) return false
+  restoredSelectedFilePath.value = ''
+
+  const uiKey = storageKey(STORAGE_FILES_EXPLORER_UI_PREFIX, base)
+  const uiState = readJson<FilesExplorerUiState | null>(localStorage, uiKey, null)
+  const sameUi =
+    uiState &&
+    uiState.v === 1 &&
+    uiState.root === base &&
+    uiState.showHidden === showHidden.value &&
+    uiState.respectGitignore === respectGitignore.value
+
+  if (sameUi) {
+    const nextExpanded = new Set<string>()
+    const expanded = Array.isArray(uiState.expandedDirs) ? uiState.expandedDirs : []
+    for (const d of expanded) {
+      const dir = normalizePath(String(d || '').trim())
+      if (dir) nextExpanded.add(dir)
+    }
+    expandedDirs.value = nextExpanded
+    highlightedPath.value = typeof uiState.highlightedPath === 'string' ? uiState.highlightedPath : ''
+    const selectedDir =
+      typeof uiState.selectedDirectoryPath === 'string'
+        ? normalizePath(String(uiState.selectedDirectoryPath || '').trim())
+        : ''
+    selectedDirectoryPath.value = selectedDir && withinWorkspace(selectedDir, base) ? selectedDir : ''
+
+    const selectedPath =
+      typeof uiState.selectedPath === 'string' ? normalizePath(String(uiState.selectedPath || '').trim()) : ''
+    restoredSelectedFilePath.value =
+      selectedPath && withinWorkspace(selectedPath, base) && !isPathHiddenInFiles(selectedPath) ? selectedPath : ''
+  }
+
+  const cacheKey = storageKey(STORAGE_FILES_EXPLORER_CACHE_PREFIX, base)
+  const cacheState = readJson<FilesExplorerCacheState | null>(sessionStorage, cacheKey, null)
+  const sameCache =
+    cacheState &&
+    cacheState.v === 1 &&
+    cacheState.root === base &&
+    cacheState.showHidden === showHidden.value &&
+    cacheState.respectGitignore === respectGitignore.value &&
+    cacheState.entriesByDir &&
+    typeof cacheState.entriesByDir === 'object'
+
+  if (!sameCache) {
+    return Boolean(sameUi)
+  }
+
+  const nextEntries: Record<string, ListEntry[]> = {}
+  const nextChildren: Record<string, FileNode[]> = {}
+  const nextLoaded = new Set<string>()
+
+  const loadedDirsRaw = Array.isArray(cacheState.loadedDirs) ? cacheState.loadedDirs : []
+  for (const dir of loadedDirsRaw) {
+    const d = normalizePath(String(dir || '').trim())
+    if (!d) continue
+    const rawEntries = cacheState.entriesByDir[d]
+    const entries = Array.isArray(rawEntries) ? rawEntries : []
+    nextEntries[d] = entries
+    nextChildren[d] = mapDirectoryEntries(d, entries)
+    nextLoaded.add(d)
+  }
+
+  // Only apply if we at least have the root listing.
+  if (!nextChildren[base]) {
+    return Boolean(sameUi)
+  }
+
+  entriesByDir.value = nextEntries
+  childrenByDir.value = nextChildren
+  loadedDirs.value = nextLoaded
+  inFlightDirs.value = new Set()
+
+  return true
+}
+
+function readStoredSearchMode(): ExplorerSearchMode {
+  const raw = (localStorage.getItem(STORAGE_FILES_SEARCH_MODE) || '').trim()
+  return raw === 'content' ? 'content' : 'files'
+}
+
+function readStoredSidebarMode(): ExplorerSidebarMode {
+  const raw = (localStorage.getItem(STORAGE_FILES_SIDEBAR_MODE) || '').trim()
+  return raw === 'search' ? 'search' : 'tree'
+}
+
+function readStoredContentScopeMode(): ContentSearchScopeMode {
+  const raw = (localStorage.getItem(STORAGE_FILES_CONTENT_SCOPE_MODE) || '').trim()
+  if (raw === 'selected') return 'selected'
+  if (raw === 'active-file') return 'active-file'
+  return 'workspace'
+}
+
+const explorerSidebarMode = ref<ExplorerSidebarMode>(readStoredSidebarMode())
+const explorerSearchMode = ref<ExplorerSearchMode>(readStoredSearchMode())
+const searchQuery = ref('')
+const searching = ref(false)
+const searchResults = ref<FileNode[]>([])
+
+const contentSearchQuery = ref('')
+const contentSearchReplace = ref('')
+const contentSearchReplaceOpen = ref(false)
+const contentSearchCaseSensitive = ref(false)
+const contentSearchWholeWord = ref(false)
+const contentSearchRegex = ref(false)
+const contentSearchScopeMode = ref<ContentSearchScopeMode>(readStoredContentScopeMode())
+const contentSearchLoading = ref(false)
+const contentSearchReplacing = ref(false)
+const contentSearchError = ref<string | null>(null)
+const contentSearchFiles = ref<FsContentSearchFileResult[]>([])
+const contentSearchMatchCount = ref(0)
+const contentSearchTruncated = ref(false)
+
+const hasFileSearch = computed(() => Boolean(searchQuery.value.trim()))
+const hasContentSearch = computed(() => Boolean(contentSearchQuery.value.trim()))
+
+const selectedFile = ref<FileNode | null>(null)
+const selectedDirectoryPath = ref('')
+const highlightedPath = ref('')
+const restoredSelectedFilePath = ref('')
+const fileContent = ref('')
+const draftContent = ref('')
+const fileChunkTotalBytes = ref(0)
+const fileChunkLoadedBytes = ref(0)
+const fileChunkNextOffset = ref(0)
+const fileChunkHasMore = ref(false)
+const fileChunkLoadingMore = ref(false)
+const pendingLargeFilePrompt = ref<{ path: string; totalBytes: number } | null>(null)
+const fileLoading = ref(false)
+const fileError = ref<string | null>(null)
+const isRefreshingFile = ref(false)
+const viewerMode = ref<ViewerMode>('none')
+const markdownViewMode = ref<MarkdownViewMode>('source')
+const wrapLines = ref(true)
+const isSaving = ref(false)
+const uploading = ref(false)
+const showMobileViewer = ref(false)
+const isEmbeddedWorkspacePane = computed(() => isEmbeddedWorkspacePaneContext(route.query))
+const embeddedMode = computed(() => props.embedded || isEmbeddedWorkspacePane.value)
+const useDesktopSidebarHost = computed(
+  () => !embeddedMode.value && !isCompactLayout.value && !isEmbeddedWorkspacePane.value,
+)
+const showFilesSidebar = computed(() => {
+  if (isEmbeddedWorkspacePane.value) return false
+  if (embeddedMode.value) return embeddedView.value === 'list'
+  if (useDesktopSidebarHost.value) return true
+  return isCompactLayout.value ? ui.isSessionSwitcherOpen : ui.isSidebarOpen
+})
+
+const blameEnabled = ref(localStorage.getItem(STORAGE_FILES_VIEWER_BLAME_VISIBLE) === 'true')
+const timelineVisibilityPreference = ref(localStorage.getItem(STORAGE_FILES_VIEWER_TIMELINE_VISIBLE) === 'true')
+const blameLoading = ref(false)
+const blameError = ref<string | null>(null)
+const blameLines = ref<GitBlameLine[]>([])
+const blameKey = ref('')
+const BLAME_CACHE_MAX = 180
+const blameCache = new Map<string, GitBlameLine[]>()
+const blameInFlight = new Map<string, Promise<GitBlameResponse>>()
+let blameRequestSeq = 0
+
+const gitInlineEnabled = ref(false)
+const gitDiffMode = ref<GitDiffMode>('working')
+const gitDiffLoading = ref(false)
+const gitDiffError = ref<string | null>(null)
+const gitDiffText = ref('')
+const gitDiffMeta = ref<GitDiffMeta | null>(null)
+const gitDiffKey = ref('')
+const gitPatchBusy = ref(false)
+
+const fileTimelineEnabled = ref(false)
+const fileTimelinePath = ref('')
+const fileTimelineLoading = ref(false)
+const fileTimelineError = ref<string | null>(null)
+const fileTimelineCommits = ref<GitLogCommit[]>([])
+const fileTimelineHasMore = ref(false)
+const fileTimelineOffset = ref(0)
+const FILE_TIMELINE_PAGE_SIZE = 10
+
+type TimelineSide = 'left' | 'right'
+
+const fileTimelineLeftCommit = ref<GitLogCommit | null>(null)
+const fileTimelineLeftContent = ref('')
+const fileTimelineLeftLoading = ref(false)
+const fileTimelineLeftError = ref<string | null>(null)
+
+const fileTimelineRightCommit = ref<GitLogCommit | null>(null)
+const fileTimelineRightContent = ref('')
+const fileTimelineRightLoading = ref(false)
+const fileTimelineRightError = ref<string | null>(null)
+
+let fileTimelineLeftRequestSeq = 0
+let fileTimelineRightRequestSeq = 0
+let fileTimelineLoadSeq = 0
+const FILE_TIMELINE_CONTENT_CACHE_MAX = 220
+const fileTimelineContentCache = new Map<string, GitCommitFileContentResponse>()
+const fileTimelineContentInFlight = new Map<string, Promise<GitCommitFileContentResponse>>()
+
+let autoSaveTimer: number | null = null
+let fileAutoRefreshTimer: number | null = null
+let fileRefreshSeq = 0
+let lastDraftEditAt = 0
+function clearAutoSaveTimer() {
+  if (autoSaveTimer !== null) {
+    window.clearTimeout(autoSaveTimer)
+    autoSaveTimer = null
+  }
+}
+
+function clearFileAutoRefreshTimer() {
+  if (fileAutoRefreshTimer !== null) {
+    window.clearInterval(fileAutoRefreshTimer)
+    fileAutoRefreshTimer = null
+  }
+}
+
+function startFileAutoRefreshTimer() {
+  clearFileAutoRefreshTimer()
+  fileAutoRefreshTimer = window.setInterval(() => {
+    void runAutoFileRefreshTick()
+  }, FILE_AUTO_REFRESH_INTERVAL_MS)
+}
+
+function handleGlobalKeydown(e: KeyboardEvent) {
+  // Cmd/Ctrl+S: save current file.
+  if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return
+  if ((e.key || '').toLowerCase() !== 's') return
+  if (!['text', 'markdown'].includes(viewerMode.value) || !canEdit.value) return
+  if (!selectedFile.value?.path) return
+
+  e.preventDefault()
+  void save()
+}
+
+const selection = ref<SelectionRange | null>(null)
+const commentText = ref('')
+
+const activeDialog = ref<DialogKind>(null)
+const dialogData = ref<{ path: string; name?: string; type?: 'file' | 'directory' } | null>(null)
+const dialogInput = ref('')
+const dialogSubmitting = ref(false)
+const moveDialogOpen = ref(false)
+const moveDialogInput = ref('')
+const moveDialogSubmitting = ref(false)
+
+const deletingPaths = ref<Set<string>>(new Set())
+const selectedPaths = ref<Set<string>>(new Set())
+const selectionAnchorPath = ref('')
+
+const confirmDiscardOpen = ref(false)
+const pendingSelect = ref<FileNode | null>(null)
+const fileRefreshConflict = ref<FileRefreshConflictState | null>(null)
+
+let syncingFilesVisibilityPreferencesFromSettings = false
+let filesVisibilityPreferencesInitialized = false
+
+function persistFilesVisibilityPreferencesToSettings() {
+  if (!filesVisibilityPreferencesInitialized) return
+  if (syncingFilesVisibilityPreferencesFromSettings) return
+  if (!settings.data) return
+
+  const showGitignored = !respectGitignore.value
+  const patch: Partial<Settings> = {}
+
+  if (settings.data.directoryShowHidden !== showHidden.value) {
+    patch.directoryShowHidden = showHidden.value
+  }
+  if (settings.data.filesViewShowGitignored !== showGitignored) {
+    patch.filesViewShowGitignored = showGitignored
+  }
+  if (Object.keys(patch).length === 0) return
+
+  void settings.save(patch)
+}
+
+function syncFilesVisibilityPreferencesFromSettings(next: Settings | null) {
+  if (!next) return
+
+  const hasShowHidden = typeof next.directoryShowHidden === 'boolean'
+  const hasShowGitignored = typeof next.filesViewShowGitignored === 'boolean'
+
+  syncingFilesVisibilityPreferencesFromSettings = true
+  if (hasShowHidden) {
+    showHidden.value = Boolean(next.directoryShowHidden)
+  }
+  if (hasShowGitignored) {
+    respectGitignore.value = !Boolean(next.filesViewShowGitignored)
+  }
+  syncingFilesVisibilityPreferencesFromSettings = false
+
+  filesVisibilityPreferencesInitialized = true
+
+  if (hasShowHidden && hasShowGitignored) return
+
+  const patch: Partial<Settings> = {}
+  if (!hasShowHidden) {
+    patch.directoryShowHidden = showHidden.value
+  }
+  if (!hasShowGitignored) {
+    patch.filesViewShowGitignored = !respectGitignore.value
+  }
+
+  void settings.save(patch)
+}
+
+watch(showHidden, (v) => localStorage.setItem(STORAGE_FILES_SHOW_HIDDEN, v ? 'true' : 'false'))
+watch(showHidden, () => persistFilesVisibilityPreferencesToSettings())
+watch(respectGitignore, (v) => {
+  localStorage.setItem(STORAGE_FILES_RESPECT_GITIGNORE, v ? 'true' : 'false')
+  persistFilesVisibilityPreferencesToSettings()
+})
+watch(autoSaveEnabled, (v) => {
+  localStorage.setItem(STORAGE_FILES_AUTOSAVE, v ? 'true' : 'false')
+  if (!v) {
+    clearAutoSaveTimer()
+    clearFileAutoRefreshTimer()
+    return
+  }
+  startFileAutoRefreshTimer()
+})
+watch(blameEnabled, (v) => localStorage.setItem(STORAGE_FILES_VIEWER_BLAME_VISIBLE, v ? 'true' : 'false'))
+watch(timelineVisibilityPreference, (v) =>
+  localStorage.setItem(STORAGE_FILES_VIEWER_TIMELINE_VISIBLE, v ? 'true' : 'false'),
+)
+watch(explorerSidebarMode, (v) => localStorage.setItem(STORAGE_FILES_SIDEBAR_MODE, v))
+watch(explorerSearchMode, (v) => localStorage.setItem(STORAGE_FILES_SEARCH_MODE, v))
+watch(contentSearchScopeMode, (v) => localStorage.setItem(STORAGE_FILES_CONTENT_SCOPE_MODE, v))
+watch(
+  () => settings.data,
+  (next) => {
+    syncFilesVisibilityPreferencesFromSettings(next)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => [blameEnabled.value, selectedFile.value?.path, viewerMode.value, root.value] as const,
+  ([enabled, path, mode, rootPath]) => {
+    if (!enabled || !path || mode !== 'text' || !rootPath) {
+      clearBlame()
+      return
+    }
+    void loadBlame()
+  },
+)
+
+watch(
+  () => [gitInlineEnabled.value, selectedFile.value?.path, viewerMode.value, root.value, gitDiffMode.value] as const,
+  ([enabled, path, mode, rootPath]) => {
+    if (!enabled || !path || mode !== 'text' || !rootPath) {
+      clearGitDiff()
+      return
+    }
+    void loadGitDiff()
+  },
+)
+
+watch(
+  () => [isCompactLayout.value, showMobileViewer.value] as const,
+  ([mobile, showViewer]) => {
+    if (!mobile || showViewer) return
+    if (!selectedFile.value) return
+
+    fileRefreshSeq += 1
+    isRefreshingFile.value = false
+    closeRefreshConflictDialog()
+    lastDraftEditAt = 0
+    selectedFile.value = null
+    viewerMode.value = 'none'
+    fileContent.value = ''
+    draftContent.value = ''
+    resetFileChunkState()
+    fileLoading.value = false
+    fileError.value = null
+    selection.value = null
+    commentText.value = ''
+    clearBlame()
+    clearGitDiff()
+    closeFileTimeline()
+  },
+)
+
+watch(
+  () => [embeddedMode.value, selectedFile.value?.path] as const,
+  ([embedded, path]) => {
+    if (!embedded) return
+    embeddedView.value = path ? 'viewer' : 'list'
+  },
+  { immediate: true },
+)
+
+watch(
+  () => filesMultiSelect.enabled.value,
+  (enabled) => {
+    if (!enabled) clearSelectedPaths()
+  },
+)
+
+let rootRestoreSeq = 0
+let openFileSeq = 0
+let pageMounted = false
+const handledFileNavigationKey = ref('')
+const handledGitNavigationKey = ref('')
+const handledWorkspaceDockFileRequestSeq = ref(0)
+const fileRevealRequestSeq = ref(0)
+const fileRevealLine = ref<number | null>(null)
+const fileRevealColumn = ref<number | null>(null)
+const fileRevealAnchor = ref('')
+
+function isStaleRootRestore(seq: number, rootPath: string): boolean {
+  return seq !== rootRestoreSeq || root.value !== rootPath
+}
+
+function isStaleFileOpen(seq: number, rootPath: string, path: string): boolean {
+  return seq !== openFileSeq || root.value !== rootPath || selectedFile.value?.path !== path
+}
+
+watch(
+  () =>
+    [root.value, Array.from(expandedDirs.value).join('|'), highlightedPath.value, selectedFile.value?.path].join('::'),
+  () => {
+    persistExplorerSoon()
+  },
+)
+
+const selectedPath = computed(() => selectedFile.value?.path || '')
+
+function fileNameFromPath(path: string): string {
+  const normalized = normalizePath(String(path || '').trim())
+  if (!normalized) return ''
+  const parts = normalized.split('/').filter(Boolean)
+  return parts[parts.length - 1] || normalized
+}
+
+const workspaceFilesTabTitle = computed(() => {
+  const selected = fileNameFromPath(selectedPath.value)
+  if (selected) return selected
+
+  const filePath = fileNameFromPath(routeQueryValue(route.query.filePath))
+  if (filePath) return filePath
+
+  const gitPath = fileNameFromPath(routeQueryValue(route.query.gitPath))
+  if (gitPath) return gitPath
+
+  return String(t('nav.files'))
+})
+
+watch(
+  () => [route.path, route.query, workspaceFilesTabTitle.value] as const,
+  ([path, _query, title]) => {
+    if (!String(path || '').startsWith('/files')) return
+    ui.setWorkspaceWindowTitleFromRoute(route.query, title)
+  },
+  { immediate: true, deep: true },
+)
+
+const rawApiPath = computed(() => {
+  const path = selectedPath.value
+  const rootPath = root.value
+  if (!path || !rootPath) return ''
+  return `/api/fs/raw?directory=${encodeURIComponent(rootPath)}&path=${encodeURIComponent(path)}`
+})
+
+const rawUrl = ref('')
+let rawUrlSeq = 0
+const blobPreviewReloadKey = ref(0)
+
+const usesBlobPreview = computed(() => ['image', 'pdf', 'audio', 'video'].includes(viewerMode.value))
+
+function revokeRawUrl() {
+  const href = String(rawUrl.value || '').trim()
+  if (!href) return
+  if (href.startsWith('blob:')) {
+    try {
+      URL.revokeObjectURL(href)
+    } catch {
+      // ignore
+    }
+  }
+  rawUrl.value = ''
+}
+
+watch(
+  () => {
+    return [rawApiPath.value, usesBlobPreview.value, blobPreviewReloadKey.value] as const
+  },
+  async ([path, needsBlob]) => {
+    rawUrlSeq += 1
+    const seq = rawUrlSeq
+
+    revokeRawUrl()
+    if (!needsBlob) return
+    if (!path) return
+
+    try {
+      const blob = await apiBlob(path, { cache: 'no-store' })
+      if (seq !== rawUrlSeq) return
+      const href = URL.createObjectURL(blob)
+      rawUrl.value = href
+    } catch (err) {
+      if (seq !== rawUrlSeq) return
+      fileError.value =
+        err instanceof ApiError ? err.message || err.bodyText || '' : err instanceof Error ? err.message : String(err)
+      rawUrl.value = ''
+    }
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  revokeRawUrl()
+})
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let idx = 0
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024
+    idx += 1
+  }
+  return `${value >= 10 || idx === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[idx]}`
+}
+
+function resetFileChunkState() {
+  fileChunkTotalBytes.value = 0
+  fileChunkLoadedBytes.value = 0
+  fileChunkNextOffset.value = 0
+  fileChunkHasMore.value = false
+  fileChunkLoadingMore.value = false
+  pendingLargeFilePrompt.value = null
+}
+
+const displayedContent = computed(() => fileContent.value)
+const largeFilePrompt = computed(() => {
+  const prompt = pendingLargeFilePrompt.value
+  const selectedPath = selectedFile.value?.path || ''
+  if (!prompt || !selectedPath || prompt.path !== selectedPath) return null
+  return {
+    totalBytes: prompt.totalBytes,
+    totalLabel: formatBytes(prompt.totalBytes),
+    initialLoadLabel: formatBytes(FILE_CHUNK_BYTES),
+  }
+})
+const fileChunkUi = computed(() => {
+  const selectedPath = selectedFile.value?.path || ''
+  if (!selectedPath) return null
+  const totalBytes = fileChunkTotalBytes.value
+  if (totalBytes <= 0) return null
+  return {
+    loadedBytes: fileChunkLoadedBytes.value,
+    loadedLabel: formatBytes(fileChunkLoadedBytes.value),
+    totalBytes,
+    totalLabel: formatBytes(totalBytes),
+    hasMore: fileChunkHasMore.value,
+    loadingMore: fileChunkLoadingMore.value,
+  }
+})
+const canEdit = computed(() =>
+  Boolean(
+    selectedFile.value &&
+    ['text', 'markdown'].includes(viewerMode.value) &&
+    !fileChunkHasMore.value &&
+    !largeFilePrompt.value,
+  ),
+)
+const dirty = computed(() => canEdit.value && draftContent.value !== displayedContent.value)
+
+const displaySelectedPath = computed(() => {
+  if (!selectedFile.value?.path) return ''
+  if (isPathHiddenInFiles(selectedFile.value.path)) return ''
+  return relativeToWorkspace(selectedFile.value.path)
+})
+
+const refreshConflictPathLabel = computed(() => {
+  const path = fileRefreshConflict.value?.path || ''
+  if (!path) return ''
+  const rel = relativeToWorkspace(path)
+  if (rel && rel !== '.') return rel
+  return path
+})
+
+const refreshConflictLargeHint = computed(() => {
+  const conflict = fileRefreshConflict.value
+  if (!conflict || conflict.remote.kind !== 'large') return ''
+  return String(
+    t('files.refreshConflict.remoteLargeHint', {
+      size: formatBytes(conflict.remote.totalBytes),
+    }),
+  )
+})
+
+const fileStatusLabel = computed(() => {
+  if (!selectedFile.value?.path || !['text', 'markdown'].includes(viewerMode.value)) return ''
+  if (largeFilePrompt.value) {
+    return String(
+      t('files.viewer.largeFile.pendingStatus', {
+        size: largeFilePrompt.value.totalLabel,
+      }),
+    )
+  }
+  if (fileChunkHasMore.value) {
+    return String(
+      t('files.viewer.largeFile.partialLoadedStatus', {
+        loaded: formatBytes(fileChunkLoadedBytes.value),
+        total: formatBytes(fileChunkTotalBytes.value),
+      }),
+    )
+  }
+  return dirty.value ? 'modified' : 'saved'
+})
+
+const flattenedTree = computed<FlatRow[]>(() => {
+  const rootPath = root.value
+  if (!rootPath) return []
+
+  const rows: FlatRow[] = []
+  const walk = (dirPath: string, depth: number) => {
+    const listRaw = childrenByDir.value[dirPath]
+    const list = Array.isArray(listRaw) ? listRaw : []
+    for (const node of list) {
+      const isDir = node.type === 'directory'
+      const isExpanded = isDir && expandedDirs.value.has(node.path)
+      rows.push({
+        node,
+        depth,
+        isExpanded,
+        isLoading: isDir && inFlightDirs.value.has(node.path),
+      })
+      if (isDir && isExpanded) {
+        walk(node.path, depth + 1)
+      }
+    }
+  }
+
+  walk(rootPath, 0)
+  return rows
+})
+
+const filesImageGalleryItems = computed<ImageViewerItem[]>(() => {
+  const workspaceRoot = root.value
+  if (!workspaceRoot) return []
+
+  const items: ImageViewerItem[] = []
+  const seen = new Set<string>()
+  for (const row of flattenedTree.value) {
+    const node = row.node
+    if (!node || node.type !== 'file') continue
+
+    const path = normalizePath(String(node.path || '').trim())
+    if (!path || seen.has(path) || isPathHiddenInFiles(path)) continue
+    if (detectPreviewMode(path) !== 'image') continue
+
+    seen.add(path)
+    const label = String(node.name || path.split('/').filter(Boolean).pop() || path)
+    items.push({
+      src: buildWorkspaceRawFileUrl(workspaceRoot, path),
+      key: path,
+      title: label,
+      alt: label,
+    })
+  }
+
+  const selectedPath = normalizePath(String(selectedFile.value?.path || '').trim())
+  if (
+    selectedPath &&
+    !seen.has(selectedPath) &&
+    detectPreviewMode(selectedPath) === 'image' &&
+    !isPathHiddenInFiles(selectedPath)
+  ) {
+    const label = String(selectedFile.value?.name || selectedPath.split('/').filter(Boolean).pop() || selectedPath)
+    items.push({
+      src: buildWorkspaceRawFileUrl(workspaceRoot, selectedPath),
+      key: selectedPath,
+      title: label,
+      alt: label,
+    })
+  }
+
+  return items
+})
+
+const selectedImageGalleryIndex = computed(() => {
+  const selectedPath = normalizePath(String(selectedFile.value?.path || '').trim())
+  if (!selectedPath) return -1
+  return filesImageGalleryItems.value.findIndex((item) => normalizePath(String(item.key || '').trim()) === selectedPath)
+})
+
+const hasRootChildren = computed(() => {
+  const rootPath = root.value
+  if (!rootPath) return false
+  return Array.isArray(childrenByDir.value[rootPath])
+})
+
+function visibleTreePaths(): string[] {
+  return flattenedTree.value.map((row) => row.node.path)
+}
+
+const knownTreePaths = computed(() => {
+  const known = new Set<string>()
+  const rootPath = normalizePath(String(root.value || '').trim())
+  if (rootPath) known.add(rootPath)
+
+  for (const [dirPath, entries] of Object.entries(entriesByDir.value)) {
+    const normalizedDirPath = normalizePath(String(dirPath || '').trim())
+    if (normalizedDirPath) known.add(normalizedDirPath)
+
+    const safeEntries = Array.isArray(entries) ? entries : []
+    for (const entry of safeEntries) {
+      const entryPath = normalizePath(String(entry.path || '').trim())
+      if (entryPath) known.add(entryPath)
+    }
+  }
+
+  return Array.from(known)
+})
+
+function clearSelectedPaths() {
+  selectedPaths.value = new Set()
+  selectionAnchorPath.value = ''
+}
+
+function selectAllVisibleNodes() {
+  if (!filesMultiSelect.enabled.value) return
+  const visible = visibleTreePaths()
+  selectedPaths.value = new Set(visible)
+  selectionAnchorPath.value = visible[visible.length - 1] || ''
+}
+
+function invertVisibleNodeSelection() {
+  if (!filesMultiSelect.enabled.value) return
+  const visible = visibleTreePaths()
+  if (!visible.length) return
+
+  const scope = new Set(visible)
+  const next = new Set<string>()
+  for (const path of selectedPaths.value) {
+    if (!scope.has(path)) next.add(path)
+  }
+  for (const path of visible) {
+    if (!selectedPaths.value.has(path)) next.add(path)
+  }
+  selectedPaths.value = next
+  selectionAnchorPath.value = visible[visible.length - 1] || ''
+}
+
+function normalizeSelectedTargets(paths: string[]): string[] {
+  const rootPath = root.value
+  if (!rootPath) return []
+
+  const unique = Array.from(
+    new Set(
+      paths
+        .map((path) => normalizePath(String(path || '').trim()))
+        .filter((path) => path && withinWorkspace(path, rootPath)),
+    ),
+  )
+
+  unique.sort((a, b) => a.length - b.length)
+  const pruned: string[] = []
+  for (const path of unique) {
+    if (pruned.some((base) => path === base || path.startsWith(`${base}/`))) continue
+    pruned.push(path)
+  }
+  return pruned
+}
+
+function selectOnlyPath(path: string) {
+  const normalized = normalizePath(String(path || '').trim())
+  if (!normalized) {
+    clearSelectedPaths()
+    return
+  }
+  selectedPaths.value = new Set([normalized])
+  selectionAnchorPath.value = normalized
+}
+
+function rangeSelectionPaths(anchorPath: string, targetPath: string): string[] {
+  const visible = visibleTreePaths()
+  const anchorIndex = visible.indexOf(anchorPath)
+  const targetIndex = visible.indexOf(targetPath)
+  if (targetIndex < 0) return []
+  if (anchorIndex < 0) return [targetPath]
+  const start = Math.min(anchorIndex, targetIndex)
+  const end = Math.max(anchorIndex, targetIndex)
+  return visible.slice(start, end + 1)
+}
+
+const activeCreateDir = computed(() => {
+  const rootPath = root.value
+  if (!rootPath) return ''
+
+  const selectedDir = normalizePath(String(selectedDirectoryPath.value || '').trim())
+  if (selectedDir && withinWorkspace(selectedDir)) return selectedDir
+
+  const file = selectedFile.value
+  if (!file) return rootPath
+  if (file.type === 'directory') return file.path
+
+  const normalized = normalizePath(String(file.path || '').trim())
+  const parent = normalized.split('/').slice(0, -1).join('/')
+  return parent || rootPath
+})
+
+const activeUploadDir = computed(() => {
+  const rootPath = root.value
+  if (!rootPath) return ''
+
+  const selectedDir = normalizePath(String(selectedDirectoryPath.value || '').trim())
+  if (selectedDir && withinWorkspace(selectedDir)) return selectedDir
+
+  const file = selectedFile.value
+  if (!file) return rootPath
+  if (file.type === 'directory') return file.path
+  const normalized = normalizePath(String(file.path || '').trim())
+  const parent = normalized.split('/').slice(0, -1).join('/')
+  return parent || rootPath
+})
+
+const contentSearchSelectedScopePath = computed(() => {
+  const selectedDir = normalizePath(String(selectedDirectoryPath.value || '').trim())
+  if (!selectedDir || !withinWorkspace(selectedDir)) return ''
+  return selectedDir
+})
+
+const contentSearchActiveFileScopePath = computed(() => {
+  const rootPath = root.value
+  if (!rootPath) return ''
+
+  const file = selectedFile.value
+  if (!file?.path) return ''
+
+  const normalized = normalizePath(String(file.path || '').trim())
+  const scopePath = file.type === 'directory' ? normalized : normalized.split('/').slice(0, -1).join('/')
+  if (!scopePath || !withinWorkspace(scopePath)) return ''
+  return scopePath
+})
+
+const contentSearchScopePath = computed(() => {
+  const rootPath = root.value
+  if (!rootPath) return ''
+
+  if (contentSearchScopeMode.value === 'selected') {
+    return contentSearchSelectedScopePath.value || rootPath
+  }
+  if (contentSearchScopeMode.value === 'active-file') {
+    return contentSearchActiveFileScopePath.value || rootPath
+  }
+  return rootPath
+})
+
+function labelForScopePath(path: string): string {
+  if (!path) return ''
+  const rel = relativeToWorkspace(path)
+  return rel === '.' ? t('files.scope.workspaceRoot') : rel
+}
+
+const contentSearchScopeOptions = computed(() => {
+  const rootPath = root.value
+  const selectedPath = contentSearchSelectedScopePath.value
+  const activeFilePath = contentSearchActiveFileScopePath.value
+
+  return [
+    {
+      id: 'workspace' as const,
+      label: t('files.scope.options.workspace.label'),
+      description: labelForScopePath(rootPath),
+      disabled: !rootPath,
+    },
+    {
+      id: 'selected' as const,
+      label: t('files.scope.options.selected.label'),
+      description: selectedPath ? labelForScopePath(selectedPath) : t('files.scope.options.selected.emptyDescription'),
+      disabled: !selectedPath,
+    },
+    {
+      id: 'active-file' as const,
+      label: t('files.scope.options.activeFile.label'),
+      description: activeFilePath
+        ? labelForScopePath(activeFilePath)
+        : t('files.scope.options.activeFile.emptyDescription'),
+      disabled: !activeFilePath,
+    },
+  ]
+})
+
+const activeContentSearchScope = computed(() => {
+  return contentSearchScopeOptions.value.find((scope) => scope.id === contentSearchScopeMode.value) || null
+})
+
+const contentSearchSummary = computed(() => {
+  if (!hasContentSearch.value) return t('files.search.content.hint')
+  if (contentSearchLoading.value) return t('common.searching')
+  const files = contentSearchFiles.value.length
+  const matches = contentSearchMatchCount.value
+  const matchWord = matches === 1 ? t('files.search.content.matchSingle') : t('files.search.content.matchPlural')
+  const fileWord = files === 1 ? t('files.search.content.fileSingle') : t('files.search.content.filePlural')
+  const text = t('files.search.content.resultSummary', { matches, matchWord, files, fileWord })
+  return contentSearchTruncated.value ? t('files.search.content.resultSummaryLimited', { text }) : text
+})
+
+const dialogTitle = computed(() => {
+  switch (activeDialog.value) {
+    case 'createFile':
+      return t('files.dialog.title.createFile')
+    case 'createFolder':
+      return t('files.dialog.title.createFolder')
+    case 'rename':
+      return t('files.dialog.title.rename')
+    default:
+      return ''
+  }
+})
+
+const dialogDescription = computed(() => {
+  const base = dialogData.value?.path || root.value || t('files.dialog.rootFallback')
+  if (activeDialog.value === 'createFile') return t('files.dialog.description.createFile', { base })
+  if (activeDialog.value === 'createFolder') return t('files.dialog.description.createFolder', { base })
+  if (activeDialog.value === 'rename')
+    return t('files.dialog.description.rename', { name: dialogData.value?.name || '' })
+  return ''
+})
+
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, '/')
+}
+
+function trimTrailingSlashes(value: string): string {
+  const normalized = normalizePath(String(value || '').trim())
+  if (!normalized) return ''
+  if (normalized === '/') return '/'
+  if (/^[A-Za-z]:\/$/.test(normalized)) return normalized
+  return normalized.replace(/\/+$/g, '')
+}
+
+function rootDrive(path: string): string {
+  const normalized = trimTrailingSlashes(path)
+  const m = normalized.match(/^([A-Za-z]:)(?:\/|$)/)
+  return m ? `${m[1]}/` : ''
+}
+
+function parentRootPath(path: string): string {
+  const normalized = trimTrailingSlashes(path)
+  if (!normalized) return ''
+  if (normalized === '/') return ''
+  const drive = rootDrive(normalized)
+  if (drive && normalized === drive) return ''
+
+  const slash = normalized.lastIndexOf('/')
+  if (slash < 0) return ''
+  if (slash === 0) return '/'
+  if (drive && slash <= drive.length - 1) return drive
+  return normalized.slice(0, slash)
+}
+
+function systemRootForPath(path: string): string {
+  const drive = rootDrive(path)
+  if (drive) return drive
+  return '/'
+}
+
+function rootOptionLabel(path: string): string {
+  const normalized = trimTrailingSlashes(path)
+  if (!normalized) return ''
+  if (normalized === '/') return '/'
+  return normalized
+}
+
+const rootCanNavigateUp = computed(() => Boolean(parentRootPath(root.value)))
+
+const explorerRootOptions = computed(() => {
+  const out = new Set<string>()
+  const current = root.value
+  const preferred = trimTrailingSlashes(normalizePath(preferredProjectRoot.value || ''))
+  const configured = configuredProjectRoots.value
+
+  if (current) {
+    out.add(current)
+    const parent = parentRootPath(current)
+    if (parent) out.add(parent)
+    const sysRoot = systemRootForPath(current)
+    if (sysRoot) out.add(sysRoot)
+  }
+  if (preferred) out.add(preferred)
+  for (const candidate of configured) {
+    out.add(candidate)
+    const sysRoot = systemRootForPath(candidate)
+    if (sysRoot) out.add(sysRoot)
+  }
+
+  return Array.from(out)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+    .map((path) => ({ id: path, label: rootOptionLabel(path) }))
+})
+
+function setExplorerRoot(path: string, opts?: { source?: string }) {
+  const next = trimTrailingSlashes(normalizePath(String(path || '').trim()))
+  if (!next || next === root.value) return
+  explorerRootPath.value = next
+  ui.setGlobalSelection('files-root', next, {
+    meta: { source: String(opts?.source || 'files-root-switch') },
+  })
+}
+
+function navigateRootUp() {
+  const parent = parentRootPath(root.value)
+  if (!parent) return
+  setExplorerRoot(parent, { source: 'files-root-up' })
+}
+
+watch(
+  () => [preferredProjectRoot.value, configuredProjectRoots.value] as const,
+  ([preferred, configured]) => {
+    if (root.value) return
+    const nextPreferred = trimTrailingSlashes(normalizePath(String(preferred || '').trim()))
+    if (nextPreferred) {
+      explorerRootPath.value = nextPreferred
+      return
+    }
+    const fallback = configured.find((path) => Boolean(path)) || ''
+    if (fallback) {
+      explorerRootPath.value = fallback
+    }
+  },
+  { immediate: true, deep: true },
+)
+
+function joinPath(base: string, name: string): string {
+  const b = base.replace(/\/+$/, '')
+  const n = name.replace(/^\/+/, '')
+  return `${b}/${n}`
+}
+
+function withinWorkspace(path: string, basePath = root.value): boolean {
+  const normalizedBase = trimTrailingSlashes(normalizePath(basePath || ''))
+  if (!normalizedBase) return true
+  const normalizedPath = trimTrailingSlashes(normalizePath(path))
+  if (normalizedPath === normalizedBase) return true
+  if (normalizedBase === '/') {
+    return normalizedPath.startsWith('/')
+  }
+  if (/^[A-Za-z]:\/$/.test(normalizedBase)) {
+    return normalizedPath.toLowerCase().startsWith(normalizedBase.toLowerCase())
+  }
+  return normalizedPath.startsWith(`${normalizedBase}/`)
+}
+
+function relativeToWorkspace(absPath: string): string {
+  const base = trimTrailingSlashes(root.value)
+  const normalized = trimTrailingSlashes(normalizePath(absPath))
+  if (!base) return normalized
+  if (normalized === base) return '.'
+  if (base === '/') {
+    if (normalized.startsWith('/')) return normalized.slice(1)
+    return normalized
+  }
+  if (/^[A-Za-z]:\/$/.test(base)) {
+    if (normalized.toLowerCase().startsWith(base.toLowerCase())) {
+      return normalized.slice(base.length).replace(/^\/+/, '')
+    }
+    return normalized
+  }
+  if (normalized.startsWith(`${base}/`)) return normalized.slice(base.length + 1)
+  return normalized
+}
+
+function normalizeRelativePathKey(path: string): string {
+  return normalizePath(String(path || '').trim()).replace(/^\/+/, '')
+}
+
+function setBoundedCacheEntry<K, V>(cache: Map<K, V>, key: K, value: V, maxEntries: number) {
+  if (cache.has(key)) cache.delete(key)
+  cache.set(key, value)
+  while (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value
+    if (oldestKey === undefined) break
+    cache.delete(oldestKey)
+  }
+}
+
+function isPathHiddenInFiles(absOrRelPath: string): boolean {
+  const normalized = normalizePath(String(absOrRelPath || '').trim())
+  if (!normalized) return false
+
+  const rel = normalizeRelativePathKey(relativeToWorkspace(normalized))
+  if (HIDDEN_FILE_RELATIVE_PATHS.has(rel)) return true
+
+  const direct = normalizeRelativePathKey(normalized)
+  return HIDDEN_FILE_RELATIVE_PATHS.has(direct)
+}
+
+function buildFileNode(path: string): FileNode {
+  const normalized = normalizePath(String(path || '').trim())
+  const name = normalized.split('/').filter(Boolean).pop() || normalized
+  return {
+    name,
+    path: normalized,
+    type: 'file',
+    extension: extensionFromPath(name),
+  }
+}
+
+type GitNavigationAction = 'open' | 'reveal'
+type GitNavigationLocation = {
+  line?: number
+  column?: number
+  anchor?: string
+}
+
+function routeQueryValue(value: unknown): string {
+  if (Array.isArray(value)) return String(value[0] || '').trim()
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function parseGitNavigationAction(value: unknown): GitNavigationAction {
+  return routeQueryValue(value) === 'reveal' ? 'reveal' : 'open'
+}
+
+function parsePositiveInt(value: unknown): number | undefined {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return undefined
+  return Math.floor(n)
+}
+
+function parseAnchor(value: unknown): string | undefined {
+  const raw = routeQueryValue(value)
+  return raw || undefined
+}
+
+function parseGitNavigationLocation(
+  lineValue: unknown,
+  columnValue: unknown,
+  anchorValue?: unknown,
+): GitNavigationLocation {
+  const line = parsePositiveInt(Array.isArray(lineValue) ? lineValue[0] : lineValue)
+  const column = parsePositiveInt(Array.isArray(columnValue) ? columnValue[0] : columnValue)
+  const anchor = parseAnchor(Array.isArray(anchorValue) ? anchorValue[0] : anchorValue)
+  return {
+    ...(line ? { line } : {}),
+    ...(column ? { column } : {}),
+    ...(anchor ? { anchor } : {}),
+  }
+}
+
+function gitNavigationLocationKey(location?: GitNavigationLocation): string {
+  const line = parsePositiveInt(location?.line)
+  const column = parsePositiveInt(location?.column)
+  const anchor = parseAnchor(location?.anchor)
+  return `${line || ''}:${column || ''}:${anchor || ''}`
+}
+
+function showEmbeddedFileList() {
+  if (!embeddedMode.value) return
+  embeddedView.value = 'list'
+}
+
+function showEmbeddedFileViewer() {
+  if (!embeddedMode.value) return
+  if (!selectedFile.value) return
+  embeddedView.value = 'viewer'
+}
+
+function resolveGitNavigationPath(rawPath: string, workspaceRoot: string): string {
+  const normalized = normalizePath(String(rawPath || '').trim())
+  if (!normalized) return ''
+  if (withinWorkspace(normalized, workspaceRoot)) return normalized
+
+  const joined = normalizePath(`${workspaceRoot}/${normalized.replace(/^\/+/, '')}`)
+  if (withinWorkspace(joined, workspaceRoot)) return joined
+  return ''
+}
+
+function parentDirectoriesForPath(path: string, workspaceRoot: string): string[] {
+  const rel = normalizePath(String(relativeToWorkspace(path) || '').trim()).replace(/^\/+/, '')
+  const segments = rel.split('/').filter(Boolean)
+  if (segments.length <= 1) return []
+
+  const dirs: string[] = []
+  let current = workspaceRoot
+  for (const segment of segments.slice(0, -1)) {
+    current = normalizePath(`${current}/${segment}`)
+    dirs.push(current)
+  }
+  return dirs
+}
+
+function clearGitNavigationQuery() {
+  if (
+    !route.query.gitPath &&
+    !route.query.gitAction &&
+    !route.query.gitLine &&
+    !route.query.gitColumn &&
+    !route.query.gitAnchor
+  )
+    return
+  const nextQuery = { ...route.query }
+  delete nextQuery.gitPath
+  delete nextQuery.gitAction
+  delete nextQuery.gitLine
+  delete nextQuery.gitColumn
+  delete nextQuery.gitAnchor
+  void router.replace({ path: route.path, query: nextQuery })
+}
+
+function clearFileRevealRequest() {
+  fileRevealLine.value = null
+  fileRevealColumn.value = null
+  fileRevealAnchor.value = ''
+}
+
+function queueFileReveal(line?: number, column?: number, anchor?: string) {
+  const nextLine = parsePositiveInt(line)
+  const nextAnchor = parseAnchor(anchor)
+  if (!nextLine && !nextAnchor) return
+  const nextColumn = parsePositiveInt(column)
+
+  fileRevealLine.value = nextLine || null
+  fileRevealColumn.value = nextLine ? nextColumn || null : null
+  fileRevealAnchor.value = nextLine ? '' : nextAnchor || ''
+  fileRevealRequestSeq.value += 1
+}
+
+async function applyGitNavigationQuery() {
+  if (!pageMounted) return
+
+  const workspaceRoot = root.value
+  const gitPathRaw = routeQueryValue(route.query.gitPath)
+  if (!workspaceRoot || !gitPathRaw) return
+
+  const action = parseGitNavigationAction(route.query.gitAction)
+  const location = parseGitNavigationLocation(route.query.gitLine, route.query.gitColumn, route.query.gitAnchor)
+  const targetPath = resolveGitNavigationPath(gitPathRaw, workspaceRoot)
+  const key = `${workspaceRoot}::${action}::${targetPath || gitPathRaw}::${gitNavigationLocationKey(location)}`
+  if (handledGitNavigationKey.value === key) return
+  handledGitNavigationKey.value = key
+
+  await applyGitNavigationTarget(gitPathRaw, action, location)
+  clearGitNavigationQuery()
+}
+
+async function applyFileNavigationQuery() {
+  if (!pageMounted) return
+
+  const workspaceRoot = root.value
+  const filePathRaw = routeQueryValue(route.query.filePath)
+  if (!workspaceRoot || !filePathRaw) return
+
+  const location = parseGitNavigationLocation(route.query.fileLine, route.query.fileColumn, route.query.fileAnchor)
+  const targetPath = resolveGitNavigationPath(filePathRaw, workspaceRoot)
+  const key = `${ui.activeWorkspaceWindowId}::${workspaceRoot}::${targetPath || filePathRaw}::${gitNavigationLocationKey(location)}`
+  if (handledFileNavigationKey.value === key) return
+  handledFileNavigationKey.value = key
+
+  await applyGitNavigationTarget(filePathRaw, 'open', location)
+}
+
+async function applyGitNavigationTarget(
+  rawPath: string,
+  action: GitNavigationAction,
+  location?: GitNavigationLocation,
+) {
+  const workspaceRoot = root.value
+  if (!workspaceRoot) return
+
+  const targetPath = resolveGitNavigationPath(rawPath, workspaceRoot)
+
+  if (!targetPath || isPathHiddenInFiles(targetPath)) {
+    return
+  }
+
+  await loadDirectory(workspaceRoot).catch(() => {})
+  for (const dir of parentDirectoriesForPath(targetPath, workspaceRoot)) {
+    await ensureDirectoryExpanded(dir)
+  }
+
+  if (action === 'open') {
+    await openFile(buildFileNode(targetPath))
+    const line = parsePositiveInt(location?.line)
+    const anchor = parseAnchor(location?.anchor)
+    if (line && (viewerMode.value === 'text' || viewerMode.value === 'markdown')) {
+      if (viewerMode.value === 'markdown' && markdownViewMode.value === 'preview') {
+        markdownViewMode.value = 'source'
+      }
+      queueFileReveal(line, parsePositiveInt(location?.column))
+      return
+    }
+
+    if (anchor && viewerMode.value === 'markdown') {
+      if (markdownViewMode.value === 'source') {
+        markdownViewMode.value = 'preview'
+      }
+      queueFileReveal(undefined, undefined, anchor)
+    }
+    return
+  }
+
+  selectOnlyPath(targetPath)
+  highlightedPath.value = targetPath
+  selectedDirectoryPath.value = normalizePath(targetPath.split('/').slice(0, -1).join('/')) || workspaceRoot
+  if (embeddedMode.value) {
+    embeddedView.value = 'list'
+  }
+  if (isCompactLayout.value) {
+    showMobileViewer.value = false
+  }
+  persistExplorerSoon()
+}
+
+async function restoreSelectedFile(rootPath: string, seq: number) {
+  if (isStaleRootRestore(seq, rootPath)) return
+
+  const selectedPath = normalizePath(String(restoredSelectedFilePath.value || '').trim())
+  if (!selectedPath || !withinWorkspace(selectedPath, rootPath) || isPathHiddenInFiles(selectedPath)) return
+
+  const currentPath = normalizePath(String(selectedFile.value?.path || '').trim())
+  if (currentPath === selectedPath) return
+
+  await openFile(buildFileNode(selectedPath))
+}
+
+function resetFileTimelineState() {
+  fileTimelineLoadSeq += 1
+  fileTimelineLeftRequestSeq += 1
+  fileTimelineRightRequestSeq += 1
+  fileTimelineContentCache.clear()
+  fileTimelineContentInFlight.clear()
+
+  fileTimelineLoading.value = false
+  fileTimelineError.value = null
+  fileTimelineCommits.value = []
+  fileTimelineHasMore.value = false
+  fileTimelineOffset.value = 0
+
+  fileTimelineLeftCommit.value = null
+  fileTimelineLeftContent.value = ''
+  fileTimelineLeftLoading.value = false
+  fileTimelineLeftError.value = null
+
+  fileTimelineRightCommit.value = null
+  fileTimelineRightContent.value = ''
+  fileTimelineRightLoading.value = false
+  fileTimelineRightError.value = null
+}
+
+function closeFileTimeline() {
+  fileTimelineEnabled.value = false
+  fileTimelinePath.value = ''
+  resetFileTimelineState()
+}
+
+function isTimelineSideRequestStale(side: TimelineSide, requestSeq: number): boolean {
+  return side === 'left' ? requestSeq !== fileTimelineLeftRequestSeq : requestSeq !== fileTimelineRightRequestSeq
+}
+
+function timelineContentCacheKey(commitHash: string): string {
+  const rootPath = root.value
+  const relPath = fileTimelinePath.value.trim()
+  const hash = String(commitHash || '').trim()
+  if (!rootPath || !relPath || !hash) return ''
+  return `${rootPath}::${relPath}::${hash}`
+}
+
+function applyTimelineCommitContent(side: TimelineSide, requestSeq: number, payload: GitCommitFileContentResponse) {
+  if (isTimelineSideRequestStale(side, requestSeq)) return
+  const isLeft = side === 'left'
+
+  if (!payload?.exists) {
+    if (isLeft) {
+      fileTimelineLeftContent.value = ''
+      fileTimelineLeftError.value = t('files.timeline.errors.missingInCommit')
+    } else {
+      fileTimelineRightContent.value = ''
+      fileTimelineRightError.value = t('files.timeline.errors.missingInCommit')
+    }
+    return
+  }
+
+  if (payload.binary) {
+    if (isLeft) {
+      fileTimelineLeftContent.value = ''
+      fileTimelineLeftError.value = t('files.timeline.errors.binaryUnavailable')
+    } else {
+      fileTimelineRightContent.value = ''
+      fileTimelineRightError.value = t('files.timeline.errors.binaryUnavailable')
+    }
+    return
+  }
+
+  if (isLeft) {
+    fileTimelineLeftContent.value = typeof payload.content === 'string' ? payload.content : ''
+    fileTimelineLeftError.value = null
+  } else {
+    fileTimelineRightContent.value = typeof payload.content === 'string' ? payload.content : ''
+    fileTimelineRightError.value = null
+  }
+
+  if (payload.truncated) {
+    toasts.push('info', t('files.timeline.info.truncated'))
+  }
+}
+
+async function selectFileTimelineCommit(side: TimelineSide, commit: GitLogCommit) {
+  const rootPath = root.value
+  const relPath = fileTimelinePath.value.trim()
+  const hash = (commit?.hash || '').trim()
+  if (!rootPath || !relPath || !hash) return
+
+  const isLeft = side === 'left'
+  const requestSeq = isLeft ? ++fileTimelineLeftRequestSeq : ++fileTimelineRightRequestSeq
+
+  if (isLeft) {
+    fileTimelineLeftCommit.value = commit
+    fileTimelineLeftError.value = null
+    fileTimelineLeftLoading.value = true
+  } else {
+    fileTimelineRightCommit.value = commit
+    fileTimelineRightError.value = null
+    fileTimelineRightLoading.value = true
+  }
+
+  const cacheKey = timelineContentCacheKey(hash)
+  const cached = cacheKey ? fileTimelineContentCache.get(cacheKey) : undefined
+  if (cached) {
+    if (!isTimelineSideRequestStale(side, requestSeq)) {
+      applyTimelineCommitContent(side, requestSeq, cached)
+      if (isLeft) {
+        fileTimelineLeftLoading.value = false
+      } else {
+        fileTimelineRightLoading.value = false
+      }
+    }
+    return
+  }
+
+  try {
+    let inFlight = cacheKey ? fileTimelineContentInFlight.get(cacheKey) : undefined
+    if (!inFlight) {
+      const request = gitJson<GitCommitFileContentResponse>('commit-file-content', rootPath, {
+        commit: hash,
+        path: relPath,
+      })
+      if (cacheKey) {
+        inFlight = request
+        fileTimelineContentInFlight.set(cacheKey, request)
+        void request.finally(() => {
+          if (fileTimelineContentInFlight.get(cacheKey) === request) {
+            fileTimelineContentInFlight.delete(cacheKey)
+          }
+        })
+      } else {
+        inFlight = request
+      }
+    }
+
+    const resp = await inFlight
+    if (isTimelineSideRequestStale(side, requestSeq)) return
+
+    if (cacheKey) {
+      setBoundedCacheEntry(fileTimelineContentCache, cacheKey, resp, FILE_TIMELINE_CONTENT_CACHE_MAX)
+    }
+    applyTimelineCommitContent(side, requestSeq, resp)
+  } catch (err) {
+    if (isTimelineSideRequestStale(side, requestSeq)) return
+    if (isLeft) {
+      fileTimelineLeftError.value = err instanceof Error ? err.message : String(err)
+    } else {
+      fileTimelineRightError.value = err instanceof Error ? err.message : String(err)
+    }
+  } finally {
+    if (!isTimelineSideRequestStale(side, requestSeq)) {
+      if (isLeft) {
+        fileTimelineLeftLoading.value = false
+      } else {
+        fileTimelineRightLoading.value = false
+      }
+    }
+  }
+}
+
+async function loadFileTimeline(reset = false) {
+  const rootPath = root.value
+  const relPath = fileTimelinePath.value.trim()
+  if (!rootPath || !relPath) return
+  if (fileTimelineLoading.value) return
+
+  if (reset) {
+    fileTimelineOffset.value = 0
+    fileTimelineCommits.value = []
+    fileTimelineHasMore.value = false
+
+    fileTimelineLeftRequestSeq += 1
+    fileTimelineRightRequestSeq += 1
+    fileTimelineLeftCommit.value = null
+    fileTimelineLeftContent.value = ''
+    fileTimelineLeftLoading.value = false
+    fileTimelineLeftError.value = null
+    fileTimelineRightCommit.value = null
+    fileTimelineRightContent.value = ''
+    fileTimelineRightLoading.value = false
+    fileTimelineRightError.value = null
+  }
+
+  const requestSeq = ++fileTimelineLoadSeq
+  fileTimelineLoading.value = true
+  fileTimelineError.value = null
+  try {
+    const resp = await gitJson<GitLogResponse>('log', rootPath, {
+      path: relPath,
+      offset: fileTimelineOffset.value,
+      limit: FILE_TIMELINE_PAGE_SIZE,
+      graph: true,
+    })
+
+    if (requestSeq !== fileTimelineLoadSeq || !fileTimelineEnabled.value || fileTimelinePath.value.trim() !== relPath) {
+      return
+    }
+
+    const next = Array.isArray(resp?.commits) ? resp.commits : []
+    fileTimelineCommits.value = reset ? next : [...fileTimelineCommits.value, ...next]
+    fileTimelineHasMore.value = Boolean(resp?.hasMore)
+    fileTimelineOffset.value = resp?.nextOffset ?? fileTimelineOffset.value + next.length
+
+    if (reset && next.length) {
+      const rightDefault = next[0] || null
+      const leftDefault = next[1] || next[0] || null
+      await Promise.all([
+        leftDefault ? selectFileTimelineCommit('left', leftDefault) : Promise.resolve(),
+        rightDefault ? selectFileTimelineCommit('right', rightDefault) : Promise.resolve(),
+      ])
+    }
+  } catch (err) {
+    if (requestSeq !== fileTimelineLoadSeq) return
+    fileTimelineError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    if (requestSeq === fileTimelineLoadSeq) {
+      fileTimelineLoading.value = false
+    }
+  }
+}
+
+async function loadMoreFileTimeline() {
+  if (!fileTimelineHasMore.value) return
+  await loadFileTimeline(false)
+}
+
+async function refreshFileTimeline() {
+  if (!fileTimelineEnabled.value || !fileTimelinePath.value.trim()) return
+  await loadFileTimeline(true)
+}
+
+function openFileTimeline() {
+  const file = selectedFile.value
+  if (!file || file.type !== 'file' || viewerMode.value !== 'text') {
+    toasts.push('error', t('files.timeline.errors.onlyTextFiles'))
+    return
+  }
+
+  const relPath = relativeToWorkspace(file.path).trim()
+  if (!relPath || relPath === '.') {
+    toasts.push('error', t('files.timeline.errors.cannotOpen'))
+    return
+  }
+
+  if (fileTimelineEnabled.value && fileTimelinePath.value === relPath) {
+    timelineVisibilityPreference.value = false
+    closeFileTimeline()
+    return
+  }
+
+  resetFileTimelineState()
+  fileTimelineEnabled.value = true
+  fileTimelinePath.value = relPath
+  selection.value = null
+  commentText.value = ''
+
+  if (blameEnabled.value) {
+    clearBlame()
+    blameEnabled.value = false
+  }
+
+  timelineVisibilityPreference.value = true
+
+  if (gitInlineEnabled.value) {
+    gitInlineEnabled.value = false
+    clearGitDiff()
+  }
+
+  void loadFileTimeline(true)
+}
+
+async function copyToClipboard(text: string) {
+  const ok = await copyTextToClipboard(text)
+  if (ok) {
+    toasts.push('success', t('common.copied'))
+    return
+  }
+  toasts.push('error', t('common.copyFailed'))
+}
+
+async function triggerDownloadForPath(path: string, fileName?: string) {
+  const rootPath = root.value
+  const normalized = normalizePath(String(path || '').trim())
+  if (!rootPath || !normalized || !withinWorkspace(normalized)) return
+
+  const url = `/api/fs/download?directory=${encodeURIComponent(rootPath)}&path=${encodeURIComponent(normalized)}`
+  try {
+    const blob = await apiBlob(url)
+    const href = URL.createObjectURL(blob)
+
+    const link = document.createElement('a')
+    link.href = href
+    if (fileName) {
+      link.download = fileName
+    }
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+
+    window.setTimeout(() => {
+      try {
+        URL.revokeObjectURL(href)
+      } catch {
+        // ignore
+      }
+    }, 30_000)
+  } catch (err) {
+    const msg =
+      err instanceof ApiError ? err.message || err.bodyText || '' : err instanceof Error ? err.message : String(err)
+    toasts.push('error', msg || t('common.downloadFailed'))
+  }
+}
+
+async function openSelectedFileRaw() {
+  const file = selectedFile.value
+  if (!file) return
+  await triggerDownloadForPath(file.path, file.name)
+}
+
+async function runExplorerFileAction(action: 'download' | 'copy-path' | 'copy-absolute-path', node: FileNode) {
+  if (action === 'download') {
+    if (node.type !== 'file') return
+    triggerDownloadForPath(node.path, node.name)
+    return
+  }
+
+  if (action === 'copy-absolute-path') {
+    await copyToClipboard(node.path)
+    return
+  }
+
+  const relPath = relativeToWorkspace(node.path)
+  const target = relPath && relPath !== '.' ? relPath : node.path
+  await copyToClipboard(target)
+}
+
+function mapDirectoryEntries(dirPath: string, entries: ListEntry[]): FileNode[] {
+  const includeHidden = showHidden.value
+  const includeGitignored = showGitignored.value
+  const buildPath = (entry: ListEntry) => normalizePath(entry.path || `${dirPath}/${entry.name}`)
+  const nodes = entries
+    .filter((entry) => entry && typeof entry.name === 'string' && entry.name.length > 0)
+    .filter((entry) => includeHidden || !isHiddenName(entry.name))
+    .filter((entry) => includeGitignored || !shouldIgnoreEntryName(entry.name))
+    .filter((entry) => !isPathHiddenInFiles(buildPath(entry)))
+    .map<FileNode>((entry) => {
+      const name = entry.name
+      const path = buildPath(entry)
+      const type = entry.isDirectory ? 'directory' : 'file'
+      const extension = type === 'file' ? extensionFromPath(name) : undefined
+      return { name, path, type, extension }
+    })
+
+  return nodes.slice().sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+}
+
+function normalizeTreePath(path: string): string {
+  const normalized = normalizePath(String(path || '').trim())
+  if (!normalized) return ''
+  if (normalized === '/') return normalized
+  return trimTrailingSlashes(normalized)
+}
+
+function isSameOrDescendantPath(path: string, basePath: string): boolean {
+  return path === basePath || path.startsWith(`${basePath}/`)
+}
+
+function remapPathPrefix(path: string, fromPath: string, toPath: string): string {
+  if (!path) return ''
+  if (path === fromPath) return toPath
+  if (path.startsWith(`${fromPath}/`)) return `${toPath}${path.slice(fromPath.length)}`
+  return path
+}
+
+function remapPathSet(paths: Set<string>, fromPath: string, toPath: string): Set<string> {
+  const next = new Set<string>()
+  for (const path of paths) {
+    const normalized = normalizeTreePath(path)
+    if (!normalized) continue
+    next.add(remapPathPrefix(normalized, fromPath, toPath))
+  }
+  return next
+}
+
+function prunePathSet(paths: Set<string>, targetPath: string): Set<string> {
+  const next = new Set<string>()
+  for (const path of paths) {
+    const normalized = normalizeTreePath(path)
+    if (!normalized) continue
+    if (isSameOrDescendantPath(normalized, targetPath)) continue
+    next.add(normalized)
+  }
+  return next
+}
+
+function resolveEntryPath(dirPath: string, entry: ListEntry): string {
+  const direct = normalizeTreePath(String(entry.path || '').trim())
+  if (direct) return direct
+  return normalizeTreePath(joinPath(dirPath, entry.name))
+}
+
+function mapChildrenFromEntries(source: Record<string, ListEntry[]>): Record<string, FileNode[]> {
+  const next: Record<string, FileNode[]> = {}
+  for (const [dirPathRaw, entriesRaw] of Object.entries(source)) {
+    const dirPath = normalizeTreePath(String(dirPathRaw || '').trim())
+    if (!dirPath) continue
+    const entries = Array.isArray(entriesRaw) ? entriesRaw : []
+    next[dirPath] = mapDirectoryEntries(dirPath, entries)
+  }
+  return next
+}
+
+function applyExplorerRenameState(oldPath: string, newPath: string) {
+  const sourcePath = normalizeTreePath(oldPath)
+  const destinationPath = normalizeTreePath(newPath)
+  if (!sourcePath || !destinationPath || sourcePath === destinationPath) return
+
+  const nextEntries: Record<string, ListEntry[]> = {}
+  for (const [dirPathRaw, entriesRaw] of Object.entries(entriesByDir.value)) {
+    const dirPath = normalizeTreePath(String(dirPathRaw || '').trim())
+    if (!dirPath) continue
+
+    const mappedDirPath = remapPathPrefix(dirPath, sourcePath, destinationPath)
+    const entries = Array.isArray(entriesRaw) ? entriesRaw : []
+    const mappedEntries = entries.map<ListEntry>((entry) => {
+      const currentPath = resolveEntryPath(dirPath, entry)
+      const mappedPath = remapPathPrefix(currentPath, sourcePath, destinationPath)
+      if (!mappedPath || mappedPath === currentPath) return entry
+      const mappedName = mappedPath.split('/').filter(Boolean).pop() || entry.name
+      return {
+        ...entry,
+        name: mappedName,
+        path: mappedPath,
+      }
+    })
+    nextEntries[mappedDirPath] = mappedEntries
+  }
+
+  entriesByDir.value = nextEntries
+  childrenByDir.value = mapChildrenFromEntries(nextEntries)
+
+  loadedDirs.value = remapPathSet(loadedDirs.value, sourcePath, destinationPath)
+  expandedDirs.value = remapPathSet(expandedDirs.value, sourcePath, destinationPath)
+  inFlightDirs.value = remapPathSet(inFlightDirs.value, sourcePath, destinationPath)
+
+  selectedPaths.value = remapPathSet(selectedPaths.value, sourcePath, destinationPath)
+
+  const nextAnchor = remapPathPrefix(normalizeTreePath(selectionAnchorPath.value), sourcePath, destinationPath)
+  selectionAnchorPath.value = nextAnchor
+
+  const nextHighlight = remapPathPrefix(normalizeTreePath(highlightedPath.value), sourcePath, destinationPath)
+  highlightedPath.value = nextHighlight
+
+  const selectedDir = normalizeTreePath(selectedDirectoryPath.value)
+  selectedDirectoryPath.value = selectedDir ? remapPathPrefix(selectedDir, sourcePath, destinationPath) : ''
+
+  persistExplorerSoon()
+}
+
+function applyExplorerDeletionState(targetPath: string) {
+  const normalizedTarget = normalizeTreePath(targetPath)
+  if (!normalizedTarget) return
+
+  const rootPath = normalizeTreePath(root.value)
+  if (rootPath && normalizedTarget === rootPath) return
+
+  const nextEntries: Record<string, ListEntry[]> = {}
+  for (const [dirPathRaw, entriesRaw] of Object.entries(entriesByDir.value)) {
+    const dirPath = normalizeTreePath(String(dirPathRaw || '').trim())
+    if (!dirPath) continue
+    if (isSameOrDescendantPath(dirPath, normalizedTarget)) continue
+
+    const entries = Array.isArray(entriesRaw) ? entriesRaw : []
+    const filtered = entries.filter((entry) => {
+      const entryPath = resolveEntryPath(dirPath, entry)
+      return Boolean(entryPath) && !isSameOrDescendantPath(entryPath, normalizedTarget)
+    })
+    nextEntries[dirPath] = filtered
+  }
+
+  entriesByDir.value = nextEntries
+  childrenByDir.value = mapChildrenFromEntries(nextEntries)
+
+  loadedDirs.value = prunePathSet(loadedDirs.value, normalizedTarget)
+  expandedDirs.value = prunePathSet(expandedDirs.value, normalizedTarget)
+  inFlightDirs.value = prunePathSet(inFlightDirs.value, normalizedTarget)
+
+  persistExplorerSoon()
+}
+
+async function loadDirectory(dirPath: string, opts?: { force?: boolean }) {
+  const workspaceRoot = root.value
+  const normalized = normalizePath(dirPath.trim())
+  if (!workspaceRoot || !normalized || !withinWorkspace(normalized, workspaceRoot)) return
+  if (!opts?.force && loadedDirs.value.has(normalized)) return
+  if (inFlightDirs.value.has(normalized)) return
+
+  inFlightDirs.value = new Set(inFlightDirs.value)
+  inFlightDirs.value.add(normalized)
+
+  try {
+    let offset = 0
+    let entries: ListEntry[] = opts?.force
+      ? []
+      : Array.isArray(entriesByDir.value[normalized])
+        ? entriesByDir.value[normalized]
+        : []
+    let hasMore = true
+
+    while (hasMore) {
+      const resp = (await listDirectory({
+        path: normalized,
+        respectGitignore: respectGitignore.value,
+        offset,
+        limit: DIRECTORY_PAGE_SIZE,
+      })) as ListResponse
+      if (root.value !== workspaceRoot) return
+      const page = Array.isArray(resp.entries) ? resp.entries : null
+      if (!page) break
+
+      if (offset === 0) entries = page
+      else if (page.length) entries = [...entries, ...page]
+
+      entriesByDir.value = { ...entriesByDir.value, [normalized]: entries }
+      childrenByDir.value = { ...childrenByDir.value, [normalized]: mapDirectoryEntries(normalized, entries) }
+
+      if (!page.length) break
+
+      const nextOffset =
+        typeof resp.nextOffset === 'number' && Number.isFinite(resp.nextOffset)
+          ? Math.max(0, Math.floor(resp.nextOffset))
+          : offset + page.length
+      if (nextOffset <= offset) {
+        break
+      }
+      const total = typeof resp.total === 'number' && Number.isFinite(resp.total) ? Math.max(0, resp.total) : null
+      if (typeof resp.hasMore === 'boolean') {
+        hasMore = resp.hasMore
+      } else if (total !== null) {
+        hasMore = nextOffset < total
+      } else {
+        hasMore = page.length === DIRECTORY_PAGE_SIZE
+      }
+      if (!hasMore) break
+      offset = nextOffset
+    }
+
+    if (root.value !== workspaceRoot) return
+    loadedDirs.value = new Set(loadedDirs.value)
+    loadedDirs.value.add(normalized)
+  } catch {
+    if (root.value !== workspaceRoot) return
+    entriesByDir.value = {
+      ...entriesByDir.value,
+      [normalized]: Array.isArray(entriesByDir.value[normalized]) ? entriesByDir.value[normalized] : [],
+    }
+    childrenByDir.value = {
+      ...childrenByDir.value,
+      [normalized]: Array.isArray(childrenByDir.value[normalized]) ? childrenByDir.value[normalized] : [],
+    }
+  } finally {
+    inFlightDirs.value = new Set(inFlightDirs.value)
+    inFlightDirs.value.delete(normalized)
+
+    // Keep explorer state warm across navigation/reloads.
+    if (root.value === workspaceRoot) {
+      persistExplorerSoon()
+    }
+  }
+}
+
+async function refreshRoot() {
+  if (!root.value) return
+
+  const rootPath = root.value
+  await loadDirectory(rootPath, { force: true })
+  if (root.value !== rootPath) return
+
+  // Refresh currently-expanded folders so the visible list stays coherent.
+  const expanded = Array.from(expandedDirs.value)
+  for (const d of expanded) {
+    const dir = normalizePath(String(d || '').trim())
+    if (!dir || dir === rootPath) continue
+    if (!withinWorkspace(dir, rootPath)) continue
+    await loadDirectory(dir, { force: true })
+    if (root.value !== rootPath) return
+  }
+}
+
+function collapseAllDirectories() {
+  if (!expandedDirs.value.size) return
+  expandedDirs.value = new Set()
+  persistExplorerSoon()
+}
+
+async function toggleDirectory(dirPath: string) {
+  const normalized = normalizePath(dirPath)
+  const next = new Set(expandedDirs.value)
+  if (next.has(normalized)) next.delete(normalized)
+  else next.add(normalized)
+  expandedDirs.value = next
+
+  if (!loadedDirs.value.has(normalized)) {
+    await loadDirectory(normalized)
+  }
+
+  persistExplorerSoon()
+}
+
+async function ensureDirectoryExpanded(dirPath: string) {
+  const rootPath = root.value
+  const normalized = normalizePath(String(dirPath || '').trim())
+  if (!rootPath || !normalized || !withinWorkspace(normalized, rootPath)) return
+
+  selectedDirectoryPath.value = normalized
+  if (normalized !== rootPath && !expandedDirs.value.has(normalized)) {
+    const next = new Set(expandedDirs.value)
+    next.add(normalized)
+    expandedDirs.value = next
+    persistExplorerSoon()
+  }
+
+  await loadDirectory(normalized)
+}
+
+function toggleBlame() {
+  if (!blameEnabled.value && fileTimelineEnabled.value) {
+    timelineVisibilityPreference.value = false
+    closeFileTimeline()
+  }
+
+  blameEnabled.value = !blameEnabled.value
+  if (blameEnabled.value) {
+    timelineVisibilityPreference.value = false
+  }
+  if (blameEnabled.value) {
+    invalidateCurrentBlameCache()
+    void loadBlame({ force: true })
+  }
+}
+
+function toggleGitInline() {
+  gitInlineEnabled.value = !gitInlineEnabled.value
+}
+
+function toggleGitDiffMode() {
+  gitDiffMode.value = gitDiffMode.value === 'staged' ? 'working' : 'staged'
+}
+
+function clearBlame() {
+  const currentKey = blameKey.value
+  blameRequestSeq += 1
+  blameLoading.value = false
+  blameLines.value = []
+  blameError.value = null
+  blameKey.value = ''
+  if (currentKey) {
+    blameInFlight.delete(currentKey)
+  }
+}
+
+function normalizeBlameLines(input: GitBlameLine[]): GitBlameLine[] {
+  const normalized = input
+    .map((line) => ({
+      line: Math.max(1, Math.floor(Number(line?.line || 0))),
+      hash: String(line?.hash || '').trim(),
+      author: String(line?.author || '').trim(),
+      authorEmail: String(line?.authorEmail || '').trim(),
+      authorTime: Number(line?.authorTime || 0),
+      summary: String(line?.summary || '').trim(),
+    }))
+    .filter((line) => line.line > 0)
+    .sort((a, b) => a.line - b.line)
+
+  const deduped: GitBlameLine[] = []
+  for (const line of normalized) {
+    const prev = deduped[deduped.length - 1]
+    if (prev && prev.line === line.line) {
+      deduped[deduped.length - 1] = line
+      continue
+    }
+    deduped.push(line)
+  }
+  return deduped
+}
+
+function currentBlameCacheKey(): string {
+  const rootPath = root.value
+  const file = selectedFile.value
+  if (!rootPath || !file || viewerMode.value !== 'text') return ''
+
+  const rel = relativeToWorkspace(file.path)
+  if (!rel) return ''
+  return `${rootPath}::${rel}`
+}
+
+function invalidateCurrentBlameCache() {
+  const key = currentBlameCacheKey()
+  if (!key) return
+  blameCache.delete(key)
+  blameInFlight.delete(key)
+}
+
+function reloadBlame() {
+  invalidateCurrentBlameCache()
+  void loadBlame({ force: true })
+}
+
+function clearGitDiff() {
+  gitDiffText.value = ''
+  gitDiffMeta.value = null
+  gitDiffError.value = null
+  gitDiffLoading.value = false
+  gitDiffKey.value = ''
+}
+
+async function loadBlame(opts?: { force?: boolean }) {
+  const rootPath = root.value
+  const file = selectedFile.value
+  if (!rootPath || !file || viewerMode.value !== 'text') return
+
+  const rel = relativeToWorkspace(file.path)
+  if (!rel) return
+  const key = `${rootPath}::${rel}`
+
+  const cached = !opts?.force ? blameCache.get(key) : undefined
+  if (cached && cached.length > 0) {
+    blameKey.value = key
+    blameLines.value = cached
+    blameError.value = null
+    blameLoading.value = false
+    return
+  }
+
+  const requestSeq = ++blameRequestSeq
+  blameKey.value = key
+
+  blameLoading.value = true
+  blameError.value = null
+  try {
+    let inFlight = !opts?.force ? blameInFlight.get(key) : undefined
+    if (!inFlight) {
+      const request = getGitBlame({ directory: rootPath, path: rel })
+      inFlight = request
+      blameInFlight.set(key, request)
+      void request.finally(() => {
+        if (blameInFlight.get(key) === request) {
+          blameInFlight.delete(key)
+        }
+      })
+    }
+
+    const resp = (await inFlight) as GitBlameResponse
+    if (blameKey.value !== key || requestSeq !== blameRequestSeq) return
+    const lines = normalizeBlameLines(Array.isArray(resp?.lines) ? resp.lines : [])
+    blameLines.value = lines
+    if (lines.length > 0) {
+      setBoundedCacheEntry(blameCache, key, lines, BLAME_CACHE_MAX)
+    } else {
+      blameCache.delete(key)
+      if (draftContent.value.trim()) {
+        blameError.value = t('files.timeline.errors.noBlameData')
+      }
+    }
+  } catch (err) {
+    if (blameKey.value !== key || requestSeq !== blameRequestSeq) return
+    blameLines.value = []
+    blameCache.delete(key)
+    blameError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    if (blameKey.value === key && requestSeq === blameRequestSeq) {
+      blameLoading.value = false
+    }
+  }
+}
+
+async function loadGitDiff() {
+  const rootPath = root.value
+  const file = selectedFile.value
+  if (!rootPath || !file || viewerMode.value !== 'text') return
+
+  const rel = relativeToWorkspace(file.path)
+  if (!rel) return
+
+  const key = `${rootPath}::${rel}::${gitDiffMode.value}`
+  gitDiffKey.value = key
+
+  gitDiffLoading.value = true
+  gitDiffError.value = null
+  try {
+    const resp = await getGitDiff({
+      directory: rootPath,
+      path: rel,
+      staged: gitDiffMode.value === 'staged',
+      contextLines: 3,
+      includeMeta: true,
+    })
+    if (gitDiffKey.value !== key) return
+    gitDiffText.value = typeof resp?.diff === 'string' ? resp.diff : ''
+    gitDiffMeta.value = resp?.meta && typeof resp.meta === 'object' ? resp.meta : null
+  } catch (err) {
+    if (gitDiffKey.value !== key) return
+    gitDiffText.value = ''
+    gitDiffMeta.value = null
+    gitDiffError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    if (gitDiffKey.value === key) {
+      gitDiffLoading.value = false
+    }
+  }
+}
+
+async function applyGitPatch(patch: string, mode: GitPatchMode) {
+  const rootPath = root.value
+  const file = selectedFile.value
+  if (!rootPath || !file || !patch.trim()) return
+  if (gitPatchBusy.value) return
+  if (dirty.value) {
+    toasts.push('error', t('files.toasts.saveFileBeforeGitHunkActions'))
+    return
+  }
+
+  gitPatchBusy.value = true
+  try {
+    await applyGitPatchApi({ directory: rootPath, patch, mode })
+
+    if (mode === 'discard') {
+      invalidateCurrentBlameCache()
+      await openFile(file)
+    }
+
+    if (blameEnabled.value) {
+      void loadBlame({ force: mode === 'discard' })
+    }
+    void loadGitDiff()
+
+    const label =
+      mode === 'stage'
+        ? t('files.toasts.hunkStaged')
+        : mode === 'unstage'
+          ? t('files.toasts.hunkUnstaged')
+          : t('files.toasts.hunkDiscarded')
+    toasts.push('success', label)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    toasts.push('error', msg)
+  } finally {
+    gitPatchBusy.value = false
+  }
+}
+
+async function runSearch() {
+  const rootPath = root.value
+  const q = searchQuery.value.trim()
+  if (!rootPath || !q) {
+    searchResults.value = []
+    searching.value = false
+    return
+  }
+
+  searching.value = true
+  try {
+    const resp = (await searchFiles({
+      root: rootPath,
+      query: q,
+      limit: 200,
+      respectGitignore: respectGitignore.value,
+    })) as SearchResponse
+
+    const includeHidden = showHidden.value
+    const includeGitignored = showGitignored.value
+    const files = Array.isArray(resp.files) ? resp.files : []
+    const filtered = files.filter((f) => includeHidden || !isHiddenName(f.name))
+    const pruned = includeGitignored ? filtered : filtered.filter((f) => !shouldIgnorePath(f.path))
+    const visible = pruned.filter((f) => !isPathHiddenInFiles(f.path))
+
+    const normalizedQuery = q.toLowerCase()
+    const ranked = visible
+      .map((hit) => {
+        const label = hit.relative_path || relativeToWorkspace(hit.path)
+        const score = fuzzyScore(normalizedQuery, label)
+        return score === null ? null : { hit, score, labelLength: label.length }
+      })
+      .filter(Boolean) as Array<{ hit: SearchFile; score: number; labelLength: number }>
+
+    ranked.sort((a, b) => b.score - a.score || a.labelLength - b.labelLength || a.hit.path.localeCompare(b.hit.path))
+
+    searchResults.value = ranked.map(({ hit }) => ({
+      name: hit.name,
+      path: normalizePath(hit.path),
+      type: 'file',
+      extension: extensionFromPath(hit.name),
+      relativePath: hit.relative_path || relativeToWorkspace(hit.path),
+    }))
+  } catch {
+    searchResults.value = []
+  } finally {
+    searching.value = false
+  }
+}
+
+function clearFileSearch() {
+  searchQuery.value = ''
+  searchResults.value = []
+  searching.value = false
+}
+
+function resetContentSearchResults() {
+  contentSearchFiles.value = []
+  contentSearchMatchCount.value = 0
+  contentSearchTruncated.value = false
+  contentSearchError.value = null
+}
+
+async function runContentSearch() {
+  const rootPath = root.value
+  const q = contentSearchQuery.value.trim()
+  if (!rootPath || !q) {
+    contentSearchLoading.value = false
+    resetContentSearchResults()
+    return
+  }
+
+  contentSearchLoading.value = true
+  contentSearchError.value = null
+  try {
+    const scopePath = trimTrailingSlashes(normalizePath(contentSearchScopePath.value || rootPath))
+    const scopeList = scopePath && scopePath !== rootPath ? [scopePath] : undefined
+
+    const resp = await searchFileContent({
+      directory: rootPath,
+      query: q,
+      paths: scopeList,
+      includeHidden: showHidden.value,
+      respectGitignore: respectGitignore.value,
+      isRegex: contentSearchRegex.value,
+      caseSensitive: contentSearchCaseSensitive.value,
+      wholeWord: contentSearchWholeWord.value,
+      maxResults: 1200,
+      maxMatchesPerFile: 80,
+      contextChars: 56,
+    })
+
+    const files = Array.isArray(resp.files)
+      ? resp.files.map((file) => ({
+          ...file,
+          path: normalizePath(file.path),
+          matches: Array.isArray(file.matches)
+            ? file.matches.map((m) => ({
+                ...m,
+                startOffset: Number(m.startOffset || 0),
+                endOffset: Number(m.endOffset || 0),
+              }))
+            : [],
+        }))
+      : []
+
+    const visibleFiles = files.filter((file) => !isPathHiddenInFiles(file.path))
+    contentSearchFiles.value = visibleFiles
+    contentSearchMatchCount.value = visibleFiles.reduce((sum, file) => sum + Number(file.matchCount || 0), 0)
+    contentSearchTruncated.value = Boolean(resp.truncated)
+  } catch (err) {
+    resetContentSearchResults()
+    contentSearchError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    contentSearchLoading.value = false
+  }
+}
+
+function clearContentSearch() {
+  contentSearchQuery.value = ''
+  contentSearchLoading.value = false
+  resetContentSearchResults()
+}
+
+async function openContentSearchResult(path: string) {
+  const normalized = normalizePath(path)
+  if (isPathHiddenInFiles(normalized)) return
+  const name = normalized.split('/').pop() || normalized
+  await requestFileSelect({
+    name,
+    path: normalized,
+    type: 'file',
+    extension: extensionFromPath(name),
+    relativePath: relativeToWorkspace(normalized),
+  })
+}
+
+async function replaceContentSearchMatch(file: FsContentSearchFileResult, match: FsContentSearchMatch) {
+  const rootPath = root.value
+  if (!rootPath) return
+  if (dirty.value) {
+    toasts.push('error', t('files.toasts.saveCurrentFileBeforeReplaceAcrossFiles'))
+    return
+  }
+
+  contentSearchReplacing.value = true
+  try {
+    const resp = await replaceFileContent({
+      directory: rootPath,
+      replace: contentSearchReplace.value,
+      match: {
+        path: file.path,
+        startOffset: match.startOffset,
+        endOffset: match.endOffset,
+        expected: match.matched,
+      },
+    })
+
+    const replaced = Number(resp.replacementCount || 0)
+    if (replaced > 0) {
+      toasts.push('success', t('files.toasts.matchReplaced'))
+    }
+
+    if (selectedFile.value?.type === 'file' && normalizePath(selectedFile.value.path) === normalizePath(file.path)) {
+      await openFile(selectedFile.value)
+    }
+
+    await runContentSearch()
+  } catch (err) {
+    toasts.push('error', err instanceof Error ? err.message : String(err))
+  } finally {
+    contentSearchReplacing.value = false
+  }
+}
+
+async function replaceAllContentSearchMatches() {
+  const rootPath = root.value
+  const q = contentSearchQuery.value.trim()
+  if (!rootPath || !q || !contentSearchFiles.value.length) return
+  if (dirty.value) {
+    toasts.push('error', t('files.toasts.saveCurrentFileBeforeReplaceAcrossFiles'))
+    return
+  }
+
+  contentSearchReplacing.value = true
+  try {
+    const resp = await replaceFileContent({
+      directory: rootPath,
+      query: q,
+      replace: contentSearchReplace.value,
+      includeHidden: showHidden.value,
+      respectGitignore: respectGitignore.value,
+      isRegex: contentSearchRegex.value,
+      caseSensitive: contentSearchCaseSensitive.value,
+      wholeWord: contentSearchWholeWord.value,
+      paths: contentSearchFiles.value.map((file) => file.path),
+    })
+
+    const replacements = Number(resp.replacementCount || 0)
+    const skipped = Number(resp.skipped || 0)
+    if (replacements > 0) {
+      const suffix =
+        skipped > 0
+          ? skipped === 1
+            ? t('files.toasts.replaceAcrossFiles.skippedFileSuffix', { count: skipped })
+            : t('files.toasts.replaceAcrossFiles.skippedFilesSuffix', { count: skipped })
+          : ''
+      toasts.push(
+        'success',
+        replacements === 1
+          ? t('files.toasts.replaceAcrossFiles.replacedMatch', { count: replacements, suffix })
+          : t('files.toasts.replaceAcrossFiles.replacedMatches', { count: replacements, suffix }),
+      )
+    } else {
+      toasts.push('info', t('files.toasts.noMatchesReplaced'))
+    }
+
+    if (selectedFile.value?.type === 'file') {
+      const selectedPath = normalizePath(selectedFile.value.path)
+      const changed = (resp.files || []).some((item) => normalizePath(item.path) === selectedPath)
+      if (changed) {
+        await openFile(selectedFile.value)
+      }
+    }
+
+    await runContentSearch()
+  } catch (err) {
+    toasts.push('error', err instanceof Error ? err.message : String(err))
+  } finally {
+    contentSearchReplacing.value = false
+  }
+}
+
+function fuzzyScore(query: string, candidate: string): number | null {
+  const q = query.trim().toLowerCase()
+  if (!q) return 0
+
+  const c = candidate.toLowerCase()
+  let score = 0
+  let lastIndex = -1
+  let consecutive = 0
+
+  for (let i = 0; i < q.length; i += 1) {
+    const ch = q[i]
+    if (!ch || ch === ' ') continue
+
+    const idx = c.indexOf(ch, lastIndex + 1)
+    if (idx === -1) return null
+
+    const gap = idx - lastIndex - 1
+    if (gap === 0) consecutive += 1
+    else consecutive = 0
+
+    score += 10
+    score += Math.max(0, 18 - idx)
+    score -= Math.max(0, gap)
+
+    if (idx === 0) {
+      score += 12
+    } else {
+      const prev = c[idx - 1]
+      if (prev === '/' || prev === '_' || prev === '-' || prev === '.' || prev === ' ') {
+        score += 10
+      }
+    }
+
+    score += consecutive > 0 ? 12 : 0
+    lastIndex = idx
+  }
+
+  score += Math.max(0, 24 - Math.round(c.length / 3))
+  return score
+}
+
+function isRefreshRequestStale(seq: number, rootPath: string, path: string): boolean {
+  const current = normalizePath(String(selectedFile.value?.path || '').trim())
+  return seq !== fileRefreshSeq || root.value !== rootPath || current !== path
+}
+
+async function readRefreshPayload(rootPath: string, path: string): Promise<FileRefreshPayload> {
+  const meta = await readFileChunk({ directory: rootPath, path, offset: 0, limit: 0 })
+  const totalBytes = Math.max(0, Math.floor(meta.totalBytes || 0))
+
+  if (totalBytes > LARGE_FILE_WARNING_BYTES) {
+    return {
+      kind: 'large',
+      totalBytes,
+    }
+  }
+
+  const limit = Math.max(FILE_CHUNK_BYTES, totalBytes || 0)
+  const chunk = await readFileChunk({ directory: rootPath, path, offset: 0, limit })
+  const loadedBytes = Math.max(0, Math.floor(chunk.loadedBytes || 0))
+  const nextOffset = Math.max(loadedBytes, Math.floor(chunk.nextOffset ?? chunk.loadedBytes ?? 0))
+
+  return {
+    kind: 'text',
+    content: typeof chunk.content === 'string' ? chunk.content : '',
+    totalBytes: Math.max(totalBytes, Math.floor(chunk.totalBytes || 0), loadedBytes),
+    loadedBytes,
+    nextOffset,
+    hasMore: Boolean(chunk.hasMore),
+  }
+}
+
+function isRefreshPayloadEqualToCurrent(path: string, payload: FileRefreshPayload): boolean {
+  if (payload.kind === 'large') {
+    const prompt = pendingLargeFilePrompt.value
+    if (!prompt || prompt.path !== path) return false
+    if (Math.max(0, Math.floor(prompt.totalBytes || 0)) !== payload.totalBytes) return false
+    return fileContent.value === '' && draftContent.value === ''
+  }
+
+  if (pendingLargeFilePrompt.value) return false
+  return (
+    fileContent.value === payload.content &&
+    fileChunkTotalBytes.value === payload.totalBytes &&
+    fileChunkLoadedBytes.value === payload.loadedBytes &&
+    fileChunkHasMore.value === payload.hasMore
+  )
+}
+
+function applyRefreshPayload(path: string, payload: FileRefreshPayload) {
+  fileError.value = null
+  selection.value = null
+  commentText.value = ''
+  fileChunkLoadingMore.value = false
+  lastDraftEditAt = 0
+
+  if (payload.kind === 'large') {
+    pendingLargeFilePrompt.value = {
+      path,
+      totalBytes: payload.totalBytes,
+    }
+    fileContent.value = ''
+    draftContent.value = ''
+    fileChunkTotalBytes.value = payload.totalBytes
+    fileChunkLoadedBytes.value = 0
+    fileChunkNextOffset.value = 0
+    fileChunkHasMore.value = false
+    return
+  }
+
+  pendingLargeFilePrompt.value = null
+  fileContent.value = payload.content
+  draftContent.value = payload.content
+  fileChunkTotalBytes.value = payload.totalBytes
+  fileChunkLoadedBytes.value = payload.loadedBytes
+  fileChunkNextOffset.value = payload.nextOffset
+  fileChunkHasMore.value = payload.hasMore
+}
+
+function refreshAuxiliaryPanelsAfterFileRefresh() {
+  if (blameEnabled.value) {
+    invalidateCurrentBlameCache()
+    void loadBlame({ force: true })
+  }
+  if (gitInlineEnabled.value) {
+    void loadGitDiff()
+  }
+}
+
+async function refreshCurrentFile(opts?: { source?: FileRefreshSource; silent?: boolean }): Promise<boolean> {
+  const source = opts?.source || 'manual'
+  const silent = source === 'auto' || Boolean(opts?.silent)
+  const rootPath = root.value
+  const node = selectedFile.value
+  if (!rootPath || !node || node.type !== 'file') return false
+
+  const path = normalizePath(String(node.path || '').trim())
+  if (!path) return false
+  if (isRefreshingFile.value || fileLoading.value || fileChunkLoadingMore.value) return false
+
+  const inEditableMode = ['text', 'markdown'].includes(viewerMode.value) && canEdit.value
+  if (!inEditableMode) {
+    if (source === 'auto') return false
+    if (usesBlobPreview.value) {
+      blobPreviewReloadKey.value += 1
+    }
+    await openFile(node)
+    return true
+  }
+
+  if (source === 'auto' && dirty.value) return false
+
+  const seq = ++fileRefreshSeq
+  isRefreshingFile.value = true
+  try {
+    const payload = await readRefreshPayload(rootPath, path)
+    if (isRefreshRequestStale(seq, rootPath, path)) return false
+
+    if (isRefreshPayloadEqualToCurrent(path, payload)) {
+      if (!silent) {
+        toasts.push('info', t('files.toasts.fileAlreadyLatest'))
+      }
+      return true
+    }
+
+    if (dirty.value) {
+      const draftMatchesRemote = payload.kind === 'text' && draftContent.value === payload.content
+      if (!draftMatchesRemote) {
+        if (source === 'auto') return false
+        fileRefreshConflict.value = {
+          source,
+          path,
+          remote: payload,
+        }
+        return false
+      }
+    }
+
+    applyRefreshPayload(path, payload)
+    refreshAuxiliaryPanelsAfterFileRefresh()
+    if (!silent) {
+      toasts.push('success', t('files.toasts.fileRefreshed'))
+    }
+    return true
+  } catch (err) {
+    if (isRefreshRequestStale(seq, rootPath, path)) return false
+    const msg =
+      err instanceof ApiError ? err.message || err.bodyText || '' : err instanceof Error ? err.message : String(err)
+    if (!silent) {
+      toasts.push('error', msg || t('files.toasts.refreshFileFailed'))
+    }
+    return false
+  } finally {
+    if (seq === fileRefreshSeq) {
+      isRefreshingFile.value = false
+    }
+  }
+}
+
+function shouldPauseAutoFileRefresh(): boolean {
+  if (!autoSaveEnabled.value) return true
+  if (!root.value) return true
+  if (!selectedFile.value || selectedFile.value.type !== 'file') return true
+  if (!['text', 'markdown'].includes(viewerMode.value)) return true
+  if (!canEdit.value) return true
+  if (dirty.value) return true
+  if (autoSaveTimer !== null) return true
+  if (isSaving.value || fileLoading.value || fileChunkLoadingMore.value || isRefreshingFile.value) return true
+  if (fileRefreshConflict.value) return true
+  if (Date.now() - lastDraftEditAt < FILE_AUTO_REFRESH_EDIT_IDLE_MS) return true
+  return false
+}
+
+async function runAutoFileRefreshTick() {
+  if (shouldPauseAutoFileRefresh()) return
+  await refreshCurrentFile({ source: 'auto', silent: true })
+}
+
+function closeRefreshConflictDialog() {
+  fileRefreshConflict.value = null
+}
+
+function keepLocalDraftAfterRefreshConflict() {
+  if (!fileRefreshConflict.value) return
+  fileRefreshConflict.value = null
+  toasts.push('info', t('files.toasts.refreshKeptLocalDraft'))
+}
+
+function applyRefreshConflictRemote() {
+  const conflict = fileRefreshConflict.value
+  if (!conflict) return
+
+  fileRefreshConflict.value = null
+  const selectedPath = normalizePath(String(selectedFile.value?.path || '').trim())
+  const targetPath = normalizePath(String(conflict.path || '').trim())
+  if (!selectedPath || selectedPath !== targetPath || !root.value) return
+
+  applyRefreshPayload(targetPath, conflict.remote)
+  refreshAuxiliaryPanelsAfterFileRefresh()
+  toasts.push('success', t('files.toasts.fileRefreshed'))
+}
+
+async function openFile(node: FileNode) {
+  if (node.type !== 'file') return
+  if (isPathHiddenInFiles(node.path)) return
+  const rootPath = root.value
+  if (!rootPath) {
+    fileError.value = String(t('files.errors.noProjectSelected'))
+    return
+  }
+  const seq = ++openFileSeq
+  fileRefreshSeq += 1
+  isRefreshingFile.value = false
+  closeRefreshConflictDialog()
+  selectOnlyPath(node.path)
+  highlightedPath.value = ''
+  selectedDirectoryPath.value = ''
+  clearBlame()
+  clearGitDiff()
+  closeFileTimeline()
+  selectedFile.value = node
+  fileError.value = null
+  selection.value = null
+  commentText.value = ''
+  resetFileChunkState()
+  clearFileRevealRequest()
+  fileLoading.value = true
+
+  if (isCompactLayout.value) {
+    showMobileViewer.value = true
+  }
+  if (embeddedMode.value) {
+    showEmbeddedFileViewer()
+  }
+
+  ui.setGlobalSelection('files-file', node.path, {
+    meta: { source: 'files-open-file' },
+  })
+
+  const previewMode = detectPreviewMode(node.path)
+  if (previewMode === 'image' || previewMode === 'pdf' || previewMode === 'audio' || previewMode === 'video') {
+    viewerMode.value = previewMode
+    fileContent.value = ''
+    draftContent.value = ''
+    fileLoading.value = false
+    return
+  }
+
+  const shouldRestoreTimeline = timelineVisibilityPreference.value
+  viewerMode.value = previewMode === 'markdown' ? 'markdown' : 'text'
+  if (previewMode === 'markdown') {
+    markdownViewMode.value = isMermaidPath(node.path) ? 'preview' : 'source'
+  }
+  try {
+    const meta = await readFileChunk({ directory: rootPath, path: node.path, offset: 0, limit: 0 })
+    if (isStaleFileOpen(seq, rootPath, node.path)) return
+
+    fileChunkTotalBytes.value = Math.max(0, Math.floor(meta.totalBytes || 0))
+    if (fileChunkTotalBytes.value > LARGE_FILE_WARNING_BYTES) {
+      pendingLargeFilePrompt.value = { path: node.path, totalBytes: fileChunkTotalBytes.value }
+      fileContent.value = ''
+      draftContent.value = ''
+      return
+    }
+
+    const chunk = await readFileChunk({ directory: rootPath, path: node.path, offset: 0, limit: FILE_CHUNK_BYTES })
+    if (isStaleFileOpen(seq, rootPath, node.path)) return
+    pendingLargeFilePrompt.value = null
+    fileContent.value = chunk.content
+    draftContent.value = chunk.content
+    fileChunkLoadedBytes.value = Math.max(0, Math.floor(chunk.loadedBytes || 0))
+    fileChunkNextOffset.value = Math.max(
+      fileChunkLoadedBytes.value,
+      Math.floor(chunk.nextOffset ?? chunk.loadedBytes ?? 0),
+    )
+    fileChunkHasMore.value = Boolean(chunk.hasMore)
+    fileChunkTotalBytes.value = Math.max(fileChunkTotalBytes.value, Math.floor(chunk.totalBytes || 0))
+  } catch (err) {
+    if (isStaleFileOpen(seq, rootPath, node.path)) return
+    viewerMode.value = 'binary'
+    fileContent.value = ''
+    draftContent.value = ''
+    fileError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    if (!isStaleFileOpen(seq, rootPath, node.path)) {
+      fileLoading.value = false
+      if (shouldRestoreTimeline && viewerMode.value === 'text') {
+        openFileTimeline()
+      }
+    }
+  }
+}
+
+async function confirmLargeFileLoad() {
+  const selected = selectedFile.value
+  const rootPath = root.value
+  const prompt = largeFilePrompt.value
+  if (!selected || !rootPath || !prompt) return
+
+  const seq = ++openFileSeq
+  fileLoading.value = true
+  fileError.value = null
+  pendingLargeFilePrompt.value = null
+
+  try {
+    const chunk = await readFileChunk({ directory: rootPath, path: selected.path, offset: 0, limit: FILE_CHUNK_BYTES })
+    if (isStaleFileOpen(seq, rootPath, selected.path)) return
+    fileContent.value = chunk.content
+    draftContent.value = chunk.content
+    fileChunkLoadedBytes.value = Math.max(0, Math.floor(chunk.loadedBytes || 0))
+    fileChunkNextOffset.value = Math.max(
+      fileChunkLoadedBytes.value,
+      Math.floor(chunk.nextOffset ?? chunk.loadedBytes ?? 0),
+    )
+    fileChunkHasMore.value = Boolean(chunk.hasMore)
+    fileChunkTotalBytes.value = Math.max(fileChunkTotalBytes.value, Math.floor(chunk.totalBytes || 0))
+  } catch (err) {
+    if (isStaleFileOpen(seq, rootPath, selected.path)) return
+    fileError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    if (!isStaleFileOpen(seq, rootPath, selected.path)) {
+      fileLoading.value = false
+    }
+  }
+}
+
+async function loadMoreFileContent() {
+  const selected = selectedFile.value
+  const rootPath = root.value
+  if (!selected || !rootPath || !fileChunkHasMore.value || fileChunkLoadingMore.value) return
+
+  const seq = openFileSeq
+  const offset = Math.max(0, Math.floor(fileChunkNextOffset.value || fileChunkLoadedBytes.value))
+  fileChunkLoadingMore.value = true
+  fileError.value = null
+
+  try {
+    const chunk = await readFileChunk({ directory: rootPath, path: selected.path, offset, limit: FILE_CHUNK_BYTES })
+    if (isStaleFileOpen(seq, rootPath, selected.path)) return
+    fileContent.value += chunk.content
+    draftContent.value = fileContent.value
+    fileChunkLoadedBytes.value = Math.max(0, Math.floor(chunk.loadedBytes || 0))
+    fileChunkNextOffset.value = Math.max(
+      fileChunkLoadedBytes.value,
+      Math.floor(chunk.nextOffset ?? chunk.loadedBytes ?? 0),
+    )
+    fileChunkHasMore.value = Boolean(chunk.hasMore)
+    fileChunkTotalBytes.value = Math.max(fileChunkTotalBytes.value, Math.floor(chunk.totalBytes || 0))
+  } catch (err) {
+    if (isStaleFileOpen(seq, rootPath, selected.path)) return
+    fileError.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    if (!isStaleFileOpen(seq, rootPath, selected.path)) {
+      fileChunkLoadingMore.value = false
+    }
+  }
+}
+
+function shouldOpenFileInNewWorkspaceWindow(): boolean {
+  return !embeddedMode.value && !isCompactLayout.value && !isEmbeddedWorkspacePane.value
+}
+
+function buildFileWindowRouteQuery(path: string): Record<string, string> {
+  const normalizedPath = normalizePath(String(path || '').trim())
+  return normalizedPath ? { filePath: normalizedPath } : {}
+}
+
+async function openFileInWorkspaceWindow(path: string) {
+  const query = buildFileWindowRouteQuery(path)
+  if (!query.filePath) return
+  if (isPathHiddenInFiles(query.filePath)) return
+
+  const title = fileNameFromPath(query.filePath) || String(t('nav.files'))
+  ui.openWorkspaceWindow('files', {
+    activate: true,
+    query,
+    title,
+    matchKeys: ['filePath'],
+  })
+
+  await router.push({ path: '/files', query }).catch(() => {})
+}
+
+async function requestFileSelect(node: FileNode) {
+  if (node.type === 'file' && isPathHiddenInFiles(node.path)) return
+  if (node.type === 'file' && shouldOpenFileInNewWorkspaceWindow()) {
+    await openFileInWorkspaceWindow(node.path)
+    return
+  }
+
+  highlightedPath.value = ''
+  selectedDirectoryPath.value = ''
+  clearBlame()
+  clearGitDiff()
+  closeFileTimeline()
+  if (dirty.value) {
+    if (autoSaveEnabled.value) {
+      const ok = await save({ silent: true })
+      if (ok) {
+        await openFile(node)
+        return
+      }
+    }
+    pendingSelect.value = node
+    confirmDiscardOpen.value = true
+    return
+  }
+  await openFile(node)
+}
+
+async function handleNodeClick(node: FileNode, options: ExplorerNodeClickOptions) {
+  const path = normalizePath(String(node.path || '').trim())
+  if (!path) return
+
+  if (filesMultiSelect.enabled.value) {
+    if (options.range) {
+      const anchor =
+        normalizePath(String(selectionAnchorPath.value || '').trim()) ||
+        normalizePath(String(selectedDirectoryPath.value || '').trim()) ||
+        normalizePath(String(selectedFile.value?.path || '').trim()) ||
+        path
+      const range = rangeSelectionPaths(anchor, path)
+      const targets = range.length ? range : [path]
+      if (options.toggle) {
+        const next = new Set(selectedPaths.value)
+        for (const target of targets) {
+          next.add(target)
+        }
+        selectedPaths.value = next
+      } else {
+        selectedPaths.value = new Set(targets)
+      }
+      selectionAnchorPath.value = path
+      ui.setGlobalSelection(node.type === 'directory' ? 'files-directory' : 'files-file', path, {
+        meta: { source: 'files-node-range-select', multi: true },
+      })
+      return
+    }
+
+    const next = new Set(selectedPaths.value)
+    if (next.has(path)) {
+      next.delete(path)
+    } else {
+      next.add(path)
+    }
+    selectedPaths.value = next
+    selectionAnchorPath.value = path
+    ui.setGlobalSelection(node.type === 'directory' ? 'files-directory' : 'files-file', path, {
+      meta: { source: 'files-node-multi-select', multi: true },
+    })
+    return
+  }
+
+  selectOnlyPath(path)
+  highlightedPath.value = ''
+  clearBlame()
+  clearGitDiff()
+  closeFileTimeline()
+  if (node.type === 'directory') {
+    selectedDirectoryPath.value = path
+    ui.setGlobalSelection('files-directory', path, {
+      meta: { source: 'files-node-click' },
+    })
+    await toggleDirectory(path)
+    return
+  }
+
+  ui.setGlobalSelection('files-file', path, {
+    meta: { source: 'files-node-click' },
+  })
+  await requestFileSelect(node)
+}
+
+async function handleNodeLongPress(node: FileNode) {
+  if (!filesMultiSelect.enabled.value) return
+  const path = normalizePath(String(node.path || '').trim())
+  if (!path) return
+  const next = new Set(selectedPaths.value)
+  next.add(path)
+  selectedPaths.value = next
+  selectionAnchorPath.value = path
+}
+
+function resolveMoveDestinationPath(input: string): string {
+  const rootPath = root.value
+  if (!rootPath) return ''
+  const raw = normalizePath(String(input || '').trim())
+  if (!raw || raw === '.') return rootPath
+
+  const normalizedInput = raw.replace(/^\.\//, '')
+  const abs = normalizedInput.startsWith('/') ? normalizedInput : joinPath(rootPath, normalizedInput)
+  return trimTrailingSlashes(normalizePath(abs)) || rootPath
+}
+
+function openMoveSelectedDialog(paths?: string[]) {
+  const rootPath = root.value
+  if (!rootPath) return
+
+  const nextTargets = normalizeSelectedTargets(paths && paths.length ? paths : Array.from(selectedPaths.value))
+  if (!nextTargets.length) return
+
+  selectedPaths.value = new Set(nextTargets)
+  const fallbackTarget = activeCreateDir.value || rootPath
+  const rel = relativeToWorkspace(fallbackTarget)
+  moveDialogInput.value = rel && rel !== '.' ? rel : '.'
+  moveDialogOpen.value = true
+}
+
+function closeMoveDialog() {
+  if (moveDialogSubmitting.value) return
+  moveDialogOpen.value = false
+  moveDialogInput.value = ''
+}
+
+async function moveNodeByDrag(sourcePath: string, targetDir: string): Promise<boolean> {
+  const rootPath = root.value
+  if (!rootPath) return false
+
+  const source = trimTrailingSlashes(normalizePath(String(sourcePath || '').trim()))
+  const destination = trimTrailingSlashes(normalizePath(String(targetDir || '').trim()))
+  if (!source || !destination) return false
+  if (!withinWorkspace(source, rootPath) || !withinWorkspace(destination, rootPath)) return false
+
+  const sourceParent = trimTrailingSlashes(source.split('/').slice(0, -1).join('/')) || rootPath
+  if (destination === sourceParent) return false
+  if (destination === source || destination.startsWith(`${source}/`)) return false
+
+  const baseName = source.split('/').filter(Boolean).pop() || ''
+  if (!baseName) return false
+
+  const nextPath = joinPath(destination, baseName)
+  if (nextPath === source) return false
+
+  try {
+    await renamePath({ directory: rootPath, oldPath: source, newPath: nextPath })
+
+    const selectedDir = normalizePath(String(selectedDirectoryPath.value || '').trim())
+    const selectedFilePath = normalizePath(String(selectedFile.value?.path || '').trim())
+    const affectedCurrentSelection =
+      (selectedDir && (selectedDir === source || selectedDir.startsWith(`${source}/`))) ||
+      (selectedFilePath && (selectedFilePath === source || selectedFilePath.startsWith(`${source}/`)))
+
+    if (affectedCurrentSelection) {
+      resetViewerSelectionState()
+      selectedDirectoryPath.value = ''
+    }
+
+    selectedPaths.value = new Set([nextPath])
+    selectionAnchorPath.value = nextPath
+    highlightedPath.value = nextPath
+    selectedDirectoryPath.value = destination
+
+    await ensureDirectoryExpanded(destination)
+    await refreshRoot()
+    toasts.push('success', t('files.toasts.movedCount', { count: 1 }))
+    return true
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    toasts.push('error', msg)
+    return false
+  }
+}
+
+async function moveSelectedNodes(paths: string[], destinationInput: string) {
+  const rootPath = root.value
+  if (!rootPath) return
+
+  const targets = normalizeSelectedTargets(paths)
+  if (!targets.length) return
+
+  const destination = resolveMoveDestinationPath(destinationInput)
+  if (!destination || !withinWorkspace(destination, rootPath)) {
+    throw new Error(String(t('files.errors.moveTargetOutsideWorkspace')))
+  }
+
+  let successCount = 0
+  let failedCount = 0
+  let firstError = ''
+  let affectedCurrentSelection = false
+
+  for (const target of targets) {
+    if (destination === target || destination.startsWith(`${target}/`)) {
+      failedCount += 1
+      if (!firstError) firstError = String(t('files.errors.moveTargetInsideSelection'))
+      continue
+    }
+
+    const baseName = target.split('/').filter(Boolean).pop() || ''
+    if (!baseName) {
+      failedCount += 1
+      continue
+    }
+
+    const nextPath = joinPath(destination, baseName)
+    if (nextPath === target) continue
+
+    try {
+      await renamePath({ directory: rootPath, oldPath: target, newPath: nextPath })
+      successCount += 1
+
+      const selectedDir = normalizePath(String(selectedDirectoryPath.value || '').trim())
+      if (selectedDir && (selectedDir === target || selectedDir.startsWith(`${target}/`))) {
+        affectedCurrentSelection = true
+      }
+
+      const selectedFilePath = normalizePath(String(selectedFile.value?.path || '').trim())
+      if (selectedFilePath && (selectedFilePath === target || selectedFilePath.startsWith(`${target}/`))) {
+        affectedCurrentSelection = true
+      }
+    } catch (err) {
+      failedCount += 1
+      if (!firstError) {
+        firstError = err instanceof Error ? err.message : String(err)
+      }
+    }
+  }
+
+  if (successCount > 0) {
+    if (affectedCurrentSelection) {
+      resetViewerSelectionState()
+      selectedDirectoryPath.value = ''
+    }
+    clearSelectedPaths()
+    selectedDirectoryPath.value = destination
+    await ensureDirectoryExpanded(destination)
+    await refreshRoot()
+  }
+
+  if (successCount > 0 && failedCount === 0) {
+    toasts.push('success', t('files.toasts.movedCount', { count: successCount }))
+    return
+  }
+  if (successCount > 0 && failedCount > 0) {
+    toasts.push('info', t('files.toasts.movedPartial', { success: successCount, failed: failedCount }))
+    return
+  }
+  if (failedCount > 0) {
+    toasts.push('error', firstError || t('files.toasts.moveFailedCount', { count: failedCount }))
+  }
+}
+
+async function submitMoveDialog() {
+  if (moveDialogSubmitting.value) return
+  moveDialogSubmitting.value = true
+  try {
+    await moveSelectedNodes(Array.from(selectedPaths.value), moveDialogInput.value)
+    moveDialogOpen.value = false
+    moveDialogInput.value = ''
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    toasts.push('error', msg)
+  } finally {
+    moveDialogSubmitting.value = false
+  }
+}
+
+async function save(opts?: { silent?: boolean }): Promise<boolean> {
+  const rootPath = root.value
+  const path = selectedFile.value?.path
+  if (!rootPath || !path || !canEdit.value) return false
+  isSaving.value = true
+  fileError.value = null
+  try {
+    await writeFile({ directory: rootPath, path, content: draftContent.value })
+    fileContent.value = draftContent.value
+    if (blameEnabled.value) {
+      invalidateCurrentBlameCache()
+      void loadBlame({ force: true })
+    }
+    if (gitInlineEnabled.value) {
+      void loadGitDiff()
+    }
+    if (!opts?.silent) {
+      toasts.push('success', t('files.toasts.savedFile'))
+    }
+    return true
+  } catch (err) {
+    const msg =
+      err instanceof ApiError ? err.message || err.bodyText || '' : err instanceof Error ? err.message : String(err)
+    fileError.value = msg
+    toasts.push('error', msg)
+    return false
+  } finally {
+    isSaving.value = false
+  }
+}
+
+function snapshotUploadFiles(files: readonly File[] | FileList | null | undefined): File[] {
+  if (!files) return []
+  return Array.from(files)
+}
+
+async function uploadFilesToDirectory(files: readonly File[] | FileList, targetDir?: string) {
+  const rootPath = root.value
+  if (!rootPath) return
+  if (uploading.value) return
+
+  const list = snapshotUploadFiles(files)
+  if (!list.length) return
+
+  const normalizedTarget = normalizePath(String(targetDir || '').trim())
+  const destination =
+    normalizedTarget && withinWorkspace(normalizedTarget) ? normalizedTarget : activeUploadDir.value || rootPath
+
+  uploading.value = true
+  let uploadedCount = 0
+  let failedCount = 0
+  let firstError = ''
+  try {
+    for (const file of list) {
+      try {
+        const target = joinPath(destination, file.name)
+        await uploadFile({ directory: rootPath, path: target, file })
+        uploadedCount += 1
+      } catch (err) {
+        failedCount += 1
+        if (!firstError) {
+          firstError =
+            err instanceof ApiError
+              ? err.message || err.bodyText || ''
+              : err instanceof Error
+                ? err.message
+                : String(err)
+        }
+      }
+    }
+
+    if (uploadedCount > 0 && failedCount === 0) {
+      toasts.push(
+        'success',
+        uploadedCount === 1
+          ? t('files.toasts.uploadedFile', { count: uploadedCount })
+          : t('files.toasts.uploadedFiles', { count: uploadedCount }),
+      )
+    } else if (uploadedCount > 0 && failedCount > 0) {
+      toasts.push('info', t('files.toasts.uploadPartial', { success: uploadedCount, failed: failedCount }))
+    } else if (failedCount > 0) {
+      toasts.push('error', firstError || t('files.toasts.uploadFailed', { count: failedCount }))
+    }
+
+    if (uploadedCount > 0) {
+      await refreshRoot()
+    }
+  } finally {
+    uploading.value = false
+  }
+}
+
+watch(
+  () => draftContent.value,
+  () => {
+    if (
+      selectedFile.value?.type === 'file' &&
+      ['text', 'markdown'].includes(viewerMode.value) &&
+      canEdit.value &&
+      draftContent.value !== fileContent.value
+    ) {
+      lastDraftEditAt = Date.now()
+    }
+
+    clearAutoSaveTimer()
+    if (!autoSaveEnabled.value) return
+    if (!['text', 'markdown'].includes(viewerMode.value) || !canEdit.value) return
+    if (!dirty.value || isSaving.value) return
+
+    autoSaveTimer = window.setTimeout(() => {
+      autoSaveTimer = null
+      if (!autoSaveEnabled.value) return
+      if (!dirty.value || isSaving.value) return
+      void save({ silent: true })
+    }, 650)
+  },
+)
+
+onMounted(() => {
+  window.addEventListener('keydown', handleGlobalKeydown)
+
+  if (autoSaveEnabled.value) {
+    startFileAutoRefreshTimer()
+  }
+})
+
+onBeforeUnmount(() => {
+  pageMounted = false
+  rootRestoreSeq += 1
+  openFileSeq += 1
+  fileRefreshSeq += 1
+  isRefreshingFile.value = false
+  closeRefreshConflictDialog()
+  clearAutoSaveTimer()
+  clearFileAutoRefreshTimer()
+  if (persistExplorerTimer !== null) {
+    window.clearTimeout(persistExplorerTimer)
+    persistExplorerTimer = null
+  }
+  persistExplorerNow()
+  window.removeEventListener('keydown', handleGlobalKeydown)
+})
+
+function normalizeCreateDirectory(basePath: string): string {
+  const rootPath = root.value
+  if (!rootPath) return ''
+
+  const normalizedBase = normalizePath(String(basePath || '').trim())
+  if (normalizedBase && withinWorkspace(normalizedBase)) {
+    return normalizedBase
+  }
+
+  return activeCreateDir.value || rootPath
+}
+
+async function createNode(kind: CreateKind, basePath: string, name: string) {
+  const rootPath = root.value
+  if (!rootPath) throw new Error(String(t('files.errors.noProjectSelected')))
+
+  const trimmedName = String(name || '').trim()
+  if (!trimmedName) {
+    throw new Error(kind === 'createFile' ? t('files.errors.filenameRequired') : t('files.errors.folderNameRequired'))
+  }
+
+  const targetDir = normalizeCreateDirectory(basePath)
+  const target = joinPath(targetDir, trimmedName)
+
+  if (kind === 'createFile') {
+    await writeFile({ directory: rootPath, path: target, content: '' })
+    toasts.push('success', t('files.toasts.fileCreated'))
+  } else {
+    await makeDirectory({ directory: rootPath, path: target })
+    toasts.push('success', t('files.toasts.folderCreated'))
+  }
+
+  await refreshRoot()
+}
+
+async function createNodeFromExplorer(kind: CreateKind, basePath: string, name: string): Promise<boolean> {
+  try {
+    await createNode(kind, basePath, name)
+    return true
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    toasts.push('error', msg)
+    return false
+  }
+}
+
+async function renameNodePath(oldPath: string, nextName: string) {
+  const rootPath = root.value
+  if (!rootPath) throw new Error(String(t('files.errors.noProjectSelected')))
+
+  const sourcePath = normalizeTreePath(oldPath)
+  if (!sourcePath || !withinWorkspace(sourcePath, rootPath)) return
+
+  const trimmedName = String(nextName || '').trim()
+  if (!trimmedName) throw new Error(t('files.errors.nameRequired'))
+
+  const parent = sourcePath.split('/').slice(0, -1).join('/')
+  const newPath = joinPath(parent || rootPath, trimmedName)
+  if (newPath === sourcePath) return
+
+  await renamePath({ directory: rootPath, oldPath: sourcePath, newPath })
+  applyExplorerRenameState(sourcePath, newPath)
+
+  const selectedDir = normalizePath(String(selectedDirectoryPath.value || '').trim())
+  if (selectedDir === sourcePath || selectedDir.startsWith(`${sourcePath}/`)) {
+    selectedDirectoryPath.value =
+      selectedDir === sourcePath ? newPath : `${newPath}${selectedDir.slice(sourcePath.length)}`
+  }
+
+  const selectedFilePath = normalizePath(String(selectedFile.value?.path || '').trim())
+  if (selectedFilePath && (selectedFilePath === sourcePath || selectedFilePath.startsWith(`${sourcePath}/`))) {
+    selectedFile.value = null
+    viewerMode.value = 'none'
+    fileContent.value = ''
+    draftContent.value = ''
+    resetFileChunkState()
+    fileError.value = null
+    clearBlame()
+    clearGitDiff()
+    closeFileTimeline()
+  }
+
+  await refreshRoot()
+
+  toasts.push('success', t('files.toasts.renamed'))
+}
+
+async function renameNodeFromExplorer(node: FileNode, nextName: string): Promise<boolean> {
+  try {
+    await renameNodePath(node.path, nextName)
+    return true
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    toasts.push('error', msg)
+    return false
+  }
+}
+
+function openDialog(kind: Exclude<DialogKind, null>, node?: FileNode) {
+  activeDialog.value = kind
+  dialogData.value = node
+    ? { path: node.path, name: node.name, type: node.type }
+    : { path: activeCreateDir.value || root.value, type: 'directory' }
+  dialogInput.value = kind === 'rename' ? node?.name || '' : ''
+  dialogSubmitting.value = false
+}
+
+function closeDialog() {
+  activeDialog.value = null
+  dialogData.value = null
+  dialogInput.value = ''
+}
+
+async function handleDialogSubmit() {
+  if (!activeDialog.value || !dialogData.value) return
+  const rootPath = root.value
+  if (!rootPath) return
+
+  dialogSubmitting.value = true
+  try {
+    if (activeDialog.value === 'createFile' || activeDialog.value === 'createFolder') {
+      await createNode(activeDialog.value, dialogData.value.path, dialogInput.value)
+    }
+
+    if (activeDialog.value === 'rename') {
+      await renameNodePath(dialogData.value.path, dialogInput.value)
+    }
+
+    closeDialog()
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    toasts.push('error', msg)
+  } finally {
+    dialogSubmitting.value = false
+  }
+}
+
+function resetViewerSelectionState() {
+  fileRefreshSeq += 1
+  isRefreshingFile.value = false
+  closeRefreshConflictDialog()
+  lastDraftEditAt = 0
+  selectedFile.value = null
+  viewerMode.value = 'none'
+  fileContent.value = ''
+  draftContent.value = ''
+  resetFileChunkState()
+  fileError.value = null
+  clearBlame()
+  clearGitDiff()
+  closeFileTimeline()
+}
+
+function applyDeletionState(target: string) {
+  const selectedDir = normalizePath(String(selectedDirectoryPath.value || '').trim())
+  if (selectedDir === target || selectedDir.startsWith(`${target}/`)) {
+    selectedDirectoryPath.value = ''
+  }
+
+  const selectedFilePath = normalizePath(String(selectedFile.value?.path || '').trim())
+  if (selectedFilePath && (selectedFilePath === target || selectedFilePath.startsWith(`${target}/`))) {
+    resetViewerSelectionState()
+  }
+
+  if (selectedPaths.value.size > 0) {
+    const next = new Set(
+      Array.from(selectedPaths.value).filter((path) => !(path === target || path.startsWith(`${target}/`))),
+    )
+    selectedPaths.value = next
+  }
+
+  if (
+    selectionAnchorPath.value &&
+    (selectionAnchorPath.value === target || selectionAnchorPath.value.startsWith(`${target}/`))
+  ) {
+    selectionAnchorPath.value = ''
+  }
+}
+
+async function deletePaths(targets: string[], opts?: { batch?: boolean }) {
+  const rootPath = root.value
+  if (!rootPath) return
+
+  const uniqueTargets = Array.from(
+    new Set(
+      targets
+        .map((path) => normalizePath(String(path || '').trim()))
+        .filter((path) => path && withinWorkspace(path, rootPath)),
+    ),
+  )
+  if (!uniqueTargets.length) return
+
+  const pending = new Set(deletingPaths.value)
+  for (const target of uniqueTargets) pending.add(target)
+  deletingPaths.value = pending
+
+  let successCount = 0
+  let failedCount = 0
+  let firstError = ''
+  try {
+    for (const target of uniqueTargets) {
+      try {
+        await deletePathApi({ directory: rootPath, path: target })
+        successCount += 1
+        applyExplorerDeletionState(target)
+        applyDeletionState(target)
+      } catch (err) {
+        failedCount += 1
+        if (!firstError) {
+          firstError = err instanceof Error ? err.message : String(err)
+        }
+      } finally {
+        const next = new Set(deletingPaths.value)
+        next.delete(target)
+        deletingPaths.value = next
+      }
+    }
+
+    if (successCount > 0) {
+      await refreshRoot()
+    }
+
+    if (opts?.batch) {
+      if (successCount > 0 && failedCount === 0) {
+        toasts.push(
+          'success',
+          successCount === 1
+            ? t('files.toasts.batchDeletedSingle')
+            : t('files.toasts.batchDeletedMultiple', { count: successCount }),
+        )
+      } else if (successCount > 0 && failedCount > 0) {
+        toasts.push('info', t('files.toasts.batchDeletedPartial', { success: successCount, failed: failedCount }))
+      } else if (failedCount > 0) {
+        toasts.push('error', firstError || t('files.toasts.batchDeleteFailed', { count: failedCount }))
+      }
+      return
+    }
+
+    if (successCount > 0) {
+      toasts.push('success', t('files.toasts.deleted'))
+      return
+    }
+    toasts.push('error', firstError || t('files.toasts.deleteFailed'))
+  } finally {
+    const next = new Set(deletingPaths.value)
+    for (const target of uniqueTargets) next.delete(target)
+    deletingPaths.value = next
+  }
+}
+
+async function deleteNode(node: FileNode) {
+  const target = normalizePath(String(node?.path || '').trim())
+  if (!target) return
+  if (deletingPaths.value.has(target)) return
+  await deletePaths([target])
+}
+
+async function deleteSelectedNodes(paths: string[]) {
+  await deletePaths(paths, { batch: true })
+}
+
+async function insertSelectionIntoChatComposer() {
+  const sel = selection.value
+  const path = selectedFile.value?.path
+  const sessionId = chat.selectedSessionId
+  if (!sel || !sel.text.trim() || !path) {
+    toasts.push('error', t('files.toasts.selectSomeLinesToInsert'))
+    return
+  }
+  if (!sessionId) {
+    toasts.push('error', t('files.toasts.selectChatSessionFirst'))
+    return
+  }
+
+  const rel = displaySelectedPath.value || path
+  const body = sel.text.trim()
+  const language = languageForPath(path)
+  let text = `File excerpt from ${rel} (L${sel.start}-${sel.end}):\n\n\`\`\`${language}\n${body}\n\`\`\``
+  if (commentText.value.trim()) {
+    text += `\n\n${commentText.value.trim()}`
+  }
+  const existing = chat.getComposerDraft(sessionId)
+  const glued = existing && existing.trim() ? `${existing.replace(/\s+$/g, '')}\n\n${text}` : text
+  chat.setComposerDraft(sessionId, glued)
+  toasts.push('success', t('files.toasts.insertedIntoChatComposer'))
+  selection.value = null
+  commentText.value = ''
+}
+
+async function discardAndContinue() {
+  const next = pendingSelect.value
+  pendingSelect.value = null
+  confirmDiscardOpen.value = false
+  draftContent.value = displayedContent.value
+  if (next) {
+    await openFile(next)
+  }
+}
+
+async function saveAndContinue() {
+  const next = pendingSelect.value
+  pendingSelect.value = null
+  confirmDiscardOpen.value = false
+  const ok = await save()
+  if (ok && next) {
+    await openFile(next)
+  }
+}
+
+async function restoreForRoot(next: string) {
+  if (!pageMounted) return
+
+  const seq = ++rootRestoreSeq
+  openFileSeq += 1
+  fileRefreshSeq += 1
+  isRefreshingFile.value = false
+  closeRefreshConflictDialog()
+  lastDraftEditAt = 0
+
+  closeFileTimeline()
+
+  selectedFile.value = null
+  clearSelectedPaths()
+  selectedDirectoryPath.value = ''
+  viewerMode.value = 'none'
+  fileContent.value = ''
+  draftContent.value = ''
+  resetFileChunkState()
+  fileLoading.value = false
+  fileError.value = null
+  selection.value = null
+  commentText.value = ''
+  searchResults.value = []
+  searchQuery.value = ''
+  contentSearchQuery.value = ''
+  contentSearchReplace.value = ''
+  contentSearchReplaceOpen.value = false
+  contentSearchCaseSensitive.value = false
+  contentSearchWholeWord.value = false
+  contentSearchRegex.value = false
+  contentSearchLoading.value = false
+  contentSearchReplacing.value = false
+  resetContentSearchResults()
+  showMobileViewer.value = false
+  clearBlame()
+  clearGitDiff()
+  expandedDirs.value = new Set()
+  loadedDirs.value = new Set()
+  inFlightDirs.value = new Set()
+  entriesByDir.value = {}
+  childrenByDir.value = {}
+  if (!next) return
+
+  const restored = restoreExplorerState(next)
+  if (isStaleRootRestore(seq, next)) return
+  if (!restored) {
+    await loadDirectory(next, { force: true }).catch(() => {})
+    return
+  }
+
+  // Ensure expanded directories are hydrated (cache may only include root).
+  await loadDirectory(next).catch(() => {})
+  if (isStaleRootRestore(seq, next)) return
+  for (const d of Array.from(expandedDirs.value)) {
+    const dir = normalizePath(String(d || '').trim())
+    if (!dir || dir === next) continue
+    if (!withinWorkspace(dir, next)) continue
+    await loadDirectory(dir).catch(() => {})
+    if (isStaleRootRestore(seq, next)) return
+  }
+
+  await restoreSelectedFile(next, seq)
+}
+
+watch(
+  () => root.value,
+  (next) => {
+    if (next) {
+      ui.setGlobalSelection('files-root', next, {
+        meta: { source: 'files-root-active' },
+      })
+    }
+    if (!pageMounted) return
+    handledFileNavigationKey.value = ''
+    void restoreForRoot(next)
+  },
+)
+
+watch(
+  () => [selectedFile.value?.path, viewerMode.value] as const,
+  ([path, mode]) => {
+    const filePath = normalizePath(String(path || '').trim())
+    if (!filePath) return
+    ui.setGlobalSelection('files-editor', filePath, {
+      meta: { mode, source: 'files-viewer-focus' },
+    })
+  },
+)
+
+watch(
+  () => selection.value,
+  (range) => {
+    if (!range) return
+    const filePath = normalizePath(String(selectedFile.value?.path || '').trim())
+    if (!filePath) return
+    ui.setGlobalSelection('files-selection', filePath, {
+      meta: {
+        source: 'files-selection-change',
+        startLine: range.startLine,
+        endLine: range.endLine,
+      },
+    })
+  },
+  { deep: true },
+)
+
+watch(
+  () =>
+    [
+      root.value,
+      route.query.gitPath,
+      route.query.gitAction,
+      route.query.gitLine,
+      route.query.gitColumn,
+      route.query.gitAnchor,
+    ] as const,
+  () => {
+    void applyGitNavigationQuery()
+  },
+)
+
+watch(
+  () =>
+    [root.value, route.query.filePath, route.query.fileLine, route.query.fileColumn, route.query.fileAnchor] as const,
+  () => {
+    void applyFileNavigationQuery()
+  },
+)
+
+watch(
+  () => [root.value, ui.workspaceDockFileRequestSeq] as const,
+  () => {
+    if (!embeddedMode.value) return
+    if (!pageMounted) return
+
+    const requestSeq = Number(ui.workspaceDockFileRequestSeq || 0)
+    if (!Number.isFinite(requestSeq)) return
+    if (requestSeq <= handledWorkspaceDockFileRequestSeq.value) return
+    if (!root.value) return
+
+    handledWorkspaceDockFileRequestSeq.value = requestSeq
+    const request = ui.workspaceDockFileRequest
+    if (!request?.path) return
+
+    const action: GitNavigationAction = request.action === 'reveal' ? 'reveal' : 'open'
+    const location = parseGitNavigationLocation(request.line, request.column, request.anchor)
+    void applyGitNavigationTarget(request.path, action, location)
+  },
+)
+
+watch(
+  () => [root.value, selectedFile.value?.path] as const,
+  ([rootPath, path]) => {
+    const conflict = fileRefreshConflict.value
+    if (!conflict) return
+
+    const currentPath = normalizePath(String(path || '').trim())
+    const conflictPath = normalizePath(String(conflict.path || '').trim())
+    if (!rootPath || !currentPath || currentPath !== conflictPath) {
+      closeRefreshConflictDialog()
+    }
+  },
+)
+
+watch([showHidden, respectGitignore], () => {
+  if (root.value) {
+    void refreshRoot()
+  }
+})
+
+watch(
+  () => knownTreePaths.value,
+  (paths) => {
+    const known = new Set(paths)
+    const next = Array.from(selectedPaths.value).filter((path) => known.has(path))
+    if (next.length !== selectedPaths.value.size) {
+      selectedPaths.value = new Set(next)
+    }
+    if (selectionAnchorPath.value && !known.has(selectionAnchorPath.value)) {
+      selectionAnchorPath.value = next[next.length - 1] || ''
+    }
+  },
+)
+
+watch(
+  () => searchQuery.value,
+  (q) => {
+    if (!q.trim()) {
+      searchResults.value = []
+      searching.value = false
+    }
+  },
+)
+
+watch(
+  () => contentSearchQuery.value,
+  (q) => {
+    if (!q.trim()) {
+      contentSearchLoading.value = false
+      resetContentSearchResults()
+    }
+  },
+)
+
+async function refresh() {
+  await refreshRoot()
+  await refreshCurrentFile({ source: 'manual', silent: true })
+}
+
+defineExpose({
+  refresh,
+})
+
+onMounted(async () => {
+  pageMounted = true
+  await nextTick()
+  await restoreForRoot(root.value).catch(() => {})
+  await applyGitNavigationQuery()
+  await applyFileNavigationQuery()
+  if (!chat.sessions.length) {
+    await chat.refreshSessions().catch(() => {})
+  }
+})
+</script>
+
+<template>
+  <section class="h-full flex flex-col overflow-hidden m-0 p-0">
+    <ConfirmPopover
+      :open="confirmDiscardOpen"
+      :title="String(t('files.confirmDiscard.title'))"
+      :description="String(t('files.confirmDiscard.description'))"
+      :confirm-text="String(t('files.confirmDiscard.discard'))"
+      :cancel-text="String(t('files.confirmDiscard.saveChanges'))"
+      variant="destructive"
+      :confirm-disabled="isSaving"
+      :cancel-disabled="isSaving"
+      @update:open="
+        (v) => {
+          if (!v) {
+            confirmDiscardOpen = false
+            pendingSelect = null
+          }
+        }
+      "
+      @cancel="saveAndContinue"
+      @confirm="discardAndContinue"
+    />
+
+    <FormDialog
+      :open="Boolean(fileRefreshConflict)"
+      :title="String(t('files.refreshConflict.title'))"
+      :description="String(t('files.refreshConflict.description', { path: refreshConflictPathLabel || '-' }))"
+      @update:open="
+        (v) => {
+          if (!v) closeRefreshConflictDialog()
+        }
+      "
+    >
+      <div class="space-y-3">
+        <div
+          v-if="refreshConflictLargeHint"
+          class="rounded-sm border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs text-muted-foreground"
+        >
+          {{ refreshConflictLargeHint }}
+        </div>
+        <div class="flex items-center justify-end gap-2">
+          <Button variant="ghost" @click="keepLocalDraftAfterRefreshConflict">{{
+            t('files.refreshConflict.keepLocalDraft')
+          }}</Button>
+          <Button @click="applyRefreshConflictRemote">{{ t('files.refreshConflict.useRefreshedContent') }}</Button>
+        </div>
+      </div>
+    </FormDialog>
+
+    <FormDialog
+      :open="activeDialog !== null"
+      :title="dialogTitle"
+      :description="dialogDescription"
+      @update:open="
+        (v) => {
+          if (!v) closeDialog()
+        }
+      "
+    >
+      <div class="space-y-3">
+        <Input v-model="dialogInput" :placeholder="String(t('files.dialog.namePlaceholder'))" class="h-9 font-mono" />
+        <div class="flex items-center justify-end gap-2">
+          <Button variant="ghost" @click="closeDialog" :disabled="dialogSubmitting">{{ t('common.cancel') }}</Button>
+          <Button @click="handleDialogSubmit" :disabled="dialogSubmitting || !dialogInput.trim()">
+            {{ dialogSubmitting ? t('common.working') : t('common.confirm') }}
+          </Button>
+        </div>
+      </div>
+    </FormDialog>
+
+    <FormDialog
+      :open="moveDialogOpen"
+      :title="String(t('files.explorer.selection.bulkMoveTitle'))"
+      :description="String(t('files.explorer.selection.bulkMoveDescription', { count: selectedPaths.size }))"
+      @update:open="
+        (v) => {
+          if (!v) closeMoveDialog()
+        }
+      "
+    >
+      <div class="space-y-3">
+        <Input
+          v-model="moveDialogInput"
+          :placeholder="String(t('files.explorer.selection.bulkMovePlaceholder'))"
+          class="h-9 font-mono"
+        />
+        <div class="flex items-center justify-end gap-2">
+          <Button variant="ghost" :disabled="moveDialogSubmitting" @click="closeMoveDialog">{{
+            t('common.cancel')
+          }}</Button>
+          <Button :disabled="moveDialogSubmitting || !moveDialogInput.trim()" @click="submitMoveDialog">
+            {{ moveDialogSubmitting ? t('common.working') : t('files.explorer.selection.bulkMove') }}
+          </Button>
+        </div>
+      </div>
+    </FormDialog>
+
+    <div class="flex-1 min-h-0 m-0 p-0">
+      <div v-if="!root" class="h-full">
+        <div v-if="isCompactLayout && ui.isSessionSwitcherOpen" class="h-full p-3">
+          <div class="rounded-sm border border-sidebar-border/60 bg-sidebar-accent/10 p-3">
+            <div class="text-sm font-medium">{{ t('files.empty.noProject.title') }}</div>
+            <div class="mt-1 text-xs text-muted-foreground">
+              {{ t('files.empty.noProject.mobileDescription') }}
+            </div>
+          </div>
+        </div>
+        <div v-else class="h-full grid place-items-center text-muted-foreground typography-meta">
+          {{ t('files.empty.noProject.desktopDescription') }}
+        </div>
+      </div>
+
+      <div v-else class="h-full m-0 p-0">
+        <div class="flex h-full min-h-0 flex-col m-0 p-0">
+          <div class="flex min-h-0 flex-1 gap-0" :class="isCompactLayout ? 'flex-col' : ''">
+            <Teleport :to="WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR" :disabled="!useDesktopSidebarHost">
+              <div
+                class="relative h-full min-h-0 overflow-hidden m-0 p-0"
+                :class="isCompactLayout || embeddedMode || useDesktopSidebarHost ? 'flex-1' : 'flex-shrink-0'"
+                :style="
+                  isCompactLayout || embeddedMode || useDesktopSidebarHost
+                    ? undefined
+                    : { width: `${ui.sidebarWidth}px` }
+                "
+                v-show="showFilesSidebar"
+              >
+                <FilesExplorerPane
+                  v-model:view-mode="explorerSidebarMode"
+                  v-model:showHidden="showHidden"
+                  v-model:showGitignored="showGitignored"
+                  :root="root"
+                  :root-options="explorerRootOptions"
+                  :can-navigate-up="rootCanNavigateUp"
+                  :navigate-up="navigateRootUp"
+                  :switch-root="setExplorerRoot"
+                  :is-compact-layout="isCompactLayout"
+                  :is-mobile-form-factor="isMobileFormFactor"
+                  :selected-file-path="highlightedPath || selectedDirectoryPath || selectedFile?.path || ''"
+                  :has-root-children="hasRootChildren"
+                  :flattened-tree="flattenedTree"
+                  :deleting-paths="deletingPaths"
+                  :selected-paths="selectedPaths"
+                  :multi-select-enabled="filesMultiSelect.enabled.value"
+                  :uploading="uploading"
+                  :toggle-multi-select-mode="filesMultiSelect.toggleEnabled"
+                  :select-all-visible-nodes="selectAllVisibleNodes"
+                  :invert-visible-node-selection="invertVisibleNodeSelection"
+                  :handle-node-click="handleNodeClick"
+                  :handle-node-long-press="handleNodeLongPress"
+                  :refresh-root="refreshRoot"
+                  :collapse-all="collapseAllDirectories"
+                  :active-create-dir="activeCreateDir"
+                  :expand-directory="ensureDirectoryExpanded"
+                  :create-node="createNodeFromExplorer"
+                  :rename-node="renameNodeFromExplorer"
+                  :move-node-by-drag="moveNodeByDrag"
+                  :run-file-action="runExplorerFileAction"
+                  :open-dialog="openDialog"
+                  :delete-node="deleteNode"
+                  :delete-selected-nodes="deleteSelectedNodes"
+                  :open-move-selected-dialog="openMoveSelectedDialog"
+                  :clear-selected-paths="clearSelectedPaths"
+                  :upload-files="uploadFilesToDirectory"
+                >
+                  <template #search>
+                    <div class="flex min-h-0 flex-1 flex-col">
+                      <div class="border-b border-sidebar-border/40 px-2 py-1.5">
+                        <SegmentedControl class="grid-cols-2">
+                          <SegmentedButton
+                            :active="explorerSearchMode === 'files'"
+                            size="xs"
+                            class="rounded-sm"
+                            @click="explorerSearchMode = 'files'"
+                          >
+                            {{ t('files.search.mode.files') }}
+                          </SegmentedButton>
+                          <SegmentedButton
+                            :active="explorerSearchMode === 'content'"
+                            size="xs"
+                            class="rounded-sm"
+                            @click="explorerSearchMode = 'content'"
+                          >
+                            {{ t('files.search.mode.content') }}
+                          </SegmentedButton>
+                        </SegmentedControl>
+
+                        <div class="mt-2 space-y-1.5">
+                          <template v-if="explorerSearchMode === 'files'">
+                            <div class="flex items-center gap-1">
+                              <SearchInput
+                                v-model="searchQuery"
+                                :placeholder="String(t('files.search.files.placeholder'))"
+                                class="flex-1"
+                                input-class="oc-vscode-subtle-input h-[26px] font-mono text-[12px]"
+                                :search-disabled="searching || !hasFileSearch"
+                                :clear-disabled="!hasFileSearch"
+                                :input-aria-label="String(t('files.search.files.placeholder'))"
+                                :input-title="String(t('files.search.files.placeholder'))"
+                                :search-aria-label="String(t('common.search'))"
+                                :search-title="String(searching ? t('common.loading') : t('common.search'))"
+                                :clear-aria-label="String(t('common.clear'))"
+                                :clear-title="String(t('common.clear'))"
+                                :is-touch-pointer="ui.isTouchPointer"
+                                @search="runSearch"
+                                @clear="clearFileSearch"
+                              />
+                            </div>
+                            <div class="px-0.5 text-[11px] text-muted-foreground">
+                              <span v-if="!hasFileSearch">{{ t('files.search.files.hint') }}</span>
+                              <span v-else-if="searching">{{ t('common.searching') }}</span>
+                              <span v-else>{{ t('files.search.files.results', { count: searchResults.length }) }}</span>
+                            </div>
+                          </template>
+
+                          <template v-else>
+                            <div class="relative">
+                              <button
+                                type="button"
+                                class="absolute left-0 top-0 inline-flex h-[26px] w-4 items-center justify-center rounded-sm text-[10px] text-muted-foreground transition hover:bg-sidebar-accent/70 hover:text-foreground"
+                                :title="
+                                  contentSearchReplaceOpen
+                                    ? String(t('files.search.content.hideReplace'))
+                                    : String(t('files.search.content.showReplace'))
+                                "
+                                :aria-label="
+                                  contentSearchReplaceOpen
+                                    ? String(t('files.search.content.hideReplace'))
+                                    : String(t('files.search.content.showReplace'))
+                                "
+                                @click="contentSearchReplaceOpen = !contentSearchReplaceOpen"
+                              >
+                                {{ contentSearchReplaceOpen ? 'v' : '>' }}
+                              </button>
+
+                              <div class="ml-[18px] flex items-center gap-1">
+                                <SearchInput
+                                  v-model="contentSearchQuery"
+                                  :placeholder="String(t('files.search.content.placeholder'))"
+                                  class="flex-1"
+                                  input-class="oc-vscode-subtle-input h-[26px] font-mono text-[12px]"
+                                  :search-disabled="contentSearchLoading || contentSearchReplacing || !hasContentSearch"
+                                  :clear-disabled="!hasContentSearch"
+                                  :input-aria-label="String(t('files.search.content.placeholder'))"
+                                  :input-title="String(t('files.search.content.placeholder'))"
+                                  :search-aria-label="String(t('common.search'))"
+                                  :search-title="
+                                    String(contentSearchLoading ? t('common.loading') : t('common.search'))
+                                  "
+                                  :clear-aria-label="String(t('common.clear'))"
+                                  :clear-title="String(t('common.clear'))"
+                                  :is-touch-pointer="ui.isTouchPointer"
+                                  @search="runContentSearch"
+                                  @clear="clearContentSearch"
+                                />
+                                <button
+                                  type="button"
+                                  class="h-6 w-6 rounded-sm border text-[10px] font-mono transition"
+                                  :class="
+                                    contentSearchCaseSensitive
+                                      ? 'border-sidebar-border bg-sidebar-accent/80 text-foreground'
+                                      : 'border-sidebar-border/60 bg-sidebar-accent/25 text-muted-foreground hover:text-foreground'
+                                  "
+                                  :title="String(t('files.search.content.matchCase'))"
+                                  @click="contentSearchCaseSensitive = !contentSearchCaseSensitive"
+                                >
+                                  Aa
+                                </button>
+                                <button
+                                  type="button"
+                                  class="h-6 w-6 rounded-sm border text-[10px] font-mono transition"
+                                  :class="
+                                    contentSearchWholeWord
+                                      ? 'border-sidebar-border bg-sidebar-accent/80 text-foreground'
+                                      : 'border-sidebar-border/60 bg-sidebar-accent/25 text-muted-foreground hover:text-foreground'
+                                  "
+                                  :title="String(t('files.search.content.matchWholeWord'))"
+                                  @click="contentSearchWholeWord = !contentSearchWholeWord"
+                                >
+                                  W
+                                </button>
+                                <button
+                                  type="button"
+                                  class="h-6 w-6 rounded-sm border text-[10px] font-mono transition"
+                                  :class="
+                                    contentSearchRegex
+                                      ? 'border-sidebar-border bg-sidebar-accent/80 text-foreground'
+                                      : 'border-sidebar-border/60 bg-sidebar-accent/25 text-muted-foreground hover:text-foreground'
+                                  "
+                                  :title="String(t('files.search.content.useRegex'))"
+                                  @click="contentSearchRegex = !contentSearchRegex"
+                                >
+                                  .*
+                                </button>
+                              </div>
+                            </div>
+
+                            <div v-if="contentSearchReplaceOpen" class="ml-[18px] flex items-center gap-1">
+                              <Input
+                                v-model="contentSearchReplace"
+                                :placeholder="String(t('files.search.content.replacePlaceholder'))"
+                                class="oc-vscode-subtle-input h-[26px] flex-1 font-mono text-[12px]"
+                              />
+                              <Button
+                                size="sm"
+                                class="h-[26px] px-2 text-[11px]"
+                                :disabled="
+                                  contentSearchReplacing ||
+                                  contentSearchLoading ||
+                                  !hasContentSearch ||
+                                  contentSearchMatchCount === 0
+                                "
+                                @click="replaceAllContentSearchMatches"
+                              >
+                                {{ contentSearchReplacing ? t('common.loading') : t('common.all') }}
+                              </Button>
+                            </div>
+
+                            <div class="ml-[18px] px-0.5 text-[11px] text-muted-foreground">
+                              <span>{{ contentSearchSummary }}</span>
+                              <span v-if="activeContentSearchScope" class="ml-1"
+                                >in {{ activeContentSearchScope.description }}</span
+                              >
+                            </div>
+
+                            <div class="ml-[18px] flex flex-wrap items-center gap-1">
+                              <button
+                                v-for="scope in contentSearchScopeOptions"
+                                :key="scope.id"
+                                type="button"
+                                class="h-5 rounded-sm border px-1.5 text-[10px] font-medium transition"
+                                :class="
+                                  contentSearchScopeMode === scope.id
+                                    ? 'border-sidebar-border bg-sidebar-accent/80 text-foreground'
+                                    : 'border-sidebar-border/60 bg-sidebar-accent/25 text-muted-foreground hover:text-foreground'
+                                "
+                                :title="scope.description"
+                                :disabled="scope.disabled"
+                                @click="contentSearchScopeMode = scope.id"
+                              >
+                                {{ scope.label }}
+                              </button>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+
+                      <ScrollArea class="min-h-0 flex-1">
+                        <div class="px-1 py-1">
+                          <template v-if="explorerSearchMode === 'files'">
+                            <div v-if="!hasFileSearch" class="px-2 py-2 text-xs text-muted-foreground">
+                              {{ t('files.search.files.noQuery') }}
+                            </div>
+                            <div v-else-if="searching" class="px-2 py-2 text-xs text-muted-foreground">
+                              {{ t('common.searching') }}
+                            </div>
+                            <div v-else-if="searchResults.length === 0" class="px-2 py-2 text-xs text-muted-foreground">
+                              {{ t('files.search.files.noFilesFound') }}
+                            </div>
+                            <div v-else class="space-y-0.5">
+                              <button
+                                v-for="node in searchResults"
+                                :key="node.path"
+                                type="button"
+                                class="oc-vscode-row h-[22px] w-full border-transparent px-2 text-left"
+                                @click="requestFileSelect(node)"
+                              >
+                                <span class="truncate font-mono text-[11px]" :title="node.path">{{
+                                  node.relativePath || node.path
+                                }}</span>
+                              </button>
+                            </div>
+                          </template>
+
+                          <template v-else>
+                            <div
+                              v-if="contentSearchError"
+                              class="mx-1 mb-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs"
+                            >
+                              {{ contentSearchError }}
+                            </div>
+                            <div v-if="!hasContentSearch" class="px-2 py-2 text-xs text-muted-foreground">
+                              {{ t('files.search.content.hint') }}
+                            </div>
+                            <div
+                              v-else-if="contentSearchLoading && !contentSearchFiles.length"
+                              class="px-2 py-2 text-xs text-muted-foreground"
+                            >
+                              {{ t('common.searching') }}
+                            </div>
+                            <div v-else-if="!contentSearchFiles.length" class="px-2 py-2 text-xs text-muted-foreground">
+                              {{ t('files.search.content.noMatchesFound') }}
+                            </div>
+                            <div v-else class="space-y-0">
+                              <div
+                                v-for="file in contentSearchFiles"
+                                :key="file.path"
+                                class="border-t border-sidebar-border/30 first:border-t-0"
+                              >
+                                <div class="flex items-center justify-between gap-2 px-2 py-0.5">
+                                  <button
+                                    type="button"
+                                    class="oc-vscode-row h-[22px] min-w-0 flex-1 border-transparent px-1"
+                                    :title="file.path"
+                                    @click="openContentSearchResult(file.path)"
+                                  >
+                                    <span class="truncate font-mono text-[11px]">{{ file.relativePath }}</span>
+                                  </button>
+                                  <span class="oc-vscode-count-badge">{{ file.matchCount }}</span>
+                                </div>
+                                <div class="pb-0.5">
+                                  <div
+                                    v-for="match in file.matches"
+                                    :key="`${file.path}:${match.startOffset}:${match.endOffset}`"
+                                    class="flex items-center gap-1 pl-2 pr-1"
+                                  >
+                                    <button
+                                      type="button"
+                                      class="oc-vscode-row h-[22px] min-w-0 flex-1 border-transparent px-1"
+                                      @click="openContentSearchResult(file.path)"
+                                    >
+                                      <span class="w-10 shrink-0 pr-1 text-right text-[10px] text-muted-foreground">{{
+                                        match.line
+                                      }}</span>
+                                      <span class="min-w-0 truncate font-mono text-[11px]">
+                                        <span class="text-muted-foreground">{{ match.before }}</span>
+                                        <span
+                                          class="rounded-sm border border-primary/35 bg-primary/20 px-0.5 text-foreground"
+                                          >{{ match.matched }}</span
+                                        >
+                                        <span class="text-muted-foreground">{{ match.after }}</span>
+                                      </span>
+                                    </button>
+                                    <button
+                                      v-if="contentSearchReplaceOpen"
+                                      type="button"
+                                      class="oc-vscode-icon-button h-5 w-12 text-[10px]"
+                                      :disabled="contentSearchReplacing"
+                                      @click="replaceContentSearchMatch(file, match)"
+                                    >
+                                      {{ t('common.replace') }}
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </template>
+                        </div>
+                      </ScrollArea>
+                    </div>
+                  </template>
+                </FilesExplorerPane>
+              </div>
+            </Teleport>
+
+            <div
+              class="flex-1 min-h-0 overflow-hidden m-0 p-0"
+              v-show="embeddedMode ? embeddedView === 'viewer' : !isCompactLayout || !ui.isSessionSwitcherOpen"
+            >
+              <FileViewerPane
+                v-model:showMobileViewer="showMobileViewer"
+                v-model:autoSaveEnabled="autoSaveEnabled"
+                v-model:wrapLines="wrapLines"
+                v-model:markdownViewMode="markdownViewMode"
+                v-model:draftContent="draftContent"
+                v-model:selection="selection"
+                v-model:commentText="commentText"
+                :is-compact-layout="isCompactLayout"
+                :show-header-back-button="embeddedMode"
+                :hide-header-title="isEmbeddedWorkspacePane"
+                :is-touch-pointer="ui.isTouchPointer"
+                :is-mobile-form-factor="isMobileFormFactor"
+                :selected-file="selectedFile"
+                :display-selected-path="displaySelectedPath"
+                :viewer-mode="viewerMode"
+                :can-edit="canEdit"
+                :dirty="dirty"
+                :is-saving="isSaving"
+                :is-refreshing-file="isRefreshingFile"
+                :displayed-content="displayedContent"
+                :raw-url="rawUrl"
+                :open-raw="openSelectedFileRaw"
+                :selected-path="selectedPath"
+                :image-gallery-items="filesImageGalleryItems"
+                :selected-image-gallery-index="selectedImageGalleryIndex"
+                :reveal-line="fileRevealLine"
+                :reveal-column="fileRevealColumn"
+                :reveal-anchor="fileRevealAnchor"
+                :reveal-request-seq="fileRevealRequestSeq"
+                :file-loading="fileLoading"
+                :file-error="fileError"
+                :file-status-label="fileStatusLabel"
+                :large-file-prompt="largeFilePrompt"
+                :file-chunk-ui="fileChunkUi"
+                :blame-enabled="blameEnabled"
+                :blame-loading="blameLoading"
+                :blame-error="blameError"
+                :blame-lines="blameLines"
+                :timeline-enabled="fileTimelineEnabled"
+                :timeline-path="fileTimelinePath"
+                :timeline-loading="fileTimelineLoading"
+                :timeline-error="fileTimelineError"
+                :timeline-commits="fileTimelineCommits"
+                :timeline-has-more="fileTimelineHasMore"
+                :timeline-left-commit="fileTimelineLeftCommit"
+                :timeline-left-content="fileTimelineLeftContent"
+                :timeline-left-loading="fileTimelineLeftLoading"
+                :timeline-left-error="fileTimelineLeftError"
+                :timeline-right-commit="fileTimelineRightCommit"
+                :timeline-right-content="fileTimelineRightContent"
+                :timeline-right-loading="fileTimelineRightLoading"
+                :timeline-right-error="fileTimelineRightError"
+                :git-inline-enabled="gitInlineEnabled"
+                :git-diff-loading="gitDiffLoading"
+                :git-diff-error="gitDiffError"
+                :git-diff-text="gitDiffText"
+                :git-diff-meta="gitDiffMeta"
+                :git-diff-mode="gitDiffMode"
+                :git-patch-busy="gitPatchBusy"
+                :toggle-blame="toggleBlame"
+                :reload-blame="reloadBlame"
+                :toggle-git-inline="toggleGitInline"
+                :toggle-git-diff-mode="toggleGitDiffMode"
+                :apply-git-patch="applyGitPatch"
+                :load-more-timeline="loadMoreFileTimeline"
+                :refresh-timeline="refreshFileTimeline"
+                :select-timeline-commit="selectFileTimelineCommit"
+                :open-timeline="openFileTimeline"
+                :open-sidebar="embeddedMode ? showEmbeddedFileList : () => ui.setSessionSwitcherOpen(true)"
+                :on-header-back="showEmbeddedFileList"
+                :refresh-file="() => refreshCurrentFile({ source: 'manual' })"
+                :save="() => save()"
+                :confirm-large-file-load="confirmLargeFileLoad"
+                :load-more-file-content="loadMoreFileContent"
+                :copy-to-clipboard="copyToClipboard"
+                @insert-selection="insertSelectionIntoChatComposer"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</template>

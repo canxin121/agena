@@ -12,14 +12,13 @@ import {
   RiSendPlane2Line,
   RiStackLine,
   RiStopCircleLine,
-  RiUserLine,
   RiBrainAi3Line,
+  RiSpeedUpLine,
 } from '@remixicon/vue'
 
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
 import MessageList from '@/components/chat/MessageList.vue'
-import PluginChatMounts from '@/components/chat/PluginChatMounts.vue'
-import PluginChatOverlayMounts from '@/components/chat/PluginChatOverlayMounts.vue'
+import ChatRuntimeStatusOverlay from '@/components/chat/ChatRuntimeStatusOverlay.vue'
 import ChatHeader from '@/components/chat/ChatHeader.vue'
 import Composer from '@/components/chat/Composer.vue'
 import RenameSessionDialog from '@/components/chat/RenameSessionDialog.vue'
@@ -50,8 +49,8 @@ const {
   composerControlsRef,
   composerPickerRef,
   modelTriggerRef,
-  variantTriggerRef,
-  agentTriggerRef,
+  thinkingTriggerRef,
+  speedTriggerRef,
   sessionActionsMenuRef,
 
   // Stores / state.
@@ -61,8 +60,6 @@ const {
   attachmentsBusy,
   attachmentsPanelOpen,
   draft,
-  chatSidebarPluginMounts,
-  chatOverlayBottomPluginMounts,
 
   // Message list.
   renderBlocks,
@@ -137,7 +134,7 @@ const {
   closeComposerActionMenu,
   runComposerActionMenu,
 
-  // Model/agent/variant picker.
+  // Model and run mode picker.
   composerPickerOpen,
   composerPickerStyle,
   composerPickerTitle,
@@ -153,17 +150,18 @@ const {
   refreshComposerPickerOptions,
   setComposerPickerOpen,
   handleComposerPickerSelect,
-  hasVariantsForSelection,
+  hasThinkingModesForSelection,
+  hasSpeedModesForSelection,
 
   // Chip labels.
   modelHint,
   modelChipLabelMobile,
   modelChipLabel,
   toggleComposerPicker,
-  variantHint,
-  variantChipLabel,
-  agentHint,
-  agentChipLabel,
+  thinkingModeHint,
+  thinkingModeChipLabel,
+  speedModeHint,
+  speedModeChipLabel,
 
   // Usage + primary action.
   sessionUsage,
@@ -211,15 +209,10 @@ const modelChipTextClass = computed(() =>
     ? 'text-[11px] font-mono font-medium truncate max-w-[88px]'
     : 'text-[11px] sm:text-xs font-mono font-medium truncate max-w-[150px] sm:max-w-[220px]',
 )
-const variantChipTextClass = computed(() =>
+const modeChipTextClass = computed(() =>
   splitComposerChipRows.value
     ? 'text-[11px] font-mono font-medium truncate max-w-[64px]'
     : 'text-[11px] sm:text-xs font-mono font-medium truncate max-w-[96px] sm:max-w-[140px]',
-)
-const agentChipTextClass = computed(() =>
-  splitComposerChipRows.value
-    ? 'text-[11px] font-medium truncate max-w-[72px]'
-    : 'text-[11px] sm:text-xs font-medium truncate max-w-[96px] sm:max-w-[140px]',
 )
 
 const attachmentsCount = computed(() => {
@@ -280,8 +273,8 @@ function resolveAnchorEl(target: TooltipAnchorLike): HTMLElement | null {
 const activePickerAnchor = computed(() => {
   const mode = unref(composerPickerOpen)
   if (mode === 'model') return resolveAnchorEl(unref(modelTriggerRef) as TooltipAnchorLike)
-  if (mode === 'variant') return resolveAnchorEl(unref(variantTriggerRef) as TooltipAnchorLike)
-  if (mode === 'agent') return resolveAnchorEl(unref(agentTriggerRef) as TooltipAnchorLike)
+  if (mode === 'thinking') return resolveAnchorEl(unref(thinkingTriggerRef) as TooltipAnchorLike)
+  if (mode === 'speed') return resolveAnchorEl(unref(speedTriggerRef) as TooltipAnchorLike)
   return null
 })
 
@@ -309,8 +302,8 @@ void composerRef
 void composerControlsRef
 void composerPickerRef
 void modelTriggerRef
-void variantTriggerRef
-void agentTriggerRef
+void thinkingTriggerRef
+void speedTriggerRef
 void sessionActionsMenuRef
 </script>
 
@@ -441,11 +434,7 @@ void sessionActionsMenuRef
           class="pointer-events-none absolute inset-x-0 bottom-2 z-30"
         >
           <div class="chat-column">
-            <PluginChatOverlayMounts
-              :mounts="chatOverlayBottomPluginMounts"
-              :is-mobile-pointer="ui.isMobilePointer"
-              @reserve-change="handleOverlayReserve"
-            />
+            <ChatRuntimeStatusOverlay :is-mobile-pointer="ui.isMobilePointer" @reserve-change="handleOverlayReserve" />
           </div>
         </div>
       </template>
@@ -469,8 +458,6 @@ void sessionActionsMenuRef
                 :mobile-pointer="ui.isMobilePointer"
                 @abort="abortRun"
               />
-              <PluginChatMounts :mounts="chatSidebarPluginMounts" />
-
               <Composer
                 ref="composerRef"
                 v-model:draft="draft"
@@ -505,8 +492,8 @@ void sessionActionsMenuRef
                       :desktop-anchor-el="activePickerAnchor"
                       :desktop-gap-px="COMPOSER_DESKTOP_MENU_GAP_PX"
                       :desktop-viewport-margin-px="COMPOSER_DESKTOP_MENU_VIEWPORT_MARGIN_PX"
-                      :paginated="composerPickerOpen === 'model' || composerPickerOpen === 'agent'"
-                      :page-size="composerPickerOpen === 'model' ? 80 : 60"
+                      :paginated="composerPickerOpen === 'model'"
+                      :page-size="80"
                       pagination-mode="group"
                       :collapsible-groups="composerPickerOpen === 'model'"
                       desktop-placement="top-start"
@@ -520,7 +507,7 @@ void sessionActionsMenuRef
                     <div
                       class="composer-controls-surface w-full flex flex-row items-center justify-between gap-2 rounded-b-xl border-t border-border/60 bg-background/60 p-2 sm:px-2.5"
                     >
-                      <!-- Region 1: Attachments, Menu, Agent, Model, Variant -->
+                      <!-- Region 1: attachments, actions, model, and server-supported run modes. -->
                       <div
                         class="flex-1 flex flex-nowrap items-center gap-1 sm:gap-1.5 min-w-0 overflow-x-auto oc-scrollbar-hidden [&>*]:shrink-0"
                         data-oc-keyboard-tap="blur"
@@ -594,20 +581,6 @@ void sessionActionsMenuRef
                         />
 
                         <ToolbarChipButton
-                          :active="composerPickerOpen === 'agent'"
-                          :tooltip="agentHint"
-                          :is-touch-pointer="ui.isTouchPointer"
-                          :title="t('chat.composer.picker.agentTitle')"
-                          :aria-label="t('chat.composer.picker.agentTitle')"
-                          ref="agentTriggerRef"
-                          @mousedown.prevent
-                          @click.stop="toggleComposerPicker('agent')"
-                        >
-                          <RiUserLine class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
-                          <span :class="agentChipTextClass">{{ agentChipLabel }}</span>
-                        </ToolbarChipButton>
-
-                        <ToolbarChipButton
                           :active="composerPickerOpen === 'model'"
                           :tooltip="modelHint"
                           :is-touch-pointer="ui.isTouchPointer"
@@ -624,18 +597,33 @@ void sessionActionsMenuRef
                         </ToolbarChipButton>
 
                         <ToolbarChipButton
-                          v-if="hasVariantsForSelection"
-                          :active="composerPickerOpen === 'variant'"
-                          :tooltip="variantHint"
+                          v-if="hasThinkingModesForSelection"
+                          :active="composerPickerOpen === 'thinking'"
+                          :tooltip="thinkingModeHint"
                           :is-touch-pointer="ui.isTouchPointer"
-                          :title="t('chat.composer.picker.variantTitle')"
-                          :aria-label="t('chat.composer.picker.variantTitle')"
-                          ref="variantTriggerRef"
+                          :title="t('chat.composer.picker.thinkingTitle')"
+                          :aria-label="t('chat.composer.picker.thinkingTitle')"
+                          ref="thinkingTriggerRef"
                           @mousedown.prevent
-                          @click.stop="toggleComposerPicker('variant')"
+                          @click.stop="toggleComposerPicker('thinking')"
                         >
                           <RiBrainAi3Line class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
-                          <span :class="variantChipTextClass">{{ variantChipLabel }}</span>
+                          <span :class="modeChipTextClass">{{ thinkingModeChipLabel }}</span>
+                        </ToolbarChipButton>
+
+                        <ToolbarChipButton
+                          v-if="hasSpeedModesForSelection"
+                          :active="composerPickerOpen === 'speed'"
+                          :tooltip="speedModeHint"
+                          :is-touch-pointer="ui.isTouchPointer"
+                          :title="t('chat.composer.picker.speedTitle')"
+                          :aria-label="t('chat.composer.picker.speedTitle')"
+                          ref="speedTriggerRef"
+                          @mousedown.prevent
+                          @click.stop="toggleComposerPicker('speed')"
+                        >
+                          <RiSpeedUpLine class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
+                          <span :class="modeChipTextClass">{{ speedModeChipLabel }}</span>
                         </ToolbarChipButton>
                       </div>
 

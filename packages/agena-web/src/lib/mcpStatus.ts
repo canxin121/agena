@@ -4,6 +4,7 @@ export type McpStatusItem = {
   name: string
   status: string
   error: string
+  toolCount: number
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -48,6 +49,7 @@ export function normalizeMcpStatus(payload: McpStatusResponse): McpStatusItem[] 
           name,
           status: info.status || 'unknown',
           error: info.error,
+          toolCount: typeof rec.tool_count === 'number' ? rec.tool_count : 0,
         }
       })
       .filter((item): item is McpStatusItem => Boolean(item))
@@ -56,6 +58,26 @@ export function normalizeMcpStatus(payload: McpStatusResponse): McpStatusItem[] 
 
   const root = asRecord(payload)
   if (!root) return []
+
+  const operator = asRecord(root.operator)
+  const runtimeMcp = asRecord(operator?.mcp) || asRecord(root.mcp)
+  if (runtimeMcp && Array.isArray(runtimeMcp.servers)) {
+    return runtimeMcp.servers
+      .map((entry) => {
+        const server = asRecord(entry)
+        if (!server) return null
+        const name = pickString(server, ['name'])
+        if (!name) return null
+        return {
+          name,
+          status: 'running',
+          error: '',
+          toolCount: typeof server.tool_count === 'number' ? server.tool_count : 0,
+        }
+      })
+      .filter((item): item is McpStatusItem => Boolean(item))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
 
   const items = Object.entries(root)
     .map(([name, value]) => {
@@ -66,6 +88,7 @@ export function normalizeMcpStatus(payload: McpStatusResponse): McpStatusItem[] 
         name: trimmed,
         status: info.status || 'unknown',
         error: info.error,
+        toolCount: 0,
       }
     })
     .filter((item): item is McpStatusItem => Boolean(item))

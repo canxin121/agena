@@ -10,7 +10,6 @@ type CommandItem = {
   name: string
   isBuiltIn?: boolean
   scope?: string
-  agent?: string
   description?: string
   aliases?: string[]
 }
@@ -80,12 +79,6 @@ function setIndex(i: number) {
                 class="text-[10px] uppercase font-bold tracking-tight rounded border border-emerald-300/40 bg-emerald-200/10 text-emerald-600 px-1.5 py-0.5"
               >
                 {{ cmd.scope }}
-              </span>
-              <span
-                v-if="cmd.agent"
-                class="text-[10px] font-bold tracking-tight rounded border border-border/60 bg-secondary/40 text-muted-foreground px-1.5 py-0.5"
-              >
-                {{ cmd.agent }}
               </span>
             </div>
             <div v-if="cmd.description" class="text-xs text-muted-foreground truncate">{{ cmd.description }}</div>

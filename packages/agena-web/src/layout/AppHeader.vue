@@ -9,6 +9,7 @@ import { useUiStore } from '@/stores/ui'
 import { useHealthStore } from '@/stores/health'
 import { useChatStore } from '@/stores/chat'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
+import { normalizeRememberedSettingsRoute } from '@/components/settings/sidebar/settingsSidebarNavigation'
 
 import IconButton from '@/components/ui/IconButton.vue'
 
@@ -151,15 +152,11 @@ const SETTINGS_LAST_ROUTE_KEY = localStorageKeys.settings.lastRoute
 
 function getRememberedSettingsRoute(): string {
   try {
-    const raw = String(localStorage.getItem(SETTINGS_LAST_ROUTE_KEY) || '').trim()
-    if (raw.startsWith('/settings/plan')) {
-      return `/settings/plugins${raw.slice('/settings/plan'.length)}`
-    }
-    if (raw.startsWith('/settings')) return raw
+    return normalizeRememberedSettingsRoute(localStorage.getItem(SETTINGS_LAST_ROUTE_KEY))
   } catch {
     // ignore
   }
-  return '/settings/opencode/general'
+  return '/settings/general'
 }
 
 function openSettings() {
@@ -219,11 +216,11 @@ function openHelpDialog() {
         <!-- Connection Status -->
         <span
           class="mr-2 inline-flex h-6 w-6 items-center justify-center rounded-full"
-          :title="health.openCodeConnected ? String(t('header.status.online')) : String(t('header.status.offline'))"
+          :title="health.serverConnected ? String(t('header.status.online')) : String(t('header.status.offline'))"
           :aria-label="String(t('header.connectionStatus'))"
         >
           <span
-            :class="cn('inline-flex h-2 w-2 rounded-full', health.openCodeConnected ? 'bg-emerald-500' : 'bg-rose-500')"
+            :class="cn('inline-flex h-2 w-2 rounded-full', health.serverConnected ? 'bg-emerald-500' : 'bg-rose-500')"
           />
         </span>
 

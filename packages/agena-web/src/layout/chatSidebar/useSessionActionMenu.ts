@@ -1,12 +1,11 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type Component, type ComponentPublicInstance } from 'vue'
-import { RiClipboardLine, RiEditLine, RiFileUploadLine, RiLinkM, RiShareLine } from '@remixicon/vue'
+import { RiClipboardLine, RiEditLine, RiFileUploadLine, RiGitBranchLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import type { DirectoryEntry } from '@/features/sessions/model/types'
 
 type SessionLike = {
   id: string
-  share?: { url?: string | null } | null
 }
 
 export type SessionActionItem = {
@@ -19,10 +18,6 @@ export type SessionActionItem = {
 
 type TFunction = (key: string, params?: Record<string, unknown>) => string
 
-function shareUrlForSession(session: SessionLike | null | undefined): string {
-  return typeof session?.share?.url === 'string' ? String(session.share.url) : ''
-}
-
 export function buildSessionActionItemsForSession(session: SessionLike | null | undefined): SessionActionItem[] {
   const { t } = useI18n()
   return buildSessionActionItemsForSessionI18n(t, session)
@@ -32,7 +27,7 @@ export function buildSessionActionItemsForSessionI18n(
   t: TFunction,
   session: SessionLike | null | undefined,
 ): SessionActionItem[] {
-  const shareUrl = shareUrlForSession(session)
+  void session
   return [
     {
       id: 'rename',
@@ -53,32 +48,10 @@ export function buildSessionActionItemsForSessionI18n(
       icon: RiFileUploadLine,
     },
     {
-      id: 'share',
-      label: String(t('chat.sidebar.sessionActions.share.label')),
-      description: String(t('chat.sidebar.sessionActions.share.description')),
-      icon: RiShareLine,
-      disabled: Boolean(shareUrl),
-    },
-    {
-      id: 'unshare',
-      label: String(t('chat.sidebar.sessionActions.unshare.label')),
-      description: String(t('chat.sidebar.sessionActions.unshare.description')),
-      icon: RiLinkM,
-      disabled: !shareUrl,
-    },
-    {
-      id: 'copy-share',
-      label: String(t('chat.sidebar.sessionActions.copyShareLink.label')),
-      description: String(t('chat.sidebar.sessionActions.copyShareLink.description')),
-      icon: RiClipboardLine,
-      disabled: !shareUrl,
-    },
-    {
-      id: 'open-share',
-      label: String(t('chat.sidebar.sessionActions.openShareLink.label')),
-      description: String(t('chat.sidebar.sessionActions.openShareLink.description')),
-      icon: RiLinkM,
-      disabled: !shareUrl,
+      id: 'fork',
+      label: String(t('chat.sidebar.sessionActions.fork.label')),
+      description: String(t('chat.sidebar.sessionActions.fork.description')),
+      icon: RiGitBranchLine,
     },
   ]
 }

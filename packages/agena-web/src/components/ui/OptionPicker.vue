@@ -33,7 +33,7 @@ const props = withDefaults(
     isMobilePointer?: boolean
   }>(),
   {
-    emptyLabel: 'Auto (OpenCode default)',
+    emptyLabel: 'Agena runtime default',
     includeEmpty: true,
     emptyDisabled: false,
     searchPlaceholder: 'Search...',
@@ -76,7 +76,7 @@ const selectedDisplayLabel = computed(() => {
     const effectivePlaceholder =
       !placeholder || placeholder === 'Select...' ? t('common.optionPicker.selectPlaceholder') : placeholder
     const effectiveEmptyLabel =
-      !emptyLabel || emptyLabel === 'Auto (OpenCode default)' ? t('chat.composer.model.autoDefault') : emptyLabel
+      !emptyLabel || emptyLabel === 'Agena runtime default' ? t('chat.composer.model.autoDefault') : emptyLabel
     if (!props.includeEmpty) return effectivePlaceholder
     return effectiveEmptyLabel || effectivePlaceholder
   }

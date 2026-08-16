@@ -1612,7 +1612,11 @@ async function createSessionInDirectory(directoryId: string, directoryPath: stri
   creatingSession.value = true
   try {
     await focusDirectoryContext(directoryId, directoryPath)
-    const created = await chat.createSession()
+    const workspaceId = Number(directoryId)
+    const created = await chat.createSession({
+      ...(Number.isSafeInteger(workspaceId) && workspaceId > 0 ? { workspaceId } : {}),
+      workspacePath: directoryPath,
+    })
     if (created?.id) {
       // Ensure the sidebar list reflects the new session without a manual refresh.
       void revalidateSidebarState(undefined, { silent: true })

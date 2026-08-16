@@ -1,3 +1,5 @@
+import { normalizeChatToolActivityId } from '../../lib/chatActivity'
+
 type InputValue = unknown
 type InputRecord = Record<string, InputValue>
 
@@ -26,9 +28,7 @@ export function resolveToolInputDisplay(
   text: string
   lang: string
 } {
-  const t = String(toolName || '')
-    .trim()
-    .toLowerCase()
+  const t = normalizeChatToolActivityId(toolName)
   const inp = asRecord(input)
 
   if (t === 'bash' && typeof inp.command === 'string' && inp.command) {

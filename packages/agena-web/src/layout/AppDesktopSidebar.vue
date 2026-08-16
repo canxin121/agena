@@ -23,6 +23,7 @@ import { useChatStore } from '@/stores/chat'
 import { apiJson } from '@/lib/api'
 import type { GitStatusResponse } from '@/types/git'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
+import { normalizeRememberedSettingsRoute } from '@/components/settings/sidebar/settingsSidebarNavigation'
 
 const props = withDefaults(
   defineProps<{
@@ -66,15 +67,11 @@ let diffTimer: number | null = null
 
 function getRememberedSettingsRoute(): string {
   try {
-    const raw = String(localStorage.getItem(SETTINGS_LAST_ROUTE_KEY) || '').trim()
-    if (raw.startsWith('/settings/plan')) {
-      return `/settings/plugins${raw.slice('/settings/plan'.length)}`
-    }
-    if (raw.startsWith('/settings')) return raw
+    return normalizeRememberedSettingsRoute(localStorage.getItem(SETTINGS_LAST_ROUTE_KEY))
   } catch {
     // ignore storage failures
   }
-  return '/settings/opencode/general'
+  return '/settings/general'
 }
 
 function routeForTab(tabId: MainTabId): string {

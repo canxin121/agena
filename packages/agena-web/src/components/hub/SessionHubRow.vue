@@ -33,9 +33,7 @@ function parseTs(iso?: string | null): number {
 
 const timeMs = computed(
   () =>
-    parseTs(props.session.last_message_at) ||
-    parseTs(props.session.updated_at) ||
-    parseTs(props.session.created_at),
+    parseTs(props.session.last_message_at) || parseTs(props.session.updated_at) || parseTs(props.session.created_at),
 )
 
 const timeText = computed(() => formatRelativeTime(timeMs.value, props.now))
@@ -62,7 +60,8 @@ const badge = computed<{ label: string; class: string; spinner: boolean } | null
   if (props.kind === 'attention') {
     return {
       label: String(t('hub.attention')),
-      class: 'border-amber-300/40 bg-amber-200/10 text-amber-600 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-300',
+      class:
+        'border-amber-300/40 bg-amber-200/10 text-amber-600 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-300',
       spinner: false,
     }
   }

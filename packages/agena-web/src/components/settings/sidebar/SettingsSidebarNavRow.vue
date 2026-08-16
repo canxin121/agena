@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import {
   RiBarChartLine,
   RiBrain2Line,
+  RiPlugLine,
   RiServerLine,
   RiShieldCheckLine,
   RiSettingsLine,
@@ -31,6 +32,7 @@ const emit = defineEmits<{
 const topLevelIcon = computed(() => {
   if (props.icon === 'providers') return RiServerLine
   if (props.icon === 'permissions') return RiShieldCheckLine
+  if (props.icon === 'plugins') return RiPlugLine
   if (props.icon === 'activities') return RiTimerLine
   if (props.icon === 'memories') return RiBrain2Line
   if (props.icon === 'usage') return RiBarChartLine

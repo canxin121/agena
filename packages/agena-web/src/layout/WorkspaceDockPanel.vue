@@ -5,7 +5,6 @@ import { useI18n } from 'vue-i18n'
 import {
   RiChat4Line,
   RiCloseLine,
-  RiFileList2Line,
   RiFileTextLine,
   RiGitMergeLine,
   RiRefreshLine,
@@ -15,7 +14,6 @@ import {
 
 import { MAIN_TABS, type MainTabId } from '@/app/navigation/mainTabs'
 import ChatDockPanel from '@/components/chat/ChatDockPanel.vue'
-import ChatSessionChangesDockPanel from '@/components/chat/ChatSessionChangesDockPanel.vue'
 import { useUiStore } from '@/stores/ui'
 import IconButton from '@/components/ui/IconButton.vue'
 import TerminalDockPanel from '@/features/terminal/components/TerminalDockPanel.vue'
@@ -32,7 +30,6 @@ if (ui.workspaceDockPlacement !== 'right') {
   ui.setWorkspaceDockPlacement('right')
 }
 
-const changesDockRef = ref<{ refresh: () => Promise<void> | void } | null>(null)
 const chatDockRef = ref<{ refresh: () => Promise<void> | void } | null>(null)
 const filesDockRef = ref<{ refresh: () => Promise<void> | void } | null>(null)
 const gitDockRef = ref<{ refresh: () => Promise<void> | void } | null>(null)
@@ -56,10 +53,6 @@ const showDockFilesTab = computed(() => currentMainRouteTab.value !== 'files')
 const showDockTerminalTab = computed(() => currentMainRouteTab.value !== 'terminal')
 
 function refreshActivePanel() {
-  if (ui.workspaceDockPanel === 'changes') {
-    void changesDockRef.value?.refresh()
-    return
-  }
   if (ui.workspaceDockPanel === 'chat') {
     void chatDockRef.value?.refresh()
     return
@@ -86,19 +79,6 @@ function refreshActivePanel() {
       <div class="border-b border-border/60 px-2 py-2">
         <div class="flex items-center justify-between gap-2">
           <div class="flex flex-wrap items-center gap-1 rounded-md bg-background/70 p-1">
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 rounded-sm px-2 py-1 text-xs font-medium transition-colors"
-              :class="
-                ui.workspaceDockPanel === 'changes'
-                  ? 'bg-secondary text-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              "
-              @click="ui.setWorkspaceDockPanel('changes')"
-            >
-              <RiFileList2Line class="h-3.5 w-3.5" />
-              {{ t('workspaceDock.changes.tab') }}
-            </button>
             <button
               v-if="showDockChatTab"
               type="button"
@@ -193,11 +173,7 @@ function refreshActivePanel() {
       </div>
 
       <Transition name="fade" mode="out-in">
-        <div v-if="ui.workspaceDockPanel === 'changes'" key="changes" class="min-h-0 flex-1 overflow-hidden">
-          <ChatSessionChangesDockPanel ref="changesDockRef" />
-        </div>
-
-        <div v-else-if="ui.workspaceDockPanel === 'chat'" key="chat" class="min-h-0 flex-1 overflow-hidden">
+        <div v-if="ui.workspaceDockPanel === 'chat'" key="chat" class="min-h-0 flex-1 overflow-hidden">
           <ChatDockPanel ref="chatDockRef" />
         </div>
 

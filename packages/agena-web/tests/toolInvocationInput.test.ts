@@ -11,6 +11,13 @@ test('resolveToolInputDisplay: shows full bash command input', () => {
   assert.equal(out.text, command)
 })
 
+test('resolveToolInputDisplay: keeps multiline commands after Agena tool normalization', () => {
+  const command = 'bun test\nbun run build'
+  const out = resolveToolInputDisplay('shell.run', { command })
+
+  assert.deepEqual(out, { text: command, lang: 'bash' })
+})
+
 test('resolveToolInputDisplay: shows full JSON input for generic tools', () => {
   const input = {
     url: 'https://example.com',

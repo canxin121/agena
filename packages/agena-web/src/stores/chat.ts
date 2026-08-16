@@ -2,17 +2,15 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
 import * as chatApi from './chat/api'
-import { normalizeAgenaPart } from './chat/api'
-import {
-  upsertMessageEntryIn,
-  upsertPart,
-  binarySearchById,
-} from './chat/messageIndex'
+import { messageErrorFromAgenaPart, normalizeAgenaPart } from './chat/api'
+import { binarySearchById, compareChatIds, upsertMessageEntryIn, upsertPart } from './chat/messageIndex'
 import { createSessionRunConfigPersister, loadSessionRunConfigMap } from './chat/runConfig'
 import { STORAGE_RUN_CONFIG } from './chat/storeKeys'
 import { ApiError } from '../lib/api'
 import { setLocalJson, getLocalJson } from '../lib/persist'
 import { useToastsStore } from './toasts'
+import { useDirectoryStore } from './directory'
+import { i18n } from '../i18n'
 import type { SseEvent } from '../lib/sse'
 import type {
   AttentionEvent,
@@ -22,6 +20,7 @@ import type {
   Session,
   SessionErrorEvent,
   SessionRunConfig,
+  SessionUsage,
   SessionStatus,
   SessionStatusEvent,
 } from '../types/chat'
@@ -59,10 +58,12 @@ function firstNonEmpty(values: Array<string | null | undefined>): string {
 
 export const useChatStore = defineStore('chat', () => {
   const toasts = useToastsStore()
+  const directoryStore = useDirectoryStore()
 
   // ─── sessions ─────────────────────────────────────────────────────────────
   const sessions = ref<Session[]>([])
   const sessionsById = ref<Record<string, Session>>({})
+  const sessionDirectoryBySessionId = ref<Record<string, string>>({})
   const sessionsLoading = ref(false)
   const sessionsError = ref<string | null>(null)
 
@@ -91,6 +92,7 @@ export const useChatStore = defineStore('chat', () => {
   const sessionStatusBySession = ref<Record<string, SessionStatusEvent>>({})
   const sessionErrorBySession = ref<Record<string, SessionErrorEvent>>({})
   const sessionRunConfigBySession = ref<Record<string, SessionRunConfig>>({})
+  const sessionUsageBySession = ref<Record<string, SessionUsage>>({})
   sessionRunConfigBySession.value = loadSessionRunConfigMap(STORAGE_RUN_CONFIG)
   const runConfigPersister = createSessionRunConfigPersister(STORAGE_RUN_CONFIG, () => sessionRunConfigBySession.value)
 
@@ -100,6 +102,7 @@ export const useChatStore = defineStore('chat', () => {
   const refreshMessagesRequestSeqBySession = new Map<string, number>()
   const attentionRefreshTimerBySession = new Map<string, number>()
   let createSessionInFlight: Promise<Session | null> | null = null
+  const workspaceRequestById = new Map<number, Promise<{ id: number; path: string } | null>>()
   const lastSessionErrorToastByKey = new Map<string, { at: number; message: string }>()
 
   function loadStoredSelectedSession(): string | null {
@@ -176,7 +179,7 @@ export const useChatStore = defineStore('chat', () => {
     sessionsLoading.value = true
     sessionsError.value = null
     try {
-      const page = await chatApi.listSessions({ limit: SESSION_PAGE_SIZE })
+      const page = await chatApi.listSessions({ limit: SESSION_PAGE_SIZE, excludeSubagents: true })
       const list = Array.isArray(page?.sessions) ? page.sessions : []
       sessions.value = list
       indexSessions(list)
@@ -195,8 +198,40 @@ export const useChatStore = defineStore('chat', () => {
 
   const selectedSession = computed(() => getSessionById(selectedSessionId.value))
 
-  // The browser client has no directory concept; always null.
-  const selectedSessionDirectory = computed<string | null>(() => null)
+  const selectedSessionDirectory = computed<string | null>(() => {
+    const sid = selectedSessionId.value
+    if (!sid) return null
+    return sessionDirectoryBySessionId.value[sid] || null
+  })
+
+  async function workspaceForSession(session: Session): Promise<{ id: number; path: string } | null> {
+    const sessionId = String(session.id || '').trim()
+    const workspaceId = Number(session.workspace_id)
+    if (!sessionId || !Number.isSafeInteger(workspaceId) || workspaceId <= 0) return null
+
+    let request = workspaceRequestById.get(workspaceId)
+    if (!request) {
+      request = chatApi
+        .getWorkspace(workspaceId)
+        .then((workspace) => workspace)
+        .catch(() => null)
+        .finally(() => workspaceRequestById.delete(workspaceId))
+      workspaceRequestById.set(workspaceId, request)
+    }
+    const workspace = await request
+    if (!workspace?.path) return null
+    sessionDirectoryBySessionId.value = {
+      ...sessionDirectoryBySessionId.value,
+      [sessionId]: workspace.path,
+    }
+    return workspace
+  }
+
+  async function hydrateSelectedSessionDirectory(session: Session): Promise<void> {
+    const workspace = await workspaceForSession(session)
+    if (!workspace || selectedSessionId.value !== session.id) return
+    directoryStore.setDirectory(workspace.path)
+  }
 
   // ─── selection ────────────────────────────────────────────────────────────
 
@@ -226,6 +261,13 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (!sid) return
+
+    let session = getSessionById(sid)
+    if (!session) {
+      session = await chatApi.getSession(sid)
+      upsertSessionCache(session)
+    }
+    void hydrateSelectedSessionDirectory(session)
 
     if (!Array.isArray(messagesBySession.value[sid])) {
       messagesBySession.value = { ...messagesBySession.value, [sid]: [] }
@@ -299,12 +341,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function normalizeMessageList(list: MessageEntry[]): MessageEntry[] {
-    return [...list].sort((a, b) => {
-      const ida = String(a?.info?.id ?? '')
-      const idb = String(b?.info?.id ?? '')
-      if (ida === idb) return 0
-      return ida < idb ? -1 : 1
-    })
+    return [...list].sort((a, b) => compareChatIds(String(a?.info?.id ?? ''), String(b?.info?.id ?? '')))
   }
 
   function mergeMessageLists(older: MessageEntry[], newer: MessageEntry[]): MessageEntry[] {
@@ -320,7 +357,7 @@ export const useChatStore = defineStore('chat', () => {
           const pid = String(p?.id ?? '')
           if (pid) partMap.set(pid, p)
         }
-        merged.parts = [...partMap.values()].sort((a, b) => (String(a.id) < String(b.id) ? -1 : 1))
+        merged.parts = [...partMap.values()].sort((a, b) => compareChatIds(String(a.id), String(b.id)))
         map.set(id, merged)
       } else {
         map.set(id, m)
@@ -384,12 +421,10 @@ export const useChatStore = defineStore('chat', () => {
     const out: Partial<SessionRunConfig> = {}
     const providerID = readString(info.providerID as JsonValue) || readString(info.provider_id as JsonValue)
     const modelID = readString(info.modelID as JsonValue) || readString(info.model_id as JsonValue)
-    const agent = readString(info.agent as JsonValue)
-    const variant = readString(info.variant as JsonValue)
+    const adapterID = readString(info.adapterID as JsonValue) || readString(info.adapter_id as JsonValue)
     if (providerID) out.providerID = providerID
+    if (adapterID) out.adapterID = adapterID
     if (modelID) out.modelID = modelID
-    if (agent) out.agent = agent
-    if (variant) out.variant = variant
     return out
   }
 
@@ -418,7 +453,7 @@ export const useChatStore = defineStore('chat', () => {
       // Capture run config from the last message that carries provider/model.
       for (let i = ordered.length - 1; i >= 0; i -= 1) {
         const patch = extractRunConfigFromMessageInfo(ordered[i]?.info)
-        if (patch.providerID || patch.modelID || patch.agent) {
+        if (patch.providerID || patch.modelID) {
           upsertSessionRunConfig(sid, patch)
           break
         }
@@ -498,16 +533,25 @@ export const useChatStore = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return
     if (attentionRefreshTimerBySession.has(sid)) return
-    const timer = window.setTimeout(() => {
-      attentionRefreshTimerBySession.delete(sid)
-      void refreshAttention(sid)
-      void refreshExecutionStatus(sid)
-    }, Math.max(60, Math.min(1200, Math.floor(delayMs))))
+    const timer = window.setTimeout(
+      () => {
+        attentionRefreshTimerBySession.delete(sid)
+        void refreshAttention(sid)
+        void refreshExecutionStatus(sid)
+      },
+      Math.max(60, Math.min(1200, Math.floor(delayMs))),
+    )
     attentionRefreshTimerBySession.set(sid, timer)
   }
 
   function statusFromState(state: string, workflow: string, running: boolean): SessionStatus {
-    if (running || state === 'running' || state === 'creating' || workflow === 'tool_pending' || workflow === 'blocked') {
+    if (
+      running ||
+      state === 'running' ||
+      state === 'creating' ||
+      workflow === 'tool_pending' ||
+      workflow === 'blocked'
+    ) {
       return { type: 'busy' }
     }
     return { type: 'idle' }
@@ -526,6 +570,34 @@ export const useChatStore = defineStore('chat', () => {
         payload: { type: 'runtime_signal', properties: { state: st.state, workflow_state: st.workflow_state } },
         status: parsed,
       },
+    }
+
+    const execution = st.execution
+    if (execution && typeof execution === 'object') {
+      const patch: Partial<SessionRunConfig> = {}
+      const providerID = readString(execution.model_provider_id as JsonValue)
+      const adapterID = readString(execution.model_adapter_id as JsonValue)
+      const modelID = readString(execution.model_id as JsonValue)
+      const thinkingMode = readString(execution.model_thinking_mode as JsonValue)
+      const speedMode = readString(execution.model_speed_mode as JsonValue)
+      const verbosity = readString(execution.model_verbosity as JsonValue)
+      if (providerID) patch.providerID = providerID
+      if (adapterID) patch.adapterID = adapterID
+      if (modelID) patch.modelID = modelID
+      if (thinkingMode) patch.thinkingMode = thinkingMode
+      if (speedMode) patch.speedMode = speedMode
+      if (verbosity) patch.verbosity = verbosity
+      if (typeof execution.model_parallel_tool_calls === 'boolean') {
+        patch.parallelToolCalls = execution.model_parallel_tool_calls
+      }
+      if (Object.keys(patch).length) upsertSessionRunConfig(sid, patch)
+    }
+
+    if (st.usage && typeof st.usage === 'object') {
+      sessionUsageBySession.value = {
+        ...sessionUsageBySession.value,
+        [sid]: { ...st.usage },
+      }
     }
   }
 
@@ -615,6 +687,8 @@ export const useChatStore = defineStore('chat', () => {
     const next = attentionFromPendingRequests(sid, Array.isArray(requests) ? requests : [])
     if (next) {
       attentionBySession.value = { ...attentionBySession.value, [sid]: next }
+      const requestId = readString(asRecord(next.payload.properties).id as JsonValue)
+      if (requestId) void chatApi.presentInteractiveRequest(sid, requestId)
     } else if (attentionBySession.value[sid]) {
       const nextMap = { ...attentionBySession.value }
       delete nextMap[sid]
@@ -655,6 +729,12 @@ export const useChatStore = defineStore('chat', () => {
     return sessionRunConfigBySession.value[sid] ?? null
   })
 
+  const selectedSessionUsage = computed(() => {
+    const sid = selectedSessionId.value
+    if (!sid) return null
+    return sessionUsageBySession.value[sid] ?? null
+  })
+
   function clearSessionError(sessionId: string) {
     const sid = (sessionId || '').trim()
     if (!sid) return
@@ -666,11 +746,28 @@ export const useChatStore = defineStore('chat', () => {
 
   // ─── session CRUD ─────────────────────────────────────────────────────────
 
-  async function createSession(): Promise<Session | null> {
+  async function createSession(opts?: {
+    workspaceId?: number
+    workspacePath?: string
+    title?: string
+    parentId?: number
+  }): Promise<Session | null> {
     if (createSessionInFlight) return await createSessionInFlight
     createSessionInFlight = (async () => {
       try {
-        const created = await chatApi.createSession()
+        let workspaceId = Number(opts?.workspaceId)
+        if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) {
+          let workspacePath = String(opts?.workspacePath || directoryStore.currentDirectory || '').trim()
+          if (!workspacePath) workspacePath = await chatApi.getRuntimeWorkspaceRoot()
+          const workspace = await chatApi.resolveWorkspace(workspacePath)
+          workspaceId = workspace.id
+        }
+        const title = String(opts?.title || i18n.global.t('chat.sidebar.directoryActions.newSession.label')).trim()
+        const created = await chatApi.createSession({
+          workspaceId,
+          title: title || 'New session',
+          ...(typeof opts?.parentId === 'number' ? { parentId: opts.parentId } : {}),
+        })
         upsertSessionCache(created)
         scheduleSessionsRefresh(1200)
         if (created?.id) {
@@ -710,6 +807,11 @@ export const useChatStore = defineStore('chat', () => {
       sessionsById.value = nextById
     }
     {
+      const next = { ...sessionDirectoryBySessionId.value }
+      delete next[sid]
+      sessionDirectoryBySessionId.value = next
+    }
+    {
       const next = { ...sessionStatusBySession.value }
       delete next[sid]
       sessionStatusBySession.value = next
@@ -724,6 +826,11 @@ export const useChatStore = defineStore('chat', () => {
       delete next[sid]
       sessionRunConfigBySession.value = next
       runConfigPersister.persistSoon()
+    }
+    {
+      const next = { ...sessionUsageBySession.value }
+      delete next[sid]
+      sessionUsageBySession.value = next
     }
     clearMessagesHydrated(sid)
     clearComposerDraft(sid)
@@ -784,26 +891,56 @@ export const useChatStore = defineStore('chat', () => {
     return document
   }
 
-  function buildRunOptions(opts: { providerID?: string; modelID?: string }): JsonValue {
+  function buildRunOptions(opts: {
+    providerID?: string
+    adapterID?: string
+    modelID?: string
+    thinkingMode?: string
+    speedMode?: string
+    verbosity?: string
+    parallelToolCalls?: boolean
+  }): chatApi.RunOptionsPayload {
     const providerID = (opts.providerID || '').trim()
+    const adapterID = (opts.adapterID || '').trim()
     const modelID = (opts.modelID || '').trim()
-    const options: JsonObject = {}
+    const options: chatApi.RunOptionsPayload = {}
     if (providerID && modelID) {
-      const model: JsonObject = { provider_id: providerID, model_id: modelID }
+      const model: chatApi.AgenaModelRef = {
+        provider_id: providerID,
+        ...(adapterID ? { adapter_id: adapterID } : {}),
+        model_id: modelID,
+      }
       options.model = model
     }
+    const thinkingMode = String(opts.thinkingMode || '').trim()
+    const speedMode = String(opts.speedMode || '').trim()
+    const verbosity = String(opts.verbosity || '').trim()
+    if (thinkingMode) options.thinking_mode = thinkingMode
+    if (speedMode) options.speed_mode = speedMode
+    if (verbosity) options.verbosity = verbosity
+    if (typeof opts.parallelToolCalls === 'boolean') options.parallel_tool_calls = opts.parallelToolCalls
     return options
   }
 
   async function sendMessage(
     sessionId: string,
-    opts: { text?: string; parts?: JsonValue[]; providerID?: string; modelID?: string; agent?: string; variant?: string },
+    opts: {
+      text?: string
+      parts?: JsonValue[]
+      providerID?: string
+      adapterID?: string
+      modelID?: string
+      thinkingMode?: string
+      speedMode?: string
+      verbosity?: string
+      parallelToolCalls?: boolean
+    },
   ) {
     const sid = (sessionId || '').trim()
     const document = buildDocument(opts)
     if (document.length === 0) return { queued: false }
     clearSessionError(sid)
-    await chatApi.sendMessage(sid, { document, options: buildRunOptions(opts) })
+    await chatApi.sendMessage(sid, { document, ...buildRunOptions(opts) })
     // Let SSE stream parts in; also nudge status to busy.
     void refreshExecutionStatus(sid)
     scheduleAttentionRefresh(sid, 200)
@@ -812,6 +949,39 @@ export const useChatStore = defineStore('chat', () => {
 
   async function sendText(sessionId: string, text: string) {
     await sendMessage(sessionId, { text })
+  }
+
+  async function uploadWorkspaceAttachment(
+    sessionId: string,
+    input: { filename: string; dataBase64: string; mime?: string },
+  ) {
+    const sid = String(sessionId || '').trim()
+    if (!sid) throw new Error('A session is required for attachments')
+    let session = getSessionById(sid)
+    if (!session) {
+      session = await chatApi.getSession(sid)
+      upsertSessionCache(session)
+    }
+    const workspaceId = Number(session.workspace_id)
+    if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) {
+      throw new Error('The session does not have a valid workspace')
+    }
+    return await chatApi.uploadWorkspaceFile(workspaceId, input)
+  }
+
+  async function resolveSessionWorkspace(sessionId: string): Promise<{ id: number; path: string }> {
+    const sid = String(sessionId || '').trim()
+    if (!sid) throw new Error('A session is required')
+    let session = getSessionById(sid)
+    if (!session) {
+      session = await chatApi.getSession(sid)
+      upsertSessionCache(session)
+    }
+    const workspace = await workspaceForSession(session)
+    if (!workspace) {
+      throw new Error('The session does not have a valid workspace')
+    }
+    return workspace
   }
 
   async function abortSession(sessionId: string) {
@@ -843,7 +1013,12 @@ export const useChatStore = defineStore('chat', () => {
 
   // ─── interactive replies ──────────────────────────────────────────────────
 
-  async function replyPermission(sessionId: string, requestId: string, reply: 'once' | 'always' | 'reject', message?: string) {
+  async function replyPermission(
+    sessionId: string,
+    requestId: string,
+    reply: 'once' | 'always' | 'reject',
+    message?: string,
+  ) {
     const ok = await chatApi.replyPermission(sessionId, requestId, reply, message)
     if (ok) clearAttention((sessionId || '').trim())
     return ok
@@ -887,12 +1062,12 @@ export const useChatStore = defineStore('chat', () => {
   async function compactSession(sessionId: string) {
     const sid = (sessionId || '').trim()
     if (!sid) return null
-    await chatApi.compactSession(sid, { options: buildRunOptions({}) })
+    await chatApi.compactSession(sid, buildRunOptions({}))
     scheduleAttentionRefresh(sid, 200)
     scheduleSessionsRefresh(1200)
   }
 
-  // ─── fork (sharing equivalent) ────────────────────────────────────────────
+  // ─── fork ─────────────────────────────────────────────────────────────────
 
   async function forkSession(sessionId: string, opts?: { at_message_id?: number }) {
     const sid = (sessionId || '').trim()
@@ -1022,9 +1197,11 @@ export const useChatStore = defineStore('chat', () => {
               }
               const content = asRecord(part.content)
               const providerID = readString(content.provider_id as JsonValue)
+              const adapterID = readString(content.adapter_id as JsonValue)
               const modelID = readString(content.model_id as JsonValue)
               const turnId = readString(content.turn_id as JsonValue)
               if (providerID) info.providerID = providerID
+              if (adapterID) info.adapterID = adapterID
               if (modelID) info.modelID = modelID
               if (turnId) info.turnId = turnId
               upsertMessageEntryIn(list, info)
@@ -1033,6 +1210,8 @@ export const useChatStore = defineStore('chat', () => {
             } else {
               const existing = binarySearchById(list, key, (m) => m.info.id)
               if (existing.found && list[existing.index]) {
+                const messageError = messageErrorFromAgenaPart(part as JsonValue)
+                if (messageError) list[existing.index].info.error = messageError
                 const partOut = normalizeAgenaPart(String(partId), sid, key, part as JsonValue)
                 if (partOut) {
                   upsertPart(list[existing.index], partOut, '')
@@ -1047,6 +1226,8 @@ export const useChatStore = defineStore('chat', () => {
                   runId,
                   time: { created: readNumber(part.created_at_ms) ?? Date.now() },
                 }
+                const messageError = messageErrorFromAgenaPart(part as JsonValue)
+                if (messageError) info.error = messageError
                 const entry = upsertMessageEntryIn(list, info)
                 const partOut = normalizeAgenaPart(String(partId), sid, key, part as JsonValue)
                 if (partOut) entry.parts.push(partOut)
@@ -1150,6 +1331,7 @@ export const useChatStore = defineStore('chat', () => {
     selectedSessionStatus,
     selectedSessionError,
     selectedSessionRunConfig,
+    selectedSessionUsage,
     sessionStatusBySession,
     sessionErrorBySession,
     sessionRunConfigBySession,
@@ -1165,6 +1347,8 @@ export const useChatStore = defineStore('chat', () => {
     abortSession,
     sendText,
     sendMessage,
+    uploadWorkspaceAttachment,
+    resolveSessionWorkspace,
     compactSession,
     forkSession,
     replyPermission,

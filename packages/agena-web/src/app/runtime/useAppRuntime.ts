@@ -6,6 +6,8 @@ import { useSettingsStore } from '@/stores/settings'
 import { useSessionActivityStore } from '@/stores/sessionActivity'
 import { useChatStore } from '@/stores/chat'
 import { useUiStore } from '@/stores/ui'
+import { useDirectoryStore } from '@/stores/directory'
+import { useDirectorySessionStore } from '@/stores/directorySessionStore'
 
 import { connectSse } from '@/lib/sse'
 import type { SseClient, SseClientStats } from '@/lib/sse'
@@ -34,9 +36,13 @@ function getDeviceInfo() {
   const narrow = width > 0 && width < 768
   let isMobile = false
   if (typeof navigator !== 'undefined' && typeof window !== 'undefined') {
-    isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || window.matchMedia?.('(pointer: coarse)')?.matches === true
+    isMobile =
+      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') ||
+      window.matchMedia?.('(pointer: coarse)')?.matches === true
   }
-  const touch = typeof window !== 'undefined' && (window.matchMedia?.('(pointer: coarse)')?.matches === true || navigator.maxTouchPoints > 0)
+  const touch =
+    typeof window !== 'undefined' &&
+    (window.matchMedia?.('(pointer: coarse)')?.matches === true || navigator.maxTouchPoints > 0)
   const coarse = isMobile || (touch && narrow)
   return {
     isCompactLayout: narrow,
@@ -55,6 +61,8 @@ export function useAppRuntime() {
   const settings = useSettingsStore()
   const activity = useSessionActivityStore()
   const chat = useChatStore()
+  const directory = useDirectoryStore()
+  const directorySessions = useDirectorySessionStore()
 
   let sse: SseClient | null = null
   let visibilityHandler: (() => void) | null = null
@@ -134,6 +142,7 @@ export function useAppRuntime() {
       void chat.refreshMessages(sid, { silent: true }).catch(() => {})
     }
     void activity.refresh().catch(() => {})
+    void directorySessions.revalidateFromApi(undefined, { silent: true }).catch(() => {})
 
     try {
       console.debug('[sse] resync after resume:', reason)
@@ -228,6 +237,7 @@ export function useAppRuntime() {
           }
           void settings.refresh().catch(() => {})
           void activity.refresh().catch(() => {})
+          void directorySessions.revalidateFromApi(undefined, { silent: true }).catch(() => {})
         },
         onEvent: (evt) => {
           // Agena global SSE frames are tagged `event: notification` with a JSON
@@ -242,11 +252,14 @@ export function useAppRuntime() {
               }
               void settings.refresh().catch(() => {})
               void activity.refresh().catch(() => {})
+              void directorySessions.revalidateFromApi(undefined, { silent: true }).catch(() => {})
             }
             return
           }
           activity.applyEvent(evt)
           chat.applyEvent(evt)
+          directory.applyGlobalEvent(evt)
+          directorySessions.applyGlobalEvent(evt)
         },
         onError: (err) => {
           // When the stream drops mid-run the UI can get stuck on partial output.
@@ -260,6 +273,7 @@ export function useAppRuntime() {
           }
           void settings.refresh().catch(() => {})
           void activity.refresh().catch(() => {})
+          void directorySessions.revalidateFromApi(undefined, { silent: true }).catch(() => {})
 
           try {
             console.warn('[sse] connection error', err)

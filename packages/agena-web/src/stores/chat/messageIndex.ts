@@ -1,5 +1,16 @@
 import type { MessageEntry, MessageInfo, MessagePart } from '@/types/chat'
 
+export function compareChatIds(left: string, right: string): number {
+  if (/^\d+$/.test(left) && /^\d+$/.test(right)) {
+    const leftNumber = BigInt(left)
+    const rightNumber = BigInt(right)
+    if (leftNumber < rightNumber) return -1
+    if (leftNumber > rightNumber) return 1
+    return 0
+  }
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
 export function binarySearchById<T>(
   arr: T[],
   id: string,
@@ -12,7 +23,7 @@ export function binarySearchById<T>(
     const midItem = arr[mid]
     if (midItem === undefined) break
     const cur = getId(midItem)
-    if (cur < id) lo = mid + 1
+    if (compareChatIds(cur, id) < 0) lo = mid + 1
     else hi = mid
   }
   const index = lo

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { useSettingsStore, type Settings } from '../stores/settings'
@@ -12,12 +12,15 @@ import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SettingsSidebar from '@/components/settings/sidebar/SettingsSidebar.vue'
 import ProvidersPanel from '@/components/settings/ProvidersPanel.vue'
 import PermissionsPanel from '@/components/settings/PermissionsPanel.vue'
+import PluginsPanel from '@/components/settings/PluginsPanel.vue'
 import ActivitiesPanel from '@/components/settings/ActivitiesPanel.vue'
 import MemoriesPanel from '@/components/settings/MemoriesPanel.vue'
 import UsagePanel from '@/components/settings/UsagePanel.vue'
 import {
   buildSettingsSidebarTabs,
-  isSettingsTab,
+  normalizeRememberedSettingsRoute,
+  settingsPathForTab,
+  settingsTabFromRouteValue,
   type SettingsTab,
 } from '@/components/settings/sidebar/settingsSidebarNavigation'
 import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
@@ -43,6 +46,7 @@ import {
 const settings = useSettingsStore()
 const ui = useUiStore()
 const route = useRoute()
+const router = useRouter()
 const { startDesktopSidebarResize } = useDesktopSidebarResize()
 const { t } = useI18n()
 
@@ -50,37 +54,24 @@ const SETTINGS_LAST_SECTION_KEY = localStorageKeys.settings.lastRoute
 
 const DEFAULT_SECTION: SettingsTab = 'general'
 
-const TAB_LABELS: Record<SettingsTab, string> = {
-  general: 'General',
-  providers: 'Providers',
-  permissions: 'Permissions',
-  activities: 'Activities',
-  memories: 'Memories',
-  usage: 'Usage',
-}
-
 function readInitialSection(): SettingsTab {
-  let raw = ''
+  const routeSection = settingsTabFromRouteValue(route.params.section)
+  if (routeSection) return routeSection
   try {
-    raw = localStorage.getItem(SETTINGS_LAST_SECTION_KEY) || ''
+    const remembered = settingsTabFromRouteValue(localStorage.getItem(SETTINGS_LAST_SECTION_KEY))
+    if (remembered) return remembered
   } catch {
     // ignore
   }
-  const normalized = String(raw || '')
-    .trim()
-    .toLowerCase()
-  return isSettingsTab(normalized) ? normalized : DEFAULT_SECTION
+  return DEFAULT_SECTION
 }
 
 const activeSection = ref<SettingsTab>(readInitialSection())
 
 function goToSection(id: SettingsTab) {
-  activeSection.value = id
-  try {
-    localStorage.setItem(SETTINGS_LAST_SECTION_KEY, id)
-  } catch {
-    // ignore
-  }
+  const path = settingsPathForTab(id)
+  void router.push({ path, query: route.query, hash: route.hash })
+  if (ui.isCompactLayout) ui.setSessionSwitcherOpen(false)
 }
 
 const settingsSidebarClass = computed(() =>
@@ -94,7 +85,7 @@ const showSidebar = computed(() => {
   return true
 })
 
-const tabs = computed(() => buildSettingsSidebarTabs((id) => TAB_LABELS[id]))
+const tabs = computed(() => buildSettingsSidebarTabs((_id, labelKey) => String(t(labelKey))))
 
 async function refreshSettingsSidebar() {
   // The settings store is client-side UI prefs only; server-backed panels have
@@ -107,6 +98,31 @@ onMounted(() => {
     void settings.refresh()
   }
 })
+
+watch(
+  () => route.params.section,
+  (value) => {
+    const section = settingsTabFromRouteValue(value)
+    if (section) {
+      activeSection.value = section
+      try {
+        localStorage.setItem(SETTINGS_LAST_SECTION_KEY, settingsPathForTab(section))
+      } catch {
+        // ignore storage failures
+      }
+      return
+    }
+
+    let target = settingsPathForTab(activeSection.value)
+    try {
+      target = normalizeRememberedSettingsRoute(localStorage.getItem(SETTINGS_LAST_SECTION_KEY), activeSection.value)
+    } catch {
+      // ignore storage failures
+    }
+    void router.replace({ path: target, query: route.query, hash: route.hash })
+  },
+  { immediate: true },
+)
 
 watch(
   () => route.fullPath,
@@ -617,6 +633,9 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
 
           <!-- Permissions Tab -->
           <PermissionsPanel v-else-if="activeSection === 'permissions'" />
+
+          <!-- Plugins Tab -->
+          <PluginsPanel v-else-if="activeSection === 'plugins'" />
 
           <!-- Activities Tab -->
           <ActivitiesPanel v-else-if="activeSection === 'activities'" />

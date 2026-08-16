@@ -1,104 +1,76 @@
-import type { JsonValue as JsonLike } from '@/types/json'
-
-type UnknownRecord = Record<string, JsonLike>
-
-export type ConfigDefaults = {
-  defaultAgent: string
-  defaultProvider: string
-  defaultModel: string
-}
-
 export type ProviderModelPair = {
   provider?: string
+  adapter?: string
   model?: string
 }
 
-export type ResolveDefaultsInput = {
-  projectConfig?: JsonLike
-  userConfig?: JsonLike
-  opencodeSelection?: ProviderModelPair
-  fallbackAgent?: string
+export type EffectiveModelDefaults = {
+  provider: string
+  adapter: string
+  model: string
+  thinkingMode: string
+  speedMode: string
+  verbosity: string
+  parallelToolCalls?: boolean
 }
 
-export function parseModelSlug(slug: string): { provider: string; model: string } {
-  const raw = (slug || '').trim()
-  const idx = raw.indexOf('/')
-  if (idx <= 0) return { provider: '', model: '' }
-  const provider = raw.slice(0, idx).trim()
-  const model = raw.slice(idx + 1).trim()
-  return { provider, model }
+function clean(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
-function isRecord(value: JsonLike | null | undefined): value is UnknownRecord {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+function encodePart(value: string): string {
+  return encodeURIComponent(clean(value))
 }
 
-function pickString(obj: JsonLike | null | undefined, keys: string[]): string {
-  if (!isRecord(obj)) return ''
-  for (const key of keys) {
-    const v = obj[key]
-    if (typeof v !== 'string') continue
-    const s = v.trim()
-    if (s) return s
+function decodePart(value: string): string {
+  try {
+    return decodeURIComponent(value).trim()
+  } catch {
+    return ''
   }
-  return ''
 }
 
-function normalizeAgentName(raw: string): string {
-  let v = String(raw || '').trim()
-  if (v.startsWith('@')) v = v.slice(1).trim()
-  return v
+export function encodeModelSelectionKey(selection: ProviderModelPair): string {
+  const provider = clean(selection.provider)
+  const adapter = clean(selection.adapter)
+  const model = clean(selection.model)
+  if (!provider || !model) return ''
+  return `${encodePart(provider)}/${encodePart(adapter)}/${encodePart(model)}`
 }
 
-export function extractConfigDefaults(cfg: JsonLike | null | undefined): ConfigDefaults {
-  const defaultAgent = normalizeAgentName(
-    pickString(cfg, ['default_agent', 'defaultAgent', 'agent', 'default_agent_name', 'defaultAgentName']),
-  )
-  const providerRaw = pickString(cfg, ['provider', 'default_provider', 'defaultProvider', 'providerID', 'providerId'])
-  const modelRaw = pickString(cfg, ['model', 'default_model', 'defaultModel', 'default_model_id', 'defaultModelId'])
-
-  let defaultProvider = providerRaw
-  let defaultModel = ''
-  if (modelRaw) {
-    const parsed = parseModelSlug(modelRaw)
-    if (parsed.provider && parsed.model) {
-      if (!defaultProvider) defaultProvider = parsed.provider
-      defaultModel = parsed.model
-    } else {
-      defaultModel = modelRaw
+export function parseModelSlug(slug: string): { provider: string; adapter: string; model: string } {
+  const parts = clean(slug).split('/')
+  if (parts.length === 2) {
+    return {
+      provider: decodePart(parts[0] || ''),
+      adapter: '',
+      model: decodePart(parts[1] || ''),
     }
   }
-
-  return { defaultAgent, defaultProvider, defaultModel }
-}
-
-function pickProviderModelPair(...candidates: ProviderModelPair[]): { provider: string; model: string } {
-  for (const candidate of candidates) {
-    const provider = (candidate.provider || '').trim()
-    const model = (candidate.model || '').trim()
-    if (provider && model) return { provider, model }
-  }
-  return { provider: '', model: '' }
-}
-
-export function resolveEffectiveDefaults(input: ResolveDefaultsInput): {
-  agent: string
-  provider: string
-  model: string
-} {
-  const project = extractConfigDefaults(input.projectConfig)
-  const user = extractConfigDefaults(input.userConfig)
-  const opencodeSelection = input.opencodeSelection || {}
-
-  const pair = pickProviderModelPair(
-    { provider: project.defaultProvider, model: project.defaultModel },
-    { provider: user.defaultProvider, model: user.defaultModel },
-    opencodeSelection,
-  )
-
+  if (parts.length !== 3) return { provider: '', adapter: '', model: '' }
   return {
-    agent: (project.defaultAgent || user.defaultAgent || input.fallbackAgent || '').trim(),
-    provider: pair.provider,
-    model: pair.model,
+    provider: decodePart(parts[0] || ''),
+    adapter: decodePart(parts[1] || ''),
+    model: decodePart(parts[2] || ''),
+  }
+}
+
+export function resolveEffectiveDefaults(input: {
+  runtime?: Partial<EffectiveModelDefaults> | null
+  fallback?: ProviderModelPair | null
+}): EffectiveModelDefaults {
+  const runtime = input.runtime || null
+  const fallback = input.fallback || null
+  const runtimeProvider = clean(runtime?.provider)
+  const runtimeModel = clean(runtime?.model)
+  const hasRuntimeModel = Boolean(runtimeProvider && runtimeModel)
+  return {
+    provider: hasRuntimeModel ? runtimeProvider : clean(fallback?.provider),
+    adapter: hasRuntimeModel ? clean(runtime?.adapter) : clean(fallback?.adapter),
+    model: hasRuntimeModel ? runtimeModel : clean(fallback?.model),
+    thinkingMode: clean(runtime?.thinkingMode),
+    speedMode: clean(runtime?.speedMode),
+    verbosity: clean(runtime?.verbosity),
+    ...(typeof runtime?.parallelToolCalls === 'boolean' ? { parallelToolCalls: runtime.parallelToolCalls } : {}),
   }
 }

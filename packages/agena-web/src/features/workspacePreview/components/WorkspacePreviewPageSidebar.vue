@@ -306,13 +306,13 @@ function clampPage(page: number, pageCount: number): number {
 const chatSessionsAll = computed(() => {
   const sid = currentChatSessionId.value
   if (!sid) return []
-  return previewSessions.value.filter((session) => String(session.opencodeSessionId || '').trim() === sid)
+  return previewSessions.value.filter((session) => String(session.agenaSessionId || '').trim() === sid)
 })
 
 const chatSessionsFiltered = computed(() => {
   const sid = currentChatSessionId.value
   if (!sid) return []
-  return previewFilteredSessions.value.filter((session) => String(session.opencodeSessionId || '').trim() === sid)
+  return previewFilteredSessions.value.filter((session) => String(session.agenaSessionId || '').trim() === sid)
 })
 
 const directorySessionsAll = computed(() => {
@@ -499,7 +499,7 @@ function suggestPreviewIdFromDirectory(directory: string): string {
 
 function suggestLogsPath(sessionId: string): string {
   const clean = String(sessionId || '').trim() || 'preview'
-  return `.opencode/preview/${clean}.log`
+  return `.agena/preview/${clean}.log`
 }
 
 async function createManagedSession() {

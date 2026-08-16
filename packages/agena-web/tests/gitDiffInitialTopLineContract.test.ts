@@ -17,10 +17,6 @@ test('all other monaco diff scenes wire initial top line', () => {
   const compare = readFileSync(resolve(import.meta.dir, '../src/components/git/GitCompareDialog.vue'), 'utf8')
   const fileViewer = readFileSync(resolve(import.meta.dir, '../src/pages/files/components/FileViewerPane.vue'), 'utf8')
   const toolInvocation = readFileSync(resolve(import.meta.dir, '../src/components/ui/ToolInvocation.vue'), 'utf8')
-  const pluginOverlay = readFileSync(
-    resolve(import.meta.dir, '../src/components/chat/PluginChatOverlayMounts.vue'),
-    'utf8',
-  )
 
   assert.ok(history.includes(':initial-top-line="selectedFileDiffModel.initialTopLine"'))
   assert.ok(history.includes(':modified-start-line="selectedFileDiffModel.modifiedStartLine"'))
@@ -33,6 +29,4 @@ test('all other monaco diff scenes wire initial top line', () => {
   assert.ok(fileViewer.includes(':initial-top-line="timelineInitialTopLine"'))
   assert.ok(toolInvocation.includes(':initial-top-line="activityDiffPreview.initialTopLine"'))
   assert.ok(toolInvocation.includes(':modified-line-numbers="activityDiffPreview.modifiedLineNumbers"'))
-  assert.ok(pluginOverlay.includes(':initial-top-line="selectedDiffPreview?.initialTopLine || null"'))
-  assert.ok(pluginOverlay.includes(':modified-start-line="selectedDiffPreview?.modifiedStartLine || null"'))
 })

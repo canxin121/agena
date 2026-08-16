@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import { apiJson } from '../lib/api'
 
@@ -29,7 +29,7 @@ export const useHealthStore = defineStore('health', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  const serverConnected = () => Boolean(data.value)
+  const serverConnected = computed(() => Boolean(data.value))
 
   async function refresh() {
     loading.value = true

@@ -1,105 +1,102 @@
-import { parseModelSlug } from './modelSelectionDefaults'
+import { encodeModelSelectionKey, parseModelSlug } from './modelSelectionDefaults'
 import type { SessionRunConfig } from '@/types/chat'
-import type { JsonValue as JsonLike } from '@/types/json'
 
-type UnknownRecord = Record<string, JsonLike>
-type ChatMessageLike = { info?: UnknownRecord }
-
-export type SessionSelection = {
-  agent: string
-  provider: string
-  model: string
-  variant: string
+type ChatMessageLike = {
+  info?: {
+    providerID?: unknown
+    adapterID?: unknown
+    modelID?: unknown
+  }
 }
 
-function asRecord(value: JsonLike): UnknownRecord {
-  return typeof value === 'object' && value !== null ? (value as UnknownRecord) : {}
+export type SessionSelection = {
+  provider: string
+  adapter: string
+  model: string
+  thinkingMode: string
+  speedMode: string
+  verbosity: string
+  parallelToolCalls?: boolean
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 export function readSessionRunConfigSelection(runConfig: SessionRunConfig | null | undefined): SessionSelection {
   return {
-    agent: typeof runConfig?.agent === 'string' ? runConfig.agent.trim() : '',
-    provider: typeof runConfig?.providerID === 'string' ? runConfig.providerID.trim() : '',
-    model: typeof runConfig?.modelID === 'string' ? runConfig.modelID.trim() : '',
-    variant: typeof runConfig?.variant === 'string' ? runConfig.variant.trim() : '',
+    provider: text(runConfig?.providerID),
+    adapter: text(runConfig?.adapterID),
+    model: text(runConfig?.modelID),
+    thinkingMode: text(runConfig?.thinkingMode),
+    speedMode: text(runConfig?.speedMode),
+    verbosity: text(runConfig?.verbosity),
+    ...(typeof runConfig?.parallelToolCalls === 'boolean' ? { parallelToolCalls: runConfig.parallelToolCalls } : {}),
   }
 }
 
 export function deriveSessionSelectionFromMessages(messages: ChatMessageLike[]): SessionSelection {
   const list = Array.isArray(messages) ? messages : []
-  const pickLast = (extract: (info: UnknownRecord) => string) => {
-    for (let i = list.length - 1; i >= 0; i -= 1) {
-      const info = asRecord(list[i]?.info)
-      const value = extract(info)
-      if (value) return value
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const info = list[index]?.info
+    const provider = text(info?.providerID)
+    const model = text(info?.modelID)
+    if (!provider || !model) continue
+    return {
+      provider,
+      adapter: text(info?.adapterID),
+      model,
+      thinkingMode: '',
+      speedMode: '',
+      verbosity: '',
     }
-    return ''
   }
-
-  const agent = pickLast((info) => (typeof info.agent === 'string' ? info.agent.trim() : ''))
-
-  const provider =
-    pickLast((info) => (typeof info.providerID === 'string' ? info.providerID.trim() : '')) ||
-    pickLast((info) => {
-      const model = asRecord(info.model)
-      return typeof model.providerID === 'string' ? model.providerID.trim() : ''
-    })
-
-  const model =
-    pickLast((info) => (typeof info.modelID === 'string' ? info.modelID.trim() : '')) ||
-    pickLast((info) => {
-      const modelInfo = asRecord(info.model)
-      return typeof modelInfo.modelID === 'string' ? modelInfo.modelID.trim() : ''
-    })
-
-  const variant = pickLast((info) => (typeof info.variant === 'string' ? info.variant.trim() : ''))
-  return { agent, provider, model, variant }
+  return {
+    provider: '',
+    adapter: '',
+    model: '',
+    thinkingMode: '',
+    speedMode: '',
+    verbosity: '',
+  }
 }
 
 export function normalizeSessionManualModelStorageEntry(
   sessionId: string,
   value: unknown,
-): {
-  key: string
-  value: string
-} | null {
-  const sid = String(sessionId || '').trim()
-  if (!sid || typeof value !== 'string') return null
-  const parsed = parseModelSlug(value)
-  if (!parsed.provider || !parsed.model) return null
-  return { key: sid, value: `${parsed.provider}/${parsed.model}` }
+): { key: string; value: string } | null {
+  const key = text(sessionId)
+  if (!key || typeof value !== 'string') return null
+  const selection = parseModelSlug(value)
+  const normalized = encodeModelSelectionKey(selection)
+  return normalized ? { key, value: normalized } : null
 }
 
 export function readSessionManualModelPair(
   map: Record<string, string>,
   sessionId: string,
-): { provider: string; model: string } {
-  const sid = String(sessionId || '').trim()
-  if (!sid) return { provider: '', model: '' }
-  return parseModelSlug(map[sid] || '')
+): { provider: string; adapter: string; model: string } {
+  const key = text(sessionId)
+  return key ? parseModelSlug(map[key] || '') : { provider: '', adapter: '', model: '' }
 }
 
 export function writeSessionManualModelPair(
   map: Record<string, string>,
   sessionId: string,
   provider: string,
+  adapter: string,
   model: string,
 ): Record<string, string> {
-  const sid = String(sessionId || '').trim()
-  const pid = String(provider || '').trim()
-  const mid = String(model || '').trim()
-  if (!sid || !pid || !mid) return map
-
-  const slug = `${pid}/${mid}`
-  if (map[sid] === slug) return map
-  return { ...map, [sid]: slug }
+  const key = text(sessionId)
+  const value = encodeModelSelectionKey({ provider, adapter, model })
+  if (!key || !value || map[key] === value) return map
+  return { ...map, [key]: value }
 }
 
 export function removeSessionManualModelPair(map: Record<string, string>, sessionId: string): Record<string, string> {
-  const sid = String(sessionId || '').trim()
-  if (!sid) return map
-  if (!Object.prototype.hasOwnProperty.call(map, sid)) return map
+  const key = text(sessionId)
+  if (!key || !Object.prototype.hasOwnProperty.call(map, key)) return map
   const next = { ...map }
-  delete next[sid]
+  delete next[key]
   return next
 }

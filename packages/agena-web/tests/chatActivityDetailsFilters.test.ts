@@ -10,12 +10,13 @@ import {
   DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS,
   normalizeChatActivityDefaultExpanded,
   normalizeChatActivityFilters,
+  normalizeChatToolActivityId,
 } from '../src/lib/chatActivity'
 
-test('activity defaults enable all transport detail types', () => {
+test('activity defaults enable Agena transport detail types without an Agent category', () => {
   assert.equal(DEFAULT_CHAT_ACTIVITY_FILTERS.includes('step-start'), true)
   assert.equal(DEFAULT_CHAT_ACTIVITY_FILTERS.includes('step-finish'), true)
-  assert.equal(DEFAULT_CHAT_ACTIVITY_FILTERS.includes('agent'), true)
+  assert.equal(DEFAULT_CHAT_ACTIVITY_FILTERS.includes('agent'), false)
 
   const optionIds = ACTIVITY_DEFAULT_EXPANDED_OPTIONS.map((item) => item.id)
   assert.equal(optionIds.includes('step-start'), false)
@@ -23,9 +24,9 @@ test('activity defaults enable all transport detail types', () => {
   assert.equal(optionIds.includes('agent'), false)
 })
 
-test('normalizers keep step and agent keys in default order', () => {
+test('normalizers discard removed Agent keys and keep supported keys in default order', () => {
   const filters = normalizeChatActivityFilters(['step-start', 'agent', 'snapshot'])
-  assert.deepEqual(filters, ['tool', 'step-start', 'snapshot', 'agent'])
+  assert.deepEqual(filters, ['tool', 'step-start', 'snapshot'])
 
   const expanded = normalizeChatActivityDefaultExpanded(['step-finish', 'agent', 'snapshot', 'thinking'])
   assert.deepEqual(expanded, ['snapshot', 'thinking'])
@@ -54,4 +55,16 @@ test('expand defaults stay configurable with stable normalization order', () => 
 
   assert.deepEqual(expanded, ['snapshot', 'patch', 'retry', 'compaction', 'thinking', 'justification'])
   assert.deepEqual(CHAT_ACTIVITY_EXPAND_KEYS, ['snapshot', 'patch', 'retry', 'compaction', 'thinking', 'justification'])
+})
+
+test('Agena namespaced tools map to the existing activity categories', () => {
+  assert.equal(normalizeChatToolActivityId('fs.read'), 'read')
+  assert.equal(normalizeChatToolActivityId('fs.replace'), 'edit')
+  assert.equal(normalizeChatToolActivityId('fs.apply_patch'), 'apply_patch')
+  assert.equal(normalizeChatToolActivityId('shell.run'), 'bash')
+  assert.equal(normalizeChatToolActivityId('web.search'), 'websearch')
+  assert.equal(normalizeChatToolActivityId('web.fetch'), 'webfetch')
+  assert.equal(normalizeChatToolActivityId('interaction.ask'), 'question')
+  assert.equal(normalizeChatToolActivityId('tasks.run'), 'task')
+  assert.equal(normalizeChatToolActivityId('custom.plugin_tool'), 'custom.plugin_tool')
 })

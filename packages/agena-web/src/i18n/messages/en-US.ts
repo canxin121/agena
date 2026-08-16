@@ -1,6 +1,6 @@
 export default {
   app: {
-    title: 'OpenCode Studio',
+    title: 'Agena',
   },
   common: {
     add: 'Add',
@@ -141,7 +141,7 @@ export default {
       quickActions: {
         title: 'Quick Actions',
         badge: 'Action',
-        reloadConfig: 'Reload OpenCode Configuration',
+        reloadConfig: 'Reload Agena Runtime',
         themeLight: 'Theme: Light',
         themeDark: 'Theme: Dark',
         themeSystem: 'Theme: System',
@@ -154,18 +154,16 @@ export default {
       shortcuts: {
         showKeyboardShortcuts: 'Show Keyboard Shortcuts',
         toggleSessionSidebar: 'Toggle Session Sidebar',
-        openModelSelector: 'Open Model Selector',
-        cycleThinkingVariant: 'Cycle Thinking Variant',
+        openChat: 'Open Chat',
+        openPreview: 'Open Preview',
         createNewSession: 'Create New Session',
         sendMessage: 'Send Message',
         focusChatInput: 'Focus Chat Input',
         abortActiveRunDouble: 'Abort active run (double press)',
         cycleTheme: 'Cycle Theme (Light → Dark → System)',
-        openDiffPanel: 'Open Diff Panel',
         openFiles: 'Open Files',
         openTerminal: 'Open Terminal',
         openGitPanel: 'Open Git Panel',
-        openTimeline: 'Open Timeline',
         openSettings: 'Open Settings',
       },
     },
@@ -173,7 +171,7 @@ export default {
   mcp: {
     dialog: {
       title: 'MCP servers',
-      description: 'Manage Model Context Protocol connections',
+      description: 'Inspect Model Context Protocol servers loaded by Agena',
       loading: 'Loading MCP status...',
       empty: 'No MCP servers configured.',
       actions: {
@@ -451,7 +449,7 @@ export default {
         argsLabel: 'Args',
         argsPlaceholder: 'run dev -- --port 5173',
         logsPathLabel: 'Log file',
-        logsPathPlaceholder: '.opencode/preview/vite-main.log',
+        logsPathPlaceholder: '.agena/preview/vite-main.log',
         targetUrlLabel: 'Target URL',
         targetUrlPlaceholder: 'http://127.0.0.1:8000',
         addAction: 'Add',
@@ -492,7 +490,7 @@ export default {
     uiAuthRequired: 'UI authentication required',
   },
   login: {
-    title: 'OpenCode Studio',
+    title: 'Agena',
     subtitle: "Choose a backend. If it's locked, enter your password to continue.",
     backendLoadingTitle: 'Backend is starting, please wait',
     backendLoadingDescription:
@@ -511,7 +509,7 @@ export default {
     passwordPlaceholder: 'Password',
     passwordRequired: 'Password required',
     backendNotReachable: 'Backend not reachable',
-    opencodeNotReady: 'OpenCode backend is still starting. Please try again shortly.',
+    opencodeNotReady: 'Agena backend is still starting. Please try again shortly.',
     failedToUpdateBackend: 'Failed to update backend',
     failedToRemoveBackend: 'Failed to remove backend',
     failedToAddBackend: 'Failed to add backend',
@@ -526,6 +524,12 @@ export default {
     unknownTab: 'Unknown settings tab.',
     emptyPlugins: 'No plugins expose settings.',
     tabs: {
+      general: 'General',
+      providers: 'Providers',
+      permissions: 'Permissions',
+      activities: 'Activities',
+      memories: 'Memories',
+      usage: 'Usage',
       opencode: 'OpenCode',
       plugins: 'Plugins',
       backends: 'Backends',
@@ -2014,7 +2018,7 @@ export default {
       },
       subtitle: {
         answerAllToEnableSend: 'Answer all questions to enable send.',
-        blocksUntilRespond: 'This blocks the agent until you respond.',
+        blocksUntilRespond: 'This run waits until you respond.',
       },
       ui: {
         rejectPermission: 'Reject permission',
@@ -2060,21 +2064,24 @@ export default {
       },
       picker: {
         modelTitle: 'Model',
-        agentTitle: 'Agent',
-        variantTitle: 'Thinking',
+        thinkingTitle: 'Thinking',
+        speedTitle: 'Speed',
         optionsTitle: 'Options',
         searchModels: 'Search models',
-        searchAgents: 'Search agents',
-        searchVariants: 'Search variants',
+        searchThinkingModes: 'Search thinking modes',
+        searchSpeedModes: 'Search speed modes',
         searchOptions: 'Search options',
         emptyModels: 'No models found.',
-        emptyAgents: 'No agents found.',
-        emptyVariants: 'No variants found.',
+        emptyThinkingModes: 'No thinking modes are available for this model.',
+        emptySpeedModes: 'No speed modes are available for this model.',
         emptyOptions: 'No options found.',
+        availableCount: '{count} available',
       },
       model: {
-        autoDefault: 'Auto (OpenCode default)',
-        autoDefaultDescription: 'Let OpenCode choose the default model',
+        autoDefault: 'Agena runtime default',
+        autoDefaultDescription: 'Use the default model configured on the Agena server',
+        defaultThinkingDescription: 'Use the thinking mode configured for this model',
+        defaultSpeedDescription: 'Use the speed mode configured for this model',
       },
       editor: {
         open: 'Open editor',
@@ -2404,6 +2411,10 @@ export default {
         exportTranscript: {
           label: 'Export transcript',
           description: 'Download a Markdown transcript',
+        },
+        fork: {
+          label: 'Fork session',
+          description: 'Create a new session from this conversation',
         },
         share: {
           label: 'Share session',
@@ -3160,7 +3171,7 @@ export default {
         title: 'Enable GPG Passphrase Preset?',
         description: 'This updates your gpg-agent configuration',
         confirmEnableRetry: 'Enable & Retry',
-        body: 'Your gpg-agent is not allowing passphrase presetting. To let OpenCode Studio sign commits after you enter the passphrase in the UI, we can add `allow-preset-passphrase` to `~/.gnupg/gpg-agent.conf` and restart gpg-agent.',
+        body: 'Your gpg-agent is not allowing passphrase presetting. To let Agena sign commits after you enter the passphrase in the UI, we can add `allow-preset-passphrase` to `~/.gnupg/gpg-agent.conf` and restart gpg-agent.',
       },
       gpgMissingKey: {
         title: 'No GPG Signing Key',

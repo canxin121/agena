@@ -60,6 +60,22 @@ test('useChatModelSelection: manual model overrides newer session run-config', a
   assert.equal(selection.selectedModelId.value, 'manual-model')
 })
 
+test('useChatModelSelection: model label does not borrow an adapter from a different default model', async () => {
+  const { selection } = await createTestHarness({ selectedSessionId: 'session-model-label' })
+  selection.runtimeDefaultSelection.value = {
+    provider: 'openai',
+    adapter: 'responses',
+    model: 'gpt-5',
+    thinkingMode: '',
+    speedMode: '',
+    verbosity: '',
+  }
+
+  selection.chooseModelSlug('manual-provider//manual-model')
+
+  assert.equal(selection.modelChipLabel.value, 'manual-provider/manual-model')
+})
+
 test('useChatModelSelection: chooseModelDefault clears manual history and falls back to defaults', async () => {
   const { chat, selection } = await createTestHarness({ selectedSessionId: 'session-1' })
 

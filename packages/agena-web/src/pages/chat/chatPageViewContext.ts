@@ -4,7 +4,6 @@ import type { RenderBlock } from '@/components/chat/messageList.types'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
 import type { AttachedFile } from '@/pages/chat/useChatAttachments'
-import type { ChatMount } from '@/plugins/host/mounts'
 import type { MessageEntry } from '@/types/chat'
 import type { JsonObject } from '@/types/json'
 
@@ -18,7 +17,6 @@ type MessageRecordLike = {
     role?: string
     finish?: string
     time?: { created?: number }
-    agent?: string
     modelID?: string
   }
   parts?: DynamicRecord[]
@@ -69,8 +67,8 @@ export type ChatPageViewContext = {
   composerControlsRef: Ref<HTMLElement | null>
   composerPickerRef: Ref<ContainsTargetExpose | null>
   modelTriggerRef: Ref<HTMLElement | null>
-  variantTriggerRef: Ref<HTMLElement | null>
-  agentTriggerRef: Ref<HTMLElement | null>
+  thinkingTriggerRef: Ref<HTMLElement | null>
+  speedTriggerRef: Ref<HTMLElement | null>
   sessionActionsMenuRef: Ref<ContainsTargetExpose | null>
 
   chat: {
@@ -93,9 +91,6 @@ export type ChatPageViewContext = {
   attachmentsBusy: MaybeRef<boolean>
   attachmentsPanelOpen: MaybeRef<boolean>
   draft: MaybeRef<string>
-
-  chatSidebarPluginMounts: MaybeRef<ChatMount[]>
-  chatOverlayBottomPluginMounts: MaybeRef<ChatMount[]>
 
   renderBlocks: MaybeRef<RenderBlock[]>
   pendingInitialScrollSessionId: MaybeRef<string | null>
@@ -167,7 +162,7 @@ export type ChatPageViewContext = {
   closeComposerActionMenu: () => void
   runComposerActionMenu: (item: OptionMenuItem) => void | Promise<void>
 
-  composerPickerOpen: MaybeRef<null | 'agent' | 'model' | 'variant'>
+  composerPickerOpen: MaybeRef<null | 'model' | 'thinking' | 'speed'>
   composerPickerStyle: MaybeRef<CSSProperties>
   composerPickerTitle: MaybeRef<string>
   composerPickerSearchable: MaybeRef<boolean>
@@ -182,16 +177,17 @@ export type ChatPageViewContext = {
   refreshComposerPickerOptions: () => void
   setComposerPickerOpen: (open: boolean) => void
   handleComposerPickerSelect: (item: OptionMenuItem) => void
-  hasVariantsForSelection: MaybeRef<boolean>
+  hasThinkingModesForSelection: MaybeRef<boolean>
+  hasSpeedModesForSelection: MaybeRef<boolean>
 
   modelHint: MaybeRef<string>
   modelChipLabelMobile: MaybeRef<string>
   modelChipLabel: MaybeRef<string>
-  toggleComposerPicker: (kind: 'agent' | 'model' | 'variant') => void | Promise<void>
-  variantHint: MaybeRef<string>
-  variantChipLabel: MaybeRef<string>
-  agentHint: MaybeRef<string>
-  agentChipLabel: MaybeRef<string>
+  toggleComposerPicker: (kind: 'model' | 'thinking' | 'speed') => void | Promise<void>
+  thinkingModeHint: MaybeRef<string>
+  thinkingModeChipLabel: MaybeRef<string>
+  speedModeHint: MaybeRef<string>
+  speedModeChipLabel: MaybeRef<string>
 
   sessionUsage: MaybeRef<SessionUsageLike | null>
   formatCompactNumber: (value: number) => string

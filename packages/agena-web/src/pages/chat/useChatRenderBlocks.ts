@@ -5,6 +5,7 @@ import {
   DEFAULT_CHAT_ACTIVITY_SUMMARY_FILTERS,
   DEFAULT_CHAT_TOOL_ACTIVITY_SUMMARY_FILTERS,
   isKnownChatToolActivityType,
+  normalizeChatToolActivityId,
   normalizeChatActivityFilters,
   normalizeChatToolActivityFilters,
   type ChatActivityType,
@@ -34,7 +35,6 @@ export type ChatMessage = {
     time?: { created?: number }
     finish?: string
     error?: RenderValue
-    agent?: string
     modelID?: string
   }
   parts: ChatPart[]
@@ -195,7 +195,7 @@ export function useChatRenderBlocks(opts: {
   }
 
   function toolActivityEnabled(id: string): boolean {
-    const key = id.trim().toLowerCase()
+    const key = normalizeChatToolActivityId(id)
     if (!key) {
       if (!toolFiltersExplicit.value) return true
       return toolFilterSet.value.has('unknown')

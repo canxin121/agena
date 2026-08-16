@@ -31,7 +31,7 @@ export function useChatComposerLayout(opts: {
 
   // Close pickers when entering fullscreen.
   commandOpen: Ref<boolean>
-  composerPickerOpen: Ref<null | 'agent' | 'model' | 'variant'>
+  composerPickerOpen: Ref<null | 'model' | 'thinking' | 'speed'>
   modelPickerQuery: Ref<string>
 
   // Scroll helper (used on entering fullscreen).

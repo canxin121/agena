@@ -3,12 +3,11 @@ import { computed, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   RiAddLine,
-  RiAiGenerate2,
-  RiBrain2Line,
+  RiChat4Line,
   RiCloseCircleLine,
-  RiFileTextLine,
   RiFolder6Line,
   RiGitMergeLine,
+  RiGlobalLine,
   RiLayoutLeftLine,
   RiRestartLine,
   RiMoonLine,
@@ -17,12 +16,11 @@ import {
   RiSettings3Line,
   RiSunLine,
   RiTerminalBoxLine,
-  RiTimeLine,
   RiText,
 } from '@remixicon/vue'
 
 import Dialog from '@/components/ui/Dialog.vue'
-import { reloadOpenCodeConfig } from '@/lib/reload'
+import { reloadAgenaRuntime } from '@/lib/reload'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 
@@ -52,16 +50,6 @@ const sections = computed((): Array<{ category: string; items: ShortcutItem[] }>
           description: String(t('help.dialog.shortcuts.toggleSessionSidebar')),
           icon: RiLayoutLeftLine,
         },
-        {
-          keys: `Shift+${m}+M`,
-          description: String(t('help.dialog.shortcuts.openModelSelector')),
-          icon: RiAiGenerate2,
-        },
-        {
-          keys: `Shift+${m}+T`,
-          description: String(t('help.dialog.shortcuts.cycleThinkingVariant')),
-          icon: RiBrain2Line,
-        },
       ],
     },
     {
@@ -85,11 +73,11 @@ const sections = computed((): Array<{ category: string; items: ShortcutItem[] }>
       category: String(t('help.dialog.sections.interface')),
       items: [
         { keys: `${m}+/`, description: String(t('help.dialog.shortcuts.cycleTheme')), icon: RiPaletteLine },
-        { keys: `${m}+2`, description: String(t('help.dialog.shortcuts.openDiffPanel')), icon: RiFileTextLine },
-        { keys: `${m}+3`, description: String(t('help.dialog.shortcuts.openFiles')), icon: RiFolder6Line },
+        { keys: `${m}+1`, description: String(t('help.dialog.shortcuts.openChat')), icon: RiChat4Line },
+        { keys: `${m}+2`, description: String(t('help.dialog.shortcuts.openFiles')), icon: RiFolder6Line },
+        { keys: `${m}+3`, description: String(t('help.dialog.shortcuts.openPreview')), icon: RiGlobalLine },
         { keys: `${m}+4`, description: String(t('help.dialog.shortcuts.openTerminal')), icon: RiTerminalBoxLine },
         { keys: `${m}+5`, description: String(t('help.dialog.shortcuts.openGitPanel')), icon: RiGitMergeLine },
-        { keys: `${m}+T`, description: String(t('help.dialog.shortcuts.openTimeline')), icon: RiTimeLine },
         { keys: `${m}+,`, description: String(t('help.dialog.shortcuts.openSettings')), icon: RiSettings3Line },
       ],
     },
@@ -97,8 +85,7 @@ const sections = computed((): Array<{ category: string; items: ShortcutItem[] }>
 })
 
 async function reloadConfiguration() {
-  // Same behavior as the old Command Palette action.
-  await reloadOpenCodeConfig().catch(() => {})
+  await reloadAgenaRuntime().catch(() => {})
   window.location.reload()
 }
 

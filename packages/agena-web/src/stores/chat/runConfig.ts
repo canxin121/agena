@@ -42,7 +42,6 @@ export function extractRunConfigFromMessageInfo(info: JsonValue): Partial<Sessio
   const out: Partial<SessionRunConfig> = {}
   const model = source?.model
   const modelRec = model && typeof model === 'object' ? (model as JsonObject) : null
-  const agent = normalizeRunConfigValue(source?.agent)
   const providerID =
     normalizeRunConfigValue(source?.providerID) ||
     normalizeRunConfigValue(modelRec?.providerID) ||
@@ -51,11 +50,18 @@ export function extractRunConfigFromMessageInfo(info: JsonValue): Partial<Sessio
     normalizeRunConfigValue(source?.modelID) ||
     normalizeRunConfigValue(modelRec?.modelID) ||
     normalizeRunConfigValue(source?.model)
-  const variant = normalizeRunConfigValue(source?.variant)
+  const adapterID = normalizeRunConfigValue(source?.adapterID) || normalizeRunConfigValue(modelRec?.adapterID)
+  const thinkingMode = normalizeRunConfigValue(source?.thinkingMode) || normalizeRunConfigValue(source?.thinking_mode)
+  const speedMode = normalizeRunConfigValue(source?.speedMode) || normalizeRunConfigValue(source?.speed_mode)
+  const verbosity = normalizeRunConfigValue(source?.verbosity)
 
-  if (agent) out.agent = agent
   if (providerID) out.providerID = providerID
+  if (adapterID) out.adapterID = adapterID
   if (modelID) out.modelID = modelID
-  if (variant) out.variant = variant
+  if (thinkingMode) out.thinkingMode = thinkingMode
+  if (speedMode) out.speedMode = speedMode
+  if (verbosity) out.verbosity = verbosity
+  if (typeof source?.parallelToolCalls === 'boolean') out.parallelToolCalls = source.parallelToolCalls
+  else if (typeof source?.parallel_tool_calls === 'boolean') out.parallelToolCalls = source.parallel_tool_calls
   return out
 }

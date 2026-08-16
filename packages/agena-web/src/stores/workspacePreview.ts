@@ -344,7 +344,7 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
     args: string[]
     logsPath: string
     targetUrl: string
-    opencodeSessionId?: string
+    agenaSessionId?: string
     select?: boolean
   }) {
     const session = await createWorkspacePreviewSession({
@@ -355,7 +355,7 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
       args: input.args,
       logsPath: input.logsPath,
       targetUrl: input.targetUrl,
-      ...(input.opencodeSessionId ? { opencodeSessionId: input.opencodeSessionId } : {}),
+      ...(input.agenaSessionId ? { agenaSessionId: input.agenaSessionId } : {}),
     })
     await refreshSessions()
     if (input.select !== false) {
@@ -370,7 +370,7 @@ export const useWorkspacePreviewStore = defineStore('workspacePreview', () => {
     patch: {
       directory?: string
       runDirectory?: string
-      opencodeSessionId?: string
+      agenaSessionId?: string
       command?: string
       args?: string[]
       logsPath?: string

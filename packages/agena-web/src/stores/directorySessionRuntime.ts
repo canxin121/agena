@@ -31,6 +31,42 @@ export function normalizeRuntime(input?: RuntimeInput): SessionRuntimeState {
   return { statusType, phase, attention, displayState, updatedAt }
 }
 
+export function runtimeFromAgenaSession(session: Record<string, unknown>): SessionRuntimeState {
+  const state = typeof session.state === 'string' ? session.state.trim() : ''
+  const rawUpdatedAt = session.updated_at
+  const updatedAt =
+    typeof rawUpdatedAt === 'number' && Number.isFinite(rawUpdatedAt)
+      ? rawUpdatedAt
+      : typeof rawUpdatedAt === 'string' && Number.isFinite(Date.parse(rawUpdatedAt))
+        ? Date.parse(rawUpdatedAt)
+        : 0
+  if (state === 'running' || state === 'creating') {
+    return normalizeRuntime({
+      statusType: 'busy',
+      phase: 'busy',
+      attention: null,
+      displayState: 'running',
+      updatedAt,
+    })
+  }
+  if (state === 'awaiting_user' || state === 'interrupted') {
+    return normalizeRuntime({
+      statusType: 'idle',
+      phase: 'idle',
+      attention: 'question',
+      displayState: 'needsReply',
+      updatedAt,
+    })
+  }
+  return normalizeRuntime({
+    statusType: 'idle',
+    phase: 'idle',
+    attention: null,
+    displayState: 'idle',
+    updatedAt,
+  })
+}
+
 function readIncomingUpdatedAt(input: RuntimeInput): { provided: boolean; value: number } {
   if (!input || typeof input !== 'object') {
     return { provided: false, value: 0 }

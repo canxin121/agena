@@ -16,7 +16,6 @@ export type TranscriptSession = {
 export type TranscriptMessage = {
   info: {
     role?: string
-    agent?: string
     modelID?: string
     time?: { created?: number; completed?: number }
   }
@@ -118,10 +117,9 @@ function formatMessage(message: TranscriptMessage, options: TranscriptOptions): 
 function formatAssistantHeader(message: TranscriptMessage, includeMetadata: boolean): string {
   if (!includeMetadata) return `## Assistant\n\n`
 
-  const agent = normalizeText(message.info?.agent)
   const model = normalizeText(message.info?.modelID)
   const duration = formatDurationMs(message.info?.time?.created, message.info?.time?.completed)
-  const meta = [agent && titleCase(agent), model, duration].filter(Boolean).join(' · ')
+  const meta = [model, duration].filter(Boolean).join(' · ')
   return meta ? `## Assistant (${meta})\n\n` : `## Assistant\n\n`
 }
 

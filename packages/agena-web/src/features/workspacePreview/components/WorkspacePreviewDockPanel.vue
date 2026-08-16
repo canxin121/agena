@@ -732,7 +732,7 @@ const activeSessionStateNorm = computed(() =>
 )
 const activeSessionIsRunning = computed(() => activeSessionStateNorm.value === 'running')
 
-const opencodeSessionId = computed(() => {
+const agenaSessionId = computed(() => {
   const path = String(route.path || '')
     .trim()
     .toLowerCase()
@@ -850,7 +850,7 @@ function suggestPreviewIdFromDirectory(directory: string): string {
 
 function suggestLogsPath(sessionId: string): string {
   const clean = String(sessionId || '').trim() || 'preview'
-  return `.opencode/preview/${clean}.log`
+  return `.agena/preview/${clean}.log`
 }
 
 function extractProxyErrorDetail(raw: string, contentType: string): string {
@@ -1011,7 +1011,7 @@ async function createManagedSession() {
       args: createArgsList.value,
       logsPath: createLogsPathNorm.value,
       targetUrl,
-      ...(opencodeSessionId.value ? { opencodeSessionId: opencodeSessionId.value } : {}),
+      ...(agenaSessionId.value ? { agenaSessionId: agenaSessionId.value } : {}),
       select: true,
     })
     createPreviewId.value = ''

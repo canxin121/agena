@@ -7,7 +7,7 @@ export type WorkspacePreviewSession = {
   state: string
   directory: string
   runDirectory: string
-  opencodeSessionId?: string
+  agenaSessionId?: string
   proxyBasePath: string
   targetUrl: string
   command: string
@@ -53,17 +53,19 @@ export function normalizeWorkspacePreviewSession(value: unknown): WorkspacePrevi
   const pidRaw = typeof record.pid === 'number' ? record.pid : Number(record.pid)
   const pid = Number.isFinite(pidRaw) && pidRaw > 0 ? Math.floor(pidRaw) : undefined
 
-  const opencodeSessionId =
-    typeof record.opencodeSessionId === 'string' && record.opencodeSessionId.trim()
-      ? record.opencodeSessionId.trim()
-      : undefined
+  const agenaSessionId =
+    typeof record.agenaSessionId === 'string' && record.agenaSessionId.trim()
+      ? record.agenaSessionId.trim()
+      : typeof record.opencodeSessionId === 'string' && record.opencodeSessionId.trim()
+        ? record.opencodeSessionId.trim()
+        : undefined
 
   return {
     id,
     state,
     directory,
     runDirectory,
-    ...(opencodeSessionId ? { opencodeSessionId } : {}),
+    ...(agenaSessionId ? { agenaSessionId } : {}),
     proxyBasePath,
     targetUrl,
     command,
@@ -97,7 +99,7 @@ export type WorkspacePreviewSessionCreateInput = {
   args: string[]
   logsPath: string
   targetUrl: string
-  opencodeSessionId?: string
+  agenaSessionId?: string
 }
 
 export async function createWorkspacePreviewSession(
@@ -118,7 +120,7 @@ export async function createWorkspacePreviewSession(
   const trimmedLogsPath = String(input?.logsPath || '').trim()
   if (!trimmedLogsPath) throw new Error('Logs path is required')
 
-  const trimmedSessionId = String(input?.opencodeSessionId || '').trim()
+  const trimmedSessionId = String(input?.agenaSessionId || '').trim()
 
   const args = Array.isArray(input?.args) ? input.args.map((v) => String(v || '').trim()).filter(Boolean) : []
   if (args.length === 0) throw new Error('Args is required')
@@ -138,7 +140,7 @@ export async function createWorkspacePreviewSession(
       command: trimmedCommand,
       args,
       logsPath: trimmedLogsPath,
-      ...(trimmedSessionId ? { opencodeSessionId: trimmedSessionId } : {}),
+      ...(trimmedSessionId ? { agenaSessionId: trimmedSessionId } : {}),
       targetUrl,
     }),
   })
@@ -166,7 +168,7 @@ export async function discoverWorkspacePreviewSession(
   const trimmedLogsPath = String(input?.logsPath || '').trim()
   if (!trimmedLogsPath) throw new Error('Logs path is required')
 
-  const trimmedSessionId = String(input?.opencodeSessionId || '').trim()
+  const trimmedSessionId = String(input?.agenaSessionId || '').trim()
   const args = Array.isArray(input?.args) ? input.args.map((v) => String(v || '').trim()).filter(Boolean) : []
   if (args.length === 0) throw new Error('Args is required')
 
@@ -182,7 +184,7 @@ export async function discoverWorkspacePreviewSession(
       command: trimmedCommand,
       args,
       logsPath: trimmedLogsPath,
-      ...(trimmedSessionId ? { opencodeSessionId: trimmedSessionId } : {}),
+      ...(trimmedSessionId ? { agenaSessionId: trimmedSessionId } : {}),
     }),
   })
 
@@ -196,7 +198,7 @@ export async function updateWorkspacePreviewSession(
   patch: {
     directory?: string
     runDirectory?: string
-    opencodeSessionId?: string
+    agenaSessionId?: string
     command?: string
     args?: string[]
     logsPath?: string
@@ -232,7 +234,7 @@ export async function updateWorkspacePreviewSession(
     body: JSON.stringify({
       ...(typeof patch.directory === 'string' ? { directory } : {}),
       ...(typeof patch.runDirectory === 'string' ? { runDirectory } : {}),
-      ...(typeof patch.opencodeSessionId === 'string' ? { opencodeSessionId: patch.opencodeSessionId.trim() } : {}),
+      ...(typeof patch.agenaSessionId === 'string' ? { agenaSessionId: patch.agenaSessionId.trim() } : {}),
       ...(typeof patch.command === 'string' ? { command } : {}),
       ...(Array.isArray(patch.args) ? { args } : {}),
       ...(typeof patch.logsPath === 'string' ? { logsPath } : {}),

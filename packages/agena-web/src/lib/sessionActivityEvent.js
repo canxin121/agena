@@ -16,7 +16,7 @@ function readRecord(v) {
 
 function readSessionId(props) {
   const p = readRecord(props) || {}
-  const raw = typeof p.session_id === 'number' ? p.session_id : p.sessionId ?? p.sessionID
+  const raw = typeof p.session_id === 'number' ? p.session_id : (p.sessionId ?? p.sessionID)
   const n = typeof raw === 'number' && Number.isFinite(raw) ? raw : null
   if (n != null) return String(n)
   const s = trimString(raw)

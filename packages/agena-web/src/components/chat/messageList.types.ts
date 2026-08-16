@@ -20,7 +20,6 @@ export type MessageLike = {
     role?: string
     time?: { created?: number }
     finish?: string
-    agent?: string
     modelID?: string
   }
   parts: MessagePartLike[]

@@ -36,7 +36,12 @@ const hasRows = computed(() => visibleGroups.value.length > 0)
 
         <div class="space-y-0.5">
           <div v-for="row in group.items" :key="row.id">
-            <SettingsSidebarNavRow :label="row.label" :active="row.active" :icon="row.icon" @click="emit('navigate-tab', row.id)" />
+            <SettingsSidebarNavRow
+              :label="row.label"
+              :active="row.active"
+              :icon="row.icon"
+              @click="emit('navigate-tab', row.id)"
+            />
           </div>
         </div>
       </div>

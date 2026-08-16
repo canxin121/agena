@@ -4,26 +4,13 @@
 // UTC. Error responses are {problem:{id, code, category, ...}} envelopes;
 // apiJson throws ApiError with .status / .code on non-2xx.
 //
-// Endpoint mapping (opencode → agena):
-//   GET    /api/session?directory=          → GET    /api/v1/sessions?limit=&cursor=
-//   POST   /api/session                     → POST   /api/v1/sessions            {workspace_id?}
-//   DELETE /api/session/:id                 → DELETE /api/v1/sessions/{id}
-//   PATCH  /api/session/:id {title}         → PUT    /api/v1/sessions/{id}      {title}
-//   POST   /api/session/:id/message         → POST   /api/v1/sessions/{id}/messages  {document, options}
-//   GET    /api/session/:id/message         → GET    /api/v1/sessions/{id}/parts?limit=
-//   POST   /api/session/:id/abort           → POST   /api/v1/sessions/{id}/cancel    {execution_id}
-//   POST   /api/session/:id/revert          → POST   /api/v1/sessions/{id}/rewind    {turn_id}
-//   POST   /api/session/:id/summarize       → POST   /api/v1/sessions/{id}/compact   {options}
-//   POST   /api/permission/:id/reply        → POST   /api/v1/sessions/{id}/permission-replies {reply}
-//   POST   /api/question/:id/reply          → POST   /api/v1/sessions/{id}/user-input-replies {reply}
-//   GET    /api/session-activity            → GET    /api/v1/activities
-//   GET    /api/session/:id/diff            → (no agena endpoint — removed)
-//   POST   /api/session/:id/share           → (no agena endpoint — fork instead)
-//   GET    /api/session/status              → derived from GET /api/v1/sessions/{id}/state
+// RunOptions are flattened into message/continue/compact request bodies. The
+// server rejects unknown fields, including the old Agent/profile selection.
 
 import { apiJson } from '../../lib/api'
 import type { JsonObject, JsonValue } from '@/types/json'
-import type { MessageEntry, MessagePart, MessageInfo, Session } from '../../types/chat'
+import type { MessageEntry, MessageError, MessagePart, MessageInfo, Session } from '../../types/chat'
+import { compareChatIds } from './messageIndex'
 
 // --- agena wire projections ------------------------------------------------
 
@@ -79,8 +66,48 @@ export type AgenaExecutionState = {
   active_execution?: { execution_id: string; phase?: string } | null
   latest_event_seq?: number | null
   pending_interactive_requests?: JsonValue[]
-  usage?: JsonValue
+  execution?: {
+    agent_id?: string
+    model_provider_id?: string | null
+    model_adapter_id?: string | null
+    model_id?: string | null
+    model_thinking_mode?: string | null
+    model_speed_mode?: string | null
+    model_verbosity?: string | null
+    model_parallel_tool_calls?: boolean | null
+    effective_workspace_root?: string | null
+    [k: string]: JsonValue
+  }
+  usage?: {
+    measured_prompt_tokens?: number | null
+    current_tokens?: number
+    projected_tokens?: number | null
+    limit_tokens?: number | null
+    limit_basis?: string | null
+    reserved_tokens?: number | null
+    model_context_window_tokens?: number | null
+    model_max_input_tokens?: number | null
+    model_max_output_tokens?: number | null
+    [k: string]: JsonValue
+  }
   [k: string]: JsonValue
+}
+
+export type AgenaModelRef = {
+  provider_id: string
+  adapter_id?: string
+  model_id: string
+}
+
+export type RunOptionsPayload = {
+  model?: AgenaModelRef
+  thinking_mode?: string
+  speed_mode?: string
+  verbosity?: string
+  parallel_tool_calls?: boolean
+  system?: string
+  temperature?: number
+  max_output_tokens?: number
 }
 
 export type SessionListResponse = {
@@ -105,6 +132,8 @@ export type SessionExecutionStatus = {
   workflow_state: string
   active_execution?: { execution_id?: string; phase?: string } | null
   pending_interactive_requests?: JsonValue[]
+  execution?: AgenaExecutionState['execution']
+  usage?: AgenaExecutionState['usage']
   running: boolean
 }
 
@@ -179,9 +208,11 @@ function entriesFromParts(sessionId: string, parts: JsonValue[]): MessageEntry[]
       }
       // Run marker metadata can carry provider/model identity.
       const providerID = str(content.provider_id)
+      const adapterID = str(content.adapter_id)
       const modelID = str(content.model_id)
       const turnId = str(content.turn_id)
       if (providerID) info.providerID = providerID
+      if (adapterID) info.adapterID = adapterID
       if (modelID) info.modelID = modelID
       if (turnId) info.turnId = turnId
       ensure(partIdStr, info)
@@ -202,6 +233,8 @@ function entriesFromParts(sessionId: string, parts: JsonValue[]): MessageEntry[]
       entry = ensure(key, info)
     }
     if (!entry.parts) entry.parts = []
+    const messageError = messageErrorFromAgenaPart(raw)
+    if (messageError) entry.info.error = messageError
     const normalized = normalizeAgenaPart(partIdStr, sessionId, key, raw as JsonValue)
     if (normalized) entry.parts.push(normalized)
   }
@@ -209,7 +242,7 @@ function entriesFromParts(sessionId: string, parts: JsonValue[]): MessageEntry[]
   for (const key of order) {
     const entry = map.get(key)
     if (entry && entry.parts) {
-      entry.parts.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      entry.parts.sort((a, b) => compareChatIds(a.id, b.id))
     }
     if (entry) list.push(entry)
   }
@@ -237,10 +270,39 @@ function arrayStringField(value: JsonValue, key: string): string {
   if (Array.isArray(raw)) {
     return raw
       .filter((v): v is string => typeof v === 'string')
-      .join('\n')
+      .join('')
       .trim()
   }
   return ''
+}
+
+function problemMessage(value: JsonValue): string {
+  const problem = asObject(value)
+  const user = asObject(problem.user)
+  return stringField(user, ['fallback']) || stringField(problem, ['message'])
+}
+
+function operationFailureMessage(value: JsonValue): string {
+  const error = asObject(value)
+  return problemMessage(error.failure) || problemMessage(error.problem) || stringField(error, ['message', 'detail'])
+}
+
+export function messageErrorFromAgenaPart(raw: JsonValue): MessageError | null {
+  const part = asRecord(raw)
+  if (str(part.kind) !== 'error') return null
+  const content = asObject(part.content)
+  const problem = asObject(content.problem)
+  const message = problemMessage(problem) || stringField(content, ['message']) || str(part.summary) || 'The run failed.'
+  const code = stringField(problem, ['code'])
+  const category = stringField(problem, ['category']) || stringField(content, ['category'])
+  return {
+    name: 'AgenaError',
+    type: category || 'error',
+    message,
+    ...(code ? { code } : {}),
+    ...(category ? { classification: category } : {}),
+    problem,
+  }
 }
 
 /**
@@ -308,20 +370,56 @@ export function normalizeAgenaPart(
       return { ...base, type: 'reasoning', text }
     }
     case 'tool_call': {
-      const toolName = stringField(content, ['name', 'tool']) || 'unknown'
-      const input = asObject(content.input)
+      const operation = asObject(asObject(content).operation)
+      const invocation = asObject(operation.invocation)
+      const result = asObject(operation.result)
+      const modelPreview = asObject(result.model_preview)
+      const modelOutput = asObject(operation.model_output)
+      const display = asObject(result.display)
+      const human = asObject(result.human)
+      const resultState = stringField(result, ['state'])
+      const toolName = stringField(content, ['name', 'tool']) || stringField(invocation, ['name']) || 'unknown'
+      const canonicalInput = asObject(asObject(content).input)
+      const operationInput = asObject(invocation.input)
+      const input = Object.keys(canonicalInput).length > 0 ? canonicalInput : operationInput
       const output =
         stringField(content, ['output']) ||
         stringField(asObject(content.result), ['output', 'text']) ||
+        stringField(modelPreview, ['text']) ||
+        stringField(modelOutput, ['text']) ||
+        stringField(human, ['markdown', 'summary']) ||
+        stringField(display, ['summary']) ||
+        stringField(operation, ['summary']) ||
         stringField(part.provider_state as JsonValue, ['output'])
       const error =
-        stringField(content, ['error']) || stringField(asObject(content.result), ['error', 'message']) || ''
-      const metaCandidate = asObject(content.metadata)
-      const toolState = {
-        status: toStatus(state),
+        stringField(content, ['error']) ||
+        operationFailureMessage(result.error) ||
+        operationFailureMessage(operation.error) ||
+        stringField(asObject(content.result), ['error', 'message']) ||
+        ''
+      const metaCandidate = {
+        ...asObject(operation.metadata),
+        ...asObject(result.metadata),
+        ...asObject(asObject(content).metadata),
+      }
+      const structuredOutput = result.structured ?? operation.structured
+      const title = stringField(operation, ['summary', 'title']) || stringField(display, ['summary', 'title'])
+      const status =
+        resultState === 'pending'
+          ? 'pending'
+          : resultState === 'running'
+            ? 'running'
+            : resultState === 'completed'
+              ? 'completed'
+              : resultState
+                ? 'error'
+                : toStatus(state)
+      const toolState: JsonObject = {
+        status,
         input,
-        ...(output ? { output } : {}),
+        ...(output ? { output } : structuredOutput !== undefined ? { output: structuredOutput } : {}),
         ...(error ? { error } : {}),
+        ...(title ? { title } : {}),
         ...(Object.keys(metaCandidate).length ? { metadata: metaCandidate } : {}),
       }
       return {
@@ -338,13 +436,32 @@ export function normalizeAgenaPart(
       return { ...base, type: 'text', text, synthetic: true }
     }
     case 'file_ref': {
-      const name = stringField(content, ['name'])
+      const contentRecord = asObject(content)
+      const attachments = Array.isArray(contentRecord.attachments) ? contentRecord.attachments : []
+      const firstAttachment = attachments.length > 0 ? asObject(attachments[0]) : {}
+      const source = {
+        ...asObject(firstAttachment.source),
+        ...asObject(contentRecord.source),
+      }
+      const name = stringField(content, ['name', 'title']) || stringField(firstAttachment, ['filename', 'title'])
+      const mime = stringField(content, ['mime']) || stringField(firstAttachment, ['mime'])
+      const path = stringField(content, ['path']) || stringField(source, ['path'])
+      const directUrl =
+        stringField(content, ['data_url', 'url']) ||
+        stringField(source, ['data_url', 'url']) ||
+        stringField(firstAttachment, ['data_url', 'url'])
+      const base64 =
+        stringField(content, ['base64']) ||
+        stringField(source, ['base64', 'data']) ||
+        stringField(firstAttachment, ['base64'])
+      const url = directUrl || (base64 && mime ? `data:${mime};base64,${base64}` : '') || path
       return {
         ...base,
         type: 'file',
         ...(name ? { filename: name } : {}),
-        ...(stringField(content, ['path']) ? { url: stringField(content, ['path']) } : {}),
-        ...(stringField(content, ['mime']) ? { mime: stringField(content, ['mime']) } : {}),
+        ...(url ? { url } : {}),
+        ...(path ? { serverPath: path } : {}),
+        ...(mime ? { mime } : {}),
       }
     }
     case 'paste_ref': {
@@ -353,8 +470,11 @@ export function normalizeAgenaPart(
       return { ...base, type: 'text', text, synthetic: true }
     }
     case 'skill_ref': {
-      const name = stringField(content, ['skill', 'name']) || 'skill'
-      const description = stringField(content, ['description'])
+      const contentRecord = asObject(content)
+      const skills = Array.isArray(contentRecord.skills) ? contentRecord.skills : []
+      const firstSkill = skills.length > 0 ? asObject(skills[0]) : {}
+      const name = stringField(content, ['skill', 'name']) || stringField(firstSkill, ['name']) || 'skill'
+      const description = stringField(content, ['description']) || stringField(firstSkill, ['description'])
       return {
         ...base,
         type: 'tool',
@@ -369,7 +489,8 @@ export function normalizeAgenaPart(
     case 'notice':
     case 'hook': {
       const hook = stringField(content, ['hook', 'kind']) || kind
-      const summary = stringField(content, ['summary', 'detail', 'message'])
+      const title = stringField(content, ['summary', 'title'])
+      const output = stringField(content, ['detail', 'message', 'summary'])
       return {
         ...base,
         type: 'tool',
@@ -377,22 +498,57 @@ export function normalizeAgenaPart(
         state: {
           status: toStatus(state),
           input: {},
-          ...(summary ? { output: summary } : {}),
+          ...(title ? { title } : {}),
+          ...(output ? { output } : {}),
         },
       }
     }
     case 'compaction': {
-      const summary = stringField(content, ['summary', 'detail'])
+      const summary = stringField(content, ['summary', 'detail']) || str(part.summary)
       return { ...base, type: 'compaction', ...(summary ? { text: summary } : {}) }
+    }
+    case 'error': {
+      const message = messageErrorFromAgenaPart(raw)?.message || 'The run failed.'
+      return { ...base, type: 'text', text: message, synthetic: true }
+    }
+    case 'interaction': {
+      const interaction = asObject(content)
+      const request = asObject(interaction.request)
+      const prompt =
+        stringField(interaction, ['prompt']) ||
+        stringField(request, ['title', 'body_markdown']) ||
+        str(part.summary) ||
+        'User input requested'
+      const reply = interaction.reply ?? interaction.response
+      return {
+        ...base,
+        type: 'tool',
+        tool: 'question',
+        state: {
+          status: reply === undefined || reply === null ? toStatus(state) : 'completed',
+          input: {
+            prompt,
+            ...(interaction.options !== undefined ? { options: interaction.options } : {}),
+            ...(request.questions !== undefined ? { questions: request.questions } : {}),
+          },
+          ...(reply !== undefined && reply !== null ? { output: reply } : {}),
+        },
+      }
     }
     case 'system_notification': {
       const opKind = stringField(content, ['operation_kind']) || 'background'
-      const summary = stringField(content, ['summary', 'body', 'detail'])
+      const title = stringField(content, ['summary'])
+      const output = stringField(content, ['body', 'detail', 'summary'])
       return {
         ...base,
         type: 'tool',
         tool: opKind,
-        state: { status: toStatus(state), input: {}, ...(summary ? { output: summary } : {}) },
+        state: {
+          status: toStatus(state),
+          input: {},
+          ...(title ? { title } : {}),
+          ...(output ? { output } : {}),
+        },
       }
     }
     default: {
@@ -415,6 +571,10 @@ export async function listSessions(opts?: {
   limit?: number
   cursor?: string
   search?: string
+  workspaceId?: number | string
+  parentId?: number | string
+  roots?: boolean
+  excludeSubagents?: boolean
   signal?: AbortSignal
 }): Promise<SessionListResponse> {
   const params: string[] = []
@@ -424,15 +584,28 @@ export async function listSessions(opts?: {
   if (cursor) params.push(`cursor=${encodeURIComponent(cursor)}`)
   const search = typeof opts?.search === 'string' ? opts.search.trim() : ''
   if (search) params.push(`search=${encodeURIComponent(search)}`)
+  const workspaceId = Number(opts?.workspaceId)
+  if (Number.isSafeInteger(workspaceId) && workspaceId > 0) {
+    params.push(`workspace_id=${encodeURIComponent(String(workspaceId))}`)
+  }
+  const parentId = Number(opts?.parentId)
+  if (Number.isSafeInteger(parentId) && parentId > 0) {
+    params.push(`parent_id=${encodeURIComponent(String(parentId))}`)
+  }
+  if (typeof opts?.roots === 'boolean') params.push(`roots=${opts.roots ? 'true' : 'false'}`)
+  if (typeof opts?.excludeSubagents === 'boolean') {
+    params.push(`exclude_subagents=${opts.excludeSubagents ? 'true' : 'false'}`)
+  }
   const suffix = params.length ? `?${params.join('&')}` : ''
 
-  const payload = await apiJson<JsonValue>(`/api/v1/sessions${suffix}`, opts?.signal ? { signal: opts.signal } : undefined)
+  const payload = await apiJson<JsonValue>(
+    `/api/v1/sessions${suffix}`,
+    opts?.signal ? { signal: opts.signal } : undefined,
+  )
   const body = asRecord(payload)
   const rawItems = body.items
   const items = Array.isArray(rawItems) ? rawItems : []
-  const sessions = items
-    .map((s) => toSession(s))
-    .filter((s): s is Session => Boolean(s))
+  const sessions = items.map((s) => toSession(s)).filter((s): s is Session => Boolean(s))
   const page = asRecord(body.page)
   const nextCursor = typeof page.next_cursor === 'string' ? (page.next_cursor as string) : null
   return {
@@ -443,12 +616,28 @@ export async function listSessions(opts?: {
   }
 }
 
-/** POST /api/v1/sessions — create a session in the server workspace. */
-export async function createSession(workspaceId?: number): Promise<Session> {
-  const payload: JsonValue = {}
-  if (typeof workspaceId === 'number' && Number.isFinite(workspaceId)) {
-    ;(payload as JsonObject).workspace_id = workspaceId
+export type CreateSessionInput = {
+  workspaceId: number
+  title: string
+  parentId?: number
+}
+
+export function buildCreateSessionRequest(input: CreateSessionInput): JsonObject {
+  const workspaceId = Number(input.workspaceId)
+  const title = String(input.title || '').trim()
+  if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) throw new Error('A valid workspace id is required')
+  if (!title) throw new Error('A session title is required')
+
+  const payload: JsonObject = { workspace_id: workspaceId, title }
+  if (typeof input.parentId === 'number' && Number.isSafeInteger(input.parentId) && input.parentId > 0) {
+    payload.parent_id = input.parentId
   }
+  return payload
+}
+
+/** POST /api/v1/sessions — create a session in a concrete server workspace. */
+export async function createSession(input: CreateSessionInput): Promise<Session> {
+  const payload = buildCreateSessionRequest(input)
   const created = await apiJson<JsonValue>('/api/v1/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -457,6 +646,73 @@ export async function createSession(workspaceId?: number): Promise<Session> {
   const session = toSession(created)
   if (!session) throw new Error('Server did not return a session')
   return session
+}
+
+/** POST /api/v1/workspaces/resolve — resolve a path and create its workspace when needed. */
+export async function resolveWorkspace(path: string): Promise<{ id: number; path: string }> {
+  const workspacePath = String(path || '').trim()
+  if (!workspacePath) throw new Error('A workspace path is required')
+  const payload = await apiJson<JsonValue>('/api/v1/workspaces/resolve', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path: workspacePath, create_if_missing: true }),
+  })
+  const record = asRecord(payload)
+  const id = record.id
+  const resolvedPath = str(record.path)
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || !resolvedPath) {
+    throw new Error('Server did not return a workspace')
+  }
+  return { id, path: resolvedPath }
+}
+
+/** GET /api/v1/workspaces/{id} — read the authoritative workspace path. */
+export async function getWorkspace(workspaceId: number): Promise<{ id: number; path: string }> {
+  if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) throw new Error('A valid workspace id is required')
+  const payload = await apiJson<JsonValue>(`/api/v1/workspaces/${encodeURIComponent(String(workspaceId))}`)
+  const record = asRecord(payload)
+  const id = record.id
+  const path = str(record.path)
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || !path) {
+    throw new Error('Server did not return a workspace')
+  }
+  return { id, path }
+}
+
+/** GET /api/v1/runtime — resolve the server's active workspace for first-run clients. */
+export async function getRuntimeWorkspaceRoot(): Promise<string> {
+  const payload = await apiJson<JsonValue>('/api/v1/runtime')
+  const root = str(asRecord(payload).workspace_root)
+  if (!root) throw new Error('Server did not report a workspace root')
+  return root
+}
+
+export type WorkspaceFileUpload = {
+  workspace_id: number
+  path: string
+  name: string
+  mime?: string | null
+  size_bytes: number
+}
+
+/** POST /api/v1/workspaces/{id}/files — upload a composer attachment. */
+export async function uploadWorkspaceFile(
+  workspaceId: number,
+  input: { filename: string; dataBase64: string; mime?: string },
+): Promise<WorkspaceFileUpload> {
+  if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) throw new Error('A valid workspace id is required')
+  const filename = String(input.filename || '').trim()
+  const dataBase64 = String(input.dataBase64 || '').trim()
+  if (!filename || !dataBase64) throw new Error('Attachment filename and data are required')
+  return await apiJson<WorkspaceFileUpload>(`/api/v1/workspaces/${encodeURIComponent(String(workspaceId))}/files`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      filename,
+      data_base64: dataBase64,
+      ...(String(input.mime || '').trim() ? { mime: String(input.mime).trim() } : {}),
+    }),
+  })
 }
 
 /** POST /api/v1/workspaces — create a workspace (project) by path. Returns the new workspace id. */
@@ -500,9 +756,7 @@ export async function patchSessionTitle(sessionId: string, title: string): Promi
 
 /** GET /api/v1/sessions/{id} — single session read-back (replaces opencode locateSession). */
 export async function getSession(sessionId: string): Promise<Session> {
-  const session = toSession(
-    await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`),
-  )
+  const session = toSession(await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`))
   if (!session) throw new Error('Server did not return a session')
   return session
 }
@@ -529,28 +783,65 @@ export async function listMessages(sessionId: string, limit: number): Promise<Me
   return { entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[]), hasMore: false }
 }
 
-export type SendMessagePayload = {
+export type SendMessagePayload = RunOptionsPayload & {
   document: JsonValue[]
-  options?: JsonValue
+}
+
+export function buildRunRequestBody(options?: RunOptionsPayload): JsonObject {
+  const source = options || {}
+  const body: JsonObject = {}
+  const model = source.model
+  if (model) {
+    const providerId = String(model.provider_id || '').trim()
+    const adapterId = String(model.adapter_id || '').trim()
+    const modelId = String(model.model_id || '').trim()
+    if (providerId && modelId) {
+      body.model = {
+        provider_id: providerId,
+        ...(adapterId ? { adapter_id: adapterId } : {}),
+        model_id: modelId,
+      }
+    }
+  }
+
+  for (const key of ['thinking_mode', 'speed_mode', 'verbosity', 'system'] as const) {
+    const value = source[key]
+    if (typeof value === 'string' && value.trim()) body[key] = key === 'system' ? value : value.trim()
+  }
+  if (typeof source.parallel_tool_calls === 'boolean') body.parallel_tool_calls = source.parallel_tool_calls
+  if (typeof source.temperature === 'number' && Number.isFinite(source.temperature))
+    body.temperature = source.temperature
+  if (
+    typeof source.max_output_tokens === 'number' &&
+    Number.isSafeInteger(source.max_output_tokens) &&
+    source.max_output_tokens > 0
+  ) {
+    body.max_output_tokens = source.max_output_tokens
+  }
+  return body
+}
+
+export function buildMessageRequestBody(payload: SendMessagePayload): JsonObject {
+  return {
+    ...buildRunRequestBody(payload),
+    document: Array.isArray(payload.document) ? payload.document : [],
+  }
 }
 
 /** POST /api/v1/sessions/{id}/messages — submit a composer document + run options. */
-export async function sendMessage(
-  sessionId: string,
-  payload: SendMessagePayload,
-): Promise<SendMessageResponse> {
+export async function sendMessage(sessionId: string, payload: SendMessagePayload): Promise<SendMessageResponse> {
   const resp = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(buildMessageRequestBody(payload)),
   })
   const body = asRecord(resp)
   return { queued: body.queued === true }
 }
 
 /** POST /api/v1/sessions/{id}/continue — resume a paused/interrupted run. */
-export async function continueSession(sessionId: string, options?: JsonValue): Promise<void> {
-  const body: JsonValue = options && Object.keys(asRecord(options)).length ? { options } : {}
+export async function continueSession(sessionId: string, options?: RunOptionsPayload): Promise<void> {
+  const body = buildRunRequestBody(options)
   await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/continue`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -559,8 +850,8 @@ export async function continueSession(sessionId: string, options?: JsonValue): P
 }
 
 /** POST /api/v1/sessions/{id}/compact — context compaction. */
-export async function compactSession(sessionId: string, options?: JsonValue): Promise<void> {
-  const body: JsonValue = options && Object.keys(asRecord(options)).length ? { options } : {}
+export async function compactSession(sessionId: string, options?: RunOptionsPayload): Promise<void> {
+  const body = buildRunRequestBody(options)
   await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/compact`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -587,7 +878,10 @@ export async function rewindSession(sessionId: string, turnId: string): Promise<
 }
 
 /** POST /api/v1/sessions/{id}/fork — clone history into a child session. */
-export async function forkSession(sessionId: string, opts?: { at_message_id?: number; title?: string }): Promise<Session> {
+export async function forkSession(
+  sessionId: string,
+  opts?: { at_message_id?: number; title?: string },
+): Promise<Session> {
   const body: JsonValue = {}
   if (typeof opts?.at_message_id === 'number' && Number.isFinite(opts.at_message_id)) {
     ;(body as JsonObject).at_message_id = opts.at_message_id
@@ -652,10 +946,14 @@ export async function rejectQuestion(sessionId: string, requestId: string): Prom
   return true
 }
 
-/** POST /api/v1/interactive/{request_id}/present — ack that a prompt was shown. */
-export async function presentInteractiveRequest(requestId: string): Promise<void> {
+/** POST /api/v1/sessions/{id}/interactive/{request_id}/present — presentation ack. */
+export function interactivePresentationPath(sessionId: string, requestId: string): string {
+  return `/api/v1/sessions/${encodeURIComponent(sessionId)}/interactive/${encodeURIComponent(requestId)}/present`
+}
+
+export async function presentInteractiveRequest(sessionId: string, requestId: string): Promise<void> {
   try {
-    await apiJson(`/api/v1/interactive/${encodeURIComponent(requestId)}/present`, { method: 'POST' })
+    await apiJson(interactivePresentationPath(sessionId, requestId), { method: 'POST' })
   } catch {
     // Best-effort; presentation ack is advisory.
   }
@@ -679,6 +977,8 @@ export async function getSessionExecutionStatus(sessionId: string): Promise<Sess
       pending_interactive_requests: Array.isArray(state.pending_interactive_requests)
         ? state.pending_interactive_requests
         : [],
+      execution: state.execution,
+      usage: state.usage,
       running: s === 'running' || s === 'creating' || (active != null && typeof active.execution_id === 'string'),
     }
   } catch {

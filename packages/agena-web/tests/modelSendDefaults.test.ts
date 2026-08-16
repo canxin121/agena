@@ -3,42 +3,106 @@ import assert from 'node:assert/strict'
 
 import { deriveSendRunConfig } from '../src/pages/chat/modelSendDefaults'
 
-test('deriveSendRunConfig: prefers explicit selection over defaults', () => {
-  const out = deriveSendRunConfig({
-    selectedProviderId: 'anthropic',
-    selectedModelId: 'claude-sonnet',
-    selectedAgent: 'general',
-    effectiveDefaults: { provider: 'openai', model: 'gpt-4.1', agent: 'explore' },
-  })
-  assert.deepEqual(out, { providerID: 'anthropic', modelID: 'claude-sonnet', agent: 'general' })
-})
-
-test('deriveSendRunConfig: falls back to effective defaults', () => {
-  const out = deriveSendRunConfig({
-    selectedProviderId: '',
-    selectedModelId: '',
-    selectedAgent: '',
-    effectiveDefaults: { provider: 'openai', model: 'gpt-4.1', agent: 'general' },
-  })
-  assert.deepEqual(out, { providerID: 'openai', modelID: 'gpt-4.1', agent: 'general' })
-})
-
-test('deriveSendRunConfig: omits model when provider/model incomplete', () => {
+test('deriveSendRunConfig emits provider, adapter, model, thinking, and speed fields', () => {
   assert.deepEqual(
     deriveSendRunConfig({
-      selectedProviderId: 'openai',
-      selectedModelId: '',
-      effectiveDefaults: null,
+      selectedProviderId: 'anthropic',
+      selectedAdapterId: 'messages',
+      selectedModelId: 'claude-sonnet',
+      selectedThinkingMode: 'high',
+      selectedSpeedMode: 'fast',
+      effectiveDefaults: { provider: 'openai', adapter: 'responses', model: 'gpt-5' },
     }),
-    {},
+    {
+      providerID: 'anthropic',
+      adapterID: 'messages',
+      modelID: 'claude-sonnet',
+      thinkingMode: 'high',
+      speedMode: 'fast',
+    },
   )
 })
 
-test('deriveSendRunConfig: includes variant when provided', () => {
-  const out = deriveSendRunConfig({
-    selectedProviderId: 'openai',
-    selectedModelId: 'gpt-4.1',
-    selectedVariant: 'thinking',
-  })
-  assert.deepEqual(out, { providerID: 'openai', modelID: 'gpt-4.1', variant: 'thinking' })
+test('deriveSendRunConfig falls back to the complete runtime default', () => {
+  assert.deepEqual(
+    deriveSendRunConfig({
+      effectiveDefaults: {
+        provider: 'openai',
+        adapter: 'responses',
+        model: 'gpt-5',
+        thinkingMode: 'high',
+        speedMode: 'fast',
+        verbosity: 'compact',
+        parallelToolCalls: false,
+      },
+    }),
+    {
+      providerID: 'openai',
+      adapterID: 'responses',
+      modelID: 'gpt-5',
+      thinkingMode: 'high',
+      speedMode: 'fast',
+      verbosity: 'compact',
+      parallelToolCalls: false,
+    },
+  )
+})
+
+test('deriveSendRunConfig does not leak default modes into a different model', () => {
+  assert.deepEqual(
+    deriveSendRunConfig({
+      selectedProviderId: 'anthropic',
+      selectedAdapterId: 'messages',
+      selectedModelId: 'claude-sonnet',
+      effectiveDefaults: {
+        provider: 'openai',
+        adapter: 'responses',
+        model: 'gpt-5',
+        thinkingMode: 'high',
+        speedMode: 'fast',
+        verbosity: 'compact',
+        parallelToolCalls: true,
+      },
+    }),
+    { providerID: 'anthropic', adapterID: 'messages', modelID: 'claude-sonnet' },
+  )
+})
+
+test('deriveSendRunConfig omits an incomplete model identity', () => {
+  assert.deepEqual(deriveSendRunConfig({ selectedProviderId: 'openai' }), {})
+})
+
+test('deriveSendRunConfig never combines a partial selection with runtime defaults', () => {
+  const effectiveDefaults = {
+    provider: 'openai',
+    adapter: 'responses',
+    model: 'gpt-5',
+    thinkingMode: 'high',
+  }
+
+  assert.deepEqual(
+    deriveSendRunConfig({
+      selectedProviderId: 'anthropic',
+      effectiveDefaults,
+    }),
+    {
+      providerID: 'openai',
+      adapterID: 'responses',
+      modelID: 'gpt-5',
+      thinkingMode: 'high',
+    },
+  )
+
+  assert.deepEqual(
+    deriveSendRunConfig({
+      selectedModelId: 'claude-sonnet',
+      effectiveDefaults,
+    }),
+    {
+      providerID: 'openai',
+      adapterID: 'responses',
+      modelID: 'gpt-5',
+      thinkingMode: 'high',
+    },
+  )
 })

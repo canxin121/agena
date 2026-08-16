@@ -1,44 +1,65 @@
 export type EffectiveDefaultsLike = {
   provider?: string
+  adapter?: string
   model?: string
-  agent?: string
+  thinkingMode?: string
+  speedMode?: string
+  verbosity?: string
+  parallelToolCalls?: boolean
 }
 
 export type DeriveSendRunConfigInput = {
   selectedProviderId?: string
+  selectedAdapterId?: string
   selectedModelId?: string
-  selectedAgent?: string
-  selectedVariant?: string
+  selectedThinkingMode?: string
+  selectedSpeedMode?: string
   effectiveDefaults?: EffectiveDefaultsLike | null
 }
 
 export type DerivedSendRunConfig = {
   providerID?: string
+  adapterID?: string
   modelID?: string
-  agent?: string
-  variant?: string
+  thinkingMode?: string
+  speedMode?: string
+  verbosity?: string
+  parallelToolCalls?: boolean
 }
 
-function norm(v: unknown): string {
-  return typeof v === 'string' ? v.trim() : ''
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
-// Ensure message payload is explicit about the effective run config.
-// This avoids relying on upstream /session defaults, which can vary by environment.
 export function deriveSendRunConfig(input: DeriveSendRunConfigInput): DerivedSendRunConfig {
   const defaults = input.effectiveDefaults || null
+  const selectedProviderID = text(input.selectedProviderId)
+  const selectedAdapterID = text(input.selectedAdapterId)
+  const selectedModelID = text(input.selectedModelId)
+  const defaultProviderID = text(defaults?.provider)
+  const defaultAdapterID = text(defaults?.adapter)
+  const defaultModelID = text(defaults?.model)
+  const hasSelectedModel = Boolean(selectedProviderID && selectedModelID)
+  const providerID = hasSelectedModel ? selectedProviderID : defaultProviderID
+  const adapterID = hasSelectedModel ? selectedAdapterID : defaultAdapterID
+  const modelID = hasSelectedModel ? selectedModelID : defaultModelID
+  const usesDefaultModel =
+    providerID === defaultProviderID && adapterID === defaultAdapterID && modelID === defaultModelID
+  const thinkingMode = text(input.selectedThinkingMode) || (usesDefaultModel ? text(defaults?.thinkingMode) : '')
+  const speedMode = text(input.selectedSpeedMode) || (usesDefaultModel ? text(defaults?.speedMode) : '')
+  const verbosity = usesDefaultModel ? text(defaults?.verbosity) : ''
 
-  const provider = norm(input.selectedProviderId) || norm(defaults?.provider)
-  const model = norm(input.selectedModelId) || norm(defaults?.model)
-  const agent = norm(input.selectedAgent) || norm(defaults?.agent)
-  const variant = norm(input.selectedVariant)
-
-  const out: DerivedSendRunConfig = {}
-  if (provider && model) {
-    out.providerID = provider
-    out.modelID = model
+  const output: DerivedSendRunConfig = {}
+  if (providerID && modelID) {
+    output.providerID = providerID
+    if (adapterID) output.adapterID = adapterID
+    output.modelID = modelID
   }
-  if (agent) out.agent = agent
-  if (variant) out.variant = variant
-  return out
+  if (thinkingMode) output.thinkingMode = thinkingMode
+  if (speedMode) output.speedMode = speedMode
+  if (verbosity) output.verbosity = verbosity
+  if (usesDefaultModel && typeof defaults?.parallelToolCalls === 'boolean') {
+    output.parallelToolCalls = defaults.parallelToolCalls
+  }
+  return output
 }

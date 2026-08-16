@@ -10,13 +10,7 @@ import type { JsonValue as JsonLike } from './json'
 // survives round-trips.
 // ---------------------------------------------------------------------------
 
-export type SessionState =
-  | 'creating'
-  | 'ready'
-  | 'running'
-  | 'awaiting_user'
-  | 'interrupted'
-  | 'failed'
+export type SessionState = 'creating' | 'ready' | 'running' | 'awaiting_user' | 'interrupted' | 'failed'
 
 export type SessionRelationKind = 'root' | 'child' | 'fork' | 'rewind' | 'subagent'
 
@@ -46,9 +40,9 @@ export type MessageInfo = {
   time?: { created?: number; completed?: number }
   finish?: string
   error?: MessageError
-  agent?: string
   modelID?: string
   providerID?: string
+  adapterID?: string
   // Durable numeric ids that back this message (agena run marker).
   runId?: number
   [k: string]: JsonLike
@@ -124,10 +118,25 @@ export type SessionErrorEvent = {
 
 export type SessionRunConfig = {
   providerID?: string
+  adapterID?: string
   modelID?: string
-  agent?: string
-  variant?: string
+  thinkingMode?: string
+  speedMode?: string
+  verbosity?: string
+  parallelToolCalls?: boolean
   at: number
+}
+
+export type SessionUsage = {
+  measured_prompt_tokens?: number | null
+  current_tokens?: number
+  projected_tokens?: number | null
+  limit_tokens?: number | null
+  limit_basis?: string | null
+  reserved_tokens?: number | null
+  model_context_window_tokens?: number | null
+  model_max_input_tokens?: number | null
+  model_max_output_tokens?: number | null
 }
 
 // ---------------------------------------------------------------------------

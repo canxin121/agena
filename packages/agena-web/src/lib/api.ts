@@ -72,6 +72,45 @@ function asRecord(value: JsonLike): Record<string, JsonLike> | null {
   return value as Record<string, JsonLike>
 }
 
+function nonEmptyString(value: JsonLike): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function apiErrorDetails(bodyJson: JsonLike, fallbackMessage: string): { message: string; code: string; hint: string } {
+  const body = asRecord(bodyJson)
+  if (!body) return { message: fallbackMessage, code: '', hint: '' }
+
+  const errorValue = body.error
+  const errorRecord = asRecord(errorValue)
+  const problem = asRecord(body.problem)
+  const user = asRecord(problem?.user)
+
+  // Legacy filesystem/git routes return { error, code, hint }; the native
+  // Agena API returns { problem: { code, user: { fallback } } }.
+  const message =
+    nonEmptyString(errorValue) ||
+    nonEmptyString(body.message) ||
+    nonEmptyString(errorRecord?.message) ||
+    nonEmptyString(user?.fallback) ||
+    fallbackMessage
+  const code = nonEmptyString(body.code) || nonEmptyString(problem?.code)
+  const hint = nonEmptyString(body.hint) || nonEmptyString(problem?.hint)
+
+  return {
+    message: hint ? `${message}\n${hint}` : message,
+    code,
+    hint,
+  }
+}
+
+function attachApiErrorDetails(error: ApiError, bodyJson: JsonLike, fallbackMessage: string) {
+  if (bodyJson === undefined) return
+  error.bodyJson = bodyJson
+  const details = apiErrorDetails(bodyJson, fallbackMessage)
+  if (details.code) error.code = details.code
+  if (details.hint) error.hint = details.hint
+}
+
 export function apiErrorBodyRecord(error: Error | JsonLike): Record<string, JsonLike> | null {
   if (!(error instanceof ApiError)) return null
   return asRecord(error.bodyJson)
@@ -105,33 +144,11 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
       }
     }
 
-    let message = txt || `Request failed (${resp.status})`
-    const bodyRecord = asRecord(bodyJson)
-    if (bodyRecord) {
-      const errorValue = bodyRecord.error
-      const errorRecord = asRecord(errorValue)
-      const extracted =
-        (typeof errorValue === 'string' && errorValue) ||
-        (typeof bodyRecord.message === 'string' && bodyRecord.message) ||
-        (typeof errorRecord?.message === 'string' && errorRecord.message)
-      if (extracted && extracted.trim()) message = extracted.trim()
-
-      const hint = typeof bodyRecord.hint === 'string' ? bodyRecord.hint.trim() : ''
-      if (hint) {
-        // Keep the primary message first; hint is extra guidance.
-        message = `${message}\n${hint}`
-      }
-    }
+    const fallbackMessage = txt || `Request failed (${resp.status})`
+    const message = apiErrorDetails(bodyJson, fallbackMessage).message
 
     const err = new ApiError(message, resp.status, txt)
-    if (bodyJson !== undefined) {
-      err.bodyJson = bodyJson
-      const bodyRecord = asRecord(bodyJson)
-      if (bodyRecord) {
-        if (typeof bodyRecord.code === 'string') err.code = bodyRecord.code
-        if (typeof bodyRecord.hint === 'string') err.hint = bodyRecord.hint
-      }
-    }
+    attachApiErrorDetails(err, bodyJson, fallbackMessage)
 
     const code = (err.code || '').trim()
     const isUiAuthRequired =
@@ -174,32 +191,11 @@ export async function apiText(url: string, init?: RequestInit): Promise<string> 
       }
     }
 
-    let message = txt || `Request failed (${resp.status})`
-    const bodyRecord = asRecord(bodyJson)
-    if (bodyRecord) {
-      const errorValue = bodyRecord.error
-      const errorRecord = asRecord(errorValue)
-      const extracted =
-        (typeof errorValue === 'string' && errorValue) ||
-        (typeof bodyRecord.message === 'string' && bodyRecord.message) ||
-        (typeof errorRecord?.message === 'string' && errorRecord.message)
-      if (extracted && extracted.trim()) message = extracted.trim()
-
-      const hint = typeof bodyRecord.hint === 'string' ? bodyRecord.hint.trim() : ''
-      if (hint) {
-        message = `${message}\n${hint}`
-      }
-    }
+    const fallbackMessage = txt || `Request failed (${resp.status})`
+    const message = apiErrorDetails(bodyJson, fallbackMessage).message
 
     const err = new ApiError(message, resp.status, txt)
-    if (bodyJson !== undefined) {
-      err.bodyJson = bodyJson
-      const bodyRecord = asRecord(bodyJson)
-      if (bodyRecord) {
-        if (typeof bodyRecord.code === 'string') err.code = bodyRecord.code
-        if (typeof bodyRecord.hint === 'string') err.hint = bodyRecord.hint
-      }
-    }
+    attachApiErrorDetails(err, bodyJson, fallbackMessage)
 
     const code = (err.code || '').trim()
     const isUiAuthRequired =
@@ -242,32 +238,11 @@ export async function apiBlob(url: string, init?: RequestInit): Promise<Blob> {
       }
     }
 
-    let message = txt || `Request failed (${resp.status})`
-    const bodyRecord = asRecord(bodyJson)
-    if (bodyRecord) {
-      const errorValue = bodyRecord.error
-      const errorRecord = asRecord(errorValue)
-      const extracted =
-        (typeof errorValue === 'string' && errorValue) ||
-        (typeof bodyRecord.message === 'string' && bodyRecord.message) ||
-        (typeof errorRecord?.message === 'string' && errorRecord.message)
-      if (extracted && extracted.trim()) message = extracted.trim()
-
-      const hint = typeof bodyRecord.hint === 'string' ? bodyRecord.hint.trim() : ''
-      if (hint) {
-        message = `${message}\n${hint}`
-      }
-    }
+    const fallbackMessage = txt || `Request failed (${resp.status})`
+    const message = apiErrorDetails(bodyJson, fallbackMessage).message
 
     const err = new ApiError(message, resp.status, txt)
-    if (bodyJson !== undefined) {
-      err.bodyJson = bodyJson
-      const bodyRecord = asRecord(bodyJson)
-      if (bodyRecord) {
-        if (typeof bodyRecord.code === 'string') err.code = bodyRecord.code
-        if (typeof bodyRecord.hint === 'string') err.hint = bodyRecord.hint
-      }
-    }
+    attachApiErrorDetails(err, bodyJson, fallbackMessage)
 
     const code = (err.code || '').trim()
     const isUiAuthRequired =

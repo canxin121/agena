@@ -1,6 +1,6 @@
 export default {
   app: {
-    title: 'OpenCode Studio',
+    title: 'Agena',
   },
   common: {
     add: 'إضافة',

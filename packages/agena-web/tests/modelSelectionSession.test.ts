@@ -10,75 +10,70 @@ import {
   writeSessionManualModelPair,
 } from '../src/pages/chat/modelSelectionSession'
 
-test('readSessionRunConfigSelection: trims values', () => {
-  const out = readSessionRunConfigSelection({
-    providerID: ' openai ',
-    modelID: ' gpt-4.1 ',
-    agent: ' general ',
-    variant: ' thinking ',
-    at: 1,
-  })
-
-  assert.deepEqual(out, {
-    provider: 'openai',
-    model: 'gpt-4.1',
-    agent: 'general',
-    variant: 'thinking',
-  })
+test('readSessionRunConfigSelection trims Agena model and mode fields', () => {
+  assert.deepEqual(
+    readSessionRunConfigSelection({
+      providerID: ' openai ',
+      adapterID: ' responses ',
+      modelID: ' gpt-5 ',
+      thinkingMode: ' high ',
+      speedMode: ' fast ',
+      verbosity: ' compact ',
+      parallelToolCalls: false,
+      at: 1,
+    }),
+    {
+      provider: 'openai',
+      adapter: 'responses',
+      model: 'gpt-5',
+      thinkingMode: 'high',
+      speedMode: 'fast',
+      verbosity: 'compact',
+      parallelToolCalls: false,
+    },
+  )
 })
 
-test('deriveSessionSelectionFromMessages: prefers latest message values', () => {
-  const out = deriveSessionSelectionFromMessages([
+test('deriveSessionSelectionFromMessages prefers the latest complete run marker identity', () => {
+  assert.deepEqual(
+    deriveSessionSelectionFromMessages([
+      { info: { providerID: 'anthropic', adapterID: 'messages', modelID: 'claude-sonnet' } },
+      { info: { providerID: 'openai' } },
+    ]),
     {
-      info: {
-        agent: 'general',
-        providerID: 'anthropic',
-        modelID: 'claude-3-7-sonnet',
-      },
+      provider: 'anthropic',
+      adapter: 'messages',
+      model: 'claude-sonnet',
+      thinkingMode: '',
+      speedMode: '',
+      verbosity: '',
     },
-    {
-      info: {
-        model: {
-          providerID: 'openai',
-          modelID: 'gpt-4.1',
-        },
-        variant: 'thinking',
-      },
-    },
-  ])
-
-  assert.deepEqual(out, {
-    provider: 'anthropic',
-    model: 'claude-3-7-sonnet',
-    agent: 'general',
-    variant: 'thinking',
-  })
+  )
 })
 
-test('normalizeSessionManualModelStorageEntry: keeps valid model slugs only', () => {
-  assert.deepEqual(normalizeSessionManualModelStorageEntry(' session-1 ', ' openai/gpt-4.1 '), {
+test('manual model storage migrates legacy keys to provider/adapter/model keys', () => {
+  assert.deepEqual(normalizeSessionManualModelStorageEntry(' session-1 ', ' openai/gpt-5 '), {
     key: 'session-1',
-    value: 'openai/gpt-4.1',
+    value: 'openai//gpt-5',
   })
-  assert.equal(normalizeSessionManualModelStorageEntry('session-1', 'invalid-slug'), null)
-  assert.equal(normalizeSessionManualModelStorageEntry('', 'openai/gpt-4.1'), null)
+  assert.equal(normalizeSessionManualModelStorageEntry('session-1', 'invalid'), null)
 })
 
-test('write/read/remove session manual model pair', () => {
-  const initial = { 'session-a': 'openai/gpt-4.1' }
-
-  const updated = writeSessionManualModelPair(initial, 'session-b', 'anthropic', 'claude-sonnet-4-5')
+test('write, read, and remove a session manual model identity', () => {
+  const initial = { 'session-a': 'openai//gpt-5' }
+  const updated = writeSessionManualModelPair(initial, 'session-b', 'anthropic', 'messages', 'claude-sonnet')
   assert.deepEqual(readSessionManualModelPair(updated, 'session-b'), {
     provider: 'anthropic',
-    model: 'claude-sonnet-4-5',
+    adapter: 'messages',
+    model: 'claude-sonnet',
   })
-
-  const unchanged = writeSessionManualModelPair(updated, 'session-b', 'anthropic', 'claude-sonnet-4-5')
-  assert.equal(unchanged, updated)
+  assert.equal(writeSessionManualModelPair(updated, 'session-b', 'anthropic', 'messages', 'claude-sonnet'), updated)
 
   const removed = removeSessionManualModelPair(updated, 'session-b')
-  assert.deepEqual(readSessionManualModelPair(removed, 'session-b'), { provider: '', model: '' })
-
-  const removeNoop = removeSessionManualModelPair(removed, 'missing')
-  assert.equal(removeNoop, removed)
+  assert.deepEqual(readSessionManualModelPair(removed, 'session-b'), {
+    provider: '',
+    adapter: '',
+    model: '',
+  })
+  assert.equal(removeSessionManualModelPair(removed, 'missing'), removed)
 })

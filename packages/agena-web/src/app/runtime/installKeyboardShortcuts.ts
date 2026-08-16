@@ -88,7 +88,7 @@ export function installKeyboardShortcuts(): () => void {
       if (isOnSettingsPage()) {
         void router.push('/chat')
       } else {
-        void router.push('/settings/opencode/general')
+        void router.push('/settings/general')
       }
       return
     }

@@ -14,6 +14,7 @@ import { useChatStore } from './chat'
 
 import {
   normalizeRuntime,
+  runtimeFromAgenaSession,
   runtimeIsActive,
   runtimeStateEquivalent,
   type SessionRuntimeState,
@@ -48,64 +49,160 @@ function agenaWorkspaceId(value: UnknownRecord | null | undefined): string {
   return ''
 }
 
+function agenaSessionUpdatedAtMs(value: UnknownRecord | null | undefined): number {
+  const raw = value?.updated_at
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  if (typeof raw === 'string') {
+    const parsed = Date.parse(raw)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return 0
+}
+
+function compareAgenaSessionsByUpdatedAt(left: UnknownRecord, right: UnknownRecord): number {
+  const timeDelta = agenaSessionUpdatedAtMs(right) - agenaSessionUpdatedAtMs(left)
+  if (timeDelta) return timeDelta
+  return Number(agenaSessionId(right)) - Number(agenaSessionId(left))
+}
+
+function runtimeMapFromAgenaSessions(sessions: UnknownRecord[]): Record<string, SessionRuntimeState> {
+  const runtime: Record<string, SessionRuntimeState> = {}
+  for (const session of sessions) {
+    const id = agenaSessionId(session)
+    if (id) runtime[id] = runtimeFromAgenaSession(session)
+  }
+  return runtime
+}
+
 async function fetchAgenaWorkspaces(opts?: {
   limit?: number
+  page?: number
   search?: string
   signal?: AbortSignal
 }): Promise<{ entries: DirectoryEntry[]; hasMore: boolean }> {
   const limit = Math.max(1, Math.min(1000, Math.floor(opts?.limit || SIDEBAR_DIRECTORIES_PAGE_SIZE)))
-  const params = new URLSearchParams()
-  params.set('limit', String(limit))
+  const targetPage = Math.max(0, Math.floor(Number(opts?.page || 0)))
+  let remainingSkip = targetPage * limit
   const search = (opts?.search || '').trim()
-  if (search) params.set('search', search)
-  const payload = await apiJson<JsonValue>(
-    `/api/v1/workspaces?${params.toString()}`,
-    opts?.signal ? { signal: opts.signal } : undefined,
-  )
-  const record = asRecord(payload)
-  const items = Array.isArray(record?.items) ? record.items : []
   const entries: DirectoryEntry[] = []
-  for (const item of items) {
-    const ws = asRecord(item)
-    const id = agenaSessionId(ws)
-    const path = typeof ws?.path === 'string' ? ws.path.trim() : ''
-    if (!id || !path) continue
-    entries.push({ id, path })
+  const seenCursors = new Set<string>()
+  let cursor = ''
+  let hasMore = false
+
+  while (entries.length < limit) {
+    const params = new URLSearchParams()
+    params.set('limit', String(Math.min(1000, Math.max(limit, remainingSkip + limit))))
+    if (search) params.set('search', search)
+    if (cursor) params.set('cursor', cursor)
+    const payload = await apiJson<JsonValue>(
+      `/api/v1/workspaces?${params.toString()}`,
+      opts?.signal ? { signal: opts.signal } : undefined,
+    )
+    const record = asRecord(payload)
+    const items = Array.isArray(record?.items) ? record.items : []
+    const page = asRecord(record?.page)
+
+    for (let index = 0; index < items.length; index += 1) {
+      const ws = asRecord(items[index])
+      const id = agenaSessionId(ws)
+      const path = typeof ws?.path === 'string' ? ws.path.trim() : ''
+      if (!id || !path) continue
+      if (remainingSkip > 0) {
+        remainingSkip -= 1
+        continue
+      }
+      if (entries.length < limit) entries.push({ id, path })
+      if (entries.length === limit) {
+        hasMore = index < items.length - 1 || page?.has_more === true
+        break
+      }
+    }
+
+    if (entries.length === limit) break
+    if (page?.has_more !== true) {
+      hasMore = false
+      break
+    }
+    const nextCursor = typeof page?.next_cursor === 'string' ? page.next_cursor.trim() : ''
+    if (!nextCursor || seenCursors.has(nextCursor)) {
+      hasMore = false
+      break
+    }
+    seenCursors.add(nextCursor)
+    cursor = nextCursor
+    hasMore = true
   }
-  const page = asRecord(record?.page)
-  return { entries, hasMore: page?.has_more === true }
+
+  return { entries, hasMore }
+}
+
+async function fetchAgenaSessions(opts?: {
+  workspaceId?: string
+  search?: string
+  signal?: AbortSignal
+}): Promise<UnknownRecord[]> {
+  const sessions: UnknownRecord[] = []
+  const seenCursors = new Set<string>()
+  let cursor = ''
+
+  for (;;) {
+    const page = await chatApi.listSessions({
+      limit: 1000,
+      ...(cursor ? { cursor } : {}),
+      ...(opts?.workspaceId ? { workspaceId: opts.workspaceId } : {}),
+      ...(opts?.search ? { search: opts.search } : {}),
+      excludeSubagents: true,
+      signal: opts?.signal,
+    })
+    sessions.push(...(page.sessions as unknown as UnknownRecord[]))
+    const nextCursor = String(page.nextCursor || '').trim()
+    if (!page.hasMore || !nextCursor || seenCursors.has(nextCursor)) break
+    seenCursors.add(nextCursor)
+    cursor = nextCursor
+  }
+  return sessions
+}
+
+function overviewFromSessions(sessions: UnknownRecord[]): AgenaOverviewWire {
+  const overview: AgenaOverviewWire = { attention: [], running: [], recent: [] }
+  for (const session of sessions) {
+    const state = typeof session.state === 'string' ? session.state.trim() : ''
+    if (state === 'awaiting_user' || state === 'interrupted') overview.attention.push(session)
+    else if (state === 'running' || state === 'creating') overview.running.push(session)
+    else overview.recent.push(session)
+  }
+  return overview
 }
 
 async function fetchAgenaOverview(signal?: AbortSignal): Promise<AgenaOverviewWire> {
-  const payload = await apiJson<JsonValue>(
-    '/api/v1/sessions/overview',
-    signal ? { signal } : undefined,
-  )
-  const record = asRecord(payload)
-  const list = (key: string): UnknownRecord[] => {
-    const raw = record?.[key]
-    return Array.isArray(raw) ? (raw as UnknownRecord[]) : []
-  }
-  return { attention: list('attention'), running: list('running'), recent: list('recent') }
+  // `/sessions/overview` without a workspace id is scoped to the server's
+  // current workspace. The sidebar is cross-workspace, so derive its global
+  // buckets from the canonical paginated session list instead.
+  return overviewFromSessions(await fetchAgenaSessions({ signal }))
 }
 
 function toSidebarRowFromAgenaSession(
   record: UnknownRecord | null | undefined,
   directory: DirectoryEntry | null,
+  expandedParents?: Set<string>,
 ): SidebarSessionRow | null {
   const sid = agenaSessionId(record)
   if (!sid) return null
   const session: SidebarSessionSummary = { ...(record as UnknownRecord), id: sid }
+  const parentId = agenaSessionId({ id: record?.parent_id } as UnknownRecord) || null
+  const rootId = agenaSessionId({ id: record?.root_id } as UnknownRecord) || sid
+  const depthRaw = Number(record?.depth)
+  const childCountRaw = Number(record?.child_session_count)
   return {
     id: sid,
     session,
     directory,
     renderKey: sid,
-    depth: 0,
-    parentId: null,
-    rootId: sid,
-    isParent: false,
-    isExpanded: false,
+    depth: Number.isFinite(depthRaw) ? Math.max(0, Math.floor(depthRaw)) : 0,
+    parentId,
+    rootId,
+    isParent: Number.isFinite(childCountRaw) && childCountRaw > 0,
+    isExpanded: expandedParents?.has(sid) === true,
   }
 }
 
@@ -134,20 +231,7 @@ const SIDEBAR_DIRECTORY_SESSIONS_PAGE_SIZE = 10
 const SIDEBAR_RECOVERY_THROTTLE_MS = 1500
 const SIDEBAR_STATE_REQUEST_STALE_MS = 12000
 const SIDEBAR_SESSION_HYDRATION_RETRY_MS = 10000
-const SIDEBAR_RECOVERY_EVENT_TYPES = new Set([
-  'session.created',
-  'session.updated',
-  'session.deleted',
-  'session.status',
-  'session.idle',
-  'session.error',
-  'permission.asked',
-  'permission.replied',
-  'question.asked',
-  'question.replied',
-  'question.rejected',
-  'opencode-studio:session-activity',
-])
+const SIDEBAR_RECOVERY_EVENT_TYPES = new Set(['session_changed', 'runtime_signal', 'lagged'])
 
 type SidebarSessionSummary = UnknownRecord & {
   id: string
@@ -232,6 +316,108 @@ type NormalizedSidebarView = {
   pinnedFooterView: SidebarFooterView
   recentFooterView: SidebarFooterView
   runningFooterView: SidebarFooterView
+}
+
+function sessionUpdatedAtMs(session: SidebarSessionSummary | null): number {
+  return agenaSessionUpdatedAtMs(session)
+}
+
+function buildDirectorySessionView(input: {
+  sessions: UnknownRecord[]
+  directory: DirectoryEntry
+  page: number
+  pageSize: number
+  pinnedIds: Set<string>
+  expandedParents: Set<string>
+}): DirectorySidebarView {
+  const rowsById = new Map<string, SidebarSessionRow>()
+  const orderedIds: string[] = []
+  for (const session of input.sessions) {
+    const row = toSidebarRowFromAgenaSession(session, input.directory, input.expandedParents)
+    if (!row || rowsById.has(row.id)) continue
+    rowsById.set(row.id, row)
+    orderedIds.push(row.id)
+  }
+
+  const childrenById = new Map<string, string[]>()
+  const parentById: Record<string, string | null> = {}
+  const rootIds: string[] = []
+  for (const id of orderedIds) {
+    const row = rowsById.get(id)
+    if (!row) continue
+    const parentId = row.parentId && rowsById.has(row.parentId) ? row.parentId : null
+    row.parentId = parentId
+    parentById[id] = parentId
+    if (!parentId) {
+      rootIds.push(id)
+      continue
+    }
+    const children = childrenById.get(parentId) || []
+    children.push(id)
+    childrenById.set(parentId, children)
+  }
+
+  const sortIds = (ids: string[]) =>
+    ids.slice().sort((left, right) => {
+      const timeDelta =
+        sessionUpdatedAtMs(rowsById.get(right)?.session || null) -
+        sessionUpdatedAtMs(rowsById.get(left)?.session || null)
+      return timeDelta || Number(right) - Number(left)
+    })
+
+  const sortedRoots = sortIds(rootIds.length > 0 ? rootIds : orderedIds)
+  const pageSize = Math.max(1, Math.floor(input.pageSize))
+  const rootPageCount = Math.max(1, Math.ceil(sortedRoots.length / pageSize))
+  const rootPage = Math.max(0, Math.min(rootPageCount - 1, Math.floor(input.page)))
+  const selectedRootIds = sortedRoots.slice(rootPage * pageSize, (rootPage + 1) * pageSize)
+  const recentRows: SidebarSessionRow[] = []
+  const visited = new Set<string>()
+
+  const walk = (id: string, depth: number, rootId: string) => {
+    if (visited.has(id)) return
+    visited.add(id)
+    const row = rowsById.get(id)
+    if (!row) return
+    const children = sortIds(childrenById.get(id) || [])
+    const next: SidebarSessionRow = {
+      ...row,
+      depth,
+      rootId,
+      isParent: children.length > 0,
+      isExpanded: input.expandedParents.has(id),
+    }
+    recentRows.push(next)
+    if (!next.isExpanded) return
+    for (const childId of children) walk(childId, depth + 1, rootId)
+  }
+  for (const rootId of selectedRootIds) walk(rootId, 0, rootId)
+
+  const pinnedRows = orderedIds
+    .filter((id) => input.pinnedIds.has(id))
+    .map((id) => rowsById.get(id))
+    .filter((row): row is SidebarSessionRow => Boolean(row))
+    .map((row) => ({
+      ...row,
+      isParent: (childrenById.get(row.id) || []).length > 0,
+      isExpanded: input.expandedParents.has(row.id),
+    }))
+
+  const states = input.sessions.map((session) => String(session.state || '').trim())
+  const hasRunningSessions = states.some((state) => state === 'running' || state === 'creating')
+  const hasBlockedSessions = states.some((state) => state === 'awaiting_user' || state === 'interrupted')
+
+  return {
+    sessionCount: rowsById.size,
+    rootPage,
+    rootPageCount,
+    hasActiveOrBlocked: hasRunningSessions || hasBlockedSessions,
+    hasRunningSessions,
+    hasBlockedSessions,
+    pinnedRows,
+    recentRows,
+    recentParentById: parentById,
+    recentRootIds: selectedRootIds,
+  }
 }
 
 function asRecord(value: JsonValue): UnknownRecord | null {
@@ -1004,12 +1190,14 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     const rawSession = located
     const locatedSessionId = readLocatedSessionId(rawSession)
     if (!rawSession || !locatedSessionId || locatedSessionId !== sid) return null
-    const directory =
+    let directory =
       resolveDirectoryEntryForSessionSnapshot(rawSession, {
-        directoryId:
-          typeof located?.workspace_id === 'number' ? String(located.workspace_id) : hint?.directoryId,
+        directoryId: typeof located?.workspace_id === 'number' ? String(located.workspace_id) : hint?.directoryId,
         directoryPath: hint?.directoryPath,
       }) || null
+    if (!directory) {
+      directory = await fetchDirectoryForSessionSnapshot(rawSession)
+    }
     return {
       session: rawSession as Session,
       directory,
@@ -1037,6 +1225,18 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       if (hintId) return { id: hintId, path: hintPath }
     }
     return null
+  }
+
+  async function fetchDirectoryForSessionSnapshot(
+    session: Partial<Session> | SidebarSessionSummary | null | undefined,
+  ): Promise<DirectoryEntry | null> {
+    const workspaceId = Number((session as SidebarSessionSummary | null)?.workspace_id)
+    if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) return null
+    const known = directoriesById.value[String(workspaceId)]
+    if (known?.path) return known
+    const workspace = await chatApi.getWorkspace(workspaceId).catch(() => null)
+    if (!workspace?.path) return null
+    return { id: String(workspace.id), path: workspace.path }
   }
 
   async function hydrateIncompleteSidebarSessions(): Promise<void> {
@@ -1081,19 +1281,21 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       const ids = [...sessionIds]
       if (ids.length === 0) return
       // Agena has no by-id session listing; hydrate each candidate directly.
-      const hydratedSessions = (
-        await Promise.all(ids.map((id) => chatApi.getSession(id).catch(() => null)))
-      ).filter((s): s is Session => Boolean(s))
+      const hydratedSessions = (await Promise.all(ids.map((id) => chatApi.getSession(id).catch(() => null)))).filter(
+        (s): s is Session => Boolean(s),
+      )
       for (const session of hydratedSessions) {
         const sid = typeof session?.id === 'string' ? session.id.trim() : ''
         if (!sid || !candidateIds.has(sid)) continue
         unresolved.delete(sid)
-        hydrated.set(sid, {
-          session,
-          directory: resolveDirectoryEntryForSessionSnapshot(session, {
+        const directory =
+          resolveDirectoryEntryForSessionSnapshot(session, {
             directoryPath,
             directoryId: hintsBySessionId.get(sid)?.directoryId,
-          }),
+          }) || (await fetchDirectoryForSessionSnapshot(session))
+        hydrated.set(sid, {
+          session,
+          directory,
         })
       }
     })
@@ -1177,7 +1379,6 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     uiPrefs.value = next
     return true
   }
-
 
   async function executeSidebarCommand(
     command: SidebarCommandRequest,
@@ -1436,56 +1637,48 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     const pageSize = SIDEBAR_DIRECTORIES_PAGE_SIZE
     const query = (persistedStateQuery.directoryQuery || '').trim()
     const [workspaces, overview] = await Promise.all([
-      fetchAgenaWorkspaces({ limit: pageSize, search: query || undefined, signal }),
+      fetchAgenaWorkspaces({ limit: pageSize, page, search: query || undefined, signal }),
       fetchAgenaOverview(signal),
     ])
 
     const pinnedIds = new Set(uiPrefs.value.pinnedSessionIds || [])
+    const expandedParents = new Set(uiPrefs.value.expandedParentSessionIds || [])
     const directoryRowsById: Record<string, JsonValue> = {}
     for (const entry of workspaces.entries) {
-      const { sessions, running, blocked } = filterOverviewByWorkspace(overview, entry.id)
-      const pinnedRows: SidebarSessionRow[] = []
-      const recentRows: SidebarSessionRow[] = []
-      for (const session of sessions) {
-        const row = toSidebarRowFromAgenaSession(session, entry)
-        if (!row) continue
-        if (pinnedIds.has(row.id)) pinnedRows.push(row)
-        recentRows.push(row)
-      }
-      const sessionCount = sessions.length
-      const rootPageCount = Math.max(1, Math.ceil(sessionCount / SIDEBAR_DIRECTORY_SESSIONS_PAGE_SIZE))
-      const rootPage = Math.min(
-        Math.max(0, Math.floor(Number(uiPrefs.value.sessionRootPageByDirectoryId[entry.id] || 0))),
-        rootPageCount - 1,
-      )
-      const hasRunning = running > 0
-      const hasBlocked = blocked > 0
-      directoryRowsById[entry.id] = {
-        sessionCount,
-        rootPage,
-        rootPageCount,
-        hasActiveOrBlocked: hasRunning || hasBlocked,
-        hasRunningSessions: hasRunning,
-        hasBlockedSessions: hasBlocked,
-        pinnedRows: pinnedRows as unknown as JsonValue,
-        recentRows: recentRows as unknown as JsonValue,
-        recentParentById: {},
-        recentRootIds: recentRows.map((row) => row.id),
-      }
+      const { sessions } = filterOverviewByWorkspace(overview, entry.id)
+      directoryRowsById[entry.id] = buildDirectorySessionView({
+        sessions,
+        directory: entry,
+        page: Math.max(0, Math.floor(Number(uiPrefs.value.sessionRootPageByDirectoryId[entry.id] || 0))),
+        pageSize: SIDEBAR_DIRECTORY_SESSIONS_PAGE_SIZE,
+        pinnedIds,
+        expandedParents,
+      }) as unknown as JsonValue
     }
 
     const pinnedRows: SidebarSessionRow[] = []
-    const allOverview = [...overview.recent, ...overview.running, ...overview.attention]
+    const allOverview = [...overview.recent, ...overview.running, ...overview.attention].sort(
+      compareAgenaSessionsByUpdatedAt,
+    )
     for (const session of allOverview) {
       const sid = agenaSessionId(session)
       if (!pinnedIds.has(sid)) continue
-      const row = toSidebarRowFromAgenaSession(session, null)
+      const row = toSidebarRowFromAgenaSession(session, null, expandedParents)
       if (row) pinnedRows.push(row)
     }
-    const footerRows = (sessions: UnknownRecord[]): JsonValue =>
-      sessions
-        .map((s) => toSidebarRowFromAgenaSession(s, null))
-        .filter((r): r is SidebarSessionRow => Boolean(r)) as unknown as JsonValue
+    const footerView = (sessions: UnknownRecord[], requestedPage: number): SidebarFooterView => {
+      const rows = sessions
+        .map((session) => toSidebarRowFromAgenaSession(session, null, expandedParents))
+        .filter((row): row is SidebarSessionRow => Boolean(row))
+      const pageCount = Math.max(1, Math.ceil(rows.length / SIDEBAR_FOOTER_PAGE_SIZE))
+      const footerPage = Math.max(0, Math.min(pageCount - 1, Math.floor(requestedPage)))
+      return {
+        total: rows.length,
+        page: footerPage,
+        pageCount,
+        rows: rows.slice(footerPage * SIDEBAR_FOOTER_PAGE_SIZE, (footerPage + 1) * SIDEBAR_FOOTER_PAGE_SIZE),
+      }
+    }
 
     return {
       preferences: uiPrefs.value,
@@ -1493,17 +1686,20 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         items: workspaces.entries.map((entry) => ({ id: entry.id, path: entry.path })),
         total: workspaces.hasMore
           ? page * pageSize + workspaces.entries.length + 1
-          : workspaces.entries.length,
+          : page * pageSize + workspaces.entries.length,
         offset: page * pageSize,
         limit: pageSize,
       },
       view: {
         directoryRowsById,
-        pinnedFooter: { total: pinnedRows.length, page: 0, pageCount: 1, rows: pinnedRows as unknown as JsonValue },
-        recentFooter: { total: overview.recent.length, page: 0, pageCount: 1, rows: footerRows(overview.recent) },
-        runningFooter: { total: overview.running.length, page: 0, pageCount: 1, rows: footerRows(overview.running) },
+        pinnedFooter: footerView(
+          pinnedRows.map((row) => row.session).filter((session): session is SidebarSessionSummary => Boolean(session)),
+          uiPrefs.value.pinnedSessionsPage,
+        ) as unknown as JsonValue,
+        recentFooter: footerView(overview.recent, uiPrefs.value.recentSessionsPage) as unknown as JsonValue,
+        runningFooter: footerView(overview.running, uiPrefs.value.runningSessionsPage) as unknown as JsonValue,
       },
-      runtimeBySessionId: {},
+      runtimeBySessionId: runtimeMapFromAgenaSessions(allOverview) as unknown as JsonValue,
       focus: null,
     }
   }
@@ -1611,7 +1807,6 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     }, waitMs)
   }
 
-
   async function revalidateFromApi(opts?: SidebarStateQuery, runtimeOpts?: RevalidateRuntimeOpts): Promise<boolean> {
     if (!runtimeOpts?.silent) {
       loading.value = true
@@ -1658,11 +1853,12 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
       const { entries, hasMore } = await fetchAgenaWorkspaces({
         limit: pageSize,
+        page,
         search: query || undefined,
       })
       applyDirectoriesPagePayload({
         items: entries.map((entry) => ({ id: entry.id, path: entry.path })),
-        total: hasMore ? page * pageSize + entries.length + 1 : entries.length,
+        total: hasMore ? page * pageSize + entries.length + 1 : page * pageSize + entries.length,
         offset: page * pageSize,
         limit: pageSize,
       })
@@ -1694,23 +1890,8 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       return
     }
 
-    // Agena global stream events refresh the sidebar data. lagged/session
-    // events schedule a coalesced reload rather than per-event fetches.
-    if (
-      normalizedType === 'session_changed' ||
-      normalizedType === 'runtime_signal' ||
-      normalizedType === 'lagged' ||
-      normalizedType === 'session.created' ||
-      normalizedType === 'session.updated' ||
-      normalizedType === 'session.deleted' ||
-      normalizedType === 'session.status'
-    ) {
-      scheduleSidebarRecoverySync(`event:${normalizedType}`, 180)
-      return
-    }
-
     if (SIDEBAR_RECOVERY_EVENT_TYPES.has(normalizedType)) {
-      scheduleSidebarRecoverySync(`event:${normalizedType}`, 90)
+      scheduleSidebarRecoverySync(`event:${normalizedType}`, 180)
     }
   }
 
@@ -1745,34 +1926,21 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         typeof opts?.page === 'number' && Number.isFinite(opts.page)
           ? opts.page
           : (uiPrefs.value.sessionRootPageByDirectoryId[did] ?? 0)
-      const page = setSessionRootPage(did, requestedPageRaw, pageSize)
+      const page = Math.max(0, Math.floor(Number(requestedPageRaw || 0)))
 
       const workspace = directoriesById.value[did] || directoryEntryByPath(did, directoriesById.value)
       if (!workspace) return false
-      const overview = await fetchAgenaOverview()
-      const { sessions } = filterOverviewByWorkspace(overview, workspace.id)
       const directory = { id: workspace.id, path: workspace.path }
+      const sessions = await fetchAgenaSessions({ workspaceId: workspace.id })
       const pinnedIds = new Set(uiPrefs.value.pinnedSessionIds || [])
-      const pinnedRows: SidebarSessionRow[] = []
-      const recentRows: SidebarSessionRow[] = []
-      for (const session of sessions) {
-        const row = toSidebarRowFromAgenaSession(session, directory)
-        if (!row) continue
-        if (pinnedIds.has(row.id)) pinnedRows.push(row)
-        recentRows.push(row)
-      }
-      const sectionBase: DirectorySidebarView = {
-        sessionCount: sessions.length,
-        rootPage: page,
-        rootPageCount: Math.max(1, Math.ceil(sessions.length / pageSize)),
-        hasActiveOrBlocked: recentRows.some((row) => String(row.session?.state) === 'awaiting_user'),
-        hasRunningSessions: recentRows.some((row) => String(row.session?.state) === 'running'),
-        hasBlockedSessions: recentRows.some((row) => String(row.session?.state) === 'interrupted'),
-        pinnedRows,
-        recentRows,
-        recentParentById: {},
-        recentRootIds: recentRows.map((row) => row.id),
-      }
+      const sectionBase = buildDirectorySessionView({
+        sessions,
+        directory,
+        page,
+        pageSize,
+        pinnedIds,
+        expandedParents: new Set(uiPrefs.value.expandedParentSessionIds || []),
+      })
       const section = enrichDirectorySidebarView(sectionBase, knownSidebarRowBySessionId())
       if (!section) return false
 
@@ -1834,32 +2002,36 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
       const overview = await fetchAgenaOverview()
       const pinnedIds = new Set(uiPrefs.value.pinnedSessionIds || [])
+      const expandedParents = new Set(uiPrefs.value.expandedParentSessionIds || [])
       const sourceRows: SidebarSessionRow[] = []
       if (targetKind === 'pinned') {
         for (const session of [...overview.recent, ...overview.running, ...overview.attention]) {
           const sid = agenaSessionId(session)
           if (!pinnedIds.has(sid)) continue
-          const row = toSidebarRowFromAgenaSession(session, null)
+          const row = toSidebarRowFromAgenaSession(session, null, expandedParents)
           if (row) sourceRows.push(row)
         }
       } else if (targetKind === 'recent') {
         for (const session of overview.recent) {
-          const row = toSidebarRowFromAgenaSession(session, null)
+          const row = toSidebarRowFromAgenaSession(session, null, expandedParents)
           if (row) sourceRows.push(row)
         }
       } else {
         for (const session of overview.running) {
-          const row = toSidebarRowFromAgenaSession(session, null)
+          const row = toSidebarRowFromAgenaSession(session, null, expandedParents)
           if (row) sourceRows.push(row)
         }
       }
-      const offset = page * pageSize
       const total = sourceRows.length
+      sourceRows.sort((left, right) => compareAgenaSessionsByUpdatedAt(left.session || {}, right.session || {}))
+      const pageCount = Math.max(1, Math.ceil(total / pageSize))
+      const footerPage = Math.max(0, Math.min(pageCount - 1, page))
+      const offset = footerPage * pageSize
       const view = enrichFooterView(
         {
           total,
-          page,
-          pageCount: Math.max(1, Math.ceil(total / pageSize)),
+          page: footerPage,
+          pageCount,
           rows: sourceRows.slice(offset, offset + pageSize),
         },
         knownSidebarRowBySessionId(),
@@ -1928,16 +2100,15 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     const located = hint?.locateResult
       ? asRecord(hint.locateResult)
       : asRecord((await chatApi.getSession(sid).catch(() => null)) ?? null)
-    const locatedSession = asRecord((located?.session ?? null) as JsonValue)
+    const nestedSession = asRecord((located?.session ?? null) as JsonValue)
+    const locatedSession = nestedSession || located
     const locatedSessionId = readLocatedSessionId(locatedSession)
-    const canUseRemoteLocate = !locatedSession || !locatedSessionId || locatedSessionId === sid
-    const rawPid =
-      typeof located?.workspace_id === 'number'
-        ? String(located.workspace_id)
-        : (located?.project_id as string | undefined)
-    const rawPath = located?.path as string | undefined
+    const canUseRemoteLocate = !locatedSessionId || locatedSessionId === sid
+    const rawPid = locatedSession?.workspace_id
+    const rawPath = located?.path
 
-    const pid = canUseRemoteLocate && typeof rawPid === 'string' ? rawPid.trim() : ''
+    const pid =
+      canUseRemoteLocate && (typeof rawPid === 'number' || typeof rawPid === 'string') ? String(rawPid).trim() : ''
     const ppath = canUseRemoteLocate && typeof rawPath === 'string' ? rawPath.trim() : ''
     const locatedDir = canUseRemoteLocate && typeof located?.directory === 'string' ? located.directory.trim() : ''
 
@@ -1965,6 +2136,17 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
           directoryId: pid,
           directoryPath: ppath,
           locatedDir: locatePath || ppath,
+        }
+      }
+      const workspaceId = Number(pid)
+      if (Number.isSafeInteger(workspaceId) && workspaceId > 0) {
+        const workspace = await chatApi.getWorkspace(workspaceId).catch(() => null)
+        if (workspace?.path) {
+          return {
+            directoryId: String(workspace.id),
+            directoryPath: workspace.path,
+            locatedDir: locatePath || workspace.path,
+          }
         }
       }
     }

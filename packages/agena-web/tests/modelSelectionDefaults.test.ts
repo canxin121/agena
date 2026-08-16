@@ -1,62 +1,75 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { extractConfigDefaults, resolveEffectiveDefaults } from '../src/pages/chat/modelSelectionDefaults'
+import {
+  encodeModelSelectionKey,
+  parseModelSlug,
+  resolveEffectiveDefaults,
+} from '../src/pages/chat/modelSelectionDefaults'
 
-test('extractConfigDefaults: supports provider/model slug and agent normalization', () => {
-  const out = extractConfigDefaults({
-    default_agent: '@general',
-    model: 'anthropic/claude-sonnet-4-5',
+test('model selection keys preserve provider, adapter, and model identity', () => {
+  const key = encodeModelSelectionKey({
+    provider: ' openai ',
+    adapter: ' responses/v1 ',
+    model: ' gpt-5/codex ',
   })
 
-  assert.deepEqual(out, {
-    defaultAgent: 'general',
-    defaultProvider: 'anthropic',
-    defaultModel: 'claude-sonnet-4-5',
-  })
-})
-
-test('resolveEffectiveDefaults: project config wins over user and opencode selection', () => {
-  const out = resolveEffectiveDefaults({
-    projectConfig: { provider: 'anthropic', model: 'claude-3-7-sonnet', default_agent: 'build' },
-    userConfig: { provider: 'openai', model: 'gpt-4.1', default_agent: 'general' },
-    opencodeSelection: { provider: 'xai', model: 'grok-4' },
-    fallbackAgent: 'explore',
-  })
-
-  assert.deepEqual(out, {
-    agent: 'build',
-    provider: 'anthropic',
-    model: 'claude-3-7-sonnet',
-  })
-})
-
-test('resolveEffectiveDefaults: falls back to user config when project is incomplete', () => {
-  const out = resolveEffectiveDefaults({
-    projectConfig: { provider: 'anthropic' },
-    userConfig: { provider: 'openai', model: 'gpt-4.1', default_agent: 'general' },
-    opencodeSelection: { provider: 'xai', model: 'grok-4' },
-    fallbackAgent: 'explore',
-  })
-
-  assert.deepEqual(out, {
-    agent: 'general',
+  assert.equal(key, 'openai/responses%2Fv1/gpt-5%2Fcodex')
+  assert.deepEqual(parseModelSlug(key), {
     provider: 'openai',
-    model: 'gpt-4.1',
+    adapter: 'responses/v1',
+    model: 'gpt-5/codex',
   })
 })
 
-test('resolveEffectiveDefaults: falls back to opencode selection after project/user', () => {
-  const out = resolveEffectiveDefaults({
-    projectConfig: { default_agent: '' },
-    userConfig: { default_agent: '' },
-    opencodeSelection: { provider: 'xai', model: 'grok-4' },
-    fallbackAgent: 'explore',
+test('parseModelSlug accepts legacy provider/model storage entries', () => {
+  assert.deepEqual(parseModelSlug('anthropic/claude-sonnet'), {
+    provider: 'anthropic',
+    adapter: '',
+    model: 'claude-sonnet',
   })
+  assert.deepEqual(parseModelSlug('invalid'), { provider: '', adapter: '', model: '' })
+})
 
-  assert.deepEqual(out, {
-    agent: 'explore',
-    provider: 'xai',
-    model: 'grok-4',
-  })
+test('resolveEffectiveDefaults uses the complete Agena runtime selection', () => {
+  assert.deepEqual(
+    resolveEffectiveDefaults({
+      runtime: {
+        provider: 'openai',
+        adapter: 'responses',
+        model: 'gpt-5',
+        thinkingMode: 'high',
+        speedMode: 'fast',
+        verbosity: 'compact',
+        parallelToolCalls: false,
+      },
+      fallback: { provider: 'anthropic', adapter: 'messages', model: 'claude-sonnet' },
+    }),
+    {
+      provider: 'openai',
+      adapter: 'responses',
+      model: 'gpt-5',
+      thinkingMode: 'high',
+      speedMode: 'fast',
+      verbosity: 'compact',
+      parallelToolCalls: false,
+    },
+  )
+})
+
+test('resolveEffectiveDefaults falls back only when runtime identity is incomplete', () => {
+  assert.deepEqual(
+    resolveEffectiveDefaults({
+      runtime: { provider: 'openai', thinkingMode: 'high' },
+      fallback: { provider: 'anthropic', adapter: 'messages', model: 'claude-sonnet' },
+    }),
+    {
+      provider: 'anthropic',
+      adapter: 'messages',
+      model: 'claude-sonnet',
+      thinkingMode: 'high',
+      speedMode: '',
+      verbosity: '',
+    },
+  )
 })

@@ -1,6 +1,6 @@
 import { isRef, nextTick, type Ref } from 'vue'
 
-type PickerKind = 'agent' | 'model' | 'variant'
+type PickerKind = 'model' | 'thinking' | 'speed'
 type AnchorLike =
   | HTMLElement
   | { triggerEl?: unknown; $el?: unknown; getBoundingClientRect?: () => DOMRect | undefined }
@@ -51,11 +51,10 @@ export function useModelSelectionPickerUi(opts: {
   composerControlsRef: Ref<HTMLDivElement | null>
   composerPickerOpen: Ref<null | PickerKind>
   composerPickerStyle: Ref<Record<string, string>>
-  agentTriggerRef: Ref<AnchorLike>
   modelTriggerRef: Ref<AnchorLike>
-  variantTriggerRef: Ref<AnchorLike>
+  thinkingTriggerRef: Ref<AnchorLike>
+  speedTriggerRef: Ref<AnchorLike>
   modelPickerQuery: Ref<string>
-  agentPickerQuery: Ref<string>
   onOpenComposerPicker: () => void
   commandOpen: Ref<boolean>
   commandQuery: Ref<string>
@@ -65,11 +64,10 @@ export function useModelSelectionPickerUi(opts: {
     composerControlsRef,
     composerPickerOpen,
     composerPickerStyle,
-    agentTriggerRef,
     modelTriggerRef,
-    variantTriggerRef,
+    thinkingTriggerRef,
+    speedTriggerRef,
     modelPickerQuery,
-    agentPickerQuery,
     onOpenComposerPicker,
     commandOpen,
     commandQuery,
@@ -108,7 +106,7 @@ export function useModelSelectionPickerUi(opts: {
 
     const box = composerControlsRef.value
     const anchor =
-      kind === 'agent' ? agentTriggerRef.value : kind === 'model' ? modelTriggerRef.value : variantTriggerRef.value
+      kind === 'model' ? modelTriggerRef.value : kind === 'thinking' ? thinkingTriggerRef.value : speedTriggerRef.value
     const anchorRect = resolveAnchorRect(anchor)
     if (!box || !anchorRect) {
       composerPickerStyle.value = { left: '8px' }
@@ -127,8 +125,6 @@ export function useModelSelectionPickerUi(opts: {
 
     if (kind === 'model') {
       modelPickerQuery.value = ''
-    } else if (kind === 'agent') {
-      agentPickerQuery.value = ''
     }
   }
 

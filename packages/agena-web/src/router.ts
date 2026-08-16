@@ -1,5 +1,12 @@
 import { createRouter, createWebHistory, type RouteLocationNormalizedLoaded, type RouteRecordRaw } from 'vue-router'
 import { sessionStorageKeys } from '@/lib/persistence/storageKeys'
+import { settingsPathForTab, settingsTabFromRouteValue } from '@/components/settings/sidebar/settingsSidebarNavigation'
+import {
+  hasEmbeddedWorkspacePaneQuery,
+  isEmbeddedWorkspacePaneContext,
+  readWindowIdFromLocation,
+  readWindowIdFromQuery,
+} from '@/app/windowScope'
 
 const CHUNK_RECOVERY_KEY = sessionStorageKeys.app.chunkRecoveryReloaded
 
@@ -31,15 +38,81 @@ const routes: RouteRecordRaw[] = [
     meta: { shellSidebar: 'chat', mobilePanel: 'sessions' },
   },
   {
-    path: '/settings',
+    path: '/terminal',
+    component: () => import('./pages/TerminalPage.vue'),
+    meta: { shellSidebar: 'none', mobilePanel: 'terminal' },
+  },
+  {
+    path: '/files',
+    component: () => import('./pages/FilesPage.vue'),
+    meta: { shellSidebar: 'none', mobilePanel: 'files' },
+  },
+  {
+    path: '/preview',
+    component: () => import('./pages/PreviewPage.vue'),
+    meta: { shellSidebar: 'none', mobilePanel: 'preview' },
+  },
+  {
+    path: '/git',
+    component: () => import('./pages/GitPage.vue'),
+    meta: { shellSidebar: 'none', mobilePanel: 'git' },
+  },
+  {
+    path: '/settings/opencode/:legacySection?',
+    redirect: (to) => ({
+      path: settingsPathForTab(settingsTabFromRouteValue(to.path) || 'general'),
+      query: to.query,
+      hash: to.hash,
+    }),
+  },
+  {
+    path: '/settings/plan/:legacySection?',
+    redirect: (to) => ({ path: '/settings/plugins', query: to.query, hash: to.hash }),
+  },
+  {
+    path: '/settings/:section?',
     component: () => import('./pages/SettingsPage.vue'),
     meta: { shellSidebar: 'none', mobilePanel: 'settings' },
+  },
+  {
+    path: '/:pathMatch(.*)*',
+    redirect: '/',
   },
 ]
 
 export const router = createRouter({
   history: createWebHistory(),
   routes,
+})
+
+router.beforeEach((to, from) => {
+  const embeddedContext = isEmbeddedWorkspacePaneContext(from.query) || isEmbeddedWorkspacePaneContext(to.query)
+  if (!embeddedContext || hasEmbeddedWorkspacePaneQuery(to.query)) return true
+
+  const nextQuery: Record<string, string> = {}
+  for (const [key, value] of Object.entries(to.query || {})) {
+    const normalizedKey = String(key || '').trim()
+    if (!normalizedKey || normalizedKey.toLowerCase() === 'ocembed') continue
+
+    const normalizedValue = Array.isArray(value)
+      ? String(value.find((item) => String(item || '').trim()) || '').trim()
+      : String(value || '').trim()
+    if (normalizedValue) nextQuery[normalizedKey] = normalizedValue
+  }
+
+  nextQuery.ocEmbed = '1'
+  const scopedWindowId =
+    readWindowIdFromQuery(to.query) || readWindowIdFromQuery(from.query) || readWindowIdFromLocation()
+  if (scopedWindowId && !String(nextQuery.windowId || '').trim()) {
+    nextQuery.windowId = scopedWindowId
+  }
+
+  return {
+    path: to.path,
+    query: nextQuery,
+    hash: to.hash,
+    replace: true,
+  }
 })
 
 // In production, a service-worker update / CDN cache / rolling deploy can briefly

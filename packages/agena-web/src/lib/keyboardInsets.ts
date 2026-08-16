@@ -118,7 +118,7 @@ export function installKeyboardInsets(options: Options) {
 
     const viewportBottom = offsetTop + height
 
-    // For chat-like UIs we want the whole composer bar to stay visible (model/agent/send
+    // For chat-like UIs we want the whole composer bar to stay visible (model/modes/send
     // controls included), not only the focused textarea.
     //
     // Note: the avoid target is shifted via `top: -offset`. Use the last applied offset to

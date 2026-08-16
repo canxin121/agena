@@ -1,352 +1,348 @@
-import { computed, ref, type Ref } from 'vue'
+import { computed, ref } from 'vue'
 
 import { apiJson } from '../../lib/api'
-import { extractConfigDefaults } from './modelSelectionDefaults'
-import type { OpencodeConfigResponse } from '../../stores/opencodeConfig'
-import type { JsonValue as JsonLike } from '../../types/json'
+import type { JsonValue } from '../../types/json'
 
-// ---------------------------------------------------------------------------
-// Agena provider catalog (replaces the old opencode /api/config/* + /api/agent
-// sources). The server exposes:
-//
-//   GET /api/v1/providers                    → ProviderSummaryResource[]
-//   GET /api/v1/providers/{provider_id}/models → { provider_id, models: ProviderModelResource[] }
-//
-// ProviderModelResource: { provider_id, adapter_id?, id, catalog_model_id?,
-//   display_name?, native_compaction, capabilities, metadata, thinking_modes[],
-//   speed_modes{} }. The catalog keeps the same public surface as the old
-// opencode catalog so the model-selection machinery above it is unchanged.
-// ---------------------------------------------------------------------------
-
-export type Provider = { id: string; name?: string; models?: JsonLike }
-export type Agent = { name: string; description?: string; mode?: string; hidden?: boolean; disable?: boolean }
-export type ModelMetaRecord = Record<string, JsonLike>
-
-export type OpencodeConfigStoreLike = {
-  data: OpencodeConfigResponse['config'] | null
-  scope: string
-  exists: boolean | null
-  refresh: (opts: { scope: 'project' | 'user'; directory: string | null }) => Promise<void>
+export type ThinkingRequest = {
+  type?: string
+  effort?: string | null
+  budget_tokens?: number
+  display?: string
 }
 
-type AgenaProviderSummary = {
+export type ProviderModelThinkingMode = {
+  default?: boolean
+  display_name?: string | null
+  description?: string | null
+  preset?: string | null
+  thinking?: ThinkingRequest | null
+}
+
+export type ProviderModelSpeedMode = {
+  default?: boolean
+  display_name?: string | null
+  description?: string | null
+}
+
+export type ProviderModel = {
+  provider_id: string
+  adapter_id?: string | null
+  id: string
+  catalog_model_id?: string | null
+  display_name?: string | null
+  native_compaction?: boolean
+  capabilities?: Record<string, JsonValue>
+  metadata?: Record<string, JsonValue>
+  thinking_modes?: ProviderModelThinkingMode[]
+  speed_modes?: Record<string, ProviderModelSpeedMode>
+  [key: string]: JsonValue
+}
+
+export type Provider = {
+  id: string
+  name: string
+  defaultAdapter: string
+  defaultModel: string
+  models: ProviderModel[]
+}
+
+export type RuntimeDefaultSelection = {
+  provider: string
+  adapter: string
+  model: string
+  thinkingMode: string
+  speedMode: string
+  verbosity: string
+  parallelToolCalls?: boolean
+}
+
+export type ModelMetaRecord = ProviderModel
+
+export type ModelModeOption = {
+  value: string
+  label: string
+  description: string
+  isDefault: boolean
+}
+
+type ProviderSummary = {
   provider_id?: string
-  defaults?: { adapter?: string; model?: string }
+  defaults?: { adapter?: string | null; model?: string | null }
   adapters?: Array<{ adapter_id?: string; enabled?: boolean; configured_model_count?: number }>
 }
 
-type AgenaProviderModelsResponse = {
-  provider_id?: string
-  models?: JsonLike[]
+type ProviderAdapterModels = {
+  adapter_id?: string
+  enabled?: boolean
+  models?: ProviderModel[]
+  failure?: JsonValue
 }
 
-function isRecord(value: JsonLike | null | undefined): value is ModelMetaRecord {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+type RuntimeStatus = {
+  default_selection?: {
+    provider?: string | null
+    adapter?: string | null
+    model?: string | null
+    thinking_mode?: string | null
+    speed_mode?: string | null
+    verbosity?: string | null
+    parallel_tool_calls?: boolean | null
+  } | null
 }
 
-function asRecord(value: JsonLike): ModelMetaRecord {
-  return isRecord(value) ? value : {}
-}
-
-function readString(value: JsonLike | null | undefined): string {
+function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-export function modelIdsFromProviderModels(models: JsonLike): string[] {
-  if (!models) return []
-  if (Array.isArray(models)) {
-    return models
-      .map((m) => {
-        const rec = asRecord(m)
-        return readString(rec.id as JsonLike) || readString(rec.model_id as JsonLike)
-      })
-      .filter(Boolean)
+function normalizeModel(model: ProviderModel, providerId: string, adapterId: string): ProviderModel | null {
+  const id = readString(model?.id)
+  if (!id) return null
+  return {
+    ...model,
+    provider_id: readString(model.provider_id) || providerId,
+    adapter_id: readString(model.adapter_id) || adapterId || undefined,
+    id,
+    thinking_modes: Array.isArray(model.thinking_modes) ? model.thinking_modes : [],
+    speed_modes:
+      model.speed_modes && typeof model.speed_modes === 'object' && !Array.isArray(model.speed_modes)
+        ? model.speed_modes
+        : {},
   }
-  if (isRecord(models)) {
-    return Object.keys(models)
-  }
-  return []
 }
 
-export function isSelectablePrimaryAgent(agent: Agent | null | undefined): boolean {
-  if (!agent) return false
-  const name = String(agent.name || '').trim()
-  if (!name) return false
-  if (agent.disable === true) return false
-  if (agent.hidden === true) return false
-  if (agent.mode === 'subagent') return false
-  return true
+export function modelIdsFromProviderModels(models: ProviderModel[] | null | undefined): string[] {
+  return Array.isArray(models) ? models.map((model) => readString(model.id)).filter(Boolean) : []
 }
 
-export function useModelSelectionCatalog(opts: {
-  opencodeConfig: OpencodeConfigStoreLike
-  sessionDirectory: Ref<string>
-}) {
-  const { opencodeConfig, sessionDirectory } = opts
+export function thinkingModeSelector(mode: ProviderModelThinkingMode | null | undefined): string {
+  if (!mode) return ''
+  const preset = readString(mode.preset)
+  if (preset) return preset
+  const thinking = mode.thinking
+  const type = readString(thinking?.type).toLowerCase()
+  if (type === 'disabled') return 'off'
+  if (type === 'effort' || type === 'adaptive') return readString(thinking?.effort)
+  return ''
+}
 
-  const projectConfigLayer = ref<ModelMetaRecord | null>(null)
-  const userConfigLayer = ref<ModelMetaRecord | null>(null)
-  const providerDefaultModels = ref<Record<string, string>>({})
-
-  const providers = ref<Provider[]>([])
-  const agents = ref<Agent[]>([])
-  const catalogLoading = ref(false)
-
-  const resolvedOpencodeConfig = computed(() => {
-    return projectConfigLayer.value || userConfigLayer.value || {}
-  })
-
-  const shareDisabled = computed(() => {
-    const cfg = resolvedOpencodeConfig.value
-    return String(cfg?.share || '').trim() === 'disabled'
-  })
-
-  const projectConfigDefaults = computed(() => extractConfigDefaults(projectConfigLayer.value))
-  const userConfigDefaults = computed(() => extractConfigDefaults(userConfigLayer.value))
-
-  const fallbackAgent = computed(() => (agents.value[0]?.name || '').trim())
-
-  const fallbackProviderModel = computed(() => {
-    const first = providers.value[0]
-    const provider = typeof first?.id === 'string' ? first.id.trim() : ''
-    if (!provider) return { provider: '', model: '' }
-
-    const ids = modelIdsFromProviderModels(first?.models)
-    const idSet = new Set(ids)
-    const candidate = (providerDefaultModels.value[provider] || '').trim()
-    const model = candidate && idSet.has(candidate) ? candidate : ids[0] || ''
-    return { provider, model }
-  })
-
-  function ensureDefaultProviderInList(list: Provider[]) {
-    const def = (projectConfigDefaults.value.defaultProvider || userConfigDefaults.value.defaultProvider || '').trim()
-    if (!def) return list
-    if (list.some((p) => p.id === def)) return list
-    return [...list, { id: def, name: def, models: {} }]
-  }
-
-  function mergeProviderLists(primary: Provider[], fallback: Provider[]) {
-    const fallbackMap = new Map<string, Provider>()
-    for (const p of fallback) fallbackMap.set(p.id, p)
-
-    const out: Provider[] = []
-    const seen = new Set<string>()
-    for (const p of primary) {
-      const existing = fallbackMap.get(p.id)
-      out.push(existing ? { ...existing, ...p, models: p.models || existing.models } : p)
-      seen.add(p.id)
-    }
-    for (const p of fallback) {
-      if (!seen.has(p.id)) out.push(p)
-    }
-    return out
-  }
-
-  function providerListFromConfig(): Provider[] {
-    const cfg = resolvedOpencodeConfig.value
-    const out: Provider[] = []
-    const providerMap = cfg?.provider
-    if (!isRecord(providerMap)) return out
-
-    for (const [id, value] of Object.entries(providerMap)) {
-      const label = String(id).trim()
-      if (!label) continue
-      const valueRecord = asRecord(value)
-      const name = typeof valueRecord.name === 'string' ? valueRecord.name : undefined
-      const modelsRaw = valueRecord.models
-      const models = Array.isArray(modelsRaw) || isRecord(modelsRaw) ? modelsRaw : undefined
-      out.push({ id: label, name, models })
-    }
-    return out
-  }
-
-  function agentListFromConfig(): Agent[] {
-    const cfg = resolvedOpencodeConfig.value
-    const entries: Agent[] = []
-    const agentMap = cfg?.agent
-    const modeMap = cfg?.mode
-
-    const readMap = (map: ModelMetaRecord | null | undefined) => {
-      if (!isRecord(map)) return
-      for (const [name, value] of Object.entries(map)) {
-        const label = String(name).trim()
-        if (!label) continue
-
-        const rec = asRecord(value)
-        const description = typeof rec.description === 'string' ? rec.description : undefined
-        const mode = typeof rec.mode === 'string' ? rec.mode : undefined
-        const hidden = typeof rec.hidden === 'boolean' ? rec.hidden : undefined
-        const disable = typeof rec.disable === 'boolean' ? rec.disable : undefined
-
-        if (disable === true) continue
-        if (hidden === true) continue
-        if (mode === 'subagent') continue
-        if (!mode && (label === 'general' || label === 'explore')) continue
-
-        entries.push({ name: label, description, mode, hidden, disable })
-      }
-    }
-
-    readMap(isRecord(agentMap) ? agentMap : undefined)
-    if (isRecord(modeMap)) {
-      const decorated: ModelMetaRecord = {}
-      for (const [k, v] of Object.entries(modeMap)) {
-        decorated[k] = { ...asRecord(v), mode: 'primary' }
-      }
-      readMap(decorated)
-    }
-
-    const defaultAgent = (
-      projectConfigDefaults.value.defaultAgent ||
-      userConfigDefaults.value.defaultAgent ||
-      ''
-    ).trim()
-    if (defaultAgent && !entries.some((a) => a.name === defaultAgent)) {
-      entries.push({ name: defaultAgent })
-    }
-
-    return entries.filter(isSelectablePrimaryAgent)
-  }
-
-  function modelMetaFor(providerId: string, modelId: string): ModelMetaRecord | null {
-    const pid = (providerId || '').trim()
-    const mid = (modelId || '').trim()
-    if (!pid || !mid) return null
-
-    const fromRemote = providers.value.find((p) => p.id === pid)
-    const remoteModels = fromRemote?.models
-    if (Array.isArray(remoteModels)) {
-      const match = remoteModels.find((m) => {
-        const rec = asRecord(m)
-        return readString(rec.id as JsonLike) === mid || readString(rec.model_id as JsonLike) === mid
-      })
-      return isRecord(match) ? match : null
-    }
-    if (isRecord(remoteModels) && !Array.isArray(remoteModels)) {
-      const candidate = remoteModels[mid]
-      return isRecord(candidate) ? candidate : null
-    }
-
-    const fromCfg = providerListFromConfig().find((p) => p.id === pid)
-    const cfgModels = fromCfg?.models
-    if (Array.isArray(cfgModels)) {
-      const match = cfgModels.find((m) => {
-        const rec = asRecord(m)
-        return readString(rec.id as JsonLike) === mid || readString(rec.model_id as JsonLike) === mid
-      })
-      return isRecord(match) ? match : null
-    }
-    if (isRecord(cfgModels) && !Array.isArray(cfgModels)) {
-      const candidate = cfgModels[mid]
-      return isRecord(candidate) ? candidate : null
-    }
-
-    return null
-  }
-
-  async function refreshOpencodeConfig() {
-    const dir = sessionDirectory.value
-    const scope = dir ? 'project' : 'user'
-    projectConfigLayer.value = null
-    userConfigLayer.value = null
-
-    try {
-      await opencodeConfig.refresh({ scope, directory: dir || null })
-    } catch {
-      // ignore
-    }
-
-    if (scope === 'project' && opencodeConfig.exists !== false) {
-      projectConfigLayer.value = isRecord(opencodeConfig.data) ? opencodeConfig.data : {}
-    }
-    if (scope === 'user') {
-      userConfigLayer.value = isRecord(opencodeConfig.data) ? opencodeConfig.data : {}
-    }
-  }
-
-  function providerFromSummary(summary: AgenaProviderSummary, models: JsonLike[]): Provider {
-    const id = readString(summary.provider_id as JsonLike)
-    return {
-      id,
-      name: id,
-      models,
-    }
-  }
-
-  function hasConfiguredModels(summary: AgenaProviderSummary): boolean {
-    if (!Array.isArray(summary.adapters)) return false
-    return summary.adapters.some((adapter) => {
-      const enabled = adapter?.enabled !== false
-      const count = Number(adapter?.configured_model_count ?? 0)
-      return enabled && count > 0
+export function thinkingModeOptionsForModel(model: ProviderModel | null | undefined): ModelModeOption[] {
+  const out: ModelModeOption[] = []
+  const seen = new Set<string>()
+  for (const mode of Array.isArray(model?.thinking_modes) ? model.thinking_modes : []) {
+    const value = thinkingModeSelector(mode)
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    out.push({
+      value,
+      label: readString(mode.display_name) || value,
+      description: readString(mode.description),
+      isDefault: mode.default === true,
     })
   }
+  return out
+}
 
-  async function loadProvidersAndAgents() {
-    if (catalogLoading.value) return
-    catalogLoading.value = true
-    try {
-      // Keep the config layers for defaults even though agena has no config
-      // endpoint; the opencodeConfig store is a local stub.
-      await refreshOpencodeConfig()
-
-      // GET /api/v1/providers → summaries; agena has no separate agent catalog.
-      const summaries: AgenaProviderSummary[] = await apiJson<AgenaProviderSummary[]>('/api/v1/providers')
-      const list = Array.isArray(summaries) ? summaries : []
-
-      const nextDefaultModels: Record<string, string> = {}
-      for (const summary of list) {
-        const pid = readString(summary.provider_id as JsonLike)
-        const model = readString(summary.defaults?.model as JsonLike)
-        if (pid && model) nextDefaultModels[pid] = model
+export function speedModeOptionsForModel(model: ProviderModel | null | undefined): ModelModeOption[] {
+  const modes = model?.speed_modes
+  if (!modes || typeof modes !== 'object' || Array.isArray(modes)) return []
+  return Object.entries(modes)
+    .map(([key, mode]) => {
+      const value = readString(key)
+      if (!value) return null
+      return {
+        value,
+        label: readString(mode?.display_name) || value,
+        description: readString(mode?.description),
+        isDefault: mode?.default === true,
       }
-      providerDefaultModels.value = nextDefaultModels
+    })
+    .filter((item): item is ModelModeOption => Boolean(item))
+}
 
-      // Fetch models for each provider that has configured adapters, in parallel.
-      const providersWithModels = list.filter(hasConfiguredModels)
-      const settled = await Promise.allSettled(
-        providersWithModels.map(async (summary) => {
-          const pid = readString(summary.provider_id as JsonLike)
-          if (!pid) return null
-          const resp = await apiJson<AgenaProviderModelsResponse>(`/api/v1/providers/${encodeURIComponent(pid)}/models`)
-          return providerFromSummary(summary, Array.isArray(resp?.models) ? resp.models : [])
-        }),
+export function defaultModeValue(options: ModelModeOption[]): string {
+  return options.find((option) => option.isDefault)?.value || ''
+}
+
+export function useModelSelectionCatalog() {
+  const providers = ref<Provider[]>([])
+  const runtimeDefaultSelection = ref<RuntimeDefaultSelection>({
+    provider: '',
+    adapter: '',
+    model: '',
+    thinkingMode: '',
+    speedMode: '',
+    verbosity: '',
+  })
+  const catalogLoading = ref(false)
+  const catalogError = ref('')
+  let loadPromise: Promise<void> | null = null
+
+  const fallbackProviderModel = computed(() => {
+    const configured = runtimeDefaultSelection.value
+    if (configured.provider && configured.model) {
+      return { provider: configured.provider, adapter: configured.adapter, model: configured.model }
+    }
+
+    for (const provider of providers.value) {
+      const defaultModel = provider.models.find((model) => {
+        if (model.id !== provider.defaultModel) return false
+        return !provider.defaultAdapter || readString(model.adapter_id) === provider.defaultAdapter
+      })
+      if (defaultModel) {
+        return {
+          provider: provider.id,
+          adapter: readString(defaultModel.adapter_id),
+          model: defaultModel.id,
+        }
+      }
+    }
+
+    const firstProvider = providers.value.find((provider) => provider.models.length > 0)
+    const firstModel = firstProvider?.models[0]
+    return {
+      provider: firstProvider?.id || '',
+      adapter: readString(firstModel?.adapter_id),
+      model: firstModel?.id || '',
+    }
+  })
+
+  function modelMetaFor(providerId: string, modelId: string, adapterId?: string): ProviderModel | null {
+    const provider = providers.value.find((item) => item.id === readString(providerId))
+    if (!provider) return null
+    const targetModel = readString(modelId)
+    const targetAdapter = readString(adapterId)
+    if (targetAdapter) {
+      return (
+        provider.models.find((model) => model.id === targetModel && readString(model.adapter_id) === targetAdapter) ||
+        null
       )
-      const next: Provider[] = []
-      for (const result of settled) {
-        if (result.status === 'fulfilled' && result.value) next.push(result.value)
-      }
-      // Providers without fetched models still appear so defaults resolve.
-      for (const summary of list) {
-        const pid = readString(summary.provider_id as JsonLike)
-        if (!pid) continue
-        if (next.some((p) => p.id === pid)) continue
-        next.push(providerFromSummary(summary, []))
-      }
-      providers.value = ensureDefaultProviderInList(mergeProviderLists(next, providerListFromConfig()))
+    }
+    return provider.models.find((model) => model.id === targetModel) || null
+  }
 
-      // No /api/agent endpoint in agena → derive agents from the (stubbed) config
-      // layers; the picker shows the "auto" default entry when that is empty.
-      agents.value = agentListFromConfig()
-    } catch {
-      providerDefaultModels.value = {}
-      providers.value = ensureDefaultProviderInList(providerListFromConfig())
-      agents.value = agentListFromConfig()
+  async function loadProvidersAndModels() {
+    if (loadPromise) return await loadPromise
+    loadPromise = (async () => {
+      catalogLoading.value = true
+      catalogError.value = ''
+      try {
+        const [runtime, summaries] = await Promise.all([
+          apiJson<RuntimeStatus>('/api/v1/runtime'),
+          apiJson<ProviderSummary[]>('/api/v1/providers'),
+        ])
+
+        const selection = runtime?.default_selection || null
+        runtimeDefaultSelection.value = {
+          provider: readString(selection?.provider),
+          adapter: readString(selection?.adapter),
+          model: readString(selection?.model),
+          thinkingMode: readString(selection?.thinking_mode),
+          speedMode: readString(selection?.speed_mode),
+          verbosity: readString(selection?.verbosity),
+          ...(typeof selection?.parallel_tool_calls === 'boolean'
+            ? { parallelToolCalls: selection.parallel_tool_calls }
+            : {}),
+        }
+
+        const summaryList = Array.isArray(summaries) ? summaries : []
+        const results = await Promise.allSettled(
+          summaryList.map(async (summary) => {
+            const providerId = readString(summary.provider_id)
+            if (!providerId) return null
+            const adapters = await apiJson<ProviderAdapterModels[]>(
+              `/api/v1/providers/${encodeURIComponent(providerId)}/configured-models`,
+            )
+            const models: ProviderModel[] = []
+            for (const adapter of Array.isArray(adapters) ? adapters : []) {
+              if (adapter?.enabled === false) continue
+              const adapterId = readString(adapter?.adapter_id)
+              for (const rawModel of Array.isArray(adapter?.models) ? adapter.models : []) {
+                const model = normalizeModel(rawModel, providerId, adapterId)
+                if (model) models.push(model)
+              }
+            }
+            return {
+              id: providerId,
+              name: providerId,
+              defaultAdapter: readString(summary.defaults?.adapter),
+              defaultModel: readString(summary.defaults?.model),
+              models,
+            } satisfies Provider
+          }),
+        )
+
+        const next: Provider[] = []
+        for (let index = 0; index < results.length; index += 1) {
+          const result = results[index]
+          if (result?.status === 'fulfilled' && result.value) {
+            next.push(result.value)
+            continue
+          }
+          const summary = summaryList[index]
+          const providerId = readString(summary?.provider_id)
+          if (providerId) {
+            next.push({
+              id: providerId,
+              name: providerId,
+              defaultAdapter: readString(summary?.defaults?.adapter),
+              defaultModel: readString(summary?.defaults?.model),
+              models: [],
+            })
+          }
+        }
+
+        const configuredDefault = runtimeDefaultSelection.value
+        if (configuredDefault.provider && configuredDefault.model) {
+          let provider = next.find((item) => item.id === configuredDefault.provider)
+          if (!provider) {
+            provider = {
+              id: configuredDefault.provider,
+              name: configuredDefault.provider,
+              defaultAdapter: configuredDefault.adapter,
+              defaultModel: configuredDefault.model,
+              models: [],
+            }
+            next.push(provider)
+          }
+          const exists = provider.models.some(
+            (model) =>
+              model.id === configuredDefault.model &&
+              (!configuredDefault.adapter || readString(model.adapter_id) === configuredDefault.adapter),
+          )
+          if (!exists) {
+            provider.models.push({
+              provider_id: configuredDefault.provider,
+              adapter_id: configuredDefault.adapter || undefined,
+              id: configuredDefault.model,
+              thinking_modes: [],
+              speed_modes: {},
+            })
+          }
+        }
+
+        providers.value = next.sort((a, b) => a.id.localeCompare(b.id))
+      } catch (error) {
+        catalogError.value = error instanceof Error ? error.message : String(error)
+        providers.value = []
+      } finally {
+        catalogLoading.value = false
+      }
+    })()
+
+    try {
+      await loadPromise
     } finally {
-      catalogLoading.value = false
+      loadPromise = null
     }
   }
 
   return {
     providers,
-    agents,
-    catalogLoading,
-    shareDisabled,
-    projectConfigDefaults,
-    userConfigDefaults,
-    fallbackAgent,
+    runtimeDefaultSelection,
     fallbackProviderModel,
+    catalogLoading,
+    catalogError,
     modelMetaFor,
-    loadProvidersAndAgents,
+    loadProvidersAndModels,
   }
 }

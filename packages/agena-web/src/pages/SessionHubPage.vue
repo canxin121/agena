@@ -19,6 +19,11 @@ interface SessionOverview {
   generated_at: string
 }
 
+type SessionPage = {
+  items?: SessionResource[]
+  page?: { has_more?: boolean; next_cursor?: string | null }
+}
+
 type HubSection = {
   id: HubRowKind
   title: string
@@ -73,7 +78,36 @@ async function loadOverview() {
   loading.value = true
   loadError.value = null
   try {
-    overview.value = await apiJson<SessionOverview>('/api/v1/sessions/overview?recent_limit=50')
+    const sessions: SessionResource[] = []
+    const seenCursors = new Set<string>()
+    let cursor = ''
+    for (;;) {
+      const params = new URLSearchParams({ limit: '1000', exclude_subagents: 'true' })
+      if (cursor) params.set('cursor', cursor)
+      const payload = await apiJson<SessionPage>(`/api/v1/sessions?${params.toString()}`)
+      if (Array.isArray(payload?.items)) sessions.push(...payload.items)
+      const nextCursor = String(payload?.page?.next_cursor || '').trim()
+      if (payload?.page?.has_more !== true || !nextCursor || seenCursors.has(nextCursor)) break
+      seenCursors.add(nextCursor)
+      cursor = nextCursor
+    }
+
+    const next: SessionOverview = {
+      attention: [],
+      running: [],
+      recent: [],
+      generated_at: new Date().toISOString(),
+    }
+    for (const session of sessions) {
+      if (session.state === 'awaiting_user' || session.state === 'interrupted') {
+        next.attention.push(session)
+      } else if (session.state === 'running' || session.state === 'creating') {
+        next.running.push(session)
+      } else if (next.recent.length < 50) {
+        next.recent.push(session)
+      }
+    }
+    overview.value = next
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : String(err)
   } finally {

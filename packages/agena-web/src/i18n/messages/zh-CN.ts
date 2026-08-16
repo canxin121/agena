@@ -1,6 +1,6 @@
 export default {
   app: {
-    title: 'OpenCode Studio',
+    title: 'Agena',
   },
   common: {
     add: '添加',
@@ -141,7 +141,7 @@ export default {
       quickActions: {
         title: '快捷操作',
         badge: '操作',
-        reloadConfig: '重新加载 OpenCode 配置',
+        reloadConfig: '重新加载 Agena 运行时',
         themeLight: '主题：浅色',
         themeDark: '主题：深色',
         themeSystem: '主题：跟随系统',
@@ -154,18 +154,16 @@ export default {
       shortcuts: {
         showKeyboardShortcuts: '显示键盘快捷键',
         toggleSessionSidebar: '切换会话侧边栏',
-        openModelSelector: '打开模型选择器',
-        cycleThinkingVariant: '切换思考变体',
+        openChat: '打开聊天',
+        openPreview: '打开预览',
         createNewSession: '新建会话',
         sendMessage: '发送消息',
         focusChatInput: '聚焦聊天输入框',
         abortActiveRunDouble: '中止当前运行（连按两次）',
         cycleTheme: '切换主题（浅色 → 深色 → 系统）',
-        openDiffPanel: '打开 Diff 面板',
         openFiles: '打开文件',
         openTerminal: '打开终端',
         openGitPanel: '打开 Git 面板',
-        openTimeline: '打开时间线',
         openSettings: '打开设置',
       },
     },
@@ -173,7 +171,7 @@ export default {
   mcp: {
     dialog: {
       title: 'MCP 服务器',
-      description: '管理 Model Context Protocol 连接',
+      description: '查看 Agena 已加载的 Model Context Protocol 服务器',
       loading: '正在加载 MCP 状态...',
       empty: '未配置 MCP 服务器。',
       actions: {
@@ -451,7 +449,7 @@ export default {
         argsLabel: '参数',
         argsPlaceholder: 'run dev -- --port 5173',
         logsPathLabel: '日志文件',
-        logsPathPlaceholder: '.opencode/preview/vite-main.log',
+        logsPathPlaceholder: '.agena/preview/vite-main.log',
         targetUrlLabel: '目标 URL',
         targetUrlPlaceholder: 'http://127.0.0.1:8000',
         addAction: '添加',
@@ -492,7 +490,7 @@ export default {
     uiAuthRequired: '需要 UI 认证',
   },
   login: {
-    title: 'OpenCode Studio',
+    title: 'Agena',
     subtitle: '选择后端。如果后端已锁定，输入密码继续。',
     backendLoadingTitle: '后端加载中，请稍候',
     backendLoadingDescription: '正在初始化桌面后端，页面会在就绪后自动恢复。',
@@ -510,7 +508,7 @@ export default {
     passwordPlaceholder: '密码',
     passwordRequired: '需要密码',
     backendNotReachable: '后端不可用',
-    opencodeNotReady: 'OpenCode 后端尚未就绪，请稍后重试',
+    opencodeNotReady: 'Agena 后端尚未就绪，请稍后重试',
     failedToUpdateBackend: '更新后端失败',
     failedToRemoveBackend: '移除后端失败',
     failedToAddBackend: '添加后端失败',
@@ -525,6 +523,12 @@ export default {
     unknownTab: '未知的设置标签页。',
     emptyPlugins: '没有插件提供设置项。',
     tabs: {
+      general: '通用',
+      providers: '服务商',
+      permissions: '权限',
+      activities: '后台活动',
+      memories: '记忆',
+      usage: '用量',
       opencode: 'OpenCode',
       plugins: '插件',
       backends: '后端',
@@ -2011,7 +2015,7 @@ export default {
       },
       subtitle: {
         answerAllToEnableSend: '回答所有问题后才能发送。',
-        blocksUntilRespond: '在你回应前，Agent 会被阻塞。',
+        blocksUntilRespond: '此运行会等待你的回应。',
       },
       ui: {
         rejectPermission: '拒绝权限',
@@ -2057,21 +2061,24 @@ export default {
       },
       picker: {
         modelTitle: '模型',
-        agentTitle: 'Agent',
-        variantTitle: '思考',
+        thinkingTitle: '思考',
+        speedTitle: '速度',
         optionsTitle: '选项',
         searchModels: '搜索模型',
-        searchAgents: '搜索 Agent',
-        searchVariants: '搜索思考变体',
+        searchThinkingModes: '搜索思考模式',
+        searchSpeedModes: '搜索速度模式',
         searchOptions: '搜索选项',
         emptyModels: '未找到模型。',
-        emptyAgents: '未找到 Agent。',
-        emptyVariants: '未找到思考变体。',
+        emptyThinkingModes: '当前模型没有可用的思考模式。',
+        emptySpeedModes: '当前模型没有可用的速度模式。',
         emptyOptions: '未找到选项。',
+        availableCount: '共 {count} 项',
       },
       model: {
-        autoDefault: '自动（OpenCode 默认）',
-        autoDefaultDescription: '让 OpenCode 自动选择默认模型',
+        autoDefault: 'Agena 运行时默认值',
+        autoDefaultDescription: '使用 Agena 服务端配置的默认模型',
+        defaultThinkingDescription: '使用当前模型配置的默认思考模式',
+        defaultSpeedDescription: '使用当前模型配置的默认速度模式',
       },
       editor: {
         open: '打开编辑器',
@@ -2401,6 +2408,10 @@ export default {
         exportTranscript: {
           label: '导出对话内容',
           description: '下载 Markdown 对话记录',
+        },
+        fork: {
+          label: '派生会话',
+          description: '从当前对话创建一个新会话',
         },
         share: {
           label: '分享会话',
@@ -3155,7 +3166,7 @@ export default {
         title: '启用 GPG 口令预设？',
         description: '这会更新你的 gpg-agent 配置',
         confirmEnableRetry: '启用并重试',
-        body: '你的 gpg-agent 不允许预设口令。为了让 OpenCode Studio 在你在界面中输入口令后也能对提交进行签名，我们可以把 `allow-preset-passphrase` 写入 `~/.gnupg/gpg-agent.conf` 并重启 gpg-agent。',
+        body: '你的 gpg-agent 不允许预设口令。为了让 Agena 在你在界面中输入口令后也能对提交进行签名，我们可以把 `allow-preset-passphrase` 写入 `~/.gnupg/gpg-agent.conf` 并重启 gpg-agent。',
       },
       gpgMissingKey: {
         title: '缺少 GPG 签名密钥',

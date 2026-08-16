@@ -1,14 +1,14 @@
 import { computed, ref, watch, type Ref } from 'vue'
 
-import { parseModelSlug, resolveEffectiveDefaults } from './modelSelectionDefaults'
 import {
-  modelIdsFromProviderModels,
+  defaultModeValue,
+  speedModeOptionsForModel,
+  thinkingModeOptionsForModel,
   useModelSelectionCatalog,
-  type ModelMetaRecord,
-  type OpencodeConfigStoreLike,
+  type ModelModeOption,
+  type ProviderModel,
 } from './modelSelectionCatalog'
-import { useModelSelectionPickerUi } from './modelSelectionPickerUi'
-import { resolveAgentSelection, resolveModelSelection, resolveVariantSelection } from './modelSelectionResolver'
+import { encodeModelSelectionKey, parseModelSlug, resolveEffectiveDefaults } from './modelSelectionDefaults'
 import {
   deriveSessionSelectionFromMessages,
   normalizeSessionManualModelStorageEntry,
@@ -16,14 +16,20 @@ import {
   readSessionRunConfigSelection,
   removeSessionManualModelPair,
   writeSessionManualModelPair,
+  type SessionSelection,
 } from './modelSelectionSession'
-import { useModelSelectionStateMachine } from './modelSelectionStateMachine'
+import { useModelSelectionPickerUi } from './modelSelectionPickerUi'
 import { createStringMapPersister, loadStringMapFromStorage, normalizeStringMapEntry } from './modelSelectionStorage'
-import { useModelSelectionViewState } from './modelSelectionViewState'
 import { localStorageKeys } from '../../lib/persistence/storageKeys'
 import type { SessionRunConfig } from '@/types/chat'
 
-type ChatMessageLike = { info?: ModelMetaRecord }
+type ChatMessageLike = {
+  info?: {
+    providerID?: unknown
+    adapterID?: unknown
+    modelID?: unknown
+  }
+}
 
 type ChatLike = {
   selectedSessionId: string | null
@@ -31,22 +37,47 @@ type ChatLike = {
   messages: ChatMessageLike[]
 }
 
+export type ModelSlugOption = {
+  value: string
+  label: string
+  providerId: string
+  adapterId: string
+  modelId: string
+  description: string
+}
+
+type PickerKind = 'model' | 'thinking' | 'speed'
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function sameModel(
+  left: { provider?: string; adapter?: string; model?: string },
+  right: { provider?: string; adapter?: string; model?: string },
+): boolean {
+  return (
+    text(left.provider) === text(right.provider) &&
+    text(left.adapter) === text(right.adapter) &&
+    text(left.model) === text(right.model)
+  )
+}
+
+function withSelectedMode(options: ModelModeOption[], selected: string): ModelModeOption[] {
+  const value = text(selected)
+  if (!value || options.some((option) => option.value === value)) return options
+  return [...options, { value, label: value, description: '', isDefault: false }]
+}
+
 export function useChatModelSelection(opts: {
   chat: ChatLike
-  opencodeConfig: OpencodeConfigStoreLike
-  sessionDirectory: Ref<string>
-
-  // UI refs for picker anchoring.
   composerControlsRef: Ref<HTMLDivElement | null>
-  composerPickerOpen: Ref<null | 'agent' | 'model' | 'variant'>
+  composerPickerOpen: Ref<null | PickerKind>
   composerPickerStyle: Ref<Record<string, string>>
-  agentTriggerRef: Ref<HTMLElement | null>
   modelTriggerRef: Ref<HTMLElement | null>
-  variantTriggerRef: Ref<HTMLElement | null>
-
-  // Other UI state that must be reset when opening picker.
+  thinkingTriggerRef: Ref<HTMLElement | null>
+  speedTriggerRef: Ref<HTMLElement | null>
   modelPickerQuery: Ref<string>
-  agentPickerQuery: Ref<string>
   onOpenComposerPicker: () => void
   commandOpen: Ref<boolean>
   commandQuery: Ref<string>
@@ -54,176 +85,177 @@ export function useChatModelSelection(opts: {
 }) {
   const {
     chat,
-    opencodeConfig,
-    sessionDirectory,
     composerControlsRef,
     composerPickerOpen,
     composerPickerStyle,
-    agentTriggerRef,
     modelTriggerRef,
-    variantTriggerRef,
+    thinkingTriggerRef,
+    speedTriggerRef,
     modelPickerQuery,
-    agentPickerQuery,
     onOpenComposerPicker,
     commandOpen,
     commandQuery,
     commandIndex,
   } = opts
 
-  const {
-    providers,
-    agents,
-    catalogLoading,
-    shareDisabled,
-    projectConfigDefaults,
-    userConfigDefaults,
-    fallbackAgent,
-    fallbackProviderModel,
-    modelMetaFor,
-    loadProvidersAndAgents: loadCatalogProvidersAndAgents,
-  } = useModelSelectionCatalog({
-    opencodeConfig,
-    sessionDirectory,
-  })
+  const catalog = useModelSelectionCatalog()
+  const { providers, runtimeDefaultSelection, fallbackProviderModel, catalogLoading, catalogError, modelMetaFor } =
+    catalog
 
-  const effectiveDefaults = computed(() => {
-    return resolveEffectiveDefaults({
-      projectConfig: projectConfigDefaults.value,
-      userConfig: userConfigDefaults.value,
-      opencodeSelection: fallbackProviderModel.value,
-      fallbackAgent: fallbackAgent.value,
-    })
-  })
-
-  // Session selection state.
-  const selectedProviderId = ref('')
-  const selectedModelId = ref('')
-  const selectedAgent = ref('')
-
-  // Variant selection is per-model (provider/model) and persists across sessions.
-  const STORAGE_MODEL_VARIANT_BY_KEY = localStorageKeys.chat.modelVariantByKey
-  const variantByModelKey = ref<Record<string, string>>(
-    loadStringMapFromStorage(STORAGE_MODEL_VARIANT_BY_KEY, normalizeStringMapEntry),
+  const effectiveDefaults = computed(() =>
+    resolveEffectiveDefaults({
+      runtime: runtimeDefaultSelection.value,
+      fallback: fallbackProviderModel.value,
+    }),
   )
-  const variantByModelPersister = createStringMapPersister({
-    storageKey: STORAGE_MODEL_VARIANT_BY_KEY,
-    getValue: () => variantByModelKey.value,
-  })
 
-  function persistVariantByModelSoon() {
-    variantByModelPersister.persistSoon()
-  }
+  const selectedProviderId = ref('')
+  const selectedAdapterId = ref('')
+  const selectedModelId = ref('')
+  const selectedThinkingMode = ref('')
+  const selectedSpeedMode = ref('')
+  const modelSource = ref<'empty' | 'session' | 'default' | 'auto' | 'manual'>('empty')
+  const thinkingModeSource = ref<'empty' | 'session' | 'default' | 'manual'>('empty')
+  const speedModeSource = ref<'empty' | 'session' | 'default' | 'manual'>('empty')
 
-  const STORAGE_SESSION_MANUAL_MODEL_BY_SESSION = localStorageKeys.chat.sessionManualModelBySession
   const sessionManualModelBySession = ref<Record<string, string>>(
-    loadStringMapFromStorage(STORAGE_SESSION_MANUAL_MODEL_BY_SESSION, normalizeSessionManualModelStorageEntry),
+    loadStringMapFromStorage(
+      localStorageKeys.chat.sessionManualModelBySession,
+      normalizeSessionManualModelStorageEntry,
+    ),
   )
   const sessionManualModelPersister = createStringMapPersister({
-    storageKey: STORAGE_SESSION_MANUAL_MODEL_BY_SESSION,
+    storageKey: localStorageKeys.chat.sessionManualModelBySession,
     getValue: () => sessionManualModelBySession.value,
   })
 
-  function persistSessionManualModelSoon() {
-    sessionManualModelPersister.persistSoon()
-  }
-
-  const selectedModelKey = computed(() => {
-    const pid = selectedProviderId.value.trim()
-    const mid = selectedModelId.value.trim()
-    return pid && mid ? `${pid}/${mid}` : ''
+  const thinkingModeByModelKey = ref<Record<string, string>>(
+    loadStringMapFromStorage(localStorageKeys.chat.modelThinkingModeByKey, normalizeStringMapEntry),
+  )
+  const thinkingModePersister = createStringMapPersister({
+    storageKey: localStorageKeys.chat.modelThinkingModeByKey,
+    getValue: () => thinkingModeByModelKey.value,
   })
 
-  const selectedVariant = computed<string>({
-    get() {
-      const key = selectedModelKey.value
-      if (!key) return ''
-      const v = variantByModelKey.value[key]
-      return typeof v === 'string' ? v : ''
-    },
-    set(nextValue) {
-      const key = selectedModelKey.value
-      if (!key) return
-      const v = String(nextValue || '').trim()
+  const speedModeByModelKey = ref<Record<string, string>>(
+    loadStringMapFromStorage(localStorageKeys.chat.modelSpeedModeByKey, normalizeStringMapEntry),
+  )
+  const speedModePersister = createStringMapPersister({
+    storageKey: localStorageKeys.chat.modelSpeedModeByKey,
+    getValue: () => speedModeByModelKey.value,
+  })
 
-      const next = { ...variantByModelKey.value }
-      if (v) {
-        next[key] = v
-      } else {
-        delete next[key]
+  const selectedModelSlug = computed(() =>
+    encodeModelSelectionKey({
+      provider: selectedProviderId.value,
+      adapter: selectedAdapterId.value,
+      model: selectedModelId.value,
+    }),
+  )
+  const selectedModelKey = selectedModelSlug
+
+  const selectedModelMeta = computed<ProviderModel | null>(() =>
+    modelMetaFor(selectedProviderId.value, selectedModelId.value, selectedAdapterId.value),
+  )
+
+  const modelSlugOptions = computed<ModelSlugOption[]>(() => {
+    const list: ModelSlugOption[] = []
+    for (const provider of providers.value) {
+      for (const model of provider.models) {
+        const adapterId = text(model.adapter_id)
+        const value = encodeModelSelectionKey({ provider: provider.id, adapter: adapterId, model: model.id })
+        if (!value) continue
+        list.push({
+          value,
+          label: text(model.display_name) || model.id,
+          providerId: provider.id,
+          adapterId,
+          modelId: model.id,
+          description: adapterId ? `${provider.id} / ${adapterId}` : provider.id,
+        })
       }
-      variantByModelKey.value = next
-      persistVariantByModelSoon()
-    },
+    }
+    const selected = selectedModelSlug.value
+    if (selected && !list.some((option) => option.value === selected)) {
+      list.push({
+        value: selected,
+        label: selectedModelId.value,
+        providerId: selectedProviderId.value,
+        adapterId: selectedAdapterId.value,
+        modelId: selectedModelId.value,
+        description: selectedAdapterId.value
+          ? `${selectedProviderId.value} / ${selectedAdapterId.value}`
+          : selectedProviderId.value,
+      })
+    }
+    return list.sort((left, right) =>
+      `${left.providerId}/${left.adapterId}/${left.label}`.localeCompare(
+        `${right.providerId}/${right.adapterId}/${right.label}`,
+      ),
+    )
   })
 
-  const {
-    agentSource,
-    providerSource,
-    modelSource,
-    variantSource,
-    setAgent,
-    setProvider,
-    setModel,
-    setVariant,
-    resetSelectionForSessionSwitch,
-  } = useModelSelectionStateMachine({
-    selectedAgent,
-    selectedProviderId,
-    selectedModelId,
-    selectedVariant,
-    ensureAgentOption: (name: string) => {
-      const label = name.trim()
-      if (!label) return
-      if (agents.value.some((agent) => agent.name === label)) return
-      agents.value = [...agents.value, { name: label }]
-    },
-    ensureProviderOption: (providerId: string) => {
-      const label = providerId.trim()
-      if (!label) return
-      if (providers.value.some((provider) => provider.id === label)) return
-      providers.value = [...providers.value, { id: label, name: label, models: {} }]
-    },
+  const filteredModelSlugOptions = computed(() => {
+    const query = modelPickerQuery.value.trim().toLowerCase()
+    if (!query) return modelSlugOptions.value
+    return modelSlugOptions.value.filter((option) =>
+      `${option.label} ${option.providerId} ${option.adapterId} ${option.modelId}`.toLowerCase().includes(query),
+    )
   })
 
-  const {
-    selectedModelSlug,
-    modelSlugOptions,
-    filteredModelSlugOptions,
-    filteredAgentsForPicker,
-    variantOptions,
-    hasVariantsForSelection,
-    agentChipLabel,
-    modelChipLabel,
-    modelChipLabelMobile,
-    variantChipLabel,
-    agentHint,
-    modelHint,
-    variantHint,
-  } = useModelSelectionViewState({
-    providers,
-    agents,
-    selectedProviderId,
-    selectedModelId,
-    selectedAgent,
-    selectedVariant,
-    modelPickerQuery,
-    agentPickerQuery,
-    effectiveDefaults,
-    agentSource,
-    modelSource,
-    variantSource,
-    modelMetaFor,
+  const thinkingModeOptions = computed(() =>
+    withSelectedMode(thinkingModeOptionsForModel(selectedModelMeta.value), selectedThinkingMode.value),
+  )
+  const speedModeOptions = computed(() =>
+    withSelectedMode(speedModeOptionsForModel(selectedModelMeta.value), selectedSpeedMode.value),
+  )
+  const hasThinkingModesForSelection = computed(() => thinkingModeOptionsForModel(selectedModelMeta.value).length > 0)
+  const hasSpeedModesForSelection = computed(() => speedModeOptionsForModel(selectedModelMeta.value).length > 0)
+
+  const modelChipLabel = computed(() => {
+    const hasSelectedModel = Boolean(selectedProviderId.value && selectedModelId.value)
+    const provider = hasSelectedModel ? selectedProviderId.value : effectiveDefaults.value.provider
+    const adapter = hasSelectedModel ? selectedAdapterId.value : effectiveDefaults.value.adapter
+    const model = hasSelectedModel ? selectedModelId.value : effectiveDefaults.value.model
+    if (!provider || !model) return 'Model'
+    return adapter ? `${provider}/${adapter}/${model}` : `${provider}/${model}`
+  })
+  const modelChipLabelMobile = computed(() => selectedModelId.value || effectiveDefaults.value.model || 'Model')
+  const thinkingModeChipLabel = computed(() => {
+    const selected = selectedThinkingMode.value
+    return thinkingModeOptions.value.find((option) => option.value === selected)?.label || selected || 'Thinking'
+  })
+  const speedModeChipLabel = computed(() => {
+    const selected = selectedSpeedMode.value
+    return speedModeOptions.value.find((option) => option.value === selected)?.label || selected || 'Speed'
   })
 
-  const { closeComposerPicker, toggleComposerPicker } = useModelSelectionPickerUi({
+  const modelHint = computed(() => {
+    if (!selectedProviderId.value || !selectedModelId.value) return 'No default model configured on the Agena server'
+    if (modelSource.value === 'manual') return ''
+    return modelSource.value === 'auto'
+      ? 'Using the only configured model'
+      : `Using Agena model: ${modelChipLabel.value}`
+  })
+  const thinkingModeHint = computed(() =>
+    thinkingModeSource.value === 'manual' || !selectedThinkingMode.value
+      ? ''
+      : `Using thinking mode: ${selectedThinkingMode.value}`,
+  )
+  const speedModeHint = computed(() =>
+    speedModeSource.value === 'manual' || !selectedSpeedMode.value
+      ? ''
+      : `Using speed mode: ${selectedSpeedMode.value}`,
+  )
+
+  const picker = useModelSelectionPickerUi({
     composerControlsRef,
     composerPickerOpen,
     composerPickerStyle,
-    agentTriggerRef,
     modelTriggerRef,
-    variantTriggerRef,
+    thinkingTriggerRef,
+    speedTriggerRef,
     modelPickerQuery,
-    agentPickerQuery,
     onOpenComposerPicker,
     commandOpen,
     commandQuery,
@@ -231,276 +263,252 @@ export function useChatModelSelection(opts: {
   })
 
   function activeSessionId(): string {
-    return String(chat.selectedSessionId || '').trim()
+    return text(chat.selectedSessionId)
   }
 
-  function readSessionManualModelPairForSession(sessionId: string): { provider: string; model: string } {
-    return readSessionManualModelPair(sessionManualModelBySession.value, sessionId)
+  function setModelSelection(
+    selection: { provider: string; adapter?: string; model: string },
+    source: typeof modelSource.value,
+  ) {
+    selectedProviderId.value = text(selection.provider)
+    selectedAdapterId.value = text(selection.adapter)
+    selectedModelId.value = text(selection.model)
+    modelSource.value = selectedProviderId.value && selectedModelId.value ? source : 'empty'
   }
 
-  function saveSessionManualModelPair(sessionId: string, provider: string, model: string) {
-    const next = writeSessionManualModelPair(sessionManualModelBySession.value, sessionId, provider, model)
-    if (next === sessionManualModelBySession.value) return
-    sessionManualModelBySession.value = next
-    persistSessionManualModelSoon()
+  function singletonAvailableModel() {
+    const all = modelSlugOptions.value
+    return all.length === 1 ? parseModelSlug(all[0]?.value || '') : { provider: '', adapter: '', model: '' }
   }
 
-  function clearSessionManualModelPair(sessionId: string) {
-    const next = removeSessionManualModelPair(sessionManualModelBySession.value, sessionId)
-    if (next === sessionManualModelBySession.value) return
-    sessionManualModelBySession.value = next
-    persistSessionManualModelSoon()
-  }
-
-  function singletonAvailableModelPair(): { provider: string; model: string } {
-    let onlyProvider = ''
-    let onlyModel = ''
-    let count = 0
-
-    for (const provider of providers.value) {
-      const providerId = String(provider.id || '').trim()
-      if (!providerId) continue
-      const ids = modelIdsFromProviderModels(provider.models)
-      for (const modelIdRaw of ids) {
-        const modelId = String(modelIdRaw || '').trim()
-        if (!modelId) continue
-        count += 1
-        if (count > 1) return { provider: '', model: '' }
-        onlyProvider = providerId
-        onlyModel = modelId
-      }
-    }
-
-    if (count === 1) return { provider: onlyProvider, model: onlyModel }
-    return { provider: '', model: '' }
-  }
-
-  function readRunConfigSelection(): { agent: string; provider: string; model: string; variant: string } {
+  function sessionRunSelection(): SessionSelection {
     return readSessionRunConfigSelection(chat.selectedSessionRunConfig)
   }
 
-  function applyAgentSelection(opts: {
-    includeSessionLayers: boolean
-    runConfig: { agent: string }
-    derived: { agent: string }
-  }) {
-    if (agentSource.value === 'manual') return
+  function resolveModelSelection(includeSessionLayers: boolean) {
+    const sessionId = includeSessionLayers ? activeSessionId() : ''
+    const candidates = includeSessionLayers
+      ? [
+          readSessionManualModelPair(sessionManualModelBySession.value, sessionId),
+          sessionRunSelection(),
+          deriveSessionSelectionFromMessages(chat.messages),
+        ]
+      : []
+    for (const candidate of candidates) {
+      if (candidate.provider && candidate.model) {
+        setModelSelection(candidate, 'session')
+        return
+      }
+    }
 
-    const resolved = resolveAgentSelection({
-      includeSessionLayers: opts.includeSessionLayers,
-      runConfigAgent: opts.runConfig.agent,
-      derivedAgent: opts.derived.agent,
-      projectDefaultAgent: projectConfigDefaults.value.defaultAgent,
-      userDefaultAgent: userConfigDefaults.value.defaultAgent,
-      fallbackAgent: fallbackAgent.value,
-    })
-    setAgent(resolved.value, resolved.source)
+    const defaults = effectiveDefaults.value
+    if (defaults.provider && defaults.model) {
+      setModelSelection(defaults, 'default')
+      return
+    }
+    const singleton = singletonAvailableModel()
+    if (singleton.provider && singleton.model) {
+      setModelSelection(singleton, 'auto')
+      return
+    }
+    setModelSelection({ provider: '', adapter: '', model: '' }, 'empty')
   }
 
-  function applyModelSelection(opts: {
-    includeSessionLayers: boolean
-    sessionId: string
-    runConfig: { provider: string; model: string }
-    derived: { provider: string; model: string }
-  }) {
-    if (providerSource.value === 'manual' || modelSource.value === 'manual') return
-
-    const resolved = resolveModelSelection({
-      includeSessionLayers: opts.includeSessionLayers,
-      sessionManual: readSessionManualModelPairForSession(opts.sessionId),
-      sessionRunConfig: opts.runConfig,
-      sessionDerived: opts.derived,
-      projectDefault: {
-        provider: projectConfigDefaults.value.defaultProvider,
-        model: projectConfigDefaults.value.defaultModel,
-      },
-      userDefault: {
-        provider: userConfigDefaults.value.defaultProvider,
-        model: userConfigDefaults.value.defaultModel,
-      },
-      opencodeDefault: fallbackProviderModel.value,
-      singletonAvailable: singletonAvailableModelPair(),
-    })
-
-    if (resolved.provider && resolved.model) {
-      setProvider(resolved.provider, resolved.source)
-      setModel(resolved.model, resolved.source)
+  function resolveModes(includeSessionLayers: boolean) {
+    const key = selectedModelKey.value
+    if (!key) {
+      selectedThinkingMode.value = ''
+      selectedSpeedMode.value = ''
+      thinkingModeSource.value = 'empty'
+      speedModeSource.value = 'empty'
       return
     }
 
-    setProvider('', 'empty')
-    setModel('', 'empty')
-  }
-
-  function applyVariantSelection(opts: {
-    includeSessionLayers: boolean
-    runConfig: { variant: string }
-    derived: { variant: string }
-  }) {
-    if (variantSource.value === 'manual') return
-
-    const resolved = resolveVariantSelection({
-      includeSessionLayers: opts.includeSessionLayers,
-      runConfigVariant: opts.runConfig.variant,
-      derivedVariant: opts.derived.variant,
-    })
-    if (resolved.source === 'session') {
-      setVariant(resolved.value, 'session')
-      return
+    const run = sessionRunSelection()
+    const current = {
+      provider: selectedProviderId.value,
+      adapter: selectedAdapterId.value,
+      model: selectedModelId.value,
     }
+    const runMatches = includeSessionLayers && sameModel(run, current)
+    const defaultsMatch = sameModel(effectiveDefaults.value, current)
 
-    variantSource.value = 'empty'
+    const savedThinking = text(thinkingModeByModelKey.value[key])
+    const runThinking = runMatches ? run.thinkingMode : ''
+    const configuredThinking = defaultsMatch ? effectiveDefaults.value.thinkingMode : ''
+    const modelThinking = defaultModeValue(thinkingModeOptionsForModel(selectedModelMeta.value))
+    selectedThinkingMode.value = savedThinking || runThinking || configuredThinking || modelThinking
+    thinkingModeSource.value = savedThinking
+      ? 'manual'
+      : runThinking
+        ? 'session'
+        : selectedThinkingMode.value
+          ? 'default'
+          : 'empty'
+
+    const savedSpeed = text(speedModeByModelKey.value[key])
+    const runSpeed = runMatches ? run.speedMode : ''
+    const configuredSpeed = defaultsMatch ? effectiveDefaults.value.speedMode : ''
+    const modelSpeed = defaultModeValue(speedModeOptionsForModel(selectedModelMeta.value))
+    selectedSpeedMode.value = savedSpeed || runSpeed || configuredSpeed || modelSpeed
+    speedModeSource.value = savedSpeed ? 'manual' : runSpeed ? 'session' : selectedSpeedMode.value ? 'default' : 'empty'
   }
 
   function applyResolvedSelection(includeSessionLayers: boolean) {
-    const runConfig = readRunConfigSelection()
-    const derived = includeSessionLayers
-      ? deriveSessionSelection()
-      : { agent: '', provider: '', model: '', variant: '' }
-    const sessionId = includeSessionLayers ? activeSessionId() : ''
-
-    applyAgentSelection({ includeSessionLayers, runConfig, derived })
-    applyModelSelection({ includeSessionLayers, sessionId, runConfig, derived })
-    applyVariantSelection({ includeSessionLayers, runConfig, derived })
-  }
-
-  function applyOpencodeDefaults() {
-    applyResolvedSelection(false)
-  }
-
-  function chooseAgent(name: string) {
-    setAgent(name, 'manual')
-    closeComposerPicker()
-  }
-
-  function chooseAgentDefault() {
-    setAgent('', 'empty')
-    closeComposerPicker()
-    applyOpencodeDefaults()
-  }
-
-  function chooseVariant(value: string) {
-    setVariant(value, 'manual')
-    closeComposerPicker()
-  }
-
-  function chooseVariantDefault() {
-    setVariant('', 'empty')
-    closeComposerPicker()
-    applyOpencodeDefaults()
-  }
-
-  function chooseModelSlug(value: string) {
-    const parsed = parseModelSlug(value)
-    if (!parsed.provider || !parsed.model) return
-
-    setProvider(parsed.provider, 'manual')
-    setModel(parsed.model, 'manual')
-    const sid = activeSessionId()
-    if (sid) saveSessionManualModelPair(sid, parsed.provider, parsed.model)
-    closeComposerPicker()
-  }
-
-  function chooseModelDefault() {
-    setProvider('', 'empty')
-    setModel('', 'empty')
-    const sid = activeSessionId()
-    if (sid) clearSessionManualModelPair(sid)
-    closeComposerPicker()
-    applyOpencodeDefaults()
-  }
-
-  function deriveSessionSelection(): { agent: string; provider: string; model: string; variant: string } {
-    return deriveSessionSelectionFromMessages(chat.messages)
+    resolveModelSelection(includeSessionLayers)
+    resolveModes(includeSessionLayers)
   }
 
   function applySessionSelection() {
-    if (!chat.selectedSessionId) return
-    applyResolvedSelection(true)
+    applyResolvedSelection(Boolean(chat.selectedSessionId))
   }
 
-  async function loadProvidersAndAgents() {
-    await loadCatalogProvidersAndAgents()
-    applyOpencodeDefaults()
+  function resetSelectionForSessionSwitch() {
+    selectedProviderId.value = ''
+    selectedAdapterId.value = ''
+    selectedModelId.value = ''
+    selectedThinkingMode.value = ''
+    selectedSpeedMode.value = ''
+    modelSource.value = 'empty'
+    thinkingModeSource.value = 'empty'
+    speedModeSource.value = 'empty'
   }
 
-  // Keep model selection consistent with provider.
-  watch(
-    () => selectedProviderId.value,
-    () => {
-      // Reset model if provider changed and the current selection is no longer valid.
-      const providerObj = providers.value.find((p) => p.id === selectedProviderId.value)
-      const ids = modelIdsFromProviderModels(providerObj?.models)
-      if (selectedModelId.value && ids.length > 0 && !ids.includes(selectedModelId.value)) {
-        selectedModelId.value = ''
-      }
-    },
-  )
+  function chooseModelSlug(value: string) {
+    const selection = parseModelSlug(value)
+    if (!selection.provider || !selection.model) return
+    setModelSelection(selection, 'manual')
+    const sessionId = activeSessionId()
+    if (sessionId) {
+      sessionManualModelBySession.value = writeSessionManualModelPair(
+        sessionManualModelBySession.value,
+        sessionId,
+        selection.provider,
+        selection.adapter,
+        selection.model,
+      )
+      sessionManualModelPersister.persistSoon()
+    }
+    resolveModes(false)
+    picker.closeComposerPicker()
+  }
 
-  watch(
-    () => `${selectedProviderId.value}/${selectedModelId.value}`,
-    () => {
-      // Variant selection is per-model; don't let a "manual" source leak across model switches.
-      if (variantSource.value === 'manual') variantSource.value = 'empty'
-    },
-  )
+  function chooseModelDefault() {
+    const sessionId = activeSessionId()
+    if (sessionId) {
+      sessionManualModelBySession.value = removeSessionManualModelPair(sessionManualModelBySession.value, sessionId)
+      sessionManualModelPersister.persistSoon()
+    }
+    applyResolvedSelection(false)
+    picker.closeComposerPicker()
+  }
+
+  function chooseThinkingMode(value: string) {
+    const key = selectedModelKey.value
+    const mode = text(value)
+    if (!key || !mode) return
+    thinkingModeByModelKey.value = { ...thinkingModeByModelKey.value, [key]: mode }
+    thinkingModePersister.persistSoon()
+    selectedThinkingMode.value = mode
+    thinkingModeSource.value = 'manual'
+    picker.closeComposerPicker()
+  }
+
+  function chooseThinkingModeDefault() {
+    const key = selectedModelKey.value
+    if (key && Object.prototype.hasOwnProperty.call(thinkingModeByModelKey.value, key)) {
+      const next = { ...thinkingModeByModelKey.value }
+      delete next[key]
+      thinkingModeByModelKey.value = next
+      thinkingModePersister.persistSoon()
+    }
+    selectedThinkingMode.value = ''
+    thinkingModeSource.value = 'empty'
+    resolveModes(false)
+    picker.closeComposerPicker()
+  }
+
+  function chooseSpeedMode(value: string) {
+    const key = selectedModelKey.value
+    const mode = text(value)
+    if (!key || !mode) return
+    speedModeByModelKey.value = { ...speedModeByModelKey.value, [key]: mode }
+    speedModePersister.persistSoon()
+    selectedSpeedMode.value = mode
+    speedModeSource.value = 'manual'
+    picker.closeComposerPicker()
+  }
+
+  function chooseSpeedModeDefault() {
+    const key = selectedModelKey.value
+    if (key && Object.prototype.hasOwnProperty.call(speedModeByModelKey.value, key)) {
+      const next = { ...speedModeByModelKey.value }
+      delete next[key]
+      speedModeByModelKey.value = next
+      speedModePersister.persistSoon()
+    }
+    selectedSpeedMode.value = ''
+    speedModeSource.value = 'empty'
+    resolveModes(false)
+    picker.closeComposerPicker()
+  }
+
+  async function loadProvidersAndModels() {
+    await catalog.loadProvidersAndModels()
+    applySessionSelection()
+  }
 
   watch(
     () => chat.selectedSessionRunConfig?.at ?? null,
-    () => {
-      applySessionSelection()
-    },
+    () => applySessionSelection(),
     { immediate: true },
   )
-
   watch(
     () => chat.messages.length,
-    () => {
-      applySessionSelection()
-    },
+    () => applySessionSelection(),
   )
 
   return {
     providers,
-    agents,
     catalogLoading,
-    selectedProviderId,
-    selectedModelId,
-    selectedAgent,
-    selectedVariant,
+    catalogError,
+    runtimeDefaultSelection,
     effectiveDefaults,
-    shareDisabled,
-    modelMetaFor,
-
-    composerPickerStyle,
-    toggleComposerPicker,
-    composerPickerOpen,
-    modelPickerQuery,
-    agentPickerQuery,
-
+    selectedProviderId,
+    selectedAdapterId,
+    selectedModelId,
+    selectedThinkingMode,
+    selectedSpeedMode,
+    modelSource,
+    thinkingModeSource,
+    speedModeSource,
     selectedModelSlug,
     modelSlugOptions,
     filteredModelSlugOptions,
-    chooseModelSlug,
-    chooseModelDefault,
-    filteredAgentsForPicker,
-    chooseAgent,
-    chooseAgentDefault,
-    variantOptions,
-    hasVariantsForSelection,
-    chooseVariant,
-    chooseVariantDefault,
-
-    agentHint,
-    modelHint,
-    variantHint,
+    thinkingModeOptions,
+    speedModeOptions,
+    hasThinkingModesForSelection,
+    hasSpeedModesForSelection,
     modelChipLabel,
     modelChipLabelMobile,
-    agentChipLabel,
-    variantChipLabel,
-
+    thinkingModeChipLabel,
+    speedModeChipLabel,
+    modelHint,
+    thinkingModeHint,
+    speedModeHint,
+    modelMetaFor,
+    composerPickerOpen,
+    composerPickerStyle,
+    modelPickerQuery,
+    toggleComposerPicker: picker.toggleComposerPicker,
+    chooseModelSlug,
+    chooseModelDefault,
+    chooseThinkingMode,
+    chooseThinkingModeDefault,
+    chooseSpeedMode,
+    chooseSpeedModeDefault,
     resetSelectionForSessionSwitch,
     applySessionSelection,
-    loadProvidersAndAgents,
+    loadProvidersAndModels,
   }
 }

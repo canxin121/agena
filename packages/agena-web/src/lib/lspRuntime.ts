@@ -13,6 +13,8 @@ export type LspRuntimeItem = {
   rootDir: string
   transport: string
   sessionID: string
+  fileExtensions: string[]
+  rootMarkers: string[]
 }
 
 const RUNTIME_LIST_KEYS = ['items', 'servers', 'list'] as const
@@ -56,6 +58,10 @@ function resolveRawRuntimeList(payload: LspRuntimeListResponse, activeSessionId:
   const root = asRecord(payload)
   if (!root) return []
 
+  const operator = asRecord(root.operator)
+  const runtimeLsp = asRecord(operator?.lsp) || asRecord(root.lsp)
+  if (runtimeLsp && Array.isArray(runtimeLsp.servers)) return runtimeLsp.servers
+
   if (activeSessionId) {
     const scopedPayload = root[activeSessionId]
     if (Array.isArray(scopedPayload)) return scopedPayload
@@ -93,10 +99,16 @@ export function normalizeLspRuntimeList(
       return {
         id: id || name,
         name,
-        status: pickStatus(rec),
+        status: pickString(rec, ['command']) && !pickString(rec, ['status', 'state']) ? 'configured' : pickStatus(rec),
         rootDir: pickString(rec, ['rootDir', 'root', 'workspaceRoot', 'workspace', 'directory']),
-        transport: pickString(rec, ['transport', 'connection', 'mode']),
+        transport: pickString(rec, ['transport', 'connection', 'mode', 'command']),
         sessionID: pickSessionID(rec),
+        fileExtensions: Array.isArray(rec.file_extensions)
+          ? rec.file_extensions.map((value) => String(value || '').trim()).filter(Boolean)
+          : [],
+        rootMarkers: Array.isArray(rec.root_markers)
+          ? rec.root_markers.map((value) => String(value || '').trim()).filter(Boolean)
+          : [],
       }
     })
     .filter((item): item is LspRuntimeItem => Boolean(item))
@@ -110,7 +122,7 @@ export function runtimeStatusTone(status: string): 'ok' | 'warn' | 'idle' {
   const value = String(status || '')
     .trim()
     .toLowerCase()
-  if (value === 'connected' || value === 'running' || value === 'ready') return 'ok'
+  if (value === 'connected' || value === 'running' || value === 'ready' || value === 'configured') return 'ok'
   if (value === 'error' || value === 'failed' || value === 'disconnected' || value === 'stopped') return 'warn'
   return 'idle'
 }

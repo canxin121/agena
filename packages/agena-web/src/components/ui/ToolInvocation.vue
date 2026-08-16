@@ -29,6 +29,7 @@ import { buildVirtualMonacoDiffModel } from '@/features/git/diff/unifiedDiff'
 import type { GitDiffMeta } from '@/types/git'
 import { useChatStore } from '@/stores/chat'
 import { formatTimeHM } from '@/i18n/intl'
+import { normalizeChatToolActivityId } from '@/lib/chatActivity'
 import { resolveToolInputDisplay } from './toolInvocationInput'
 
 type ToolValue = unknown
@@ -177,6 +178,7 @@ const toolName = computed(() => {
   const value = partRecord.value.tool
   return typeof value === 'string' && value.trim() ? value : 'unknown'
 })
+const toolKind = computed(() => normalizeChatToolActivityId(toolName.value))
 const state = computed(() => asRecord(partRecord.value.state))
 const status = computed(() => state.value.status)
 const input = computed(() => asRecord(state.value.input))
@@ -193,7 +195,7 @@ const metadata = computed(() => {
 })
 
 const displayName = computed(() => {
-  const tool = toolName.value.toLowerCase()
+  const tool = toolKind.value
   if (tool === 'bash') return t('chat.messages.activity.toolInvocation.toolNames.bash')
   if (tool === 'edit' || tool === 'multiedit') return t('chat.messages.activity.toolInvocation.toolNames.edit')
   if (tool === 'apply_patch') return t('chat.messages.activity.toolInvocation.toolNames.applyPatch')
@@ -215,7 +217,7 @@ const displayName = computed(() => {
 })
 
 const icon = computed(() => {
-  const t = toolName.value.toLowerCase()
+  const t = toolKind.value
   if (['edit', 'multiedit', 'apply_patch', 'str_replace'].includes(t)) return RiPencilLine
   if (['write', 'create', 'file_write'].includes(t)) return RiFileEditLine
   if (['read', 'view', 'file_read', 'cat'].includes(t)) return RiFileTextLine
@@ -265,7 +267,7 @@ function summarizeUnknownInputValue(value: ToolValue): string {
 
 const summary = computed(() => {
   const inp = input.value && typeof input.value === 'object' ? input.value : {}
-  const tool = toolName.value.toLowerCase()
+  const tool = toolKind.value
 
   // Prefer upstream title/label when available.
   const title = typeof state.value?.title === 'string' ? state.value.title.trim() : ''
@@ -386,7 +388,7 @@ const disclosureStatus = computed(() => {
 
 // Helper to determine language for CodeBlock
 const outputLang = computed(() => {
-  const t = toolName.value.toLowerCase()
+  const t = toolKind.value
   if (t === 'read') {
     const rawPath = input.value.filePath ?? input.value.file_path
     const path = typeof rawPath === 'string' ? rawPath : ''
@@ -407,7 +409,7 @@ const outputLang = computed(() => {
 })
 
 const activityDiffPreview = computed(() => {
-  const t = toolName.value.toLowerCase()
+  const t = toolKind.value
   if (!['edit', 'multiedit', 'apply_patch', 'str_replace', 'str_replace_based_edit_tool'].includes(t)) return null
 
   const meta = metadata.value
@@ -504,7 +506,7 @@ const displayOutput = computed(() => {
   return clean.trim()
 })
 
-const displayInputData = computed(() => resolveToolInputDisplay(toolName.value, input.value))
+const displayInputData = computed(() => resolveToolInputDisplay(toolKind.value, input.value))
 
 const shouldShowInput = computed(() => {
   return Boolean(displayInputData.value.text)

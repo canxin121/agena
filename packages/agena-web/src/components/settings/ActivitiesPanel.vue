@@ -8,7 +8,19 @@ import IconButton from '@/components/ui/IconButton.vue'
 import { apiJson } from '../../lib/api'
 import { useToastsStore } from '../../stores/toasts'
 
-type Activity = Record<string, unknown>
+type ActivityControl = 'stop' | 'pause' | 'resume' | 'delete' | 'dismiss'
+
+type Activity = {
+  id: string
+  kind: string
+  status: string
+  title: string
+  description: string
+  session_id?: number | null
+  created_at_ms: number
+  message?: string | null
+  controls?: ActivityControl[]
+}
 
 const toasts = useToastsStore()
 
@@ -18,11 +30,12 @@ const activities = ref<Activity[]>([])
 const busyId = ref<string | null>(null)
 
 const sortedActivities = computed(() =>
-  [...activities.value].sort((a, b) => String(a.created_at || a.id || '').localeCompare(String(b.created_at || b.id || ''))),
+  [...activities.value].sort((a, b) => Number(b.created_at_ms || 0) - Number(a.created_at_ms || 0)),
 )
 
-function fieldNames(activity: Activity): string[] {
-  return ['kind', 'session_id', 'status', 'created_at'].filter((key) => {
+function fieldNames(activity: Activity): Array<'kind' | 'session_id' | 'status'> {
+  const keys: Array<'kind' | 'session_id' | 'status'> = ['kind', 'session_id', 'status']
+  return keys.filter((key) => {
     const value = activity[key]
     return value !== undefined && value !== null && String(value).trim().length > 0
   })
@@ -38,7 +51,19 @@ function displayValue(value: unknown): string {
 }
 
 function activityId(activity: Activity): string {
-  return String(activity.id ?? '')
+  return String(activity.id || '')
+}
+
+function activityControls(activity: Activity): ActivityControl[] {
+  return Array.isArray(activity.controls) ? activity.controls : []
+}
+
+function formatCreatedAt(value: number): string {
+  return Number.isFinite(value) && value > 0 ? new Date(value).toLocaleString() : ''
+}
+
+function controlLabel(control: ActivityControl): string {
+  return control.charAt(0).toUpperCase() + control.slice(1)
 }
 
 async function refresh() {
@@ -55,12 +80,12 @@ async function refresh() {
   }
 }
 
-async function runAction(id: string, action: 'stop' | 'delete' | 'dismiss') {
+async function runAction(id: string, action: ActivityControl) {
   if (!id || busyId.value) return
   busyId.value = id
   try {
     await apiJson(`/api/v1/activities/${encodeURIComponent(id)}/${action}`, { method: 'POST' })
-    toasts.push('success', `Activity ${action}d`)
+    toasts.push('success', `${controlLabel(action)} requested`)
     await refresh()
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -99,10 +124,15 @@ onMounted(() => {
 
     <div class="grid gap-3">
       <div v-if="loading" class="text-sm text-muted-foreground">Loading activities...</div>
-      <div v-else-if="error" class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+      <div
+        v-else-if="error"
+        class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+      >
         {{ error }}
       </div>
-      <div v-else-if="sortedActivities.length === 0" class="text-sm text-muted-foreground">No background activities.</div>
+      <div v-else-if="sortedActivities.length === 0" class="text-sm text-muted-foreground">
+        No background activities.
+      </div>
 
       <div v-else class="space-y-2">
         <div
@@ -112,32 +142,40 @@ onMounted(() => {
         >
           <div class="flex items-center justify-between gap-3">
             <div class="min-w-0">
-              <div class="font-mono text-sm font-semibold break-words">{{ activityId(activity) }}</div>
-              <div v-if="fieldNames(activity).length" class="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+              <div class="text-sm font-semibold break-words">{{ activity.title || activityId(activity) }}</div>
+              <div class="mt-0.5 font-mono text-[11px] text-muted-foreground break-all">{{ activityId(activity) }}</div>
+              <div v-if="activity.description" class="mt-1 text-xs text-muted-foreground break-words">
+                {{ activity.description }}
+              </div>
+              <div
+                v-if="fieldNames(activity).length"
+                class="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground"
+              >
                 <span v-for="key in fieldNames(activity)" :key="key" class="break-all">
                   {{ key }}: {{ displayValue(activity[key]) }}
                 </span>
+                <span v-if="formatCreatedAt(activity.created_at_ms)">{{
+                  formatCreatedAt(activity.created_at_ms)
+                }}</span>
+              </div>
+              <div v-if="activity.message" class="mt-1 text-xs text-muted-foreground break-words">
+                {{ activity.message }}
               </div>
             </div>
 
             <div class="flex shrink-0 items-center gap-1.5">
               <Button
+                v-for="control in activityControls(activity).filter((item) => item !== 'delete')"
+                :key="control"
                 variant="outline"
                 size="sm"
                 :disabled="busyId === activityId(activity)"
-                @click="runAction(activityId(activity), 'stop')"
+                @click="runAction(activityId(activity), control)"
               >
-                {{ busyId === activityId(activity) ? 'Working...' : 'Stop' }}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="busyId === activityId(activity)"
-                @click="runAction(activityId(activity), 'dismiss')"
-              >
-                Dismiss
+                {{ busyId === activityId(activity) ? 'Working...' : controlLabel(control) }}
               </Button>
               <ConfirmPopover
+                v-if="activityControls(activity).includes('delete')"
                 :title="'Delete activity?'"
                 :description="activityId(activity)"
                 :confirm-text="'Delete'"

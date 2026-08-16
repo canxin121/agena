@@ -8,13 +8,6 @@ function asRecord(value: JsonValue): JsonObject {
   return typeof value === 'object' && value !== null ? (value as JsonObject) : {}
 }
 
-type ModelSelectionForSessionActions = {
-  shareDisabled: Ref<boolean>
-  selectedProviderId: Ref<string>
-  selectedModelId: Ref<string>
-  effectiveDefaults: Ref<{ provider?: string; model?: string }>
-}
-
 type ToastKind = 'info' | 'success' | 'error'
 
 type ToastsLike = {
@@ -40,11 +33,8 @@ export function useChatSessionActions(opts: {
   toasts: ToastsLike
 
   sessionTitle: ComputedRef<string>
-  sessionShareUrl: ComputedRef<string>
   showThinking: Ref<boolean>
   showJustification: Ref<boolean>
-
-  modelSelection: ModelSelectionForSessionActions
 
   copyToClipboard: (text: string) => Promise<void>
 
@@ -53,15 +43,7 @@ export function useChatSessionActions(opts: {
 }) {
   const { t } = useI18n()
 
-  const {
-    chat,
-    toasts,
-    sessionTitle,
-    showThinking,
-    showJustification,
-    copyToClipboard,
-    onSessionForked,
-  } = opts
+  const { chat, toasts, sessionTitle, showThinking, showJustification, copyToClipboard, onSessionForked } = opts
 
   const renameDialogOpen = ref(false)
   const renameDraft = ref('')
@@ -158,7 +140,6 @@ export function useChatSessionActions(opts: {
     toasts.push('success', t('chat.toasts.transcriptExportedAs', { filename }))
   }
 
-  /** Agena has no share URLs; "share" becomes "fork this session". */
   async function handleForkSession() {
     const sid = chat.selectedSessionId
     if (!sid) return
@@ -170,7 +151,7 @@ export function useChatSessionActions(opts: {
         toasts.push('success', t('chat.toasts.sessionForked'))
         if (typeof onSessionForked === 'function') onSessionForked(createdId)
       } else {
-        toasts.push('success', t('chat.toasts.sessionShared'))
+        throw new Error('The server did not return a forked session.')
       }
     } catch (err) {
       toasts.push('error', err instanceof Error ? err.message : String(err))

@@ -87,7 +87,11 @@ export async function createTestHarness(
     messages?: Array<{ info?: Record<string, unknown> }>
   } = {},
 ) {
-  clearLocalStorageKeys([localStorageKeys.chat.modelVariantByKey, localStorageKeys.chat.sessionManualModelBySession])
+  clearLocalStorageKeys([
+    localStorageKeys.chat.modelThinkingModeByKey,
+    localStorageKeys.chat.modelSpeedModeByKey,
+    localStorageKeys.chat.sessionManualModelBySession,
+  ])
   const useChatModelSelection = await getUseChatModelSelection()
 
   const chat = reactive<ChatState>({
@@ -98,23 +102,14 @@ export async function createTestHarness(
 
   const selection = useChatModelSelection({
     chat,
-    ui: { isMobile: false, isMobilePointer: false },
-    opencodeConfig: {
-      data: null,
-      scope: 'user',
-      exists: null,
-      refresh: async () => {},
-    },
-    sessionDirectory: ref(''),
     composerControlsRef: ref(null),
     composerPickerOpen: ref(null),
     composerPickerStyle: ref({}),
-    agentTriggerRef: ref(null),
     modelTriggerRef: ref(null),
-    variantTriggerRef: ref(null),
+    thinkingTriggerRef: ref(null),
+    speedTriggerRef: ref(null),
     modelPickerQuery: ref(''),
-    agentPickerQuery: ref(''),
-    closeComposerActionMenu: () => {},
+    onOpenComposerPicker: () => {},
     commandOpen: ref(false),
     commandQuery: ref(''),
     commandIndex: ref(0),

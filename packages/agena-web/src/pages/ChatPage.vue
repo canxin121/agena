@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { RiFileTextLine, RiScissorsLine, RiSearchLine } from '@remixicon/vue'
+import { RiScissorsLine } from '@remixicon/vue'
 
 import ChatPageView from './chat/ChatPageView.vue'
 import type { ChatPageViewContext } from './chat/chatPageViewContext'
@@ -12,13 +12,10 @@ import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigat
 import { useChatStore } from '@/stores/chat'
 import { useDirectoryStore } from '@/stores/directory'
 import { useDirectorySessionStore } from '@/stores/directorySessionStore'
-import { useOpencodeConfigStore } from '@/stores/opencodeConfig'
-import { usePluginHostStore } from '@/stores/pluginHost'
 import { useSessionActivityStore } from '@/stores/sessionActivity'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import { useToastsStore } from '@/stores/toasts'
-import { resolveChatMounts, type ChatMount } from '@/plugins/host/mounts'
 
 import { useMessageStreaming } from '@/composables/chat/useMessageStreaming'
 import { useChatAttachments } from './chat/useChatAttachments'
@@ -41,6 +38,7 @@ import {
   DEFAULT_CHAT_ACTIVITY_EXPAND_KEYS,
   DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS,
   isKnownChatToolActivityType,
+  normalizeChatToolActivityId,
   normalizeChatActivityDefaultExpanded,
   normalizeChatToolActivityFilters,
   type ChatActivityExpandKey,
@@ -61,21 +59,31 @@ type OptionMenuExpose = {
 
 type OutgoingMessagePart =
   | { type: 'text'; text: string }
-  | { type: 'file'; mime: string; filename: string; url: string }
-  | { type: 'file'; mime: string; filename: string; serverPath: string }
+  | {
+      type: 'activity'
+      activity: {
+        id: string
+        payload: {
+          activity_type: 'resource'
+          kind: 'file' | 'image' | 'audio' | 'video' | 'pdf'
+          reference: { reference_type: 'workspace_path'; path: string }
+          name: string
+          media_type?: string
+          size_bytes?: number
+        }
+      }
+    }
 
 const route = useRoute()
 const router = useRouter()
 const chat = useChatStore()
 const directoryStore = useDirectoryStore()
 const directorySessions = useDirectorySessionStore()
-const opencodeConfig = useOpencodeConfigStore()
-const pluginHost = usePluginHostStore()
 const activity = useSessionActivityStore()
 const settings = useSettingsStore()
 const ui = useUiStore()
 const toasts = useToastsStore()
-const { t, locale } = useI18n()
+const { t } = useI18n()
 
 const orphanDraft = ref('')
 const draft = computed<string>({
@@ -131,18 +139,6 @@ const composerActionItems = computed<ComposerActionItem[]>(() => [
     icon: RiScissorsLine,
     disabled: !chat.selectedSessionId || compactBusy.value,
   },
-  {
-    id: 'init',
-    label: String(t('chat.composer.actions.init.label')),
-    description: String(t('chat.composer.actions.init.description')),
-    icon: RiFileTextLine,
-  },
-  {
-    id: 'review',
-    label: String(t('chat.composer.actions.review.label')),
-    description: String(t('chat.composer.actions.review.description')),
-    icon: RiSearchLine,
-  },
 ])
 
 const filteredComposerActionItems = computed<ComposerActionItem[]>(() => {
@@ -186,26 +182,19 @@ watch(
   },
   { immediate: true, deep: true },
 )
-const sessionShareUrl = computed(() => {
-  const s = asRecord(chat.selectedSession)
-  const share = getRecord(s, 'share')
-  const url = typeof share.url === 'string' ? share.url.trim() : ''
-  return url
-})
-
 const composerControlsRef = ref<HTMLDivElement | null>(null)
 const composerPickerRef = ref<OptionMenuExpose | null>(null)
-const composerPickerOpen = ref<null | 'agent' | 'model' | 'variant'>(null)
+const composerPickerOpen = ref<null | 'model' | 'thinking' | 'speed'>(null)
 const modelPickerQuery = ref('')
-const agentPickerQuery = ref('')
-const variantPickerQuery = ref('')
+const thinkingPickerQuery = ref('')
+const speedPickerQuery = ref('')
 
 const pageRef = ref<HTMLElement | null>(null)
 const composerBarRef = ref<HTMLElement | null>(null)
 
-const agentTriggerRef = ref<HTMLElement | null>(null)
 const modelTriggerRef = ref<HTMLElement | null>(null)
-const variantTriggerRef = ref<HTMLElement | null>(null)
+const thinkingTriggerRef = ref<HTMLElement | null>(null)
+const speedTriggerRef = ref<HTMLElement | null>(null)
 
 const composerPickerStyle = ref<Record<string, string>>({ left: '8px' })
 
@@ -215,8 +204,14 @@ const composerShellHeight = ref(0)
 
 let modelSelection: ReturnType<typeof useChatModelSelection>
 
-type ModelSlugPickerOption = { value?: string; providerId?: string; modelId?: string }
-type AgentPickerOption = { name?: string; description?: string }
+type ModelSlugPickerOption = {
+  value?: string
+  label?: string
+  providerId?: string
+  adapterId?: string
+  modelId?: string
+  description?: string
+}
 
 function getComposerTextareaEl(composer: ComposerExpose | null): HTMLTextAreaElement | null {
   const textarea = composer?.textareaEl
@@ -241,13 +236,9 @@ function getSelectedSessionRevertId(): string {
 }
 
 const chatCommands = useChatCommands({
-  sessionDirectory,
   draft,
   composerRef,
   composerPickerOpen,
-  getSelectedAgent: () => String(modelSelection?.selectedAgent?.value || ''),
-  setAgentFromCommand: (agent) => modelSelection?.chooseAgent?.(agent),
-  setModelSlugFromCommand: (slug) => modelSelection?.chooseModelSlug?.(slug),
   onSend: send,
 })
 
@@ -270,16 +261,13 @@ function handleDraftInput() {
 
 modelSelection = useChatModelSelection({
   chat,
-  opencodeConfig,
-  sessionDirectory,
   composerControlsRef,
   composerPickerOpen,
   composerPickerStyle,
-  agentTriggerRef,
   modelTriggerRef,
-  variantTriggerRef,
+  thinkingTriggerRef,
+  speedTriggerRef,
   modelPickerQuery,
-  agentPickerQuery,
   onOpenComposerPicker: () => {
     openComposerInputMenu('picker', {
       closeAttachments: closeAttachmentsPanel,
@@ -294,8 +282,8 @@ modelSelection = useChatModelSelection({
 
 const composerPickerTitle = computed(() => {
   if (composerPickerOpen.value === 'model') return String(t('chat.composer.picker.modelTitle'))
-  if (composerPickerOpen.value === 'agent') return String(t('chat.composer.picker.agentTitle'))
-  if (composerPickerOpen.value === 'variant') return String(t('chat.composer.picker.variantTitle'))
+  if (composerPickerOpen.value === 'thinking') return String(t('chat.composer.picker.thinkingTitle'))
+  if (composerPickerOpen.value === 'speed') return String(t('chat.composer.picker.speedTitle'))
   return String(t('chat.composer.picker.optionsTitle'))
 })
 
@@ -305,15 +293,15 @@ const composerPickerSearchable = computed(() => {
 
 const composerPickerSearchPlaceholder = computed(() => {
   if (composerPickerOpen.value === 'model') return String(t('chat.composer.picker.searchModels'))
-  if (composerPickerOpen.value === 'agent') return String(t('chat.composer.picker.searchAgents'))
-  if (composerPickerOpen.value === 'variant') return String(t('chat.composer.picker.searchVariants'))
+  if (composerPickerOpen.value === 'thinking') return String(t('chat.composer.picker.searchThinkingModes'))
+  if (composerPickerOpen.value === 'speed') return String(t('chat.composer.picker.searchSpeedModes'))
   return String(t('chat.composer.picker.searchOptions'))
 })
 
 const composerPickerQuery = computed(() => {
   if (composerPickerOpen.value === 'model') return modelPickerQuery.value
-  if (composerPickerOpen.value === 'agent') return agentPickerQuery.value
-  if (composerPickerOpen.value === 'variant') return variantPickerQuery.value
+  if (composerPickerOpen.value === 'thinking') return thinkingPickerQuery.value
+  if (composerPickerOpen.value === 'speed') return speedPickerQuery.value
   return ''
 })
 
@@ -323,12 +311,12 @@ function setComposerPickerQuery(value: string) {
     modelPickerQuery.value = next
     return
   }
-  if (composerPickerOpen.value === 'agent') {
-    agentPickerQuery.value = next
+  if (composerPickerOpen.value === 'thinking') {
+    thinkingPickerQuery.value = next
     return
   }
-  if (composerPickerOpen.value === 'variant') {
-    variantPickerQuery.value = next
+  if (composerPickerOpen.value === 'speed') {
+    speedPickerQuery.value = next
   }
 }
 
@@ -336,8 +324,8 @@ const composerPickerHelperText = computed(() => '')
 
 const composerPickerEmptyText = computed(() => {
   if (composerPickerOpen.value === 'model') return String(t('chat.composer.picker.emptyModels'))
-  if (composerPickerOpen.value === 'agent') return String(t('chat.composer.picker.emptyAgents'))
-  if (composerPickerOpen.value === 'variant') return String(t('chat.composer.picker.emptyVariants'))
+  if (composerPickerOpen.value === 'thinking') return String(t('chat.composer.picker.emptyThinkingModes'))
+  if (composerPickerOpen.value === 'speed') return String(t('chat.composer.picker.emptySpeedModes'))
   return String(t('chat.composer.picker.emptyOptions'))
 })
 
@@ -353,7 +341,7 @@ const composerPickerGroups = computed<OptionMenuGroup[]>(() => {
             id: 'model:default',
             label: String(t('chat.composer.model.autoDefault')),
             description: String(t('chat.composer.model.autoDefaultDescription')),
-            checked: !modelSelection.selectedModelSlug.value,
+            checked: modelSelection.modelSource.value === 'default' || modelSelection.modelSource.value === 'auto',
             keywords: 'auto default model',
           },
         ],
@@ -363,16 +351,18 @@ const composerPickerGroups = computed<OptionMenuGroup[]>(() => {
     const byProvider = new Map<string, OptionMenuItem[]>()
     for (const opt of modelSelection.filteredModelSlugOptions.value as ModelSlugPickerOption[]) {
       const providerId = String(opt?.providerId || '').trim() || String(t('common.other'))
+      const adapterId = String(opt?.adapterId || '').trim()
       const modelId = String(opt?.modelId || '').trim() || String(opt?.value || '').trim()
+      const label = String(opt?.label || '').trim() || modelId
       const value = String(opt?.value || '').trim()
       if (!value) continue
       const list = byProvider.get(providerId) || []
       list.push({
         id: `model:${value}`,
-        label: modelId || value,
-        description: providerId,
+        label: label || value,
+        description: adapterId ? `${adapterId} / ${modelId}` : modelId,
         checked: value === modelSelection.selectedModelSlug.value,
-        keywords: `${value} ${providerId} ${modelId}`,
+        keywords: `${value} ${providerId} ${adapterId} ${modelId} ${label}`,
         monospace: true,
       })
       byProvider.set(providerId, list)
@@ -391,71 +381,78 @@ const composerPickerGroups = computed<OptionMenuGroup[]>(() => {
     return groups
   }
 
-  if (composerPickerOpen.value === 'agent') {
-    return [
-      {
-        id: 'agent-default',
-        title: String(t('common.default')),
-        items: [
-          {
-            id: 'agent:default',
-            label: String(t('chat.composer.model.autoDefault')),
-            description: 'Let Agena choose the default agent',
-            checked: !modelSelection.selectedAgent.value,
-            keywords: 'auto default agent',
-          },
-        ],
-      },
-      {
-        id: 'agents',
-        title: 'Agents',
-        subtitle: `${modelSelection.filteredAgentsForPicker.value.length} available`,
-        items: (modelSelection.filteredAgentsForPicker.value as AgentPickerOption[]).map((agent) => ({
-          id: `agent:${agent.name}`,
-          label: String(agent.name || ''),
-          description: String(agent.description || ''),
-          checked: String(agent.name || '') === modelSelection.selectedAgent.value,
-          keywords: `${agent.name || ''} ${agent.description || ''}`,
-        })),
-      },
-    ]
-  }
-
-  if (composerPickerOpen.value === 'variant') {
-    const query = variantPickerQuery.value.trim().toLowerCase()
-    const variantItems = (modelSelection.variantOptions.value as string[])
-      .filter((variant) => {
+  if (composerPickerOpen.value === 'thinking') {
+    const query = thinkingPickerQuery.value.trim().toLowerCase()
+    const thinkingItems = modelSelection.thinkingModeOptions.value
+      .filter((option) => {
         if (!query) return true
-        return String(variant || '')
-          .toLowerCase()
-          .includes(query)
+        return `${option.label} ${option.value} ${option.description}`.toLowerCase().includes(query)
       })
-      .map((variant) => ({
-        id: `variant:${variant}`,
-        label: variant,
-        checked: variant === modelSelection.selectedVariant.value,
-        keywords: variant,
+      .map((option) => ({
+        id: `thinking:${option.value}`,
+        label: option.label,
+        description: option.description,
+        checked: option.value === modelSelection.selectedThinkingMode.value,
+        keywords: `${option.label} ${option.value} ${option.description}`,
       }))
 
     return [
       {
-        id: 'variant-default',
+        id: 'thinking-default',
         title: String(t('common.default')),
         items: [
           {
-            id: 'variant:default',
+            id: 'thinking:default',
             label: String(t('common.default')),
-            description: 'Use model default thinking profile',
-            checked: !modelSelection.selectedVariant.value,
-            keywords: 'default variant thinking',
+            description: String(t('chat.composer.model.defaultThinkingDescription')),
+            checked: modelSelection.thinkingModeSource.value !== 'manual',
+            keywords: 'default thinking mode',
           },
         ],
       },
       {
-        id: 'variants',
-        title: 'Variants',
-        subtitle: `${variantItems.length} available`,
-        items: variantItems,
+        id: 'thinking-modes',
+        title: String(t('chat.composer.picker.thinkingTitle')),
+        subtitle: String(t('chat.composer.picker.availableCount', { count: thinkingItems.length })),
+        items: thinkingItems,
+      },
+    ]
+  }
+
+  if (composerPickerOpen.value === 'speed') {
+    const query = speedPickerQuery.value.trim().toLowerCase()
+    const speedItems = modelSelection.speedModeOptions.value
+      .filter((option) => {
+        if (!query) return true
+        return `${option.label} ${option.value} ${option.description}`.toLowerCase().includes(query)
+      })
+      .map((option) => ({
+        id: `speed:${option.value}`,
+        label: option.label,
+        description: option.description,
+        checked: option.value === modelSelection.selectedSpeedMode.value,
+        keywords: `${option.label} ${option.value} ${option.description}`,
+      }))
+
+    return [
+      {
+        id: 'speed-default',
+        title: String(t('common.default')),
+        items: [
+          {
+            id: 'speed:default',
+            label: String(t('common.default')),
+            description: String(t('chat.composer.model.defaultSpeedDescription')),
+            checked: modelSelection.speedModeSource.value !== 'manual',
+            keywords: 'default speed mode',
+          },
+        ],
+      },
+      {
+        id: 'speed-modes',
+        title: String(t('chat.composer.picker.speedTitle')),
+        subtitle: String(t('chat.composer.picker.availableCount', { count: speedItems.length })),
+        items: speedItems,
       },
     ]
   }
@@ -464,24 +461,21 @@ const composerPickerGroups = computed<OptionMenuGroup[]>(() => {
 })
 
 const composerPickerLoading = computed(() => {
-  if (composerPickerOpen.value !== 'model' && composerPickerOpen.value !== 'agent') return false
-  return modelSelection.catalogLoading.value
+  return composerPickerOpen.value === 'model' && modelSelection.catalogLoading.value
 })
 
-const composerPickerRefreshable = computed(
-  () => composerPickerOpen.value === 'model' || composerPickerOpen.value === 'agent',
-)
+const composerPickerRefreshable = computed(() => composerPickerOpen.value === 'model')
 
 function refreshComposerPickerOptions() {
   if (!composerPickerRefreshable.value) return
-  void modelSelection.loadProvidersAndAgents()
+  void modelSelection.loadProvidersAndModels()
 }
 
 function closeComposerPickerMenu() {
   composerPickerOpen.value = null
   modelPickerQuery.value = ''
-  agentPickerQuery.value = ''
-  variantPickerQuery.value = ''
+  thinkingPickerQuery.value = ''
+  speedPickerQuery.value = ''
 }
 
 function closeAttachmentsPanel() {
@@ -516,24 +510,24 @@ function handleComposerPickerSelect(item: OptionMenuItem) {
     void modelSelection.chooseModelDefault()
     return
   }
-  if (id === 'agent:default') {
-    void modelSelection.chooseAgentDefault()
+  if (id === 'thinking:default') {
+    void modelSelection.chooseThinkingModeDefault()
     return
   }
-  if (id === 'variant:default') {
-    void modelSelection.chooseVariantDefault()
+  if (id === 'speed:default') {
+    void modelSelection.chooseSpeedModeDefault()
     return
   }
   if (id.startsWith('model:')) {
     void modelSelection.chooseModelSlug(id.slice('model:'.length))
     return
   }
-  if (id.startsWith('agent:')) {
-    void modelSelection.chooseAgent(id.slice('agent:'.length))
+  if (id.startsWith('thinking:')) {
+    void modelSelection.chooseThinkingMode(id.slice('thinking:'.length))
     return
   }
-  if (id.startsWith('variant:')) {
-    void modelSelection.chooseVariant(id.slice('variant:'.length))
+  if (id.startsWith('speed:')) {
+    void modelSelection.chooseSpeedMode(id.slice('speed:'.length))
   }
 }
 
@@ -693,30 +687,6 @@ const settingsData = computed<JsonObject>(() => asRecord(settings.data))
 
 const activityAutoCollapseOnIdle = computed(() => settingsData.value.chatActivityAutoCollapseOnIdle !== false)
 
-const chatMountsBySurface = computed(() => resolveChatMounts(pluginHost.manifestsById))
-
-function withChatMountContext(mounts: ChatMount[]): ChatMount[] {
-  const ctx: Record<string, string> = {}
-  const sid = String(chat.selectedSessionId || '').trim()
-  const cwd = String(sessionDirectory.value || '').trim()
-  const appLocale = String(locale.value || '').trim()
-  if (sid) ctx.sessionId = sid
-  if (cwd) ctx.cwd = cwd
-  if (appLocale) ctx.locale = appLocale
-
-  // Always return fresh mount objects so UI loaders can react to context changes.
-  return mounts.map((mount) => ({
-    ...mount,
-    context: ctx,
-  }))
-}
-
-const chatSidebarPluginMounts = computed(() => withChatMountContext(chatMountsBySurface.value['chat.sidebar']))
-
-const chatOverlayBottomPluginMounts = computed(() =>
-  withChatMountContext(chatMountsBySurface.value['chat.overlay.bottom']),
-)
-
 const activityDefaultExpandedKeys = computed<ChatActivityExpandKey[]>(() => {
   const s = settingsData.value
   if (s && Object.prototype.hasOwnProperty.call(s, 'chatActivityDefaultExpanded')) {
@@ -747,7 +717,7 @@ function activityInitiallyExpandedForPart(part: JsonObject): boolean {
   const key = activityExpandKeyForPart(part)
   if (!key) return false
   if (key === 'tool') {
-    const toolId = typeof part?.tool === 'string' ? part.tool.trim().toLowerCase() : ''
+    const toolId = normalizeChatToolActivityId(part?.tool)
     if (!toolId) return activityDefaultExpandedToolSet.value.has('unknown')
     if (activityDefaultExpandedToolSet.value.has(toolId)) return true
     if (isKnownChatToolActivityType(toolId)) return false
@@ -787,15 +757,8 @@ const sessionActions = useChatSessionActions({
   chat,
   toasts,
   sessionTitle,
-  sessionShareUrl,
   showThinking,
   showJustification,
-  modelSelection: {
-    shareDisabled: modelSelection.shareDisabled,
-    selectedProviderId: modelSelection.selectedProviderId,
-    selectedModelId: modelSelection.selectedModelId,
-    effectiveDefaults: modelSelection.effectiveDefaults,
-  },
   copyToClipboard,
   onSessionForked: (newId) => {
     void router.push('/chat')
@@ -1019,15 +982,10 @@ const {
 } = runUi
 
 function handleSessionActionRequest(actionId: string) {
-  const insertBuiltInCommand = (name: string) => {
-    insertCommand({ name, isBuiltIn: true, scope: 'session' })
-  }
-
   switch (actionId) {
     case 'rename':
       openRenameDialog()
       break
-    case 'share':
     case 'fork':
       void handleForkSession()
       break
@@ -1039,12 +997,6 @@ function handleSessionActionRequest(actionId: string) {
       break
     case 'compact':
       void handleCompactSession()
-      break
-    case 'init':
-      insertBuiltInCommand('init')
-      break
-    case 'review':
-      insertBuiltInCommand('review')
       break
     case 'attach-local':
       openFilePicker()
@@ -1068,9 +1020,8 @@ watch(
     }
     requestInitialScroll(chat.selectedSessionId)
 
-    // Keep existing session behavior: agent/model are driven by the session's run config.
-    // For a brand new session (no messages yet), applySessionSelection() will fall back to
-    // OpenCode defaults.
+    // Existing sessions restore their model and run modes from the server execution context.
+    // New sessions fall back to the Agena runtime defaults.
     modelSelection.resetSelectionForSessionSwitch()
     modelSelection.applySessionSelection()
     activityExpandedByBlockKey.value = {}
@@ -1117,12 +1068,121 @@ watch(
   },
 )
 
+function attachmentBase64(dataUrl: string): string {
+  const match = /^data:[^,]*;base64,([a-z0-9+/=\s]+)$/i.exec(String(dataUrl || '').trim())
+  const data = match?.[1]?.replace(/\s+/g, '') || ''
+  if (!data) throw new Error('Attachment data is not a valid base64 data URL')
+  return data
+}
+
+function workspaceRelativePath(inputPath: string, workspaceRoot: string): string {
+  const path = String(inputPath || '')
+    .trim()
+    .replace(/\\/g, '/')
+  const root = String(workspaceRoot || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+  if (!path) throw new Error('Attachment path is empty')
+
+  if (root && (path === root || path.startsWith(`${root}/`))) {
+    const relative = path.slice(root.length).replace(/^\/+/, '')
+    if (!relative) throw new Error('The workspace root cannot be attached as a file')
+    return relative
+  }
+  if (path.startsWith('/') || /^[a-z]:\//i.test(path)) {
+    throw new Error('The attachment must be inside the active workspace')
+  }
+  return path.replace(/^\.\//, '')
+}
+
+function attachmentResourceKind(mime: string, filename: string): 'file' | 'image' | 'audio' | 'video' | 'pdf' {
+  const mediaType = String(mime || '')
+    .trim()
+    .toLowerCase()
+  const name = String(filename || '')
+    .trim()
+    .toLowerCase()
+  if (mediaType.startsWith('image/')) return 'image'
+  if (mediaType.startsWith('audio/')) return 'audio'
+  if (mediaType.startsWith('video/')) return 'video'
+  if (mediaType === 'application/pdf' || name.endsWith('.pdf')) return 'pdf'
+  return 'file'
+}
+
+function resourceComposerNode(input: {
+  path: string
+  filename: string
+  mime: string
+  size?: number
+}): OutgoingMessagePart {
+  const mediaType = String(input.mime || '').trim()
+  return {
+    type: 'activity',
+    activity: {
+      id: globalThis.crypto.randomUUID(),
+      payload: {
+        activity_type: 'resource',
+        kind: attachmentResourceKind(mediaType, input.filename),
+        reference: { reference_type: 'workspace_path', path: input.path },
+        name: input.filename,
+        ...(mediaType ? { media_type: mediaType } : {}),
+        ...(typeof input.size === 'number' ? { size_bytes: input.size } : {}),
+      },
+    },
+  }
+}
+
 async function send() {
   const sid = chat.selectedSessionId
-  const text = draft.value.trim()
+  let text = draft.value.trim()
   const filesSnapshot = attachedFiles.value.slice()
   const draftSnapshot = draft.value
   if (!sid || (!text && filesSnapshot.length === 0)) return
+
+  if (text && filesSnapshot.length === 0) {
+    sending.value = true
+    try {
+      const effect = await chatCommands.runPluginSlashCommand(text, sid)
+      if (effect) {
+        if (effect.kind === 'submit_prompt') {
+          text = effect.prompt.trim()
+          if (!text) {
+            draft.value = ''
+            return
+          }
+        } else {
+          draft.value = ''
+          commandOpen.value = false
+          commandQuery.value = ''
+          if (effect.kind === 'message' && effect.text.trim()) {
+            toasts.push('info', effect.text.trim())
+          } else if (effect.kind === 'open_plugin_workbench') {
+            await router.push({
+              path: '/settings/plugins',
+              query: {
+                ...route.query,
+                plugin: effect.pluginId,
+                ...(effect.tab ? { pluginTab: effect.tab } : {}),
+              },
+            })
+          } else if (effect.kind === 'open_url') {
+            const url = new URL(effect.url, window.location.href)
+            if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+              throw new Error('Plugin URLs must use HTTP or HTTPS.')
+            }
+            window.open(url.toString(), '_blank', 'noopener,noreferrer')
+          }
+          return
+        }
+      }
+    } catch (err) {
+      toasts.push('error', err instanceof Error ? err.message : String(err))
+      return
+    } finally {
+      sending.value = false
+    }
+  }
 
   // UX: if the editor is expanded, collapse it on send.
   if (editorFullscreen.value && !editorClosing.value) {
@@ -1147,20 +1207,33 @@ async function send() {
   try {
     const parts: OutgoingMessagePart[] = []
     if (text) parts.push({ type: 'text', text })
+    const workspace = filesSnapshot.length > 0 ? await chat.resolveSessionWorkspace(sid) : null
     for (const f of filesSnapshot) {
-      const url = typeof f.url === 'string' ? f.url : ''
-      if (url) {
-        parts.push({ type: 'file', mime: f.mime, url, filename: f.filename })
-      } else if (f.serverPath) {
-        parts.push({ type: 'file', mime: f.mime, filename: f.filename, serverPath: f.serverPath })
+      let path = ''
+      let size = Number.isFinite(f.size) && f.size > 0 ? Math.floor(f.size) : undefined
+      const dataUrl = typeof f.url === 'string' ? f.url.trim() : ''
+      if (dataUrl) {
+        const dataBase64 = attachmentBase64(dataUrl)
+        const uploaded = await chat.uploadWorkspaceAttachment(sid, {
+          filename: f.filename,
+          dataBase64,
+          mime: f.mime,
+        })
+        path = String(uploaded.path || '').trim()
+        size = Number.isFinite(uploaded.size_bytes) ? Math.max(0, Math.floor(uploaded.size_bytes)) : size
+      } else if (f.serverPath && workspace) {
+        path = workspaceRelativePath(f.serverPath, workspace.path)
       }
+      if (!path) continue
+      parts.push(resourceComposerNode({ path, filename: f.filename, mime: f.mime, size }))
     }
 
     const runCfg = deriveSendRunConfig({
       selectedProviderId: modelSelection.selectedProviderId.value,
+      selectedAdapterId: modelSelection.selectedAdapterId.value,
       selectedModelId: modelSelection.selectedModelId.value,
-      selectedAgent: modelSelection.selectedAgent.value,
-      selectedVariant: modelSelection.selectedVariant.value,
+      selectedThinkingMode: modelSelection.selectedThinkingMode.value,
+      selectedSpeedMode: modelSelection.selectedSpeedMode.value,
       effectiveDefaults: modelSelection.effectiveDefaults.value,
     })
 
@@ -1246,7 +1319,7 @@ onMounted(async () => {
     requestInitialScroll(sid)
   }
 
-  await modelSelection.loadProvidersAndAgents()
+  await modelSelection.loadProvidersAndModels()
   modelSelection.applySessionSelection()
   await loadCommands()
   navIndex.value = Math.max(0, navigableMessageIds.value.length - 1)
@@ -1330,7 +1403,7 @@ watch(
   () => sessionDirectory.value,
   () => {
     void loadCommands()
-    void modelSelection.loadProvidersAndAgents()
+    void modelSelection.loadProvidersAndModels()
   },
 )
 
@@ -1351,8 +1424,8 @@ const viewCtx = {
   composerControlsRef,
   composerPickerRef,
   modelTriggerRef,
-  variantTriggerRef,
-  agentTriggerRef,
+  thinkingTriggerRef,
+  speedTriggerRef,
   sessionActionsMenuRef,
 
   // Composer + attachments.
@@ -1439,7 +1512,7 @@ const viewCtx = {
   closeComposerActionMenu,
   runComposerActionMenu,
 
-  // Model/agent/variant selection + picker.
+  // Model, thinking mode, and speed mode selection.
   composerPickerTitle,
   composerPickerSearchable,
   composerPickerSearchPlaceholder,
@@ -1475,10 +1548,6 @@ const viewCtx = {
   attachProjectPath,
   sessionDirectory,
   addProjectAttachment,
-
-  // Plugin chat mounts.
-  chatSidebarPluginMounts,
-  chatOverlayBottomPluginMounts,
 } satisfies ChatPageViewContext
 
 onBeforeUnmount(() => {

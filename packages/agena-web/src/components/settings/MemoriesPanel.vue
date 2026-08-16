@@ -6,6 +6,7 @@ import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
+import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '../../lib/api'
 import { useToastsStore } from '../../stores/toasts'
 
@@ -40,7 +41,17 @@ const editBody = ref('')
 const editBusy = ref(false)
 const editError = ref('')
 
-const sortedItems = computed(() => [...items.value].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))))
+const memoryTypeOptions = [
+  { value: 'user', label: 'User', description: 'Stable user preferences and personal context.' },
+  { value: 'feedback', label: 'Feedback', description: 'Corrections and feedback from prior work.' },
+  { value: 'project', label: 'Project', description: 'Project-specific facts and conventions.' },
+  { value: 'reference', label: 'Reference', description: 'Reusable reference information.' },
+  { value: 'other', label: 'Other', description: 'Memory that does not fit another category.' },
+]
+
+const sortedItems = computed(() =>
+  [...items.value].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))),
+)
 
 function selectMemory(item: MemoryItem) {
   selectedName.value = item.name ?? item.file_name ?? item.path ?? null
@@ -85,7 +96,7 @@ async function saveSelected() {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         description: editDescription.value.trim(),
-        memory_type: editMemoryType.value.trim(),
+        memory_type: editMemoryType.value.trim() || null,
         body: editBody.value,
       }),
     })
@@ -137,7 +148,10 @@ onMounted(() => {
 
     <div class="grid gap-3">
       <div v-if="loading" class="text-sm text-muted-foreground">Loading memories...</div>
-      <div v-else-if="error" class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+      <div
+        v-else-if="error"
+        class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+      >
         {{ error }}
       </div>
       <div v-else-if="sortedItems.length === 0" class="text-sm text-muted-foreground">No memories stored.</div>
@@ -152,8 +166,13 @@ onMounted(() => {
           @click="selectMemory(item)"
         >
           <div class="text-sm font-semibold break-words">{{ item.name ?? item.file_name ?? item.path }}</div>
-          <div v-if="item.description" class="mt-0.5 text-xs text-muted-foreground break-words">{{ item.description }}</div>
-          <div v-if="item.memory_type" class="mt-1 inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+          <div v-if="item.description" class="mt-0.5 text-xs text-muted-foreground break-words">
+            {{ item.description }}
+          </div>
+          <div
+            v-if="item.memory_type"
+            class="mt-1 inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+          >
             {{ item.memory_type }}
           </div>
         </button>
@@ -172,7 +191,14 @@ onMounted(() => {
       </div>
       <div class="grid gap-2">
         <label class="text-xs font-medium text-muted-foreground">Type</label>
-        <Input v-model="editMemoryType" :disabled="editBusy" class="h-10" placeholder="e.g. note" />
+        <OptionPicker
+          v-model="editMemoryType"
+          :options="memoryTypeOptions"
+          title="Memory type"
+          empty-label="Unclassified"
+          :include-empty="true"
+          :disabled="editBusy"
+        />
       </div>
       <div class="grid gap-2">
         <label class="text-xs font-medium text-muted-foreground">Body</label>
@@ -193,7 +219,12 @@ onMounted(() => {
           variant="destructive"
           @confirm="deleteSelected"
         >
-          <Button variant="outline" size="sm" class="text-destructive border-destructive/30 hover:bg-destructive/10" :disabled="editBusy">
+          <Button
+            variant="outline"
+            size="sm"
+            class="text-destructive border-destructive/30 hover:bg-destructive/10"
+            :disabled="editBusy"
+          >
             Delete
           </Button>
         </ConfirmPopover>

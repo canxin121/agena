@@ -2616,6 +2616,176 @@ mod transcript_character_cursor_tests {
     }
 
     #[test]
+    fn vim_word_motion_treats_wrapped_code_as_one_clean_logical_line() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![message(
+                1,
+                "```rust\nlet first = \"abcdefghijklmnopqrstuvwxyz\";\n```",
+            )],
+            ..TranscriptState::default()
+        };
+        let (start, expected) =
+            {
+                let rendered = transcript.rendered(24);
+                let start = rendered
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .find_map(|(line, rendered_line)| {
+                        let byte = rendered_line.copy_text.find("abc")?;
+                        Some(TranscriptTextPosition {
+                            line,
+                            column: rendered_line.copy_column.saturating_add(
+                                UnicodeWidthStr::width(&rendered_line.copy_text[..byte]),
+                            ),
+                        })
+                    })
+                    .expect("wrapped identifier start");
+                let expected = rendered
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .find_map(|(line, rendered_line)| {
+                        let byte = rendered_line.copy_text.find("\";")?;
+                        Some(TranscriptTextPosition {
+                            line,
+                            column: rendered_line.copy_column.saturating_add(
+                                UnicodeWidthStr::width(&rendered_line.copy_text[..byte]),
+                            ),
+                        })
+                    })
+                    .expect("closing string quote");
+                assert_ne!(start.line, expected.line, "fixture must wrap the word");
+                (start, expected)
+            };
+
+        transcript.select_pointer_line(24, 20, start);
+        transcript.move_cursor_by_words(24, 20, true, false, false, 1);
+        assert_eq!(
+            transcript.cursor_text_position(24),
+            Some(expected),
+            "w must ignore code-card padding and visual wrapping"
+        );
+    }
+
+    #[test]
+    fn vim_word_motion_keeps_a_nul_boundary_between_logical_code_lines() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![message(1, "```text\nfoo\nbar\n```")],
+            ..TranscriptState::default()
+        };
+        let (foo, bar) = {
+            let rendered = transcript.rendered(80);
+            let locate = |text: &str| {
+                rendered
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .find_map(|(line, rendered_line)| {
+                        (rendered_line.copy_text == text).then_some(TranscriptTextPosition {
+                            line,
+                            column: rendered_line.copy_column,
+                        })
+                    })
+                    .expect("code source line")
+            };
+            (locate("foo"), locate("bar"))
+        };
+
+        transcript.select_pointer_line(80, 20, foo);
+        transcript.move_cursor_by_words(80, 20, true, false, false, 1);
+        assert_eq!(transcript.cursor_text_position(80), Some(bar));
+
+        transcript.select_pointer_line(80, 20, foo);
+        transcript.move_cursor_by_words(80, 20, true, true, false, 1);
+        assert_eq!(
+            transcript.cursor_text_position(80),
+            Some(TranscriptTextPosition {
+                column: foo.column + 2,
+                ..foo
+            })
+        );
+
+        transcript.select_pointer_line(80, 20, bar);
+        transcript.move_cursor_by_words(80, 20, false, false, false, 1);
+        assert_eq!(transcript.cursor_text_position(80), Some(foo));
+
+        transcript.select_pointer_line(80, 20, bar);
+        transcript.move_cursor_by_words(80, 20, false, true, false, 1);
+        assert_eq!(
+            transcript.cursor_text_position(80),
+            Some(TranscriptTextPosition {
+                column: foo.column + 2,
+                ..foo
+            })
+        );
+    }
+
+    #[test]
+    fn vim_word_motion_preserves_empty_logical_code_line_stops() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![message(1, "```text\nfoo\n\nbar\n```")],
+            ..TranscriptState::default()
+        };
+        let (foo, blank, bar) = {
+            let rendered = transcript.rendered(80);
+            let locate = |text: &str| {
+                rendered
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .find_map(|(line, rendered_line)| {
+                        (rendered_line.navigation_unit.is_some()
+                            && rendered_line.navigation_copy_text == text)
+                            .then_some(TranscriptTextPosition {
+                                line,
+                                column: rendered_line.copy_column,
+                            })
+                    })
+                    .expect("logical code line")
+            };
+            (locate("foo"), locate(""), locate("bar"))
+        };
+
+        transcript.select_pointer_line(80, 20, foo);
+        transcript.move_cursor_by_words(80, 20, true, false, false, 1);
+        assert_eq!(transcript.cursor_text_position(80), Some(blank));
+
+        transcript.select_pointer_line(80, 20, foo);
+        transcript.move_cursor_by_words(80, 20, true, false, false, 2);
+        assert_eq!(transcript.cursor_text_position(80), Some(bar));
+
+        transcript.select_pointer_line(80, 20, bar);
+        transcript.move_cursor_by_words(80, 20, false, false, false, 1);
+        assert_eq!(transcript.cursor_text_position(80), Some(blank));
+
+        transcript.select_pointer_line(
+            80,
+            20,
+            TranscriptTextPosition {
+                column: foo.column + 2,
+                ..foo
+            },
+        );
+        transcript.move_cursor_by_words(80, 20, true, true, false, 1);
+        assert_eq!(
+            transcript.cursor_text_position(80),
+            Some(TranscriptTextPosition {
+                column: bar.column + 2,
+                ..bar
+            }),
+            "normal-mode e crosses an empty line when starting at a word end"
+        );
+
+        transcript.select_pointer_line(80, 20, bar);
+        transcript.move_cursor_by_words(80, 20, false, true, false, 1);
+        assert_eq!(transcript.cursor_text_position(80), Some(blank));
+    }
+
+    #[test]
     fn markdown_and_message_text_objects_select_semantic_ranges() {
         let mut transcript = TranscriptState {
             session_id: Some(7),

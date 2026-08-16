@@ -653,9 +653,11 @@ impl TranscriptState {
         );
     }
 
-    /// Implements Vim's `w`, `b`, `e`, `ge` and their WORD variants over
-    /// the clean, focusable transcript rows. A word is Unicode
-    /// alphanumeric/underscore; a WORD is any non-whitespace run.
+    /// Implements Vim's `w`, `b`, `e`, `ge` and their WORD variants over the
+    /// clean transcript projection. Small-word boundaries use Vim's default
+    /// `iskeyword` and `utf_class()` rules; a WORD is any non-whitespace run.
+    /// Layout-only chrome is excluded and visual wraps of one semantic source
+    /// line remain one logical Vim line.
     pub(crate) fn move_cursor_by_words(
         &mut self,
         width: u16,
@@ -671,25 +673,53 @@ impl TranscriptState {
         };
         let (positions, current_index) = {
             let rendered = self.rendered(width);
-            let positions = rendered
-                .lines
-                .iter()
-                .enumerate()
-                .filter(|(line, _)| transcript_rendered_line_is_focusable(rendered, *line))
-                .flat_map(|(line, rendered_line)| {
-                    transcript_cursor_graphemes(rendered_line).into_iter().map(
-                        move |(range, grapheme)| TranscriptGraphemePosition {
-                            position: TranscriptTextPosition {
-                                line,
-                                column: range.start,
-                            },
-                            grapheme,
-                        },
-                    )
-                })
-                .collect::<Vec<_>>();
+            let mut positions = Vec::new();
+            for (line, rendered_line) in rendered.lines.iter().enumerate() {
+                if !transcript_rendered_line_is_focusable(rendered, line) {
+                    continue;
+                }
+                let line_positions = transcript_word_grapheme_positions(line, rendered_line);
+                let end_column = line_positions
+                    .iter()
+                    .rev()
+                    .find(|position| position.cursorable)
+                    .map(|position| {
+                        position
+                            .position
+                            .column
+                            .saturating_add(UnicodeWidthStr::width(position.grapheme.as_str()))
+                    })
+                    .unwrap_or(rendered_line.copy_column);
+                let empty_line = !line_positions.iter().any(|position| position.cursorable);
+                positions.extend(line_positions);
+                let continues_navigation_unit = rendered_line.navigation_unit.is_some()
+                    && rendered
+                        .lines
+                        .get(line.saturating_add(1))
+                        .is_some_and(|next| next.navigation_unit == rendered_line.navigation_unit);
+                if continues_navigation_unit {
+                    continue;
+                }
+                // Vim's word functions see a NUL after every line. Keeping an
+                // explicit non-cursor character here prevents equal Unicode
+                // classes on adjacent logical rows from becoming one word.
+                // Wrapped terminal rows that share a navigation unit are one
+                // logical Vim line and deliberately do not get this boundary.
+                positions.push(TranscriptGraphemePosition {
+                    position: TranscriptTextPosition {
+                        line,
+                        column: end_column,
+                    },
+                    grapheme: String::new(),
+                    cursorable: empty_line,
+                    end_of_line: true,
+                    empty_line,
+                });
+            }
             let current_index = positions.iter().rposition(|position| {
-                position.position.line == cursor.line && position.position.column <= cursor.column
+                position.position.line == cursor.line
+                    && position.position.column <= cursor.column
+                    && position.cursorable
             });
             (positions, current_index)
         };
@@ -1672,7 +1702,7 @@ impl TranscriptState {
             };
             while current < graphemes.len()
                 && transcript_word_class(graphemes[current].1.as_str(), false)
-                    == TranscriptWordClass::Whitespace
+                    == TranscriptWordClass::WHITESPACE
             {
                 current = current.saturating_add(1);
             }
@@ -1699,7 +1729,7 @@ impl TranscriptState {
                 let mut after = end.saturating_add(1);
                 while after < graphemes.len()
                     && transcript_word_class(graphemes[after].1.as_str(), false)
-                        == TranscriptWordClass::Whitespace
+                        == TranscriptWordClass::WHITESPACE
                 {
                     end = after;
                     after = after.saturating_add(1);
@@ -1709,7 +1739,7 @@ impl TranscriptState {
                         && transcript_word_class(
                             graphemes[start.saturating_sub(1)].1.as_str(),
                             false,
-                        ) == TranscriptWordClass::Whitespace
+                        ) == TranscriptWordClass::WHITESPACE
                     {
                         start = start.saturating_sub(1);
                     }
@@ -3150,56 +3180,244 @@ fn transcript_rendered_line_is_focusable(rendered: &RenderedTranscript, line: us
 /// row. Zero-width marks remain part of their grapheme cluster and do not
 /// produce a second cursor stop of their own.
 fn transcript_cursor_grapheme_ranges(line: &RenderedLine) -> Vec<Range<usize>> {
-    let mut column = 0_usize;
-    line.text
-        .graphemes(true)
-        .filter_map(|grapheme| {
-            let width = UnicodeWidthStr::width(grapheme);
-            let start = column;
-            column = column.saturating_add(width);
-            (width > 0 && start >= line.copy_column).then_some(start..column)
-        })
+    transcript_cursor_graphemes(line)
+        .into_iter()
+        .map(|(range, _)| range)
         .collect()
 }
 
 fn transcript_cursor_graphemes(line: &RenderedLine) -> Vec<(Range<usize>, String)> {
-    let mut column = 0_usize;
-    line.text
-        .graphemes(true)
-        .filter_map(|grapheme| {
-            let width = UnicodeWidthStr::width(grapheme);
-            let start = column;
-            column = column.saturating_add(width);
-            (width > 0 && start >= line.copy_column).then(|| (start..column, grapheme.to_owned()))
-        })
-        .collect()
+    let mut output = Vec::new();
+    if line.copy_segments.is_empty() {
+        push_transcript_cursor_graphemes(&mut output, line.copy_text.as_str(), line.copy_column);
+    } else {
+        for segment in &line.copy_segments {
+            push_transcript_cursor_graphemes(
+                &mut output,
+                segment.text.as_str(),
+                segment.display_column,
+            );
+        }
+    }
+    output
+}
+
+fn push_transcript_cursor_graphemes(
+    output: &mut Vec<(Range<usize>, String)>,
+    text: &str,
+    mut column: usize,
+) {
+    for grapheme in text.graphemes(true) {
+        let width = UnicodeWidthStr::width(grapheme);
+        let start = column;
+        column = column.saturating_add(width);
+        if width > 0 {
+            output.push((start..column, grapheme.to_owned()));
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 struct TranscriptGraphemePosition {
     position: TranscriptTextPosition,
     grapheme: String,
+    cursorable: bool,
+    end_of_line: bool,
+    empty_line: bool,
+}
+
+fn transcript_word_grapheme_positions(
+    line: usize,
+    rendered: &RenderedLine,
+) -> Vec<TranscriptGraphemePosition> {
+    let actual = |range: Range<usize>, grapheme: String| TranscriptGraphemePosition {
+        position: TranscriptTextPosition {
+            line,
+            column: range.start,
+        },
+        grapheme,
+        cursorable: true,
+        end_of_line: false,
+        empty_line: false,
+    };
+    if rendered.copy_segments.is_empty() {
+        return transcript_cursor_graphemes(rendered)
+            .into_iter()
+            .map(|(range, grapheme)| actual(range, grapheme))
+            .collect();
+    }
+
+    let mut output = Vec::new();
+    for segment in &rendered.copy_segments {
+        if !segment.separator_before.is_empty() {
+            // Tables expose their clean row as cell text separated by tabs.
+            // The separator participates in Vim word classification but is
+            // layout-only, so it must never become a visible cursor stop.
+            output.push(TranscriptGraphemePosition {
+                position: TranscriptTextPosition {
+                    line,
+                    column: segment.display_column,
+                },
+                grapheme: segment.separator_before.clone(),
+                cursorable: false,
+                end_of_line: false,
+                empty_line: false,
+            });
+        }
+        let mut graphemes = Vec::new();
+        push_transcript_cursor_graphemes(
+            &mut graphemes,
+            segment.text.as_str(),
+            segment.display_column,
+        );
+        output.extend(
+            graphemes
+                .into_iter()
+                .map(|(range, grapheme)| actual(range, grapheme)),
+        );
+    }
+    output
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TranscriptWordClass {
-    Whitespace,
-    Keyword,
-    Punctuation,
+struct TranscriptWordClass(u32);
+
+impl TranscriptWordClass {
+    const WHITESPACE: Self = Self(0);
+    const PUNCTUATION: Self = Self(1);
+    const KEYWORD: Self = Self(2);
+    const EMOJI: Self = Self(3);
+}
+
+// Vim src/mbyte.c:utf_class_buf(). Classes above punctuation intentionally
+// retain their distinct numeric values: cls() treats transitions between
+// Latin, Hiragana, Katakana, CJK, Hangul, Braille, superscript, and subscript
+// text as word boundaries.
+const VIM_UNICODE_CLASS_INTERVALS: &[(u32, u32, u32)] = &[
+    (0x037e, 0x037e, 1),
+    (0x0387, 0x0387, 1),
+    (0x055a, 0x055f, 1),
+    (0x0589, 0x0589, 1),
+    (0x05be, 0x05be, 1),
+    (0x05c0, 0x05c0, 1),
+    (0x05c3, 0x05c3, 1),
+    (0x05f3, 0x05f4, 1),
+    (0x060c, 0x060c, 1),
+    (0x061b, 0x061b, 1),
+    (0x061f, 0x061f, 1),
+    (0x066a, 0x066d, 1),
+    (0x06d4, 0x06d4, 1),
+    (0x0700, 0x070d, 1),
+    (0x0964, 0x0965, 1),
+    (0x0970, 0x0970, 1),
+    (0x0df4, 0x0df4, 1),
+    (0x0e4f, 0x0e4f, 1),
+    (0x0e5a, 0x0e5b, 1),
+    (0x0f04, 0x0f12, 1),
+    (0x0f3a, 0x0f3d, 1),
+    (0x0f85, 0x0f85, 1),
+    (0x104a, 0x104f, 1),
+    (0x10fb, 0x10fb, 1),
+    (0x1361, 0x1368, 1),
+    (0x166d, 0x166e, 1),
+    (0x1680, 0x1680, 0),
+    (0x169b, 0x169c, 1),
+    (0x16eb, 0x16ed, 1),
+    (0x1735, 0x1736, 1),
+    (0x17d4, 0x17dc, 1),
+    (0x1800, 0x180a, 1),
+    (0x2000, 0x200b, 0),
+    (0x200c, 0x2027, 1),
+    (0x2028, 0x2029, 0),
+    (0x202a, 0x202e, 1),
+    (0x202f, 0x202f, 0),
+    (0x2030, 0x205e, 1),
+    (0x205f, 0x205f, 0),
+    (0x2060, 0x206f, 1),
+    (0x2070, 0x207f, 0x2070),
+    (0x2080, 0x2094, 0x2080),
+    (0x20a0, 0x27ff, 1),
+    (0x2800, 0x28ff, 0x2800),
+    (0x2900, 0x2998, 1),
+    (0x29d8, 0x29db, 1),
+    (0x29fc, 0x29fd, 1),
+    (0x2e00, 0x2e7f, 1),
+    (0x3000, 0x3000, 0),
+    (0x3001, 0x3020, 1),
+    (0x3030, 0x3030, 1),
+    (0x303d, 0x303d, 1),
+    (0x3040, 0x309f, 0x3040),
+    (0x30a0, 0x30ff, 0x30a0),
+    (0x3300, 0x9fff, 0x4e00),
+    (0xac00, 0xd7a3, 0xac00),
+    (0xf900, 0xfaff, 0x4e00),
+    (0xfd3e, 0xfd3f, 1),
+    (0xfe30, 0xfe6b, 1),
+    (0xff00, 0xff0f, 1),
+    (0xff1a, 0xff20, 1),
+    (0xff3b, 0xff40, 1),
+    (0xff5b, 0xff65, 1),
+    (0x1d000, 0x1d24f, 1),
+    (0x1d400, 0x1d7ff, 1),
+    (0x1f000, 0x1f2ff, 1),
+    (0x1f300, 0x1f9ff, 1),
+    (0x20000, 0x2a6df, 0x4e00),
+    (0x2a700, 0x2b73f, 0x4e00),
+    (0x2b740, 0x2b81f, 0x4e00),
+    (0x2f800, 0x2fa1f, 0x4e00),
+];
+
+fn vim_unicode_word_class(codepoint: u32) -> TranscriptWordClass {
+    let index = VIM_UNICODE_CLASS_INTERVALS.partition_point(|(_, last, _)| *last < codepoint);
+    VIM_UNICODE_CLASS_INTERVALS
+        .get(index)
+        .filter(|(first, _, _)| codepoint >= *first)
+        .map(|(_, _, class)| TranscriptWordClass(*class))
+        .unwrap_or(TranscriptWordClass::KEYWORD)
 }
 
 fn transcript_word_class(grapheme: &str, big_word: bool) -> TranscriptWordClass {
-    if grapheme.chars().all(char::is_whitespace) {
-        TranscriptWordClass::Whitespace
-    } else if big_word
-        || grapheme
-            .chars()
-            .any(|character| character == '_' || character.is_alphanumeric())
-    {
-        TranscriptWordClass::Keyword
+    let Some(character) = grapheme.chars().next() else {
+        return TranscriptWordClass::WHITESPACE;
+    };
+    let codepoint = u32::from(character);
+    let class = if codepoint < 0x100 {
+        if matches!(character, '\0' | ' ' | '\t') || codepoint == 0xa0 {
+            TranscriptWordClass::WHITESPACE
+        } else if character == '_'
+            || character.is_ascii_digit()
+            || character.is_ascii_alphabetic()
+            || codepoint == 0xb5
+            || codepoint >= 0xc0
+        {
+            // Vim's default 'iskeyword' is @,48-57,_,192-255.
+            TranscriptWordClass::KEYWORD
+        } else {
+            TranscriptWordClass::PUNCTUATION
+        }
+    } else if character.is_emoji_char() {
+        TranscriptWordClass::EMOJI
     } else {
-        TranscriptWordClass::Punctuation
+        vim_unicode_word_class(codepoint)
+    };
+    if big_word && class != TranscriptWordClass::WHITESPACE {
+        TranscriptWordClass::PUNCTUATION
+    } else {
+        class
     }
+}
+
+fn adjust_vim_forward_target(positions: &[TranscriptGraphemePosition], index: usize) -> usize {
+    let Some(position) = positions.get(index) else {
+        return index;
+    };
+    if position.cursorable {
+        return index;
+    }
+    positions[..index]
+        .iter()
+        .rposition(|candidate| candidate.cursorable)
+        .unwrap_or(index)
 }
 
 fn transcript_word_motion_target(
@@ -3209,100 +3427,114 @@ fn transcript_word_motion_target(
     to_end: bool,
     big_word: bool,
 ) -> Option<usize> {
-    let class_at =
-        |index: usize| transcript_word_class(positions[index].grapheme.as_str(), big_word);
+    let class_at = |index: usize| {
+        if positions[index].end_of_line {
+            TranscriptWordClass::WHITESPACE
+        } else {
+            transcript_word_class(positions[index].grapheme.as_str(), big_word)
+        }
+    };
     let len = positions.len();
     (current < len).then_some(())?;
 
     if forward && !to_end {
-        // Vim fwd_word(): always move at least one grapheme, leave the current
-        // word run, cross whitespace, and land on the next word start.
+        // Vim fwd_word(): explicit end-of-line positions model cls() == 0 at
+        // NUL, while a genuinely empty line remains a motion destination.
         let current_class = class_at(current);
-        let mut index = current.saturating_add(1);
-        if index >= len {
-            return Some(len.saturating_sub(1));
-        }
-        if current_class != TranscriptWordClass::Whitespace {
-            while index < len && class_at(index) == current_class {
-                index = index.saturating_add(1);
-            }
-            if index >= len {
-                return Some(len.saturating_sub(1));
+        let mut index = current.checked_add(1).filter(|index| *index < len)?;
+        if current_class != TranscriptWordClass::WHITESPACE {
+            while class_at(index) == current_class {
+                let Some(next) = index.checked_add(1).filter(|next| *next < len) else {
+                    return Some(adjust_vim_forward_target(positions, index));
+                };
+                index = next;
             }
         }
-        while index < len && class_at(index) == TranscriptWordClass::Whitespace {
-            index = index.saturating_add(1);
+        while class_at(index) == TranscriptWordClass::WHITESPACE {
+            if positions[index].end_of_line && positions[index].empty_line {
+                break;
+            }
+            let Some(next) = index.checked_add(1).filter(|next| *next < len) else {
+                return Some(adjust_vim_forward_target(positions, index));
+            };
+            index = next;
         }
-        return Some(index.min(len.saturating_sub(1)));
+        return Some(adjust_vim_forward_target(positions, index));
     }
 
     if forward {
-        // Vim end_word(): move one grapheme first. Inside the current word, go
-        // to its end; otherwise cross whitespace and go to the next word end.
+        // Normal-mode end_word(..., stop = FALSE, empty = FALSE): unlike w,
+        // e/E crosses empty lines to the next word end.
         let current_class = class_at(current);
-        let mut index = current.saturating_add(1);
-        if index >= len {
-            return Some(len.saturating_sub(1));
-        }
-        if current_class != TranscriptWordClass::Whitespace && class_at(index) == current_class {
-            while index < len && class_at(index) == current_class {
-                index = index.saturating_add(1);
+        let mut index = current.checked_add(1).filter(|index| *index < len)?;
+        if current_class != TranscriptWordClass::WHITESPACE && class_at(index) == current_class {
+            while class_at(index) == current_class {
+                let Some(next) = index.checked_add(1).filter(|next| *next < len) else {
+                    return Some(adjust_vim_forward_target(positions, index));
+                };
+                index = next;
             }
-            return Some(index.saturating_sub(1).max(current));
+        } else {
+            while class_at(index) == TranscriptWordClass::WHITESPACE {
+                let Some(next) = index.checked_add(1).filter(|next| *next < len) else {
+                    return Some(adjust_vim_forward_target(positions, index));
+                };
+                index = next;
+            }
+            let target_class = class_at(index);
+            while class_at(index) == target_class {
+                let Some(next) = index.checked_add(1).filter(|next| *next < len) else {
+                    return Some(adjust_vim_forward_target(positions, index));
+                };
+                index = next;
+            }
         }
-        while index < len && class_at(index) == TranscriptWordClass::Whitespace {
-            index = index.saturating_add(1);
-        }
-        if index >= len {
-            return Some(len.saturating_sub(1));
-        }
-        let target_class = class_at(index);
-        while index.saturating_add(1) < len && class_at(index.saturating_add(1)) == target_class {
-            index = index.saturating_add(1);
-        }
-        return Some(index);
+        return index.checked_sub(1);
     }
 
     if !to_end {
-        // Vim bck_word(): step one grapheme backward, skip whitespace, then
-        // move to the start of the preceding word run.
-        if current == 0 {
-            return None;
-        }
-        let mut index = current.saturating_sub(1);
-        while class_at(index) == TranscriptWordClass::Whitespace {
-            if index == 0 {
-                return Some(0);
+        // Vim bck_word(..., stop = FALSE). Empty lines, but not lines that
+        // merely contain spaces, are individual stops.
+        let mut index = current.checked_sub(1)?;
+        while class_at(index) == TranscriptWordClass::WHITESPACE {
+            if positions[index].end_of_line && positions[index].empty_line {
+                return Some(index);
             }
-            index = index.saturating_sub(1);
+            let Some(previous) = index.checked_sub(1) else {
+                return Some(index);
+            };
+            index = previous;
         }
         let target_class = class_at(index);
-        while index > 0 && class_at(index.saturating_sub(1)) == target_class {
-            index = index.saturating_sub(1);
+        while class_at(index) == target_class {
+            let Some(previous) = index.checked_sub(1) else {
+                return Some(index);
+            };
+            index = previous;
         }
-        return Some(index);
+        return index.checked_add(1).filter(|target| *target < len);
     }
 
-    // Vim bckend_word(): step one grapheme backward, leave the current word
-    // run, cross whitespace, and stop on the previous word end.
-    if current == 0 {
-        return None;
-    }
+    // Vim bckend_word(): leave the current run, cross NUL/whitespace, and
+    // stop on the preceding word end (or on an empty line).
     let current_class = class_at(current);
-    let mut index = current.saturating_sub(1);
-    if current_class != TranscriptWordClass::Whitespace {
-        while index > 0 && class_at(index) == current_class {
-            index = index.saturating_sub(1);
-        }
-        if index == 0 && class_at(0) == current_class {
-            index = 0;
+    let mut index = current.checked_sub(1)?;
+    if current_class != TranscriptWordClass::WHITESPACE {
+        while class_at(index) == current_class {
+            let Some(previous) = index.checked_sub(1) else {
+                return Some(index);
+            };
+            index = previous;
         }
     }
-    while index > 0 && class_at(index) == TranscriptWordClass::Whitespace {
-        index = index.saturating_sub(1);
-    }
-    if index == 0 && class_at(index) == TranscriptWordClass::Whitespace {
-        return Some(0);
+    while class_at(index) == TranscriptWordClass::WHITESPACE {
+        if positions[index].end_of_line && positions[index].empty_line {
+            return Some(index);
+        }
+        let Some(previous) = index.checked_sub(1) else {
+            return Some(index);
+        };
+        index = previous;
     }
     Some(index)
 }
@@ -3319,7 +3551,7 @@ fn transcript_cursor_column_for_line(line: &RenderedLine, requested_column: usiz
     let graphemes = transcript_cursor_grapheme_ranges(line);
     transcript_cursor_grapheme_index(graphemes.as_slice(), requested_column)
         .map(|index| graphemes[index].start)
-        .unwrap_or_default()
+        .unwrap_or(line.copy_column)
 }
 
 fn transcript_cursor_cell_range(line: &RenderedLine, column: usize) -> Range<usize> {
@@ -3327,7 +3559,7 @@ fn transcript_cursor_cell_range(line: &RenderedLine, column: usize) -> Range<usi
     transcript_cursor_grapheme_index(graphemes.as_slice(), column)
         .map(|index| graphemes[index].clone())
         // An empty rendered row still has a visible Vim-style cursor cell.
-        .unwrap_or(0..1)
+        .unwrap_or(line.copy_column..line.copy_column.saturating_add(1))
 }
 
 use super::TranscriptAction;
@@ -3343,6 +3575,7 @@ use crate::{
     transcript_selection_scroll_position, transcript_text_selection_text, ui_text,
 };
 use agena_tui_transcript::render_entry_detailed_with_interactions;
+use unicode_properties::UnicodeEmoji;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -3725,17 +3958,28 @@ mod word_motion_tests {
     use super::*;
 
     fn positions(text: &str) -> Vec<TranscriptGraphemePosition> {
-        let mut column = 0_usize;
-        text.graphemes(true)
-            .map(|grapheme| {
-                let position = TranscriptGraphemePosition {
-                    position: TranscriptTextPosition { line: 0, column },
+        let mut positions = Vec::new();
+        for (line, text) in text.split('\n').enumerate() {
+            let mut column = 0_usize;
+            for grapheme in text.graphemes(true) {
+                positions.push(TranscriptGraphemePosition {
+                    position: TranscriptTextPosition { line, column },
                     grapheme: grapheme.to_owned(),
-                };
+                    cursorable: true,
+                    end_of_line: false,
+                    empty_line: false,
+                });
                 column = column.saturating_add(grapheme.len());
-                position
-            })
-            .collect()
+            }
+            positions.push(TranscriptGraphemePosition {
+                position: TranscriptTextPosition { line, column },
+                grapheme: String::new(),
+                cursorable: text.is_empty(),
+                end_of_line: true,
+                empty_line: text.is_empty(),
+            });
+        }
+        positions
     }
 
     fn target(
@@ -3746,6 +3990,34 @@ mod word_motion_tests {
         big_word: bool,
     ) -> Option<usize> {
         transcript_word_motion_target(&positions(text), current, forward, to_end, big_word)
+    }
+
+    fn repeated_target(
+        text: &str,
+        current: usize,
+        forward: bool,
+        to_end: bool,
+        big_word: bool,
+        count: usize,
+    ) -> usize {
+        let positions = positions(text);
+        let mut index = current;
+        for _ in 0..count.max(1) {
+            let Some(next) = transcript_word_motion_target(
+                positions.as_slice(),
+                index,
+                forward,
+                to_end,
+                big_word,
+            ) else {
+                break;
+            };
+            if next == index {
+                break;
+            }
+            index = next;
+        }
+        index
     }
 
     #[test]
@@ -3795,5 +4067,109 @@ mod word_motion_tests {
     fn motions_reach_final_words_and_leading_whitespace_like_vim() {
         assert_eq!(target("one foo", 4, true, false, false), Some(6));
         assert_eq!(target("   foo", 3, false, true, false), Some(0));
+    }
+
+    #[test]
+    fn line_nul_prevents_equal_classes_on_adjacent_rows_from_merging() {
+        let text = "foo\nbar";
+
+        // Character indexes include the explicit end-of-line at index 3.
+        assert_eq!(target(text, 0, true, false, false), Some(4));
+        assert_eq!(target(text, 0, true, true, false), Some(2));
+        assert_eq!(target(text, 4, false, false, false), Some(0));
+        assert_eq!(target(text, 4, false, true, false), Some(2));
+    }
+
+    #[test]
+    fn empty_lines_are_vim_stops_except_for_forward_word_end() {
+        let text = "foo\n\nbar";
+
+        assert_eq!(repeated_target(text, 0, true, false, false, 1), 4);
+        assert_eq!(repeated_target(text, 0, true, false, false, 2), 5);
+        assert_eq!(repeated_target(text, 5, false, false, false, 1), 4);
+        assert_eq!(repeated_target(text, 5, false, false, false, 2), 0);
+        assert_eq!(repeated_target(text, 2, true, true, false, 1), 7);
+        assert_eq!(repeated_target(text, 5, false, true, false, 1), 4);
+        assert_eq!(repeated_target(text, 5, false, true, false, 2), 2);
+    }
+
+    #[test]
+    fn vim_unicode_script_emoji_and_word_classes_are_preserved() {
+        assert_eq!(repeated_target("a中b", 0, true, false, false, 1), 1);
+        assert_eq!(repeated_target("a中b", 0, true, false, false, 2), 2);
+        assert_eq!(target("a中b", 0, true, true, false), Some(1));
+
+        assert_eq!(target("a🙂.b", 1, true, false, false), Some(2));
+        assert_eq!(target("a🙂.b", 1, true, true, false), Some(2));
+
+        assert_eq!(target("a中.b x", 0, true, false, true), Some(5));
+        assert_eq!(target("a中.b x", 0, true, true, true), Some(3));
+    }
+
+    #[test]
+    fn vim_whitespace_classes_do_not_use_rusts_generic_whitespace_set() {
+        assert_eq!(target("a\u{2003}b", 0, true, false, false), Some(2));
+        // U+0085 is Rust whitespace but Vim Latin-1 punctuation. It joins the
+        // following full stop into one punctuation run.
+        assert_eq!(target("a\u{0085}.b", 1, true, false, false), Some(3));
+    }
+
+    #[test]
+    fn default_vim_latin1_iskeyword_table_is_preserved() {
+        assert_eq!(target("aª.b", 0, true, false, false), Some(1));
+        assert_eq!(target("aº.b", 0, true, false, false), Some(1));
+        assert_eq!(target("aµ.b", 0, true, false, false), Some(2));
+    }
+
+    #[test]
+    fn clean_table_projection_inserts_non_cursorable_tab_word_boundaries() {
+        let line = RenderedLine::plain("│ab  │cd│", ratatui::style::Style::default())
+            .with_copy_segments(vec![
+                agena_tui_transcript::RenderedCopySegment {
+                    display_column: 1,
+                    text: "ab".to_owned(),
+                    separator_before: String::new(),
+                },
+                agena_tui_transcript::RenderedCopySegment {
+                    display_column: 6,
+                    text: "cd".to_owned(),
+                    separator_before: "\t".to_owned(),
+                },
+            ]);
+        assert_eq!(
+            transcript_cursor_graphemes(&line)
+                .into_iter()
+                .map(|(_, grapheme)| grapheme)
+                .collect::<String>(),
+            "abcd",
+            "layout borders and padding are not cursor text"
+        );
+
+        let mut positions = transcript_word_grapheme_positions(0, &line);
+        assert_eq!(
+            positions
+                .iter()
+                .map(|position| (position.grapheme.as_str(), position.cursorable))
+                .collect::<Vec<_>>(),
+            vec![
+                ("a", true),
+                ("b", true),
+                ("\t", false),
+                ("c", true),
+                ("d", true)
+            ]
+        );
+        positions.push(TranscriptGraphemePosition {
+            position: TranscriptTextPosition { line: 0, column: 8 },
+            grapheme: String::new(),
+            cursorable: false,
+            end_of_line: true,
+            empty_line: false,
+        });
+        assert_eq!(
+            transcript_word_motion_target(positions.as_slice(), 0, true, false, false),
+            Some(3),
+            "w lands at the next table cell instead of merging its letters"
+        );
     }
 }

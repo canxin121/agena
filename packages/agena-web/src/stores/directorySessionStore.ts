@@ -26,8 +26,8 @@ type SidebarFooterKind = 'pinned' | 'recent' | 'running'
 //   GET /api/v1/workspaces        → directory list (WorkspaceResource {id, path})
 //   GET /api/v1/sessions/overview → attention/running/recent session buckets
 //   GET /api/v1/sessions          → flat session list (search/workspace filters)
-// Sidebar command state (collapsed/pinned/expanded/pages) is client-local via
-// uiPrefs; the server never persists sidebar chrome.
+// Sidebar chrome (collapsed/expanded/pages) is client-local via uiPrefs.
+// Session favorite/pinned flags are durable server metadata.
 
 type AgenaOverviewWire = {
   attention: UnknownRecord[]
@@ -63,6 +63,15 @@ function compareAgenaSessionsByUpdatedAt(left: UnknownRecord, right: UnknownReco
   const timeDelta = agenaSessionUpdatedAtMs(right) - agenaSessionUpdatedAtMs(left)
   if (timeDelta) return timeDelta
   return Number(agenaSessionId(right)) - Number(agenaSessionId(left))
+}
+
+function pinnedSessionIdSet(sessions: UnknownRecord[]): Set<string> {
+  return new Set(
+    sessions
+      .filter((session) => session.pinned === true)
+      .map(agenaSessionId)
+      .filter(Boolean),
+  )
 }
 
 function runtimeMapFromAgenaSessions(sessions: UnknownRecord[]): Record<string, SessionRuntimeState> {
@@ -306,7 +315,6 @@ type SidebarCommandRequest =
   | { type: 'setDirectoriesPage'; page: number }
   | { type: 'setDirectoryCollapsed'; directoryId: string; collapsed: boolean }
   | { type: 'setDirectoryRootPage'; directoryId: string; page: number }
-  | { type: 'setSessionPinned'; sessionId: string; pinned: boolean }
   | { type: 'setSessionExpanded'; sessionId: string; expanded: boolean }
   | { type: 'setFooterOpen'; kind: SidebarFooterKind; open: boolean }
   | { type: 'setFooterPage'; kind: SidebarFooterKind; page: number }
@@ -1390,8 +1398,8 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     }
 
     try {
-      // Agena has no sidebar command endpoint; commands mutate the client-local
-      // uiPrefs directly (collapsed/pinned/expanded/page prefs live in localStorage).
+      // Agena has no sidebar-chrome command endpoint; these commands mutate
+      // the client-local collapsed/expanded/page preferences.
       const patch: Partial<ChatSidebarUiPrefs> = {}
       if (command.type === 'setDirectoriesPage') {
         patch.directoriesPage = Math.max(0, Math.floor(Number(command.page || 0)))
@@ -1405,11 +1413,6 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
           ...(uiPrefs.value.sessionRootPageByDirectoryId || {}),
           [command.directoryId]: Math.max(0, Math.floor(Number(command.page || 0))),
         }
-      } else if (command.type === 'setSessionPinned') {
-        const current = new Set(uiPrefs.value.pinnedSessionIds || [])
-        if (command.pinned) current.add(command.sessionId)
-        else current.delete(command.sessionId)
-        patch.pinnedSessionIds = [...current]
       } else if (command.type === 'setSessionExpanded') {
         const current = new Set(uiPrefs.value.expandedParentSessionIds || [])
         if (command.expanded) current.add(command.sessionId)
@@ -1479,7 +1482,38 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
   ): Promise<boolean> {
     const sid = String(sessionId || '').trim()
     if (!sid) return false
-    return executeSidebarCommand({ type: 'setSessionPinned', sessionId: sid, pinned }, opts)
+    if (!opts?.silent) {
+      loading.value = true
+      error.value = null
+    }
+    try {
+      const updated = await chat.updateSessionMetadata(sid, { pinned })
+      if (!updated) return false
+
+      // Keep the local projection responsive; the scheduled canonical read
+      // below rebuilds every pinned section from SessionResource.pinned.
+      const current = new Set(uiPrefs.value.pinnedSessionIds || [])
+      if (pinned) current.add(sid)
+      else current.delete(sid)
+      applyAuthoritativeUiPrefs(
+        normalizeUiPrefs(
+          patchChatSidebarUiPrefs(uiPrefs.value, {
+            pinnedSessionIds: [...current],
+          }),
+        ),
+      )
+      sidebarStateRequestInFlight?.controller?.abort()
+      sidebarStateRequestInFlight = null
+      scheduleSidebarRecoverySync('session-pinned-updated', 0, { force: true })
+      return true
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : String(err)
+      return false
+    } finally {
+      if (!opts?.silent) {
+        loading.value = false
+      }
+    }
   }
 
   async function commandSetSessionExpanded(
@@ -1641,7 +1675,15 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       fetchAgenaOverview(signal),
     ])
 
-    const pinnedIds = new Set(uiPrefs.value.pinnedSessionIds || [])
+    const allOverview = [...overview.recent, ...overview.running, ...overview.attention].sort(
+      compareAgenaSessionsByUpdatedAt,
+    )
+    const pinnedIds = pinnedSessionIdSet(allOverview)
+    const serverProjectedPrefs = normalizeUiPrefs(
+      patchChatSidebarUiPrefs(uiPrefs.value, {
+        pinnedSessionIds: [...pinnedIds],
+      }),
+    )
     const expandedParents = new Set(uiPrefs.value.expandedParentSessionIds || [])
     const directoryRowsById: Record<string, JsonValue> = {}
     for (const entry of workspaces.entries) {
@@ -1657,9 +1699,6 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     }
 
     const pinnedRows: SidebarSessionRow[] = []
-    const allOverview = [...overview.recent, ...overview.running, ...overview.attention].sort(
-      compareAgenaSessionsByUpdatedAt,
-    )
     for (const session of allOverview) {
       const sid = agenaSessionId(session)
       if (!pinnedIds.has(sid)) continue
@@ -1681,7 +1720,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     }
 
     return {
-      preferences: uiPrefs.value,
+      preferences: serverProjectedPrefs,
       directoriesPage: {
         items: workspaces.entries.map((entry) => ({ id: entry.id, path: entry.path })),
         total: workspaces.hasMore
@@ -1932,7 +1971,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       if (!workspace) return false
       const directory = { id: workspace.id, path: workspace.path }
       const sessions = await fetchAgenaSessions({ workspaceId: workspace.id })
-      const pinnedIds = new Set(uiPrefs.value.pinnedSessionIds || [])
+      const pinnedIds = pinnedSessionIdSet(sessions)
       const sectionBase = buildDirectorySessionView({
         sessions,
         directory,
@@ -2001,11 +2040,12 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       const pageSize = Math.max(1, Math.floor(Number(pageSizeRaw || SIDEBAR_FOOTER_PAGE_SIZE)))
 
       const overview = await fetchAgenaOverview()
-      const pinnedIds = new Set(uiPrefs.value.pinnedSessionIds || [])
+      const allOverview = [...overview.recent, ...overview.running, ...overview.attention]
+      const pinnedIds = pinnedSessionIdSet(allOverview)
       const expandedParents = new Set(uiPrefs.value.expandedParentSessionIds || [])
       const sourceRows: SidebarSessionRow[] = []
       if (targetKind === 'pinned') {
-        for (const session of [...overview.recent, ...overview.running, ...overview.attention]) {
+        for (const session of allOverview) {
           const sid = agenaSessionId(session)
           if (!pinnedIds.has(sid)) continue
           const row = toSidebarRowFromAgenaSession(session, null, expandedParents)

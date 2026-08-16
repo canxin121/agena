@@ -23,3 +23,10 @@ test('sidebar uses cursor pagination and hydrates workspaces outside the visible
   assert.ok(source.includes('await chatApi.getWorkspace(workspaceId)'))
   assert.ok(!source.includes('/api/v1/sessions/overview?'))
 })
+
+test('sidebar derives pinned sessions from durable server metadata', () => {
+  const source = readFileSync(resolve(import.meta.dir, '../src/stores/directorySessionStore.ts'), 'utf8')
+  assert.ok(source.includes('chat.updateSessionMetadata(sid, { pinned })'))
+  assert.ok(source.includes('.filter((session) => session.pinned === true)'))
+  assert.ok(source.includes('const pinnedIds = pinnedSessionIdSet(allOverview)'))
+})

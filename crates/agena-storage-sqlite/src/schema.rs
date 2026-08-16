@@ -99,7 +99,7 @@ async fn schema_lock_path(db: &DatabaseConnection) -> Result<Option<PathBuf>, Db
 /// Serialized across processes by a filesystem lock so concurrent cold starts
 /// of the same database file cannot race the WAL switch or the DDL transaction.
 /// A version-0 database is created from scratch; a database already at
-/// [`CURRENT_SCHEMA_VERSION`] is left untouched. Compatible v8 and v9
+/// [`CURRENT_SCHEMA_VERSION`] is left untouched. Compatible v8, v9, and v10
 /// schemas are migrated forward in one transaction; other development schemas are
 /// rejected (v1 databases were discarded by decision D3).
 pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
@@ -138,7 +138,8 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
             txn.commit().await
         }
         8 => migrate_v8_to_current(db).await,
-        9 => migrate_v9_to_v10(db).await,
+        9 => migrate_v9_to_current(db).await,
+        10 => migrate_v10_to_v11(db).await,
         v if v == CURRENT_SCHEMA_VERSION => Ok(()),
         v => Err(DbErr::Custom(format!(
             "database schema version {v} is incompatible with the supported version {CURRENT_SCHEMA_VERSION}; \
@@ -186,6 +187,7 @@ async fn migrate_v8_to_current(db: &DatabaseConnection) -> Result<(), DbErr> {
             .to_owned(),
     ))
     .await?;
+    add_session_metadata_columns(&txn).await?;
     txn.execute(Statement::from_string(
         txn.get_database_backend(),
         format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"),
@@ -198,7 +200,7 @@ async fn migrate_v8_to_current(db: &DatabaseConnection) -> Result<(), DbErr> {
 /// paired assistant launch run/tool reference. SQLite cannot alter a CHECK
 /// constraint in place. Renaming both tables first preserves every foreign
 /// key while the canonical names are recreated and copied transactionally.
-async fn migrate_v9_to_v10(db: &DatabaseConnection) -> Result<(), DbErr> {
+async fn migrate_v9_to_current(db: &DatabaseConnection) -> Result<(), DbErr> {
     let txn = db.begin().await?;
     for statement in [
         "ALTER TABLE agena_background_deliveries RENAME TO agena_background_deliveries_v9",
@@ -223,12 +225,59 @@ async fn migrate_v9_to_v10(db: &DatabaseConnection) -> Result<(), DbErr> {
         ))
         .await?;
     }
+    add_session_metadata_columns(&txn).await?;
     txn.execute(Statement::from_string(
         txn.get_database_backend(),
         format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"),
     ))
     .await?;
     txn.commit().await
+}
+
+/// Add the client-shared favorite/pinned flags without rewriting session
+/// identity, lineage, or transcript data.
+async fn migrate_v10_to_v11(db: &DatabaseConnection) -> Result<(), DbErr> {
+    let txn = db.begin().await?;
+    add_session_metadata_columns(&txn).await?;
+    txn.execute(Statement::from_string(
+        txn.get_database_backend(),
+        format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"),
+    ))
+    .await?;
+    txn.commit().await
+}
+
+async fn add_session_metadata_columns<C: ConnectionTrait>(connection: &C) -> Result<(), DbErr> {
+    let existing = connection
+        .query_all(Statement::from_string(
+            connection.get_database_backend(),
+            "PRAGMA table_info(agena_sessions)".to_owned(),
+        ))
+        .await?
+        .into_iter()
+        .map(|row| row.try_get::<String>("", "name"))
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+    for (name, statement) in [
+        (
+            "favorite",
+            "ALTER TABLE agena_sessions ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0, 1))",
+        ),
+        (
+            "pinned",
+            "ALTER TABLE agena_sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1))",
+        ),
+    ] {
+        if existing.contains(name) {
+            continue;
+        }
+        connection
+            .execute(Statement::from_string(
+                connection.get_database_backend(),
+                statement.to_owned(),
+            ))
+            .await?;
+    }
+    Ok(())
 }
 
 async fn read_schema_version(db: &DatabaseConnection) -> Result<i64, DbErr> {
@@ -253,7 +302,7 @@ const SEEDS: &[&str] = &[
 
 const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, depth INTEGER NOT NULL DEFAULT 0, root_id INTEGER NOT NULL DEFAULT 0, workspace_id INTEGER NOT NULL REFERENCES agena_workspaces(id) ON UPDATE CASCADE ON DELETE CASCADE, relation_kind TEXT NOT NULL DEFAULT 'root' CHECK (relation_kind IN ('root','child','fork','rewind','subagent')), is_subagent INTEGER NOT NULL GENERATED ALWAYS AS (relation_kind = 'subagent') STORED, cutoff_part_id INTEGER NULL, title TEXT NOT NULL, version INTEGER NOT NULL, lifecycle_state TEXT NOT NULL DEFAULT 'creating' CHECK (lifecycle_state IN ('creating','ready','failed')), creation_failure_json JSON NULL, task_id TEXT NULL, subtask_status TEXT NULL, subtask_started_at_ms INTEGER NULL, subtask_finished_at_ms INTEGER NULL, subtask_failure_json JSON NULL, config_json JSON NULL, provider_anchors_json JSON NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, depth INTEGER NOT NULL DEFAULT 0, root_id INTEGER NOT NULL DEFAULT 0, workspace_id INTEGER NOT NULL REFERENCES agena_workspaces(id) ON UPDATE CASCADE ON DELETE CASCADE, relation_kind TEXT NOT NULL DEFAULT 'root' CHECK (relation_kind IN ('root','child','fork','rewind','subagent')), is_subagent INTEGER NOT NULL GENERATED ALWAYS AS (relation_kind = 'subagent') STORED, cutoff_part_id INTEGER NULL, title TEXT NOT NULL, favorite INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0, 1)), pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)), version INTEGER NOT NULL, lifecycle_state TEXT NOT NULL DEFAULT 'creating' CHECK (lifecycle_state IN ('creating','ready','failed')), creation_failure_json JSON NULL, task_id TEXT NULL, subtask_status TEXT NULL, subtask_started_at_ms INTEGER NULL, subtask_finished_at_ms INTEGER NULL, subtask_failure_json JSON NULL, config_json JSON NULL, provider_anchors_json JSON NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_parts (part_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, role TEXT NOT NULL CHECK (role IN ('user','assistant','system','tool','runtime')), state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','in_progress','completed','failed','cancelled')), content JSON NOT NULL, summary TEXT NULL, visibility TEXT NOT NULL DEFAULT 'both' CHECK (visibility IN ('both','user','ai')), rendered_markdown TEXT NULL, parent_part_id INTEGER NULL REFERENCES agena_parts(part_id), run_id INTEGER NULL REFERENCES agena_parts(part_id), origin_session_id INTEGER NULL, revision INTEGER NOT NULL DEFAULT 1, started_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, provider_state JSON NULL, CHECK (finished_at_ms IS NULL OR finished_at_ms >= started_at_ms), CHECK ((state IN ('pending','in_progress') AND finished_at_ms IS NULL) OR (state IN ('completed','failed','cancelled') AND finished_at_ms IS NOT NULL)))",
     "CREATE TABLE IF NOT EXISTS agena_session_parts (session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, part_id INTEGER NOT NULL REFERENCES agena_parts(part_id), added_at_ms INTEGER NOT NULL, PRIMARY KEY (session_id, part_id))",
     "CREATE TABLE IF NOT EXISTS agena_execution_leases (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, owner_id TEXT NOT NULL, run_id INTEGER NULL, lease_started_at_ms INTEGER NOT NULL, heartbeat_at_ms INTEGER NOT NULL)",
@@ -415,6 +464,65 @@ mod tests {
             .map(|row| row.try_get::<String>("", "name").expect("table name"))
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(actual, expected);
+
+        let session_columns = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "PRAGMA table_info(agena_sessions)".to_owned(),
+            ))
+            .await
+            .expect("list session columns")
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "name").expect("column name"))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(session_columns.contains("favorite"));
+        assert!(session_columns.contains("pinned"));
+    }
+
+    #[tokio::test]
+    async fn v10_migration_adds_defaulted_session_metadata_flags() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory SQLite");
+        execute(
+            &db,
+            "CREATE TABLE agena_sessions (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+        )
+        .await
+        .expect("create v10 session fixture");
+        execute(
+            &db,
+            "INSERT INTO agena_sessions (id, title) VALUES (1, 'existing')",
+        )
+        .await
+        .expect("insert existing session");
+        execute(&db, "PRAGMA user_version = 10")
+            .await
+            .expect("set v10 marker");
+
+        initialize_schema(&db).await.expect("migrate v10 to v11");
+
+        let row = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT favorite, pinned FROM agena_sessions WHERE id = 1".to_owned(),
+            ))
+            .await
+            .expect("read migrated flags")
+            .expect("existing session remains");
+        assert!(!row.try_get::<bool>("", "favorite").expect("favorite"));
+        assert!(!row.try_get::<bool>("", "pinned").expect("pinned"));
+        let version: i64 = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "PRAGMA user_version".to_owned(),
+            ))
+            .await
+            .expect("read migrated version")
+            .expect("version row")
+            .try_get("", "user_version")
+            .expect("version");
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
     }
 
     #[tokio::test]

@@ -59,6 +59,7 @@ const props = defineProps<{
   openSessionActions: (directory: DirectoryEntry, session: SessionLike) => void
   openSessionActionMenu: (directory: DirectoryEntry, session: SessionLike, event?: MouseEvent | PointerEvent) => void
   togglePin: (sessionId: string) => void
+  toggleFavorite: (sessionId: string) => void
   deleteSession: (sessionId: string) => Promise<void>
 
   sessionActionMenuTarget: SessionMenuTarget | null
@@ -180,6 +181,7 @@ function statusMeta(sessionId: string) {
               item.session && item.directory ? openSessionActionMenu(item.directory, item.session, event) : undefined
           "
           @toggle-pin="togglePin(item.id)"
+          @toggle-favorite="toggleFavorite(item.id)"
           @delete="deleteSession(item.id)"
           @update:renameDraft="updateRenameDraft"
           @rename-save="saveRename"

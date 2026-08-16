@@ -923,7 +923,17 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     const trimmed = (title || '').trim()
     if (!sid || !trimmed) return null
-    const updated = await chatApi.patchSessionTitle(sid, trimmed)
+    const updated = await updateSessionMetadata(sid, { title: trimmed })
+    return updated
+  }
+
+  async function updateSessionMetadata(
+    sessionId: string,
+    patch: { title?: string; favorite?: boolean; pinned?: boolean },
+  ) {
+    const sid = (sessionId || '').trim()
+    if (!sid || Object.keys(patch).length === 0) return null
+    const updated = await chatApi.patchSessionMetadata(sid, patch)
     upsertSessionCache(updated)
     scheduleSessionsRefresh(1200)
     return updated
@@ -1325,12 +1335,16 @@ const useChatStoreDefinition = defineStore('chat', () => {
         }
       } else if (sid && changeKind === 'session_meta_updated') {
         const title = readString(props.title as JsonValue)
+        const favorite = typeof props.favorite === 'boolean' ? props.favorite : undefined
+        const pinned = typeof props.pinned === 'boolean' ? props.pinned : undefined
         const updatedAtMs = readNumber(props.updated_at_ms)
         const current = getSessionById(sid)
         if (title || current) {
           upsertSessionCache({
             id: sid,
             ...(title ? { title } : {}),
+            ...(favorite !== undefined ? { favorite } : {}),
+            ...(pinned !== undefined ? { pinned } : {}),
             ...(typeof updatedAtMs === 'number' ? { updated_at_ms: updatedAtMs } : {}),
           })
         }
@@ -1411,6 +1425,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     createSession,
     deleteSession,
     renameSession,
+    updateSessionMetadata,
     abortSession,
     sendText,
     sendMessage,

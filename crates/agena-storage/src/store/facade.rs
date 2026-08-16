@@ -37,8 +37,9 @@ use super::{
     BackgroundOperationTransition, BackgroundSettleOutcome, LEASE_STALENESS_MS, LeaseAcquire,
     MaintenanceOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartDelta, PartState,
     PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
-    SessionPresentation, SessionState, SessionSummary, SessionView, StateInputs, StoreError,
-    SubmitOutcome, UsageQuery, UsageRecord, UsageStats, apply_part_transition, presentation,
+    SessionMetadataPatch, SessionPresentation, SessionState, SessionSummary, SessionView,
+    StateInputs, StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
+    apply_part_transition, presentation,
 };
 
 /// Safety ceiling for streaming deltas buffered in memory before one durable
@@ -346,6 +347,13 @@ pub trait SessionStore: Send + Sync {
 
     /// Rename a session (bumps `sessions.version`).
     async fn rename(&self, session_id: i64, title: String) -> Result<SessionMeta, StoreError>;
+
+    /// Atomically update user-editable session metadata.
+    async fn update_metadata(
+        &self,
+        session_id: i64,
+        patch: SessionMetadataPatch,
+    ) -> Result<SessionMeta, StoreError>;
 
     /// Cancel a run marker and its non-terminal children (17.5 user cancel).
     /// Returns every changed row (marker and cancelled children).
@@ -1706,7 +1714,30 @@ where
     }
 
     async fn rename(&self, session_id: i64, title: String) -> Result<SessionMeta, StoreError> {
-        let meta = self.engine.rename_session(session_id, title).await?;
+        self.update_metadata(
+            session_id,
+            SessionMetadataPatch {
+                title: Some(title),
+                ..SessionMetadataPatch::default()
+            },
+        )
+        .await
+    }
+
+    async fn update_metadata(
+        &self,
+        session_id: i64,
+        patch: SessionMetadataPatch,
+    ) -> Result<SessionMeta, StoreError> {
+        if patch.is_empty() {
+            return Err(StoreError::InvalidState(
+                "session metadata patch cannot be empty".to_owned(),
+            ));
+        }
+        let meta = self
+            .engine
+            .update_session_metadata(session_id, patch)
+            .await?;
         self.memory.invalidate(session_id);
         self.bus.emit(SessionChange::SessionMetaUpdated {
             session_id,
@@ -3469,6 +3500,14 @@ mod tests {
             title: String,
         ) -> Result<SessionMeta, StoreError> {
             self.inner.rename_session(session_id, title).await
+        }
+
+        async fn update_session_metadata(
+            &self,
+            session_id: i64,
+            patch: SessionMetadataPatch,
+        ) -> Result<SessionMeta, StoreError> {
+            self.inner.update_session_metadata(session_id, patch).await
         }
 
         async fn set_provider_anchors(

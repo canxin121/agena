@@ -526,6 +526,12 @@ pub struct SessionMeta {
     pub relation_kind: SessionRelationKind,
     pub cutoff_part_id: Option<i64>,
     pub title: String,
+    /// Whether the user marked this session as a favorite.
+    #[serde(default)]
+    pub favorite: bool,
+    /// Whether the user pinned this session in session navigation.
+    #[serde(default)]
+    pub pinned: bool,
     /// Optimistic-lock counter, bumped on every session mutation.
     pub version: i64,
     pub lifecycle_state: SessionLifecycleState,
@@ -543,6 +549,23 @@ pub struct SessionMeta {
     pub provider_anchors_json: Option<Value>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+}
+
+/// Atomic patch for user-editable session metadata.
+///
+/// Keeping all fields in one patch ensures a multi-field update advances the
+/// optimistic-lock version exactly once.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionMetadataPatch {
+    pub title: Option<String>,
+    pub favorite: Option<bool>,
+    pub pinned: Option<bool>,
+}
+
+impl SessionMetadataPatch {
+    pub const fn is_empty(&self) -> bool {
+        self.title.is_none() && self.favorite.is_none() && self.pinned.is_none()
+    }
 }
 
 /// A session's transcript: metadata plus parts ordered by `(created_at_ms,
@@ -575,6 +598,8 @@ pub struct SessionSummary {
     pub depth: i64,
     pub root_id: i64,
     pub title: String,
+    pub favorite: bool,
+    pub pinned: bool,
     pub relation_kind: SessionRelationKind,
     pub lifecycle_state: SessionLifecycleState,
     /// Optimistic-lock counter, bumped on every session mutation.

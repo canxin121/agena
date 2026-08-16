@@ -1,11 +1,12 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type Component, type ComponentPublicInstance } from 'vue'
-import { RiClipboardLine, RiEditLine, RiFileUploadLine, RiGitBranchLine } from '@remixicon/vue'
+import { RiClipboardLine, RiEditLine, RiFileUploadLine, RiGitBranchLine, RiStarFill, RiStarLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import type { DirectoryEntry } from '@/features/sessions/model/types'
 
 type SessionLike = {
   id: string
+  favorite?: boolean
 }
 
 export type SessionActionItem = {
@@ -27,8 +28,25 @@ export function buildSessionActionItemsForSessionI18n(
   t: TFunction,
   session: SessionLike | null | undefined,
 ): SessionActionItem[] {
-  void session
   return [
+    {
+      id: 'toggle-favorite',
+      label: String(
+        t(
+          session?.favorite
+            ? 'chat.sidebar.sessionActions.unfavorite.label'
+            : 'chat.sidebar.sessionActions.favorite.label',
+        ),
+      ),
+      description: String(
+        t(
+          session?.favorite
+            ? 'chat.sidebar.sessionActions.unfavorite.description'
+            : 'chat.sidebar.sessionActions.favorite.description',
+        ),
+      ),
+      icon: session?.favorite ? RiStarFill : RiStarLine,
+    },
     {
       id: 'rename',
       label: String(t('chat.sidebar.sessionActions.rename.label')),

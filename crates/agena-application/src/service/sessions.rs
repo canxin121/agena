@@ -128,9 +128,31 @@ impl ApplicationService {
     ) -> ApplicationResult<SessionResource> {
         self.ensure_session_model(session_id).await?;
 
+        if request.title.is_none() && request.favorite.is_none() && request.pinned.is_none() {
+            return Err(ApplicationError::bad_request(
+                "session metadata update must include title, favorite, or pinned",
+            ));
+        }
+        if request
+            .title
+            .as_deref()
+            .is_some_and(|title| title.trim().is_empty())
+        {
+            return Err(ApplicationError::bad_request(
+                "session title cannot be empty",
+            ));
+        }
+
         let updated = self
             .session_store
-            .rename(session_id, request.title)
+            .update_metadata(
+                session_id,
+                agena_storage::store::SessionMetadataPatch {
+                    title: request.title,
+                    favorite: request.favorite,
+                    pinned: request.pinned,
+                },
+            )
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?;
         let state = self
@@ -169,6 +191,8 @@ pub(crate) fn session_resource_from_summary(
         root_id: summary.root_id,
         workspace_id: summary.workspace_id,
         title: summary.title,
+        favorite: summary.favorite,
+        pinned: summary.pinned,
         version: summary.version,
         relation_kind: session_relation_kind_from_domain(summary.relation_kind),
         lifecycle_state: session_lifecycle_state_from_domain(summary.lifecycle_state),
@@ -208,6 +232,8 @@ fn session_resource_from_storage_summary(
         root_id: summary.root_id,
         workspace_id: summary.workspace_id,
         title: summary.title.clone(),
+        favorite: summary.favorite,
+        pinned: summary.pinned,
         version: summary.version,
         relation_kind: session_relation_kind_from_domain(summary.relation_kind),
         lifecycle_state: session_lifecycle_state_from_domain(summary.lifecycle_state),
@@ -263,6 +289,8 @@ fn session_resource_from_storage_meta(
         root_id: meta.root_id,
         workspace_id: meta.workspace_id,
         title: meta.title.clone(),
+        favorite: meta.favorite,
+        pinned: meta.pinned,
         version: meta.version,
         relation_kind: session_relation_kind_from_domain(meta.relation_kind),
         lifecycle_state: session_lifecycle_state_from_domain(meta.lifecycle_state),
@@ -537,12 +565,32 @@ mod tests {
             .replace_session(
                 created.id,
                 SessionUpdateRequest {
-                    title: "Renamed".to_owned(),
+                    title: Some("Renamed".to_owned()),
+                    favorite: Some(true),
+                    pinned: Some(true),
                 },
             )
             .await
             .expect("rename session");
         assert_eq!(renamed.title, "Renamed");
+        assert!(renamed.favorite);
+        assert!(renamed.pinned);
+        assert_eq!(renamed.version, created.version + 1);
+
+        let unpinned = service
+            .replace_session(
+                created.id,
+                SessionUpdateRequest {
+                    title: None,
+                    favorite: None,
+                    pinned: Some(false),
+                },
+            )
+            .await
+            .expect("update only pinned state");
+        assert_eq!(unpinned.title, "Renamed");
+        assert!(unpinned.favorite);
+        assert!(!unpinned.pinned);
 
         let fetched = service
             .get_session(created.id)
@@ -550,6 +598,8 @@ mod tests {
             .expect("get session")
             .expect("session exists");
         assert_eq!(fetched.title, "Renamed");
+        assert!(fetched.favorite);
+        assert!(!fetched.pinned);
 
         let deleted = service
             .delete_session(created.id)

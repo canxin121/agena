@@ -22,6 +22,8 @@ export type AgenaSession = {
   root_id?: number
   workspace_id?: number
   title?: string
+  favorite?: boolean
+  pinned?: boolean
   version?: number
   relation_kind?: string
   lifecycle_state?: string
@@ -755,16 +757,23 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 }
 
-/** PUT /api/v1/sessions/{id} — rename. */
-export async function patchSessionTitle(sessionId: string, title: string): Promise<Session> {
+/** PUT /api/v1/sessions/{id} — atomically update user-editable metadata. */
+export async function patchSessionMetadata(
+  sessionId: string,
+  patch: { title?: string; favorite?: boolean; pinned?: boolean },
+): Promise<Session> {
   const updated = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify(patch),
   })
   const session = toSession(updated)
   if (!session) throw new Error('Server did not return a session')
   return session
+}
+
+export async function patchSessionTitle(sessionId: string, title: string): Promise<Session> {
+  return patchSessionMetadata(sessionId, { title })
 }
 
 /** GET /api/v1/sessions/{id} — single session read-back (replaces opencode locateSession). */

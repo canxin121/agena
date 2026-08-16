@@ -7,6 +7,8 @@ import {
   RiCloseLine,
   RiDeleteBinLine,
   RiLoader4Line,
+  RiPushpinFill,
+  RiPushpinLine,
   RiStarFill,
   RiStarLine,
 } from '@remixicon/vue'
@@ -29,6 +31,7 @@ type SessionLike = {
   slug?: string | null
   directory?: string | null
   time?: { updated?: number | string | null } | null
+  favorite?: boolean
 }
 
 const { t } = useI18n()
@@ -110,6 +113,7 @@ const emit = defineEmits<{
   (e: 'open-actions'): void
   (e: 'open-action-menu', event: MouseEvent | PointerEvent): void
   (e: 'toggle-pin'): void
+  (e: 'toggle-favorite'): void
   (e: 'delete'): void
   (e: 'update:renameDraft', v: string): void
   (e: 'rename-save'): void
@@ -148,6 +152,7 @@ const titleText = computed(() => {
   if (!props.session) return props.sessionId
   return sessionLabel(props.session)
 })
+const isFavorite = computed(() => props.session?.favorite === true)
 
 const workspaceTabTitleText = computed(() => {
   const titled = String(props.session?.title || '').trim()
@@ -383,10 +388,37 @@ function handleRowDragStart(event: DragEvent) {
           />
 
           <IconButton
+            size="xs"
+            class="hover:dark:bg-accent/40 hover:bg-primary/6"
+            :class="isFavorite ? 'text-amber-500' : 'text-muted-foreground hover:text-amber-500'"
+            :title="
+              String(
+                t(
+                  isFavorite
+                    ? 'chat.sidebar.sessionActions.unfavorite.label'
+                    : 'chat.sidebar.sessionActions.favorite.label',
+                ),
+              )
+            "
+            :aria-label="
+              String(
+                t(
+                  isFavorite
+                    ? 'chat.sidebar.sessionActions.unfavorite.label'
+                    : 'chat.sidebar.sessionActions.favorite.label',
+                ),
+              )
+            "
+            @click.stop="emit('toggle-favorite')"
+          >
+            <component :is="isFavorite ? RiStarFill : RiStarLine" class="h-4 w-4" />
+          </IconButton>
+
+          <IconButton
             v-if="canPin"
             size="xs"
             class="hover:dark:bg-accent/40 hover:bg-primary/6"
-            :class="pinned ? 'text-amber-500' : 'text-muted-foreground hover:text-amber-500'"
+            :class="pinned ? 'text-primary' : 'text-muted-foreground hover:text-primary'"
             :title="
               String(t(pinned ? 'chat.sidebar.sessionActions.unpin.label' : 'chat.sidebar.sessionActions.pin.label'))
             "
@@ -395,7 +427,7 @@ function handleRowDragStart(event: DragEvent) {
             "
             @click.stop="emit('toggle-pin')"
           >
-            <component :is="pinned ? RiStarFill : RiStarLine" class="h-4 w-4" />
+            <component :is="pinned ? RiPushpinFill : RiPushpinLine" class="h-4 w-4" />
           </IconButton>
 
           <ConfirmPopover

@@ -2496,6 +2496,14 @@ export default {
           label: '打开分享链接',
           description: '在新标签页打开分享链接',
         },
+        favorite: {
+          label: '收藏会话',
+          description: '添加到收藏',
+        },
+        unfavorite: {
+          label: '取消收藏',
+          description: '从收藏中移除',
+        },
         pin: {
           label: '置顶会话',
           description: '保持在列表顶部',

@@ -20,6 +20,8 @@ export type Session = {
   // Agena fields (kept on the open signature as well; listed for docs).
   state?: SessionState
   relation_kind?: SessionRelationKind
+  favorite?: boolean
+  pinned?: boolean
   version?: number
   message_count?: number
   child_session_count?: number

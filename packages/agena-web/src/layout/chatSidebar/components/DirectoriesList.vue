@@ -112,6 +112,7 @@ const props = defineProps<{
   openSessionActionMenu: (directory: DirectoryEntry, session: SessionLike, event?: MouseEvent | PointerEvent) => void
 
   togglePin: (sessionId: string) => void
+  toggleFavorite: (sessionId: string) => void
   deleteSession: (sessionId: string) => Promise<void>
 
   hasAttention: (sessionId: string) => 'permission' | 'question' | null
@@ -493,6 +494,7 @@ function sessionSelectableCount(directoryId: string): number {
                               : undefined
                         "
                         @toggle-pin="props.togglePin(row.id)"
+                        @toggle-favorite="props.toggleFavorite(row.id)"
                         @delete="props.deleteSession(row.id)"
                         @update:renameDraft="props.updateRenameDraft"
                         @rename-save="props.saveRename"
@@ -576,6 +578,7 @@ function sessionSelectableCount(directoryId: string): number {
                             row.session ? props.openSessionActionMenu(directory, row.session, event) : undefined
                         "
                         @toggle-pin="props.togglePin(row.id)"
+                        @toggle-favorite="props.toggleFavorite(row.id)"
                         @delete="props.deleteSession(row.id)"
                         @update:renameDraft="props.updateRenameDraft"
                         @rename-save="props.saveRename"

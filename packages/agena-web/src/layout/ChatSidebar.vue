@@ -8,9 +8,9 @@ import {
   RiDeleteBinLine,
   RiFolder6Line,
   RiListCheck3,
+  RiPushpinFill,
+  RiPushpinLine,
   RiRefreshLine,
-  RiStarFill,
-  RiStarLine,
 } from '@remixicon/vue'
 
 import RenameSessionDialog from '@/components/chat/RenameSessionDialog.vue'
@@ -277,6 +277,7 @@ const pinnedSessionsOpenUpdating = ref(false)
 const directoryPage = ref(initialPrefs.directoriesPage)
 const directoryPaging = ref(false)
 const pinCommandPendingIds = ref<Set<string>>(new Set())
+const favoriteCommandPendingIds = ref<Set<string>>(new Set())
 const collapseCommandPendingIds = ref<Set<string>>(new Set())
 const directoryExpandLoadingIds = ref<Set<string>>(new Set())
 const directorySectionLoadingIds = ref<Set<string>>(new Set())
@@ -345,6 +346,8 @@ type SessionLike = {
   title?: string
   slug?: string
   directory?: string
+  favorite?: boolean
+  pinned?: boolean
   time?: { updated?: number | null } | null
   [k: string]: SessionValue
 }
@@ -672,7 +675,7 @@ const sessionActionsDialogItems = computed<SessionDialogActionItem[]>(() => {
       description: isPinned
         ? String(t('chat.sidebar.sessionActions.unpin.description'))
         : String(t('chat.sidebar.sessionActions.pin.description')),
-      icon: isPinned ? RiStarFill : RiStarLine,
+      icon: isPinned ? RiPushpinFill : RiPushpinLine,
     },
     {
       id: 'delete',
@@ -686,7 +689,9 @@ const sessionActionsDialogItems = computed<SessionDialogActionItem[]>(() => {
       cancelText: String(t('common.cancel')),
     },
   ]
-  return [...base, ...buildSessionActionItemsForSessionI18n(t, target?.session)]
+  return [base[0], ...buildSessionActionItemsForSessionI18n(t, target?.session), base[1]].filter(
+    (item): item is SessionDialogActionItem => Boolean(item),
+  )
 })
 
 const filteredSessionActionsDialogItems = computed<SessionDialogActionItem[]>(() => {
@@ -859,6 +864,12 @@ async function runSessionActionMenu(item: SessionActionItem) {
   if (item.disabled) return
   const target = sessionActionMenuTarget.value
   if (!target) return
+  if (item.id === 'toggle-favorite') {
+    const favorite = target.session.favorite
+    closeDesktopSessionActionMenu()
+    await toggleFavorite(target.session.id, favorite)
+    return
+  }
   if (!props.mobileVariant && item.id === 'rename') {
     closeDesktopSessionActionMenu()
     openInlineRenameForSession(target.session)
@@ -875,6 +886,12 @@ async function runSessionDialogAction(item: SessionDialogActionItem) {
   }
   if (item.id === 'toggle-pin') {
     sessionActionTogglePin()
+    return
+  }
+  if (item.id === 'toggle-favorite') {
+    const target = sessionActionsTarget.value
+    sessionActionsOpen.value = false
+    if (target) await toggleFavorite(target.session.id, target.session.favorite)
     return
   }
   if (item.id === 'delete') {
@@ -931,6 +948,26 @@ async function togglePin(id: string) {
     const next = new Set(pinCommandPendingIds.value)
     next.delete(sid)
     pinCommandPendingIds.value = next
+  }
+}
+
+async function toggleFavorite(id: string, favoriteHint?: boolean) {
+  const sid = String(id || '').trim()
+  if (!sid || favoriteCommandPendingIds.value.has(sid)) return
+
+  const current = typeof favoriteHint === 'boolean' ? favoriteHint : chat.getSessionById(sid)?.favorite === true
+  const pending = new Set(favoriteCommandPendingIds.value)
+  pending.add(sid)
+  favoriteCommandPendingIds.value = pending
+  try {
+    await chat.updateSessionMetadata(sid, { favorite: !current })
+    await directorySessions.revalidateFromApi(undefined, { silent: true })
+  } catch (err) {
+    toasts.push('error', err instanceof Error ? err.message : String(err))
+  } finally {
+    const next = new Set(favoriteCommandPendingIds.value)
+    next.delete(sid)
+    favoriteCommandPendingIds.value = next
   }
 }
 
@@ -1130,6 +1167,8 @@ function mergeSidebarSessionLike(
   if (title) merged.title = title
   if (slug) merged.slug = slug
   if (directory) merged.directory = directory
+  if (typeof cacheSession?.favorite === 'boolean') merged.favorite = cacheSession.favorite
+  if (typeof cacheSession?.pinned === 'boolean') merged.pinned = cacheSession.pinned
   return merged
 }
 
@@ -2181,6 +2220,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
             :openSessionActions="openSessionActions"
             :openSessionActionMenu="openSessionActionMenu"
             :togglePin="togglePin"
+            :toggleFavorite="toggleFavorite"
             :deleteSession="deleteSession"
             :hasAttention="hasAttention"
             :statusLabelForSessionId="statusLabelForSessionId"
@@ -2230,6 +2270,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
               :openSessionActions="openSessionActions"
               :openSessionActionMenu="openSessionActionMenu"
               :togglePin="togglePin"
+              :toggleFavorite="toggleFavorite"
               :deleteSession="deleteSession"
               :sessionActionMenuTarget="sessionActionMenuTarget"
               :sessionActionMenuAnchorEl="sessionActionMenuAnchorRef"
@@ -2269,6 +2310,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
               :openSessionActions="openSessionActions"
               :openSessionActionMenu="openSessionActionMenu"
               :togglePin="togglePin"
+              :toggleFavorite="toggleFavorite"
               :deleteSession="deleteSession"
               :sessionActionMenuTarget="sessionActionMenuTarget"
               :sessionActionMenuAnchorEl="sessionActionMenuAnchorRef"
@@ -2309,6 +2351,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
               :openSessionActions="openSessionActions"
               :openSessionActionMenu="openSessionActionMenu"
               :togglePin="togglePin"
+              :toggleFavorite="toggleFavorite"
               :deleteSession="deleteSession"
               :sessionActionMenuTarget="sessionActionMenuTarget"
               :sessionActionMenuAnchorEl="sessionActionMenuAnchorRef"

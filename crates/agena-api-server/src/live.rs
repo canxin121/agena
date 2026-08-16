@@ -202,6 +202,8 @@ fn project_change(change: SessionChange) -> SessionChangeResource {
                 session_id,
                 version: meta.version,
                 title: meta.title,
+                favorite: meta.favorite,
+                pinned: meta.pinned,
                 updated_at_ms: meta.updated_at_ms,
             }
         }

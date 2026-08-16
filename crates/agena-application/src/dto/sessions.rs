@@ -35,7 +35,12 @@ pub struct SessionHierarchyRequest {
 #[serde(deny_unknown_fields)]
 /// Request to update session metadata.
 pub struct SessionUpdateRequest {
-    pub title: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub favorite: Option<bool>,
+    #[serde(default)]
+    pub pinned: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -109,7 +114,19 @@ pub struct SessionRewindRequestBody {
 
 #[cfg(test)]
 mod tests {
-    use super::SessionRunRequest;
+    use super::{SessionRunRequest, SessionUpdateRequest};
+
+    #[test]
+    fn session_update_accepts_flag_only_metadata_patches() {
+        let request = serde_json::from_value::<SessionUpdateRequest>(serde_json::json!({
+            "favorite": true,
+            "pinned": false,
+        }))
+        .expect("deserialize metadata flags");
+        assert_eq!(request.title, None);
+        assert_eq!(request.favorite, Some(true));
+        assert_eq!(request.pinned, Some(false));
+    }
 
     #[test]
     fn session_run_request_rejects_removed_agent_selection_fields() {

@@ -550,7 +550,14 @@ impl Application {
             })?;
 
         self.service()
-            .replace_session(session_id, crate::dto::SessionUpdateRequest { title })
+            .replace_session(
+                session_id,
+                crate::dto::SessionUpdateRequest {
+                    title: Some(title),
+                    favorite: None,
+                    pinned: None,
+                },
+            )
             .await
             .map_err(|error| {
                 ApplicationError::internal(format!("failed to rename session: {error}"))

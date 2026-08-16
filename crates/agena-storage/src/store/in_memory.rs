@@ -24,8 +24,9 @@ use super::{
     InteractionAnswerOutcome, LEASE_STALENESS_MS, LeaseAcquire, LeaseState, MaintenanceOutcome,
     NewBackgroundOperation, NewPart, NewSession, Part, PartDelta, PartRole, PartState,
     PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
-    SessionState, SessionSummary, SessionView, StateInputs, StoreError, SubmitOutcome, UsageGroup,
-    UsageQuery, UsageRecord, UsageStats, apply_part_transition, derive_session_state,
+    SessionMetadataPatch, SessionState, SessionSummary, SessionView, StateInputs, StoreError,
+    SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats, apply_part_transition,
+    derive_session_state,
 };
 use crate::store::jsonl;
 
@@ -448,6 +449,8 @@ impl PersistenceEngine for InMemoryEngine {
             relation_kind,
             cutoff_part_id,
             title,
+            favorite: false,
+            pinned: false,
             version: 1,
             lifecycle_state: SessionLifecycleState::Ready,
             creation_failure: None,
@@ -516,6 +519,35 @@ impl PersistenceEngine for InMemoryEngine {
             .get_mut(&session_id)
             .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
         meta.title = title;
+        meta.version += 1;
+        meta.updated_at_ms = now_ms;
+        Ok(meta.clone())
+    }
+
+    async fn update_session_metadata(
+        &self,
+        session_id: i64,
+        patch: SessionMetadataPatch,
+    ) -> Result<SessionMeta, StoreError> {
+        if patch.is_empty() {
+            return Err(StoreError::InvalidState(
+                "session metadata patch cannot be empty".to_owned(),
+            ));
+        }
+        let now_ms = self.now_ms();
+        let mut sessions = self.sessions.write().expect("sessions lock");
+        let meta = sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
+        if let Some(title) = patch.title {
+            meta.title = title;
+        }
+        if let Some(favorite) = patch.favorite {
+            meta.favorite = favorite;
+        }
+        if let Some(pinned) = patch.pinned {
+            meta.pinned = pinned;
+        }
         meta.version += 1;
         meta.updated_at_ms = now_ms;
         Ok(meta.clone())
@@ -606,6 +638,8 @@ impl PersistenceEngine for InMemoryEngine {
             relation_kind: SessionRelationKind::Subagent,
             cutoff_part_id: None,
             title,
+            favorite: false,
+            pinned: false,
             version: 1,
             lifecycle_state: SessionLifecycleState::Creating,
             creation_failure: None,
@@ -703,6 +737,8 @@ impl PersistenceEngine for InMemoryEngine {
                     depth: meta.depth,
                     root_id: meta.root_id,
                     title: meta.title.clone(),
+                    favorite: meta.favorite,
+                    pinned: meta.pinned,
                     relation_kind: meta.relation_kind,
                     lifecycle_state: meta.lifecycle_state,
                     version: meta.version,
@@ -801,6 +837,8 @@ impl PersistenceEngine for InMemoryEngine {
             depth: meta.depth,
             root_id: meta.root_id,
             title: meta.title.clone(),
+            favorite: meta.favorite,
+            pinned: meta.pinned,
             relation_kind: meta.relation_kind,
             lifecycle_state: meta.lifecycle_state,
             version: meta.version,
@@ -863,6 +901,8 @@ impl PersistenceEngine for InMemoryEngine {
                     depth: meta.depth,
                     root_id: meta.root_id,
                     title: meta.title.clone(),
+                    favorite: meta.favorite,
+                    pinned: meta.pinned,
                     relation_kind: meta.relation_kind,
                     lifecycle_state: meta.lifecycle_state,
                     version: meta.version,

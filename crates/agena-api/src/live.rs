@@ -65,6 +65,8 @@ pub enum SessionChangeResource {
         session_id: i64,
         version: i64,
         title: String,
+        favorite: bool,
+        pinned: bool,
         updated_at_ms: i64,
     },
 }

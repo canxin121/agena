@@ -178,7 +178,14 @@ pub async fn dispatch_command(
             }
             let session = state
                 .service()
-                .replace_session(session_id, SessionUpdateRequest { title })
+                .replace_session(
+                    session_id,
+                    SessionUpdateRequest {
+                        title: Some(title),
+                        favorite: None,
+                        pinned: None,
+                    },
+                )
                 .await?;
             Ok(CommandResult::Session(session))
         }

@@ -32,6 +32,10 @@ pub struct SessionSummary {
     pub root_id: i64,
     pub workspace_id: i64,
     pub title: String,
+    #[serde(default)]
+    pub favorite: bool,
+    #[serde(default)]
+    pub pinned: bool,
     pub version: i64,
     pub relation_kind: SessionRelationKind,
     pub lifecycle_state: SessionLifecycleState,

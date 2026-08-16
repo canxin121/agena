@@ -26,8 +26,8 @@ use agena_storage::store::{
     BackgroundSettleOutcome, InFlightRun, InteractionAnswerOutcome, LeaseAcquire, LeaseState,
     MaintenanceOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartDelta, PartRole,
     PartState, PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery,
-    SessionMeta, SessionState, SessionSummary, SessionView, StoreError, SubmitOutcome, UsageGroup,
-    UsageQuery, UsageRecord, UsageStats, apply_part_transition,
+    SessionMeta, SessionMetadataPatch, SessionState, SessionSummary, SessionView, StoreError,
+    SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats, apply_part_transition,
 };
 use async_trait::async_trait;
 use sea_orm::{
@@ -52,7 +52,8 @@ const PART_COLS: &str = "\
 /// Every session column, aliased to the `SessionMeta` field names.
 const SESSION_COLS: &str = "\
     s.id, s.parent_id, s.depth, s.root_id, s.workspace_id, s.relation_kind, s.cutoff_part_id, \
-    s.title, s.version, s.lifecycle_state, CAST(s.creation_failure_json AS TEXT) AS creation_failure, \
+    s.title, s.favorite, s.pinned, s.version, s.lifecycle_state, \
+    CAST(s.creation_failure_json AS TEXT) AS creation_failure, \
     s.task_id, s.subtask_status, s.subtask_started_at_ms, s.subtask_finished_at_ms, \
     CAST(s.subtask_failure_json AS TEXT) AS subtask_failure, CAST(s.config_json AS TEXT) AS config_json, \
     CAST(s.provider_anchors_json AS TEXT) AS provider_anchors_json, s.created_at_ms, s.updated_at_ms";
@@ -480,6 +481,8 @@ fn meta_from_row(row: sea_orm::QueryResult) -> Result<SessionMeta, DbErr> {
         relation_kind,
         cutoff_part_id: row.try_get("", "cutoff_part_id")?,
         title: row.try_get("", "title")?,
+        favorite: row.try_get("", "favorite")?,
+        pinned: row.try_get("", "pinned")?,
         version: row.try_get("", "version")?,
         lifecycle_state,
         creation_failure: json_col("creation_failure")?,
@@ -590,6 +593,8 @@ fn summary_from_row(row: sea_orm::QueryResult) -> Result<SessionSummary, DbErr> 
         depth: row.try_get("", "depth")?,
         root_id: row.try_get("", "root_id")?,
         title: row.try_get("", "title")?,
+        favorite: row.try_get("", "favorite")?,
+        pinned: row.try_get("", "pinned")?,
         relation_kind,
         lifecycle_state,
         version: row.try_get("", "version")?,
@@ -853,6 +858,49 @@ impl PersistenceEngine for SqliteEngine {
         .await
     }
 
+    async fn update_session_metadata(
+        &self,
+        session_id: i64,
+        patch: SessionMetadataPatch,
+    ) -> Result<SessionMeta, StoreError> {
+        if patch.is_empty() {
+            return Err(StoreError::InvalidState(
+                "session metadata patch cannot be empty".to_owned(),
+            ));
+        }
+        let db = self.db();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                let now = wall_clock_ms();
+                let has_title = patch.title.is_some();
+                let has_favorite = patch.favorite.is_some();
+                let has_pinned = patch.pinned.is_some();
+                txn.execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Sqlite,
+                    "UPDATE agena_sessions SET \
+                     title = CASE WHEN ? THEN ? ELSE title END, \
+                     favorite = CASE WHEN ? THEN ? ELSE favorite END, \
+                     pinned = CASE WHEN ? THEN ? ELSE pinned END, \
+                     version = version + 1, updated_at_ms = ? WHERE id = ?",
+                    [
+                        has_title.into(),
+                        text_value(patch.title),
+                        has_favorite.into(),
+                        patch.favorite.unwrap_or(false).into(),
+                        has_pinned.into(),
+                        patch.pinned.unwrap_or(false).into(),
+                        now.into(),
+                        session_id.into(),
+                    ],
+                ))
+                .await
+                .map_err(map_db_err)?;
+                session_meta_tx(txn, session_id).await
+            })
+        })
+        .await
+    }
+
     async fn set_provider_anchors(
         &self,
         session_id: i64,
@@ -1070,6 +1118,7 @@ impl PersistenceEngine for SqliteEngine {
         };
         let mut sql = format!(
             "SELECT s.id, s.workspace_id, s.parent_id, s.depth, s.root_id, s.title, \
+                    s.favorite, s.pinned, \
                     s.relation_kind, s.lifecycle_state, s.version, s.task_id, s.subtask_status, \
                     s.created_at_ms, s.updated_at_ms, \
              (SELECT COUNT(*) FROM agena_session_parts sp \
@@ -1150,6 +1199,7 @@ impl PersistenceEngine for SqliteEngine {
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "SELECT s.id, s.workspace_id, s.parent_id, s.depth, s.root_id, s.title, \
+                        s.favorite, s.pinned, \
                         s.relation_kind, s.lifecycle_state, s.version, s.task_id, s.subtask_status, \
                         s.created_at_ms, s.updated_at_ms, \
                  (SELECT COUNT(*) FROM agena_session_parts sp \
@@ -1207,6 +1257,7 @@ impl PersistenceEngine for SqliteEngine {
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "SELECT s.id, s.workspace_id, s.parent_id, s.depth, s.root_id, s.title, \
+                        s.favorite, s.pinned, \
                         s.relation_kind, s.lifecycle_state, s.version, s.task_id, s.subtask_status, \
                         s.created_at_ms, s.updated_at_ms, \
                  (SELECT COUNT(*) FROM agena_session_parts sp \

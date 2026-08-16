@@ -15,8 +15,8 @@ use super::{
     BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationTransition,
     BackgroundSettleOutcome, InteractionAnswerOutcome, LeaseAcquire, NewBackgroundOperation,
     NewPart, NewSession, Part, PartDelta, PartState, ReconcileOutcome, RunOutcome,
-    SessionListQuery, SessionMeta, SessionState, SessionSummary, SessionView, StoreError,
-    SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
+    SessionListQuery, SessionMeta, SessionMetadataPatch, SessionState, SessionSummary, SessionView,
+    StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
 };
 
 /// A live-update notification derived from an operation and emitted after
@@ -83,6 +83,14 @@ pub trait PersistenceEngine: Send + Sync {
         &self,
         session_id: i64,
         title: String,
+    ) -> Result<SessionMeta, StoreError>;
+
+    /// Atomically update user-editable session metadata (bumps `version`
+    /// exactly once, regardless of how many fields are present).
+    async fn update_session_metadata(
+        &self,
+        session_id: i64,
+        patch: SessionMetadataPatch,
     ) -> Result<SessionMeta, StoreError>;
 
     /// Persist `provider_anchors_json` (resume is blocking on it, D8).

@@ -1703,6 +1703,8 @@ mod tests {
             root_id: 1,
             workspace_id: 1,
             title: id.to_string(),
+            favorite: false,
+            pinned: false,
             version: 1,
             relation_kind: if parent_id.is_some() {
                 agena_domain::SessionRelationKind::Subagent

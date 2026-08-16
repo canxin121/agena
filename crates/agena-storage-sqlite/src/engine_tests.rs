@@ -15,7 +15,7 @@ use agena_storage::{
         BackgroundOperationPhase, BackgroundOperationTransition, LeaseAcquire,
         NewBackgroundOperation, NewPart, NewSession, PartDelta, PartRole, PartState,
         PartVisibility, PersistenceEngine, RunOutcome, SessionFacade, SessionListQuery,
-        SessionStore, SessionView,
+        SessionMetadataPatch, SessionStore, SessionView,
     },
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
@@ -107,6 +107,38 @@ async fn user_send_creates_marker_and_parts_with_membership() {
     assert_eq!(text.kind, "text");
     assert_eq!(text.run_id, Some(marker.part_id));
     assert_eq!(text.origin_session_id, session_id);
+}
+
+#[tokio::test]
+async fn session_metadata_patch_persists_flags_and_bumps_version_once() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+
+    let updated = engine
+        .update_session_metadata(
+            session_id,
+            SessionMetadataPatch {
+                title: Some("updated".to_owned()),
+                favorite: Some(true),
+                pinned: Some(true),
+            },
+        )
+        .await
+        .expect("update metadata");
+    assert_eq!(updated.title, "updated");
+    assert!(updated.favorite);
+    assert!(updated.pinned);
+    assert_eq!(updated.version, 2);
+
+    let summary = engine
+        .get_session_summary(session_id)
+        .await
+        .expect("read summary")
+        .expect("session summary");
+    assert_eq!(summary.title, "updated");
+    assert!(summary.favorite);
+    assert!(summary.pinned);
+    assert_eq!(summary.version, 2);
 }
 
 #[tokio::test]

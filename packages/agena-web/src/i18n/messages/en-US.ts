@@ -2499,6 +2499,14 @@ export default {
           label: 'Open share link',
           description: 'Open the share link in a new tab',
         },
+        favorite: {
+          label: 'Favorite session',
+          description: 'Add to your favorites',
+        },
+        unfavorite: {
+          label: 'Remove favorite',
+          description: 'Remove from your favorites',
+        },
         pin: {
           label: 'Pin session',
           description: 'Keep it at the top',

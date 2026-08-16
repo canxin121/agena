@@ -7,8 +7,9 @@
 
 /// Current SQLite schema version written to `PRAGMA user_version`.
 ///
-/// Version 10 lets scheduled deliveries retain optional assistant launch
-/// provenance. Version 9 added the durable background-operation aggregate and delivery
+/// Version 11 persists user favorite/pinned session metadata. Version 10 lets
+/// scheduled deliveries retain optional assistant launch provenance. Version 9
+/// added the durable background-operation aggregate and delivery
 /// inbox. Version 8 added a stored generated `is_subagent` column to
 /// `agena_sessions` (derived from `relation_kind = 'subagent'`). This schema
 /// owns the chat tables —
@@ -19,8 +20,7 @@
 /// entity; runs are `kind='run'` marker parts; session state is derived from
 /// parts + leases. Background-operation control state is deliberately
 /// normalized rather than encoded only in transcript JSON. v1 databases are
-/// NOT migrated, but the compatible v8 → current additive migration and the
-/// v9 → v10 background-table rebuild are supported.
+/// NOT migrated, but compatible v8/v9/v10 migrations are supported.
 ///
 /// Version history:
 /// - 5: the v2 "everything is a part" schema.
@@ -39,7 +39,9 @@
 /// - 10: scheduled-delivery operations may carry the same paired launch
 ///   run/tool references as other AI-created work; launch-less host schedules
 ///   remain valid Runtime ingress.
-pub const CURRENT_SCHEMA_VERSION: i64 = 10;
+/// - 11: `agena_sessions` gains durable `favorite` and `pinned` flags shared
+///   by every client.
+pub const CURRENT_SCHEMA_VERSION: i64 = 11;
 
 #[cfg(test)]
 mod tests {
@@ -96,7 +98,7 @@ mod tests {
     #[tokio::test]
     async fn incompatible_older_database_is_rejected_without_mutation() {
         // Simulate a pre-refactor (legacy) schema version.
-        let db = database_with_version(11).await;
+        let db = database_with_version(7).await;
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             "CREATE TABLE legacy_marker (value TEXT NOT NULL)".to_owned(),
@@ -115,7 +117,7 @@ mod tests {
             .expect_err("reject legacy schema");
 
         assert!(error.to_string().contains("does not migrate"));
-        assert_eq!(read_schema_version(&db).await, 11);
+        assert_eq!(read_schema_version(&db).await, 7);
         let marker = db
             .query_one(Statement::from_string(
                 DatabaseBackend::Sqlite,

@@ -1,4 +1,9 @@
-use std::{env, net::SocketAddr, sync::Arc};
+use std::{
+    env,
+    net::SocketAddr,
+    path::PathBuf,
+    sync::Arc,
+};
 
 use agena_api_server::AppState as ApiV2State;
 use agena_application::Application;
@@ -10,6 +15,7 @@ use axum::{
     routing::{get, post},
 };
 use serde_json::json;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use crate::server::{diagnostics::health, state::AppState};
@@ -398,6 +404,43 @@ fn server_api_router() -> Router<Arc<AppState>> {
         )
 }
 
+/// Resolve the built web frontend directory to serve, if any.
+///
+/// An explicit `--web-dir` wins; if it does not contain an `index.html` we warn
+/// and fall back to probing `<cwd>/packages/agena-web/dist`. Returns `None` in
+/// pure API mode (TUI/CLI clients only).
+fn resolve_web_dir(args: &crate::server::ServerArgs) -> Option<PathBuf> {
+    if let Some(dir) = &args.web_dir {
+        if dir.join("index.html").is_file() {
+            tracing::info!(
+                target: "agena.runtime",
+                web_dir = %dir.display(),
+                "serving web frontend from --web-dir"
+            );
+            return Some(dir.clone());
+        }
+        tracing::warn!(
+            target: "agena.runtime",
+            web_dir = %dir.display(),
+            "web-dir does not contain an index.html; falling back to API-only mode"
+        );
+        return None;
+    }
+    let probe = env::current_dir()
+        .ok()?
+        .join("packages/agena-web/dist");
+    if probe.join("index.html").is_file() {
+        tracing::info!(
+            target: "agena.runtime",
+            web_dir = %probe.display(),
+            "serving web frontend from auto-detected dist"
+        );
+        Some(probe)
+    } else {
+        None
+    }
+}
+
 pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     let workspace_root = args
         .workspace_root
@@ -479,13 +522,26 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     let app = public_router
         .merge(agena_api)
         .merge(server_api_routes)
-        .layer(TraceLayer::new_for_http())
-        .fallback(|| async {
+        .layer(TraceLayer::new_for_http());
+    let app = match resolve_web_dir(&args) {
+        // Serve the built frontend at the root. All API paths are matched by
+        // the routers above, so ServeDir only handles unmatched paths; any
+        // history-mode route (/chat, /settings, …) falls back to index.html
+        // for client-side routing. An unknown /api/* reaching here also
+        // resolves to index.html — the standard single-server SPA trade-off.
+        // `fallback` (not `not_found_service`) so the SPA index.html is served
+        // with a 200 on history-mode routes; `not_found_service` forces 404.
+        Some(dir) => app.fallback_service(
+            ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html"))),
+        ),
+        // Pure API mode: TUI/CLI clients get a JSON fallback on unknown routes.
+        None => app.fallback(|| async {
             Json(json!({
                 "service": "agena",
                 "message": "Agena server is running. The TUI and CLI clients connect over the HTTP API.",
             }))
-        });
+        }),
+    };
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)
         .parse()

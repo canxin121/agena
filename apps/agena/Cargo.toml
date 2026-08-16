@@ -47,7 +47,7 @@ sha2 = { workspace = true }
 sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio", "tls-rustls"] }
 tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true }
-tower-http = { workspace = true, features = ["trace"] }
+tower-http = { workspace = true, features = ["trace", "fs"] }
 thiserror = { workspace = true }
 argon2 = { workspace = true }
 time = { workspace = true, features = ["formatting"] }

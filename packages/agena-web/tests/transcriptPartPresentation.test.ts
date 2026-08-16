@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 
 import type { TranscriptDisplayPart } from '../src/components/chat/messageList.types'
 import {
@@ -159,5 +160,80 @@ describe('TUI-parity part presentation', () => {
       },
     })
     expect(partInteractionRequestIds(part)).toEqual(['input-1', 'permission-1'])
+  })
+
+  test('extracts explicit stdout logs and removes duplicate primary output', () => {
+    const projected = operationPresentation(
+      operationPart({
+        operation: {
+          result: {
+            human: { markdown: '## Complete\n\n- one' },
+            content: [{ type: 'log', stream: 'stdout', text: '## Complete\n\n- one' }],
+          },
+        },
+      }),
+    )
+    expect(projected.stdout).toBe('## Complete\n\n- one')
+    expect(projected.humanMarkdown).toBe('')
+    expect(projected.blocks).toEqual([])
+  })
+
+  test('extracts command stdout while retaining command diagnostics in Output', () => {
+    const projected = operationPresentation(
+      operationPart({
+        operation: {
+          result: {
+            content: [
+              {
+                type: 'command',
+                command: 'cargo test',
+                cwd: '/workspace',
+                stdout: '**2 passed**',
+                stderr: 'warning',
+                exit_code: 0,
+              },
+            ],
+          },
+        },
+      }),
+    )
+    expect(projected.stdout).toBe('**2 passed**')
+    expect(projected.blocks).toEqual([
+      {
+        type: 'command',
+        command: 'cargo test',
+        cwd: '/workspace',
+        stderr: 'warning',
+        exit_code: 0,
+      },
+    ])
+  })
+
+  test('deduplicates direct stdout sources and leaves stdout-only Output empty', () => {
+    const projected = operationPresentation(
+      operationPart({
+        stdout: '# Result',
+        operation: {
+          stdout: '# Result',
+          raw: { stdout: '# Result' },
+          result: { stdout: '# Result', raw: { stdout: '# Result' } },
+        },
+      }),
+    )
+    expect(projected.stdout).toBe('# Result')
+    expect(projected.humanMarkdown).toBe('')
+    expect(projected.modelOutput).toBe('')
+    expect(projected.structured).toBeNull()
+    expect(projected.blocks).toEqual([])
+    expect(projected.displaySections).toEqual([])
+    expect(projected.attachments).toEqual([])
+  })
+
+  test('keeps Input and Output folded while Stdout is expanded Markdown', () => {
+    const source = readFileSync(new URL('../src/components/chat/AgenaOperationPart.vue', import.meta.url), 'utf8')
+    expect(source).toContain('const inputExpanded = ref(false)')
+    expect(source).toContain('const outputExpanded = ref(false)')
+    expect(source).toContain('const stdoutExpanded = ref(true)')
+    expect(source).toContain('<MarkdownRenderer :content="operation.stdout" mode="markdown" :stream="false" />')
   })
 })

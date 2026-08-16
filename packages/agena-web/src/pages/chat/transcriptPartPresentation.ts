@@ -31,6 +31,7 @@ export type OperationPresentation = {
   error: string
   humanMarkdown: string
   modelOutput: string
+  stdout: string
   structured: JsonValue | null
   displaySections: OperationDisplaySection[]
   blocks: JsonRecord[]
@@ -242,6 +243,63 @@ function operationBlockText(block: JsonRecord): string {
   return ''
 }
 
+function splitOperationStdout(blocks: JsonRecord[]): { blocks: JsonRecord[]; stdout: string[] } {
+  const outputBlocks: JsonRecord[] = []
+  const stdout: string[] = []
+
+  for (const block of blocks) {
+    const kind = firstString(block, ['type', 'kind']).toLowerCase()
+    if (kind === 'log' && firstString(block, ['stream']).toLowerCase() === 'stdout') {
+      const text = firstString(block, ['text', 'markdown', 'content'])
+      if (text) stdout.push(text)
+      continue
+    }
+
+    if (kind === 'command') {
+      const text = firstString(block, ['stdout'])
+      if (text) stdout.push(text)
+      const remainder: JsonRecord = { ...block }
+      delete remainder.stdout
+      const hasVisibleRemainder = Boolean(
+        firstString(remainder, ['command', 'cwd', 'stderr']) || typeof remainder.exit_code === 'number',
+      )
+      if (hasVisibleRemainder) outputBlocks.push(remainder)
+      continue
+    }
+
+    outputBlocks.push(block)
+  }
+
+  return { blocks: outputBlocks, stdout }
+}
+
+function operationStdout(
+  content: JsonRecord,
+  operation: JsonRecord,
+  result: JsonRecord,
+  blockStdout: string[],
+): { text: string; normalized: Set<string> } {
+  const candidates = [
+    ...blockStdout,
+    firstString(content, ['stdout']),
+    firstString(operation, ['stdout']),
+    firstString(result, ['stdout']),
+    firstString(jsonRecord(operation.raw), ['stdout']),
+    firstString(jsonRecord(result.raw), ['stdout']),
+  ]
+  const normalized = new Set<string>()
+  const output: string[] = []
+  for (const candidate of candidates) {
+    const key = normalizedBlockText(candidate)
+    if (!key || normalized.has(key)) continue
+    normalized.add(key)
+    output.push(candidate.trim())
+  }
+  const text = output.join('\n\n')
+  if (text) normalized.add(normalizedBlockText(text))
+  return { text, normalized }
+}
+
 function operationBlocks(
   operation: JsonRecord,
   result: JsonRecord,
@@ -315,15 +373,20 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
   const input = Object.keys(encodedInput).length ? decodeStructuredValue(encodedInput) : null
   const toolName =
     firstString(content, ['name', 'tool']) || firstString(invocation, ['name']) || stringValue(part.source.tool)
-  const humanMarkdown = firstString(human, ['markdown', 'summary'])
+  const rawHumanMarkdown = firstString(human, ['markdown', 'summary'])
   const rawModelOutput = firstString(modelPreview, ['text']) || firstString(modelOutput, ['text'])
   const structured = result.structured ?? operation.structured ?? null
-  const blocks = operationBlocks(operation, result, structured, toolName, rawModelOutput, humanMarkdown)
+  const projectedBlocks = operationBlocks(operation, result, structured, toolName, rawModelOutput, rawHumanMarkdown)
+  const splitBlocks = splitOperationStdout(projectedBlocks)
+  const blocks = splitBlocks.blocks
+  const stdout = operationStdout(content, operation, result, splitBlocks.stdout)
+  const humanMarkdown = stdout.normalized.has(normalizedBlockText(rawHumanMarkdown)) ? '' : rawHumanMarkdown
   const modelOutputDuplicatedByBlock =
     blocks.some((block) => normalizedBlockText(operationBlockText(block)) === normalizedBlockText(rawModelOutput)) ||
     ((/(^|[._-])search$/i.test(toolName) || /web[._-]?search/i.test(toolName)) &&
       blocks.some((block) => firstString(block, ['type', 'kind']) === 'search_results'))
-  const modelOutputText = modelOutputDuplicatedByBlock ? '' : rawModelOutput
+  const modelOutputText =
+    modelOutputDuplicatedByBlock || stdout.normalized.has(normalizedBlockText(rawModelOutput)) ? '' : rawModelOutput
 
   const displaySections = jsonArray(display.sections)
     .map((item) => {
@@ -405,6 +468,7 @@ export function operationPresentation(part: TranscriptDisplayPart): OperationPre
       operationFailureMessage(operation.error ?? null),
     humanMarkdown,
     modelOutput: modelOutputText,
+    stdout: stdout.text,
     structured,
     displaySections,
     blocks,

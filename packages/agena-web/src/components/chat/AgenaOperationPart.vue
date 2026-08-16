@@ -34,6 +34,7 @@ const operation = computed(() => operationPresentation(props.part))
 const status = computed(() => partStatusPresentation(props.part.status))
 const inputExpanded = ref(false)
 const outputExpanded = ref(false)
+const stdoutExpanded = ref(true)
 const permissionsExpanded = ref(false)
 
 watch(
@@ -41,6 +42,7 @@ watch(
   () => {
     inputExpanded.value = false
     outputExpanded.value = false
+    stdoutExpanded.value = true
     permissionsExpanded.value = false
   },
 )
@@ -317,6 +319,23 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
             lang="json"
             compact
           />
+        </div>
+      </section>
+
+      <section v-if="!operation.userInputs.length && operation.stdout" class="py-1">
+        <button
+          type="button"
+          class="flex items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-primary outline-none hover:bg-muted/40"
+          :aria-expanded="stdoutExpanded"
+          @click="stdoutExpanded = !stdoutExpanded"
+        >
+          <span class="w-3 text-center font-mono text-muted-foreground" aria-hidden="true">{{
+            stdoutExpanded ? '▾' : '▸'
+          }}</span>
+          Stdout
+        </button>
+        <div v-if="stdoutExpanded" class="min-w-0 pl-5 pt-1">
+          <MarkdownRenderer :content="operation.stdout" mode="markdown" :stream="false" />
         </div>
       </section>
     </div>

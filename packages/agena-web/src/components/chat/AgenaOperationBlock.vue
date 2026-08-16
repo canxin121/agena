@@ -24,6 +24,7 @@ const bodyText = computed(() => {
   )
 })
 const command = computed(() => stringValue(props.block.command))
+const cwd = computed(() => stringValue(props.block.cwd))
 const stdout = computed(() => stringValue(props.block.stdout))
 const stderr = computed(() => stringValue(props.block.stderr))
 const exitCode = computed(() => (typeof props.block.exit_code === 'number' ? props.block.exit_code : null))
@@ -128,6 +129,7 @@ const progressPercent = computed(() =>
     >
 
     <div v-else-if="kind === 'command'" class="space-y-2">
+      <div v-if="cwd" class="font-mono text-[10px] text-muted-foreground">{{ cwd }}</div>
       <div class="font-mono text-xs text-foreground"><span class="text-primary">$</span> {{ command }}</div>
       <CodeBlock v-if="stdout" :code="stdout" lang="text" compact />
       <CodeBlock v-if="stderr" :code="stderr" lang="text" compact />

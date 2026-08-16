@@ -6,7 +6,7 @@ import { RiListUnordered } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 import { renderMarkdown, type MarkdownUiLabels } from '@/lib/markdown'
 import { copyTextToClipboard } from '@/lib/clipboard'
-import { withEmbeddedWorkspaceScopeQuery } from '@/app/windowScope'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { resolveWorkspaceFileLink, resolveWorkspaceMediaUrl } from '@/lib/workspaceLinks'
 import { useDirectoryStore } from '@/stores/directory'
 import { useToastsStore } from '@/stores/toasts'
@@ -265,6 +265,7 @@ const toasts = useToastsStore()
 const directoryStore = useDirectoryStore()
 const ui = useUiStore()
 const router = useRouter()
+const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
 
 function buildMarkdownLabels(): Partial<MarkdownUiLabels> {
@@ -605,13 +606,11 @@ function openWorkspaceLink(href: string): boolean {
   if (resolved.anchor) query.fileAnchor = String(resolved.anchor)
 
   const fileName = resolved.path.split('/').filter(Boolean).pop() || String(t('nav.files'))
-  ui.openWorkspaceWindow('files', {
-    activate: true,
+  void workspaceNavigation.openWorkspaceLocation('files', {
     query,
     title: fileName,
     matchKeys: ['filePath'],
   })
-  void router.push({ path: '/files', query: withEmbeddedWorkspaceScopeQuery(query, route.query) })
   return true
 }
 

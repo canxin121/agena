@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 
-import { isMainTabId, type MainTabId } from '@/app/navigation/mainTabs'
+import { isMainTabId, mainTabPath, normalizeMainTabPath, type MainTabId } from '@/app/navigation/mainTabs'
 import { getLocalJson, getLocalString, setLocalJson, setLocalString } from '@/lib/persist'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 
@@ -28,7 +28,9 @@ export type WorkspaceWindowTab = {
   id: string
   mainTab: MainTab
   title?: string
+  routePath: string
   routeQuery: Record<string, string>
+  routeHash: string
   createdAt: number
 }
 
@@ -178,17 +180,23 @@ function sortedStringRecordEntries(record: Record<string, string>): Array<[strin
     .sort(([a], [b]) => a.localeCompare(b))
 }
 
-function buildWorkspaceWindowIdentity(tab: MainTab, query: Record<string, string>, matchKeys?: string[]): string {
+function buildWorkspaceWindowIdentity(
+  tab: MainTab,
+  path: string,
+  query: Record<string, string>,
+  matchKeys?: string[],
+): string {
+  const normalizedPath = normalizeMainTabPath(tab, path)
   const keys = normalizeMatchKeys(matchKeys)
   if (keys.length > 0) {
     const values = keys.map((key) => readMatchQueryValue(query, key))
     if (values.every(Boolean)) {
-      return `${tab}::match::${keys.map((key, idx) => `${key}=${values[idx]}`).join('&')}`
+      return `${tab}::${normalizedPath}::match::${keys.map((key, idx) => `${key}=${values[idx]}`).join('&')}`
     }
   }
 
   const parts = sortedStringRecordEntries(query)
-  return `${tab}::full::${parts.map(([key, value]) => `${key}=${value}`).join('&')}`
+  return `${tab}::${normalizedPath}::full::${parts.map(([key, value]) => `${key}=${value}`).join('&')}`
 }
 
 function normalizeIdList(raw: unknown): string[] {
@@ -375,7 +383,10 @@ export const useUiStore = defineStore('ui', () => {
     const mainTabRaw = String(source.mainTab || '').trim()
     const mainTab: MainTab = isMainTabId(mainTabRaw) ? mainTabRaw : 'chat'
     const title = String(source.title || '').trim()
+    const routePath = normalizeMainTabPath(mainTab, String(source.routePath || ''))
     const routeQuery = normalizeRouteQueryRecord(source.routeQuery)
+    const routeHashRaw = String(source.routeHash || '').trim()
+    const routeHash = routeHashRaw && !routeHashRaw.startsWith('#') ? `#${routeHashRaw}` : routeHashRaw
 
     const createdAtRaw = Number(source.createdAt)
     const createdAt = Number.isFinite(createdAtRaw) && createdAtRaw > 0 ? Math.floor(createdAtRaw) : Date.now()
@@ -384,18 +395,29 @@ export const useUiStore = defineStore('ui', () => {
       id,
       mainTab,
       ...(title ? { title } : {}),
+      routePath,
       routeQuery,
+      routeHash,
       createdAt,
     }
   }
 
-  function createWorkspaceWindowTab(mainTab: MainTab = 'chat', rawQuery?: unknown, title?: string): WorkspaceWindowTab {
+  function createWorkspaceWindowTab(
+    mainTab: MainTab = 'chat',
+    rawQuery?: unknown,
+    title?: string,
+    routePath?: string,
+    routeHash?: string,
+  ): WorkspaceWindowTab {
     const normalizedTitle = String(title || '').trim()
+    const normalizedHashRaw = String(routeHash || '').trim()
     return {
       id: nextWorkspaceWindowId(),
       mainTab,
       ...(normalizedTitle ? { title: normalizedTitle } : {}),
+      routePath: normalizeMainTabPath(mainTab, routePath),
       routeQuery: normalizeRouteQueryRecord(rawQuery),
+      routeHash: normalizedHashRaw && !normalizedHashRaw.startsWith('#') ? `#${normalizedHashRaw}` : normalizedHashRaw,
       createdAt: Date.now(),
     }
   }
@@ -745,6 +767,7 @@ export const useUiStore = defineStore('ui', () => {
 
       const identity = buildWorkspaceWindowIdentity(
         windowTab.mainTab,
+        windowTab.routePath,
         windowTab.routeQuery,
         defaultMatchKeysForMainTab(windowTab.mainTab),
       )
@@ -1378,18 +1401,28 @@ export const useUiStore = defineStore('ui', () => {
 
   function createWorkspaceWindow(
     tab: MainTab = activeMainTab.value,
-    opts?: { activate?: boolean; query?: unknown; title?: string },
+    opts?: { activate?: boolean; query?: unknown; title?: string; path?: string; hash?: string },
   ): string {
     return openWorkspaceWindow(tab, {
       activate: opts?.activate,
       query: opts?.query,
       title: opts?.title,
+      path: opts?.path,
+      hash: opts?.hash,
     })
   }
 
   function openWorkspaceWindow(
     tab: MainTab = activeMainTab.value,
-    opts?: { activate?: boolean; query?: unknown; title?: string; matchKeys?: string[]; reuseExisting?: boolean },
+    opts?: {
+      activate?: boolean
+      query?: unknown
+      title?: string
+      path?: string
+      hash?: string
+      matchKeys?: string[]
+      reuseExisting?: boolean
+    },
   ): string {
     const shouldActivate = opts?.activate !== false
     const shouldReuseExisting = opts?.reuseExisting !== false
@@ -1398,12 +1431,16 @@ export const useUiStore = defineStore('ui', () => {
       workspaceGroups.value[0] ||
       getWorkspaceGroupById(getWorkspaceWindowGroupId(activeWorkspaceWindowId.value))
     const query = normalizeRouteQueryRecord(opts?.query)
+    const path = normalizeMainTabPath(tab, opts?.path)
+    const hashRaw = String(opts?.hash || '').trim()
+    const hash = hashRaw && !hashRaw.startsWith('#') ? `#${hashRaw}` : hashRaw
     const matchKeys = normalizeMatchKeys(opts?.matchKeys)
     const effectiveKeys = matchKeys.length > 0 ? matchKeys : defaultMatchKeysForMainTab(tab)
     const scopeWindowIds = selectedGroup ? selectedGroup.tabIds : workspaceWindows.value.map((item) => item.id)
 
     const existing = shouldReuseExisting
       ? findWorkspaceWindowByTabAndQuery(tab, query, {
+          path,
           keys: effectiveKeys,
           windowIds: scopeWindowIds,
         })
@@ -1412,7 +1449,9 @@ export const useUiStore = defineStore('ui', () => {
       const targetId = existing.id
       clearSuppressedRouteWindowRestore(targetId)
       setWorkspaceWindowMainTab(targetId, tab)
+      setWorkspaceWindowRoutePath(targetId, path)
       setWorkspaceWindowRouteQuery(targetId, query)
+      setWorkspaceWindowRouteHash(targetId, hash)
       if (typeof opts?.title !== 'undefined') {
         setWorkspaceWindowTitle(targetId, opts.title)
       }
@@ -1434,7 +1473,7 @@ export const useUiStore = defineStore('ui', () => {
       return targetId
     }
 
-    const next = createWorkspaceWindowTab(tab, query, opts?.title)
+    const next = createWorkspaceWindowTab(tab, query, opts?.title, path, hash)
     clearSuppressedRouteWindowRestore(next.id)
     workspaceWindows.value = [...workspaceWindows.value, next]
 
@@ -1464,9 +1503,10 @@ export const useUiStore = defineStore('ui', () => {
   function findWorkspaceWindowByTabAndQuery(
     tab: MainTab,
     rawQuery: unknown,
-    opts?: { keys?: string[]; windowIds?: string[] },
+    opts?: { path?: string; keys?: string[]; windowIds?: string[] },
   ): WorkspaceWindowTab | null {
     const query = normalizeRouteQueryRecord(rawQuery)
+    const path = opts?.path ? normalizeMainTabPath(tab, opts.path) : ''
     const matchKeys = normalizeMatchKeys(opts?.keys)
 
     const candidates = Array.isArray(opts?.windowIds)
@@ -1481,6 +1521,7 @@ export const useUiStore = defineStore('ui', () => {
 
     for (const item of candidates) {
       if (item.mainTab !== tab) continue
+      if (path && item.routePath !== path) continue
 
       if (!matchKeys.length) {
         if (areStringRecordsEqual(item.routeQuery || {}, query)) return item
@@ -1539,11 +1580,37 @@ export const useUiStore = defineStore('ui', () => {
             const next = {
               ...item,
               mainTab: tab,
+              routePath: mainTabPath(tab),
+              routeHash: '',
             }
             const { title: _ignored, ...rest } = next
             return rest
           })()
         : item,
+    )
+  }
+
+  function setWorkspaceWindowRoutePath(windowId: string, path?: string | null) {
+    const idx = findWorkspaceWindowIndex(windowId)
+    if (idx < 0) return
+    const current = workspaceWindows.value[idx]
+    if (!current) return
+
+    const nextPath = normalizeMainTabPath(current.mainTab, path)
+    if (current.routePath === nextPath) return
+    workspaceWindows.value = workspaceWindows.value.map((item, itemIdx) =>
+      itemIdx === idx ? { ...item, routePath: nextPath } : item,
+    )
+  }
+
+  function setWorkspaceWindowRouteHash(windowId: string, hash?: string | null) {
+    const idx = findWorkspaceWindowIndex(windowId)
+    if (idx < 0) return
+    const raw = String(hash || '').trim()
+    const nextHash = raw && !raw.startsWith('#') ? `#${raw}` : raw
+    if (workspaceWindows.value[idx]?.routeHash === nextHash) return
+    workspaceWindows.value = workspaceWindows.value.map((item, itemIdx) =>
+      itemIdx === idx ? { ...item, routeHash: nextHash } : item,
     )
   }
 
@@ -1621,21 +1688,33 @@ export const useUiStore = defineStore('ui', () => {
     setWorkspaceWindowRouteQuery(targetId, rawQuery)
   }
 
-  function syncActiveWorkspaceWindowFromRoute(tab: MainTab, rawQuery: unknown) {
+  function syncActiveWorkspaceWindowFromRoute(
+    tab: MainTab,
+    rawQuery: unknown,
+    location?: { path?: string | null; hash?: string | null },
+  ) {
     const routeWindowId = readWindowIdFromRouteQuery(rawQuery)
+    const routePath = normalizeMainTabPath(tab, location?.path)
+    const routeHash = String(location?.hash || '').trim()
+    const normalizedQuery = normalizeRouteQueryRecord(rawQuery)
 
-    // Desktop shell routes drive sidebar state only.
-    // Keep split-pane window content stable unless explicit window activation happens.
     if (!isCompactLayout.value) {
       if (routeWindowId && workspaceWindows.value.some((item) => item.id === routeWindowId)) {
         clearSuppressedRouteWindowRestore(routeWindowId)
         activateWorkspaceWindow(routeWindowId)
+        setWorkspaceWindowMainTab(routeWindowId, tab)
+        setWorkspaceWindowRoutePath(routeWindowId, routePath)
+        setWorkspaceWindowRouteQuery(routeWindowId, normalizedQuery)
+        setWorkspaceWindowRouteHash(routeWindowId, routeHash)
         return
       }
 
-      if (!activeWorkspaceWindow.value) {
-        activeMainTabFallback.value = tab
-      }
+      openWorkspaceWindow(tab, {
+        activate: true,
+        path: routePath,
+        query: normalizedQuery,
+        hash: routeHash,
+      })
       return
     }
 
@@ -1647,7 +1726,9 @@ export const useUiStore = defineStore('ui', () => {
         const seeded: WorkspaceWindowTab = {
           id: routeWindowId,
           mainTab: tab,
-          routeQuery: normalizeRouteQueryRecord(rawQuery),
+          routePath,
+          routeQuery: normalizedQuery,
+          routeHash,
           createdAt: Date.now(),
         }
         workspaceWindows.value = [...workspaceWindows.value, seeded]
@@ -1656,22 +1737,28 @@ export const useUiStore = defineStore('ui', () => {
       clearSuppressedRouteWindowRestore(routeWindowId)
       activateWorkspaceWindow(routeWindowId)
       setWorkspaceWindowMainTab(routeWindowId, tab)
-      setWorkspaceWindowRouteQuery(routeWindowId, rawQuery)
+      setWorkspaceWindowRoutePath(routeWindowId, routePath)
+      setWorkspaceWindowRouteQuery(routeWindowId, normalizedQuery)
+      setWorkspaceWindowRouteHash(routeWindowId, routeHash)
       return
     }
 
     const prevMainTab = activeMainTab.value
     setActiveMainTab(tab)
 
-    const normalizedQuery = normalizeRouteQueryRecord(rawQuery)
     if (Object.keys(normalizedQuery).length > 0) {
       setActiveWorkspaceWindowRouteQuery(normalizedQuery)
-      return
+    }
+
+    const targetId = getResolvedWorkspaceWindowId()
+    if (targetId) {
+      setWorkspaceWindowRoutePath(targetId, routePath)
+      setWorkspaceWindowRouteHash(targetId, routeHash)
     }
 
     // Keep per-window route context when URL is clean (no query params).
     // Only clear route query when user explicitly switches to another main tab.
-    if (prevMainTab !== tab) {
+    if (prevMainTab !== tab && Object.keys(normalizedQuery).length === 0) {
       setActiveWorkspaceWindowRouteQuery({})
     }
   }
@@ -1771,7 +1858,9 @@ export const useUiStore = defineStore('ui', () => {
 
     const duplicatedId = openWorkspaceWindow(source.mainTab, {
       activate: false,
+      path: source.routePath,
       query: source.routeQuery,
+      hash: source.routeHash,
       title: source.title,
       matchKeys: defaultMatchKeysForMainTab(source.mainTab),
       reuseExisting: false,
@@ -1816,7 +1905,9 @@ export const useUiStore = defineStore('ui', () => {
     }
 
     setWorkspaceWindowMainTab(targetId, source.mainTab)
+    setWorkspaceWindowRoutePath(targetId, source.routePath)
     setWorkspaceWindowRouteQuery(targetId, source.routeQuery)
+    setWorkspaceWindowRouteHash(targetId, source.routeHash)
     if (typeof source.title !== 'undefined') {
       setWorkspaceWindowTitle(targetId, source.title)
     }
@@ -1833,7 +1924,13 @@ export const useUiStore = defineStore('ui', () => {
     if (!targetId) return createWorkspaceWindow(defaultMainTab)
     const source = workspaceWindows.value.find((item) => item.id === targetId)
     if (!source) return createWorkspaceWindow(defaultMainTab)
-    return createWorkspaceWindow(source.mainTab, { activate: true, query: source.routeQuery, title: source.title })
+    return createWorkspaceWindow(source.mainTab, {
+      activate: true,
+      path: source.routePath,
+      query: source.routeQuery,
+      hash: source.routeHash,
+      title: source.title,
+    })
   }
 
   function getAdjacentWorkspaceWindowId(direction: 'next' | 'prev', fromWindowId?: string | null): string | null {
@@ -2019,24 +2116,7 @@ export const useUiStore = defineStore('ui', () => {
     const targetId = getResolvedWorkspaceWindowId()
     if (!targetId) return
 
-    const idx = findWorkspaceWindowIndex(targetId)
-    if (idx < 0) return
-
-    const current = workspaceWindows.value[idx]
-    if (!current || current.mainTab === tab) return
-
-    workspaceWindows.value = workspaceWindows.value.map((item, itemIdx) =>
-      itemIdx === idx
-        ? (() => {
-            const next = {
-              ...item,
-              mainTab: tab,
-            }
-            const { title: _ignored, ...rest } = next
-            return rest
-          })()
-        : item,
-    )
+    setWorkspaceWindowMainTab(targetId, tab)
   }
 
   function enableSessionQuery() {
@@ -2240,7 +2320,9 @@ export const useUiStore = defineStore('ui', () => {
     activateWorkspaceWindow,
     setFocusedWorkspaceWindow,
     setWorkspaceWindowMainTab,
+    setWorkspaceWindowRoutePath,
     setWorkspaceWindowRouteQuery,
+    setWorkspaceWindowRouteHash,
     setActiveWorkspaceWindowRouteQuery,
     syncActiveWorkspaceWindowFromRoute,
     closeWorkspaceWindow,

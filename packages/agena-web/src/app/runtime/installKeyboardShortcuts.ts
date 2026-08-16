@@ -3,8 +3,8 @@ import { useChatStore } from '@/stores/chat'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import { patchSessionIdInQuery } from '@/app/navigation/sessionQuery'
-import { isEmbeddedWorkspacePaneContext, withEmbeddedWorkspaceScopeQuery } from '@/app/windowScope'
 import { i18n } from '@/i18n'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 
 function hasModifier(e: KeyboardEvent): boolean {
   // Treat Meta on macOS, Ctrl elsewhere.
@@ -19,6 +19,7 @@ export function installKeyboardShortcuts(): () => void {
   const ui = useUiStore()
   const chat = useChatStore()
   const settings = useSettingsStore()
+  const workspaceNavigation = useWorkspaceNavigation()
 
   const isOnSettingsPage = () => router.currentRoute.value.path.startsWith('/settings')
 
@@ -42,9 +43,11 @@ export function installKeyboardShortcuts(): () => void {
       e.preventDefault()
       ui.setSessionSwitcherOpen(false)
       if (isOnSettingsPage()) {
-        void router.push('/chat')
+        if (ui.isCompactLayout) void router.push('/chat')
+        else void workspaceNavigation.openMainTab('chat')
       } else {
-        void router.push('/settings/general')
+        if (ui.isCompactLayout) void router.push('/settings/general')
+        else void workspaceNavigation.openMainTab('settings', { path: '/settings/general' })
       }
       return
     }
@@ -75,19 +78,12 @@ export function installKeyboardShortcuts(): () => void {
         const sid = (created?.id || chat.selectedSessionId || '').trim()
 
         if (sid) {
-          const currentQuery = router.currentRoute.value.query || {}
-          const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(currentQuery)
-          const nextQuery = patchSessionIdInQuery(currentQuery, sid)
-          ui.createWorkspaceWindow('chat', {
-            activate: true,
+          const nextQuery = patchSessionIdInQuery(router.currentRoute.value.query || {}, sid)
+          await workspaceNavigation.openWorkspaceLocation('chat', {
             query: nextQuery,
             title: String(i18n.global.t('nav.chat')),
+            matchKeys: ['sessionId'],
           })
-          if (isEmbeddedWorkspacePane) {
-            await router.push({ path: '/chat', query: withEmbeddedWorkspaceScopeQuery(nextQuery, currentQuery) })
-          } else {
-            await router.push('/chat')
-          }
         } else {
           await router.push('/chat')
         }
@@ -128,7 +124,8 @@ export function installKeyboardShortcuts(): () => void {
     if (e.key === 'Escape') {
       if (isOnSettingsPage()) {
         e.preventDefault()
-        void router.push('/chat')
+        if (ui.isCompactLayout) void router.push('/chat')
+        else void workspaceNavigation.openMainTab('chat')
         return
       }
     }

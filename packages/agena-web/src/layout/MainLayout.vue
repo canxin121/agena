@@ -10,7 +10,8 @@ import ChatSidebar from '@/layout/ChatSidebar.vue'
 import BottomNav from '@/layout/BottomNav.vue'
 import WorkspaceEditorGroupPane from '@/layout/WorkspaceEditorGroupPane.vue'
 import WorkspacePrimaryPaneView from '@/layout/WorkspacePrimaryPaneView.vue'
-import { WORKSPACE_MAIN_TABS, type MainTabId } from '@/app/navigation/mainTabs'
+import { mainTabFromPath, mainTabPath, type MainTabId } from '@/app/navigation/mainTabs'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import {
   hasEmbeddedWorkspacePaneQuery,
   isEmbeddedWorkspacePaneContext,
@@ -24,7 +25,7 @@ import {
   type WorkspaceWindowTemplateDragData,
 } from '@/layout/workspaceWindowDrag'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { useUiStore } from '@/stores/ui'
@@ -35,18 +36,10 @@ import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
 const ui = useUiStore()
 const toasts = useToastsStore()
 const route = useRoute()
-const router = useRouter()
+const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
 const { startDesktopSidebarResize } = useDesktopSidebarResize()
 useAppRuntime()
-
-const TAB_PATHS = WORKSPACE_MAIN_TABS.reduce(
-  (acc, item) => {
-    acc[item.id] = item.path
-    return acc
-  },
-  {} as Record<MainTabId, string>,
-)
 
 const isEmbeddedWorkspacePane = computed(() => isEmbeddedWorkspacePaneContext(route.query))
 
@@ -519,6 +512,17 @@ onMounted(() => {
   window.addEventListener('dragend', handleGlobalWorkspaceDragTerminateFallback, true)
   window.addEventListener('drop', handleGlobalWorkspaceDragTerminateFallback, true)
   window.addEventListener('blur', handleGlobalWorkspaceDragTerminateFallback)
+
+  if (!ui.workspaceWindows.length) {
+    const tab = mainTabFromPath(route.path)
+    ui.openWorkspaceWindow(tab, {
+      activate: true,
+      path: route.path === '/' ? mainTabPath(tab) : route.path,
+      query: route.query,
+      hash: route.hash,
+    })
+  }
+  void syncRouteToActiveWorkspaceWindow()
 })
 
 function handleWorkspacePaneDropDragOver(event: DragEvent, paneId: string, position: WorkspaceDropPosition) {
@@ -583,43 +587,13 @@ async function handleWorkspacePaneDrop(event: DragEvent, paneId: string, positio
   await syncRouteToActiveWorkspaceWindow()
 }
 
-function hasRouteQueryKey(rawQuery: unknown, key: string): boolean {
-  if (!rawQuery || typeof rawQuery !== 'object') return false
-  return Object.prototype.hasOwnProperty.call(rawQuery, key)
-}
-
-function stripSessionWindowKeysFromRouteQuery(rawQuery: unknown): Record<string, unknown> {
-  if (!rawQuery || typeof rawQuery !== 'object') return {}
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(rawQuery as Record<string, unknown>)) {
-    const normalizedKey = String(key || '')
-      .trim()
-      .toLowerCase()
-    if (!normalizedKey) continue
-    if (normalizedKey === 'windowid' || normalizedKey === 'sessionid' || normalizedKey === 'session') continue
-    out[key] = value
-  }
-  return out
-}
-
 async function syncRouteToActiveWorkspaceWindow() {
-  if (!useWorkspaceWindowLayout.value) return
   if (isEmbeddedWorkspacePane.value || hasEmbeddedWorkspacePaneQuery(route.query)) return
 
   const target = ui.activeWorkspaceWindow || ui.workspaceWindows[0] || null
   if (!target) return
 
-  const path = TAB_PATHS[target.mainTab] || '/chat'
-  const hasAnyQuery = Object.keys(route.query || {}).length > 0
-  if (route.path === path && !hasAnyQuery) {
-    return
-  }
-
-  await router
-    .replace({
-      path,
-    })
-    .catch(() => {})
+  await workspaceNavigation.navigateToWorkspaceWindow(target.id, true)
 }
 
 watch(
@@ -630,35 +604,6 @@ watch(
     if (!next || next === prev) return
     void syncRouteToActiveWorkspaceWindow()
   },
-)
-
-watch(
-  () => ({
-    path: route.path,
-    query: route.query,
-    embedded: isEmbeddedWorkspacePane.value,
-  }),
-  ({ path, query, embedded }) => {
-    if (!useWorkspaceWindowLayout.value) return
-    if (embedded || hasEmbeddedWorkspacePaneQuery(query)) return
-    const hasSessionOrWindowQuery =
-      hasRouteQueryKey(query, 'windowId') ||
-      hasRouteQueryKey(query, 'windowid') ||
-      hasRouteQueryKey(query, 'sessionId') ||
-      hasRouteQueryKey(query, 'sessionid') ||
-      hasRouteQueryKey(query, 'session')
-    if (!hasSessionOrWindowQuery) return
-
-    const nextQuery = stripSessionWindowKeysFromRouteQuery(query)
-    const hasNextQuery = Object.keys(nextQuery).length > 0
-    void router
-      .replace({
-        path,
-        ...(hasNextQuery ? { query: nextQuery } : {}),
-      })
-      .catch(() => {})
-  },
-  { immediate: true, deep: true },
 )
 
 watch(
@@ -690,7 +635,10 @@ watch(
     if (!Number.isFinite(seq) || seq <= 0 || seq === prev) return
     const nextQuery = workspaceDockRequestQuery()
     if (!nextQuery) return
-    void router.push({ path: '/files', query: nextQuery }).catch(() => {})
+    void workspaceNavigation.openWorkspaceLocation('files', {
+      query: nextQuery,
+      matchKeys: ['filePath'],
+    })
   },
 )
 </script>
@@ -756,10 +704,6 @@ watch(
             :aria-hidden="!ui.isSessionSwitcherOpen"
           >
             <ChatSidebar mobile-variant />
-          </div>
-
-          <div v-if="showDesktopSidebarHost && !usesChatShellSidebar" class="hidden" aria-hidden="true">
-            <router-view />
           </div>
 
           <main

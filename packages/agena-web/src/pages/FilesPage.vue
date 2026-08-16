@@ -93,6 +93,8 @@ import {
 import type { FsContentSearchFileResult, FsContentSearchMatch } from '@/features/files/api/filesApi'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { useChatStore } from '@/stores/chat'
@@ -133,6 +135,8 @@ const settings = useSettingsStore()
 const toasts = useToastsStore()
 const directoryStore = useDirectoryStore()
 const ui = useUiStore()
+const workspacePane = useWorkspacePaneContext()
+const workspaceNavigation = useWorkspaceNavigation()
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
@@ -406,12 +410,14 @@ const isSaving = ref(false)
 const uploading = ref(false)
 const showMobileViewer = ref(false)
 const isEmbeddedWorkspacePane = computed(() => isEmbeddedWorkspacePaneContext(route.query))
+const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
 const embeddedMode = computed(() => props.embedded || isEmbeddedWorkspacePane.value)
 const useDesktopSidebarHost = computed(
-  () => !embeddedMode.value && !isCompactLayout.value && !isEmbeddedWorkspacePane.value,
+  () => !embeddedMode.value && !isCompactLayout.value && !isEmbeddedWorkspacePane.value && isFocusedWorkspacePane.value,
 )
 const showFilesSidebar = computed(() => {
   if (isEmbeddedWorkspacePane.value) return false
+  if (workspacePane && !isFocusedWorkspacePane.value) return false
   if (embeddedMode.value) return embeddedView.value === 'list'
   if (useDesktopSidebarHost.value) return true
   return isCompactLayout.value ? ui.isSessionSwitcherOpen : ui.isSidebarOpen
@@ -491,6 +497,7 @@ function startFileAutoRefreshTimer() {
 }
 
 function handleGlobalKeydown(e: KeyboardEvent) {
+  if (workspacePane && !isFocusedWorkspacePane.value) return
   // Cmd/Ctrl+S: save current file.
   if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return
   if ((e.key || '').toLowerCase() !== 's') return
@@ -3074,7 +3081,7 @@ async function loadMoreFileContent() {
 }
 
 function shouldOpenFileInNewWorkspaceWindow(): boolean {
-  return !embeddedMode.value && !isCompactLayout.value && !isEmbeddedWorkspacePane.value
+  return !workspacePane && !embeddedMode.value && !isCompactLayout.value && !isEmbeddedWorkspacePane.value
 }
 
 function buildFileWindowRouteQuery(path: string): Record<string, string> {
@@ -3088,14 +3095,11 @@ async function openFileInWorkspaceWindow(path: string) {
   if (isPathHiddenInFiles(query.filePath)) return
 
   const title = fileNameFromPath(query.filePath) || String(t('nav.files'))
-  ui.openWorkspaceWindow('files', {
-    activate: true,
+  await workspaceNavigation.openWorkspaceLocation('files', {
     query,
     title,
     matchKeys: ['filePath'],
   })
-
-  await router.push({ path: '/files', query }).catch(() => {})
 }
 
 async function requestFileSelect(node: FileNode) {

@@ -18,6 +18,7 @@ test('workspace pages teleport non-chat sidebars into stable panel host', () => 
     'pages/TerminalPage.vue',
     'pages/git/GitPageView.vue',
     'pages/PreviewPage.vue',
+    'pages/SettingsPage.vue',
   ]
 
   for (const file of pageFiles) {
@@ -27,9 +28,12 @@ test('workspace pages teleport non-chat sidebars into stable panel host', () => 
   }
 })
 
-test('main layout mounts hidden non-chat route host even without split panes', () => {
+test('workspace panes own page rendering without a hidden duplicate route host', () => {
   const mainLayoutSource = readFileSync(resolve(import.meta.dir, '../src/layout/MainLayout.vue'), 'utf8')
+  const paneSource = readFileSync(resolve(import.meta.dir, '../src/layout/WorkspacePaneView.vue'), 'utf8')
 
-  assert.ok(mainLayoutSource.includes('v-if="showDesktopSidebarHost && !usesChatShellSidebar"'))
-  assert.ok(!mainLayoutSource.includes('v-if="isGroupPaneMode && showDesktopSidebarHost && !usesChatShellSidebar"'))
+  assert.ok(!mainLayoutSource.includes('class="hidden" aria-hidden="true"'))
+  assert.ok(paneSource.includes('<RouterView v-if="routeReady" :route="scopedRoute"'))
+  assert.ok(paneSource.includes('provide(routeLocationKey, scopedRoute)'))
+  assert.ok(paneSource.includes('provide(routerKey, scopedRouter)'))
 })

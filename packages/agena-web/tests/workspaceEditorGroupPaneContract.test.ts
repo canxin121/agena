@@ -17,16 +17,15 @@ test('workspace editor group pane keeps tab strip droppable without hover drag c
   assert.ok(mainLayoutSource.includes('top-9'))
 })
 
-test('workspace editor group pane propagates pane and iframe interactions into focused window state', () => {
+test('workspace editor group pane renders retained SPA views and propagates pane focus', () => {
   const paneSource = readFileSync(resolve(import.meta.dir, '../src/layout/WorkspaceEditorGroupPane.vue'), 'utf8')
 
   assert.ok(paneSource.includes('@pointerdown.capture="handlePanePointerDown"'))
   assert.ok(paneSource.includes('ui.setFocusedWorkspaceWindow(targetWindowId)'))
-  assert.ok(paneSource.includes('readWorkspacePaneFocusWindowId(event.data)'))
-  assert.ok(paneSource.includes("window.addEventListener('message', handleWorkspacePaneFocusMessage)"))
-  assert.ok(paneSource.includes("window.removeEventListener('message', handleWorkspacePaneFocusMessage)"))
-  assert.ok(paneSource.includes("frameWindow.addEventListener('pointerdown', handleFramePointerDown, true)"))
-  assert.ok(paneSource.includes("frameDocument.addEventListener('focusin', handleFrameFocusIn, true)"))
-  assert.ok(paneSource.includes('@load="handleFrameLoad"'))
+  assert.ok(paneSource.includes('<WorkspacePaneView'))
+  assert.ok(paneSource.includes('v-for="windowTab in mountedTabs"'))
+  assert.ok(paneSource.includes('v-show="isWindowActive(windowTab.id)"'))
+  assert.ok(!paneSource.includes('<iframe'))
+  assert.ok(!paneSource.includes("window.addEventListener('message'"))
   assert.ok(paneSource.includes('border-border/70 bg-secondary/40 text-foreground/85'))
 })

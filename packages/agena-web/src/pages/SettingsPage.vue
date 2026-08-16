@@ -28,6 +28,8 @@ import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { apiJson } from '@/lib/api'
 import { buildLocalePickerOptions } from '@/pages/loginLocaleOptions'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
+import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
 import {
   CHAT_ACTIVITY_EXPAND_KEYS,
   DEFAULT_CHAT_ACTIVITY_EXPAND_KEYS,
@@ -49,6 +51,7 @@ import {
 
 const settings = useSettingsStore()
 const ui = useUiStore()
+const workspacePane = useWorkspacePaneContext()
 const route = useRoute()
 const router = useRouter()
 const { startDesktopSidebarResize } = useDesktopSidebarResize()
@@ -78,14 +81,19 @@ function goToSection(id: SettingsTab) {
   if (ui.isCompactLayout) ui.setSessionSwitcherOpen(false)
 }
 
+const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
+const useDesktopSidebarHost = computed(
+  () => Boolean(workspacePane) && !ui.isCompactLayout && isFocusedWorkspacePane.value,
+)
 const settingsSidebarClass = computed(() =>
-  ui.isCompactLayout
+  ui.isCompactLayout || useDesktopSidebarHost.value
     ? 'relative h-full w-full shrink-0 border-r border-border bg-sidebar'
     : 'relative h-full w-full shrink-0 bg-sidebar',
 )
 
 const showSidebar = computed(() => {
   if (ui.isCompactLayout) return ui.isSessionSwitcherOpen
+  if (workspacePane && !isFocusedWorkspacePane.value) return false
   return true
 })
 
@@ -426,25 +434,27 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
 <template>
   <div class="settings-page flex h-full flex-col overflow-hidden bg-background text-foreground">
     <div class="flex flex-1 overflow-hidden">
-      <aside
-        v-if="showSidebar"
-        :class="settingsSidebarClass"
-        :style="ui.isCompactLayout ? undefined : { width: `${ui.sidebarWidth}px` }"
-      >
-        <div
-          v-if="!ui.isCompactLayout"
-          class="absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize hover:bg-primary/40"
-          @pointerdown="startDesktopSidebarResize"
-        />
-        <SettingsSidebar
-          :tabs="tabs"
-          :active-tab="activeSection"
-          :loading="settings.loading"
-          :is-touch-pointer="ui.isTouchPointer"
-          @refresh="refreshSettingsSidebar"
-          @navigate-tab="goToSection"
-        />
-      </aside>
+      <Teleport :to="WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR" :disabled="!useDesktopSidebarHost">
+        <aside
+          v-if="showSidebar"
+          :class="settingsSidebarClass"
+          :style="ui.isCompactLayout || useDesktopSidebarHost ? undefined : { width: `${ui.sidebarWidth}px` }"
+        >
+          <div
+            v-if="!ui.isCompactLayout && !useDesktopSidebarHost"
+            class="absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize hover:bg-primary/40"
+            @pointerdown="startDesktopSidebarResize"
+          />
+          <SettingsSidebar
+            :tabs="tabs"
+            :active-tab="activeSection"
+            :loading="settings.loading"
+            :is-touch-pointer="ui.isTouchPointer"
+            @refresh="refreshSettingsSidebar"
+            @navigate-tab="goToSection"
+          />
+        </aside>
+      </Teleport>
 
       <!-- Content -->
       <main

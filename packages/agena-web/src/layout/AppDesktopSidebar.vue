@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   RiArrowLeftSLine,
@@ -24,6 +24,7 @@ import { apiJson } from '@/lib/api'
 import type { GitStatusResponse } from '@/types/git'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { normalizeRememberedSettingsRoute } from '@/components/settings/sidebar/settingsSidebarNavigation'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 
 const props = withDefaults(
   defineProps<{
@@ -48,7 +49,7 @@ const ui = useUiStore()
 const directoryStore = useDirectoryStore()
 const chat = useChatStore()
 const route = useRoute()
-const router = useRouter()
+const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
 
 const SETTINGS_LAST_ROUTE_KEY = localStorageKeys.settings.lastRoute
@@ -147,13 +148,13 @@ async function locateCurrentSessionInSidebar() {
   if (!sid) return
   ui.openAndLocateSessionInSidebar(sid)
   if (activeTab.value !== 'chat') {
-    await router.push('/chat')
+    await workspaceNavigation.openMainTab('chat')
   }
 }
 
 async function openSettings() {
   ui.setSidebarOpen(true, { preserveWidth: true })
-  await router.push(getRememberedSettingsRoute())
+  await workspaceNavigation.openMainTab('settings', { path: getRememberedSettingsRoute() })
 }
 
 function formatBadge(value?: number): string {
@@ -180,7 +181,7 @@ async function activateRailItem(tabId: MainTabId) {
     return
   }
 
-  await router.push(routeForTab(tabId))
+  await workspaceNavigation.openMainTab(tabId, { path: routeForTab(tabId) })
 }
 </script>
 
@@ -203,6 +204,7 @@ async function activateRailItem(tabId: MainTabId) {
         <button
           v-for="item in primaryRailItems"
           :key="item.id"
+          :data-main-nav-tab="item.id"
           type="button"
           :title="railItemAriaLabel(item)"
           :aria-label="railItemAriaLabel(item)"
@@ -231,6 +233,7 @@ async function activateRailItem(tabId: MainTabId) {
         <button
           v-if="settingsNavItem"
           type="button"
+          data-main-nav-tab="settings"
           :title="settingsNavItem.label"
           :aria-label="settingsNavItem.label"
           :aria-current="isTabActive('settings') ? 'page' : undefined"

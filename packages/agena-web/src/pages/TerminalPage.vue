@@ -63,6 +63,7 @@ import {
 import { handleTerminalKeyboardShortcut } from '@/features/terminal/lib/terminalKeyboardShortcuts'
 import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
 import { isEmbeddedWorkspacePaneContext, withEmbeddedWorkspaceScopeQuery } from '@/app/windowScope'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
 
@@ -178,6 +179,7 @@ function persistGitHandoffSessionName(next: string | null) {
 }
 
 const ui = useUiStore()
+const workspacePane = useWorkspacePaneContext()
 const directoryStore = useDirectoryStore()
 
 const route = useRoute()
@@ -227,9 +229,13 @@ function hydratePendingSendFromQuery() {
 }
 
 const isEmbeddedWorkspacePane = computed(() => isEmbeddedWorkspacePaneContext(route.query))
-const useDesktopSidebarHost = computed(() => !ui.isCompactLayout && !isEmbeddedWorkspacePane.value)
+const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
+const useDesktopSidebarHost = computed(
+  () => !ui.isCompactLayout && !isEmbeddedWorkspacePane.value && isFocusedWorkspacePane.value,
+)
 const useShellSidebar = computed(() => {
   if (isEmbeddedWorkspacePane.value) return false
+  if (workspacePane && !isFocusedWorkspacePane.value) return false
   if (useDesktopSidebarHost.value) return true
   return ui.isCompactLayout ? ui.isSessionSwitcherOpen : ui.isSidebarOpen
 })

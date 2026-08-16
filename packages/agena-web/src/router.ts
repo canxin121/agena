@@ -1,12 +1,7 @@
 import { createRouter, createWebHistory, type RouteLocationNormalizedLoaded, type RouteRecordRaw } from 'vue-router'
 import { sessionStorageKeys } from '@/lib/persistence/storageKeys'
 import { settingsPathForTab, settingsTabFromRouteValue } from '@/components/settings/sidebar/settingsSidebarNavigation'
-import {
-  hasEmbeddedWorkspacePaneQuery,
-  isEmbeddedWorkspacePaneContext,
-  readWindowIdFromLocation,
-  readWindowIdFromQuery,
-} from '@/app/windowScope'
+import { hasEmbeddedWorkspacePaneQuery } from '@/app/windowScope'
 
 const CHUNK_RECOVERY_KEY = sessionStorageKeys.app.chunkRecoveryReloaded
 
@@ -85,9 +80,8 @@ export const router = createRouter({
   routes,
 })
 
-router.beforeEach((to, from) => {
-  const embeddedContext = isEmbeddedWorkspacePaneContext(from.query) || isEmbeddedWorkspacePaneContext(to.query)
-  if (!embeddedContext || hasEmbeddedWorkspacePaneQuery(to.query)) return true
+router.beforeEach((to) => {
+  if (!hasEmbeddedWorkspacePaneQuery(to.query)) return true
 
   const nextQuery: Record<string, string> = {}
   for (const [key, value] of Object.entries(to.query || {})) {
@@ -98,13 +92,6 @@ router.beforeEach((to, from) => {
       ? String(value.find((item) => String(item || '').trim()) || '').trim()
       : String(value || '').trim()
     if (normalizedValue) nextQuery[normalizedKey] = normalizedValue
-  }
-
-  nextQuery.ocEmbed = '1'
-  const scopedWindowId =
-    readWindowIdFromQuery(to.query) || readWindowIdFromQuery(from.query) || readWindowIdFromLocation()
-  if (scopedWindowId && !String(nextQuery.windowId || '').trim()) {
-    nextQuery.windowId = scopedWindowId
   }
 
   return {

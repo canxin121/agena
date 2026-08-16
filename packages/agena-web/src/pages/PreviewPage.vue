@@ -9,16 +9,22 @@ import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebar
 import { useUiStore } from '@/stores/ui'
 import { useWorkspacePreviewStore } from '@/stores/workspacePreview'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
 const ui = useUiStore()
+const workspacePane = useWorkspacePaneContext()
 const preview = useWorkspacePreviewStore()
 const route = useRoute()
 const { t } = useI18n()
 
 const isEmbeddedWorkspacePane = computed(() => isEmbeddedWorkspacePaneContext(route.query))
-const useDesktopSidebarHost = computed(() => !ui.isCompactLayout && !isEmbeddedWorkspacePane.value)
+const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
+const useDesktopSidebarHost = computed(
+  () => !ui.isCompactLayout && !isEmbeddedWorkspacePane.value && isFocusedWorkspacePane.value,
+)
 const showPreviewSidebar = computed(() => {
   if (isEmbeddedWorkspacePane.value) return false
+  if (workspacePane && !isFocusedWorkspacePane.value) return false
   if (useDesktopSidebarHost.value) return true
   return ui.isCompactLayout ? ui.isSessionSwitcherOpen : ui.isSidebarOpen
 })

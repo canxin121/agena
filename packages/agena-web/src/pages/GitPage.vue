@@ -51,7 +51,8 @@ import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import { useToastsStore } from '@/stores/toasts'
 import { gitRepoScopedStorageKey, localStorageKeys } from '@/lib/persistence/storageKeys'
-import { isEmbeddedWorkspacePaneContext, withEmbeddedWorkspaceScopeQuery } from '@/app/windowScope'
+import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 
 const props = withDefaults(
   defineProps<{
@@ -71,6 +72,7 @@ const gitRepos = useGitReposStore()
 const ui = useUiStore()
 const route = useRoute()
 const router = useRouter()
+const workspaceNavigation = useWorkspaceNavigation()
 const isEmbeddedWorkspacePane = computed(() => props.embedded || isEmbeddedWorkspacePaneContext(route.query))
 
 const projectRoot = computed(() => directoryStore.currentDirectory)
@@ -1008,13 +1010,11 @@ function openFileInFiles(path: string) {
     filePath: abs,
   }
   const fileName = abs.split('/').filter(Boolean).pop() || String(t('nav.files'))
-  ui.openWorkspaceWindow('files', {
-    activate: true,
+  void workspaceNavigation.openWorkspaceLocation('files', {
     query,
     title: fileName,
     matchKeys: ['filePath'],
   })
-  void router.push({ path: '/files', query: withEmbeddedWorkspaceScopeQuery(query, route.query) })
 }
 
 function revealFileInFiles(path: string) {
@@ -1029,13 +1029,11 @@ function revealFileInFiles(path: string) {
     filePath: abs,
   }
   const fileName = abs.split('/').filter(Boolean).pop() || String(t('nav.files'))
-  ui.openWorkspaceWindow('files', {
-    activate: true,
+  void workspaceNavigation.openWorkspaceLocation('files', {
     query,
     title: fileName,
     matchKeys: ['filePath'],
   })
-  void router.push({ path: '/files', query: withEmbeddedWorkspaceScopeQuery(query, route.query) })
 }
 
 function openWorktree(path: string) {

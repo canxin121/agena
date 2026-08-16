@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, ref, watch, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   RiChat4Line,
@@ -22,16 +21,16 @@ import {
   type WorkspaceWindowTemplateDragData,
 } from '@/layout/workspaceWindowDrag'
 import { cn } from '@/lib/utils'
-import { readWorkspacePaneFocusWindowId } from '@/app/windowScope'
 import { useUiStore, type WorkspaceWindowTab } from '@/stores/ui'
+import WorkspacePaneView from '@/layout/WorkspacePaneView.vue'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 
 const props = defineProps<{
   groupId: string
 }>()
 
 const ui = useUiStore()
-const route = useRoute()
-const router = useRouter()
+const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
 
 const TAB_ICONS: Record<MainTabId, Component> = {
@@ -42,14 +41,6 @@ const TAB_ICONS: Record<MainTabId, Component> = {
   git: RiGitMergeLine,
   settings: RiSettings3Line,
 }
-
-const TAB_PATHS = WORKSPACE_MAIN_TABS.reduce(
-  (acc, item) => {
-    acc[item.id] = item.path
-    return acc
-  },
-  {} as Record<MainTabId, string>,
-)
 
 const TAB_LABEL_KEYS = WORKSPACE_MAIN_TABS.reduce(
   (acc, item) => {
@@ -97,13 +88,31 @@ const activeWindow = computed<WorkspaceWindowTab | null>(() => {
 const activeWindowId = computed(() => String(activeWindow.value?.id || '').trim())
 const canDragTabs = computed(() => !ui.isCompactLayout)
 const isTabStripDropActive = ref(false)
-const frameEl = ref<HTMLIFrameElement | null>(null)
-let clearFrameFocusBridge: (() => void) | null = null
+const mountedWindowIds = ref<string[]>([])
 
-function clearFrameFocusListeners() {
-  clearFrameFocusBridge?.()
-  clearFrameFocusBridge = null
-}
+watch(
+  activeWindowId,
+  (windowId) => {
+    if (!windowId || mountedWindowIds.value.includes(windowId)) return
+    mountedWindowIds.value = [...mountedWindowIds.value, windowId]
+  },
+  { immediate: true },
+)
+
+watch(
+  () => groupTabs.value.map((item) => item.id),
+  (windowIds) => {
+    const valid = new Set(windowIds)
+    const next = mountedWindowIds.value.filter((windowId) => valid.has(windowId))
+    if (next.length !== mountedWindowIds.value.length) mountedWindowIds.value = next
+  },
+  { deep: true },
+)
+
+const mountedTabs = computed(() => {
+  const mounted = new Set(mountedWindowIds.value)
+  return groupTabs.value.filter((item) => mounted.has(item.id))
+})
 
 function resolvePaneFocusWindowId(): string {
   const target = group.value
@@ -129,61 +138,6 @@ function handlePanePointerDown() {
   focusPaneWindow()
 }
 
-function bindFrameFocusListeners() {
-  clearFrameFocusListeners()
-
-  const frame = frameEl.value
-  if (!frame) return
-
-  try {
-    const frameWindow = frame.contentWindow
-    const frameDocument = frame.contentDocument
-    if (!frameWindow || !frameDocument) return
-
-    const handleFramePointerDown = () => {
-      focusPaneWindow()
-    }
-    const handleFrameFocusIn = () => {
-      focusPaneWindow()
-    }
-
-    frameWindow.addEventListener('pointerdown', handleFramePointerDown, true)
-    frameWindow.addEventListener('mousedown', handleFramePointerDown, true)
-    frameDocument.addEventListener('focusin', handleFrameFocusIn, true)
-
-    clearFrameFocusBridge = () => {
-      frameWindow.removeEventListener('pointerdown', handleFramePointerDown, true)
-      frameWindow.removeEventListener('mousedown', handleFramePointerDown, true)
-      frameDocument.removeEventListener('focusin', handleFrameFocusIn, true)
-    }
-  } catch {
-    clearFrameFocusBridge = null
-  }
-}
-
-function handleFrameLoad() {
-  bindFrameFocusListeners()
-}
-
-function handleWorkspacePaneFocusMessage(event: MessageEvent) {
-  if (event.origin !== window.location.origin) return
-
-  const targetWindowId = readWorkspacePaneFocusWindowId(event.data)
-  if (!targetWindowId) return
-  if (!groupTabs.value.some((tab) => tab.id === targetWindowId)) return
-
-  focusPaneWindow(targetWindowId)
-}
-
-onMounted(() => {
-  window.addEventListener('message', handleWorkspacePaneFocusMessage)
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('message', handleWorkspacePaneFocusMessage)
-  clearFrameFocusListeners()
-})
-
 function tabLabel(tab: MainTabId): string {
   return String(t(TAB_LABEL_KEYS[tab]))
 }
@@ -200,62 +154,8 @@ function windowTitle(windowTab: WorkspaceWindowTab): string {
   return `${base} ${idx + 1}`
 }
 
-function toRouteQuery(query: Record<string, string>): Record<string, string> | undefined {
-  const entries = Object.entries(query || {})
-  if (!entries.length) return undefined
-  return Object.fromEntries(entries)
-}
-
-function normalizeQueryRecord(raw: unknown): Record<string, string> {
-  if (!raw || typeof raw !== 'object') return {}
-  const out: Record<string, string> = {}
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    const k = String(key || '').trim()
-    if (!k || k === 'windowId' || k === 'windowid' || k === 'ocEmbed') continue
-    const v = Array.isArray(value)
-      ? String(value.find((item) => String(item || '').trim()) || '').trim()
-      : String(value || '').trim()
-    if (!v) continue
-    out[k] = v
-  }
-  return out
-}
-
-function areQueriesEqual(a: Record<string, string>, b: Record<string, string>): boolean {
-  const aKeys = Object.keys(a)
-  const bKeys = Object.keys(b)
-  if (aKeys.length !== bKeys.length) return false
-  for (const key of aKeys) {
-    if (a[key] !== b[key]) return false
-  }
-  return true
-}
-
 async function navigateToWindow(windowId: string, replace = true) {
-  const target = ui.getWorkspaceWindowById(windowId)
-  if (!target) return
-
-  const path = TAB_PATHS[target.mainTab] || '/chat'
-  const currentQuery = normalizeQueryRecord(route.query)
-  const targetQuery = target.routeQuery || {}
-  const currentWindowId = String(route.query?.windowId || route.query?.windowid || '').trim()
-  if (route.path === path && areQueriesEqual(currentQuery, targetQuery) && currentWindowId === target.id) return
-
-  const query = toRouteQuery({
-    ...targetQuery,
-    windowId: target.id,
-  })
-  const payload = {
-    path,
-    ...(query ? { query } : {}),
-  }
-
-  if (replace) {
-    await router.replace(payload).catch(() => {})
-    return
-  }
-
-  await router.push(payload).catch(() => {})
+  await workspaceNavigation.navigateToWorkspaceWindow(windowId, replace)
 }
 
 function getWorkspaceWindowGroupId(windowId: string): string {
@@ -372,25 +272,6 @@ function tabClass(windowId: string): string {
       : 'border-transparent bg-transparent text-muted-foreground hover:border-border/60 hover:bg-secondary/60 hover:text-foreground',
   )
 }
-
-const frameSrc = computed(() => {
-  const tab = activeWindow.value
-  if (!tab || typeof window === 'undefined') return ''
-
-  const path = TAB_PATHS[tab.mainTab] || '/chat'
-  const params = new URLSearchParams()
-  for (const [key, value] of Object.entries(tab.routeQuery || {})) {
-    const k = String(key || '').trim()
-    const v = String(value || '').trim()
-    if (!k || !v) continue
-    params.set(k, v)
-  }
-  params.set('windowId', String(tab.id || '').trim())
-  params.set('ocEmbed', '1')
-
-  const query = params.toString()
-  return query ? `${path}?${query}` : path
-})
 
 async function activateTab(windowId: string) {
   const targetId = String(windowId || '').trim()
@@ -526,6 +407,7 @@ async function handleTabStripDrop(event: DragEvent) {
 <template>
   <section
     class="app-region-no-drag flex h-full min-h-0 flex-col border-l border-border/60 bg-background"
+    :data-workspace-pane-group="groupId"
     @pointerdown.capture="handlePanePointerDown"
   >
     <div
@@ -539,6 +421,8 @@ async function handleTabStripDrop(event: DragEvent) {
         <div
           v-for="windowTab in groupTabs"
           :key="`${groupId}:${windowTab.id}`"
+          :data-workspace-tab-id="windowTab.id"
+          :data-workspace-tab-main="windowTab.mainTab"
           :class="tabClass(windowTab.id)"
           :draggable="canDragTabs"
           role="button"
@@ -583,9 +467,15 @@ async function handleTabStripDrop(event: DragEvent) {
       </div>
     </div>
 
-    <div class="min-h-0 flex-1 overflow-hidden bg-background">
-      <iframe v-if="frameSrc" ref="frameEl" :src="frameSrc" class="h-full w-full border-0" @load="handleFrameLoad" />
-      <div v-else class="flex h-full items-center justify-center px-4 text-xs text-muted-foreground">
+    <div class="relative min-h-0 flex-1 overflow-hidden bg-background">
+      <WorkspacePaneView
+        v-for="windowTab in mountedTabs"
+        v-show="isWindowActive(windowTab.id)"
+        :key="windowTab.id"
+        :window-id="windowTab.id"
+        class="absolute inset-0"
+      />
+      <div v-if="!activeWindowId" class="flex h-full items-center justify-center px-4 text-xs text-muted-foreground">
         {{ t('header.windowTabs.splitNoContent') }}
       </div>
     </div>

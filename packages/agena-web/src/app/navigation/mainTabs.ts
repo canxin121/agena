@@ -22,6 +22,12 @@ export const MAIN_TABS: MainTabDef<NavigationMainTabId>[] = WORKSPACE_MAIN_TABS.
 
 const MAIN_TAB_IDS = new Set<MainTabId>(WORKSPACE_MAIN_TABS.map((tab) => tab.id))
 
+const MAIN_TAB_PATHS = new Map<MainTabId, string>(WORKSPACE_MAIN_TABS.map((tab) => [tab.id, tab.path]))
+
+export function mainTabPath(tab: MainTabId): string {
+  return MAIN_TAB_PATHS.get(tab) || '/chat'
+}
+
 export function isWorkspaceMainTabPath(path: string): boolean {
   const p = String(path || '').toLowerCase()
   return WORKSPACE_MAIN_TABS.some((tab) => p.startsWith(tab.path))
@@ -37,4 +43,11 @@ export function mainTabFromPath(path: string): MainTabId {
     if (p.startsWith(tab.path)) return tab.id
   }
   return 'chat'
+}
+
+export function normalizeMainTabPath(tab: MainTabId, path?: string | null): string {
+  const normalized = String(path || '').trim()
+  if (normalized === '/') return mainTabPath(tab)
+  if (!normalized.startsWith('/')) return mainTabPath(tab)
+  return mainTabFromPath(normalized) === tab ? normalized : mainTabPath(tab)
 }

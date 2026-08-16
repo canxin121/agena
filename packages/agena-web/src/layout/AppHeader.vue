@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { RiArrowLeftSLine, RiPlayListAddLine, RiQuestionLine, RiMapPin2Line, RiSettings3Line } from '@remixicon/vue'
 import { cn } from '@/lib/utils'
 import { MAIN_TABS, isWorkspaceMainTabPath, mainTabFromPath } from '@/app/navigation/mainTabs'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { useUiStore } from '@/stores/ui'
 import { useHealthStore } from '@/stores/health'
 import { useChatStore } from '@/stores/chat'
@@ -18,6 +19,7 @@ const health = useHealthStore()
 const chat = useChatStore()
 const route = useRoute()
 const router = useRouter()
+const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
 
 // -- Layout & Resizing --
@@ -54,13 +56,13 @@ function mainTabRoute(path: string): string {
 
 // Sync Route -> UI Store (for mobile title / persistence + workspace windows)
 watch(
-  () => ({ path: route.path, query: route.query }),
-  ({ path, query }) => {
+  () => ({ path: route.path, query: route.query, hash: route.hash }),
+  ({ path, query, hash }) => {
     const normalized = String(path || '').toLowerCase()
     if (!isWorkspaceMainTabPath(normalized)) return
 
     const next = mainTabFromPath(normalized)
-    ui.syncActiveWorkspaceWindowFromRoute(next, query)
+    ui.syncActiveWorkspaceWindowFromRoute(next, query, { path, hash })
   },
   { immediate: true, deep: true },
 )
@@ -121,7 +123,11 @@ onMounted(() => {
     e.preventDefault()
     const tab = MAIN_TABS[num - 1]
     if (tab) {
-      router.push(mainTabRoute(tab.path))
+      if (ui.isCompactLayout) {
+        void router.push(mainTabRoute(tab.path))
+      } else {
+        void workspaceNavigation.openMainTab(tab.id, { path: mainTabRoute(tab.path) })
+      }
     }
   }
   window.addEventListener('keydown', keyHandler)
@@ -164,7 +170,11 @@ function openSettings() {
   if (!ui.isCompactLayout) {
     ui.setSidebarOpen(true, { preserveWidth: true })
   }
-  router.push(getRememberedSettingsRoute())
+  if (ui.isCompactLayout) {
+    void router.push(getRememberedSettingsRoute())
+  } else {
+    void workspaceNavigation.openMainTab('settings', { path: getRememberedSettingsRoute() })
+  }
 }
 
 function locateCurrentSessionInSidebar() {
@@ -177,7 +187,11 @@ function locateCurrentSessionInSidebar() {
       .toLowerCase()
       .startsWith('/chat')
   ) {
-    void router.push('/chat')
+    if (ui.isCompactLayout) {
+      void router.push('/chat')
+    } else {
+      void workspaceNavigation.openMainTab('chat')
+    }
   }
 }
 

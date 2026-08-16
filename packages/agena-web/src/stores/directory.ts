@@ -7,6 +7,7 @@ import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { fsPathEquals, fsPathStartsWith, normalizeFsPath, trimTrailingFsSlashes } from '@/lib/path'
 import type { SseEvent } from '@/lib/sse'
 import { DEFAULT_WINDOW_SCOPE_ID, normalizeWindowScopeId, resolveWindowScopeId } from '@/app/windowScope'
+import { useWorkspacePaneContext, type WorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { useUiStore } from '@/stores/ui'
 
 const STORAGE_LAST_DIRECTORY = localStorageKeys.directory.lastDirectory
@@ -75,7 +76,7 @@ export function parseFsChangedEvent(evt: SseEvent): FsChangeEvent | null {
   }
 }
 
-export const useDirectoryStore = defineStore('directory', () => {
+const useDirectoryStoreDefinition = defineStore('directory', () => {
   const ui = useUiStore()
   const homeDirectory = ref<string | null>(null)
   const currentDirectoryByWindow = ref<Record<string, string>>(
@@ -219,6 +220,7 @@ export const useDirectoryStore = defineStore('directory', () => {
   })
 
   return {
+    homeDirectory,
     currentDirectory,
     currentDirectoryByWindow,
     displayDirectory,
@@ -232,3 +234,49 @@ export const useDirectoryStore = defineStore('directory', () => {
     hydrateFromStorage,
   }
 })
+
+type DirectoryStore = ReturnType<typeof useDirectoryStoreDefinition>
+
+function scopedDirectory(store: DirectoryStore, pane: WorkspacePaneContext): DirectoryStore {
+  function paneDirectory(): string | null {
+    const windowId = pane.windowId.value
+    return store.getDirectoryForWindow(windowId) || store.getDirectoryForWindow(DEFAULT_WINDOW_SCOPE_ID)
+  }
+
+  function paneDisplayDirectory(): string {
+    const cwd = trimTrailingFsSlashes(paneDirectory() || '')
+    const home = trimTrailingFsSlashes(store.homeDirectory || '')
+    if (!cwd) return ''
+    if (!home) return cwd
+    if (fsPathEquals(cwd, home)) return '~'
+    if (fsPathStartsWith(cwd, home)) return `~/${cwd.slice(home.length).replace(/^\/+/, '')}`
+    return cwd
+  }
+
+  return new Proxy(store, {
+    get(target, property, receiver) {
+      if (property === 'currentDirectory') return paneDirectory()
+      if (property === 'displayDirectory') return paneDisplayDirectory()
+      if (property === 'setDirectory') {
+        return (path: string | null | undefined) => target.setDirectoryForWindow(pane.windowId.value, path)
+      }
+      if (property === 'hydrateFromStorage') {
+        return () => {
+          if (target.getDirectoryForWindow(pane.windowId.value)) return
+          const fallback = target.getDirectoryForWindow(DEFAULT_WINDOW_SCOPE_ID) || target.currentDirectory
+          if (fallback) target.setDirectoryForWindow(pane.windowId.value, fallback)
+        }
+      }
+      return Reflect.get(target, property, receiver)
+    },
+  })
+}
+
+export const useDirectoryStore = Object.assign(
+  (...args: Parameters<typeof useDirectoryStoreDefinition>) => {
+    const store = useDirectoryStoreDefinition(...args)
+    const pane = useWorkspacePaneContext()
+    return pane ? scopedDirectory(store, pane) : store
+  },
+  { $id: useDirectoryStoreDefinition.$id },
+) as typeof useDirectoryStoreDefinition

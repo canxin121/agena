@@ -16,8 +16,6 @@ function hasEmbeddedWorkspacePaneLocation(): boolean {
   return hasEmbeddedWorkspacePaneSearch(window.location.search || '')
 }
 
-const embeddedWorkspacePaneBootContext = hasEmbeddedWorkspacePaneLocation()
-
 export const DEFAULT_WINDOW_SCOPE_ID = 'window-default'
 export const WORKSPACE_PANE_FOCUS_MESSAGE_TYPE = 'oc:workspace-pane-focus'
 
@@ -36,8 +34,7 @@ export function hasEmbeddedWorkspacePaneSearch(search: string): boolean {
 
 export function isEmbeddedWorkspacePaneContext(query?: unknown): boolean {
   if (hasEmbeddedWorkspacePaneQuery(query)) return true
-  if (hasEmbeddedWorkspacePaneLocation()) return true
-  return embeddedWorkspacePaneBootContext
+  return hasEmbeddedWorkspacePaneLocation()
 }
 
 export function withEmbeddedWorkspaceScopeQuery(nextQuery: LocationQueryRaw, currentQuery?: unknown): LocationQueryRaw {

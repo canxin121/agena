@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   RiAddLine,
@@ -19,6 +19,7 @@ import * as chatApi from '@/stores/chat/api'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastsStore } from '@/stores/toasts'
 import { useUiStore } from '@/stores/ui'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { useDirectoryStore } from '@/stores/directory'
 import { useDirectorySessionStore } from '@/stores/directorySessionStore'
 
@@ -57,7 +58,7 @@ const props = withDefaults(
 )
 
 const route = useRoute()
-const router = useRouter()
+const workspaceNavigation = useWorkspaceNavigation()
 
 const ui = useUiStore()
 const chat = useChatStore()
@@ -1595,16 +1596,11 @@ async function openSessionInWorkspaceWindow(sessionId: string): Promise<string> 
   const nextQuery = { sessionId: sid }
   const resolvedTitle = resolveSessionTabTitle(sid)
 
-  const targetId = ui.openWorkspaceWindow('chat', {
-    activate: true,
+  return workspaceNavigation.openWorkspaceLocation('chat', {
     query: nextQuery,
     title: resolvedTitle || undefined,
     matchKeys: ['sessionId'],
   })
-
-  await router.push('/chat')
-
-  return targetId
 }
 
 async function createSessionInDirectory(directoryId: string, directoryPath: string) {

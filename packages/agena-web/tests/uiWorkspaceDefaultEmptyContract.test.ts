@@ -23,19 +23,20 @@ function extractFunctionSource(source: string, signature: string): string {
   throw new Error(`unterminated function block: ${signature}`)
 }
 
-test('ui workspace defaults to empty and route sync avoids implicit window creation', () => {
+test('workspace route sync opens durable tabs and restores complete locations', () => {
   const uiStoreSource = readFileSync(resolve(import.meta.dir, '../src/stores/ui.ts'), 'utf8')
+  const mainLayoutSource = readFileSync(resolve(import.meta.dir, '../src/layout/MainLayout.vue'), 'utf8')
+  const sidebarSource = readFileSync(resolve(import.meta.dir, '../src/layout/AppDesktopSidebar.vue'), 'utf8')
 
-  // No persisted windows should stay empty; do not fabricate a default chat tab.
+  // Persisted state is loaded without fabricating data before the shell knows
+  // which route should seed a first tab.
   assert.ok(!uiStoreSource.includes('return [createWorkspaceWindowTab(defaultMainTab)]'))
+  assert.ok(mainLayoutSource.includes('if (!ui.workspaceWindows.length)'))
+  assert.ok(mainLayoutSource.includes('ui.openWorkspaceWindow(tab,'))
 
   const setRouteQueryFn = extractFunctionSource(
     uiStoreSource,
     'function setActiveWorkspaceWindowRouteQuery(rawQuery: unknown)',
-  )
-  const syncFromRouteFn = extractFunctionSource(
-    uiStoreSource,
-    'function syncActiveWorkspaceWindowFromRoute(tab: MainTab, rawQuery: unknown)',
   )
   const resolveRouteWindowFn = extractFunctionSource(
     uiStoreSource,
@@ -48,28 +49,26 @@ test('ui workspace defaults to empty and route sync avoids implicit window creat
   assert.ok(setRouteQueryFn.includes('setWorkspaceWindowRouteQuery(targetId, rawQuery)'))
   assert.ok(!setRouteQueryFn.includes('createWorkspaceWindow('))
 
-  // Main-tab sync should update fallback tab state but must not auto-open a workspace window.
+  // Main-tab mutation remains a focused-window operation.
   assert.ok(setActiveMainTabFn.includes('activeMainTabFallback.value = tab'))
   assert.ok(setActiveMainTabFn.includes('if (!targetId) return'))
   assert.ok(!setActiveMainTabFn.includes('createWorkspaceWindow('))
 
-  // Desktop route-only switches should not rewrite active split-pane window content.
-  const desktopRouteGuardIdx = syncFromRouteFn.indexOf('if (!isCompactLayout.value)')
-  const routeWindowBranchIdx = syncFromRouteFn.indexOf('if (routeWindowId)')
-  const setActiveMainTabCallIdx = syncFromRouteFn.indexOf('setActiveMainTab(tab)')
-  const desktopBranch =
-    desktopRouteGuardIdx >= 0 && routeWindowBranchIdx > desktopRouteGuardIdx
-      ? syncFromRouteFn.slice(desktopRouteGuardIdx, routeWindowBranchIdx)
-      : ''
-
+  // Desktop navigation creates/reuses a durable tab, while explicit window
+  // routes update the complete persisted location.
+  const desktopRouteGuardIdx = uiStoreSource.indexOf('if (!isCompactLayout.value)')
   assert.ok(desktopRouteGuardIdx >= 0)
-  assert.ok(routeWindowBranchIdx >= 0)
-  assert.ok(setActiveMainTabCallIdx >= 0)
-  assert.ok(desktopRouteGuardIdx < routeWindowBranchIdx)
-  assert.ok(desktopRouteGuardIdx < setActiveMainTabCallIdx)
-  assert.ok(desktopBranch.includes('activateWorkspaceWindow(routeWindowId)'))
-  assert.ok(!desktopBranch.includes('setWorkspaceWindowMainTab(routeWindowId, tab)'))
-  assert.ok(!desktopBranch.includes('setWorkspaceWindowRouteQuery(routeWindowId, rawQuery)'))
+  assert.ok(uiStoreSource.includes('openWorkspaceWindow(tab,'))
+  assert.ok(uiStoreSource.includes('setWorkspaceWindowRoutePath(routeWindowId, routePath)'))
+  assert.ok(uiStoreSource.includes('setWorkspaceWindowRouteQuery(routeWindowId, normalizedQuery)'))
+  assert.ok(uiStoreSource.includes('setWorkspaceWindowRouteHash(routeWindowId, routeHash)'))
+  assert.ok(uiStoreSource.includes('routePath: normalizeMainTabPath(mainTab, routePath)'))
+  assert.ok(uiStoreSource.includes('routeHash:'))
+
+  // Rail clicks must enter the workspace navigation path instead of changing
+  // only the shell URL.
+  assert.ok(sidebarSource.includes('workspaceNavigation.openMainTab(tabId'))
+  assert.ok(!sidebarSource.includes('await router.push(routeForTab(tabId))'))
 
   // Route-derived window-title updates should require explicit window scope on desktop.
   assert.ok(resolveRouteWindowFn.includes('if (isCompactLayout.value)'))

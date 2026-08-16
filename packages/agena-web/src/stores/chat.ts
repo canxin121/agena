@@ -25,6 +25,8 @@ import type {
   SessionStatusEvent,
 } from '../types/chat'
 import type { JsonObject, JsonValue } from '../types/json'
+import { readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
+import { useWorkspacePaneContext, type WorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
 // ─── constants ──────────────────────────────────────────────────────────────
 
@@ -56,7 +58,7 @@ function firstNonEmpty(values: Array<string | null | undefined>): string {
   return ''
 }
 
-export const useChatStore = defineStore('chat', () => {
+const useChatStoreDefinition = defineStore('chat', () => {
   const toasts = useToastsStore()
   const directoryStore = useDirectoryStore()
 
@@ -227,10 +229,38 @@ export const useChatStore = defineStore('chat', () => {
     return workspace
   }
 
-  async function hydrateSelectedSessionDirectory(session: Session): Promise<void> {
+  async function hydrateSessionDirectory(session: Session, windowId?: string | null): Promise<void> {
     const workspace = await workspaceForSession(session)
-    if (!workspace || selectedSessionId.value !== session.id) return
-    directoryStore.setDirectory(workspace.path)
+    if (!workspace) return
+    const targetWindowId = String(windowId || '').trim()
+    if (targetWindowId) {
+      directoryStore.setDirectoryForWindow(targetWindowId, workspace.path)
+      return
+    }
+    if (selectedSessionId.value === session.id) directoryStore.setDirectory(workspace.path)
+  }
+
+  async function hydrateSession(id: string | null, opts?: { windowId?: string | null }) {
+    const sid = String(id || '').trim()
+    if (!sid) return
+
+    let session = getSessionById(sid)
+    if (!session) {
+      session = await chatApi.getSession(sid)
+      upsertSessionCache(session)
+    }
+    void hydrateSessionDirectory(session, opts?.windowId)
+
+    if (!Array.isArray(messagesBySession.value[sid])) {
+      messagesBySession.value = { ...messagesBySession.value, [sid]: [] }
+    }
+
+    if (!messagesHydratedBySession.value[sid]) {
+      await refreshMessages(sid)
+    } else {
+      void refreshAttention(sid)
+      void refreshExecutionStatus(sid)
+    }
   }
 
   // ─── selection ────────────────────────────────────────────────────────────
@@ -261,24 +291,7 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (!sid) return
-
-    let session = getSessionById(sid)
-    if (!session) {
-      session = await chatApi.getSession(sid)
-      upsertSessionCache(session)
-    }
-    void hydrateSelectedSessionDirectory(session)
-
-    if (!Array.isArray(messagesBySession.value[sid])) {
-      messagesBySession.value = { ...messagesBySession.value, [sid]: [] }
-    }
-
-    if (!messagesHydratedBySession.value[sid]) {
-      await refreshMessages(sid)
-    } else {
-      void refreshAttention(sid)
-      void refreshExecutionStatus(sid)
-    }
+    await hydrateSession(sid)
   }
 
   // ─── messages ─────────────────────────────────────────────────────────────
@@ -734,6 +747,53 @@ export const useChatStore = defineStore('chat', () => {
     if (!sid) return null
     return sessionUsageBySession.value[sid] ?? null
   })
+
+  function getMessagesForSession(sessionId: string | null | undefined): MessageEntry[] {
+    const sid = String(sessionId || '').trim()
+    if (!sid) return []
+    const list = messagesBySession.value[sid]
+    return Array.isArray(list) ? list : []
+  }
+
+  function getSessionDirectory(sessionId: string | null | undefined): string | null {
+    const sid = String(sessionId || '').trim()
+    return sid ? sessionDirectoryBySessionId.value[sid] || null : null
+  }
+
+  function getSessionHistory(sessionId: string | null | undefined) {
+    const sid = String(sessionId || '').trim()
+    if (!sid) return { loading: false, exhausted: false, limit: 0 }
+    return {
+      loading: Boolean(historyLoadingBySession.value[sid]),
+      exhausted: Boolean(historyExhaustedBySession.value[sid]),
+      limit: typeof historyLimitBySession.value[sid] === 'number' ? Number(historyLimitBySession.value[sid]) : 0,
+    }
+  }
+
+  function getSessionAttention(sessionId: string | null | undefined): AttentionEvent | null {
+    const sid = String(sessionId || '').trim()
+    return sid ? attentionBySession.value[sid] || null : null
+  }
+
+  function getSessionStatus(sessionId: string | null | undefined): SessionStatusEvent | null {
+    const sid = String(sessionId || '').trim()
+    return sid ? sessionStatusBySession.value[sid] || null : null
+  }
+
+  function getSessionError(sessionId: string | null | undefined): SessionErrorEvent | null {
+    const sid = String(sessionId || '').trim()
+    return sid ? sessionErrorBySession.value[sid] || null : null
+  }
+
+  function getSessionRunConfig(sessionId: string | null | undefined): SessionRunConfig | null {
+    const sid = String(sessionId || '').trim()
+    return sid ? sessionRunConfigBySession.value[sid] || null : null
+  }
+
+  function getSessionUsage(sessionId: string | null | undefined): SessionUsage | null {
+    const sid = String(sessionId || '').trim()
+    return sid ? sessionUsageBySession.value[sid] || null : null
+  }
 
   function clearSessionError(sessionId: string) {
     const sid = (sessionId || '').trim()
@@ -1344,6 +1404,7 @@ export const useChatStore = defineStore('chat', () => {
     attentionBySession,
     refreshSessions,
     selectSession,
+    hydrateSession,
     refreshMessages,
     loadOlderMessages,
     selectedHistory,
@@ -1361,6 +1422,14 @@ export const useChatStore = defineStore('chat', () => {
     replyQuestion,
     rejectQuestion,
     getSessionById,
+    getMessagesForSession,
+    getSessionDirectory,
+    getSessionHistory,
+    getSessionAttention,
+    getSessionStatus,
+    getSessionError,
+    getSessionRunConfig,
+    getSessionUsage,
     cacheSessions,
     ensureMessagePartDetail,
     consumePendingComposer,
@@ -1371,3 +1440,80 @@ export const useChatStore = defineStore('chat', () => {
     applyEvent,
   }
 })
+
+type ChatStore = ReturnType<typeof useChatStoreDefinition>
+
+function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
+  function selectedSessionId(): string | null {
+    return readSessionIdFromQuery(pane.route.value.query) || null
+  }
+
+  async function selectSession(id: string | null) {
+    const sid = String(id || '').trim()
+    if (sid) await store.hydrateSession(sid, { windowId: pane.windowId.value })
+
+    const query: Record<string, string> = {}
+    for (const [rawKey, rawValue] of Object.entries(pane.route.value.query || {})) {
+      const key = String(rawKey || '').trim()
+      if (!key || ['session', 'sessionid', 'sessionId', 'windowid', 'windowId', 'ocEmbed'].includes(key)) continue
+      const value = Array.isArray(rawValue)
+        ? String(rawValue.find((item) => String(item || '').trim()) || '').trim()
+        : String(rawValue || '').trim()
+      if (value) query[key] = value
+    }
+    if (sid) query.sessionId = sid
+
+    await pane.navigate(
+      {
+        path: '/chat',
+        query,
+        hash: pane.route.value.hash,
+      },
+      true,
+    )
+  }
+
+  return new Proxy(store, {
+    get(target, property, receiver) {
+      const sid = selectedSessionId()
+      if (property === 'selectedSessionId') return sid
+      if (property === 'selectedSession') return target.getSessionById(sid)
+      if (property === 'selectedSessionDirectory') return target.getSessionDirectory(sid)
+      if (property === 'messages') return target.getMessagesForSession(sid)
+      if (property === 'messagesLoading') return sid === target.selectedSessionId ? target.messagesLoading : false
+      if (property === 'messagesError') return sid === target.selectedSessionId ? target.messagesError : null
+      if (property === 'selectedHistory') return target.getSessionHistory(sid)
+      if (property === 'selectedAttention') return target.getSessionAttention(sid)
+      if (property === 'selectedSessionStatus') return target.getSessionStatus(sid)
+      if (property === 'selectedSessionError') return target.getSessionError(sid)
+      if (property === 'selectedSessionRunConfig') return target.getSessionRunConfig(sid)
+      if (property === 'selectedSessionUsage') return target.getSessionUsage(sid)
+      if (property === 'selectSession') return selectSession
+      if (property === 'createSession') {
+        return async (...args: Parameters<ChatStore['createSession']>) => {
+          const created = await target.createSession(...args)
+          if (created?.id) await selectSession(created.id)
+          return created
+        }
+      }
+      if (property === 'deleteSession') {
+        return async (...args: Parameters<ChatStore['deleteSession']>) => {
+          const deletedId = String(args[0] || '').trim()
+          const result = await target.deleteSession(...args)
+          if (deletedId && deletedId === selectedSessionId()) await selectSession(null)
+          return result
+        }
+      }
+      return Reflect.get(target, property, receiver)
+    },
+  })
+}
+
+export const useChatStore = Object.assign(
+  (...args: Parameters<typeof useChatStoreDefinition>) => {
+    const store = useChatStoreDefinition(...args)
+    const pane = useWorkspacePaneContext()
+    return pane ? scopedChat(store, pane) : store
+  },
+  { $id: useChatStoreDefinition.$id },
+) as typeof useChatStoreDefinition

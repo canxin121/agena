@@ -289,7 +289,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             .map_err(client_backend_error)?;
         Ok(PermissionReplyResult {
             session_id: execution.session.id,
-            status: format!("{:?}", execution.workflow_state).to_ascii_lowercase(),
+            status: format!("{:?}", execution.session.state.workflow_state()).to_ascii_lowercase(),
         })
     }
 
@@ -304,7 +304,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
                 .map(|session| SessionListItem {
                     session_id: session.id,
                     title: session.title,
-                    status: session_state_name(session.state).to_owned(),
+                    status: session_state_name(&session.state).to_owned(),
                     updated_at: session.updated_at,
                 })
                 .collect(),
@@ -367,14 +367,14 @@ fn latest_run_parts(parts: &[SessionTranscriptPart]) -> (Option<i64>, Vec<Sessio
     (run_id, selected)
 }
 
-const fn session_state_name(state: SessionState) -> &'static str {
+fn session_state_name(state: &SessionState) -> &'static str {
     match state {
         SessionState::Creating => "creating",
-        SessionState::Ready => "ready",
-        SessionState::Running => "running",
-        SessionState::AwaitingUser => "awaiting_user",
-        SessionState::Interrupted => "interrupted",
-        SessionState::Failed => "failed",
+        SessionState::Ready { .. } => "ready",
+        SessionState::Running { .. } => "running",
+        SessionState::AwaitingInteraction { .. } => "awaiting_interaction",
+        SessionState::Interrupted { .. } => "interrupted",
+        SessionState::Failed { .. } => "failed",
     }
 }
 

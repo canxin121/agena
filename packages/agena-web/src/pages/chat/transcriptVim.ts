@@ -69,6 +69,7 @@ export function resolveTranscriptVimAction(input: TranscriptVimKey): TranscriptV
   if (!plain(input)) return null
   if (/^[1-9]$/.test(key)) return { type: 'count', digit: Number(key) }
   if (key === 'i') return { type: 'insert' }
+  if (key.toLowerCase() === 'v' && input.shiftKey) return { type: 'visual', mode: 'line' }
   if (key === 'v') return { type: 'visual', mode: 'character' }
   if (key === 'V') return { type: 'visual', mode: 'line' }
   if (key === 'Escape') return { type: 'cancel' }

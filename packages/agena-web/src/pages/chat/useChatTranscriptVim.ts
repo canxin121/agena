@@ -20,8 +20,20 @@ import {
   transcriptLineRange,
   transcriptOffsetAtLineColumn,
   transcriptParagraphRange,
+  transcriptVisualLineRange,
   transcriptWordRange,
 } from './transcriptTextCursor'
+import {
+  transcriptBoundaryOnVisualRow,
+  transcriptCaretBoundaryAtPoint,
+  transcriptDomBoundaryForOffset,
+  transcriptProjectionOffsetForBoundary,
+  transcriptTextProjection,
+  transcriptVisualRows,
+  type TranscriptDomBoundary,
+  type TranscriptTextProjection,
+  type TranscriptVisualRow,
+} from './transcriptDomCursor'
 
 type ComposerExpose = {
   textareaEl?: HTMLTextAreaElement | { value: HTMLTextAreaElement | null } | null
@@ -32,10 +44,25 @@ type ToastsLike = { push: (kind: 'success' | 'error' | 'info', message: string, 
 type PendingFind = { direction: 'forward' | 'backward'; till: boolean; count: number }
 type LastFind = PendingFind & { target: string }
 type CursorPoint = { key: string; offset: number }
-type TextEntry = CursorPoint & { element: HTMLElement; text: string; start: number; end: number }
+type TextEntry = CursorPoint & {
+  element: HTMLElement
+  projection: TranscriptTextProjection
+  text: string
+  start: number
+  end: number
+}
+type TextModel = { entries: TextEntry[]; text: string }
 
 const NODE_SELECTOR = '[data-transcript-node][data-transcript-key]'
 const MESSAGE_SELECTOR = '[data-transcript-node="message"][data-transcript-key]'
+const VISUAL_BLOCK_HIGHLIGHT = 'agena-vim-block'
+
+type CssHighlightRegistry = {
+  set: (name: string, highlight: unknown) => void
+  delete: (name: string) => boolean
+}
+
+type HighlightConstructor = new (...ranges: Range[]) => unknown
 
 function composerTextarea(composer: ComposerExpose | null): HTMLTextAreaElement | null {
   const value = composer?.textareaEl
@@ -75,7 +102,7 @@ export function useChatTranscriptVim(opts: {
   const activeNodeKey = ref('')
   const visualAnchorKey = ref('')
   const cursorOffset = ref(0)
-  const preferredColumn = ref(0)
+  const preferredViewportX = ref<number | null>(null)
   const visualAnchorOffset = ref(0)
   const countPrefix = ref('')
   const pendingCommand = ref('')
@@ -91,6 +118,30 @@ export function useChatTranscriptVim(opts: {
   const jumpHistoryIndex = ref(0)
   const commandEcho = ref('')
   let placementFrame = 0
+  let scrollFollowFrame = 0
+  let scrollSuppressionFrame = 0
+  let scrollFollowSuppressed = false
+  let cursorScreenAnchor: { x: number; y: number } | null = null
+  let mountedRoot: HTMLElement | null = null
+  let mountedScroll: HTMLElement | null = null
+  let transcriptResizeObserver: ResizeObserver | null = null
+  let cachedTextModel: TextModel | null = null
+
+  function invalidateTextModel() {
+    cachedTextModel = null
+  }
+
+  function suppressScrollFollow() {
+    scrollFollowSuppressed = true
+    if (scrollSuppressionFrame) window.cancelAnimationFrame(scrollSuppressionFrame)
+    scrollSuppressionFrame = window.requestAnimationFrame(() => {
+      scrollSuppressionFrame = window.requestAnimationFrame(() => {
+        scrollSuppressionFrame = 0
+        scrollFollowSuppressed = false
+        scheduleCursorPlacement()
+      })
+    })
+  }
 
   function scheduleCursorPlacement() {
     if (placementFrame) window.cancelAnimationFrame(placementFrame)
@@ -137,19 +188,22 @@ export function useChatTranscriptVim(opts: {
     return elementForKey(activeNodeKey.value)
   }
 
-  function textEntries(): { entries: TextEntry[]; text: string } {
+  function textEntries(): TextModel {
+    if (cachedTextModel) return cachedTextModel
     const entries: TextEntry[] = []
     let combined = ''
     for (const element of cursorElements()) {
       const key = keyForElement(element)
-      const value = cleanNodeCopyText(element)
+      const projection = transcriptTextProjection(element)
+      const value = projection.text
       if (!key || !value) continue
       if (combined) combined += '\n'
       const start = combined.length
       combined += value
-      entries.push({ key, offset: 0, element, text: value, start, end: combined.length })
+      entries.push({ key, offset: 0, element, projection, text: value, start, end: combined.length })
     }
-    return { entries, text: combined }
+    cachedTextModel = { entries, text: combined }
+    return cachedTextModel
   }
 
   function activeTextEntry(preferTail = false): TextEntry | null {
@@ -193,16 +247,16 @@ export function useChatTranscriptVim(opts: {
     return { key: entry.key, offset: clampTranscriptOffset(entry.text, target - entry.start) }
   }
 
-  function setCursorPoint(point: CursorPoint | null, options?: { center?: boolean; preserveColumn?: boolean }) {
+  function setCursorPoint(point: CursorPoint | null, options?: { center?: boolean; preserveX?: boolean }) {
     if (!point) return
     const entry = textEntries().entries.find((candidate) => candidate.key === point.key)
     if (!entry) return
     activeNodeKey.value = point.key
     cursorOffset.value = clampTranscriptOffset(entry.text, point.offset)
-    if (!options?.preserveColumn) preferredColumn.value = transcriptLinePosition(entry.text, cursorOffset.value).column
+    suppressScrollFollow()
     entry.element.focus({ preventScroll: true })
-    entry.element.scrollIntoView({ behavior: 'auto', block: options?.center ? 'center' : 'nearest', inline: 'nearest' })
-    syncNativeSelection()
+    revealCursorPoint({ key: entry.key, offset: cursorOffset.value }, Boolean(options?.center))
+    syncNativeSelection({ updatePreferredX: !options?.preserveX })
   }
 
   function ensureActive(preferTail = true): HTMLElement | null {
@@ -215,9 +269,9 @@ export function useChatTranscriptVim(opts: {
       return null
     }
     activeNodeKey.value = keyForElement(selected)
-    const text = cleanNodeCopyText(selected)
+    const text = transcriptTextProjection(selected).text
     cursorOffset.value = preferTail && text ? transcriptLineRange(text, text.length).start : 0
-    preferredColumn.value = 0
+    preferredViewportX.value = null
     return selected
   }
 
@@ -233,7 +287,7 @@ export function useChatTranscriptVim(opts: {
 
   function selectElement(
     element: HTMLElement | null,
-    options?: { center?: boolean; recordJump?: boolean; offset?: number; preserveColumn?: boolean },
+    options?: { center?: boolean; recordJump?: boolean; offset?: number; preserveX?: boolean },
   ) {
     if (!element) return
     const key = keyForElement(element)
@@ -241,14 +295,18 @@ export function useChatTranscriptVim(opts: {
     if (options?.recordJump) pushJumpMark()
     const changed = activeNodeKey.value !== key
     activeNodeKey.value = key
-    const text = cleanNodeCopyText(element)
+    const text = transcriptTextProjection(element).text
     if (typeof options?.offset === 'number') cursorOffset.value = clampTranscriptOffset(text, options.offset)
     else if (changed) cursorOffset.value = 0
-    if (!options?.preserveColumn) preferredColumn.value = transcriptLinePosition(text, cursorOffset.value).column
+    suppressScrollFollow()
     element.focus({ preventScroll: true })
-    element.scrollIntoView({ behavior: 'auto', block: options?.center ? 'center' : 'nearest', inline: 'nearest' })
+    if (textEntries().entries.some((entry) => entry.key === key)) {
+      revealCursorPoint({ key, offset: cursorOffset.value }, Boolean(options?.center))
+    } else {
+      element.scrollIntoView({ behavior: 'auto', block: options?.center ? 'center' : 'nearest', inline: 'nearest' })
+    }
     if (mode.value.startsWith('VISUAL') && !visualAnchorKey.value) visualAnchorKey.value = key
-    syncNativeSelection()
+    syncNativeSelection({ updatePreferredX: !options?.preserveX })
   }
 
   function selectNode(key: string) {
@@ -257,7 +315,7 @@ export function useChatTranscriptVim(opts: {
     activeNodeKey.value = key
     if (changed) {
       cursorOffset.value = 0
-      preferredColumn.value = 0
+      preferredViewportX.value = null
     }
     if (mode.value.startsWith('VISUAL') && !visualAnchorKey.value) {
       visualAnchorKey.value = key
@@ -268,6 +326,69 @@ export function useChatTranscriptVim(opts: {
 
   function nodeIndex(key: string, nodes = nodeElements()): number {
     return nodes.findIndex((element) => keyForElement(element) === key)
+  }
+
+  function pointForDomBoundary(boundary: TranscriptDomBoundary, model = textEntries()): CursorPoint | null {
+    const owner = boundary.node.parentElement?.closest<HTMLElement>(NODE_SELECTOR)
+    let entry = owner ? model.entries.find((candidate) => candidate.key === keyForElement(owner)) : undefined
+    if (!entry) entry = model.entries.find((candidate) => candidate.element.contains(boundary.node))
+    if (!entry) return null
+
+    let offset = transcriptProjectionOffsetForBoundary(entry.element, boundary, entry.projection)
+    if (offset === null) return null
+    // A browser caret at the end of a text node belongs to the character on
+    // its left in Normal mode. This also keeps synthetic block separators out
+    // of the set of cursor destinations.
+    const segment = entry.projection.segments.find(
+      (candidate) =>
+        candidate.node === boundary.node &&
+        boundary.offset >= candidate.nodeStart &&
+        boundary.offset <= candidate.nodeEnd,
+    )
+    if (segment && boundary.offset === segment.nodeEnd && segment.nodeEnd > segment.nodeStart) {
+      offset = Math.max(segment.start, offset - 1)
+    }
+    return { key: entry.key, offset: clampTranscriptOffset(entry.text, offset) }
+  }
+
+  function rowIndexForRect(rows: TranscriptVisualRow[], rect: DOMRect): number {
+    const centerY = (rect.top + rect.bottom) / 2
+    let bestIndex = -1
+    let bestDistance = Number.POSITIVE_INFINITY
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index]
+      if (!row) continue
+      const overlap = Math.min(row.bottom, rect.bottom) - Math.max(row.top, rect.top)
+      const distance = overlap > 0 ? 0 : Math.abs(row.centerY - centerY)
+      if (distance < bestDistance) {
+        bestDistance = distance
+        bestIndex = index
+      }
+    }
+    return bestIndex
+  }
+
+  function rectIsOnVisualRow(row: TranscriptVisualRow, rect: DOMRect): boolean {
+    const overlap = Math.min(row.bottom, rect.bottom) - Math.max(row.top, rect.top)
+    return overlap >= Math.min(row.height, rect.height) * 0.4
+  }
+
+  function pointForVisualRow(row: TranscriptVisualRow, preferredX: number): CursorPoint | null {
+    const model = textEntries()
+    const boundary = transcriptBoundaryOnVisualRow(row, preferredX)
+    return boundary ? pointForDomBoundary(boundary, model) : null
+  }
+
+  function visualRowsForMove(direction: 'up' | 'down', count: number): TranscriptVisualRow[] {
+    const elements = cursorElements()
+    const point = cursorPoint()
+    const index = point ? elements.findIndex((element) => keyForElement(element) === point.key) : -1
+    if (index < 0) return []
+    const reach = Math.max(2, count + 1)
+    const start = direction === 'up' ? Math.max(0, index - reach) : Math.max(0, index - 1)
+    const end =
+      direction === 'down' ? Math.min(elements.length, index + reach + 1) : Math.min(elements.length, index + 2)
+    return transcriptVisualRows(elements.slice(start, end))
   }
 
   function takeCount(defaultValue = 1): number {
@@ -283,40 +404,19 @@ export function useChatTranscriptVim(opts: {
   }
 
   function moveVisualLines(direction: 'up' | 'down', count = takeCount()) {
-    const model = textEntries()
-    let entryIndex = model.entries.findIndex((entry) => entry.key === activeTextEntry()?.key)
-    if (entryIndex < 0) return
-    let entry = model.entries[entryIndex]
-    if (!entry) return
-    let position = transcriptLinePosition(entry.text, cursorOffset.value)
-    const targetColumn = preferredColumn.value
-
-    for (let step = 0; step < Math.max(1, count); step += 1) {
-      const lines = entry.text.split('\n')
-      const nextLine = position.line + (direction === 'down' ? 1 : -1)
-      if (nextLine >= 0 && nextLine < lines.length) {
-        position = { line: nextLine, column: targetColumn }
-        continue
-      }
-      const nextEntryIndex = entryIndex + (direction === 'down' ? 1 : -1)
-      const nextEntry = model.entries[nextEntryIndex]
-      if (!nextEntry) break
-      entryIndex = nextEntryIndex
-      entry = nextEntry
-      position = {
-        line: direction === 'down' ? 0 : Math.max(0, entry.text.split('\n').length - 1),
-        column: targetColumn,
-      }
-    }
-
-    setCursorPoint(
-      {
-        key: entry.key,
-        offset: transcriptOffsetAtLineColumn(entry.text, position.line, targetColumn),
-      },
-      { preserveColumn: true },
-    )
-    preferredColumn.value = targetColumn
+    const point = cursorPoint()
+    const rect = point ? cursorRectForPoint(point) : null
+    const rows = visualRowsForMove(direction, count)
+    if (!point || !rect || !rows.length) return
+    const currentIndex = rowIndexForRect(rows, rect)
+    if (currentIndex < 0) return
+    const delta = (direction === 'down' ? 1 : -1) * Math.max(1, count)
+    const targetIndex = Math.max(0, Math.min(rows.length - 1, currentIndex + delta))
+    const targetX = preferredViewportX.value ?? rect.left
+    const target = rows[targetIndex] ? pointForVisualRow(rows[targetIndex], targetX) : null
+    if (!target) return
+    setCursorPoint(target, { preserveX: true })
+    preferredViewportX.value = targetX
   }
 
   function moveWord(action: Extract<TranscriptVimAction, { type: 'word' }>, count = takeCount()) {
@@ -335,18 +435,34 @@ export function useChatTranscriptVim(opts: {
   }
 
   function moveToLineEdge(edge: 'start' | 'first-non-blank' | 'end') {
-    const entry = activeTextEntry()
-    if (!entry) return
-    const range = transcriptLineRange(entry.text, cursorOffset.value)
-    let offset = range.start
-    if (edge === 'end') {
-      const graphemes = transcriptGraphemes(entry.text.slice(range.start, range.end))
-      offset = range.start + (graphemes.at(-1)?.start ?? 0)
-    } else if (edge === 'first-non-blank') {
-      const match = entry.text.slice(range.start, range.end).search(/\S/u)
-      offset = range.start + Math.max(0, match)
+    const point = cursorPoint()
+    const rect = point ? cursorRectForPoint(point) : null
+    const element = point ? elementForKey(point.key) : null
+    const rows = element ? transcriptVisualRows([element]) : []
+    if (!point || !rect || !rows.length) return
+    const row = rows[rowIndexForRect(rows, rect)]
+    if (!row) return
+    const targetX = edge === 'end' ? row.right : row.left
+    let target = pointForVisualRow(row, targetX)
+    if (!target) return
+
+    if (edge === 'first-non-blank') {
+      const entry = textEntries().entries.find((candidate) => candidate.key === target?.key)
+      if (entry) {
+        const graphemes = transcriptGraphemes(entry.text)
+        let index = graphemes.findIndex((grapheme) => target && grapheme.start === target.offset)
+        while (index >= 0 && /^\s$/u.test(graphemes[index]?.text || '')) {
+          const next = graphemes[index + 1]
+          if (!next) break
+          const candidate = { key: entry.key, offset: next.start }
+          const candidateRect = cursorRectForPoint(candidate)
+          if (!candidateRect || !rectIsOnVisualRow(row, candidateRect)) break
+          target = candidate
+          index += 1
+        }
+      }
     }
-    setCursorPoint({ key: entry.key, offset })
+    setCursorPoint(target)
   }
 
   function moveMessage(delta: number, count = takeCount()) {
@@ -387,19 +503,52 @@ export function useChatTranscriptVim(opts: {
     activeElement()?.querySelector<HTMLButtonElement>('[data-transcript-toggle="true"]')?.click()
   }
 
-  function nearestNodeAtViewportRatio(ratio: number): HTMLElement | null {
+  function visibleVisualRows(): TranscriptVisualRow[] {
     const scroll = opts.scrollEl.value
-    const nodes = cursorElements()
-    if (!scroll || !nodes.length) return null
+    if (!scroll) return []
     const bounds = scroll.getBoundingClientRect()
-    const target = bounds.top + bounds.height * ratio
-    return nodes.reduce<HTMLElement | null>((best, element) => {
-      const center = element.getBoundingClientRect().top + element.getBoundingClientRect().height / 2
-      if (!best) return element
-      const bestRect = best.getBoundingClientRect()
-      const bestCenter = bestRect.top + bestRect.height / 2
-      return Math.abs(center - target) < Math.abs(bestCenter - target) ? element : best
-    }, null)
+    const visibleElements = cursorElements().filter((element) => {
+      const rect = element.getBoundingClientRect()
+      return rect.bottom > bounds.top && rect.top < bounds.bottom
+    })
+    return transcriptVisualRows(visibleElements).filter((row) => row.bottom > bounds.top && row.top < bounds.bottom)
+  }
+
+  function pointAtViewportPosition(x: number, y: number): CursorPoint | null {
+    const scroll = opts.scrollEl.value
+    if (!scroll) return null
+    const bounds = scroll.getBoundingClientRect()
+    const model = textEntries()
+    const directBoundary = transcriptCaretBoundaryAtPoint(x, y)
+    const direct = directBoundary ? pointForDomBoundary(directBoundary, model) : null
+    const directRect = direct ? cursorRectForPoint(direct) : null
+    if (
+      direct &&
+      directRect &&
+      rectIntersects(directRect, bounds) &&
+      Math.abs((directRect.top + directRect.bottom) / 2 - y) <= Math.max(24, directRect.height * 1.5)
+    ) {
+      return direct
+    }
+    const rows = visibleVisualRows()
+    if (!rows.length) return null
+    const targetY = Math.max(bounds.top + 1, Math.min(bounds.bottom - 1, y))
+    const row = rows.reduce((best, candidate) => {
+      const distance =
+        targetY < candidate.top ? candidate.top - targetY : targetY > candidate.bottom ? targetY - candidate.bottom : 0
+      const bestDistance = targetY < best.top ? best.top - targetY : targetY > best.bottom ? targetY - best.bottom : 0
+      return distance < bestDistance ? candidate : best
+    })
+    const targetX = Math.max(bounds.left + 1, Math.min(bounds.right - 1, x))
+    return pointForVisualRow(row, targetX)
+  }
+
+  function pointAtViewportRatio(ratio: number): CursorPoint | null {
+    const scroll = opts.scrollEl.value
+    if (!scroll) return null
+    const bounds = scroll.getBoundingClientRect()
+    const x = preferredViewportX.value ?? bounds.left + Math.min(32, bounds.width / 4)
+    return pointAtViewportPosition(x, bounds.top + bounds.height * ratio)
   }
 
   function movePage(direction: 'up' | 'down', half: boolean) {
@@ -413,6 +562,7 @@ export function useChatTranscriptVim(opts: {
       half,
       count: takeCount(),
     })
+    suppressScrollFollow()
     scroll.scrollTo({ top: target.top, behavior: 'auto' })
     window.requestAnimationFrame(() => {
       if (target.boundary) {
@@ -425,21 +575,56 @@ export function useChatTranscriptVim(opts: {
         })
         return
       }
-      selectElement(nearestNodeAtViewportRatio(direction === 'down' ? 0.75 : 0.25))
+      const preferredX = preferredViewportX.value
+      setCursorPoint(pointAtViewportRatio(direction === 'down' ? 0.75 : 0.25), { preserveX: true })
+      preferredViewportX.value = preferredX
     })
   }
 
   function scrollLine(direction: 'up' | 'down') {
     const count = takeCount()
-    opts.scrollEl.value?.scrollBy({ top: (direction === 'down' ? 1 : -1) * count * 24, behavior: 'auto' })
+    if (!cursorScreenAnchor) syncNativeSelection()
+    const scroll = opts.scrollEl.value
+    const point = cursorPoint()
+    if (!scroll || !point) return
+    suppressScrollFollow()
+    scroll.scrollBy({ top: (direction === 'down' ? 1 : -1) * count * 24, behavior: 'auto' })
+    window.requestAnimationFrame(() => {
+      const rect = cursorRectForPoint(point)
+      const bounds = scroll.getBoundingClientRect()
+      if (rect && rectIntersects(rect, bounds) && cursorRectIsVisible(point, rect)) {
+        syncNativeSelection()
+        return
+      }
+      const x = preferredViewportX.value ?? cursorScreenAnchor?.x ?? bounds.left + 1
+      const y = direction === 'down' ? bounds.top + 5 : bounds.bottom - 5
+      const target = pointAtViewportPosition(x, y)
+      if (target) installCursorWithoutReveal(target, { updatePreferredX: false })
+    })
   }
 
   function moveView(row: 'top' | 'middle' | 'bottom', place = false) {
+    if (place) {
+      const scroll = opts.scrollEl.value
+      const point = cursorPoint()
+      const rect = point ? cursorRectForPoint(point) : null
+      if (!scroll || !point || !rect) return
+      const bounds = contentViewport(scroll)
+      const targetY =
+        row === 'top' ? bounds.top + 4 : row === 'middle' ? (bounds.top + bounds.bottom) / 2 : bounds.bottom - 4
+      const sourceY = row === 'top' ? rect.top : row === 'middle' ? (rect.top + rect.bottom) / 2 : rect.bottom
+      suppressScrollFollow()
+      scroll.scrollTop += sourceY - targetY
+      syncNativeSelection()
+      return
+    }
+
     const ratio = row === 'top' ? 0.08 : row === 'middle' ? 0.5 : 0.92
-    const node = nearestNodeAtViewportRatio(ratio)
-    if (!node) return
-    selectElement(node)
-    if (place) node.scrollIntoView({ block: row === 'middle' ? 'center' : row === 'top' ? 'start' : 'end' })
+    const preferredX = preferredViewportX.value
+    const point = pointAtViewportRatio(ratio)
+    if (!point) return
+    setCursorPoint(point, { preserveX: true })
+    preferredViewportX.value = preferredX
   }
 
   function gotoTopOrLine() {
@@ -471,13 +656,13 @@ export function useChatTranscriptVim(opts: {
     }
   }
 
-  function cleanNodeCopyText(element: HTMLElement): string {
-    if (element.dataset.transcriptNode === 'part') return String(element.dataset.copyText || '').trim()
-    const role = String(element.dataset.role || '').trim()
-    const parts = Array.from(element.querySelectorAll<HTMLElement>('[data-transcript-node="part"][data-copy-text]'))
-      .map((part) => String(part.dataset.copyText || '').trim())
+  function visibleMessageText(element: HTMLElement): string {
+    const messageId = String(element.dataset.messageId || '').trim()
+    const parts = textEntries()
+      .entries.filter((entry) => entry.element.dataset.messageId === messageId)
+      .map((entry) => entry.text)
       .filter(Boolean)
-    return [role, parts.join('\n\n')].filter(Boolean).join('\n')
+    return parts.length ? parts.join('\n\n') : transcriptTextProjection(element).text
   }
 
   let cursorOverlay: HTMLDivElement | null = null
@@ -488,37 +673,14 @@ export function useChatTranscriptVim(opts: {
     cursorOverlay = null
   }
 
-  function selectableTextNodes(element: HTMLElement): Text[] {
-    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
-    const nodes: Text[] = []
-    let current = walker.nextNode()
-    while (current) {
-      const textNode = current as Text
-      const parent = textNode.parentElement
-      if (
-        textNode.data &&
-        parent &&
-        !parent.closest('[data-transcript-chrome="true"], [aria-hidden="true"], input, textarea, select, option')
-      ) {
-        nodes.push(textNode)
-      }
-      current = walker.nextNode()
-    }
-    return nodes
-  }
-
-  function domBoundary(point: CursorPoint): { node: Text; offset: number } | null {
-    const element = elementForKey(point.key)
-    if (!element) return null
-    const nodes = selectableTextNodes(element)
-    if (!nodes.length) return null
-    let remaining = Math.max(0, point.offset)
-    for (const node of nodes) {
-      if (remaining <= node.data.length) return { node, offset: remaining }
-      remaining -= node.data.length
-    }
-    const last = nodes.at(-1)!
-    return { node: last, offset: last.data.length }
+  function domBoundary(
+    point: CursorPoint,
+    direction: 'forward' | 'backward' = 'forward',
+    model = textEntries(),
+  ): TranscriptDomBoundary | null {
+    const entry = model.entries.find((candidate) => candidate.key === point.key)
+    if (!entry) return null
+    return transcriptDomBoundaryForOffset(entry.element, point.offset, direction, entry.projection)
   }
 
   function rangeBetweenPoints(anchor: CursorPoint, head: CursorPoint, includeHead: boolean): Range | null {
@@ -528,8 +690,8 @@ export function useChatTranscriptVim(opts: {
     if (anchorGlobal === null || headGlobal === null) return null
     const startPoint = anchorGlobal <= headGlobal ? anchor : head
     const endPoint = anchorGlobal <= headGlobal ? head : anchor
-    const start = domBoundary(startPoint)
-    const end = domBoundary(endPoint)
+    const start = domBoundary(startPoint, 'forward', model)
+    const end = domBoundary(endPoint, 'forward', model)
     if (!start || !end) return null
     const range = document.createRange()
     range.setStart(start.node, Math.min(start.node.data.length, start.offset))
@@ -542,8 +704,145 @@ export function useChatTranscriptVim(opts: {
     return range
   }
 
-  function syncNativeSelection() {
+  function cursorRectForPoint(point: CursorPoint): DOMRect | null {
+    const range = rangeBetweenPoints(point, point, true)
+    return range?.getClientRects()[0] || range?.getBoundingClientRect() || null
+  }
+
+  function scrollableOverflow(value: string): boolean {
+    return value === 'auto' || value === 'scroll' || value === 'overlay'
+  }
+
+  function clippingOverflow(value: string): boolean {
+    return scrollableOverflow(value) || value === 'hidden' || value === 'clip'
+  }
+
+  function contentViewport(element: HTMLElement): { left: number; right: number; top: number; bottom: number } {
+    const rect = element.getBoundingClientRect()
+    const left = rect.left + element.clientLeft
+    const top = rect.top + element.clientTop
+    return {
+      left,
+      right: left + element.clientWidth,
+      top,
+      bottom: top + element.clientHeight,
+    }
+  }
+
+  function revealCursorPoint(point: CursorPoint, center: boolean) {
+    const outer = opts.scrollEl.value
+    const range = rangeBetweenPoints(point, point, true)
+    let current = range?.startContainer.parentElement || null
+    if (!outer || !range || !current) return
+
+    while (current) {
+      const style = window.getComputedStyle(current)
+      const scrollsX =
+        (current === outer || scrollableOverflow(style.overflowX)) && current.scrollWidth > current.clientWidth
+      const scrollsY =
+        (current === outer || scrollableOverflow(style.overflowY)) && current.scrollHeight > current.clientHeight
+      if (scrollsX || scrollsY) {
+        const viewport = contentViewport(current)
+        const rect = range.getClientRects()[0] || range.getBoundingClientRect()
+        if (scrollsX) {
+          if (rect.left < viewport.left + 4) current.scrollLeft += rect.left - viewport.left - 4
+          else if (rect.right > viewport.right - 4) current.scrollLeft += rect.right - viewport.right + 4
+        }
+        if (scrollsY) {
+          if (center && current === outer) {
+            current.scrollTop += (rect.top + rect.bottom - viewport.top - viewport.bottom) / 2
+          } else if (rect.top < viewport.top + 4) {
+            current.scrollTop += rect.top - viewport.top - 4
+          } else if (rect.bottom > viewport.bottom - 4) {
+            current.scrollTop += rect.bottom - viewport.bottom + 4
+          }
+        }
+      }
+      if (current === outer) break
+      current = current.parentElement
+    }
+  }
+
+  function cursorRectIsVisible(point: CursorPoint, rect: DOMRect): boolean {
+    const outer = opts.scrollEl.value
+    const boundary = domBoundary(point)
+    let current = boundary?.node.parentElement || null
+    if (!outer || !current) return false
+    while (current) {
+      const style = window.getComputedStyle(current)
+      const viewport = contentViewport(current)
+      if (clippingOverflow(style.overflowX) && (rect.right <= viewport.left || rect.left >= viewport.right))
+        return false
+      if (clippingOverflow(style.overflowY) && (rect.bottom <= viewport.top || rect.top >= viewport.bottom))
+        return false
+      if (current === outer) return true
+      current = current.parentElement
+    }
+    return false
+  }
+
+  function visualBlockSelection(anchor: CursorPoint, head: CursorPoint): { ranges: Range[]; text: string } | null {
+    const anchorRect = cursorRectForPoint(anchor)
+    const headRect = cursorRectForPoint(head)
+    const elements = cursorElements()
+    const anchorElement = elements.findIndex((element) => keyForElement(element) === anchor.key)
+    const headElement = elements.findIndex((element) => keyForElement(element) === head.key)
+    if (!anchorRect || !headRect || anchorElement < 0 || headElement < 0) return null
+
+    const rows = transcriptVisualRows(
+      elements.slice(Math.min(anchorElement, headElement), Math.max(anchorElement, headElement) + 1),
+    )
+    const anchorRow = rowIndexForRect(rows, anchorRect)
+    const headRow = rowIndexForRect(rows, headRect)
+    if (anchorRow < 0 || headRow < 0) return null
+
+    const left = Math.min(anchorRect.left, headRect.left)
+    const right = Math.max(anchorRect.left, headRect.left)
+    const model = textEntries()
+    const ranges: Range[] = []
+    const lines: string[] = []
+    for (const row of rows.slice(Math.min(anchorRow, headRow), Math.max(anchorRow, headRow) + 1)) {
+      const startPoint = pointForVisualRow(row, left)
+      const endPoint = pointForVisualRow(row, right)
+      if (!startPoint || !endPoint) continue
+      const range = rangeBetweenPoints(startPoint, endPoint, true)
+      const start = globalOffsetForPoint(startPoint, model)
+      const end = globalOffsetForPoint(endPoint, model)
+      if (!range || start === null || end === null) continue
+      ranges.push(range)
+      lines.push(model.text.slice(Math.min(start, end), inclusiveGraphemeEnd(model.text, Math.max(start, end))))
+    }
+    return ranges.length ? { ranges, text: lines.join('\n') } : null
+  }
+
+  function visualBlockHighlightSupport(): {
+    registry: CssHighlightRegistry
+    Constructor: HighlightConstructor
+  } | null {
+    if (typeof CSS === 'undefined') return null
+    const registry = (CSS as typeof CSS & { highlights?: CssHighlightRegistry }).highlights
+    const Constructor = (globalThis as typeof globalThis & { Highlight?: HighlightConstructor }).Highlight
+    return registry && Constructor ? { registry, Constructor } : null
+  }
+
+  function clearVisualBlockHighlight() {
+    visualBlockHighlightSupport()?.registry.delete(VISUAL_BLOCK_HIGHLIGHT)
+  }
+
+  function installVisualBlockHighlight(ranges: Range[]): boolean {
+    const support = visualBlockHighlightSupport()
+    if (!support) return false
+    support.registry.set(VISUAL_BLOCK_HIGHLIGHT, new support.Constructor(...ranges))
+    return true
+  }
+
+  function rectIntersects(left: DOMRect, right: DOMRect): boolean {
+    return left.right > right.left && left.left < right.right && left.bottom > right.top && left.top < right.bottom
+  }
+
+  function syncNativeSelection(options?: { updatePreferredX?: boolean; preserveScreenAnchor?: boolean }) {
     if (typeof document === 'undefined' || mode.value === 'INSERT' || mode.value === 'SEARCH') {
+      clearVisualBlockHighlight()
       removeCursorOverlay()
       return
     }
@@ -553,9 +852,48 @@ export function useChatTranscriptVim(opts: {
       return
     }
 
+    const headRect = cursorRectForPoint(head)
+    const viewport = opts.scrollEl.value?.getBoundingClientRect() || null
+    const headIsVisible = Boolean(
+      headRect && viewport && rectIntersects(headRect, viewport) && cursorRectIsVisible(head, headRect),
+    )
+    if (headRect && headIsVisible && !options?.preserveScreenAnchor) {
+      cursorScreenAnchor = { x: headRect.left, y: (headRect.top + headRect.bottom) / 2 }
+    }
+    if (headRect && headIsVisible && options?.updatePreferredX) preferredViewportX.value = headRect.left
+
     if (mode.value.startsWith('VISUAL') && visualAnchorKey.value) {
       removeCursorOverlay()
-      const range = rangeBetweenPoints({ key: visualAnchorKey.value, offset: visualAnchorOffset.value }, head, true)
+      const anchorPoint = { key: visualAnchorKey.value, offset: visualAnchorOffset.value }
+      if (mode.value === 'VISUAL BLOCK') {
+        const block = visualBlockSelection(anchorPoint, head)
+        if (block && installVisualBlockHighlight(block.ranges)) {
+          window.getSelection()?.removeAllRanges()
+          ownsNativeSelection = false
+          return
+        }
+      } else {
+        clearVisualBlockHighlight()
+      }
+      let range: Range | null
+      if (mode.value === 'VISUAL LINE') {
+        const model = textEntries()
+        const anchorGlobal = globalOffsetForPoint(anchorPoint, model)
+        const headGlobal = globalOffsetForPoint(head, model)
+        if (anchorGlobal === null || headGlobal === null) {
+          range = null
+        } else {
+          const lineRange = transcriptVisualLineRange(model.text, anchorGlobal, headGlobal)
+          const start = pointForGlobalOffset(lineRange.start, 'forward', model)
+          const finalGrapheme = transcriptGraphemes(model.text.slice(0, lineRange.end)).at(-1)
+          const end = finalGrapheme
+            ? pointForGlobalOffset(finalGrapheme.start, 'backward', model)
+            : pointForGlobalOffset(lineRange.end, 'backward', model)
+          range = start && end ? rangeBetweenPoints(start, end, true) : null
+        }
+      } else {
+        range = rangeBetweenPoints(anchorPoint, head, true)
+      }
       const selection = window.getSelection()
       if (range && selection) {
         selection.removeAllRanges()
@@ -565,13 +903,21 @@ export function useChatTranscriptVim(opts: {
       return
     }
 
+    clearVisualBlockHighlight()
+
     if (ownsNativeSelection) {
       window.getSelection()?.removeAllRanges()
       ownsNativeSelection = false
     }
     const range = rangeBetweenPoints(head, head, true)
     const rect = range?.getClientRects()[0] || range?.getBoundingClientRect()
-    if (!rect || (!rect.width && !rect.height)) {
+    if (
+      !rect ||
+      (!rect.width && !rect.height) ||
+      !viewport ||
+      !rectIntersects(rect, viewport) ||
+      !cursorRectIsVisible(head, rect)
+    ) {
       removeCursorOverlay()
       return
     }
@@ -579,13 +925,78 @@ export function useChatTranscriptVim(opts: {
       cursorOverlay = document.createElement('div')
       cursorOverlay.dataset.agenaVimCursor = 'true'
       cursorOverlay.style.cssText =
-        'position:fixed;pointer-events:none;z-index:69;background:oklch(var(--primary) / 0.3);border-bottom:2px solid oklch(var(--primary));'
+        'position:fixed;pointer-events:none;z-index:69;background:oklch(var(--primary) / 0.3);border-bottom:2px solid oklch(var(--primary));will-change:left,top;'
       document.body.append(cursorOverlay)
     }
-    cursorOverlay.style.left = `${rect.left}px`
-    cursorOverlay.style.top = `${rect.top}px`
-    cursorOverlay.style.width = `${Math.max(2, rect.width)}px`
-    cursorOverlay.style.height = `${Math.max(2, rect.height)}px`
+    cursorOverlay.dataset.transcriptKey = head.key
+    cursorOverlay.dataset.transcriptOffset = String(head.offset)
+    const left = Math.max(rect.left, viewport.left)
+    const top = Math.max(rect.top, viewport.top)
+    const right = Math.min(rect.right, viewport.right)
+    const bottom = Math.min(rect.bottom, viewport.bottom)
+    cursorOverlay.style.left = `${left}px`
+    cursorOverlay.style.top = `${top}px`
+    cursorOverlay.style.width = `${Math.max(2, right - left)}px`
+    cursorOverlay.style.height = `${Math.max(2, bottom - top)}px`
+  }
+
+  function installCursorWithoutReveal(
+    point: CursorPoint,
+    options?: { preserveScreenAnchor?: boolean; updatePreferredX?: boolean },
+  ) {
+    const entry = textEntries().entries.find((candidate) => candidate.key === point.key)
+    if (!entry) return
+    activeNodeKey.value = entry.key
+    cursorOffset.value = clampTranscriptOffset(entry.text, point.offset)
+    if (mode.value.startsWith('VISUAL') && !visualAnchorKey.value) {
+      visualAnchorKey.value = entry.key
+      visualAnchorOffset.value = cursorOffset.value
+    }
+    syncNativeSelection(options)
+  }
+
+  function followCursorAfterScroll() {
+    scrollFollowFrame = 0
+    if (scrollFollowSuppressed) {
+      scheduleCursorPlacement()
+      return
+    }
+    if (mode.value === 'INSERT' || mode.value === 'SEARCH') {
+      removeCursorOverlay()
+      return
+    }
+    if (!cursorScreenAnchor) {
+      syncNativeSelection()
+      return
+    }
+    const target = pointAtViewportPosition(cursorScreenAnchor.x, cursorScreenAnchor.y)
+    if (!target) {
+      syncNativeSelection({ preserveScreenAnchor: true })
+      return
+    }
+    installCursorWithoutReveal(target, { preserveScreenAnchor: true })
+  }
+
+  function onTranscriptScroll() {
+    if (scrollFollowFrame) window.cancelAnimationFrame(scrollFollowFrame)
+    scrollFollowFrame = window.requestAnimationFrame(followCursorAfterScroll)
+  }
+
+  function onTranscriptPointerDown(event: PointerEvent) {
+    if (opts.enabled && !opts.enabled.value) return
+    if (event.button !== 0 || !(event.target instanceof Element)) return
+    if (event.target.closest('[data-transcript-chrome="true"]')) return
+    const transcriptNode = event.target.closest<HTMLElement>(NODE_SELECTOR)
+    if (!transcriptNode || !opts.pageRef.value?.contains(transcriptNode)) return
+
+    const model = textEntries()
+    const boundary = transcriptCaretBoundaryAtPoint(event.clientX, event.clientY)
+    const point =
+      (boundary ? pointForDomBoundary(boundary, model) : null) || pointAtViewportPosition(event.clientX, event.clientY)
+    if (!point) return
+    if (mode.value === 'INSERT') mode.value = 'NAVIGATE'
+    installCursorWithoutReveal(point, { updatePreferredX: true })
+    scheduleCursorPlacement()
   }
 
   const selectedNodeKeys = computed(() => {
@@ -616,28 +1027,18 @@ export function useChatTranscriptVim(opts: {
     if (anchor === null || head === null) return ''
 
     if (mode.value === 'VISUAL LINE') {
-      const first = transcriptLineRange(model.text, Math.min(anchor, head))
-      const last = transcriptLineRange(model.text, Math.max(anchor, head))
-      return model.text.slice(first.start, last.end)
+      const range = transcriptVisualLineRange(model.text, anchor, head)
+      return model.text.slice(range.start, range.end)
     }
 
     if (mode.value === 'VISUAL BLOCK') {
-      const anchorPosition = transcriptLinePosition(model.text, anchor)
-      const headPosition = transcriptLinePosition(model.text, head)
-      const startLine = Math.min(anchorPosition.line, headPosition.line)
-      const endLine = Math.max(anchorPosition.line, headPosition.line)
-      const startColumn = Math.min(anchorPosition.column, headPosition.column)
-      const endColumn = Math.max(anchorPosition.column, headPosition.column)
-      return model.text
-        .split('\n')
-        .slice(startLine, endLine + 1)
-        .map((line) =>
-          transcriptGraphemes(line)
-            .slice(startColumn, endColumn + 1)
-            .map((item) => item.text)
-            .join(''),
+      if (visualBlockHighlightSupport()) {
+        const block = visualBlockSelection(
+          { key: visualAnchorKey.value, offset: visualAnchorOffset.value },
+          { key: activeNodeKey.value, offset: cursorOffset.value },
         )
-        .join('\n')
+        if (block) return block.text
+      }
     }
 
     const start = Math.min(anchor, head)
@@ -646,9 +1047,8 @@ export function useChatTranscriptVim(opts: {
   }
 
   async function copyRawText(value: string) {
-    const copy = value.trimEnd()
-    if (!copy) return
-    const ok = await copyTextToClipboard(copy)
+    if (!value) return
+    const ok = await copyTextToClipboard(value)
     opts.toasts.push(
       ok ? 'success' : 'error',
       ok ? 'Copied transcript selection' : 'Failed to copy transcript selection',
@@ -746,7 +1146,7 @@ export function useChatTranscriptVim(opts: {
     if (scope === 'message') {
       const messageId = active.dataset.messageId || ''
       const message = messageElements().find((element) => element.dataset.messageId === messageId)
-      const text = message ? cleanNodeCopyText(message) : entry.text
+      const text = message ? visibleMessageText(message) : entry.text
       return { text, range: { start: 0, end: text.length } }
     }
     if (scope === 'markdown') return { text: entry.text, range: { start: 0, end: entry.text.length }, entry }
@@ -819,39 +1219,36 @@ export function useChatTranscriptVim(opts: {
     applyingSearchHighlight = true
     try {
       removeSearchHighlights(root)
+      invalidateTextModel()
       const query = searchQuery.value.trim()
       if (!query || !searchMatches.value.length) return
       const activeMatch = searchMatchIndex.value >= 0 ? searchMatches.value[searchMatchIndex.value] : null
       const activeKey = activeMatch?.key || ''
       for (const element of cursorElements()) {
         const key = keyForElement(element)
-        const nodes = selectableTextNodes(element)
-        if (!nodes.length) continue
-        let combined = ''
-        const mapping: { node: Text; start: number; end: number }[] = []
-        for (const node of nodes) {
-          mapping.push({ node, start: combined.length, end: combined.length + node.data.length })
-          combined += node.data
-        }
-        const ranges = transcriptSearchRanges(combined, query)
+        const projection = transcriptTextProjection(element)
+        if (!projection.segments.length) continue
+        const ranges = transcriptSearchRanges(projection.text, query)
         if (!ranges.length) continue
         const keyMatches = searchMatches.value.filter((match) => match.key === key)
         const activeOrdinal = activeKey === key ? keyMatches.indexOf(activeMatch as TranscriptSearchMatch) : -1
         for (let rangeIndex = ranges.length - 1; rangeIndex >= 0; rangeIndex -= 1) {
           const range = ranges[rangeIndex]
-          const startMapping = mapping.find((item) => range.start >= item.start && range.start <= item.end)
-          const endMapping = mapping.find((item) => range.end >= item.start && range.end <= item.end)
-          if (!startMapping || !endMapping) continue
-          wrapSearchRange(
-            startMapping.node,
-            range.start - startMapping.start,
-            endMapping.node,
-            range.end - endMapping.start,
-            rangeIndex === activeOrdinal,
+          const segments = projection.segments.filter(
+            (segment) => segment.end > range.start && segment.start < range.end,
           )
+          for (let segmentIndex = segments.length - 1; segmentIndex >= 0; segmentIndex -= 1) {
+            const segment = segments[segmentIndex]
+            if (!segment) continue
+            const start = segment.nodeStart + Math.max(range.start, segment.start) - segment.start
+            const end = segment.nodeStart + Math.min(range.end, segment.end) - segment.start
+            wrapSearchRange(segment.node, start, segment.node, end, rangeIndex === activeOrdinal)
+          }
         }
       }
     } finally {
+      invalidateTextModel()
+      scheduleCursorPlacement()
       queueMicrotask(() => {
         applyingSearchHighlight = false
       })
@@ -1402,13 +1799,20 @@ export function useChatTranscriptVim(opts: {
     return `${current}/${total}`
   })
 
+  function onTranscriptResize() {
+    invalidateTextModel()
+    scheduleCursorPlacement()
+  }
+
   watch(
     () => opts.selectedSessionId.value,
     () => {
+      invalidateTextModel()
       activeNodeKey.value = ''
       visualAnchorKey.value = ''
       cursorOffset.value = 0
-      preferredColumn.value = 0
+      preferredViewportX.value = null
+      cursorScreenAnchor = null
       visualAnchorOffset.value = 0
       searchQuery.value = ''
       searchMatches.value = []
@@ -1420,7 +1824,7 @@ export function useChatTranscriptVim(opts: {
       mode.value = 'NAVIGATE'
       nextTick(() => {
         ensureActive(true)
-        syncNativeSelection()
+        syncNativeSelection({ updatePreferredX: true })
       })
     },
   )
@@ -1429,33 +1833,48 @@ export function useChatTranscriptVim(opts: {
     () => opts.renderBlocks.value.map((block) => block.key).join('|'),
     () =>
       nextTick(() => {
+        invalidateTextModel()
         ensureActive(true)
-        syncNativeSelection()
+        syncNativeSelection({ updatePreferredX: true })
         scheduleSearchHighlight()
       }),
   )
 
   onMounted(() => {
     const root = opts.pageRef.value
+    mountedRoot = root
+    mountedScroll = opts.scrollEl.value
     if (root && typeof MutationObserver !== 'undefined') {
       searchHighlightObserver = new MutationObserver(() => {
+        invalidateTextModel()
         if (applyingSearchHighlight) return
         if (!searchOpen.value && !searchQuery.value.trim()) return
         scheduleSearchHighlight()
       })
       searchHighlightObserver.observe(root, { childList: true, subtree: true, characterData: true })
     }
+    if (mountedScroll && typeof ResizeObserver !== 'undefined') {
+      transcriptResizeObserver = new ResizeObserver(onTranscriptResize)
+      transcriptResizeObserver.observe(mountedScroll)
+    }
+    root?.addEventListener('pointerdown', onTranscriptPointerDown, true)
     window.addEventListener('keydown', onKeydown)
-    window.addEventListener('resize', scheduleCursorPlacement)
-    opts.scrollEl.value?.addEventListener('scroll', scheduleCursorPlacement, { passive: true })
+    window.addEventListener('resize', onTranscriptResize)
+    mountedScroll?.addEventListener('scroll', onTranscriptScroll, { passive: true })
   })
   onBeforeUnmount(() => {
     searchHighlightObserver?.disconnect()
     searchHighlightObserver = null
+    transcriptResizeObserver?.disconnect()
+    transcriptResizeObserver = null
+    mountedRoot?.removeEventListener('pointerdown', onTranscriptPointerDown, true)
     window.removeEventListener('keydown', onKeydown)
-    window.removeEventListener('resize', scheduleCursorPlacement)
-    opts.scrollEl.value?.removeEventListener('scroll', scheduleCursorPlacement)
+    window.removeEventListener('resize', onTranscriptResize)
+    mountedScroll?.removeEventListener('scroll', onTranscriptScroll)
     if (placementFrame) window.cancelAnimationFrame(placementFrame)
+    if (scrollFollowFrame) window.cancelAnimationFrame(scrollFollowFrame)
+    if (scrollSuppressionFrame) window.cancelAnimationFrame(scrollSuppressionFrame)
+    clearVisualBlockHighlight()
     removeCursorOverlay()
     if (ownsNativeSelection) window.getSelection()?.removeAllRanges()
   })

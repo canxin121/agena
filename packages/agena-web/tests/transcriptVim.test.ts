@@ -7,6 +7,7 @@ describe('transcript Vim keymap parity', () => {
     expect(resolveTranscriptVimAction({ key: 'i' })).toEqual({ type: 'insert' })
     expect(resolveTranscriptVimAction({ key: 'v' })).toEqual({ type: 'visual', mode: 'character' })
     expect(resolveTranscriptVimAction({ key: 'V', shiftKey: true })).toEqual({ type: 'visual', mode: 'line' })
+    expect(resolveTranscriptVimAction({ key: 'v', shiftKey: true })).toEqual({ type: 'visual', mode: 'line' })
     expect(resolveTranscriptVimAction({ key: 'v', ctrlKey: true })).toEqual({ type: 'visual', mode: 'block' })
     expect(resolveTranscriptVimAction({ key: '7' })).toEqual({ type: 'count', digit: 7 })
     expect(resolveTranscriptVimAction({ key: 'j' })).toEqual({ type: 'move', direction: 'down' })

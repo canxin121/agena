@@ -7,6 +7,7 @@ import {
   transcriptLinePosition,
   transcriptOffsetAtLineColumn,
   transcriptParagraphRange,
+  transcriptVisualLineRange,
   transcriptWordRange,
 } from '../src/pages/chat/transcriptTextCursor'
 
@@ -95,5 +96,14 @@ describe('transcript text cursor', () => {
     expect(text.slice(aroundWord.start, aroundWord.end)).toBe('beta  ')
     const paragraph = transcriptParagraphRange(text, text.indexOf('second') + 2, false)
     expect(text.slice(paragraph.start, paragraph.end)).toBe('second paragraph')
+  })
+
+  test('expands visual-line selections to complete lines in either direction', () => {
+    const text = 'alpha one\nbeta two\ngamma three'
+    const forward = transcriptVisualLineRange(text, text.indexOf('one'), text.indexOf('two'))
+    expect(text.slice(forward.start, forward.end)).toBe('alpha one\nbeta two')
+
+    const backward = transcriptVisualLineRange(text, text.indexOf('three'), text.indexOf('beta'))
+    expect(text.slice(backward.start, backward.end)).toBe('beta two\ngamma three')
   })
 })

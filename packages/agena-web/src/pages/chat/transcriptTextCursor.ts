@@ -48,6 +48,13 @@ export function transcriptLineRange(text: string, offset: number): TextRange {
   return { start, end: newline < 0 ? text.length : newline }
 }
 
+/** Inclusive whole-line selection represented as an exclusive text range. */
+export function transcriptVisualLineRange(text: string, anchor: number, head: number): TextRange {
+  const first = transcriptLineRange(text, Math.min(anchor, head))
+  const last = transcriptLineRange(text, Math.max(anchor, head))
+  return { start: first.start, end: last.end }
+}
+
 export function transcriptLinePosition(text: string, offset: number): TextPosition {
   const cursor = clampTranscriptOffset(text, offset)
   const before = text.slice(0, cursor)

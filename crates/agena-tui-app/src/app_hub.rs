@@ -34,6 +34,8 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
+            // Search is applied client-side via `SessionHubPresentation::set_query`
+            // after the overview lands, so the server call stays un-filtered.
             let result = application
                 .session_overview(None, HUB_RECENT_LIMIT)
                 .await
@@ -55,18 +57,25 @@ impl App {
                 false,
                 None,
                 Some(vec![
+                    // The new-session action row is a synthetic first option:
+                    // Enter on it creates a fresh session, so the hub supports
+                    // "Enter → new session" right from the landing screen.
                     SessionHubSection::new(
-                        SessionHubSectionKind::Attention,
-                        overview
-                            .attention
-                            .iter()
-                            .map(|session| self.hub_session_item(session))
-                            .collect(),
+                        SessionHubSectionKind::New,
+                        vec![self.hub_new_session_item()],
                     ),
                     SessionHubSection::new(
                         SessionHubSectionKind::Running,
                         overview
                             .running
+                            .iter()
+                            .map(|session| self.hub_session_item(session))
+                            .collect(),
+                    ),
+                    SessionHubSection::new(
+                        SessionHubSectionKind::Attention,
+                        overview
+                            .attention
                             .iter()
                             .map(|session| self.hub_session_item(session))
                             .collect(),
@@ -95,21 +104,39 @@ impl App {
         }
         if let Some(sections) = sections {
             state.presentation.set_sections(sections);
+            state.presentation.set_query(&state.query);
             state.presentation.clamp_selection();
         }
     }
 
     pub(crate) fn handle_hub_key(&mut self, key: KeyEvent, state: &mut HubState) -> bool {
+        // While search is active, printable characters edit the query instead
+        // of firing the single-letter navigation bindings, so words like
+        // "attention" or "recent" can be typed uninterrupted. Arrow keys,
+        // PgUp/PgDn, Home/End, Tab, Enter, Esc and Ctrl+* still navigate.
+        let typing = state.search_active
+            && matches!(key.code, crossterm::event::KeyCode::Char(_));
         match resolve_tui_key(KeyContext::Hub, key) {
-            Some(KeyAction::Close) => return true,
-            Some(KeyAction::HubCreateSession) => {
+            Some(KeyAction::Close) => {
+                // Esc with an active search clears the filter and leaves
+                // search mode instead of closing the hub; a second Esc closes
+                // the hub.
+                if state.search_active || !state.query.is_empty() {
+                    state.search_active = false;
+                    state.query.clear();
+                    self.spawn_hub_overview_request(state);
+                    return false;
+                }
+                return true;
+            }
+            Some(KeyAction::HubCreateSession) if !typing => {
                 // `create_session(None)` creates a fresh session and routes
                 // into it as soon as the server confirms, so the hub closes
                 // immediately and the new session opens on Main.
                 self.create_session(None);
                 return true;
             }
-            Some(KeyAction::HubOpenSessionList) => {
+            Some(KeyAction::HubOpenSessionList) if !typing => {
                 // Reuses the existing resume picker; it replaces the hub as
                 // the current route.
                 self.open_resume_session_picker();
@@ -118,23 +145,51 @@ impl App {
             Some(KeyAction::Refresh) => {
                 self.spawn_hub_overview_request(state);
             }
-            Some(KeyAction::MoveUp) => state.presentation.move_selection(-1),
-            Some(KeyAction::MoveDown) => state.presentation.move_selection(1),
+            Some(KeyAction::MoveUp) if !typing => state.presentation.move_selection(-1),
+            Some(KeyAction::MoveDown) if !typing => state.presentation.move_selection(1),
             Some(KeyAction::PageUp) => state.presentation.move_selection_page(-1, 10),
             Some(KeyAction::PageDown) => state.presentation.move_selection_page(1, 10),
             Some(KeyAction::Home) => state.presentation.move_selection_home(),
             Some(KeyAction::End) => state.presentation.move_selection_end(),
-            Some(KeyAction::NextTab | KeyAction::PreviousTab) => {
+            Some(KeyAction::NextTab | KeyAction::PreviousTab) if !typing => {
                 state.presentation.toggle_focus();
             }
             Some(KeyAction::Open) => {
-                if let Some(session) = state.presentation.selected_session().cloned() {
-                    self.open_session(session.session_id, session.title);
-                    self.focus = Focus::Composer;
+                let Some(selected) = state.presentation.selected_session().cloned() else {
+                    return false;
+                };
+                if selected.is_new_session {
+                    // Enter on the first (action) row creates a fresh session.
+                    self.create_session(None);
                     return true;
                 }
+                self.open_session(selected.session_id, selected.title);
+                self.focus = Focus::Composer;
+                return true;
             }
+            // A letter bound to a Hub action types into the search instead
+            // while search is active.
+            Some(_) if typing => {}
             Some(_) | None => {}
+        }
+        // `/` (or any unbound printable key) starts search mode. While active,
+        // printable keys and Backspace edit the filter; each edit issues a
+        // fresh overview request (the server call itself is un-filtered; the
+        // query is applied client-side by the presentation).
+        match key.code {
+            crossterm::event::KeyCode::Char('/') if !state.search_active => {
+                state.search_active = true;
+            }
+            crossterm::event::KeyCode::Char(c) if c.is_ascii_graphic() || c == ' ' => {
+                state.search_active = true;
+                state.query.push(c);
+                self.spawn_hub_overview_request(state);
+            }
+            crossterm::event::KeyCode::Backspace if state.search_active => {
+                state.query.pop();
+                self.spawn_hub_overview_request(state);
+            }
+            _ => {}
         }
         false
     }
@@ -172,6 +227,19 @@ impl App {
             title: session.title.clone(),
             label: session.title.clone(),
             detail: detail_parts.join(" | "),
+            is_new_session: false,
+        }
+    }
+
+    /// The synthetic first row of the hub: Entering on it creates a fresh
+    /// session, so the hub supports "Enter → new session" directly.
+    fn hub_new_session_item(&self) -> SessionHubItem {
+        SessionHubItem {
+            session_id: 0,
+            title: String::new(),
+            label: self.i18n.text("hub-item-new"),
+            detail: self.i18n.text("hub-item-new-detail"),
+            is_new_session: true,
         }
     }
 }

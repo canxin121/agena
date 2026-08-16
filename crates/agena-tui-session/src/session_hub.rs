@@ -33,30 +33,37 @@ pub struct SessionHubItem {
     pub label: String,
     /// Second, muted line of the row (state, message count, recency, ...).
     pub detail: String,
+    /// True for the synthetic "new session" action row the App places at the
+    /// very top of the hub. Entering on it creates a fresh session instead of
+    /// opening an existing one.
+    pub is_new_session: bool,
 }
 
 /// Identity of a hub section. Ordering of the sections is fixed by the
-/// renderer: attention, then running, then recent.
+/// renderer: new session (action), then running, then attention, then recent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionHubSectionKind {
-    Attention,
+    New,
     Running,
+    Attention,
     Recent,
 }
 
 impl SessionHubSectionKind {
     pub fn localization_key(self) -> &'static str {
         match self {
-            Self::Attention => "hub-section-attention",
+            Self::New => "hub-section-new",
             Self::Running => "hub-section-running",
+            Self::Attention => "hub-section-attention",
             Self::Recent => "hub-section-recent",
         }
     }
 
     pub fn empty_localization_key(self) -> &'static str {
         match self {
-            Self::Attention => "hub-empty-attention",
+            Self::New => "hub-empty-new",
             Self::Running => "hub-empty-running",
+            Self::Attention => "hub-empty-attention",
             Self::Recent => "hub-empty-recent",
         }
     }
@@ -151,19 +158,74 @@ impl SessionHubPresentation {
     pub fn clamp_selection(&mut self) {
         self.state.clamp_selection();
     }
+
+    /// Filter the sections to rows matching `query` (case-insensitive substring
+    /// over title/label/session id). The new-session action row always stays.
+    /// Selection is preserved by identity when the selected row still matches,
+    /// otherwise it lands on the first row.
+    pub fn set_query(&mut self, query: &str) {
+        let previous = self.selected_session().cloned();
+        let query = query.trim().to_lowercase();
+        let sections = self
+            .state
+            .sections()
+            .iter()
+            .map(|section| {
+                let items = if query.is_empty() {
+                    section.items.clone()
+                } else {
+                    section
+                        .items
+                        .iter()
+                        .filter(|item| item.is_new_session || session_matches(item, &query))
+                        .cloned()
+                        .collect()
+                };
+                SessionHubSection::new(section.kind, items)
+            })
+            .collect::<Vec<_>>();
+        let focus = self.state.focus();
+        let (section_index, item_index) = match previous {
+            Some(previous) => sections
+                .iter()
+                .enumerate()
+                .find_map(|(section_index, section)| {
+                    section
+                        .items
+                        .iter()
+                        .position(|item| *item == previous)
+                        .map(|item_index| (section_index, item_index))
+                })
+                .unwrap_or((0, 0)),
+            None => (0, 0),
+        };
+        self.state = SectionedListState::new(sections, section_index, item_index, focus);
+    }
+}
+
+/// Case-insensitive substring match of one hub row against the search query.
+fn session_matches(item: &SessionHubItem, query_lower: &str) -> bool {
+    item.label.to_lowercase().contains(query_lower)
+        || item.title.to_lowercase().contains(query_lower)
+        || item.session_id.to_string().contains(query_lower)
 }
 
 /// Renders the session hub home screen into `area`.
 ///
 /// `loading` and `error` are application-owned response state: loading hides
 /// the empty state while the first overview response is in flight, and an
-/// error is drawn as a banner above (possibly stale) sections.
+/// error is drawn as a banner above (possibly stale) sections. `search_active`
+/// is whether the user is composing a search (shown as an active filter box);
+/// `query` is the live filter — when non-empty the list narrows to matching
+/// rows.
 pub fn render_session_hub(
     frame: &mut Frame<'_>,
     area: Rect,
     presentation: &SessionHubPresentation,
     loading: bool,
     error: Option<&str>,
+    search_active: bool,
+    query: &str,
     i18n: &I18n,
 ) {
     let block = Block::default()
@@ -176,22 +238,42 @@ pub fn render_session_hub(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
+            Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(1),
         ])
         .split(inner);
     let action_area = rows[0];
-    let mut content_area = rows[1];
-    let footer_area = rows[2];
+    let search_area = rows[1];
+    let mut content_area = rows[2];
+    let footer_area = rows[3];
 
-    frame.render_widget(
-        Paragraph::new(build_shortcut_line([
+    let action = if search_active {
+        build_shortcut_line([ShortcutHint::new(
+            "Esc",
+            i18n.text("hub-action-clear-search"),
+        )])
+    } else {
+        build_shortcut_line([
             ShortcutHint::new("Ctrl+N", i18n.text("hub-action-create")),
+            ShortcutHint::new("/", i18n.text("hub-action-search")),
             ShortcutHint::new("l", i18n.text("hub-action-list")),
             ShortcutHint::new("Ctrl+R", i18n.text("hub-action-refresh")),
-        ])),
-        action_area,
-    );
+        ])
+    };
+    frame.render_widget(Paragraph::new(action), action_area);
+
+    let search_title = if search_active {
+        let prompt = if query.trim().is_empty() {
+            i18n.text("hub-search-active-empty")
+        } else {
+            i18n.text_args("hub-search-active", &agena_tui::fl_args!("query" => query))
+        };
+        Line::from(Span::styled(prompt, accent_color()))
+    } else {
+        Line::from(Span::styled(i18n.text("hub-search-placeholder"), muted_style()))
+    };
+    frame.render_widget(Paragraph::new(search_title), search_area);
 
     if let Some(error) = error {
         let rows = Layout::default()
@@ -272,20 +354,70 @@ fn split_section_areas(area: Rect, sections: &[SessionHubSection]) -> Vec<Rect> 
     if sections.is_empty() || area.height == 0 {
         return Vec::new();
     }
+    // The new-session action section is always a single fixed-height row at
+    // the top; every other section shares the remaining space proportionally
+    // to its row count so non-empty sections never get starved.
+    let (new_index, new_area, remaining) = match sections.iter().position(|section| {
+        section.kind == SessionHubSectionKind::New && !section.items.is_empty()
+    }) {
+        Some(index) => {
+            let new_area = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: 1.min(area.height),
+            };
+            let remaining = Rect {
+                x: area.x,
+                y: area.y + 1,
+                width: area.width,
+                height: area.height.saturating_sub(1),
+            };
+            (Some(index), new_area, remaining)
+        }
+        None => (None, Rect::ZERO, area),
+    };
+    let mut areas = vec![Rect::ZERO; sections.len()];
+    if let Some(index) = new_index {
+        areas[index] = new_area;
+    }
+    if remaining.height == 0 {
+        return areas;
+    }
     let total = sections
         .iter()
-        .map(|section| section.items.len().max(1) as u32)
+        .enumerate()
+        .map(|(index, section)| {
+            if Some(index) == new_index {
+                0
+            } else {
+                section.items.len().max(1) as u32
+            }
+        })
         .sum::<u32>()
         .max(1);
     let constraints = sections
         .iter()
-        .map(|section| Constraint::Ratio(section.items.len().max(1) as u32, total))
+        .enumerate()
+        .map(|(index, section)| {
+            if Some(index) == new_index {
+                Constraint::Length(1)
+            } else {
+                Constraint::Ratio(section.items.len().max(1) as u32, total)
+            }
+        })
         .collect::<Vec<_>>();
-    Layout::default()
+    let rest_areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
-        .split(area)
-        .to_vec()
+        .split(remaining)
+        .to_vec();
+    for (index, area) in rest_areas.into_iter().enumerate() {
+        if areas[index] == Rect::ZERO {
+            areas[index] = area;
+        }
+    }
+    areas
 }
 
 fn render_section(
@@ -364,6 +496,17 @@ mod tests {
             title: format!("session {id}"),
             label: format!("session {id}"),
             detail: "detail".to_string(),
+            is_new_session: false,
+        }
+    }
+
+    fn new_session_item() -> SessionHubItem {
+        SessionHubItem {
+            session_id: 0,
+            title: String::new(),
+            label: "new session".to_string(),
+            detail: String::new(),
+            is_new_session: true,
         }
     }
 
@@ -407,5 +550,70 @@ mod tests {
         assert_eq!(presentation.selected_session(), None);
         presentation.toggle_focus();
         assert_eq!(presentation.selected_session().map(|s| s.session_id), Some(1));
+    }
+
+    #[test]
+    fn query_filters_rows_and_keeps_the_new_session_action() {
+        let mut presentation = SessionHubPresentation::empty(SectionedListFocus::Items);
+        let mut sections = vec![
+            SessionHubSection::new(
+                SessionHubSectionKind::New,
+                vec![new_session_item()],
+            ),
+            section(SessionHubSectionKind::Running, &[1, 2]),
+            section(SessionHubSectionKind::Attention, &[3]),
+            section(SessionHubSectionKind::Recent, &[4]),
+        ];
+        // A synthetic new-session row placed outside the New section must
+        // survive filtering too: only the New section emits it today, but the
+        // filter treats action rows as always-visible.
+        sections.push(SessionHubSection::new(
+            SessionHubSectionKind::Recent,
+            vec![SessionHubItem {
+                is_new_session: true,
+                ..item(5)
+            }],
+        ));
+        presentation.set_sections(sections);
+
+        presentation.set_query("session 3");
+
+        let ids: Vec<i64> = presentation
+            .state
+            .sections()
+            .iter()
+            .flat_map(|section| section.items.iter().map(|row| row.session_id))
+            .collect();
+        assert_eq!(
+            ids,
+            vec![0, 3, 5],
+            "the new-session action row, the matching row, and any action row all survive"
+        );
+        // Selection stays on the previously selected (new-session) row.
+        assert!(
+            presentation
+                .selected_session()
+                .map(|row| row.is_new_session)
+                .unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn query_selection_survives_by_identity_when_selected_row_still_matches() {
+        let mut presentation = SessionHubPresentation::empty(SectionedListFocus::Items);
+        presentation.set_sections(vec![
+            section(SessionHubSectionKind::Running, &[1, 2]),
+            section(SessionHubSectionKind::Attention, &[3]),
+        ]);
+        // Select the second row of the Running section.
+        presentation.move_selection(1);
+        assert_eq!(presentation.selected_session().map(|s| s.session_id), Some(2));
+        // Filtering to "session 2" keeps row 2 selected even though the list
+        // shrank around it.
+        presentation.set_query("session 2");
+        assert_eq!(presentation.selected_session().map(|s| s.session_id), Some(2));
+        // Clearing the query restores the full list and keeps row 2 selected.
+        presentation.set_query("");
+        assert_eq!(presentation.selected_session().map(|s| s.session_id), Some(2));
     }
 }

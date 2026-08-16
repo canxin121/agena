@@ -14,6 +14,7 @@ impl App {
             CommandId::Commands => self.open_command_palette(),
             CommandId::New => self.create_session(None),
             CommandId::Sessions => self.open_resume_session_picker(),
+            CommandId::Hub => self.open_hub(),
             CommandId::Lineage => self.open_lineage_picker(),
             CommandId::Rewind => self.open_rewind_messages_picker(),
             CommandId::Rename => self.open_rename_session_overlay(),
@@ -59,6 +60,14 @@ impl App {
             }
             CommandId::Usage => self.open_usage_dashboard(),
             CommandId::Activities => self.open_activities_panel(),
+            CommandId::Background => {
+                // Return to the session hub and leave the TUI. The server owns
+                // the session independently of this client, so nothing is
+                // stopped: the session keeps running and can be re-attached
+                // from the hub next launch.
+                self.open_hub();
+                self.should_quit = true;
+            }
             CommandId::Plan => self.open_plan_viewer(),
             CommandId::Side => self.handle_side_command(args),
         }
@@ -398,6 +407,8 @@ fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
     matches!(
         id,
         CommandId::Sessions
+            | CommandId::Hub
+            | CommandId::Background
             | CommandId::Rename
             | CommandId::Timeline
             | CommandId::Settings

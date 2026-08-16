@@ -961,6 +961,13 @@ pub(super) struct HubState {
     pub(super) loading: bool,
     pub(super) request_id: u64,
     pub(super) error: Option<String>,
+    /// Live search filter. An empty string lists everything; any other value
+    /// narrows the hub to matching sessions (title / label / id).
+    pub(super) query: String,
+    /// Whether the user is composing a search. While active, printable keys
+    /// (including the single-letter hub bindings c/j/k/l/t) type into the
+    /// query instead of triggering their hub action.
+    pub(super) search_active: bool,
 }
 
 impl HubState {
@@ -971,6 +978,8 @@ impl HubState {
             loading: true,
             request_id: 0,
             error: None,
+            query: String::new(),
+            search_active: false,
         }
     }
 }

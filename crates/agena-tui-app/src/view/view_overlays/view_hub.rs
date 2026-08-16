@@ -19,6 +19,8 @@ impl App {
             &state.presentation,
             state.loading,
             state.error.as_deref(),
+            state.search_active,
+            state.query.as_str(),
             &self.i18n,
         );
     }

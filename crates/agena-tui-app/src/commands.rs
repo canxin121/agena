@@ -5,6 +5,7 @@ pub enum CommandId {
     Commands,
     New,
     Sessions,
+    Hub,
     Lineage,
     Rewind,
     Rename,
@@ -39,6 +40,7 @@ pub enum CommandId {
     Status,
     Usage,
     Activities,
+    Background,
     Plan,
     Side,
 }
@@ -120,6 +122,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         arguments: "",
         summary_key: "command-sessions-summary",
+    },
+    CommandSpec {
+        id: CommandId::Hub,
+        name: "hub",
+        aliases: &[],
+        arguments: "",
+        summary_key: "command-hub-summary",
     },
     CommandSpec {
         id: CommandId::Lineage,
@@ -355,9 +364,16 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::Activities,
         name: "activities",
-        aliases: &["background", "tasks"],
+        aliases: &["tasks"],
         arguments: "",
         summary_key: "command-activities-summary",
+    },
+    CommandSpec {
+        id: CommandId::Background,
+        name: "background",
+        aliases: &[],
+        arguments: "",
+        summary_key: "command-background-summary",
     },
     CommandSpec {
         id: CommandId::Plan,

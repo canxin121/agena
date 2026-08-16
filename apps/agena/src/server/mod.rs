@@ -2,9 +2,20 @@ mod app;
 mod auth;
 pub(crate) mod server_record;
 mod diagnostics;
+mod error;
+mod fs;
+mod git {
+    pub(crate) use agena_git_http::*;
+}
 mod lifecycle;
+mod path_utils;
+mod persistence;
+mod preview;
 mod state;
+mod terminal;
 mod user_service;
+
+pub(crate) use error::{ApiResult, AppError};
 
 use crate::error::AgenaProcessError;
 use agena_cli::{ServerArgs, ServerLaunchRequest};

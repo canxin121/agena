@@ -22,7 +22,7 @@ mod error;
 mod launch;
 mod server;
 
-pub(crate) use server::AppState;
+pub(crate) use server::{ApiResult, AppError, AppState};
 
 use agena_cli::{AgenaCli, LaunchMode};
 use clap::Parser;

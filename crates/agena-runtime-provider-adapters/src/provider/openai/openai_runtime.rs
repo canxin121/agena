@@ -12,10 +12,10 @@ use super::{
     OpenAiUsage, ProviderError, ProviderId, ProviderImageCapabilities, ProviderImageOperation,
     ProviderImageRequest, ProviderImageResponse, ProviderNativeToolArtifact, REALTIME_ADAPTER_KIND,
     RESPONSES_ADAPTER_KIND, RequestHeaderContext, Stream, ToolStreamAccumulator, async_trait,
-    completion_event_from_tool_stream_update, openai_reasoning_item_from_event,
-    openai_reasoning_items_from_output, openai_responses_metadata,
-    responses_provider_native_tool_event, responses_reasoning_delta, responses_tool_stream_input,
-    sse, utils,
+    completion_event_from_tool_stream_update, merge_openai_reasoning_item,
+    openai_reasoning_item_from_event, openai_reasoning_items_from_output,
+    openai_responses_metadata, responses_provider_native_tool_event, responses_reasoning_delta,
+    responses_tool_stream_input, sse, utils,
 };
 impl OpenAiTransport {
     pub(super) fn runtime_model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
@@ -739,7 +739,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                         .iter_mut()
                         .find(|(current_id, _)| current_id == &item_id)
                     {
-                        *current = item;
+                        merge_openai_reasoning_item(current, item);
                     } else {
                         reasoning_items.push((item_id, item));
                     }

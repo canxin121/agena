@@ -107,6 +107,67 @@ pub fn merge_json_object_patch_map(
     }
 }
 
+/// Merge provider replay metadata emitted across several stream events.
+///
+/// Terminal events are snapshots, but compatible gateways occasionally emit
+/// more than one of them (or split replay fields across them). Treat absent or
+/// structurally empty updates as "no change" so a late `{}`, `null`, or blank
+/// value cannot erase an earlier response id or reasoning payload. Object
+/// updates merge recursively; meaningful later scalar/array values replace
+/// their earlier counterpart.
+pub fn merge_provider_metadata(
+    current: Option<serde_json::Value>,
+    update: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let mut current = current.filter(provider_metadata_value_is_meaningful);
+    let Some(update) = update.filter(provider_metadata_value_is_meaningful) else {
+        return current;
+    };
+    match current.as_mut() {
+        Some(current) => merge_provider_metadata_value(current, update),
+        None => current = Some(update),
+    }
+    current
+}
+
+fn merge_provider_metadata_value(current: &mut serde_json::Value, update: serde_json::Value) {
+    if !provider_metadata_value_is_meaningful(&update) {
+        return;
+    }
+    match (current, update) {
+        (serde_json::Value::Object(current), serde_json::Value::Object(update)) => {
+            for (key, value) in update {
+                if !provider_metadata_value_is_meaningful(&value) {
+                    continue;
+                }
+                match current.get_mut(key.as_str()) {
+                    Some(existing) => merge_provider_metadata_value(existing, value),
+                    None => {
+                        current.insert(key, value);
+                    }
+                }
+            }
+        }
+        (current, update) => *current = update,
+    }
+}
+
+/// Whether a provider replay-metadata value carries any non-empty state.
+///
+/// Objects and arrays are inspected recursively so wrappers containing only
+/// `null`, blank strings, or empty containers behave like an absent update.
+pub fn provider_metadata_value_is_meaningful(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::String(value) => !value.trim().is_empty(),
+        serde_json::Value::Array(value) => value.iter().any(provider_metadata_value_is_meaningful),
+        serde_json::Value::Object(value) => {
+            value.values().any(provider_metadata_value_is_meaningful)
+        }
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) => true,
+    }
+}
+
 fn merge_json_value(current: &mut serde_json::Value, patch: &serde_json::Value) {
     match (current, patch) {
         (serde_json::Value::Object(current), serde_json::Value::Object(patch)) => {
@@ -153,6 +214,48 @@ mod tests {
                 ("accept".to_owned(), "application/json".to_owned()),
                 ("x-feature".to_owned(), "enabled".to_owned()),
             ]
+        );
+    }
+
+    #[test]
+    fn provider_metadata_merge_preserves_earlier_replay_state_from_empty_updates() {
+        let current = serde_json::json!({
+            "response_id": "resp_1",
+            "nested": {
+                "reasoning": [1, 2],
+                "first": true
+            }
+        });
+        let update = serde_json::json!({
+            "response_id": "   ",
+            "nested": {
+                "reasoning": [],
+                "first": null,
+                "second": true
+            }
+        });
+
+        let merged = merge_provider_metadata(Some(current), Some(update))
+            .expect("meaningful replay metadata remains");
+        assert_eq!(merged["response_id"], "resp_1");
+        assert_eq!(merged["nested"]["reasoning"], serde_json::json!([1, 2]));
+        assert_eq!(merged["nested"]["first"], true);
+        assert_eq!(merged["nested"]["second"], true);
+        assert_eq!(
+            merge_provider_metadata(Some(merged.clone()), Some(serde_json::json!({}))),
+            Some(merged),
+            "an empty terminal metadata snapshot is not a deletion"
+        );
+        assert_eq!(
+            merge_provider_metadata(
+                None,
+                Some(serde_json::json!({
+                    "response_id": "   ",
+                    "nested": { "reasoning": [], "value": null }
+                })),
+            ),
+            None,
+            "a recursively empty first snapshot is not replay state"
         );
     }
 

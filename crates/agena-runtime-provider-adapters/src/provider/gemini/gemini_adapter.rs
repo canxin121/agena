@@ -399,6 +399,7 @@ impl GeminiAdapter {
                         let signature = signatures
                             .and_then(|signatures| signatures.get(id))
                             .cloned()
+                            .filter(|value| !value.trim().is_empty())
                             .or_else(|| {
                                 first_function_call
                                     .then(|| "skip_thought_signature_validator".to_owned())
@@ -408,7 +409,8 @@ impl GeminiAdapter {
                     }
                     _ if final_part_index == Some(index) => signatures
                         .and_then(|signatures| signatures.get(GEMINI_FINAL_PART_SIGNATURE_KEY))
-                        .cloned(),
+                        .cloned()
+                        .filter(|value| !value.trim().is_empty()),
                     _ => None,
                 };
                 Self::part_from_wire_part(part, thought_signature)
@@ -803,8 +805,8 @@ impl GeminiAdapter {
                     for call in tool_call.function_calls {
                         let arguments_json =
                             gemini_tool_call_arguments_json(&call, "realtime")?;
-                        let dedupe_key = call
-                            .id
+                        let provider_call_id = utils::normalize_optional_text(call.id.clone());
+                        let dedupe_key = provider_call_id
                             .clone()
                             .unwrap_or_else(|| utils::request_shape_fingerprint(&call));
                         if !emitted_tool_calls.insert(dedupe_key.clone()) {
@@ -813,7 +815,7 @@ impl GeminiAdapter {
 
                         tool_call_seen = true;
                         saw_content = true;
-                        let id = call.id.unwrap_or(dedupe_key);
+                        let id = provider_call_id.unwrap_or(dedupe_key);
                         yield CompletionStreamEvent::ToolCallDelta {
                             provider_id: provider_id.clone(),
                             model: model_name.clone(),

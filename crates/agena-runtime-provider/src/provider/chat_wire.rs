@@ -1132,7 +1132,7 @@ fn apply_raw_assistant_reasoning_state(
     if let Some(opaque) = state
         .copilot_reasoning_opaque
         .as_deref()
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
     {
         target.reasoning_text = (!reasoning_text.is_empty()).then(|| reasoning_text.to_owned());
         target.reasoning_opaque = Some(opaque.to_owned());

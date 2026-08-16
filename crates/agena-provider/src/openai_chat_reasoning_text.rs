@@ -21,12 +21,22 @@ pub fn openai_chat_reasoning_field(
     reasoning_content: Option<&Value>,
     reasoning_details: Option<&Value>,
 ) -> Option<&'static str> {
-    if reasoning_content.is_some() {
+    if reasoning_content.is_some_and(reasoning_field_value_is_meaningful) {
         Some("reasoning_content")
-    } else if reasoning_details.is_some() {
+    } else if reasoning_details.is_some_and(reasoning_field_value_is_meaningful) {
         Some("reasoning_details")
     } else {
         None
+    }
+}
+
+fn reasoning_field_value_is_meaningful(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
     }
 }
 
@@ -47,5 +57,27 @@ fn extract_reasoning_details_text(value: &Value) -> String {
             .map(extract_reasoning_details_text)
             .unwrap_or_default(),
         _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::openai_chat_reasoning_field;
+
+    #[test]
+    fn empty_reasoning_carrier_does_not_mask_a_later_meaningful_field() {
+        let blank = serde_json::json!("   ");
+        let details = serde_json::json!([{
+            "type": "reasoning.text",
+            "text": "reasoning"
+        }]);
+        assert_eq!(
+            openai_chat_reasoning_field(Some(&blank), Some(&details)),
+            Some("reasoning_details")
+        );
+        assert_eq!(
+            openai_chat_reasoning_field(Some(&serde_json::Value::Null), None),
+            None
+        );
     }
 }

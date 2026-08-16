@@ -363,7 +363,7 @@ impl OpenAiTransport {
                     if let Some(opaque) = delta
                         .reasoning_opaque
                         .as_deref()
-                        .filter(|value| !value.is_empty())
+                        .filter(|value| !value.trim().is_empty())
                     {
                         if copilot_reasoning_opaque
                             .as_deref()
@@ -425,10 +425,12 @@ impl OpenAiTransport {
                     stream_usage = Some(chat_wire::chat_usage_to_completion(usage));
                 }
 
-                let finish_reason = choice
-                    .and_then(|item| item.finish_reason.as_deref())
-                    .filter(|value| !value.is_empty() && *value != "null")
-                    .map(ToOwned::to_owned);
+                let finish_reason = utils::normalize_optional_text(
+                    choice
+                        .and_then(|item| item.finish_reason.as_deref())
+                        .map(ToOwned::to_owned),
+                )
+                    .filter(|value| !value.eq_ignore_ascii_case("null"));
 
                 if stream_finish_reason.is_none() {
                     stream_finish_reason = finish_reason;

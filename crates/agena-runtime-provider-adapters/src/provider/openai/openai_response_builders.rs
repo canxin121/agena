@@ -394,7 +394,7 @@ impl OpenAiTransport {
         if item
             .get("encrypted_content")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|content| !content.is_empty())
+            .is_some_and(|content| !content.trim().is_empty())
             && let Some(object) = item.as_object_mut()
         {
             object.remove("content");
@@ -473,7 +473,7 @@ impl OpenAiTransport {
                                     && if replay_content_reasoning {
                                         item.get("encrypted_content")
                                             .and_then(serde_json::Value::as_str)
-                                            .is_some_and(|content| !content.is_empty())
+                                            .is_some_and(|content| !content.trim().is_empty())
                                             || item
                                                 .get("content")
                                                 .and_then(serde_json::Value::as_array)
@@ -481,7 +481,7 @@ impl OpenAiTransport {
                                     } else {
                                         item.get("encrypted_content")
                                             .and_then(serde_json::Value::as_str)
-                                            .is_some_and(|content| !content.is_empty())
+                                            .is_some_and(|content| !content.trim().is_empty())
                                     }
                             })
                             .cloned()

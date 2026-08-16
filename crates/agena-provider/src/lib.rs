@@ -65,9 +65,9 @@ pub use bedrock_auth::BedrockSigv4AuthConfig;
 mod http_utils;
 pub use http_utils::{
     auth_header_value, ensure_header_case_insensitive, insert_header_case_insensitive,
-    merge_json_object_patch_map, merged_request_headers, normalize_base_url,
-    normalize_optional_text, optional_non_empty, prompt_cache_header_entries,
-    prompt_cache_ignores_header, request_shape_fingerprint,
+    merge_json_object_patch_map, merge_provider_metadata, merged_request_headers,
+    normalize_base_url, normalize_optional_text, optional_non_empty, prompt_cache_header_entries,
+    prompt_cache_ignores_header, provider_metadata_value_is_meaningful, request_shape_fingerprint,
 };
 mod usage_cost;
 pub use usage_cost::{

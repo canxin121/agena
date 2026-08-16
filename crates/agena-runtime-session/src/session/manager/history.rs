@@ -1269,6 +1269,8 @@ fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
             .metadata
             .get(OPERATION_ID_METADATA_KEY)
             .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned),
         _ => None,
     };

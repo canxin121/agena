@@ -1,13 +1,15 @@
 use super::{
     AppError, BTreeMap, OperationPart, PendingProviderNativeToolCall, PendingToolCall,
     SessionProcessor, SessionRunRequest, StructuredObject, TimeRange, ToolInvocation, Utc,
-    parse_tool_invocation_lossy, placeholder_tool_invocation, provider_native_tool_execution_title,
+    merge_provider_native_tool_invocation, parse_tool_invocation_lossy,
+    placeholder_tool_invocation, provider_native_tool_execution_title,
     tool_api_definition_identity, tool_execution_title, tool_execution_title_for_invocation,
 };
 use crate::session::store::{
     OPERATION_ID_METADATA_KEY, tool_call_from_operation, typed_content_from_value,
     typed_content_to_value,
 };
+use agena_provider::merge_provider_metadata;
 use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
 use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
 
@@ -334,9 +336,22 @@ impl SessionProcessor {
         details: agena_domain::ToolOutput,
         raw: Option<serde_json::Value>,
     ) -> Result<(), AppError> {
-        pending.id = id;
+        if let Some(id) = id
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+        {
+            pending.id = Some(id);
+        }
+        let invocation =
+            merge_provider_native_tool_invocation(pending.invocation.as_ref(), invocation);
         pending.invocation = Some(invocation.clone());
+        let title = if title.trim().is_empty() && !pending.title.trim().is_empty() {
+            pending.title.clone()
+        } else {
+            title
+        };
         pending.title = title.clone();
+        let raw = merge_provider_metadata(pending.raw.take(), raw);
         pending.raw = raw.clone();
         self.ensure_provider_native_tool_call_part(run, run_id, parts, &mut pending)
             .await?;

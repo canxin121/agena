@@ -1545,8 +1545,16 @@ impl OperationPart {
             ExecutionStatus::CapabilityUnavailable
         } else if self.result.state == ToolResultState::ToolUnavailable {
             ExecutionStatus::ToolUnavailable
+        } else if self.result.state == ToolResultState::Failed {
+            ExecutionStatus::Failed
+        } else if self.result.state == ToolResultState::Cancelled {
+            ExecutionStatus::Cancelled
         } else if self.error.is_some() {
             ExecutionStatus::Failed
+        } else if self.result.state == ToolResultState::Completed {
+            ExecutionStatus::Completed
+        } else if self.result.state == ToolResultState::Running {
+            ExecutionStatus::InProgress
         } else if self.lifecycle.end_ms.is_some() {
             ExecutionStatus::Completed
         } else if self.result.model_preview.text.trim().is_empty() {
@@ -1612,8 +1620,10 @@ mod operation_part_tests {
 
 #[cfg(test)]
 mod failure_projection_tests {
-    use super::{ToolResultEnvelope, model_visible_failure_text};
-    use agena_domain::ToolOutput;
+    use super::{OperationPart, ToolResultEnvelope, model_visible_failure_text};
+    use agena_domain::{
+        ExecutionStatus, StructuredObject, TimeRange, ToolInvocation, ToolOutput, ToolResultState,
+    };
     use agena_failure::{
         Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
         RecoveryDirective, RetryDirective, UserPresentation,
@@ -1639,5 +1649,35 @@ mod failure_projection_tests {
         assert_eq!(result.display.summary, detail);
         assert_eq!(result.model_preview.text, detail);
         assert!(!result.model_preview.text.contains("The plugin failed"));
+    }
+
+    #[test]
+    fn explicit_cancelled_result_state_wins_over_completed_lifecycle() {
+        let mut operation = OperationPart::pending(
+            7,
+            ToolInvocation::new("fixture.cancel", StructuredObject::default()),
+            "Cancel fixture",
+            TimeRange {
+                start_ms: 1,
+                end_ms: Some(2),
+            },
+        );
+        operation.result.state = ToolResultState::Cancelled;
+        assert_eq!(operation.status(), ExecutionStatus::Cancelled);
+    }
+
+    #[test]
+    fn explicit_running_and_completed_result_states_do_not_depend_on_preview_text_or_timestamps() {
+        let mut operation = OperationPart::pending(
+            8,
+            ToolInvocation::new("fixture.state", StructuredObject::default()),
+            "State fixture",
+            TimeRange::default(),
+        );
+        operation.result.state = ToolResultState::Running;
+        assert_eq!(operation.status(), ExecutionStatus::InProgress);
+
+        operation.result.state = ToolResultState::Completed;
+        assert_eq!(operation.status(), ExecutionStatus::Completed);
     }
 }

@@ -276,7 +276,7 @@ fn contains_any(value: &str, patterns: &[&str]) -> bool {
 }
 
 fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value> {
-    response_id.map(|response_id| serde_json::json!({ "response_id": response_id }))
+    utils::response_id_metadata(response_id)
 }
 
 fn bedrock_anthropic_metadata(
@@ -290,7 +290,7 @@ fn bedrock_anthropic_metadata(
                 if block
                     .signature
                     .as_deref()
-                    .is_some_and(|signature| !signature.is_empty()) =>
+                    .is_some_and(|signature| !signature.trim().is_empty()) =>
             {
                 Some(serde_json::json!({
                     "type": "thinking",
@@ -298,7 +298,12 @@ fn bedrock_anthropic_metadata(
                     "signature": block.signature.as_deref().unwrap_or_default(),
                 }))
             }
-            "redacted_thinking" if block.data.as_deref().is_some_and(|data| !data.is_empty()) => {
+            "redacted_thinking"
+                if block
+                    .data
+                    .as_deref()
+                    .is_some_and(|data| !data.trim().is_empty()) =>
+            {
                 Some(serde_json::json!({
                     "type": "redacted_thinking",
                     "data": block.data.as_deref().unwrap_or_default(),
@@ -308,7 +313,7 @@ fn bedrock_anthropic_metadata(
         })
         .collect::<Vec<_>>();
     let mut metadata = serde_json::Map::new();
-    if let Some(response_id) = response_id.filter(|value| !value.is_empty()) {
+    if let Some(response_id) = utils::normalize_optional_text(response_id) {
         metadata.insert("response_id".to_owned(), Value::String(response_id));
     }
     if !thinking_blocks.is_empty() {
@@ -1006,11 +1011,43 @@ struct BedrockAnthropicThinkingBlockState {
 }
 
 impl BedrockAnthropicThinkingBlockState {
+    fn merge_start(&mut self, update: Self) {
+        if !self.kind.trim().is_empty()
+            && !update.kind.trim().is_empty()
+            && self.kind != update.kind
+        {
+            *self = update;
+            return;
+        }
+        if self.kind.trim().is_empty() && !update.kind.trim().is_empty() {
+            self.kind = update.kind;
+        }
+        if !update.thinking.trim().is_empty()
+            && !self.thinking.starts_with(update.thinking.as_str())
+        {
+            self.thinking = update.thinking;
+        }
+        if update
+            .signature
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            self.signature = update.signature;
+        }
+        if update
+            .data
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            self.data = update.data;
+        }
+    }
+
     fn into_value(self) -> Option<Value> {
         match self.kind.as_str() {
             "thinking" => self
                 .signature
-                .filter(|signature| !signature.is_empty())
+                .filter(|signature| !signature.trim().is_empty())
                 .map(|signature| {
                     serde_json::json!({
                         "type": "thinking",
@@ -1018,12 +1055,15 @@ impl BedrockAnthropicThinkingBlockState {
                         "signature": signature,
                     })
                 }),
-            "redacted_thinking" => self.data.filter(|data| !data.is_empty()).map(|data| {
-                serde_json::json!({
-                    "type": "redacted_thinking",
-                    "data": data,
-                })
-            }),
+            "redacted_thinking" => self
+                .data
+                .filter(|data| !data.trim().is_empty())
+                .map(|data| {
+                    serde_json::json!({
+                        "type": "redacted_thinking",
+                        "data": data,
+                    })
+                }),
             _ => None,
         }
     }
@@ -1032,6 +1072,25 @@ impl BedrockAnthropicThinkingBlockState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_thinking_start_does_not_erase_valid_state_with_blanks() {
+        let mut state = BedrockAnthropicThinkingBlockState {
+            kind: "thinking".to_owned(),
+            thinking: "reasoning".to_owned(),
+            signature: Some("signed".to_owned()),
+            data: None,
+        };
+        state.merge_start(BedrockAnthropicThinkingBlockState {
+            kind: "thinking".to_owned(),
+            thinking: "   ".to_owned(),
+            signature: Some("   ".to_owned()),
+            data: None,
+        });
+        let value = state.into_value().expect("valid thinking state remains");
+        assert_eq!(value["thinking"], "reasoning");
+        assert_eq!(value["signature"], "signed");
+    }
 
     fn request_with_thinking_parts(
         parts: BedrockAnthropicThinkingParts,

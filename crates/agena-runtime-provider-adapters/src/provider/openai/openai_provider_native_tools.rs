@@ -345,11 +345,18 @@ pub(super) fn responses_provider_native_tool_stream_key(
     item_id: Option<&str>,
     output_index: Option<usize>,
 ) -> Option<String> {
-    item_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| format!("item:{value}"))
-        .or_else(|| output_index.map(|value| format!("idx:{value}")))
+    // The output index is present on both `output_item.added` and
+    // `output_item.done`, while some compatible gateways only add the item id
+    // on the latter. Prefer the index so a late id cannot split one hosted
+    // tool into an in-progress ghost plus a separate completed activity.
+    output_index
+        .map(|value| format!("idx:{value}"))
+        .or_else(|| {
+            item_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| format!("item:{value}"))
+        })
 }
 
 pub(super) fn openai_web_search_invocation(
@@ -810,4 +817,26 @@ pub(super) fn responses_output_call_id(call_id: Option<&str>) -> Option<String> 
 
 pub(super) fn responses_input_call_id(raw: &str) -> Option<String> {
     protocol_ids::openai_responses_call_id(raw).map(String::from)
+}
+
+#[cfg(test)]
+mod stream_key_tests {
+    use super::responses_provider_native_tool_stream_key;
+
+    #[test]
+    fn output_index_keeps_started_and_done_events_on_one_hosted_tool_stream() {
+        assert_eq!(
+            responses_provider_native_tool_stream_key(None, Some(3)).as_deref(),
+            Some("idx:3")
+        );
+        assert_eq!(
+            responses_provider_native_tool_stream_key(Some("ws_late"), Some(3)).as_deref(),
+            Some("idx:3"),
+            "a late item id must not change the stream key"
+        );
+        assert_eq!(
+            responses_provider_native_tool_stream_key(Some("ws_only"), None).as_deref(),
+            Some("item:ws_only")
+        );
+    }
 }

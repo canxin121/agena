@@ -15,11 +15,39 @@ pub struct AnthropicThinkingBlockState {
 }
 
 impl AnthropicThinkingBlockState {
+    pub fn merge_start(&mut self, update: Self) {
+        if !self.kind.trim().is_empty()
+            && !update.kind.trim().is_empty()
+            && self.kind != update.kind
+        {
+            *self = update;
+            return;
+        }
+        if self.kind.trim().is_empty() && !update.kind.trim().is_empty() {
+            self.kind = update.kind;
+        }
+        merge_thinking_snapshot(&mut self.thinking, update.thinking);
+        if update
+            .signature
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            self.signature = update.signature;
+        }
+        if update
+            .data
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            self.data = update.data;
+        }
+    }
+
     pub fn into_value(self) -> Option<Value> {
         match self.kind.as_str() {
             "thinking" => self
                 .signature
-                .filter(|signature| !signature.is_empty())
+                .filter(|signature| !signature.trim().is_empty())
                 .map(|signature| {
                     serde_json::json!({
                         "type": "thinking",
@@ -27,15 +55,25 @@ impl AnthropicThinkingBlockState {
                         "signature": signature,
                     })
                 }),
-            "redacted_thinking" => self.data.filter(|data| !data.is_empty()).map(|data| {
-                serde_json::json!({
-                    "type": "redacted_thinking",
-                    "data": data,
-                })
-            }),
+            "redacted_thinking" => self
+                .data
+                .filter(|data| !data.trim().is_empty())
+                .map(|data| {
+                    serde_json::json!({
+                        "type": "redacted_thinking",
+                        "data": data,
+                    })
+                }),
             _ => None,
         }
     }
+}
+
+fn merge_thinking_snapshot(current: &mut String, update: String) {
+    if update.trim().is_empty() || current.starts_with(update.as_str()) {
+        return;
+    }
+    *current = update;
 }
 
 pub fn anthropic_thinking_metadata(blocks: &[AnthropicTextBlock]) -> Option<Value> {
@@ -46,7 +84,7 @@ pub fn anthropic_thinking_metadata(blocks: &[AnthropicTextBlock]) -> Option<Valu
                 if block
                     .signature
                     .as_deref()
-                    .is_some_and(|signature| !signature.is_empty()) =>
+                    .is_some_and(|signature| !signature.trim().is_empty()) =>
             {
                 Some(serde_json::json!({
                     "type": "thinking",
@@ -54,7 +92,12 @@ pub fn anthropic_thinking_metadata(blocks: &[AnthropicTextBlock]) -> Option<Valu
                     "signature": block.signature.as_deref().unwrap_or_default(),
                 }))
             }
-            "redacted_thinking" if block.data.as_deref().is_some_and(|data| !data.is_empty()) => {
+            "redacted_thinking"
+                if block
+                    .data
+                    .as_deref()
+                    .is_some_and(|data| !data.trim().is_empty()) =>
+            {
                 Some(serde_json::json!({
                     "type": "redacted_thinking",
                     "data": block.data.as_deref().unwrap_or_default(),
@@ -431,6 +474,49 @@ mod tests {
 
         let impossible = anthropic_enabled_parts(1024, 1024);
         assert!(!impossible.include_thinking());
+    }
+
+    #[test]
+    fn blank_thinking_replay_credentials_are_absent() {
+        assert!(
+            AnthropicThinkingBlockState {
+                kind: "thinking".to_owned(),
+                thinking: "reasoning".to_owned(),
+                signature: Some("   ".to_owned()),
+                data: None,
+            }
+            .into_value()
+            .is_none()
+        );
+        assert!(
+            AnthropicThinkingBlockState {
+                kind: "redacted_thinking".to_owned(),
+                thinking: String::new(),
+                signature: None,
+                data: Some("   ".to_owned()),
+            }
+            .into_value()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn repeated_thinking_start_does_not_erase_valid_state_with_blanks() {
+        let mut state = AnthropicThinkingBlockState {
+            kind: "thinking".to_owned(),
+            thinking: "reasoning".to_owned(),
+            signature: Some("signed".to_owned()),
+            data: None,
+        };
+        state.merge_start(AnthropicThinkingBlockState {
+            kind: "thinking".to_owned(),
+            thinking: "   ".to_owned(),
+            signature: Some("   ".to_owned()),
+            data: None,
+        });
+        let value = state.into_value().expect("valid thinking state remains");
+        assert_eq!(value["thinking"], "reasoning");
+        assert_eq!(value["signature"], "signed");
     }
 
     #[test]

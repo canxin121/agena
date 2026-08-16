@@ -116,10 +116,9 @@ fn completion_stream_event_is_content(event: &CompletionStreamEvent) -> bool {
     )
 }
 
-fn stream_tool_api_calls(
-    calls: &BTreeMap<String, StreamToolApiCallState>,
-) -> Vec<RejectedToolApiCall> {
+fn stream_tool_api_calls(calls: &StreamToolApiCalls) -> Vec<RejectedToolApiCall> {
     calls
+        .calls
         .values()
         .map(|call| RejectedToolApiCall {
             name: call.name.clone().unwrap_or_else(|| "<missing>".to_owned()),
@@ -611,67 +610,168 @@ fn retain_valid_completion_tool_calls(
 
 #[derive(Default)]
 struct StreamToolApiCallState {
+    id: Option<String>,
     name: Option<String>,
     arguments_json: String,
+}
+
+#[derive(Default)]
+struct StreamToolApiCalls {
+    calls: BTreeMap<String, StreamToolApiCallState>,
+    aliases: BTreeMap<String, String>,
+}
+
+impl StreamToolApiCalls {
+    fn state_for_event(
+        &mut self,
+        stream_key: &str,
+        provider_call_id: Option<&str>,
+    ) -> (String, &mut StreamToolApiCallState) {
+        let provider_call_id = provider_call_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let resolved_key = self.resolve_stream_key(stream_key, provider_call_id);
+        let state = self.calls.entry(resolved_key.clone()).or_default();
+        if let Some(provider_call_id) = provider_call_id {
+            state.id = Some(provider_call_id.to_owned());
+        }
+        (resolved_key, state)
+    }
+
+    fn resolve_stream_key(&mut self, stream_key: &str, provider_call_id: Option<&str>) -> String {
+        let Some(provider_call_id) = provider_call_id else {
+            if self.calls.contains_key(stream_key) {
+                return stream_key.to_owned();
+            }
+            if let Some(existing_key) = self
+                .aliases
+                .get(stream_key)
+                .filter(|existing_key| self.calls.contains_key(existing_key.as_str()))
+            {
+                return existing_key.clone();
+            }
+            return stream_key.to_owned();
+        };
+
+        if let Some(existing_key) = self.calls.iter().find_map(|(key, state)| {
+            (state.id.as_deref().map(str::trim) == Some(provider_call_id)).then(|| key.clone())
+        }) {
+            self.aliases
+                .insert(stream_key.to_owned(), existing_key.clone());
+            return existing_key;
+        }
+
+        let canonical_key = format!("id:{provider_call_id}");
+        if self.calls.contains_key(canonical_key.as_str()) {
+            self.aliases
+                .insert(stream_key.to_owned(), canonical_key.clone());
+            return canonical_key;
+        }
+
+        let existing_stream_key = if self.calls.contains_key(stream_key) {
+            Some(stream_key.to_owned())
+        } else {
+            self.aliases
+                .get(stream_key)
+                .filter(|existing_key| self.calls.contains_key(existing_key.as_str()))
+                .cloned()
+        };
+        let can_rekey_existing_stream =
+            existing_stream_key.as_deref().is_some_and(|existing_key| {
+                self.calls.get(existing_key).is_some_and(|state| {
+                    state.id.as_deref().is_none()
+                        || state.id.as_deref().map(str::trim) == Some(provider_call_id)
+                })
+            });
+        if can_rekey_existing_stream
+            && let Some(existing_stream_key) = existing_stream_key
+            && existing_stream_key != canonical_key
+        {
+            let state = self
+                .calls
+                .remove(existing_stream_key.as_str())
+                .expect("checked tool validation stream exists");
+            self.calls.insert(canonical_key.clone(), state);
+            for alias_target in self.aliases.values_mut() {
+                if alias_target == &existing_stream_key {
+                    *alias_target = canonical_key.clone();
+                }
+            }
+        }
+
+        self.aliases
+            .insert(stream_key.to_owned(), canonical_key.clone());
+        canonical_key
+    }
 }
 
 fn validate_stream_tool_api_event(
     provider_id: &str,
     event: &CompletionStreamEvent,
     declared: &BTreeSet<String>,
-    calls: &mut BTreeMap<String, StreamToolApiCallState>,
+    calls: &mut StreamToolApiCalls,
 ) -> Result<(), ProviderError> {
     match event {
         CompletionStreamEvent::ToolCallDelta {
             stream_key,
+            id,
             name,
             arguments_delta,
             ..
         } => {
-            let state = calls.entry(stream_key.clone()).or_default();
-            if let Some(name) = name {
+            let (resolved_key, state) = calls.state_for_event(stream_key, id.as_deref());
+            if let Some(name) = name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
                 if state
                     .name
                     .as_deref()
                     .is_some_and(|existing| existing != name)
                 {
                     return Err(ProviderError::Provider(format!(
-                        "provider `{provider_id}` changed Tool API function name for stream `{stream_key}`"
+                        "provider `{provider_id}` changed Tool API function name for stream `{resolved_key}`"
                     )));
                 }
-                state.name = Some(name.clone());
-                state.arguments_json.push_str(arguments_delta);
-                return Ok(());
+                state.name = Some(name.to_owned());
             }
             state.arguments_json.push_str(arguments_delta);
             Ok(())
         }
         CompletionStreamEvent::ToolCallSnapshot {
             stream_key,
+            id,
             name,
             arguments_json,
             ..
         } => {
-            let state = calls.entry(stream_key.clone()).or_default();
-            if let Some(name) = name {
+            let (resolved_key, state) = calls.state_for_event(stream_key, id.as_deref());
+            if let Some(name) = name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
                 if state
                     .name
                     .as_deref()
                     .is_some_and(|existing| existing != name)
                 {
                     return Err(ProviderError::Provider(format!(
-                        "provider `{provider_id}` changed Tool API function name for stream `{stream_key}`"
+                        "provider `{provider_id}` changed Tool API function name for stream `{resolved_key}`"
                     )));
                 }
-                state.name = Some(name.clone());
-                state.arguments_json.clone_from(arguments_json);
-                return Ok(());
+                state.name = Some(name.to_owned());
             }
-            state.arguments_json.clone_from(arguments_json);
+            let snapshot = arguments_json.trim();
+            let snapshot_is_degenerate = snapshot.is_empty() || snapshot == "{}";
+            if !snapshot_is_degenerate || state.arguments_json.trim().is_empty() {
+                state.arguments_json.clone_from(arguments_json);
+            }
             Ok(())
         }
         CompletionStreamEvent::Completed { .. } => {
-            for (stream_key, state) in calls.iter() {
+            for (stream_key, state) in &calls.calls {
                 let name = state.name.as_deref().ok_or_else(|| {
                     ProviderError::Provider(format!(
                         "provider `{provider_id}` completed Tool API call `{stream_key}` without a function name"
@@ -1046,7 +1146,7 @@ impl ProviderRegistry {
                 let mut emitted_content_in_attempt = false;
                 let mut terminal_event_in_attempt = false;
                 let mut should_restart_for_protocol_repair = false;
-                let mut tool_api_calls = BTreeMap::<String, StreamToolApiCallState>::new();
+                let mut tool_api_calls = StreamToolApiCalls::default();
                 // Once a Tool API call begins, retain the rest of that provider
                 // turn until Completed validates the whole batch. This both
                 // prevents invalid calls from reaching session state and
@@ -1569,7 +1669,7 @@ mod tool_api_function_validation_tests {
     };
 
     use super::{
-        MAX_TOOL_API_REPAIRS, RejectedToolApiCall, StreamToolApiCallState,
+        MAX_TOOL_API_REPAIRS, RejectedToolApiCall, StreamToolApiCalls,
         parse_tool_api_arguments_tolerant, stream_tool_api_calls,
         validate_provider_native_tool_definition_boundary, validate_returned_tool_api_function,
         validate_stream_tool_api_event, validate_tool_api_arguments,
@@ -2224,7 +2324,7 @@ mod tool_api_function_validation_tests {
     #[test]
     fn rejected_stream_call_keeps_fragmented_arguments_for_model_repair() {
         let declared = BTreeSet::from(["tools_call".to_owned(), "tools_help".to_owned()]);
-        let mut calls = std::collections::BTreeMap::<String, StreamToolApiCallState>::new();
+        let mut calls = StreamToolApiCalls::default();
         let provider_id = ProviderId::new("repair-test");
         let model = ModelId::new("test-model");
         let first = CompletionStreamEvent::ToolCallDelta {
@@ -2263,6 +2363,69 @@ mod tool_api_function_validation_tests {
             vec![super::RejectedToolApiCall {
                 name: "fs.read".to_owned(),
                 arguments_json: r#"{"file_path":"README.md"}"#.to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn stream_tool_validation_preserves_identity_across_empty_and_rekeyed_fragments() {
+        let declared = BTreeSet::from(["tools_search".to_owned()]);
+        let mut calls = StreamToolApiCalls::default();
+        let provider_id = ProviderId::new("stream-fixture");
+        let model = ModelId::new("test-model");
+        let events = [
+            CompletionStreamEvent::ToolCallSnapshot {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                stream_key: "idx:0".to_owned(),
+                id: Some("call_search".to_owned()),
+                name: Some("  tools_search  ".to_owned()),
+                arguments_json: r#"{"query":"filesystem"}"#.to_owned(),
+            },
+            CompletionStreamEvent::ToolCallDelta {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                stream_key: "idx:7".to_owned(),
+                id: Some("call_search".to_owned()),
+                name: None,
+                arguments_delta: String::new(),
+            },
+            CompletionStreamEvent::ToolCallDelta {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                stream_key: "idx:0".to_owned(),
+                id: Some("   ".to_owned()),
+                name: Some("   ".to_owned()),
+                arguments_delta: String::new(),
+            },
+            CompletionStreamEvent::ToolCallSnapshot {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                stream_key: "idx:0".to_owned(),
+                id: None,
+                name: None,
+                arguments_json: "{}".to_owned(),
+            },
+            CompletionStreamEvent::Completed {
+                provider_id,
+                model,
+                finish_reason: Some(CompletionFinishReason::ToolCalls),
+                usage: None,
+                provider_metadata: None,
+                end_turn: None,
+            },
+        ];
+
+        for event in &events {
+            validate_stream_tool_api_event("stream-fixture", event, &declared, &mut calls)
+                .expect("empty/rekeyed fragments retain the valid call");
+        }
+        assert_eq!(calls.calls.len(), 1);
+        assert_eq!(
+            stream_tool_api_calls(&calls),
+            vec![super::RejectedToolApiCall {
+                name: "tools_search".to_owned(),
+                arguments_json: r#"{"query":"filesystem"}"#.to_owned(),
             }]
         );
     }

@@ -2,13 +2,18 @@ use super::{
     AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, FinishReason, PathBuf,
     PendingProviderNativeToolCall, PendingToolCall, REASONING_PLACEHOLDER, SessionProcessor,
     SessionRunRequest, SessionRunResult, SessionRunTermination, complete_part_status,
-    map_finish_reason, message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
-    terminalize_nonterminal_parts,
+    map_finish_reason, merge_provider_native_tool_invocation,
+    message_provider_state_from_provider_metadata, pending_provider_native_tool_call_stream_key,
+    pending_tool_call_stream_key, terminalize_nonterminal_parts,
 };
 use crate::provider::ProviderRegistry;
-use agena_provider::{ProviderNativeToolArtifact, ProviderNativeToolOutputBlock};
+use agena_provider::{
+    CompletionUsage, ProviderNativeToolArtifact, ProviderNativeToolOutputBlock,
+    merge_provider_metadata, normalize_optional_text,
+};
 use agena_storage::store::{Part, PartDelta, PartState, RunOutcome};
 use futures_util::StreamExt;
+use std::collections::BTreeSet;
 use tracing::Instrument;
 
 use agena_domain::{ArtifactRef, ViewBlock, WebSearchResult};
@@ -63,6 +68,33 @@ fn merge_round_record(
         serde_json::Value::Array(rounds),
     );
     Some(serde_json::Value::Object(content))
+}
+
+/// Fold one terminal stream event into the run's accumulated terminal state.
+///
+/// Some compatible gateways emit more than one `Completed` event. Optional
+/// fields on a later event are not deletion markers: retaining the last known
+/// usage/replay state/end-turn decision prevents an empty trailer from making
+/// the next provider request forget the response it is continuing from.
+fn merge_completed_event_state(
+    usage: &mut Option<CompletionUsage>,
+    provider_metadata: &mut Option<serde_json::Value>,
+    follow_up_requested: &mut bool,
+    usage_update: Option<CompletionUsage>,
+    provider_metadata_update: Option<serde_json::Value>,
+    end_turn_update: Option<bool>,
+) {
+    if usage_update
+        .as_ref()
+        .is_some_and(|usage| usage != &CompletionUsage::default())
+    {
+        *usage = usage_update;
+    }
+    *provider_metadata =
+        merge_provider_metadata(provider_metadata.take(), provider_metadata_update);
+    if let Some(end_turn) = end_turn_update {
+        *follow_up_requested = !end_turn;
+    }
 }
 
 impl SessionProcessor {
@@ -204,10 +236,14 @@ impl SessionProcessor {
         let mut active_text_part: Option<i64> = None;
         let mut active_reasoning_part: Option<i64> = None;
         let mut pending_calls: BTreeMap<String, PendingToolCall> = BTreeMap::new();
+        let mut pending_call_stream_aliases: BTreeMap<String, String> = BTreeMap::new();
         let mut pending_provider_native_tool_calls: BTreeMap<
             String,
             PendingProviderNativeToolCall,
         > = BTreeMap::new();
+        let mut pending_provider_native_tool_call_aliases: BTreeMap<String, String> =
+            BTreeMap::new();
+        let mut completed_provider_native_tool_call_keys = BTreeSet::<String>::new();
         let mut provider_err: Option<AppError> = None;
         let mut usage = None;
         let mut finish_reason_enum = FinishReason::Stop;
@@ -274,13 +310,17 @@ impl SessionProcessor {
                         self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
 
-                    let stream_key =
-                        pending_tool_call_stream_key(&mut pending_calls, stream_key, id.as_deref());
+                    let stream_key = pending_tool_call_stream_key(
+                        &mut pending_calls,
+                        &mut pending_call_stream_aliases,
+                        stream_key,
+                        id.as_deref(),
+                    );
                     let pending = pending_calls.entry(stream_key).or_default();
-                    if let Some(id) = id {
+                    if let Some(id) = normalize_optional_text(id) {
                         pending.id = Some(id);
                     }
-                    if let Some(name) = name {
+                    if let Some(name) = normalize_optional_text(name) {
                         pending.name = Some(name);
                     }
                     pending.arguments_json.push_str(arguments_delta.as_str());
@@ -309,13 +349,17 @@ impl SessionProcessor {
                         self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
 
-                    let stream_key =
-                        pending_tool_call_stream_key(&mut pending_calls, stream_key, id.as_deref());
+                    let stream_key = pending_tool_call_stream_key(
+                        &mut pending_calls,
+                        &mut pending_call_stream_aliases,
+                        stream_key,
+                        id.as_deref(),
+                    );
                     let pending = pending_calls.entry(stream_key).or_default();
-                    if let Some(id) = id {
+                    if let Some(id) = normalize_optional_text(id) {
                         pending.id = Some(id);
                     }
-                    if let Some(name) = name {
+                    if let Some(name) = normalize_optional_text(name) {
                         pending.name = Some(name);
                     }
                     // A degenerate snapshot (empty or `{}`) must never wipe
@@ -354,13 +398,38 @@ impl SessionProcessor {
                         self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
 
+                    let raw_stream_key = stream_key.clone();
+                    let id = normalize_optional_text(id);
+                    let stream_key = pending_provider_native_tool_call_stream_key(
+                        &mut pending_provider_native_tool_calls,
+                        &mut pending_provider_native_tool_call_aliases,
+                        stream_key,
+                        id.as_deref(),
+                    );
+                    let canonical_id_key = id.as_deref().map(|id| format!("id:{id}"));
+                    let duplicate_terminal_item = completed_provider_native_tool_call_keys
+                        .contains(&stream_key)
+                        || completed_provider_native_tool_call_keys.contains(&raw_stream_key)
+                        || canonical_id_key.as_ref().is_some_and(|key| {
+                            completed_provider_native_tool_call_keys.contains(key)
+                        });
+                    if duplicate_terminal_item {
+                        continue;
+                    }
                     let pending = pending_provider_native_tool_calls
                         .entry(stream_key)
                         .or_default();
-                    pending.id = id;
-                    pending.invocation = Some(invocation);
-                    pending.title = title;
-                    pending.raw = raw;
+                    if let Some(id) = id {
+                        pending.id = Some(id);
+                    }
+                    pending.invocation = Some(merge_provider_native_tool_invocation(
+                        pending.invocation.as_ref(),
+                        invocation,
+                    ));
+                    if !title.trim().is_empty() {
+                        pending.title = title;
+                    }
+                    pending.raw = merge_provider_metadata(pending.raw.take(), raw);
                     self.ensure_provider_native_tool_call_part(
                         &mut run,
                         assistant_message_id,
@@ -391,6 +460,24 @@ impl SessionProcessor {
                         self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
 
+                    let raw_stream_key = stream_key.clone();
+                    let id = normalize_optional_text(id);
+                    let stream_key = pending_provider_native_tool_call_stream_key(
+                        &mut pending_provider_native_tool_calls,
+                        &mut pending_provider_native_tool_call_aliases,
+                        stream_key,
+                        id.as_deref(),
+                    );
+                    let canonical_id_key = id.as_deref().map(|id| format!("id:{id}"));
+                    let duplicate_terminal_item = completed_provider_native_tool_call_keys
+                        .contains(&stream_key)
+                        || completed_provider_native_tool_call_keys.contains(&raw_stream_key)
+                        || canonical_id_key.as_ref().is_some_and(|key| {
+                            completed_provider_native_tool_call_keys.contains(key)
+                        });
+                    if duplicate_terminal_item {
+                        continue;
+                    }
                     let pending = pending_provider_native_tool_calls
                         .remove(&stream_key)
                         .unwrap_or_default();
@@ -409,6 +496,11 @@ impl SessionProcessor {
                         raw,
                     )
                     .await?;
+                    completed_provider_native_tool_call_keys.insert(stream_key);
+                    completed_provider_native_tool_call_keys.insert(raw_stream_key);
+                    if let Some(canonical_id_key) = canonical_id_key {
+                        completed_provider_native_tool_call_keys.insert(canonical_id_key);
+                    }
                 }
                 Ok(CompletionStreamEvent::Completed {
                     finish_reason,
@@ -417,12 +509,17 @@ impl SessionProcessor {
                     end_turn,
                     ..
                 }) => {
-                    usage = usage_value;
                     if let Some(reason) = finish_reason.as_ref() {
                         finish_reason_enum = map_finish_reason(reason);
                     }
-                    provider_metadata = completed_provider_metadata;
-                    follow_up_requested = end_turn == Some(false);
+                    merge_completed_event_state(
+                        &mut usage,
+                        &mut provider_metadata,
+                        &mut follow_up_requested,
+                        usage_value,
+                        completed_provider_metadata,
+                        end_turn,
+                    );
                 }
                 Ok(CompletionStreamEvent::ThinkingDelta { delta, .. }) => {
                     reasoning_text.push_str(delta.as_str());
@@ -512,6 +609,16 @@ impl SessionProcessor {
             provider_err = Some(AppError::EmptyResponse);
         }
 
+        if provider_err.is_none() && !pending_provider_native_tool_calls.is_empty() {
+            let stream_keys = pending_provider_native_tool_calls
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            provider_err = Some(AppError::Provider(format!(
+                "provider stream ended with unfinished provider-native tool calls: {stream_keys}"
+            )));
+        }
         if provider_err.is_none() {
             // A malformed final tool call is a run failure, not an abort: fold
             // it into the terminal path below so the already-persisted text
@@ -779,5 +886,59 @@ mod tests {
         // content), but the fallback itself must stay `None`.
         let record = serde_json::json!({"part_ids": [301], "provider_state": null});
         assert!(merge_round_record(None, record).is_none());
+    }
+
+    #[test]
+    fn multiple_completed_events_do_not_erase_terminal_replay_state() {
+        let mut usage = None;
+        let mut provider_metadata = None;
+        let mut follow_up_requested = false;
+        let first_usage = CompletionUsage {
+            output_tokens: 23,
+            ..CompletionUsage::default()
+        };
+
+        merge_completed_event_state(
+            &mut usage,
+            &mut provider_metadata,
+            &mut follow_up_requested,
+            Some(first_usage.clone()),
+            Some(serde_json::json!({
+                "response_id": "resp_1",
+                "nested": { "first": true }
+            })),
+            Some(false),
+        );
+        merge_completed_event_state(
+            &mut usage,
+            &mut provider_metadata,
+            &mut follow_up_requested,
+            Some(CompletionUsage::default()),
+            Some(serde_json::json!({
+                "nested": { "second": true }
+            })),
+            None,
+        );
+
+        assert_eq!(usage, Some(first_usage));
+        assert!(follow_up_requested);
+        assert_eq!(provider_metadata.as_ref().unwrap()["response_id"], "resp_1");
+        assert_eq!(
+            provider_metadata.as_ref().unwrap()["nested"],
+            serde_json::json!({"first": true, "second": true})
+        );
+
+        merge_completed_event_state(
+            &mut usage,
+            &mut provider_metadata,
+            &mut follow_up_requested,
+            None,
+            None,
+            Some(true),
+        );
+        assert!(
+            !follow_up_requested,
+            "only an explicit later end_turn=true may clear an earlier follow-up request"
+        );
     }
 }

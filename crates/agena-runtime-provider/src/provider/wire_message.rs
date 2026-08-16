@@ -21,6 +21,7 @@ use agena_domain::{ExecutionStatus, ReasoningPart, Role, ToolApiFunction, ToolIn
 use agena_provider::{
     CompletionInputAttachment, CompletionInputAttachmentKind, CompletionInputAttachmentSource,
     CompletionInputPart, CompletionInputProviderState, CompletionInputRun, ModelToolFunction,
+    normalize_optional_text, provider_metadata_value_is_meaningful,
 };
 use agena_runtime_contracts::part::{
     AttachmentItem, AttachmentKind, AttachmentSource, OperationPart,
@@ -121,6 +122,8 @@ fn project_operation_call_id(exec: &OperationPart) -> String {
     exec.metadata
         .get("agena.operation_id")
         .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| exec.call_id().to_string())
 }
@@ -465,9 +468,31 @@ fn completion_input_attachment(item: AttachmentItem) -> CompletionInputAttachmen
 pub fn completion_input_provider_state(
     value: &serde_json::Value,
 ) -> Option<CompletionInputProviderState> {
-    serde_json::from_value::<PartProviderState>(value.clone())
-        .ok()
-        .map(Into::into)
+    let mut state: CompletionInputProviderState =
+        serde_json::from_value::<PartProviderState>(value.clone())
+            .ok()?
+            .into();
+    state.response_id = normalize_optional_text(state.response_id);
+    state.gemini_thought_signatures = std::mem::take(&mut state.gemini_thought_signatures)
+        .into_iter()
+        .filter_map(|(call_id, signature)| {
+            let call_id = normalize_optional_text(Some(call_id))?;
+            (!signature.trim().is_empty()).then_some((call_id, signature))
+        })
+        .collect();
+    state.copilot_reasoning_opaque = state
+        .copilot_reasoning_opaque
+        .filter(|value| !value.trim().is_empty());
+    state.openai_chat_reasoning_details = state
+        .openai_chat_reasoning_details
+        .filter(provider_metadata_value_is_meaningful);
+    state
+        .anthropic_thinking_blocks
+        .retain(provider_metadata_value_is_meaningful);
+    state
+        .openai_reasoning_items
+        .retain(provider_metadata_value_is_meaningful);
+    (!state.is_empty()).then_some(state)
 }
 
 /// Enforce the boundary between Tool API functions and execution tools before
@@ -871,7 +896,9 @@ pub fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -
         ExecutionStatus::Pending | ExecutionStatus::InProgress => {
             "Tool call was interrupted before producing a result.".to_string()
         }
-        ExecutionStatus::Cancelled => String::new(),
+        ExecutionStatus::Cancelled => {
+            "Tool execution was cancelled before producing a result.".to_owned()
+        }
         ExecutionStatus::Completed
         | ExecutionStatus::PolicyDenied
         | ExecutionStatus::UserDeclined
@@ -1154,8 +1181,8 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        WirePart, completion_input_result_status, project_completion_input, project_persisted,
-        validate_provider_native_tool_history,
+        WirePart, completion_input_provider_state, completion_input_result_status,
+        project_completion_input, project_persisted, validate_provider_native_tool_history,
     };
     use agena_domain::ToolInvocation;
     use agena_domain::ToolOutput;
@@ -1353,6 +1380,27 @@ mod tests {
     }
 
     #[test]
+    fn persisted_provider_state_drops_blank_replay_credentials() {
+        let state = completion_input_provider_state(&serde_json::json!({
+            "response_id": "   ",
+            "gemini_thought_signatures": {
+                "  call_1  ": "signed",
+                "call_2": "   "
+            },
+            "openai_chat_reasoning_details": [],
+            "copilot_reasoning_opaque": "   "
+        }))
+        .expect("one normalized signature remains");
+        assert_eq!(state.response_id, None);
+        assert_eq!(
+            state.gemini_thought_signatures,
+            std::collections::BTreeMap::from([("call_1".to_owned(), "signed".to_owned())])
+        );
+        assert_eq!(state.openai_chat_reasoning_details, None);
+        assert_eq!(state.copilot_reasoning_opaque, None);
+    }
+
+    #[test]
     fn every_structured_non_execution_outcome_reaches_the_model_as_completed() {
         for status in [
             ExecutionStatus::PolicyDenied,
@@ -1478,6 +1526,60 @@ mod tests {
             *status,
             agena_provider::CompletionInputToolResultStatus::Cancelled,
             "an interrupted call replays as a cancelled result"
+        );
+    }
+
+    #[test]
+    fn cancelled_tool_uses_numeric_fallback_for_blank_provider_id_and_nonempty_output() {
+        let mut invocation = ToolInvocation::new(
+            ToolApiFunction::Help.function_name(),
+            StructuredObject::try_from(serde_json::json!({"tool": "fs.read"}))
+                .expect("structured help input"),
+        );
+        invocation.tool_api_call = Some(agena_domain::ToolApiCall {
+            function: ToolApiFunction::Help,
+            arguments: invocation.input.clone(),
+        });
+        let mut operation = OperationPart::pending(
+            1396,
+            invocation,
+            "Tool help",
+            TimeRange {
+                start_ms: 1,
+                end_ms: Some(2),
+            },
+        );
+        operation
+            .metadata
+            .insert("agena.operation_id".to_owned(), serde_json::json!("   "));
+        operation.result.state = agena_domain::ToolResultState::Cancelled;
+        let tool_call = part(
+            "tool_call",
+            PartRole::Assistant,
+            PartState::Cancelled,
+            tool_call_content(&operation),
+        );
+
+        let projected = project_persisted(&[tool_call]);
+        assert_eq!(projected.len(), 2);
+        let WirePart::ToolCall { id, .. } = &projected[0] else {
+            panic!("expected ToolCall")
+        };
+        let WirePart::ToolResult {
+            tool_call_id,
+            output_json,
+            status,
+            ..
+        } = &projected[1]
+        else {
+            panic!("expected ToolResult")
+        };
+        assert_eq!(id, "1396");
+        assert_eq!(tool_call_id, id);
+        assert!(output_json.contains("cancelled"));
+        assert_eq!(
+            *status,
+            agena_provider::CompletionInputToolResultStatus::Cancelled
         );
     }
 

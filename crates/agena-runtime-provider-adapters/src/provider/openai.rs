@@ -243,13 +243,14 @@ fn openai_reasoning_items_from_output(
             let encrypted_content = item
                 .encrypted_content
                 .as_deref()
-                .filter(|content| !content.is_empty())
+                .filter(|content| !content.trim().is_empty())
                 .map(ToOwned::to_owned);
             let summary = item
                 .summary
                 .iter()
                 .flatten()
                 .filter_map(|part| part.text.as_deref())
+                .filter(|text| !text.trim().is_empty())
                 .map(|text| {
                     serde_json::json!({
                         "type": "summary_text",
@@ -262,12 +263,15 @@ fn openai_reasoning_items_from_output(
                 .iter()
                 .flatten()
                 .filter_map(|part| {
-                    part.text.as_deref().map(|text| {
-                        serde_json::json!({
-                            "type": part.kind.as_deref().unwrap_or("reasoning_text"),
-                            "text": text,
+                    part.text
+                        .as_deref()
+                        .filter(|text| !text.trim().is_empty())
+                        .map(|text| {
+                            serde_json::json!({
+                                "type": part.kind.as_deref().unwrap_or("reasoning_text"),
+                                "text": text,
+                            })
                         })
-                    })
                 })
                 .collect::<Vec<_>>();
             // A `reasoning_content` model (e.g. deepseek) returns reasoning as
@@ -324,18 +328,38 @@ fn openai_reasoning_item_from_event(
     let encrypted_content = item
         .get("encrypted_content")
         .and_then(serde_json::Value::as_str)
-        .filter(|content| !content.is_empty())
+        .filter(|content| !content.trim().is_empty())
         .map(ToOwned::to_owned);
-    let summary = item
+    let summary: Vec<serde_json::Value> = item
         .get("summary")
         .and_then(serde_json::Value::as_array)
-        .cloned()
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| {
+                    item.get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty())
+                })
+                .cloned()
+                .collect()
+        })
         .unwrap_or_default();
     let mut content = item
         .get("content")
         .and_then(serde_json::Value::as_array)
-        .filter(|content| !content.is_empty())
-        .cloned();
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| {
+                    item.get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty())
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .filter(|content| !content.is_empty());
     // Fall back to the summary text (chat-style `reasoning_content` models)
     // when no explicit content array is present, so the reasoning survives
     // into the replay carrier.
@@ -370,13 +394,29 @@ fn openai_reasoning_item_from_event(
     if let Some(content) = content {
         normalized["content"] = serde_json::Value::Array(content);
     }
-    let key = item
-        .get("id")
-        .and_then(serde_json::Value::as_str)
-        .filter(|id| !id.is_empty())
-        .map(ToOwned::to_owned)
+    // The output index is stable across `added` -> `done` even when the
+    // provider item id appears only on the later event. Prefer it whenever it
+    // exists so one reasoning item cannot split into two replay slots when its
+    // transport id arrives late.
+    let key = event
+        .get("output_index")
+        .and_then(serde_json::Value::as_u64)
+        .map(|index| format!("output-index:{index}"))
+        .or_else(|| {
+            item.get("id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(ToOwned::to_owned)
+        })
         .unwrap_or_else(|| utils::request_shape_fingerprint(&normalized));
     Some((key, normalized))
+}
+
+fn merge_openai_reasoning_item(current: &mut serde_json::Value, update: serde_json::Value) {
+    if let Some(merged) = utils::merge_provider_metadata(Some(current.clone()), Some(update)) {
+        *current = merged;
+    }
 }
 
 fn openai_responses_metadata(
@@ -385,7 +425,7 @@ fn openai_responses_metadata(
 ) -> Option<serde_json::Value> {
     let items = reasoning_items.into_iter().collect::<Vec<_>>();
     let mut metadata = serde_json::Map::new();
-    if let Some(response_id) = response_id.filter(|value| !value.is_empty()) {
+    if let Some(response_id) = utils::normalize_optional_text(response_id) {
         metadata.insert(
             "response_id".to_owned(),
             serde_json::Value::String(response_id),
@@ -469,8 +509,9 @@ mod tests {
         OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions,
         OpenAiResponsesResponse, OpenAiTransport, OpenAiUsage, ProviderImageOperation,
         ProviderImageRequest, RequestHeaderContext, ToolStreamAccumulator, ToolStreamInputKind,
-        ToolStreamUpdate, chat_tool_stream_input, openai_reasoning_item_from_event,
-        openai_reasoning_items_from_output, openai_responses_metadata, responses_tool_stream_input,
+        ToolStreamUpdate, chat_tool_stream_input, merge_openai_reasoning_item,
+        openai_reasoning_item_from_event, openai_reasoning_items_from_output,
+        openai_responses_metadata, responses_tool_stream_input,
     };
     use crate::provider::{
         ModelRuntime,
@@ -852,6 +893,72 @@ mod tests {
     }
 
     #[test]
+    fn blank_reasoning_item_ids_fall_back_to_content_identity() {
+        let event = |output_index: u64, text: &str| {
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "output_index": output_index,
+                "item": {
+                    "id": "   ",
+                    "type": "reasoning",
+                    "summary": [],
+                    "content": [{ "type": "reasoning_text", "text": text }]
+                }
+            })
+        };
+        let (first_key, _) =
+            openai_reasoning_item_from_event(&event(0, "first")).expect("first reasoning item");
+        let (second_key, _) =
+            openai_reasoning_item_from_event(&event(1, "second")).expect("second reasoning item");
+        assert!(!first_key.trim().is_empty());
+        assert_ne!(
+            first_key, second_key,
+            "blank transport ids must not collapse distinct reasoning items into one replay slot"
+        );
+        assert_eq!(
+            openai_responses_metadata(
+                Some("   ".to_owned()),
+                std::iter::empty::<serde_json::Value>(),
+            ),
+            None,
+            "blank response ids are absent replay state"
+        );
+    }
+
+    #[test]
+    fn reasoning_item_updates_share_output_index_and_preserve_prior_replay_fields() {
+        let added = serde_json::json!({
+            "type": "response.output_item.added",
+            "output_index": 4,
+            "item": {
+                "id": "   ",
+                "type": "reasoning",
+                "summary": [],
+                "encrypted_content": "encrypted-state"
+            }
+        });
+        let done = serde_json::json!({
+            "type": "response.output_item.done",
+            "output_index": 4,
+            "item": {
+                "id": "rs_late_id",
+                "type": "reasoning",
+                "summary": [],
+                "content": [{ "type": "reasoning_text", "text": "finished reasoning" }]
+            }
+        });
+        let (added_key, mut item) =
+            openai_reasoning_item_from_event(&added).expect("added reasoning item");
+        let (done_key, update) =
+            openai_reasoning_item_from_event(&done).expect("done reasoning item");
+        assert_eq!(added_key, "output-index:4");
+        assert_eq!(done_key, added_key);
+        merge_openai_reasoning_item(&mut item, update);
+        assert_eq!(item["encrypted_content"], "encrypted-state");
+        assert_eq!(item["content"][0]["text"], "finished reasoning");
+    }
+
+    #[test]
     fn content_only_reasoning_items_are_preserved_for_replay() {
         // A chat-style `reasoning_content` model (e.g. deepseek-v4-flash)
         // returns reasoning as plain-text `content` without OpenAI's
@@ -915,6 +1022,21 @@ mod tests {
         assert!(
             openai_reasoning_items_from_output(response.output.as_deref()).is_empty(),
             "an empty reasoning output item must be dropped"
+        );
+
+        let whitespace_event = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "id": "rs_empty_3",
+                "type": "reasoning",
+                "summary": [{ "type": "summary_text", "text": "   " }],
+                "content": [{ "type": "reasoning_text", "text": "\n\t" }],
+                "encrypted_content": "   "
+            }
+        });
+        assert!(
+            openai_reasoning_item_from_event(&whitespace_event).is_none(),
+            "whitespace-only replay carriers are absent, not reasoning state"
         );
     }
 

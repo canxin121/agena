@@ -265,6 +265,7 @@ impl ModelRuntime for OllamaAdapter {
             let mut emitted_content = false;
             let mut stream_tool_call_seen = false;
             let mut completed = false;
+            let mut next_tool_call_index = 0usize;
 
             while let Some(event) = events.next().await {
                 let event = event
@@ -282,7 +283,7 @@ impl ModelRuntime for OllamaAdapter {
                 )?;
 
                 if finish_reason.is_none() {
-                    finish_reason = chunk.done_reason.clone();
+                    finish_reason = utils::normalize_optional_text(chunk.done_reason.clone());
                 }
                     usage = ollama_usage_to_completion(&chunk).or(usage);
                 let chunk_model = chunk.model.clone();
@@ -297,7 +298,13 @@ impl ModelRuntime for OllamaAdapter {
                         };
                     }
 
-                    for (index, tool_call) in parse_stream_tool_calls(provider_label.as_str(), message.tool_calls)? {
+                    let tool_calls = parse_stream_tool_calls(
+                        provider_label.as_str(),
+                        message.tool_calls,
+                        next_tool_call_index,
+                    )?;
+                    next_tool_call_index += tool_calls.len();
+                    for (index, tool_call) in tool_calls {
                         emitted_content = true;
                         stream_tool_call_seen = true;
                         yield CompletionStreamEvent::ToolCallDelta {
@@ -444,11 +451,13 @@ fn parse_tool_calls(
 fn parse_stream_tool_calls(
     provider_id: &str,
     calls: Vec<OllamaToolCall>,
+    start_index: usize,
 ) -> Result<Vec<(usize, ParsedToolCall)>, ProviderError> {
     calls
         .into_iter()
         .enumerate()
-        .map(|(index, call)| {
+        .map(|(offset, call)| {
+            let index = start_index + offset;
             let name = call
                 .function
                 .name
@@ -495,7 +504,7 @@ mod tests {
     fn ollama_rejects_tool_calls_without_names() {
         for name in [None, Some(""), Some("   ")] {
             assert!(parse_tool_calls("ollama", vec![call(name)]).is_err());
-            assert!(parse_stream_tool_calls("ollama", vec![call(name)]).is_err());
+            assert!(parse_stream_tool_calls("ollama", vec![call(name)], 0).is_err());
         }
     }
 
@@ -513,5 +522,23 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["ollama-call-0", "ollama-call-1"]);
+    }
+
+    #[test]
+    fn ollama_stream_batches_do_not_reuse_positional_call_ids() {
+        let first = parse_stream_tool_calls("ollama", vec![call(Some("tools_help"))], 0)
+            .expect("first stream batch");
+        let second = parse_stream_tool_calls(
+            "ollama",
+            vec![call(Some("tools_help")), call(Some("tools_help"))],
+            first.len(),
+        )
+        .expect("second stream batch");
+        let ids = first
+            .into_iter()
+            .chain(second)
+            .map(|(_, call)| call.id.expect("synthetic id"))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["ollama-call-0", "ollama-call-1", "ollama-call-2"]);
     }
 }

@@ -9,10 +9,10 @@ use super::{
     inherit_operation_context, is_authorization_phase_title, operation_authorization,
     operation_blocks_from_tool_output, operation_from_part, operation_permission_approved_actions,
     pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
-    permission_request_id, push_unique_permission_action, requested_background_kind,
-    reserve_background_external_id, resolve_pending_tool, responses_api_request_metadata,
-    run_abort_reason, should_execute_pending_tools_concurrently, terminal_operation_title,
-    tool_name, update_resolved_tool_message,
+    permission_request_id, plugin_user_input_request_id, push_unique_permission_action,
+    requested_background_kind, reserve_background_external_id, resolve_pending_tool,
+    responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
+    terminal_operation_title, tool_name, update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -2630,7 +2630,8 @@ impl SessionManager {
                 .await
             }
             Err(ToolError::UserInputRequired(input)) => {
-                let request_id = resolve_pending_tool(&session, pending_tool)?.operation_id;
+                let resolved = resolve_pending_tool(&session, pending_tool)?;
+                let request_id = plugin_user_input_request_id(session.id, &resolved);
                 Box::pin(self.apply_user_input_request_with_id(
                     session,
                     pending_tool,
@@ -3335,6 +3336,7 @@ impl SessionManager {
             {
                 let mut operation = operation_from_tool_call(&tool_call);
                 operation.set_summary("Execution cancelled");
+                operation.result.state = agena_domain::ToolResultState::Cancelled;
                 operation.lifecycle = completed_lifecycle(&resolved.lifecycle);
                 part.content = typed_content_to_value(&TypedContent::ToolCall(
                     tool_call_from_operation(&operation),

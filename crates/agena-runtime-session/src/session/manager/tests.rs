@@ -837,6 +837,17 @@ struct FakeProvider {
     finish_reason: Option<CompletionFinishReason>,
 }
 
+#[derive(Clone, Copy)]
+enum ProviderNativeFixtureMode {
+    CompletionOmitsId,
+    StartedOnly,
+}
+
+struct ProviderNativeFixtureProvider {
+    model: ModelId,
+    mode: ProviderNativeFixtureMode,
+}
+
 struct StartupFailureProvider {
     model: ModelId,
 }
@@ -984,6 +995,116 @@ impl ModelRuntime for FakeProvider {
             provider_id: ProviderId::new(self.provider_id),
             model: self.model.clone(),
             finish_reason: self.finish_reason.clone(),
+            usage: Some(CompletionUsage::default()),
+            provider_metadata: None,
+            end_turn: None,
+        }));
+        Ok(Box::pin(futures_util::stream::iter(events)))
+    }
+}
+
+#[async_trait::async_trait]
+impl ModelRuntime for ProviderNativeFixtureProvider {
+    fn id(&self) -> &str {
+        "provider-native-fixture"
+    }
+
+    fn default_model(&self) -> &ModelId {
+        &self.model
+    }
+
+    async fn list_models(&self) -> Result<Vec<agena_domain::Model>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse, ProviderError> {
+        Ok(CompletionResponse {
+            provider_id: ProviderId::new(self.id()),
+            model: self.model.clone(),
+            text: String::new(),
+            reasoning_text: None,
+            finish_reason: Some(CompletionFinishReason::Stop),
+            tool_calls: Vec::new(),
+            usage: Some(CompletionUsage::default()),
+            provider_metadata: None,
+        })
+    }
+
+    async fn complete_stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures_util::Stream<Item = Result<CompletionStreamEvent, ProviderError>>
+                    + Send,
+            >,
+        >,
+        ProviderError,
+    > {
+        let provider_id = ProviderId::new(self.id());
+        let model = self.model.clone();
+        let invocation = ToolInvocation::new(
+            "web_search",
+            StructuredObject::try_from(serde_json::json!({"query": "fixture"}))
+                .expect("structured provider-native input"),
+        );
+        let mut events = vec![Ok(CompletionStreamEvent::ProviderNativeToolCallStarted {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key: "idx:0".to_owned(),
+            id: Some("ws_fixture_1".to_owned()),
+            invocation: invocation.clone(),
+            title: "Hosted search".to_owned(),
+            raw: Some(serde_json::json!({
+                "id": "ws_fixture_1",
+                "status": "in_progress"
+            })),
+        })];
+        if matches!(self.mode, ProviderNativeFixtureMode::CompletionOmitsId) {
+            // A redundant progress/start fragment may omit fields or carry
+            // structurally empty replacements. It must not erase the hosted
+            // call's identity, title, or raw provider context.
+            events.push(Ok(CompletionStreamEvent::ProviderNativeToolCallStarted {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                stream_key: "idx:7".to_owned(),
+                id: Some("ws_fixture_1".to_owned()),
+                invocation: invocation.clone(),
+                title: "   ".to_owned(),
+                raw: Some(serde_json::json!({
+                    "id": "   ",
+                    "status": null,
+                    "result": "done"
+                })),
+            }));
+            let completed_event = CompletionStreamEvent::ProviderNativeToolCallCompleted {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                stream_key: "idx:7".to_owned(),
+                id: None,
+                // The terminal snapshot omits the query carried by the
+                // started item. It must not erase the richer invocation.
+                invocation: ToolInvocation::new("web_search", StructuredObject::default()),
+                title: String::new(),
+                summary: "1 result".to_owned(),
+                output_text: "fixture result".to_owned(),
+                blocks: vec![agena_provider::ProviderNativeToolOutputBlock::Text {
+                    text: "fixture result".to_owned(),
+                }],
+                details: agena_domain::ToolOutput::default(),
+                raw: None,
+            };
+            events.push(Ok(completed_event.clone()));
+            events.push(Ok(completed_event));
+        }
+        events.push(Ok(CompletionStreamEvent::Completed {
+            provider_id,
+            model,
+            finish_reason: Some(CompletionFinishReason::Stop),
             usage: Some(CompletionUsage::default()),
             provider_metadata: None,
             end_turn: None,
@@ -1367,6 +1488,17 @@ impl ModelRuntime for ToolSearchLoopProvider {
                     id: Some("call_tools_search_1".to_owned()),
                     name: Some("tools_search".to_owned()),
                     arguments_json: r#"{"query":"filesystem"}"#.to_owned(),
+                }),
+                // Some gateways repeat registration metadata in a trailer but
+                // serialize an absent name as whitespace. The valid earlier
+                // function identity must remain authoritative.
+                Ok(CompletionStreamEvent::ToolCallDelta {
+                    provider_id: provider_id.clone(),
+                    model: model.clone(),
+                    stream_key: "call:0".to_owned(),
+                    id: Some("   ".to_owned()),
+                    name: Some("   ".to_owned()),
+                    arguments_delta: String::new(),
                 }),
                 Ok(CompletionStreamEvent::Completed {
                     provider_id,
@@ -1938,7 +2070,7 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
         .parts()
         .iter()
         .find(|part| part.kind == "tool_call")
-        .expect("tools_search part");
+        .unwrap_or_else(|| panic!("tools_search part missing from {:#?}", completed.parts()));
     assert_eq!(
         tool_part.state,
         PartState::Completed,
@@ -2227,6 +2359,292 @@ async fn policy_denied_terminal_transition_preserves_operation_metadata() {
         operation.metadata.get("fixture.runtime_context"),
         Some(&serde_json::json!({"preserve": true})),
         "terminal constructors must inherit all runtime metadata, not only the provider call id"
+    );
+}
+
+#[tokio::test]
+async fn idless_plugin_asks_are_unique_and_cancellation_is_scoped_and_model_visible() {
+    let manager = test_manager().await;
+    let session = create(&manager, "idless plugin ask correlation").await;
+    let run_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            run_marker_content("continue", None, None, None, None),
+        )
+        .await
+        .expect("start assistant run");
+    let operation = |call_id, name: &str| {
+        agena_runtime_contracts::part::OperationPart::pending(
+            call_id,
+            ToolInvocation::new(name, StructuredObject::default()),
+            "Ask fixture",
+            TimeRange {
+                start_ms: 1,
+                end_ms: None,
+            },
+        )
+    };
+    let created = manager
+        .store
+        .append_parts(
+            session.id,
+            run_id,
+            vec![
+                new_part_from_content(
+                    "tool_call",
+                    PartRole::Assistant,
+                    &TypedContent::ToolCall(tool_call_from_operation(&operation(
+                        77,
+                        "fixture.ask.first",
+                    ))),
+                    PartState::InProgress,
+                )
+                .expect("build first pending tool"),
+                new_part_from_content(
+                    "tool_call",
+                    PartRole::Assistant,
+                    &TypedContent::ToolCall(tool_call_from_operation(&operation(
+                        78,
+                        "fixture.ask.second",
+                    ))),
+                    PartState::InProgress,
+                )
+                .expect("build second pending tool"),
+            ],
+        )
+        .await
+        .expect("append idless pending tools");
+    let first_part_id = created[0].part_id;
+    let second_part_id = created[1].part_id;
+    let mut session = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("load pending tools");
+
+    for (part_id, title) in [
+        (first_part_id, "First question"),
+        (second_part_id, "Second question"),
+    ] {
+        let pending = session
+            .pending_tool_by_part_id(part_id)
+            .expect("resolve idless pending tool");
+        session = manager
+            .apply_tool_execution_result(
+                session,
+                &pending,
+                Err(crate::tool::ToolError::UserInputRequired(Box::new(
+                    crate::part::AskUserToolInput {
+                        title: title.to_owned(),
+                        kind: "ask_user".to_owned(),
+                        body_markdown: String::new(),
+                        auto_resolution_ms: None,
+                        questions: Vec::new(),
+                    },
+                ))),
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist plugin user-input request");
+    }
+
+    let first_request_id = session
+        .parts()
+        .iter()
+        .find(|part| part.part_id == first_part_id)
+        .and_then(tool_part_first_user_input)
+        .map(|record| record.request.request_id)
+        .expect("first plugin request id");
+    let second_request_id = session
+        .parts()
+        .iter()
+        .find(|part| part.part_id == second_part_id)
+        .and_then(tool_part_first_user_input)
+        .map(|record| record.request.request_id)
+        .expect("second plugin request id");
+    assert_eq!(first_request_id, format!("tool-input:{}:77", session.id));
+    assert_eq!(second_request_id, format!("tool-input:{}:78", session.id));
+    assert_ne!(
+        first_request_id, second_request_id,
+        "id-less provider calls must not collapse unrelated plugin asks into an empty request id"
+    );
+
+    let first_pending = session
+        .pending_tool_by_part_id(first_part_id)
+        .expect("first tool remains pending while awaiting input");
+    session = manager
+        .apply_tool_cancellation(session, &first_pending, manager.execution_state())
+        .await
+        .expect("cancel first idless tool");
+    let first_part = session
+        .parts()
+        .iter()
+        .find(|part| part.part_id == first_part_id)
+        .expect("cancelled first tool part");
+    let first_operation = operation_from_part(first_part).expect("decode cancelled operation");
+    assert_eq!(first_part.state, PartState::Cancelled);
+    assert_eq!(
+        first_operation.status(),
+        agena_domain::ExecutionStatus::Cancelled
+    );
+    assert!(
+        first_operation.user_input.requests.is_empty(),
+        "the cancelled tool must not retain an unanswerable pending request"
+    );
+    assert!(
+        super::replies::has_finished_operation(&session, first_request_id.as_str()),
+        "a late retry of the removed id-less ask must still resolve as a duplicate of the terminal operation"
+    );
+    assert!(
+        crate::provider::project_session_tool_result_output(
+            first_operation.status(),
+            &first_operation
+        )
+        .contains("cancelled"),
+        "a cancelled function call must replay a non-empty result to the model"
+    );
+
+    let second_part = session
+        .parts()
+        .iter()
+        .find(|part| part.part_id == second_part_id)
+        .expect("second tool part");
+    assert!(second_part.state.is_in_flight());
+    assert_eq!(
+        tool_part_first_user_input(second_part)
+            .map(|record| record.request.request_id)
+            .as_deref(),
+        Some(second_request_id.as_str()),
+        "terminalizing one id-less operation must not clear another operation's ask"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn provider_native_completion_preserves_started_identity_and_context() {
+    let provider = Arc::new(ProviderNativeFixtureProvider {
+        model: ModelId::new("provider-native-model"),
+        mode: ProviderNativeFixtureMode::CompletionOmitsId,
+    });
+    let manager = manager_with_provider(provider).await;
+    let session = create(&manager, "provider-native identity").await;
+    let completed = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        manager.submit_subtask_user_message(
+            SessionUserRunRequest::new(
+                session.id,
+                agena_runtime::SessionRunOptions {
+                    model: ModelRef::new("provider-native-fixture", "provider-native-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: Some(0.0),
+                    max_output_tokens: Some(64),
+                },
+                vec![TypedContent::Text(text_content("run hosted search"))],
+            ),
+            None,
+        ),
+    )
+    .await
+    .expect("provider-native run must terminate")
+    .expect("provider-native run succeeds");
+
+    let tool_parts = completed
+        .parts()
+        .iter()
+        .filter(|part| part.kind == "tool_call")
+        .collect::<Vec<_>>();
+    assert_eq!(tool_parts.len(), 1, "one hosted call produces one activity");
+    let part = tool_parts[0];
+    assert_eq!(part.state, PartState::Completed);
+    let operation = operation_from_part(part).expect("decode provider-native operation");
+    assert!(operation.is_provider_only());
+    assert_eq!(operation.status(), agena_domain::ExecutionStatus::Completed);
+    assert_eq!(
+        operation
+            .metadata
+            .get(OPERATION_ID_METADATA_KEY)
+            .and_then(serde_json::Value::as_str),
+        Some("ws_fixture_1"),
+        "a completion event that omits id must retain the started event's provider identity"
+    );
+    assert_eq!(operation.title, "Hosted search");
+    assert_eq!(
+        operation
+            .invocation
+            .input
+            .get("query")
+            .and_then(agena_domain::StructuredValue::as_text),
+        Some("fixture")
+    );
+    assert_eq!(
+        operation.raw.as_ref().and_then(|raw| raw["id"].as_str()),
+        Some("ws_fixture_1")
+    );
+    assert_eq!(
+        operation
+            .raw
+            .as_ref()
+            .and_then(|raw| raw["result"].as_str()),
+        Some("done")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unfinished_provider_native_call_fails_instead_of_wedging_the_run() {
+    let provider = Arc::new(ProviderNativeFixtureProvider {
+        model: ModelId::new("provider-native-model"),
+        mode: ProviderNativeFixtureMode::StartedOnly,
+    });
+    let manager = manager_with_provider(provider).await;
+    let session = create(&manager, "unfinished provider-native call").await;
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        manager.submit_subtask_user_message(
+            SessionUserRunRequest::new(
+                session.id,
+                agena_runtime::SessionRunOptions {
+                    model: ModelRef::new("provider-native-fixture", "provider-native-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: Some(0.0),
+                    max_output_tokens: Some(64),
+                },
+                vec![TypedContent::Text(text_content(
+                    "start incomplete hosted search",
+                ))],
+            ),
+            None,
+        ),
+    )
+    .await
+    .expect("malformed provider-native run must terminate")
+    .expect_err("a started-only hosted call is a provider protocol error");
+    assert!(
+        error
+            .to_string()
+            .contains("unfinished provider-native tool calls")
+    );
+    let reloaded = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("reload failed provider-native run");
+    assert!(
+        reloaded
+            .parts()
+            .iter()
+            .all(|part| part.kind != "tool_call" || !part.state.is_in_flight()),
+        "a malformed hosted call must not leave an executable ghost operation"
     );
 }
 

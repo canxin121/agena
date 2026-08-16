@@ -261,6 +261,8 @@ pub(super) fn operation_id_from_part(part: &Part) -> Option<String> {
             .metadata
             .get(OPERATION_ID_METADATA_KEY)
             .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     })
 }
@@ -360,6 +362,9 @@ fn matching_request_part_refs(
     request_id: &str,
     pending_only: bool,
 ) -> Vec<SessionPartRef> {
+    if request_id.trim().is_empty() {
+        return Vec::new();
+    }
     session
         .parts()
         .iter()
@@ -388,8 +393,10 @@ fn matching_request_part_refs(
 /// the way they always were.
 pub(super) fn cancel_unanswered_request_parts_for_operation(
     session: &mut Session,
+    tool_part_id: i64,
     operation_id: &str,
 ) -> Result<Vec<i64>, AppError> {
+    let operation_id = operation_id.trim();
     let mut changed_part_ids = Vec::new();
     for part_index in 0..session.parts().len() {
         let part_ref = SessionPartRef {
@@ -398,15 +405,18 @@ pub(super) fn cancel_unanswered_request_parts_for_operation(
         };
         let part = session.part_mut(&part_ref).ok_or_else(|| {
             AppError::Internal(format!(
-                "pending interaction part not found while closing operation {operation_id}: part={}",
-                part_ref.part_id
+                "pending interaction part not found while closing tool part {tool_part_id} (operation {operation_id}): part={}",
+                part_ref.part_id,
             ))
         })?;
         if part.kind == "tool_call" {
             // Canonical: clear the unanswered records on the operation bucket.
             // The tool part is already terminal when this runs (the caller
             // completed it in the same checkpoint), so no in-flight check.
-            if operation_id_from_part(part).as_deref() != Some(operation_id) {
+            // The durable tool part id is always present and session-unique;
+            // provider operation ids are optional and therefore cannot own
+            // this correlation.
+            if part.part_id != tool_part_id {
                 continue;
             }
             let mut cleared = false;
@@ -432,7 +442,19 @@ pub(super) fn cancel_unanswered_request_parts_for_operation(
             continue;
         }
         let interaction = interaction_from_part(part);
-        if interaction.as_ref().and_then(|i| i.operation_id()) == Some(operation_id) {
+        let interaction_tool_part_id = interaction.as_ref().and_then(|value| value.tool_part_id());
+        let matches_tool_part = interaction_tool_part_id == Some(tool_part_id);
+        // Only rows old enough to lack the durable tool-part correlation may
+        // fall back to the provider id. If a canonical row names another tool
+        // part, a duplicated/reused provider id must never cancel that row.
+        let matches_non_empty_operation = interaction_tool_part_id.is_none()
+            && !operation_id.is_empty()
+            && interaction
+                .as_ref()
+                .and_then(|value| value.operation_id())
+                .map(str::trim)
+                == Some(operation_id);
+        if matches_tool_part || matches_non_empty_operation {
             part.state = PartState::Cancelled;
             part.summary = Some(
                 "Cancelled because the associated tool already reached a terminal result."
@@ -650,10 +672,39 @@ pub(super) fn pending_user_input_request(
 /// Whether the operation owning `operation_id` reached a terminal state. Used
 /// to treat a reply to an already-finished operation as a duplicate.
 pub(super) fn has_finished_operation(session: &Session, operation_id: &str) -> bool {
+    let operation_id = operation_id.trim();
+    if operation_id.is_empty() {
+        return false;
+    }
+    // An unanswered plugin ask is removed when its owning operation becomes
+    // terminal, otherwise the UI would retain an impossible-to-answer prompt.
+    // For id-less provider calls the stable request id still encodes the
+    // session-local call id, so retain a tombstone-equivalent lookup without
+    // keeping the request payload itself. This makes a very late client retry
+    // idempotent after cancellation/failure instead of reporting "not found".
+    let idless_plugin_call_id = operation_id
+        .strip_prefix(format!("tool-input:{}:", session.id).as_str())
+        .filter(|suffix| !suffix.is_empty() && !suffix.contains(':'))
+        .and_then(|suffix| suffix.parse::<i64>().ok());
     session.parts().iter().any(|part| {
-        part.kind == "tool_call"
-            && operation_id_from_part(part).as_deref() == Some(operation_id)
-            && part.state.is_terminal()
+        if part.kind != "tool_call" || !part.state.is_terminal() {
+            return false;
+        }
+        operation_from_part(part).is_some_and(|operation| {
+            operation
+                .metadata
+                .get(OPERATION_ID_METADATA_KEY)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .is_some_and(|value| value == operation_id)
+                || operation.authorization.find(operation_id).is_some()
+                || operation
+                    .user_input
+                    .requests
+                    .iter()
+                    .any(|record| record.request.request_id == operation_id)
+                || idless_plugin_call_id == Some(operation.call_id)
+        })
     })
 }
 
@@ -669,6 +720,23 @@ pub(super) fn permission_request_id(session_id: i64, resolved: &ResolvedPendingT
     let provider_id = resolved.operation_id.trim();
     if provider_id.is_empty() {
         format!("host-permission:{session_id}:{}", resolved.call_id)
+    } else {
+        provider_id.to_owned()
+    }
+}
+
+/// Stable request identity for a plugin-owned user-input pause.
+///
+/// Preserve the provider call id for compatibility when one exists. Providers
+/// are allowed to omit it, though; an empty request id would merge unrelated
+/// asks into one lookup/dedup bucket, so fall back to the session-local call id.
+pub(super) fn plugin_user_input_request_id(
+    session_id: i64,
+    resolved: &ResolvedPendingTool,
+) -> String {
+    let provider_id = resolved.operation_id.trim();
+    if provider_id.is_empty() {
+        format!("tool-input:{session_id}:{}", resolved.call_id)
     } else {
         provider_id.to_owned()
     }
@@ -788,6 +856,12 @@ impl SessionManager {
         find_pending: impl FnOnce(&Session, &str) -> Option<P>,
         has_replied: impl FnOnce(&Session, &str) -> bool,
     ) -> Result<PendingReplyLookup<P>, AppError> {
+        if request_id.trim().is_empty() {
+            // Optional provider ids historically leaked into request ids. An
+            // empty lookup is never a safe correlation key: matching it could
+            // select an arbitrary legacy ask among several id-less tools.
+            return Err(pending_reply_not_found_error(request_kind, request_id));
+        }
         match find_pending(session, request_id) {
             Some(pending) => Ok(PendingReplyLookup::Pending(pending)),
             None if has_replied(session, request_id)
@@ -1101,6 +1175,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let mut changed_part_ids = cancel_unanswered_request_parts_for_operation(
             &mut session,
+            resolved.pending.part.part_id,
             resolved.operation_id.as_str(),
         )?;
         changed_part_ids.push(resolved.pending.part.part_id);

@@ -558,10 +558,8 @@ fn gemini_function_calls_from_content(
         };
         let arguments_json = gemini_tool_call_arguments_json(call, "generateContent")?;
         calls.push(CompletionToolCall::Function {
-            id: call
-                .id
-                .clone()
-                .unwrap_or_else(|| format!("{}-{idx}", call.name)),
+            id: utils::normalize_optional_text(call.id.clone())
+                .unwrap_or_else(|| format!("{}-{idx}", call.name.trim())),
             name: call.name.clone(),
             arguments_json,
         });
@@ -826,7 +824,9 @@ fn ensure_gemini_stream_function_call_ids(
             };
             let call_index = *next_tool_call_index;
             *next_tool_call_index += 1;
-            if call.id.as_deref().is_none_or(str::is_empty) {
+            if let Some(id) = utils::normalize_optional_text(call.id.take()) {
+                call.id = Some(id);
+            } else {
                 let name = call.name.trim();
                 call.id = Some(if name.is_empty() {
                     format!("function-{call_index}")
@@ -859,7 +859,7 @@ fn gemini_thought_signatures_from_content(content: &GeminiContent) -> Option<ser
         let signature = part
             .thought_signature
             .as_deref()
-            .filter(|signature| !signature.is_empty());
+            .filter(|signature| !signature.trim().is_empty());
         let Some(call) = part.function_call.as_ref() else {
             if let Some(signature) = signature {
                 final_part_signature = Some(signature.to_owned());
@@ -869,10 +869,8 @@ fn gemini_thought_signatures_from_content(content: &GeminiContent) -> Option<ser
         let Some(signature) = signature else {
             continue;
         };
-        let call_id = call
-            .id
-            .clone()
-            .unwrap_or_else(|| format!("{}-{index}", call.name));
+        let call_id = utils::normalize_optional_text(call.id.clone())
+            .unwrap_or_else(|| format!("{}-{index}", call.name.trim()));
         signatures.insert(call_id, serde_json::Value::String(signature.to_owned()));
     }
     if let Some(signature) = final_part_signature {
@@ -1299,6 +1297,38 @@ mod tests {
             second_events.as_slice(),
             [GeminiStreamEvent::ToolCall(_)]
         ));
+    }
+
+    #[test]
+    fn blank_function_call_ids_are_synthesized_and_signature_keys_stay_aligned() {
+        let mut response = GeminiGenerateResponse {
+            candidates: vec![GeminiCandidate {
+                content: Some(GeminiContent {
+                    role: Some("model".to_owned()),
+                    parts: vec![GeminiPart::function_call(
+                        Some("   ".to_owned()),
+                        "lookup",
+                        serde_json::json!({"query": "fixture"}),
+                        Some("signed-thought".to_owned()),
+                    )],
+                }),
+                finish_reason: None,
+                safety_ratings: None,
+                grounding_metadata: None,
+            }],
+            usage_metadata: None,
+        };
+        let mut next_tool_call_index = 0;
+        ensure_gemini_stream_function_call_ids(&mut response, &mut next_tool_call_index);
+
+        let candidate = &response.candidates[0];
+        let calls = gemini_candidate_function_calls(candidate).expect("function call");
+        let CompletionToolCall::Function { id, .. } = &calls[0];
+        assert_eq!(id, "lookup-0");
+        assert_eq!(
+            gemini_candidate_provider_metadata(candidate).unwrap()["gemini_thought_signatures"]["lookup-0"],
+            "signed-thought"
+        );
     }
 
     #[test]

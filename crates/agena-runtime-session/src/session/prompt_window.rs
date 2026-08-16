@@ -1145,6 +1145,8 @@ pub(crate) fn extract_response_id(provider_metadata: Option<&serde_json::Value>)
     provider_metadata
         .and_then(|metadata| provider_metadata_field(metadata, "response_id"))
         .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
 }
 
@@ -1155,13 +1157,32 @@ fn provider_metadata_field<'a>(
     metadata
         .as_object()
         .and_then(|object| object.get(field))
+        .filter(|value| agena_provider::provider_metadata_value_is_meaningful(value))
         .or_else(|| {
             metadata
                 .as_object()
                 .and_then(|object| object.get("provider_metadata"))
                 .and_then(serde_json::Value::as_object)
                 .and_then(|object| object.get(field))
+                .filter(|value| agena_provider::provider_metadata_value_is_meaningful(value))
         })
+}
+
+#[cfg(test)]
+mod response_id_tests {
+    use super::extract_response_id;
+
+    #[test]
+    fn blank_direct_response_id_does_not_mask_nested_anchor() {
+        let metadata = serde_json::json!({
+            "response_id": "   ",
+            "provider_metadata": { "response_id": "  resp_nested  " }
+        });
+        assert_eq!(
+            extract_response_id(Some(&metadata)).as_deref(),
+            Some("resp_nested")
+        );
+    }
 }
 
 /// Project a bounded transcript for permission classification, anchoring the

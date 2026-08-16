@@ -113,14 +113,22 @@ pub(crate) use self::tool_call_helpers::*;
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{PendingToolCall, pending_tool_call_stream_key};
+    use super::{
+        PendingProviderNativeToolCall, PendingToolCall,
+        pending_provider_native_tool_call_stream_key, pending_tool_call_stream_key,
+    };
 
     #[test]
     fn provider_call_id_merges_changing_adapter_stream_keys() {
         let mut pending = BTreeMap::<String, PendingToolCall>::new();
+        let mut aliases = BTreeMap::new();
 
-        let first =
-            pending_tool_call_stream_key(&mut pending, "idx:0".to_string(), Some("call_shared"));
+        let first = pending_tool_call_stream_key(
+            &mut pending,
+            &mut aliases,
+            "idx:0".to_string(),
+            Some("call_shared"),
+        );
         assert_eq!(first, "id:call_shared");
         pending.insert(
             first.clone(),
@@ -130,8 +138,12 @@ mod tests {
             },
         );
 
-        let replay =
-            pending_tool_call_stream_key(&mut pending, "idx:6".to_string(), Some("call_shared"));
+        let replay = pending_tool_call_stream_key(
+            &mut pending,
+            &mut aliases,
+            "idx:6".to_string(),
+            Some("call_shared"),
+        );
         assert_eq!(replay, first);
         assert_eq!(pending.len(), 1);
     }
@@ -139,9 +151,14 @@ mod tests {
     #[test]
     fn distinct_provider_call_ids_do_not_merge_even_when_stream_key_repeats() {
         let mut pending = BTreeMap::<String, PendingToolCall>::new();
+        let mut aliases = BTreeMap::new();
 
-        let first =
-            pending_tool_call_stream_key(&mut pending, "idx:0".to_string(), Some("call_one"));
+        let first = pending_tool_call_stream_key(
+            &mut pending,
+            &mut aliases,
+            "idx:0".to_string(),
+            Some("call_one"),
+        );
         pending.insert(
             first.clone(),
             PendingToolCall {
@@ -150,8 +167,12 @@ mod tests {
             },
         );
 
-        let second =
-            pending_tool_call_stream_key(&mut pending, "idx:0".to_string(), Some("call_two"));
+        let second = pending_tool_call_stream_key(
+            &mut pending,
+            &mut aliases,
+            "idx:0".to_string(),
+            Some("call_two"),
+        );
         assert_ne!(first, second);
         pending.insert(
             second.clone(),
@@ -169,14 +190,79 @@ mod tests {
     #[test]
     fn provider_id_rekeys_an_earlier_idless_stream_without_a_second_call() {
         let mut pending = BTreeMap::<String, PendingToolCall>::new();
+        let mut aliases = BTreeMap::new();
         pending.insert("idx:0".to_string(), PendingToolCall::default());
 
-        let key =
-            pending_tool_call_stream_key(&mut pending, "idx:0".to_string(), Some("call_shared"));
+        let key = pending_tool_call_stream_key(
+            &mut pending,
+            &mut aliases,
+            "idx:0".to_string(),
+            Some("call_shared"),
+        );
 
         assert_eq!(key, "id:call_shared");
         assert_eq!(pending.len(), 1);
         assert!(pending.contains_key("id:call_shared"));
         assert!(!pending.contains_key("idx:0"));
+        assert_eq!(
+            aliases.get("idx:0").map(String::as_str),
+            Some("id:call_shared")
+        );
+    }
+
+    #[test]
+    fn idless_trailer_uses_the_original_stream_key_alias_after_provider_id_rekey() {
+        let mut pending = BTreeMap::<String, PendingToolCall>::new();
+        let mut aliases = BTreeMap::new();
+
+        let first = pending_tool_call_stream_key(
+            &mut pending,
+            &mut aliases,
+            "idx:0".to_string(),
+            Some("call_shared"),
+        );
+        pending.insert(
+            first.clone(),
+            PendingToolCall {
+                id: Some("call_shared".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let trailer =
+            pending_tool_call_stream_key(&mut pending, &mut aliases, "idx:0".to_string(), None);
+        assert_eq!(trailer, first);
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn provider_native_item_id_merges_started_and_done_events_with_different_keys() {
+        let mut pending = BTreeMap::<String, PendingProviderNativeToolCall>::new();
+        let mut aliases = BTreeMap::new();
+
+        let started = pending_provider_native_tool_call_stream_key(
+            &mut pending,
+            &mut aliases,
+            "item:ws_1".to_owned(),
+            Some("ws_1"),
+        );
+        pending.insert(
+            started.clone(),
+            PendingProviderNativeToolCall {
+                id: Some("ws_1".to_owned()),
+                call_id: Some(9),
+                ..Default::default()
+            },
+        );
+
+        let completed = pending_provider_native_tool_call_stream_key(
+            &mut pending,
+            &mut aliases,
+            "idx:4".to_owned(),
+            Some("ws_1"),
+        );
+        assert_eq!(completed, started);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[&completed].call_id, Some(9));
     }
 }

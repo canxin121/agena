@@ -15,9 +15,9 @@ pub use agena_provider::{ChatStreamChunk, ResponsesToolEvent, ResponsesToolEvent
 use agena_provider::{CompletionFinishReason, CompletionToolCall, CompletionUsage};
 pub use agena_provider::{
     auth_header_value, ensure_header_case_insensitive, insert_header_case_insensitive,
-    merge_json_object_patch_map, merged_request_headers, normalize_base_url,
-    normalize_optional_text, optional_non_empty, prompt_cache_header_entries,
-    request_shape_fingerprint,
+    merge_json_object_patch_map, merge_provider_metadata, merged_request_headers,
+    normalize_base_url, normalize_optional_text, optional_non_empty, prompt_cache_header_entries,
+    provider_metadata_value_is_meaningful, request_shape_fingerprint,
 };
 
 pub const ADAPTER_LOG_TARGET: &str = "agena::adapter";
@@ -665,6 +665,93 @@ struct AggregatedToolCallState {
     arguments: String,
 }
 
+#[derive(Default)]
+struct AggregatedToolCalls {
+    calls: BTreeMap<String, AggregatedToolCallState>,
+    aliases: BTreeMap<String, String>,
+}
+
+impl AggregatedToolCalls {
+    fn state_for_event(
+        &mut self,
+        stream_key: String,
+        provider_call_id: Option<&str>,
+    ) -> &mut AggregatedToolCallState {
+        let provider_call_id = provider_call_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let resolved_key = self.resolve_stream_key(stream_key, provider_call_id);
+        let state = self.calls.entry(resolved_key).or_default();
+        if let Some(provider_call_id) = provider_call_id {
+            state.id = Some(provider_call_id.to_owned());
+        }
+        state
+    }
+
+    fn resolve_stream_key(&mut self, stream_key: String, provider_call_id: Option<&str>) -> String {
+        let Some(provider_call_id) = provider_call_id else {
+            if self.calls.contains_key(stream_key.as_str()) {
+                return stream_key;
+            }
+            if let Some(existing_key) = self
+                .aliases
+                .get(stream_key.as_str())
+                .filter(|existing_key| self.calls.contains_key(existing_key.as_str()))
+            {
+                return existing_key.clone();
+            }
+            return stream_key;
+        };
+
+        if let Some(existing_key) = self.calls.iter().find_map(|(key, state)| {
+            (state.id.as_deref().map(str::trim) == Some(provider_call_id)).then(|| key.clone())
+        }) {
+            self.aliases.insert(stream_key, existing_key.clone());
+            return existing_key;
+        }
+
+        let canonical_key = format!("id:{provider_call_id}");
+        if self.calls.contains_key(canonical_key.as_str()) {
+            self.aliases.insert(stream_key, canonical_key.clone());
+            return canonical_key;
+        }
+
+        let existing_stream_key = if self.calls.contains_key(stream_key.as_str()) {
+            Some(stream_key.clone())
+        } else {
+            self.aliases
+                .get(stream_key.as_str())
+                .filter(|existing_key| self.calls.contains_key(existing_key.as_str()))
+                .cloned()
+        };
+        let can_rekey_existing_stream =
+            existing_stream_key.as_deref().is_some_and(|existing_key| {
+                self.calls.get(existing_key).is_some_and(|state| {
+                    state.id.as_deref().is_none()
+                        || state.id.as_deref().map(str::trim) == Some(provider_call_id)
+                })
+            });
+        if can_rekey_existing_stream
+            && let Some(existing_stream_key) = existing_stream_key
+            && existing_stream_key != canonical_key
+        {
+            let state = self
+                .calls
+                .remove(existing_stream_key.as_str())
+                .expect("checked aggregated tool stream exists");
+            self.calls.insert(canonical_key.clone(), state);
+            for alias_target in self.aliases.values_mut() {
+                if alias_target == &existing_stream_key {
+                    *alias_target = canonical_key.clone();
+                }
+            }
+        }
+
+        self.aliases.insert(stream_key, canonical_key.clone());
+        canonical_key
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub async fn aggregate_stream<S>(
     provider_id: &str,
@@ -677,7 +764,7 @@ where
     let mut stream = stream;
     let mut text = String::new();
     let mut reasoning_text = String::new();
-    let mut tool_calls: BTreeMap<String, AggregatedToolCallState> = BTreeMap::new();
+    let mut tool_calls = AggregatedToolCalls::default();
     let mut completed: Option<(
         ProviderId,
         ModelId,
@@ -701,11 +788,9 @@ where
                 arguments_delta,
                 ..
             } => {
-                let state = tool_calls.entry(stream_key).or_default();
-                if let Some(id) = id {
-                    state.id = Some(id);
-                }
-                if let Some(name) = name {
+                let id = normalize_optional_text(id);
+                let state = tool_calls.state_for_event(stream_key, id.as_deref());
+                if let Some(name) = normalize_optional_text(name) {
                     state.name = Some(name);
                 }
                 state.arguments.push_str(arguments_delta.as_str());
@@ -717,14 +802,16 @@ where
                 arguments_json,
                 ..
             } => {
-                let state = tool_calls.entry(stream_key).or_default();
-                if let Some(id) = id {
-                    state.id = Some(id);
-                }
-                if let Some(name) = name {
+                let id = normalize_optional_text(id);
+                let state = tool_calls.state_for_event(stream_key, id.as_deref());
+                if let Some(name) = normalize_optional_text(name) {
                     state.name = Some(name);
                 }
-                state.arguments = arguments_json;
+                let snapshot = arguments_json.trim();
+                let snapshot_is_degenerate = snapshot.is_empty() || snapshot == "{}";
+                if !snapshot_is_degenerate || state.arguments.trim().is_empty() {
+                    state.arguments = arguments_json;
+                }
             }
             CompletionStreamEvent::ProviderNativeToolCallStarted { .. }
             | CompletionStreamEvent::ProviderNativeToolCallCompleted { .. }
@@ -736,9 +823,39 @@ where
                 usage,
                 provider_metadata,
                 end_turn: _,
-            } => {
-                completed = Some((pid, model, finish_reason, usage, provider_metadata));
-            }
+            } => match completed.as_mut() {
+                Some((
+                    completed_pid,
+                    completed_model,
+                    completed_finish_reason,
+                    completed_usage,
+                    completed_provider_metadata,
+                )) => {
+                    if !pid.as_ref().trim().is_empty() {
+                        *completed_pid = pid;
+                    }
+                    if !model.as_ref().trim().is_empty() {
+                        *completed_model = model;
+                    }
+                    if finish_reason.is_some() {
+                        *completed_finish_reason = finish_reason;
+                    }
+                    if usage
+                        .as_ref()
+                        .is_some_and(|usage| usage != &CompletionUsage::default())
+                    {
+                        *completed_usage = usage;
+                    }
+                    *completed_provider_metadata = merge_provider_metadata(
+                        completed_provider_metadata.take(),
+                        provider_metadata,
+                    );
+                }
+                None => {
+                    let usage = usage.filter(|usage| usage != &CompletionUsage::default());
+                    completed = Some((pid, model, finish_reason, usage, provider_metadata));
+                }
+            },
         }
     }
 
@@ -753,6 +870,7 @@ where
     });
 
     let calls = tool_calls
+        .calls
         .into_iter()
         .map(|(stream_key, state)| {
             let id = normalize_optional_text(state.id).unwrap_or(stream_key);
@@ -788,7 +906,7 @@ where
 }
 
 pub fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value> {
-    response_id.map(|id| serde_json::json!({ "response_id": id }))
+    normalize_optional_text(response_id).map(|id| serde_json::json!({ "response_id": id }))
 }
 
 pub fn provider_metadata_with_chat_reasoning_state(
@@ -811,10 +929,10 @@ pub fn provider_metadata_with_chat_reasoning_state(
             serde_json::Value::String(field.to_owned()),
         );
     }
-    if let Some(details) = reasoning_details.filter(|value| !value.is_null()) {
+    if let Some(details) = reasoning_details.filter(provider_metadata_value_is_meaningful) {
         metadata.insert("openai_chat_reasoning_details".to_owned(), details);
     }
-    if let Some(opaque) = copilot_reasoning_opaque.filter(|value| !value.is_empty()) {
+    if let Some(opaque) = copilot_reasoning_opaque.filter(|value| !value.trim().is_empty()) {
         metadata.insert(
             "copilot_reasoning_opaque".to_owned(),
             serde_json::Value::String(opaque),
@@ -969,32 +1087,39 @@ pub fn responses_end_turn(event: &serde_json::Value) -> Option<bool> {
 }
 
 pub fn responses_finish_reason(event: &serde_json::Value) -> Option<String> {
-    event
-        .get("response")
-        .and_then(|r| r.get("stop_reason"))
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
+    normalize_optional_text(
+        event
+            .get("response")
+            .and_then(|r| r.get("stop_reason"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+    )
+    .or_else(|| {
+        normalize_optional_text(
             event
                 .get("response")
                 .and_then(|r| r.get("incomplete_details"))
                 .and_then(|d| d.get("reason"))
                 .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned)
-        })
-        .or_else(|| {
+                .map(ToOwned::to_owned),
+        )
+    })
+    .or_else(|| {
+        normalize_optional_text(
             event
                 .get("response")
                 .and_then(|r| r.get("status_details"))
                 .and_then(|d| d.get("reason"))
                 .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned)
-        })
-        .or_else(|| {
-            // Only treat `response.status` as a finish reason when it is
-            // terminal — early events can carry `status: "in_progress"`
-            // and would otherwise be latched as the final finish reason
-            // even though the response continues.
+                .map(ToOwned::to_owned),
+        )
+    })
+    .or_else(|| {
+        // Only treat `response.status` as a finish reason when it is
+        // terminal — early events can carry `status: "in_progress"`
+        // and would otherwise be latched as the final finish reason
+        // even though the response continues.
+        normalize_optional_text(
             event
                 .get("response")
                 .and_then(|r| r.get("status"))
@@ -1005,14 +1130,17 @@ pub fn responses_finish_reason(event: &serde_json::Value) -> Option<String> {
                         "in_progress" | "queued" | "pending" | "created" | "started"
                     )
                 })
-                .map(ToOwned::to_owned)
-        })
-        .or_else(|| {
+                .map(ToOwned::to_owned),
+        )
+    })
+    .or_else(|| {
+        normalize_optional_text(
             event
                 .get("stop_reason")
                 .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned)
-        })
+                .map(ToOwned::to_owned),
+        )
+    })
 }
 
 pub fn responses_usage_value(event: &serde_json::Value) -> Option<serde_json::Value> {
@@ -1025,17 +1153,21 @@ pub fn responses_usage_value(event: &serde_json::Value) -> Option<serde_json::Va
 }
 
 pub fn responses_response_id(event: &serde_json::Value) -> Option<String> {
-    event
-        .get("response")
-        .and_then(|r| r.get("id"))
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
+    normalize_optional_text(
+        event
+            .get("response")
+            .and_then(|r| r.get("id"))
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+    )
+    .or_else(|| {
+        normalize_optional_text(
             event
                 .get("id")
                 .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned)
-        })
+                .map(ToOwned::to_owned),
+        )
+    })
 }
 
 pub fn responses_stream_error(
@@ -1569,5 +1701,113 @@ mod tests {
             }
             other => panic!("expected ProviderClassified, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn aggregate_stream_keeps_valid_tool_and_terminal_state_from_empty_updates() {
+        let provider_id = ProviderId::new("fixture");
+        let model = ModelId::new("fixture-model");
+        let usage = CompletionUsage {
+            input_tokens: 17,
+            ..CompletionUsage::default()
+        };
+        let events = vec![
+            Ok(CompletionStreamEvent::ToolCallDelta {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                stream_key: "idx:0".to_owned(),
+                id: Some("call_valid".to_owned()),
+                name: Some("fs.read".to_owned()),
+                arguments_delta: r#"{"file_path":"README.md"}"#.to_owned(),
+            }),
+            Ok(CompletionStreamEvent::ToolCallSnapshot {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                stream_key: "idx:7".to_owned(),
+                id: Some("call_valid".to_owned()),
+                name: Some(String::new()),
+                arguments_json: "{}".to_owned(),
+            }),
+            Ok(CompletionStreamEvent::ToolCallDelta {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                stream_key: "idx:0".to_owned(),
+                id: Some("   ".to_owned()),
+                name: Some("   ".to_owned()),
+                arguments_delta: String::new(),
+            }),
+            Ok(CompletionStreamEvent::Completed {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                finish_reason: Some(CompletionFinishReason::ToolCalls),
+                usage: Some(usage.clone()),
+                provider_metadata: Some(serde_json::json!({
+                    "response_id": "resp_valid",
+                    "nested": { "first": true }
+                })),
+                end_turn: None,
+            }),
+            Ok(CompletionStreamEvent::Completed {
+                provider_id,
+                model,
+                finish_reason: None,
+                usage: Some(CompletionUsage::default()),
+                provider_metadata: Some(serde_json::json!({
+                    "nested": { "second": true }
+                })),
+                end_turn: None,
+            }),
+        ];
+
+        let response = aggregate_stream(
+            "fixture",
+            ModelId::new("fallback-model"),
+            futures_util::stream::iter(events),
+        )
+        .await
+        .expect("stream aggregates");
+        assert_eq!(
+            response.finish_reason,
+            Some(CompletionFinishReason::ToolCalls)
+        );
+        assert_eq!(response.usage, Some(usage));
+        assert_eq!(
+            response.provider_metadata.as_ref().unwrap()["response_id"],
+            "resp_valid"
+        );
+        assert_eq!(
+            response.provider_metadata.as_ref().unwrap()["nested"],
+            serde_json::json!({"first": true, "second": true})
+        );
+        assert_eq!(
+            response.tool_calls,
+            vec![CompletionToolCall::Function {
+                id: "call_valid".to_owned(),
+                name: "fs.read".to_owned(),
+                arguments_json: r#"{"file_path":"README.md"}"#.to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn responses_ids_ignore_blank_nested_updates_and_normalize_metadata() {
+        let event = serde_json::json!({
+            "id": "  resp_fallback  ",
+            "response": { "id": "   " }
+        });
+        assert_eq!(
+            responses_response_id(&event).as_deref(),
+            Some("resp_fallback")
+        );
+        assert_eq!(
+            response_id_metadata(Some("  resp_1  ".to_owned())),
+            Some(serde_json::json!({"response_id": "resp_1"}))
+        );
+        assert_eq!(response_id_metadata(Some("   ".to_owned())), None);
+        let finish = serde_json::json!({
+            "stop_reason": "  stop  ",
+            "response": { "stop_reason": "   " }
+        });
+        assert_eq!(responses_finish_reason(&finish).as_deref(), Some("stop"));
     }
 }

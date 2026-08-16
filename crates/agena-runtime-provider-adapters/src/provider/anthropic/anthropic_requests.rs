@@ -17,7 +17,25 @@ impl AnthropicAdapter {
             .iter()
             .filter_map(|block| {
                 let block = serde_json::from_value::<AnthropicTextBlock>(block.clone()).ok()?;
-                matches!(block.kind.as_str(), "thinking" | "redacted_thinking").then_some(block)
+                match block.kind.as_str() {
+                    "thinking"
+                        if block
+                            .signature
+                            .as_deref()
+                            .is_some_and(|value| !value.trim().is_empty()) =>
+                    {
+                        Some(block)
+                    }
+                    "redacted_thinking"
+                        if block
+                            .data
+                            .as_deref()
+                            .is_some_and(|value| !value.trim().is_empty()) =>
+                    {
+                        Some(block)
+                    }
+                    _ => None,
+                }
             })
             .collect()
     }

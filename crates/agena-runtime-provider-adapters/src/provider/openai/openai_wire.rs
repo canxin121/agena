@@ -153,7 +153,7 @@ pub(super) fn validate_responses_input(
                 let has_encrypted_content = item
                     .get("encrypted_content")
                     .and_then(serde_json::Value::as_str)
-                    .is_some_and(|content| !content.is_empty());
+                    .is_some_and(|content| !content.trim().is_empty());
                 let has_content = item
                     .get("content")
                     .and_then(serde_json::Value::as_array)
@@ -384,7 +384,7 @@ pub(crate) fn chat_tool_stream_input(
 }
 
 pub(super) fn responses_model_tool_name(namespace: Option<&str>, name: &str) -> String {
-    match namespace.filter(|value| !value.is_empty()) {
+    match namespace.filter(|value| !value.trim().is_empty()) {
         Some(namespace) => format!("{namespace}.{name}"),
         None => name.to_owned(),
     }

@@ -819,21 +819,30 @@ impl Session {
             .filter_map(|pending| {
                 let tool = pending.tool();
                 let part = self.part(&tool.part)?;
-                let operation_id = part
-                    .content
-                    .get("operation_id")
+                let operation = operation_from_part(part);
+                let call_id = operation
+                    .as_ref()
+                    .map(|operation| operation.call_id)
+                    .filter(|call_id| *call_id != 0)
+                    .unwrap_or(part.part_id);
+                let operation_id = operation
+                    .as_ref()
+                    .and_then(|operation| operation.metadata.get("agena.operation_id"))
                     .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
                     .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| part.part_id.to_string());
-                let tool_name = part
-                    .content
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_else(|| call_id.to_string());
+                let tool_name = operation
+                    .as_ref()
+                    .map(|operation| operation.invocation.name.as_str())
+                    .filter(|name| !name.trim().is_empty())
+                    .or_else(|| part.content.get("name").and_then(serde_json::Value::as_str))
                     .unwrap_or_default()
                     .to_owned();
                 Some(PendingToolCallRuntime {
                     operation_id,
-                    call_id: part.part_id,
+                    call_id,
                     tool_name,
                     part: tool.part.clone(),
                 })
@@ -1346,6 +1355,45 @@ mod parts_projection_tests {
         // Highest part id + 1 is the next call id (call ids are part ids).
         assert_eq!(session.next_call_id(), 16);
         assert_eq!(session.workflow_state(), WorkflowState::ToolPending);
+    }
+
+    #[test]
+    fn pending_tool_runtime_snapshot_uses_operation_protocol_identity() {
+        let mut operation = agena_runtime_contracts::part::OperationPart::pending(
+            7,
+            agena_domain::ToolInvocation::new(
+                "tools_search",
+                agena_domain::StructuredObject::default(),
+            ),
+            "Search tools",
+            agena_domain::TimeRange::default(),
+        );
+        operation.metadata.insert(
+            "agena.operation_id".to_owned(),
+            serde_json::json!("call_tools_search_7"),
+        );
+        let pending = part(
+            42,
+            "tool_call",
+            PartRole::Assistant,
+            PartState::InProgress,
+            json!({
+                "name": "tools_search",
+                "input": {},
+                "operation": serde_json::to_value(&operation).unwrap()
+            }),
+        );
+        let session = session_with(vec![pending]);
+        let snapshot = session
+            .runtime
+            .workflow
+            .pending_tool_calls
+            .first()
+            .expect("pending tool runtime snapshot");
+        assert_eq!(snapshot.operation_id, "call_tools_search_7");
+        assert_eq!(snapshot.call_id, 7);
+        assert_eq!(snapshot.tool_name, "tools_search");
+        assert_eq!(snapshot.part.part_id, 42);
     }
 
     /// A `tool_call` part whose operation carries one user-input request,

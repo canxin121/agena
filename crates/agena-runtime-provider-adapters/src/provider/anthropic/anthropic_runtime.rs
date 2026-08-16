@@ -507,15 +507,24 @@ impl ModelRuntime for AnthropicAdapter {
                                         .to_owned(),
                                 )
                             })?;
-                            thinking_blocks.insert(
-                                index,
-                                AnthropicThinkingBlockState {
+                            let update = AnthropicThinkingBlockState {
                                     kind: content_block.kind,
                                     thinking: content_block.thinking.unwrap_or_default(),
-                                    signature: content_block.signature,
-                                    data: content_block.data,
-                                },
-                            );
+                                    signature: content_block
+                                        .signature
+                                        .filter(|value| !value.trim().is_empty()),
+                                    data: content_block
+                                        .data
+                                        .filter(|value| !value.trim().is_empty()),
+                                };
+                            match thinking_blocks.entry(index) {
+                                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                                    entry.get_mut().merge_start(update);
+                                }
+                                std::collections::btree_map::Entry::Vacant(entry) => {
+                                    entry.insert(update);
+                                }
+                            }
                             continue;
                         }
                         if content_block.kind != "tool_use" {
@@ -578,7 +587,9 @@ impl ModelRuntime for AnthropicAdapter {
                             if let Some(thinking) = delta.thinking.as_deref() {
                                 block.thinking.push_str(thinking);
                             }
-                            if let Some(signature) = delta.signature.filter(|value| !value.is_empty()) {
+                            if let Some(signature) =
+                                delta.signature.filter(|value| !value.trim().is_empty())
+                            {
                                 block.signature = Some(signature);
                             }
                         }
@@ -662,9 +673,14 @@ impl ModelRuntime for AnthropicAdapter {
                         message,
                     } => {
                         if stream_finish_reason.is_none() {
-                            stream_finish_reason = delta
-                                .stop_reason
-                                .or_else(|| message.as_ref().and_then(|item| item.stop_reason.clone()));
+                            stream_finish_reason = utils::normalize_optional_text(delta.stop_reason)
+                                .or_else(|| {
+                                    utils::normalize_optional_text(
+                                        message
+                                            .as_ref()
+                                            .and_then(|item| item.stop_reason.clone()),
+                                    )
+                                });
                         }
 
                         if let Some(usage) = usage.or_else(|| message.and_then(|item| item.usage)) {
@@ -674,9 +690,11 @@ impl ModelRuntime for AnthropicAdapter {
                     }
                     AnthropicSseEvent::MessageStop { usage, message } => {
                         if stream_finish_reason.is_none() {
-                            stream_finish_reason = message
-                                .as_ref()
-                                .and_then(|item| item.stop_reason.clone());
+                            stream_finish_reason = utils::normalize_optional_text(
+                                message
+                                    .as_ref()
+                                    .and_then(|item| item.stop_reason.clone()),
+                            );
                         }
 
                         if let Some(usage) = usage.or_else(|| message.and_then(|item| item.usage)) {

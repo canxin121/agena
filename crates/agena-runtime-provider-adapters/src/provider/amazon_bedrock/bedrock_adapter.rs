@@ -482,7 +482,25 @@ impl AmazonBedrockAdapter {
             .filter_map(|block| {
                 let block =
                     serde_json::from_value::<BedrockAnthropicTextBlock>(block.clone()).ok()?;
-                matches!(block.kind.as_str(), "thinking" | "redacted_thinking").then_some(block)
+                match block.kind.as_str() {
+                    "thinking"
+                        if block
+                            .signature
+                            .as_deref()
+                            .is_some_and(|value| !value.trim().is_empty()) =>
+                    {
+                        Some(block)
+                    }
+                    "redacted_thinking"
+                        if block
+                            .data
+                            .as_deref()
+                            .is_some_and(|value| !value.trim().is_empty()) =>
+                    {
+                        Some(block)
+                    }
+                    _ => None,
+                }
             })
             .collect()
     }
@@ -1055,15 +1073,24 @@ impl AmazonBedrockAdapter {
                                         .to_owned(),
                                 )
                             })?;
-                            thinking_blocks.insert(
-                                index,
-                                BedrockAnthropicThinkingBlockState {
+                            let update = BedrockAnthropicThinkingBlockState {
                                     kind: content_block.kind,
                                     thinking: content_block.thinking.unwrap_or_default(),
-                                    signature: content_block.signature,
-                                    data: content_block.data,
-                                },
-                            );
+                                    signature: content_block
+                                        .signature
+                                        .filter(|value| !value.trim().is_empty()),
+                                    data: content_block
+                                        .data
+                                        .filter(|value| !value.trim().is_empty()),
+                                };
+                            match thinking_blocks.entry(index) {
+                                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                                    entry.get_mut().merge_start(update);
+                                }
+                                std::collections::btree_map::Entry::Vacant(entry) => {
+                                    entry.insert(update);
+                                }
+                            }
                             continue;
                         }
                         if content_block.kind != "tool_use" {
@@ -1122,7 +1149,11 @@ impl AmazonBedrockAdapter {
                             if let Some(thinking) = delta.thinking.as_deref() {
                                 block.thinking.push_str(thinking);
                             }
-                            if let Some(signature) = delta.signature.clone().filter(|value| !value.is_empty()) {
+                            if let Some(signature) = delta
+                                .signature
+                                .clone()
+                                .filter(|value| !value.trim().is_empty())
+                            {
                                 block.signature = Some(signature);
                             }
                         }
@@ -1187,9 +1218,14 @@ impl AmazonBedrockAdapter {
                         message,
                     } => {
                         if stream_finish_reason.is_none() {
-                            stream_finish_reason = delta
-                                .stop_reason
-                                .or_else(|| message.as_ref().and_then(|item| item.stop_reason.clone()));
+                            stream_finish_reason = utils::normalize_optional_text(delta.stop_reason)
+                                .or_else(|| {
+                                    utils::normalize_optional_text(
+                                        message
+                                            .as_ref()
+                                            .and_then(|item| item.stop_reason.clone()),
+                                    )
+                                });
                         }
 
                         if let Some(message) = message.as_ref() {
@@ -1208,9 +1244,11 @@ impl AmazonBedrockAdapter {
                     }
                     BedrockAnthropicStreamEvent::MessageStop { usage, message } => {
                         if stream_finish_reason.is_none() {
-                            stream_finish_reason = message
-                                .as_ref()
-                                .and_then(|item| item.stop_reason.clone());
+                            stream_finish_reason = utils::normalize_optional_text(
+                                message
+                                    .as_ref()
+                                    .and_then(|item| item.stop_reason.clone()),
+                            );
                         }
 
                         if let Some(message) = message.as_ref() {
@@ -1522,7 +1560,7 @@ impl AmazonBedrockAdapter {
                     if let Some(opaque) = delta
                         .reasoning_opaque
                         .as_deref()
-                        .filter(|value| !value.is_empty())
+                        .filter(|value| !value.trim().is_empty())
                     {
                         if copilot_reasoning_opaque
                             .as_deref()
@@ -1592,10 +1630,12 @@ impl AmazonBedrockAdapter {
                     );
                 }
 
-                let finish_reason = choice
-                    .and_then(|item| item.finish_reason.as_deref())
-                    .filter(|value| !value.is_empty() && *value != "null")
-                    .map(ToOwned::to_owned);
+                let finish_reason = utils::normalize_optional_text(
+                    choice
+                        .and_then(|item| item.finish_reason.as_deref())
+                        .map(ToOwned::to_owned),
+                )
+                    .filter(|value| !value.eq_ignore_ascii_case("null"));
 
                 if stream_finish_reason.is_none() {
                     stream_finish_reason = finish_reason;

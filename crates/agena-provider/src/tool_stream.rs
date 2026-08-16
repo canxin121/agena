@@ -295,6 +295,10 @@ enum SnapshotEffect {
 }
 
 fn snapshot_delta(current: &mut String, snapshot: &str) -> Option<SnapshotEffect> {
+    let snapshot_trimmed = snapshot.trim();
+    if !current.trim().is_empty() && (snapshot_trimmed.is_empty() || snapshot_trimmed == "{}") {
+        return None;
+    }
     if snapshot.starts_with(current.as_str()) {
         let delta = snapshot[current.len()..].to_owned();
         if delta.is_empty() {
@@ -500,6 +504,55 @@ mod tests {
                 name: Some("tools_call".to_string()),
                 arguments_delta: "100}".to_string(),
             }]
+        );
+    }
+
+    #[test]
+    fn degenerate_snapshot_does_not_erase_accumulated_arguments() {
+        let mut accumulator = ToolStreamAccumulator::new();
+        let arguments = r#"{"tool":"fs.read","input":{"file_path":"README.md"}}"#;
+        accumulator
+            .ingest(
+                "openai",
+                input(
+                    ToolStreamInputKind::Delta,
+                    &["call:call_1", "idx:0"],
+                    Some("call_1"),
+                    Some(arguments),
+                ),
+            )
+            .expect("complete argument delta");
+
+        let empty_trailer = accumulator
+            .ingest(
+                "openai",
+                input(
+                    ToolStreamInputKind::Finish,
+                    &["call:call_1", "idx:0"],
+                    Some("call_1"),
+                    Some("{}"),
+                ),
+            )
+            .expect("degenerate finish snapshot");
+        assert!(
+            empty_trailer.is_empty(),
+            "an empty object trailer is not an argument replacement"
+        );
+
+        let repeated_full_snapshot = accumulator
+            .ingest(
+                "openai",
+                input(
+                    ToolStreamInputKind::Finish,
+                    &["call:call_1", "idx:0"],
+                    Some("call_1"),
+                    Some(arguments),
+                ),
+            )
+            .expect("repeat the authoritative snapshot");
+        assert!(
+            repeated_full_snapshot.is_empty(),
+            "the authoritative arguments remained accumulated"
         );
     }
 

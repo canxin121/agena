@@ -83,6 +83,65 @@ describe('transcript text cursor', () => {
     expect(moveTranscriptWord(text, text.indexOf('继续'), { forward: false, toEnd: true, bigWord: false })).toBe(2)
   })
 
+  test('does not merge equal word classes across line boundaries', () => {
+    const text = 'foo\nbar'
+    const bar = text.indexOf('bar')
+
+    // Verified against Vim 9.1 fwd_word(), end_word(), bck_word(), and
+    // bckend_word(): the line-ending NUL is class 0 even without visible
+    // whitespace in the transcript projection.
+    expect(moveTranscriptWord(text, 0, { forward: true, toEnd: false, bigWord: false })).toBe(bar)
+    expect(moveTranscriptWord(text, 0, { forward: true, toEnd: true, bigWord: false })).toBe(2)
+    expect(moveTranscriptWord(text, bar, { forward: false, toEnd: false, bigWord: false })).toBe(0)
+    expect(moveTranscriptWord(text, bar, { forward: false, toEnd: true, bigWord: false })).toBe(2)
+  })
+
+  test('matches Vim empty-line stops and e crossing behavior', () => {
+    const text = 'foo\n\nbar'
+    const blankLine = 4
+    const bar = text.indexOf('bar')
+
+    expect(moveTranscriptWord(text, 0, { forward: true, toEnd: false, bigWord: false })).toBe(blankLine)
+    expect(moveTranscriptWord(text, 0, { forward: true, toEnd: false, bigWord: false, count: 2 })).toBe(bar)
+    expect(moveTranscriptWord(text, bar, { forward: false, toEnd: false, bigWord: false })).toBe(blankLine)
+    expect(moveTranscriptWord(text, bar, { forward: false, toEnd: false, bigWord: false, count: 2 })).toBe(0)
+    expect(moveTranscriptWord(text, 2, { forward: true, toEnd: true, bigWord: false })).toBe(text.length - 1)
+    expect(moveTranscriptWord(text, bar, { forward: false, toEnd: true, bigWord: false })).toBe(blankLine)
+    expect(moveTranscriptWord(text, bar, { forward: false, toEnd: true, bigWord: false, count: 2 })).toBe(2)
+  })
+
+  test('uses Vim script and emoji classes while WORD ignores those boundaries', () => {
+    const mixedScripts = 'a中b'
+    expect(moveTranscriptWord(mixedScripts, 0, { forward: true, toEnd: false, bigWord: false })).toBe(1)
+    expect(moveTranscriptWord(mixedScripts, 0, { forward: true, toEnd: false, bigWord: false, count: 2 })).toBe(
+      'a中'.length,
+    )
+    expect(moveTranscriptWord(mixedScripts, 0, { forward: true, toEnd: true, bigWord: false })).toBe(1)
+
+    const emojiAndPunctuation = 'a🙂.b'
+    expect(moveTranscriptWord(emojiAndPunctuation, 1, { forward: true, toEnd: false, bigWord: false })).toBe(3)
+    expect(moveTranscriptWord(emojiAndPunctuation, 1, { forward: true, toEnd: true, bigWord: false })).toBe(3)
+
+    const word = 'a中.b x'
+    expect(moveTranscriptWord(word, 0, { forward: true, toEnd: false, bigWord: true })).toBe(word.indexOf('x'))
+    expect(moveTranscriptWord(word, 0, { forward: true, toEnd: true, bigWord: true })).toBe(word.indexOf('b'))
+  })
+
+  test('uses Vim whitespace classes rather than JavaScript generic whitespace', () => {
+    const emSpace = 'a\u2003b'
+    expect(moveTranscriptWord(emSpace, 0, { forward: true, toEnd: false, bigWord: false })).toBe(2)
+
+    // U+0085 satisfies JavaScript \s, but Vim classifies it as punctuation.
+    const nextLineControl = 'a\u0085.b'
+    expect(moveTranscriptWord(nextLineControl, 1, { forward: true, toEnd: false, bigWord: false })).toBe(3)
+  })
+
+  test("matches Vim's default Latin-1 iskeyword table", () => {
+    expect(moveTranscriptWord('aª.b', 0, { forward: true, toEnd: false, bigWord: false })).toBe(1)
+    expect(moveTranscriptWord('aº.b', 0, { forward: true, toEnd: false, bigWord: false })).toBe(1)
+    expect(moveTranscriptWord('aµ.b', 0, { forward: true, toEnd: false, bigWord: false })).toBe(2)
+  })
+
   test('find respects direction, count, and till offsets on the current line', () => {
     const text = 'a-b-c-d\nother'
     expect(findTranscriptCharacter(text, 0, '-', { forward: true, till: false, count: 2 })).toBe(3)

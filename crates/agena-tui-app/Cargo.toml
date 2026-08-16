@@ -49,6 +49,7 @@ tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread"
 tracing = { workspace = true }
 tui-markdown = { version = "0.3.8", default-features = false }
 unicode-segmentation = { workspace = true }
+unicode-properties = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }

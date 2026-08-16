@@ -2,9 +2,109 @@ export type TextRange = { start: number; end: number }
 export type TextPosition = { line: number; column: number }
 
 type Grapheme = TextRange & { text: string }
-type WordClass = 'space' | 'keyword' | 'punctuation'
+type VimWordPosition = Grapheme & {
+  line: number
+  endOfLine: boolean
+  emptyLine: boolean
+}
 
-const wordCharacter = /[\p{L}\p{N}_]/u
+const VIM_WHITE = 0
+const VIM_PUNCTUATION = 1
+const VIM_KEYWORD = 2
+const VIM_EMOJI = 3
+const emojiCharacter = /\p{Emoji}/u
+
+// Mirrors Vim's utf_class_buf() interval table. Values greater than 1 are
+// deliberately distinct: Vim treats transitions between Latin, Hiragana,
+// Katakana, CJK, Hangul, Braille, superscript, and subscript text as word
+// boundaries. See Vim src/mbyte.c and cls() in src/textobject.c.
+const vimUnicodeClassIntervals: ReadonlyArray<readonly [number, number, number]> = [
+  [0x037e, 0x037e, VIM_PUNCTUATION],
+  [0x0387, 0x0387, VIM_PUNCTUATION],
+  [0x055a, 0x055f, VIM_PUNCTUATION],
+  [0x0589, 0x0589, VIM_PUNCTUATION],
+  [0x05be, 0x05be, VIM_PUNCTUATION],
+  [0x05c0, 0x05c0, VIM_PUNCTUATION],
+  [0x05c3, 0x05c3, VIM_PUNCTUATION],
+  [0x05f3, 0x05f4, VIM_PUNCTUATION],
+  [0x060c, 0x060c, VIM_PUNCTUATION],
+  [0x061b, 0x061b, VIM_PUNCTUATION],
+  [0x061f, 0x061f, VIM_PUNCTUATION],
+  [0x066a, 0x066d, VIM_PUNCTUATION],
+  [0x06d4, 0x06d4, VIM_PUNCTUATION],
+  [0x0700, 0x070d, VIM_PUNCTUATION],
+  [0x0964, 0x0965, VIM_PUNCTUATION],
+  [0x0970, 0x0970, VIM_PUNCTUATION],
+  [0x0df4, 0x0df4, VIM_PUNCTUATION],
+  [0x0e4f, 0x0e4f, VIM_PUNCTUATION],
+  [0x0e5a, 0x0e5b, VIM_PUNCTUATION],
+  [0x0f04, 0x0f12, VIM_PUNCTUATION],
+  [0x0f3a, 0x0f3d, VIM_PUNCTUATION],
+  [0x0f85, 0x0f85, VIM_PUNCTUATION],
+  [0x104a, 0x104f, VIM_PUNCTUATION],
+  [0x10fb, 0x10fb, VIM_PUNCTUATION],
+  [0x1361, 0x1368, VIM_PUNCTUATION],
+  [0x166d, 0x166e, VIM_PUNCTUATION],
+  [0x1680, 0x1680, VIM_WHITE],
+  [0x169b, 0x169c, VIM_PUNCTUATION],
+  [0x16eb, 0x16ed, VIM_PUNCTUATION],
+  [0x1735, 0x1736, VIM_PUNCTUATION],
+  [0x17d4, 0x17dc, VIM_PUNCTUATION],
+  [0x1800, 0x180a, VIM_PUNCTUATION],
+  [0x2000, 0x200b, VIM_WHITE],
+  [0x200c, 0x2027, VIM_PUNCTUATION],
+  [0x2028, 0x2029, VIM_WHITE],
+  [0x202a, 0x202e, VIM_PUNCTUATION],
+  [0x202f, 0x202f, VIM_WHITE],
+  [0x2030, 0x205e, VIM_PUNCTUATION],
+  [0x205f, 0x205f, VIM_WHITE],
+  [0x2060, 0x206f, VIM_PUNCTUATION],
+  [0x2070, 0x207f, 0x2070],
+  [0x2080, 0x2094, 0x2080],
+  [0x20a0, 0x27ff, VIM_PUNCTUATION],
+  [0x2800, 0x28ff, 0x2800],
+  [0x2900, 0x2998, VIM_PUNCTUATION],
+  [0x29d8, 0x29db, VIM_PUNCTUATION],
+  [0x29fc, 0x29fd, VIM_PUNCTUATION],
+  [0x2e00, 0x2e7f, VIM_PUNCTUATION],
+  [0x3000, 0x3000, VIM_WHITE],
+  [0x3001, 0x3020, VIM_PUNCTUATION],
+  [0x3030, 0x3030, VIM_PUNCTUATION],
+  [0x303d, 0x303d, VIM_PUNCTUATION],
+  [0x3040, 0x309f, 0x3040],
+  [0x30a0, 0x30ff, 0x30a0],
+  [0x3300, 0x9fff, 0x4e00],
+  [0xac00, 0xd7a3, 0xac00],
+  [0xf900, 0xfaff, 0x4e00],
+  [0xfd3e, 0xfd3f, VIM_PUNCTUATION],
+  [0xfe30, 0xfe6b, VIM_PUNCTUATION],
+  [0xff00, 0xff0f, VIM_PUNCTUATION],
+  [0xff1a, 0xff20, VIM_PUNCTUATION],
+  [0xff3b, 0xff40, VIM_PUNCTUATION],
+  [0xff5b, 0xff65, VIM_PUNCTUATION],
+  [0x1d000, 0x1d24f, VIM_PUNCTUATION],
+  [0x1d400, 0x1d7ff, VIM_PUNCTUATION],
+  [0x1f000, 0x1f2ff, VIM_PUNCTUATION],
+  [0x1f300, 0x1f9ff, VIM_PUNCTUATION],
+  [0x20000, 0x2a6df, 0x4e00],
+  [0x2a700, 0x2b73f, 0x4e00],
+  [0x2b740, 0x2b81f, 0x4e00],
+  [0x2f800, 0x2fa1f, 0x4e00],
+]
+
+function vimUnicodeWordClass(codePoint: number): number {
+  let lower = 0
+  let upper = vimUnicodeClassIntervals.length - 1
+  while (lower <= upper) {
+    const middle = Math.floor((lower + upper) / 2)
+    const interval = vimUnicodeClassIntervals[middle]
+    if (!interval) break
+    if (codePoint < interval[0]) upper = middle - 1
+    else if (codePoint > interval[1]) lower = middle + 1
+    else return interval[2]
+  }
+  return VIM_KEYWORD
+}
 
 export function transcriptGraphemes(text: string): Grapheme[] {
   if (!text) return []
@@ -88,76 +188,187 @@ export function moveTranscriptGrapheme(text: string, offset: number, forward: bo
   return range.start + (graphemes[index]?.start ?? 0)
 }
 
-function wordClass(value: string, bigWord: boolean): WordClass {
-  if (/^\s+$/u.test(value)) return 'space'
-  if (bigWord || wordCharacter.test(value)) return 'keyword'
-  return 'punctuation'
+function vimWordClass(value: string, bigWord: boolean): number {
+  if (value.includes('\n')) return VIM_WHITE
+  const character = Array.from(value)[0]
+  if (!character) return VIM_WHITE
+  const codePoint = character.codePointAt(0) ?? 0
+  let wordClass: number
+
+  // Vim applies the buffer's default 'iskeyword' only to Latin-1. The
+  // transcript has no filetype-local override, so this is Vim's default
+  // @,48-57,_,192-255 value.
+  if (codePoint < 0x100) {
+    if (character === '\0' || character === ' ' || character === '\t' || codePoint === 0xa0) wordClass = VIM_WHITE
+    else if (
+      character === '_' ||
+      (character >= '0' && character <= '9') ||
+      (character >= 'A' && character <= 'Z') ||
+      (character >= 'a' && character <= 'z') ||
+      codePoint === 0xb5 ||
+      codePoint >= 0xc0
+    ) {
+      wordClass = VIM_KEYWORD
+    } else wordClass = VIM_PUNCTUATION
+  } else if (emojiCharacter.test(character)) {
+    wordClass = VIM_EMOJI
+  } else {
+    wordClass = vimUnicodeWordClass(codePoint)
+  }
+
+  return bigWord && wordClass !== VIM_WHITE ? VIM_PUNCTUATION : wordClass
+}
+
+function vimWordPositions(text: string): VimWordPosition[] {
+  const positions: VimWordPosition[] = []
+  let line = 0
+  let lineHasText = false
+  for (const grapheme of transcriptGraphemes(text)) {
+    const newline = grapheme.text.indexOf('\n')
+    if (newline >= 0) {
+      const start = grapheme.start + newline
+      positions.push({ start, end: grapheme.end, text: '', line, endOfLine: true, emptyLine: !lineHasText })
+      line += 1
+      lineHasText = false
+      continue
+    }
+    positions.push({ ...grapheme, line, endOfLine: false, emptyLine: false })
+    lineHasText = true
+  }
+  positions.push({ start: text.length, end: text.length, text: '', line, endOfLine: true, emptyLine: !lineHasText })
+  return positions
+}
+
+function vimPositionIndexAt(positions: VimWordPosition[], offset: number): number {
+  const clamped = Math.max(0, offset)
+  const containing = positions.findIndex(
+    (position) => !position.endOfLine && clamped >= position.start && clamped < position.end,
+  )
+  if (containing >= 0) return containing
+
+  let nearest = 0
+  for (let index = 0; index < positions.length; index += 1) {
+    const position = positions[index]
+    if (!position || position.start > clamped) break
+    nearest = index
+  }
+  const position = positions[nearest]
+  if (position?.endOfLine && !position.emptyLine) {
+    const previous = positions[nearest - 1]
+    if (previous && previous.line === position.line && !previous.endOfLine) return nearest - 1
+  }
+  return nearest
+}
+
+function adjustVimForwardTarget(positions: VimWordPosition[], index: number): number {
+  const position = positions[index]
+  if (!position?.endOfLine || position.emptyLine) return index
+  const previous = positions[index - 1]
+  return previous && previous.line === position.line && !previous.endOfLine ? index - 1 : index
 }
 
 function transcriptWordMotionTarget(
-  graphemes: Grapheme[],
+  positions: VimWordPosition[],
   current: number,
   options: { forward: boolean; toEnd: boolean; bigWord: boolean },
 ): number {
-  const len = graphemes.length
-  if (current < 0 || current >= len) return -1
-  const classify = (candidate: number) => wordClass(graphemes[candidate]?.text || '', options.bigWord)
+  if (current < 0 || current >= positions.length) return -1
+  const classify = (candidate: number) =>
+    positions[candidate]?.endOfLine ? VIM_WHITE : vimWordClass(positions[candidate]?.text || '', options.bigWord)
+  const increment = (index: number) => (index + 1 < positions.length ? index + 1 : -1)
+  const decrement = (index: number) => (index > 0 ? index - 1 : -1)
 
   if (options.forward && !options.toEnd) {
-    // Vim fwd_word(): always move at least one grapheme, then leave the
-    // current word run, cross whitespace, and land on the next word start.
-    const currentClass = classify(current)
-    let index = current + 1
-    if (index >= len) return len - 1
-    if (currentClass !== 'space') {
-      while (index < len && classify(index) === currentClass) index += 1
-      if (index >= len) return len - 1
+    // Equivalent to Vim's fwd_word(): the explicit end-of-line positions are
+    // Vim's NUL class. They prevent same-class text on adjacent lines from
+    // being merged, and a genuinely empty line is a motion destination.
+    const startClass = classify(current)
+    let index = increment(current)
+    if (index < 0) return -1
+    if (startClass !== VIM_WHITE) {
+      while (classify(index) === startClass) {
+        const next = increment(index)
+        if (next < 0) return adjustVimForwardTarget(positions, index)
+        index = next
+      }
     }
-    while (index < len && classify(index) === 'space') index += 1
-    return index < len ? index : len - 1
+    while (classify(index) === VIM_WHITE) {
+      if (positions[index]?.endOfLine && positions[index]?.emptyLine) break
+      const next = increment(index)
+      if (next < 0) return adjustVimForwardTarget(positions, index)
+      index = next
+    }
+    return adjustVimForwardTarget(positions, index)
   }
 
   if (options.forward) {
-    // Vim end_word(): move one grapheme first. Inside the current word, go to
-    // its end; otherwise cross whitespace and go to the next word end.
-    const currentClass = classify(current)
-    let index = current + 1
-    if (index >= len) return len - 1
-    if (currentClass !== 'space' && classify(index) === currentClass) {
-      while (index < len && classify(index) === currentClass) index += 1
-      return Math.max(current, index - 1)
+    // Equivalent to normal-mode end_word(..., stop = FALSE, empty = FALSE):
+    // unlike w, Vim's e/E crosses empty lines to the next word end.
+    const startClass = classify(current)
+    let index = increment(current)
+    if (index < 0) return -1
+    if (startClass !== VIM_WHITE && classify(index) === startClass) {
+      while (classify(index) === startClass) {
+        const next = increment(index)
+        if (next < 0) return adjustVimForwardTarget(positions, index)
+        index = next
+      }
+    } else {
+      while (classify(index) === VIM_WHITE) {
+        const next = increment(index)
+        if (next < 0) return adjustVimForwardTarget(positions, index)
+        index = next
+      }
+      const targetClass = classify(index)
+      while (classify(index) === targetClass) {
+        const next = increment(index)
+        if (next < 0) return adjustVimForwardTarget(positions, index)
+        index = next
+      }
     }
-    while (index < len && classify(index) === 'space') index += 1
-    if (index >= len) return len - 1
-    const targetClass = classify(index)
-    while (index + 1 < len && classify(index + 1) === targetClass) index += 1
-    return index
+    const previous = decrement(index)
+    return previous < 0 ? current : previous
   }
 
   if (!options.toEnd) {
-    // Vim bck_word(): step one grapheme backward, skip whitespace, then move
-    // to the start of the preceding word run.
-    if (current === 0) return -1
-    let index = current - 1
-    while (classify(index) === 'space') {
-      if (index === 0) return 0
-      index -= 1
+    // Equivalent to bck_word(..., stop = FALSE). Empty lines, but not lines
+    // containing spaces, are individual stops.
+    let index = decrement(current)
+    if (index < 0) return -1
+    while (classify(index) === VIM_WHITE) {
+      if (positions[index]?.endOfLine && positions[index]?.emptyLine) return index
+      const previous = decrement(index)
+      if (previous < 0) return index
+      index = previous
     }
-    const target = classify(index)
-    while (index > 0 && classify(index - 1) === target) index -= 1
-    return index
+    const targetClass = classify(index)
+    while (classify(index) === targetClass) {
+      const previous = decrement(index)
+      if (previous < 0) return index
+      index = previous
+    }
+    return increment(index)
   }
 
-  // Vim bckend_word(): step one grapheme backward, leave the current word run,
-  // cross whitespace, and stop on the previous word end.
-  if (current === 0) return -1
-  const currentClass = classify(current)
-  let index = current - 1
-  if (currentClass !== 'space') {
-    while (index >= 0 && classify(index) === currentClass) index -= 1
+  // Equivalent to bckend_word(): leave the current run, cross NUL/whitespace,
+  // and stop on the preceding word end (or on an empty line).
+  const startClass = classify(current)
+  let index = decrement(current)
+  if (index < 0) return -1
+  if (startClass !== VIM_WHITE) {
+    while (classify(index) === startClass) {
+      const previous = decrement(index)
+      if (previous < 0) return index
+      index = previous
+    }
   }
-  while (index >= 0 && classify(index) === 'space') index -= 1
-  return index >= 0 ? index : 0
+  while (classify(index) === VIM_WHITE) {
+    if (positions[index]?.endOfLine && positions[index]?.emptyLine) return index
+    const previous = decrement(index)
+    if (previous < 0) return index
+    index = previous
+  }
+  return index
 }
 
 export function moveTranscriptWord(
@@ -165,17 +376,16 @@ export function moveTranscriptWord(
   offset: number,
   options: { forward: boolean; toEnd: boolean; bigWord: boolean; count?: number },
 ): number {
-  const graphemes = transcriptGraphemes(text)
-  if (!graphemes.length) return 0
-  let index = graphemeIndexAt(graphemes, offset)
+  const positions = vimWordPositions(text)
+  let index = vimPositionIndexAt(positions, offset)
 
   for (let motion = 0; motion < Math.max(1, options.count || 1); motion += 1) {
-    const target = transcriptWordMotionTarget(graphemes, index, options)
+    const target = transcriptWordMotionTarget(positions, index, options)
     if (target < 0 || target === index) break
     index = target
   }
 
-  return graphemes[index]?.start ?? 0
+  return positions[index]?.start ?? 0
 }
 
 export function findTranscriptCharacter(
@@ -209,19 +419,19 @@ export function transcriptWordRange(text: string, offset: number, around: boolea
   const graphemes = transcriptGraphemes(text)
   if (!graphemes.length) return { start: 0, end: 0 }
   let index = graphemeIndexAt(graphemes, offset)
-  if (wordClass(graphemes[index]?.text || '', bigWord) === 'space') {
+  if (vimWordClass(graphemes[index]?.text || '', bigWord) === VIM_WHITE) {
     const next = graphemes.findIndex(
-      (item, candidate) => candidate >= index && wordClass(item.text, bigWord) !== 'space',
+      (item, candidate) => candidate >= index && vimWordClass(item.text, bigWord) !== VIM_WHITE,
     )
     if (next >= 0) index = next
   }
-  const current = wordClass(graphemes[index]?.text || '', bigWord)
+  const current = vimWordClass(graphemes[index]?.text || '', bigWord)
   let start = index
   let end = index
-  while (start > 0 && wordClass(graphemes[start - 1]?.text || '', bigWord) === current) start -= 1
-  while (end + 1 < graphemes.length && wordClass(graphemes[end + 1]?.text || '', bigWord) === current) end += 1
+  while (start > 0 && vimWordClass(graphemes[start - 1]?.text || '', bigWord) === current) start -= 1
+  while (end + 1 < graphemes.length && vimWordClass(graphemes[end + 1]?.text || '', bigWord) === current) end += 1
   if (around) {
-    while (end + 1 < graphemes.length && wordClass(graphemes[end + 1]?.text || '', bigWord) === 'space') end += 1
+    while (end + 1 < graphemes.length && vimWordClass(graphemes[end + 1]?.text || '', bigWord) === VIM_WHITE) end += 1
   }
   return { start: graphemes[start]?.start ?? 0, end: graphemes[end]?.end ?? text.length }
 }

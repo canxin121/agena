@@ -14,6 +14,7 @@ mod preview;
 mod state;
 mod terminal;
 mod user_service;
+mod web_ui;
 
 pub(crate) use error::{ApiResult, AppError};
 

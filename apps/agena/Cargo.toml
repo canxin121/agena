@@ -47,7 +47,7 @@ sha2 = { workspace = true }
 sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio", "tls-rustls"] }
 tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true }
-tower-http = { workspace = true, features = ["trace"] }
+tower-http = { workspace = true, features = ["fs", "trace"] }
 thiserror = { workspace = true }
 argon2 = { workspace = true }
 time = { workspace = true, features = ["formatting"] }
@@ -59,6 +59,7 @@ tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tower = { workspace = true }
 # Integration tests spawn the agena binary and reach into the SQLite database
 # to set up lease-staleness scenarios (see tests/server_restart.rs).
 portable-pty = { workspace = true }

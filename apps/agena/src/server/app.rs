@@ -5,11 +5,9 @@ use agena_application::Application;
 use agena_runtime::bootstrap_application_services;
 use anyhow::{Context, Result, anyhow};
 use axum::{
-    Json, Router,
-    middleware,
-    routing::{get, post},
+    Router, middleware,
+    routing::{any, get, post},
 };
-use serde_json::json;
 use tower_http::trace::TraceLayer;
 
 use crate::server::{diagnostics::health, state::AppState};
@@ -403,6 +401,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         .workspace_root
         .clone()
         .unwrap_or(env::current_dir().context("failed to resolve current working directory")?);
+    let ui_dir = crate::server::web_ui::resolve_ui_dir(args.ui_dir.as_deref(), &workspace_root)?;
     let runtime = bootstrap_application_services(agena_runtime::RuntimeBootstrapRequest {
         workspace_root: Some(workspace_root),
         config_override_expressions: args.overrides.clone(),
@@ -479,13 +478,12 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     let app = public_router
         .merge(agena_api)
         .merge(server_api_routes)
-        .layer(TraceLayer::new_for_http())
-        .fallback(|| async {
-            Json(json!({
-                "service": "agena",
-                "message": "Agena server is running. The TUI and CLI clients connect over the HTTP API.",
-            }))
-        });
+        .route("/api", any(crate::server::web_ui::api_not_found))
+        .route("/api/{*path}", any(crate::server::web_ui::api_not_found))
+        .route("/auth", any(crate::server::web_ui::api_not_found))
+        .route("/auth/{*path}", any(crate::server::web_ui::api_not_found))
+        .layer(TraceLayer::new_for_http());
+    let app = crate::server::web_ui::attach(app, ui_dir);
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)
         .parse()

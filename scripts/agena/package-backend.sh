@@ -6,6 +6,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SERVER_MANIFEST="$REPO_ROOT/Cargo.toml"
 SERVER_TARGET_DIR="$REPO_ROOT/target"
 RELEASE_DIR="$REPO_ROOT/artifacts/agena"
+WEB_PROJECT_DIR="$REPO_ROOT/packages/agena-web"
+WEB_DIST_DIR="$WEB_PROJECT_DIR/dist"
 
 detect_host_triple() {
   if rustc --print host-tuple >/dev/null 2>&1; then
@@ -35,6 +37,25 @@ case "$TARGET_TRIPLE" in
 esac
 
 echo "Building agena for ${TARGET_TRIPLE}..."
+if ! command -v bun >/dev/null 2>&1; then
+  echo "ERROR: bun is required to build the Agena Web frontend." >&2
+  exit 1
+fi
+if [[ ! -d "$WEB_PROJECT_DIR/node_modules" ]]; then
+  (
+    cd "$WEB_PROJECT_DIR"
+    bun install --frozen-lockfile
+  )
+fi
+(
+  cd "$WEB_PROJECT_DIR"
+  bun run build
+)
+if [[ ! -f "$WEB_DIST_DIR/index.html" ]]; then
+  echo "ERROR: built Web frontend not found at $WEB_DIST_DIR" >&2
+  exit 1
+fi
+
 cargo build \
   --manifest-path "$SERVER_MANIFEST" \
   --release \
@@ -50,9 +71,10 @@ fi
 
 STAGE_DIR="$RELEASE_DIR/backend/$TARGET_TRIPLE"
 rm -rf "$STAGE_DIR"
-mkdir -p "$STAGE_DIR/bin"
+mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/web-dist"
 
 cp "$BIN_PATH" "$STAGE_DIR/bin/agena$EXT"
+cp -R "$WEB_DIST_DIR/." "$STAGE_DIR/web-dist/"
 
 cat > "$STAGE_DIR/README.txt" <<EOF
 Agena package
@@ -61,6 +83,7 @@ Target: $TARGET_TRIPLE
 
 Contents:
 - bin/agena$EXT
+- web-dist/ (served by the Agena server on the same host and port)
 EOF
 
 ARCHIVE_NAME="agena-backend-${TARGET_TRIPLE}-v${VERSION}.${ARCHIVE_EXT}"

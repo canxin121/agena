@@ -116,7 +116,7 @@ LAUNCHER="$INSTALL_DIR/bin/run-agena.sh"
     printf ' --ui-password %q' "$UI_PASSWORD"
   fi
   if [[ -n "$WORKSPACE_ROOT" ]]; then
-    printf ' --workspace-root %q' "$WORKSPACE_ROOT"
+    printf ' --workspace %q' "$WORKSPACE_ROOT"
   fi
   if [[ -n "$DATABASE_PATH" ]]; then
     printf ' --database-path %q' "$DATABASE_PATH"

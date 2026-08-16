@@ -122,6 +122,10 @@ fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
     let workspace = fs::canonicalize(&workspace).unwrap_or(workspace);
     arguments.push("--workspace".into());
     arguments.push(workspace.into_os_string());
+    if let Some(ui_dir) = &args.ui_dir {
+        arguments.push("--ui-dir".into());
+        arguments.push(ui_dir.as_os_str().to_owned());
+    }
 
     Ok(arguments)
 }
@@ -469,6 +473,31 @@ fn run_command(command: &mut Command, description: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_arguments_preserve_the_web_frontend_directory() {
+        let args = ServerArgs {
+            action: None,
+            overrides: Vec::new(),
+            database_url: None,
+            database_path: None,
+            host: "127.0.0.1".to_owned(),
+            port: 3210,
+            ui_password: None,
+            workspace_root: Some(PathBuf::from("/tmp/agena-workspace")),
+            ui_dir: Some(PathBuf::from("/opt/agena/web-dist")),
+        };
+        let arguments = server_arguments(&args).expect("render server arguments");
+        let arguments = arguments
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["--ui-dir", "/opt/agena/web-dist"])
+        );
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

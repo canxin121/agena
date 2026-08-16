@@ -19,6 +19,7 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
             || args.database_path.is_some()
             || args.workspace_root.is_some()
             || args.ui_password.is_some()
+            || args.ui_dir.is_some()
         {
             bail!(
                 "the Agena user service is already installed; run `agena server install` with the new options to update its definition"
@@ -98,6 +99,9 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
         .arg(args.port.to_string());
     if let Some(workspace_root) = &args.workspace_root {
         command.arg("--workspace").arg(workspace_root);
+    }
+    if let Some(ui_dir) = &args.ui_dir {
+        command.arg("--ui-dir").arg(ui_dir);
     }
     if let Some(password) = &args.ui_password {
         command.env("AGENA_SERVER_UI_PASSWORD", password);

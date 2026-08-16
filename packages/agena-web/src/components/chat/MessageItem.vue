@@ -1,572 +1,307 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import {
-  RiArrowGoBackLine,
-  RiCheckLine,
-  RiClipboardLine,
-  RiFileLine,
-  RiGitBranchLine,
-  RiInformationLine,
-  RiLoader4Line,
-} from '@remixicon/vue'
+import { computed, ref, watch } from 'vue'
+import { RiArrowGoBackLine, RiCheckLine, RiClipboardLine, RiGitBranchLine, RiLoader4Line } from '@remixicon/vue'
 
-import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
+import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
-import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
-import {
-  buildAssistantErrorDetailsText,
-  buildAssistantErrorMetaEntries,
-  getAssistantErrorInfo,
-} from '@/pages/chat/assistantError'
-import {
-  buildWorkspaceRawFileUrl,
-  extractWorkspacePathFromFileUrl,
-  mediaKindFromHref,
-  resolveWorkspaceFileLink,
-} from '@/lib/workspaceLinks'
-import { useDirectoryStore } from '@/stores/directory'
-import { useUiStore, type ImageViewerItem } from '@/stores/ui'
-import type { JsonValue } from '@/types/json'
+import type { AttentionLike, MessageLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
+import { getAssistantErrorInfo } from '@/pages/chat/assistantError'
+import { partStatusPresentation } from '@/pages/chat/transcriptPartPresentation'
 import { useI18n } from 'vue-i18n'
-
-type MessagePartLike = {
-  id?: string
-  type?: string
-  text?: string
-  url?: string
-  mime?: string
-  filename?: string
-  serverPath?: string
-  synthetic?: boolean
-  ignored?: boolean
-  [k: string]: JsonValue
-}
-
-type MessageLike = {
-  info: {
-    id?: string
-    role?: string
-    time?: { created?: number }
-    finish?: string
-    error?: JsonValue
-    modelID?: string
-    [k: string]: JsonValue
-  }
-  parts: MessagePartLike[]
-}
-
-type FilePart = MessagePartLike & { type: 'file' }
 
 const props = defineProps<{
   message: MessageLike
-  textParts: MessagePartLike[]
+  displayParts: TranscriptDisplayPart[]
   showTimestamps: boolean
   formatTime: (ms?: number) => string
   copiedMessageId: string
   revertBusyMessageId: string
   isStreaming: boolean
+  collapseSignal: number
+  isPartExpanded: (part: TranscriptDisplayPart) => boolean
+  isNodeActive?: (key: string) => boolean
+  isNodeSelected?: (key: string) => boolean
+  isNodeSearchMatch?: (key: string) => boolean
+  sessionId?: string | null
+  attention?: AttentionLike
 }>()
 
 const emit = defineEmits<{
-  (e: 'fork', messageId: string): void
-  (e: 'revert', messageId: string): void
-  (e: 'copy', message: MessageLike): void
+  (event: 'fork', messageId: string): void
+  (event: 'revert', messageId: string): void
+  (event: 'copy', message: MessageLike): void
+  (event: 'partToggle', part: TranscriptDisplayPart, expanded: boolean): void
+  (event: 'nodeSelect', key: string): void
 }>()
 
 const { t } = useI18n()
-const directoryStore = useDirectoryStore()
-const ui = useUiStore()
-const errorDetailsOpen = ref(false)
-
-function isFilePart(part: MessagePartLike): part is FilePart {
-  const url = typeof part?.url === 'string' ? part.url.trim() : ''
-  const serverPath = typeof part?.serverPath === 'string' ? part.serverPath.trim() : ''
-  return part?.type === 'file' && Boolean(url || serverPath)
-}
-
-function getFileParts(parts: MessagePartLike[]): FilePart[] {
-  return (parts || []).filter(isFilePart)
-}
-
-function isImageFilePart(part: FilePart): boolean {
-  if (String(part?.mime || '').startsWith('image/')) return true
-  const filename = typeof part?.filename === 'string' ? part.filename : ''
-  if (mediaKindFromHref(filename) === 'image') return true
-  return mediaKindFromHref(typeof part?.url === 'string' ? part.url : '') === 'image'
-}
-
-function imageFileParts(parts: MessagePartLike[]): FilePart[] {
-  return getFileParts(parts).filter((part) => isImageFilePart(part))
-}
-
-function isVideoFilePart(part: FilePart): boolean {
-  if (String(part?.mime || '').startsWith('video/')) return true
-  const filename = typeof part?.filename === 'string' ? part.filename : ''
-  if (mediaKindFromHref(filename) === 'video') return true
-  return mediaKindFromHref(typeof part?.url === 'string' ? part.url : '') === 'video'
-}
-
-function videoFileParts(parts: MessagePartLike[]): FilePart[] {
-  return getFileParts(parts).filter((part) => isVideoFilePart(part))
-}
-
-function isAudioFilePart(part: FilePart): boolean {
-  if (String(part?.mime || '').startsWith('audio/')) return true
-  const filename = typeof part?.filename === 'string' ? part.filename : ''
-  if (mediaKindFromHref(filename) === 'audio') return true
-  return mediaKindFromHref(typeof part?.url === 'string' ? part.url : '') === 'audio'
-}
-
-function audioFileParts(parts: MessagePartLike[]): FilePart[] {
-  return getFileParts(parts).filter((part) => isAudioFilePart(part))
-}
-
-function resolveWorkspacePathForFilePart(part: MessagePartLike): string {
-  const workspaceRoot = String(directoryStore.currentDirectory || '').trim()
-  if (!workspaceRoot) return ''
-
-  const serverPath = typeof part?.serverPath === 'string' ? part.serverPath.trim() : ''
-  if (serverPath) {
-    return extractWorkspacePathFromFileUrl(serverPath, workspaceRoot) || ''
-  }
-
-  const url = typeof part?.url === 'string' ? part.url.trim() : ''
-  if (!url) return ''
-  return extractWorkspacePathFromFileUrl(url, workspaceRoot) || ''
-}
-
-function filePartPreviewUrl(part: MessagePartLike): string {
-  const workspaceRoot = String(directoryStore.currentDirectory || '').trim()
-  const path = resolveWorkspacePathForFilePart(part)
-  if (workspaceRoot && path) {
-    return buildWorkspaceRawFileUrl(workspaceRoot, path)
-  }
-
-  const url = typeof part?.url === 'string' ? part.url.trim() : ''
-  if (!url) return ''
-  if (url.startsWith('data:') || url.startsWith('blob:')) return url
-  return url
-}
-
-function keyForFilePart(part: MessagePartLike): string {
-  return String(part?.id || part?.serverPath || part?.url || part?.filename || '').trim()
-}
-
-function imageViewerItemFromFilePart(part: MessagePartLike): ImageViewerItem | null {
-  const src = filePartPreviewUrl(part)
-  if (!src) return null
-  const label = filePartLabel(part)
-  const key = keyForFilePart(part)
-  return {
-    src,
-    alt: label,
-    title: label,
-    ...(key ? { key } : {}),
-  }
-}
-
-function imageViewerItemsFromFileParts(parts: FilePart[]): ImageViewerItem[] {
-  const out: ImageViewerItem[] = []
-  for (const part of parts || []) {
-    const item = imageViewerItemFromFilePart(part)
-    if (!item) continue
-    out.push(item)
-  }
-  return out
-}
-
-function openImagePartPreview(part: FilePart) {
-  const images = imageFileParts(props.message.parts)
-  const items = imageViewerItemsFromFileParts(images)
-  if (!items.length) {
-    openFilePart(part)
-    return
-  }
-
-  const targetKey = keyForFilePart(part)
-  const index = images.findIndex((img) => keyForFilePart(img) === targetKey)
-  ui.openImageViewer(items, index >= 0 ? index : 0)
-}
-
-function recordFieldString(record: Record<string, JsonValue> | null | undefined, key: string): string {
-  const value = record?.[key]
-  return typeof value === 'string' ? value.trim() : ''
-}
-
-function asJsonRecord(value: JsonValue | null | undefined): Record<string, JsonValue> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  return value as Record<string, JsonValue>
-}
-
-const SOURCE_PATH_KEYS = ['sourcePath', 'source_path', 'filePath', 'file_path', 'path'] as const
-const SOURCE_PATH_NESTED_KEYS = ['source', 'meta', 'metadata', 'context'] as const
-
-function sourcePathCandidateFromRecord(record: Record<string, JsonValue> | null | undefined): string {
-  if (!record) return ''
-
-  for (const key of SOURCE_PATH_KEYS) {
-    const direct = recordFieldString(record, key)
-    if (direct) return direct
-  }
-
-  for (const nestedKey of SOURCE_PATH_NESTED_KEYS) {
-    const nested = asJsonRecord(record[nestedKey])
-    if (!nested) continue
-    for (const key of SOURCE_PATH_KEYS) {
-      const nestedValue = recordFieldString(nested, key)
-      if (nestedValue) return nestedValue
-    }
-  }
-
-  return ''
-}
-
-function resolveWorkspaceSourcePath(candidate: string, baseFilePath?: string): string {
-  const workspaceRoot = String(directoryStore.currentDirectory || '').trim()
-  const input = String(candidate || '').trim()
-  if (!workspaceRoot || !input) return ''
-
-  const fromFileUrl = extractWorkspacePathFromFileUrl(input, workspaceRoot)
-  if (fromFileUrl) return fromFileUrl
-
-  const resolved = resolveWorkspaceFileLink(input, {
-    workspaceRoot,
-    ...(baseFilePath ? { baseFilePath } : {}),
-  })
-  return resolved?.path || ''
-}
-
-const fallbackMessageSourcePath = computed(() => {
-  for (const part of getFileParts(props.message.parts)) {
-    const path = resolveWorkspacePathForFilePart(part)
-    if (path) return path
+const role = computed(() => String(props.message.info.role || 'assistant'))
+const messageId = computed(() => String(props.message.info.id || ''))
+const messageNodeKey = computed(() => `message:${messageId.value}`)
+const runStatus = computed(() =>
+  partStatusPresentation(String(props.message.info.runState || props.message.info.finish || 'completed')),
+)
+const sourcePath = computed(() => {
+  for (const part of props.message.parts || []) {
+    const candidate = String(part.serverPath || '').trim()
+    if (candidate) return candidate
   }
   return ''
 })
-
-const messageInfoSourcePath = computed(() => {
-  const infoRecord = asJsonRecord((props.message?.info || null) as JsonValue)
-  if (!infoRecord) return ''
-
-  const candidate = sourcePathCandidateFromRecord(infoRecord)
-  if (!candidate) return ''
-  return resolveWorkspaceSourcePath(candidate, fallbackMessageSourcePath.value || undefined)
+const hasErrorPart = computed(() => props.displayParts.some((part) => part.kind === 'error'))
+const assistantError = computed(() =>
+  getAssistantErrorInfo({ role: props.message.info.role, error: props.message.info.error }),
+)
+const fallbackError = computed(() => {
+  if (hasErrorPart.value || !assistantError.value || assistantError.value.interrupted) return ''
+  return assistantError.value.message || ''
 })
+const activityRunExpanded = ref<Record<string, boolean>>({})
+const COLLAPSED_ACTIVITY_VISIBLE_COUNT = 5
 
-const messageFallbackSourcePath = computed(() => messageInfoSourcePath.value || fallbackMessageSourcePath.value)
+type TranscriptRow =
+  | { kind: 'part'; key: string; part: TranscriptDisplayPart }
+  | { kind: 'summary'; key: string; hiddenCount: number; expanded: boolean }
 
-function sourcePathForTextPart(part: MessagePartLike): string {
-  const partRecord = asJsonRecord(part as JsonValue)
-  if (partRecord) {
-    const candidate = sourcePathCandidateFromRecord(partRecord)
-    if (candidate) {
-      const resolved = resolveWorkspaceSourcePath(candidate, messageFallbackSourcePath.value || undefined)
-      if (resolved) return resolved
+watch(
+  () => props.collapseSignal,
+  () => {
+    activityRunExpanded.value = {}
+  },
+)
+
+const transcriptRows = computed<TranscriptRow[]>(() => {
+  if (role.value === 'user') {
+    return props.displayParts.map((part) => ({ kind: 'part' as const, key: part.key, part }))
+  }
+  const rows: TranscriptRow[] = []
+  let index = 0
+  while (index < props.displayParts.length) {
+    const current = props.displayParts[index]
+    if (!current) break
+    if (current.kind === 'text') {
+      rows.push({ kind: 'part', key: current.key, part: current })
+      index += 1
+      continue
+    }
+    const run: TranscriptDisplayPart[] = []
+    while (index < props.displayParts.length && props.displayParts[index]?.kind !== 'text') {
+      const part = props.displayParts[index]
+      if (part) run.push(part)
+      index += 1
+    }
+    const prefixLength = Math.max(0, run.length - COLLAPSED_ACTIVITY_VISIBLE_COUNT)
+    const summaryKey = `activity-summary:${messageId.value}:${run[0]?.id || index}`
+    const expanded = Boolean(activityRunExpanded.value[summaryKey])
+    const hidden = run.slice(0, prefixLength).filter((part) => !props.isPartExpanded(part))
+    if (hidden.length) {
+      rows.push({ kind: 'summary', key: summaryKey, hiddenCount: hidden.length, expanded })
+    }
+    for (let runIndex = 0; runIndex < run.length; runIndex += 1) {
+      const part = run[runIndex]
+      if (!part) continue
+      const hiddenWhenCollapsed = runIndex < prefixLength && !props.isPartExpanded(part)
+      if (!expanded && hiddenWhenCollapsed) continue
+      rows.push({ kind: 'part', key: part.key, part })
     }
   }
-  return messageFallbackSourcePath.value
+  return rows
+})
+
+function active(key: string): boolean {
+  return props.isNodeActive?.(key) === true
 }
 
-function openFilePart(part: MessagePartLike) {
-  const targetPath = resolveWorkspacePathForFilePart(part)
-  if (targetPath) {
-    ui.requestWorkspaceDockFile(targetPath, 'open')
-    return
-  }
-
-  const url = typeof part?.url === 'string' ? part.url.trim() : ''
-  if (!url) return
-  window.open(url, '_blank', 'noopener,noreferrer')
+function selected(key: string): boolean {
+  return props.isNodeSelected?.(key) === true
 }
 
-function filePartLabel(part: MessagePartLike): string {
-  const name = typeof part?.filename === 'string' ? part.filename.trim() : ''
-  if (name) return name
-  const url = typeof part?.url === 'string' ? part.url : ''
-  if (!url) return String(t('chat.messageItem.fileFallback'))
-  if (url.startsWith('data:')) return String(t('chat.messageItem.attachmentFallback'))
-  try {
-    const u = new URL(url)
-    const last = u.pathname.split('/').filter(Boolean).pop()
-    return last || String(t('chat.messageItem.fileFallback'))
-  } catch {
-    return String(t('chat.messageItem.fileFallback'))
-  }
+function searchMatch(key: string): boolean {
+  return props.isNodeSearchMatch?.(key) === true
 }
 
-const role = () => String(props.message?.info?.role || '')
-const messageId = () => String(props.message?.info?.id || '')
-
-function assistantErrorInfo() {
-  return getAssistantErrorInfo({
-    role: props.message?.info?.role,
-    error: props.message?.info?.error,
-  })
+function togglePart(part: TranscriptDisplayPart) {
+  emit('nodeSelect', part.key)
+  emit('partToggle', part, !props.isPartExpanded(part))
 }
 
-const assistantErrorMessage = () => {
-  const info = assistantErrorInfo()
-  if (!info || info.interrupted || !info.message) return ''
-  return info.message
+function toggleActivitySummary(key: string) {
+  activityRunExpanded.value = { ...activityRunExpanded.value, [key]: !activityRunExpanded.value[key] }
+  emit('nodeSelect', key)
 }
-
-const assistantErrorMetaEntries = () => {
-  const info = assistantErrorInfo()
-  if (!info || info.interrupted) return []
-  return buildAssistantErrorMetaEntries(info)
-}
-
-const assistantErrorDetailsText = () => {
-  const info = assistantErrorInfo()
-  if (!info || info.interrupted) return ''
-  return buildAssistantErrorDetailsText(info)
-}
-
-const assistantErrorDetails = computed(() => assistantErrorDetailsText())
-const hasAssistantErrorDetails = computed(() => assistantErrorDetails.value.length > 0)
-
-const assistantInterrupted = () => Boolean(assistantErrorInfo()?.interrupted)
-const assistantHasError = () => role() === 'assistant' && Boolean(assistantErrorMessage())
 </script>
 
 <template>
-  <div class="group">
-    <div class="flex">
-      <div
-        class="w-full min-w-0"
-        :id="`msg-${message.info.id}`"
-        :data-chat-message-anchor="message.info.role === 'user' ? 'true' : undefined"
-        :data-role="message.info.role"
+  <article
+    :id="`msg-${messageId}`"
+    class="group/message relative min-w-0 scroll-mt-16 py-2"
+    :class="[
+      active(messageNodeKey) ? 'bg-primary/[0.055] outline outline-1 outline-primary/30' : '',
+      selected(messageNodeKey) ? 'bg-primary/10' : '',
+      searchMatch(messageNodeKey) ? 'ring-1 ring-inset ring-amber-400/55' : '',
+    ]"
+    data-transcript-node="message"
+    :data-transcript-key="messageNodeKey"
+    :data-message-id="messageId"
+    :data-chat-message-anchor="role === 'user' ? 'true' : undefined"
+    :data-role="role"
+    tabindex="-1"
+    @pointerdown="$emit('nodeSelect', messageNodeKey)"
+    @focus="$emit('nodeSelect', messageNodeKey)"
+  >
+    <header class="flex min-h-6 items-center gap-2 px-1 text-[11px] text-muted-foreground">
+      <span
+        class="font-semibold"
+        :class="{
+          'text-primary': role === 'user',
+          'text-emerald-700 dark:text-emerald-300': role === 'assistant' && !fallbackError,
+          'text-amber-700 dark:text-amber-300': role === 'system' || role === 'runtime',
+          'text-rose-700 dark:text-rose-300': Boolean(fallbackError),
+        }"
+        >{{ role }}</span
       >
-        <div class="flex items-center gap-2 px-1 mb-1 text-[11px] text-muted-foreground/70">
-          <div class="flex items-center gap-2 min-w-0">
-            <span
-              class="font-semibold uppercase tracking-wider"
-              :class="assistantHasError() ? 'text-rose-700 dark:text-rose-300' : ''"
-              >{{ message.info.role }}</span
-            >
-            <span v-if="showTimestamps">{{ formatTime(message.info.time?.created) }}</span>
-            <span v-if="message.info.modelID" class="font-mono truncate">{{ message.info.modelID }}</span>
-            <span v-if="assistantInterrupted()" class="text-muted-foreground">{{
-              t('chat.messageItem.interrupted')
-            }}</span>
-          </div>
+      <span
+        v-if="runStatus.label !== 'completed'"
+        class="font-mono"
+        :class="{
+          'text-primary': runStatus.tone === 'pending',
+          'text-amber-600 dark:text-amber-400': runStatus.tone === 'warning',
+          'text-rose-600 dark:text-rose-400': runStatus.tone === 'danger',
+        }"
+        >{{ runStatus.icon }}</span
+      >
+      <span v-if="showTimestamps">{{ formatTime(message.info.time?.created) }}</span>
+      <span v-if="message.info.providerID || message.info.modelID" class="min-w-0 truncate font-mono text-[10px]">
+        {{ [message.info.providerID, message.info.adapterID, message.info.modelID].filter(Boolean).join('/') }}
+      </span>
+      <span v-if="assistantError?.interrupted" class="text-muted-foreground">{{
+        t('chat.messageItem.interrupted')
+      }}</span>
 
-          <div class="flex-1" />
+      <span class="flex-1" />
 
-          <div v-if="role() === 'user' || role() === 'assistant'" class="flex items-center gap-1">
-            <ConfirmPopover
-              v-if="role() === 'user'"
-              :title="t('chat.messageItem.fork.confirmTitle')"
-              :description="t('chat.messageItem.fork.confirmDescription')"
-              :confirm-text="t('chat.messageItem.fork.confirmAction')"
-              :cancel-text="t('common.cancel')"
-              :anchor-to-cursor="false"
-              @confirm="emit('fork', messageId())"
-            >
-              <IconButton
-                variant="ghost"
-                class="h-7 w-7"
-                :tooltip="t('chat.messageItem.fork.actionTitle')"
-                :aria-label="t('chat.messageItem.fork.actionTitle')"
-              >
-                <RiGitBranchLine class="h-4 w-4" />
-              </IconButton>
-            </ConfirmPopover>
-
-            <ConfirmPopover
-              v-if="role() === 'user'"
-              :title="t('chat.messageItem.revert.confirmTitle')"
-              :description="t('chat.messageItem.revert.confirmDescription')"
-              :confirm-text="t('chat.messageItem.revert.confirmAction')"
-              :cancel-text="t('common.cancel')"
-              variant="destructive"
-              :anchor-to-cursor="false"
-              @confirm="emit('revert', messageId())"
-            >
-              <IconButton
-                variant="ghost"
-                class="h-7 w-7"
-                :tooltip="t('chat.messageItem.revert.actionTitle')"
-                :aria-label="t('chat.messageItem.revert.actionTitle')"
-                :disabled="revertBusyMessageId === messageId()"
-              >
-                <RiLoader4Line v-if="revertBusyMessageId === messageId()" class="h-4 w-4 animate-spin" />
-                <RiArrowGoBackLine v-else class="h-4 w-4" />
-              </IconButton>
-            </ConfirmPopover>
-
-            <IconButton
-              variant="ghost"
-              class="h-7 w-7"
-              :tooltip="t('chat.messageItem.copy.actionTitle')"
-              :aria-label="t('chat.messageItem.copy.actionTitle')"
-              @click="$emit('copy', message)"
-            >
-              <RiCheckLine v-if="copiedMessageId === messageId()" class="h-4 w-4 text-emerald-500" />
-              <RiClipboardLine v-else class="h-4 w-4" />
-            </IconButton>
-          </div>
-        </div>
-
-        <div
-          class="rounded-lg border border-border/60 px-4 py-3 text-sm leading-relaxed relative"
-          :class="{
-            'bg-secondary/50': role() === 'user',
-            'bg-card/50': role() === 'assistant' && !assistantHasError(),
-            'border-rose-300/70 bg-rose-50/70 text-rose-950 dark:border-rose-500/45 dark:bg-rose-950/25 dark:text-rose-100':
-              assistantHasError(),
-            'bg-destructive/10 border border-destructive/20 text-destructive': role() === 'system',
-          }"
+      <div
+        v-if="role === 'user' || role === 'assistant'"
+        class="flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/message:opacity-100"
+        data-transcript-chrome="true"
+      >
+        <ConfirmPopover
+          v-if="role === 'user'"
+          :title="t('chat.messageItem.fork.confirmTitle')"
+          :description="t('chat.messageItem.fork.confirmDescription')"
+          :confirm-text="t('chat.messageItem.fork.confirmAction')"
+          :cancel-text="t('common.cancel')"
+          :anchor-to-cursor="false"
+          @confirm="$emit('fork', messageId)"
         >
-          <div
-            class="pointer-events-none absolute inset-y-0 left-0 w-1 rounded-l-lg"
-            :class="{
-              'bg-secondary/90': role() === 'user',
-              'bg-primary/55': role() === 'assistant' && !assistantHasError(),
-              'bg-rose-400/80 dark:bg-rose-400/70': assistantHasError(),
-              'bg-destructive/70': role() === 'system',
-            }"
-          />
-          <div v-for="p in textParts" :key="p.id" class="space-y-2">
-            <div class="break-words">
-              <MarkdownRenderer
-                :content="p.text || ''"
-                mode="markdown"
-                :stream="isStreaming"
-                :source-path="sourcePathForTextPart(p)"
-              />
-            </div>
-          </div>
+          <IconButton
+            variant="ghost"
+            class="h-6 w-6"
+            :tooltip="t('chat.messageItem.fork.actionTitle')"
+            :aria-label="t('chat.messageItem.fork.actionTitle')"
+          >
+            <RiGitBranchLine class="h-3.5 w-3.5" />
+          </IconButton>
+        </ConfirmPopover>
 
-          <div v-if="assistantErrorMessage()" class="mt-2 break-words">
-            <MarkdownRenderer
-              :content="assistantErrorMessage()"
-              mode="markdown"
-              :stream="false"
-              :source-path="messageFallbackSourcePath"
-            />
-          </div>
+        <ConfirmPopover
+          v-if="role === 'user'"
+          :title="t('chat.messageItem.revert.confirmTitle')"
+          :description="t('chat.messageItem.revert.confirmDescription')"
+          :confirm-text="t('chat.messageItem.revert.confirmAction')"
+          :cancel-text="t('common.cancel')"
+          variant="destructive"
+          :anchor-to-cursor="false"
+          @confirm="$emit('revert', messageId)"
+        >
+          <IconButton
+            variant="ghost"
+            class="h-6 w-6"
+            :tooltip="t('chat.messageItem.revert.actionTitle')"
+            :aria-label="t('chat.messageItem.revert.actionTitle')"
+            :disabled="revertBusyMessageId === messageId"
+          >
+            <RiLoader4Line v-if="revertBusyMessageId === messageId" class="h-3.5 w-3.5 animate-spin" />
+            <RiArrowGoBackLine v-else class="h-3.5 w-3.5" />
+          </IconButton>
+        </ConfirmPopover>
 
-          <div v-if="assistantErrorMetaEntries().length" class="mt-2 flex flex-wrap gap-1.5">
-            <span
-              v-for="meta in assistantErrorMetaEntries()"
-              :key="meta.label"
-              class="inline-flex items-center rounded-md border border-rose-300/70 bg-rose-100/65 px-1.5 py-0.5 text-[10px] font-mono text-rose-900 dark:border-rose-500/45 dark:bg-rose-900/35 dark:text-rose-100"
-            >
-              {{ meta.label }}={{ meta.value }}
-            </span>
-          </div>
+        <IconButton
+          variant="ghost"
+          class="h-6 w-6"
+          :tooltip="t('chat.messageItem.copy.actionTitle')"
+          :aria-label="t('chat.messageItem.copy.actionTitle')"
+          @click="$emit('copy', message)"
+        >
+          <RiCheckLine v-if="copiedMessageId === messageId" class="h-3.5 w-3.5 text-emerald-500" />
+          <RiClipboardLine v-else class="h-3.5 w-3.5" />
+        </IconButton>
+      </div>
+    </header>
 
-          <div v-if="hasAssistantErrorDetails" class="mt-2">
-            <ToolbarChipButton
-              :active="errorDetailsOpen"
-              :tooltip="t('chat.messageItem.errorDetails')"
-              :title="t('chat.messageItem.errorDetails')"
-              :aria-label="t('chat.messageItem.errorDetails')"
-              :aria-expanded="errorDetailsOpen"
-              class="h-6 sm:h-7 rounded-md border border-rose-300/60 bg-rose-100/40 px-2 text-[11px] font-medium text-rose-900 hover:bg-rose-100/65 dark:border-rose-500/40 dark:bg-rose-900/25 dark:text-rose-100 dark:hover:bg-rose-900/40"
-              @click="errorDetailsOpen = !errorDetailsOpen"
-            >
-              <RiInformationLine class="h-3.5 w-3.5" />
-              <span>{{ t('chat.messageItem.errorDetails') }}</span>
-            </ToolbarChipButton>
-            <Transition name="toolreveal">
-              <pre
-                v-show="errorDetailsOpen"
-                class="mt-1 max-h-64 overflow-auto rounded-md border border-rose-300/60 bg-rose-100/40 px-2 py-1 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-rose-950 dark:border-rose-500/35 dark:bg-rose-900/20 dark:text-rose-100"
-                >{{ assistantErrorDetails }}</pre
-              >
-            </Transition>
-          </div>
+    <div
+      class="mt-0.5 min-w-0"
+      :class="role === 'user' ? 'border-l-2 border-primary/35 pl-2' : ''"
+      data-transcript-copy-root="true"
+    >
+      <div
+        v-for="row in transcriptRows"
+        :key="row.key"
+        class="min-w-0 scroll-mt-20"
+        :class="[
+          active(row.key) ? 'bg-primary/[0.055] outline outline-1 outline-primary/30' : '',
+          selected(row.key) ? 'bg-primary/10' : '',
+          searchMatch(row.key) ? 'ring-1 ring-inset ring-amber-400/55' : '',
+        ]"
+        data-transcript-node="part"
+        :data-transcript-key="row.key"
+        :data-message-id="messageId"
+        :data-part-id="row.kind === 'part' ? row.part.id : undefined"
+        :data-part-kind="row.kind === 'part' ? row.part.kind : 'activity_summary'"
+        :data-toggleable="row.kind === 'summary' || row.part.toggleable ? 'true' : 'false'"
+        :data-copy-text="
+          row.kind === 'summary' ? t('chat.messages.activity.moreCount', { count: row.hiddenCount }) : row.part.copyText
+        "
+        tabindex="-1"
+        @pointerdown="$emit('nodeSelect', row.key)"
+        @focus="$emit('nodeSelect', row.key)"
+      >
+        <button
+          v-if="row.kind === 'summary'"
+          type="button"
+          class="flex w-full items-center gap-2 py-1 text-left font-mono text-[11px] text-muted-foreground hover:text-foreground"
+          data-transcript-toggle="true"
+          :aria-expanded="row.expanded"
+          @click="toggleActivitySummary(row.key)"
+        >
+          <span class="w-3 text-center" aria-hidden="true">{{ row.expanded ? '▾' : '▸' }}</span>
+          <span>{{
+            row.expanded
+              ? t('chat.messages.activity.hide')
+              : t('chat.messages.activity.moreCount', { count: row.hiddenCount })
+          }}</span>
+        </button>
+        <AgenaTranscriptPart
+          v-else
+          :part="row.part"
+          :expanded="isPartExpanded(row.part)"
+          :collapse-signal="collapseSignal"
+          :streaming="isStreaming && row.part.kind === 'answer'"
+          :source-path="sourcePath"
+          :session-id="sessionId"
+          :attention="attention"
+          @toggle="togglePart(row.part)"
+          @select="$emit('nodeSelect', row.part.key)"
+        />
+      </div>
 
-          <div v-if="getFileParts(message.parts).length" class="mt-3 space-y-2">
-            <div class="flex flex-wrap gap-2">
-              <template v-for="f in getFileParts(message.parts)" :key="keyForFilePart(f)">
-                <button
-                  v-if="!(isImageFilePart(f) || isVideoFilePart(f) || isAudioFilePart(f))"
-                  type="button"
-                  class="inline-flex items-center gap-2 rounded-md bg-muted/25 px-3 py-1 text-[11px] hover:bg-muted/35"
-                  :title="filePartLabel(f)"
-                  @click="openFilePart(f)"
-                >
-                  <RiFileLine class="h-3.5 w-3.5" />
-                  <span class="font-mono truncate max-w-[220px]">{{ filePartLabel(f) }}</span>
-                </button>
-              </template>
-            </div>
-
-            <div v-if="imageFileParts(message.parts).length" class="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              <button
-                v-for="img in imageFileParts(message.parts)"
-                :key="keyForFilePart(img)"
-                type="button"
-                class="block rounded-md overflow-hidden bg-muted/10"
-                :title="filePartLabel(img)"
-                @click="openImagePartPreview(img)"
-              >
-                <img
-                  :src="filePartPreviewUrl(img)"
-                  :alt="filePartLabel(img)"
-                  class="w-full h-24 object-cover cursor-zoom-in"
-                />
-              </button>
-            </div>
-
-            <div v-if="videoFileParts(message.parts).length" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <div
-                v-for="video in videoFileParts(message.parts)"
-                :key="keyForFilePart(video)"
-                class="rounded-md overflow-hidden bg-muted/10 border border-border/50"
-              >
-                <video :src="filePartPreviewUrl(video)" controls preload="metadata" class="w-full h-28 object-cover" />
-                <button
-                  type="button"
-                  class="w-full border-t border-border/40 px-2 py-1 text-left text-[11px] font-mono text-muted-foreground hover:text-foreground"
-                  :title="filePartLabel(video)"
-                  @click="openFilePart(video)"
-                >
-                  <span class="block truncate">{{ filePartLabel(video) }}</span>
-                </button>
-              </div>
-            </div>
-
-            <div v-if="audioFileParts(message.parts).length" class="space-y-2">
-              <div
-                v-for="audio in audioFileParts(message.parts)"
-                :key="keyForFilePart(audio)"
-                class="rounded-md overflow-hidden bg-muted/10 border border-border/50 p-2"
-              >
-                <audio :src="filePartPreviewUrl(audio)" controls preload="metadata" class="w-full" />
-                <button
-                  type="button"
-                  class="mt-1 w-full border-t border-border/40 px-2 pt-1 text-left text-[11px] font-mono text-muted-foreground hover:text-foreground"
-                  :title="filePartLabel(audio)"
-                  @click="openFilePart(audio)"
-                >
-                  <span class="block truncate">{{ filePartLabel(audio) }}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+      <div
+        v-if="fallbackError"
+        class="ml-7 border-l border-rose-400/60 py-1 pl-3 text-sm text-rose-700 dark:text-rose-300"
+      >
+        {{ fallbackError }}
       </div>
     </div>
-  </div>
+  </article>
 </template>
-
-<style scoped>
-.toolreveal-enter-active,
-.toolreveal-leave-active {
-  transition:
-    opacity 140ms ease,
-    transform 160ms ease;
-}
-
-.toolreveal-enter-from,
-.toolreveal-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
-}
-</style>

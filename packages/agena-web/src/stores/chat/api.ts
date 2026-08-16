@@ -199,11 +199,15 @@ function entriesFromParts(sessionId: string, parts: JsonValue[]): MessageEntry[]
     if (kind === 'run') {
       const created = typeof part.created_at_ms === 'number' ? part.created_at_ms : now
       const finished = typeof part.finished_at_ms === 'number' ? part.finished_at_ms : undefined
+      const runState = str(part.state) || 'pending'
       const info: MessageInfo = {
         id: partIdStr,
         sessionID: sessionId,
         role,
         runId: partId,
+        runState,
+        runContent: content,
+        ...(runState === 'pending' || runState === 'in_progress' || runState === 'running' ? {} : { finish: runState }),
         time: { created, ...(typeof finished === 'number' ? { completed: finished } : {}) },
       }
       // Run marker metadata can carry provider/model identity.
@@ -336,6 +340,9 @@ export function normalizeAgenaPart(
   const createdMs = typeof part.created_at_ms === 'number' ? part.created_at_ms : Date.now()
   const startedMs = typeof part.started_at_ms === 'number' ? part.started_at_ms : createdMs
   const finishedMs = typeof part.finished_at_ms === 'number' ? part.finished_at_ms : undefined
+  const runId = typeof part.run_id === 'number' ? part.run_id : null
+  const parentPartId = typeof part.parent_part_id === 'number' ? part.parent_part_id : null
+  const agenaSummary = typeof part.summary === 'string' ? part.summary : null
 
   const base: MessagePart = {
     id: partIdStr,
@@ -343,6 +350,12 @@ export function normalizeAgenaPart(
     messageID: messageId,
     type: 'text',
     partState: state,
+    agenaKind: kind,
+    agenaRole: str(part.role) || 'assistant',
+    agenaSummary,
+    agenaContent: content,
+    runId,
+    parentPartId,
     time: {
       start: startedMs,
       ...(typeof finishedMs === 'number' ? { end: finishedMs } : {}),

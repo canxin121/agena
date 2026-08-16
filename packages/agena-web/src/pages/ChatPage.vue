@@ -25,6 +25,8 @@ import { useChatModelSelection } from './chat/useChatModelSelection'
 import { useChatCommands } from './chat/useChatCommands'
 import { useChatSessionActions } from './chat/useChatSessionActions'
 import { useChatRunUi } from './chat/useChatRunUi'
+import { useChatTranscriptVim } from './chat/useChatTranscriptVim'
+import PlanViewerDialog from '@/components/chat/PlanViewerDialog.vue'
 import { openComposerInputMenu } from './chat/composerInputMenus'
 import { formatTimeHM } from '@/i18n/intl'
 import { useChatRenderBlocks } from './chat/useChatRenderBlocks'
@@ -32,6 +34,7 @@ import { useChatMessageActions } from './chat/useChatMessageActions'
 import { deriveSendRunConfig } from './chat/modelSendDefaults'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
+import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageEntry } from '@/types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import {
@@ -191,6 +194,8 @@ const speedPickerQuery = ref('')
 
 const pageRef = ref<HTMLElement | null>(null)
 const composerBarRef = ref<HTMLElement | null>(null)
+const transcriptSearchInputRef = ref<HTMLInputElement | null>(null)
+const planViewerOpen = ref(false)
 
 const modelTriggerRef = ref<HTMLElement | null>(null)
 const thinkingTriggerRef = ref<HTMLElement | null>(null)
@@ -753,6 +758,18 @@ const {
   setActivityExpanded,
 } = renderBlocksApi
 
+function transcriptPartExpanded(part: TranscriptDisplayPart): boolean {
+  if (Object.prototype.hasOwnProperty.call(activityExpandedByBlockKey.value, part.key)) {
+    return Boolean(activityExpandedByBlockKey.value[part.key])
+  }
+  if (part.defaultExpanded) return true
+  return activityInitiallyExpandedForPart(part.source as JsonObject)
+}
+
+function setTranscriptPartExpanded(part: TranscriptDisplayPart, expanded: boolean) {
+  setActivityExpanded(part.key, expanded)
+}
+
 const sessionActions = useChatSessionActions({
   chat,
   toasts,
@@ -980,6 +997,48 @@ const {
   handleComposerPrimaryAction,
   handleComposerStopAction,
 } = runUi
+
+const transcriptVim = useChatTranscriptVim({
+  pageRef,
+  scrollEl,
+  composerRef,
+  searchInputRef: transcriptSearchInputRef,
+  selectedSessionId: computed(() => chat.selectedSessionId),
+  renderBlocks,
+  draft,
+  clearComposer: () => {
+    draft.value = ''
+    clearAttachments()
+  },
+  canAbort,
+  abortRun,
+  toggleHelp: () => ui.toggleHelpDialog(),
+  openPlan: () => {
+    if (!chat.selectedSessionId) {
+      toasts.push('info', String(t('chat.planViewer.requiresSession')))
+      return
+    }
+    planViewerOpen.value = true
+  },
+  togglePart: setTranscriptPartExpanded,
+  isPartExpanded: transcriptPartExpanded,
+  toasts,
+})
+
+const {
+  modeLabel: transcriptVimModeLabel,
+  commandLabel: transcriptVimCommandLabel,
+  searchOpen: transcriptSearchOpen,
+  searchQuery: transcriptSearchQuery,
+  searchSummary: transcriptSearchSummary,
+  selectNode: selectTranscriptNode,
+  isNodeActive: isTranscriptNodeActive,
+  isNodeSelected: isTranscriptNodeSelected,
+  isNodeSearchMatch: isTranscriptNodeSearchMatch,
+  setSearchQuery: setTranscriptSearchQuery,
+  handleSearchKeydown: handleTranscriptSearchKeydown,
+  closeSearch: closeTranscriptSearch,
+} = transcriptVim
 
 function handleSessionActionRequest(actionId: string) {
   switch (actionId) {
@@ -1492,6 +1551,23 @@ const viewCtx = {
   isReasoningPart,
   isJustificationPart,
   isMetaPart,
+  transcriptPartExpanded,
+  setTranscriptPartExpanded,
+
+  // TUI-parity transcript navigation and search.
+  transcriptSearchInputRef,
+  transcriptVimModeLabel,
+  transcriptVimCommandLabel,
+  transcriptSearchOpen,
+  transcriptSearchQuery,
+  transcriptSearchSummary,
+  selectTranscriptNode,
+  isTranscriptNodeActive,
+  isTranscriptNodeSelected,
+  isTranscriptNodeSearchMatch,
+  setTranscriptSearchQuery,
+  handleTranscriptSearchKeydown,
+  closeTranscriptSearch,
 
   // Scroll + nav.
   handleScroll,
@@ -1547,6 +1623,7 @@ const viewCtx = {
   attachProjectDialogOpen,
   attachProjectPath,
   sessionDirectory,
+  sessionTitle,
   addProjectAttachment,
 } satisfies ChatPageViewContext
 
@@ -1568,4 +1645,5 @@ onBeforeUnmount(() => {
 
 <template>
   <ChatPageView :ctx="viewCtx" />
+  <PlanViewerDialog v-model:open="planViewerOpen" :session-id="chat.selectedSessionId" />
 </template>

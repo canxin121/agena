@@ -1188,14 +1188,20 @@ export const useChatStore = defineStore('chat', () => {
 
             if (kind === 'run') {
               // New message (turn marker).
+              const runState = readString(part.state as JsonValue) || 'pending'
+              const content = asRecord(part.content)
               const info: MessageInfo = {
                 id: String(partId),
                 sessionID: sid,
                 role: readString(part.role as JsonValue) || 'assistant',
                 runId: partId,
+                runState,
+                runContent: content,
+                ...(runState === 'pending' || runState === 'in_progress' || runState === 'running'
+                  ? {}
+                  : { finish: runState }),
                 time: { created: readNumber(part.created_at_ms) ?? Date.now() },
               }
-              const content = asRecord(part.content)
               const providerID = readString(content.provider_id as JsonValue)
               const adapterID = readString(content.adapter_id as JsonValue)
               const modelID = readString(content.model_id as JsonValue)

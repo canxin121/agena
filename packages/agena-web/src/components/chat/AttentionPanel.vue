@@ -17,6 +17,7 @@ const props = defineProps<{
   kind: AttentionKind
   sessionId: string
   payload: PayloadValue
+  inline?: boolean
 }>()
 
 const chat = useChatStore()
@@ -286,7 +287,12 @@ async function rejectQuestion() {
 </script>
 
 <template>
-  <Card class="border-input bg-background flex min-h-0 flex-col overflow-hidden">
+  <component
+    :is="inline ? 'div' : Card"
+    class="flex min-h-0 flex-col overflow-hidden"
+    :class="inline ? 'border-y border-border/60 bg-background/35' : 'border-input bg-background'"
+    data-transcript-chrome="true"
+  >
     <div class="shrink-0 border-b border-border/60 px-3 py-3">
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
@@ -504,5 +510,5 @@ async function rejectQuestion() {
         <div v-else class="text-xs text-muted-foreground">{{ t('chat.attention.ui.noQuestionsAvailable') }}</div>
       </div>
     </div>
-  </Card>
+  </component>
 </template>

@@ -1,6 +1,6 @@
 import type { CSSProperties, ComputedRef, Ref } from 'vue'
 
-import type { RenderBlock } from '@/components/chat/messageList.types'
+import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
 import type { AttachedFile } from '@/pages/chat/useChatAttachments'
@@ -70,6 +70,7 @@ export type ChatPageViewContext = {
   thinkingTriggerRef: Ref<HTMLElement | null>
   speedTriggerRef: Ref<HTMLElement | null>
   sessionActionsMenuRef: Ref<ContainsTargetExpose | null>
+  transcriptSearchInputRef: Ref<HTMLInputElement | null>
 
   chat: {
     selectedSessionId: string | null
@@ -116,6 +117,20 @@ export type ChatPageViewContext = {
   isReasoningPart: (part: DynamicRecord) => boolean
   isJustificationPart: (part: DynamicRecord) => boolean
   isMetaPart: (part: DynamicRecord) => boolean
+  transcriptPartExpanded: (part: TranscriptDisplayPart) => boolean
+  setTranscriptPartExpanded: (part: TranscriptDisplayPart, expanded: boolean) => void
+  transcriptVimModeLabel: MaybeRef<string>
+  transcriptVimCommandLabel: MaybeRef<string>
+  transcriptSearchOpen: MaybeRef<boolean>
+  transcriptSearchQuery: MaybeRef<string>
+  transcriptSearchSummary: MaybeRef<string>
+  selectTranscriptNode: (key: string) => void
+  isTranscriptNodeActive: (key: string) => boolean
+  isTranscriptNodeSelected: (key: string) => boolean
+  isTranscriptNodeSearchMatch: (key: string) => boolean
+  setTranscriptSearchQuery: (query: string) => void
+  handleTranscriptSearchKeydown: (event: KeyboardEvent) => void
+  closeTranscriptSearch: (clear?: boolean) => void
 
   handleScroll: (event?: Event) => void
   isAtBottom: MaybeRef<boolean>
@@ -206,6 +221,7 @@ export type ChatPageViewContext = {
   attachProjectDialogOpen: MaybeRef<boolean>
   attachProjectPath: MaybeRef<string>
   sessionDirectory: MaybeRef<string>
+  sessionTitle: MaybeRef<string>
   addProjectAttachment: () => void | Promise<void>
 
   isStreamingAssistantMessage: (message: MessageRecordLike | null | undefined) => boolean

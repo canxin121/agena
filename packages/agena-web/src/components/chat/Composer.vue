@@ -8,6 +8,8 @@ import AttachmentPicker from '@/components/chat/AttachmentPicker.vue'
 const props = defineProps<{
   draft: string
   fullscreen: boolean
+  modeLabel?: string
+  statusLabel?: string
 }>()
 
 const emit = defineEmits<{
@@ -41,17 +43,31 @@ defineExpose({ shellEl, textareaEl, openFilePicker })
 <template>
   <div
     ref="shellEl"
-    class="composer-shell relative rounded-xl border border-input bg-background/70 shadow-sm overflow-visible flex flex-col"
+    class="composer-shell relative flex flex-col overflow-visible border border-input bg-background/85"
     :class="fullscreen ? 'composer-fullscreen' : ''"
     data-oc-keyboard-tap="keep"
     @dragover.prevent
     @drop.prevent="$emit('drop', $event)"
   >
+    <div
+      v-if="modeLabel || statusLabel"
+      class="pointer-events-none absolute left-2 top-0 z-10 flex max-w-[calc(100%-3.5rem)] -translate-y-1/2 items-center gap-2 bg-background px-1 font-mono text-[10px]"
+      aria-hidden="true"
+    >
+      <span
+        v-if="modeLabel"
+        class="font-semibold"
+        :class="modeLabel === 'INSERT' ? 'text-primary' : 'text-emerald-700 dark:text-emerald-300'"
+        >{{ modeLabel }}</span
+      >
+      <span v-if="statusLabel" class="truncate text-muted-foreground">{{ statusLabel }}</span>
+    </div>
+
     <div class="absolute top-1 right-1 z-10 flex items-center gap-1">
       <button
         type="button"
         :data-oc-keyboard-tap="fullscreen ? 'blur' : 'keep'"
-        class="h-6 w-6 rounded-md text-muted-foreground/80 hover:text-foreground hover:bg-secondary/60 flex items-center justify-center backdrop-blur bg-background/40 shadow-sm"
+        class="flex h-6 w-6 items-center justify-center text-muted-foreground/80 hover:bg-secondary/60 hover:text-foreground"
         :title="fullscreen ? t('chat.composer.editor.collapse') : t('chat.composer.editor.open')"
         :aria-label="fullscreen ? t('chat.composer.editor.collapse') : t('chat.composer.editor.open')"
         @pointerdown.prevent
@@ -65,7 +81,7 @@ defineExpose({ shellEl, textareaEl, openFilePicker })
       ref="textareaEl"
       :value="draft ?? ''"
       data-chat-input="true"
-      class="w-full min-h-[44px] sm:min-h-[60px] resize-none border-0 bg-transparent px-3 py-2 text-sm shadow-none placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 flex-1"
+      class="w-full min-h-[44px] flex-1 resize-none border-0 bg-transparent px-3 pb-2 pt-3 text-sm shadow-none placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-0 sm:min-h-[60px]"
       :class="fullscreen ? 'composer-textarea-full' : 'max-h-none'"
       :placeholder="t('chat.composer.input.placeholder')"
       spellcheck="false"

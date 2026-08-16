@@ -14,6 +14,8 @@ import {
   RiStopCircleLine,
   RiBrainAi3Line,
   RiSpeedUpLine,
+  RiSearchLine,
+  RiCloseLine,
 } from '@remixicon/vue'
 
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
@@ -30,6 +32,7 @@ import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import type { ChatPageViewContext } from './chatPageViewContext'
 import { hasDisplayableAssistantError } from './assistantError'
 import { resolveComposerToolbarLayout } from './composerToolbarLayout'
+import { attentionRequestId, partInteractionRequestIds } from './transcriptPartPresentation'
 
 // This view is template-only: it takes a context bag from ChatPage.
 // Keep it "dumb" so we can aggressively split ChatPage logic into composables.
@@ -52,6 +55,7 @@ const {
   thinkingTriggerRef,
   speedTriggerRef,
   sessionActionsMenuRef,
+  transcriptSearchInputRef,
 
   // Stores / state.
   chat,
@@ -79,14 +83,21 @@ const {
   showOptimisticUser,
 
   // Activity.
-  activityInitiallyExpandedForPart,
   activityCollapseSignal,
-  MAX_VISIBLE_ACTIVITY_COLLAPSED,
-  isActivityExpanded,
-  setActivityExpanded,
-  isReasoningPart,
-  isJustificationPart,
-  isMetaPart,
+  transcriptPartExpanded,
+  setTranscriptPartExpanded,
+  transcriptVimModeLabel,
+  transcriptVimCommandLabel,
+  transcriptSearchOpen,
+  transcriptSearchQuery,
+  transcriptSearchSummary,
+  selectTranscriptNode,
+  isTranscriptNodeActive,
+  isTranscriptNodeSelected,
+  isTranscriptNodeSearchMatch,
+  setTranscriptSearchQuery,
+  handleTranscriptSearchKeydown,
+  closeTranscriptSearch,
 
   // Scroll/nav.
   handleScroll,
@@ -182,6 +193,7 @@ const {
   attachProjectDialogOpen,
   attachProjectPath,
   sessionDirectory,
+  sessionTitle,
   addProjectAttachment,
 
   // Message actions.
@@ -292,6 +304,19 @@ const timelineSessionError = computed(() => {
   return chat.selectedSessionError
 })
 
+const attentionRenderedInline = computed(() => {
+  const requestId = attentionRequestId(chat.selectedAttention?.payload)
+  if (!requestId) return false
+  const blocks = unref(renderBlocks)
+  return blocks.some(
+    (block) =>
+      block.kind === 'message' &&
+      block.displayParts.some((part) => partInteractionRequestIds(part).includes(requestId)),
+  )
+})
+
+const headerAttention = computed(() => (attentionRenderedInline.value ? null : chat.selectedAttention))
+
 // `ref="..."` in templates doesn't count as usage for TS.
 void pageRef
 void scrollEl
@@ -318,123 +343,186 @@ void sessionActionsMenuRef
       :disabled="ui.isCompactLayout"
     >
       <template #top>
-        <div
-          ref="scrollEl"
-          class="h-full min-h-0 chat-scroll flex-1 overflow-y-auto"
-          data-scrollbar="chat"
-          @scroll="handleScroll"
-        >
-          <div ref="contentEl" class="chat-message-column py-4">
-            <MessageList
-              :is-compact-layout="ui.isCompactLayout"
-              :selected-session-id="chat.selectedSessionId"
-              :messages-loading="chat.messagesLoading"
-              :messages-error="chat.messagesError"
-              :session-error="timelineSessionError"
-              :render-blocks="renderBlocks"
-              :pending-initial-scroll-session-id="pendingInitialScrollSessionId"
-              :loading-older="loadingOlder"
-              :show-timestamps="showTimestamps"
-              :format-time="formatTime"
-              :copied-message-id="copiedMessageId"
-              :revert-busy-message-id="revertBusyMessageId"
-              :is-streaming-assistant-message="isStreamingAssistantMessage"
-              :show-assistant-placeholder="showAssistantPlaceholder"
-              :revert-marker-busy="revertMarkerBusy"
-              :session-ended="sessionEnded"
-              :retry-status="retryStatus"
-              :current-phase="currentPhase"
-              :awaiting-assistant="awaitingAssistant"
-              :activity-initially-expanded-for-part="activityInitiallyExpandedForPart"
-              :activity-collapse-signal="activityCollapseSignal"
-              :max-visible-activity-collapsed="MAX_VISIBLE_ACTIVITY_COLLAPSED"
-              :is-activity-expanded="isActivityExpanded"
-              :set-activity-expanded="setActivityExpanded"
-              :is-reasoning-part="isReasoningPart"
-              :is-justification-part="isJustificationPart"
-              :is-meta-part="isMetaPart"
-              :optimistic-user="optimisticUser"
-              :show-optimistic-user="showOptimisticUser"
-              :open-mobile-sidebar="() => ui.setSessionSwitcherOpen(true)"
-              @fork="handleForkFromMessage"
-              @revert="handleRevertFromMessage"
-              @copy="handleCopyMessage"
-              @redo-from-revert="handleRedoFromRevertMarker"
-              @unrevert-from-revert="handleUnrevertFromRevertMarker"
-              @copySessionError="handleCopySessionError"
-              @clearSessionError="chat.selectedSessionId ? chat.clearSessionError(chat.selectedSessionId) : undefined"
-            />
+        <div class="relative flex h-full min-h-0 flex-col" data-vim-chat-surface="true">
+          <header class="shrink-0 border-b border-border/70 bg-background/92 backdrop-blur">
+            <div class="chat-message-column flex min-h-12 items-center gap-4 py-2">
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-sm font-semibold">
+                  {{ sessionTitle || (chat.selectedSessionId ? `Session ${chat.selectedSessionId}` : t('nav.chat')) }}
+                </div>
+                <div v-if="sessionDirectory" class="truncate font-mono text-[10px] text-muted-foreground">
+                  {{ sessionDirectory }}
+                </div>
+              </div>
+              <div class="flex shrink-0 items-center gap-2 font-mono text-[10px] text-muted-foreground">
+                <span v-if="currentPhase !== 'idle'">{{ currentPhase }}</span>
+                <span v-if="transcriptVimCommandLabel" class="text-foreground">{{ transcriptVimCommandLabel }}</span>
+                <span
+                  class="font-semibold"
+                  :class="{
+                    'text-primary': transcriptVimModeLabel === 'INSERT',
+                    'text-amber-600 dark:text-amber-400': transcriptVimModeLabel.startsWith('VISUAL'),
+                    'text-emerald-700 dark:text-emerald-300': transcriptVimModeLabel === 'NAVIGATE',
+                  }"
+                  >{{ transcriptVimModeLabel }}</span
+                >
+              </div>
+            </div>
 
-            <div v-if="overlayReservePx > 0" :style="{ height: `${overlayReservePx}px` }" aria-hidden="true" />
-
-            <div ref="bottomEl" class="h-px w-full" aria-hidden="true" />
-          </div>
-        </div>
-
-        <!-- Floating message navigation (user messages only) -->
-        <div
-          v-if="
-            !composerFullscreenActive &&
-            !(ui.isCompactLayout && ui.isSessionSwitcherOpen) &&
-            (navigableMessageIds.length > 1 ||
-              (!isAtBottom && chat.messages.length) ||
-              (navigableMessageIds.length > 0 && !chat.selectedHistory.exhausted))
-          "
-          class="pointer-events-none absolute right-3 z-20 flex flex-col items-center gap-2"
-          :style="{ bottom: navBottomOffset }"
-        >
-          <IconButton
-            v-if="navigableMessageIds.length > 1 || (navigableMessageIds.length > 0 && !chat.selectedHistory.exhausted)"
-            variant="outline"
-            class="pointer-events-auto h-8 w-8 rounded-full bg-background/80 backdrop-blur"
-            :tooltip="t('chat.page.nav.previousUserMessage')"
-            :is-touch-pointer="ui.isTouchPointer"
-            :aria-label="t('chat.page.nav.previousUserMessage')"
-            @click="navPrev"
-            :disabled="(navIndex <= 0 && chat.selectedHistory.exhausted) || loadingOlder"
-          >
-            <RiArrowUpLine class="h-4 w-4" />
-          </IconButton>
-          <IconButton
-            v-if="navigableMessageIds.length > 1"
-            variant="outline"
-            class="pointer-events-auto h-8 w-8 rounded-full bg-background/80 backdrop-blur"
-            :tooltip="t('chat.page.nav.nextUserMessage')"
-            :is-touch-pointer="ui.isTouchPointer"
-            :aria-label="t('chat.page.nav.nextUserMessage')"
-            @click="navNext"
-            :disabled="navIndex >= navigableMessageIds.length - 1"
-          >
-            <RiArrowDownLine class="h-4 w-4" />
-          </IconButton>
+            <div
+              v-if="transcriptSearchOpen"
+              class="chat-message-column flex items-center gap-2 border-t border-border/50 py-1.5"
+            >
+              <RiSearchLine class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span class="font-mono text-xs text-primary">{{
+                transcriptVimCommandLabel.startsWith('?') ? '?' : '/'
+              }}</span>
+              <input
+                ref="transcriptSearchInputRef"
+                :value="transcriptSearchQuery"
+                type="text"
+                class="h-7 min-w-0 flex-1 border-0 bg-transparent px-0 font-mono text-xs outline-none"
+                autocomplete="off"
+                spellcheck="false"
+                aria-label="Search transcript"
+                @input="setTranscriptSearchQuery(($event.target as HTMLInputElement).value)"
+                @keydown="handleTranscriptSearchKeydown"
+              />
+              <span class="font-mono text-[10px] text-muted-foreground">{{ transcriptSearchSummary }}</span>
+              <button
+                type="button"
+                class="inline-flex h-6 w-6 items-center justify-center text-muted-foreground hover:text-foreground"
+                aria-label="Close transcript search"
+                @click="closeTranscriptSearch(false)"
+              >
+                <RiCloseLine class="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </header>
 
           <div
-            v-if="navigableMessageIds.length > 0"
-            class="pointer-events-none text-[10px] text-muted-foreground/80 bg-background/80 backdrop-blur rounded-full px-2 py-0.5 border border-border/60 select-none"
+            ref="scrollEl"
+            class="min-h-0 chat-scroll flex-1 overflow-y-auto"
+            data-scrollbar="chat"
+            @scroll="handleScroll"
           >
-            {{ navIndex + 1 }} / {{ navTotalLabel }}
+            <div ref="contentEl" class="chat-message-column py-3">
+              <MessageList
+                :is-compact-layout="ui.isCompactLayout"
+                :selected-session-id="chat.selectedSessionId"
+                :messages-loading="chat.messagesLoading"
+                :messages-error="chat.messagesError"
+                :session-error="timelineSessionError"
+                :render-blocks="renderBlocks"
+                :pending-initial-scroll-session-id="pendingInitialScrollSessionId"
+                :loading-older="loadingOlder"
+                :show-timestamps="showTimestamps"
+                :format-time="formatTime"
+                :copied-message-id="copiedMessageId"
+                :revert-busy-message-id="revertBusyMessageId"
+                :is-streaming-assistant-message="isStreamingAssistantMessage"
+                :show-assistant-placeholder="showAssistantPlaceholder"
+                :revert-marker-busy="revertMarkerBusy"
+                :session-ended="sessionEnded"
+                :retry-status="retryStatus"
+                :current-phase="currentPhase"
+                :awaiting-assistant="awaitingAssistant"
+                :activity-collapse-signal="activityCollapseSignal"
+                :is-part-expanded="transcriptPartExpanded"
+                :is-node-active="isTranscriptNodeActive"
+                :is-node-selected="isTranscriptNodeSelected"
+                :is-node-search-match="isTranscriptNodeSearchMatch"
+                :optimistic-user="optimisticUser"
+                :show-optimistic-user="showOptimisticUser"
+                :open-mobile-sidebar="() => ui.setSessionSwitcherOpen(true)"
+                :attention="chat.selectedAttention"
+                @fork="handleForkFromMessage"
+                @revert="handleRevertFromMessage"
+                @copy="handleCopyMessage"
+                @part-toggle="setTranscriptPartExpanded"
+                @node-select="selectTranscriptNode"
+                @redo-from-revert="handleRedoFromRevertMarker"
+                @unrevert-from-revert="handleUnrevertFromRevertMarker"
+                @copySessionError="handleCopySessionError"
+                @clearSessionError="chat.selectedSessionId ? chat.clearSessionError(chat.selectedSessionId) : undefined"
+              />
+
+              <div v-if="overlayReservePx > 0" :style="{ height: `${overlayReservePx}px` }" aria-hidden="true" />
+
+              <div ref="bottomEl" class="h-px w-full" aria-hidden="true" />
+            </div>
           </div>
 
-          <!-- Keep this slot fixed so other controls don't move -->
-          <IconButton
-            variant="outline"
-            class="h-8 w-8 rounded-full bg-background/80 backdrop-blur"
-            :tooltip="t('chat.page.nav.bottom')"
-            :is-touch-pointer="ui.isTouchPointer"
-            :aria-label="t('chat.page.nav.bottom')"
-            :class="!isAtBottom && chat.messages.length ? 'pointer-events-auto' : 'invisible pointer-events-none'"
-            @click="scrollToBottom('smooth')"
+          <!-- Floating message navigation (user messages only) -->
+          <div
+            v-if="
+              !composerFullscreenActive &&
+              !(ui.isCompactLayout && ui.isSessionSwitcherOpen) &&
+              (navigableMessageIds.length > 1 ||
+                (!isAtBottom && chat.messages.length) ||
+                (navigableMessageIds.length > 0 && !chat.selectedHistory.exhausted))
+            "
+            class="pointer-events-none absolute right-3 z-20 flex flex-col items-center gap-2"
+            :style="{ bottom: navBottomOffset }"
           >
-            <RiArrowDownDoubleLine class="h-4 w-4" />
-          </IconButton>
-        </div>
+            <IconButton
+              v-if="
+                navigableMessageIds.length > 1 || (navigableMessageIds.length > 0 && !chat.selectedHistory.exhausted)
+              "
+              variant="outline"
+              class="pointer-events-auto h-8 w-8 rounded-full bg-background/80 backdrop-blur"
+              :tooltip="t('chat.page.nav.previousUserMessage')"
+              :is-touch-pointer="ui.isTouchPointer"
+              :aria-label="t('chat.page.nav.previousUserMessage')"
+              @click="navPrev"
+              :disabled="(navIndex <= 0 && chat.selectedHistory.exhausted) || loadingOlder"
+            >
+              <RiArrowUpLine class="h-4 w-4" />
+            </IconButton>
+            <IconButton
+              v-if="navigableMessageIds.length > 1"
+              variant="outline"
+              class="pointer-events-auto h-8 w-8 rounded-full bg-background/80 backdrop-blur"
+              :tooltip="t('chat.page.nav.nextUserMessage')"
+              :is-touch-pointer="ui.isTouchPointer"
+              :aria-label="t('chat.page.nav.nextUserMessage')"
+              @click="navNext"
+              :disabled="navIndex >= navigableMessageIds.length - 1"
+            >
+              <RiArrowDownLine class="h-4 w-4" />
+            </IconButton>
 
-        <div
-          v-if="chat.selectedSessionId && !ui.isSessionSwitcherOpen && !composerFullscreenActive"
-          class="pointer-events-none absolute inset-x-0 bottom-2 z-30"
-        >
-          <div class="chat-column">
-            <ChatRuntimeStatusOverlay :is-mobile-pointer="ui.isMobilePointer" @reserve-change="handleOverlayReserve" />
+            <div
+              v-if="navigableMessageIds.length > 0"
+              class="pointer-events-none text-[10px] text-muted-foreground/80 bg-background/80 backdrop-blur rounded-full px-2 py-0.5 border border-border/60 select-none"
+            >
+              {{ navIndex + 1 }} / {{ navTotalLabel }}
+            </div>
+
+            <!-- Keep this slot fixed so other controls don't move -->
+            <IconButton
+              variant="outline"
+              class="h-8 w-8 rounded-full bg-background/80 backdrop-blur"
+              :tooltip="t('chat.page.nav.bottom')"
+              :is-touch-pointer="ui.isTouchPointer"
+              :aria-label="t('chat.page.nav.bottom')"
+              :class="!isAtBottom && chat.messages.length ? 'pointer-events-auto' : 'invisible pointer-events-none'"
+              @click="scrollToBottom('smooth')"
+            >
+              <RiArrowDownDoubleLine class="h-4 w-4" />
+            </IconButton>
+          </div>
+
+          <div
+            v-if="chat.selectedSessionId && !ui.isSessionSwitcherOpen && !composerFullscreenActive"
+            class="pointer-events-none absolute inset-x-0 bottom-2 z-30"
+          >
+            <div class="chat-column">
+              <ChatRuntimeStatusOverlay
+                :is-mobile-pointer="ui.isMobilePointer"
+                @reserve-change="handleOverlayReserve"
+              />
+            </div>
           </div>
         </div>
       </template>
@@ -454,7 +542,7 @@ void sessionActionsMenuRef
                 :retry-status="retryStatus"
                 :retry-countdown-label="retryCountdownLabel"
                 :retry-next-label="retryNextLabel"
-                :attention="chat.selectedAttention"
+                :attention="headerAttention"
                 :mobile-pointer="ui.isMobilePointer"
                 @abort="abortRun"
               />
@@ -462,6 +550,8 @@ void sessionActionsMenuRef
                 ref="composerRef"
                 v-model:draft="draft"
                 :fullscreen="composerFullscreenActive"
+                :mode-label="transcriptVimModeLabel"
+                :status-label="currentPhase === 'idle' ? '' : currentPhase"
                 class="flex-1 shrink-0 sm:shrink min-h-min"
                 @toggleFullscreen="toggleEditorFullscreen"
                 @drop="handleDrop"
@@ -505,7 +595,7 @@ void sessionActionsMenuRef
                     />
 
                     <div
-                      class="composer-controls-surface w-full flex flex-row items-center justify-between gap-2 rounded-b-xl border-t border-border/60 bg-background/60 p-2 sm:px-2.5"
+                      class="composer-controls-surface flex w-full flex-row items-center justify-between gap-2 border-t border-border/60 bg-background/60 p-2 sm:px-2.5"
                     >
                       <!-- Region 1: attachments, actions, model, and server-supported run modes. -->
                       <div

@@ -1,0 +1,163 @@
+import { describe, expect, test } from 'bun:test'
+
+import type { TranscriptDisplayPart } from '../src/components/chat/messageList.types'
+import {
+  decodeStructuredValue,
+  operationPresentation,
+  partInteractionRequestIds,
+  partStatusPresentation,
+  structuredValueMarkdown,
+} from '../src/pages/chat/transcriptPartPresentation'
+
+function operationPart(content: Record<string, unknown>): TranscriptDisplayPart {
+  return {
+    key: 'part:4',
+    id: '4',
+    kind: 'operation',
+    status: 'completed',
+    role: 'assistant',
+    title: 'fallback',
+    summary: '',
+    copyText: '',
+    toggleable: true,
+    defaultExpanded: false,
+    source: {
+      id: '4',
+      agenaKind: 'tool_call',
+      agenaRole: 'assistant',
+      partState: 'completed',
+      agenaContent: content,
+    },
+  }
+}
+
+describe('TUI-parity part presentation', () => {
+  test('decodes structured operation input and renders nested Markdown bullets', () => {
+    const structured = {
+      fields: [
+        { name: 'path', value: { kind: 'text', value: 'src/main.rs' } },
+        {
+          name: 'flags',
+          value: {
+            kind: 'array',
+            items: [
+              { kind: 'boolean', value: true },
+              { kind: 'integer', value: 2 },
+            ],
+          },
+        },
+      ],
+    }
+    expect(decodeStructuredValue(structured)).toEqual({ path: 'src/main.rs', flags: [true, 2] })
+    expect(structuredValueMarkdown(structured)).toContain('- **path**: `src/main.rs`')
+  })
+
+  test('preserves operation title, human output, rich blocks, metadata, and duration', () => {
+    const projected = operationPresentation(
+      operationPart({
+        name: 'fs.read',
+        input: { path: 'README.md' },
+        operation: {
+          title: 'fs.read · README.md',
+          summary: 'Read 42 lines',
+          lifecycle: { start_ms: 10, end_ms: 35 },
+          result: {
+            state: 'completed',
+            human: { markdown: '**README**' },
+            content: [{ type: 'log', text: 'line one' }],
+            metadata: { cache: true },
+          },
+        },
+      }),
+    )
+    expect(projected.title).toBe('fs.read · README.md')
+    expect(projected.humanMarkdown).toBe('**README**')
+    expect(projected.blocks).toEqual([{ type: 'log', text: 'line one' }])
+    expect(projected.metadata).toEqual({ cache: true })
+    expect(projected.durationMs).toBe(25)
+  })
+
+  test('projects operation-owned user input as the interaction part', () => {
+    const projected = operationPresentation(
+      operationPart({
+        name: 'interaction.ask',
+        operation: {
+          invocation: { name: 'interaction.ask' },
+          user_input: {
+            requests: [
+              {
+                request: {
+                  request_id: 'request-1',
+                  kind: 'ask_user',
+                  questions: [
+                    {
+                      header: 'Target',
+                      question: 'Choose one',
+                      options: [{ label: 'Workspace', description: 'Search files' }],
+                    },
+                  ],
+                },
+                reply: { kind: 'submit', answers: { '0': ['Workspace'] } },
+              },
+            ],
+          },
+          result: { state: 'completed' },
+        },
+      }),
+    )
+    expect(projected.userInputs).toHaveLength(1)
+    expect(projected.userInputs[0]?.requestId).toBe('request-1')
+    expect(projected.userInputs[0]?.questions[0]?.options[0]?.label).toBe('Workspace')
+    expect(projected.userInputs[0]?.pending).toBe(false)
+  })
+
+  test('matches TUI lifecycle glyphs for denied and unavailable parts', () => {
+    expect(partStatusPresentation('policy_denied')).toMatchObject({ icon: '⊘', tone: 'warning', terminal: true })
+    expect(partStatusPresentation('tool_unavailable')).toMatchObject({ icon: '◇', tone: 'warning', terminal: true })
+    expect(partStatusPresentation('failed')).toMatchObject({ icon: '×', tone: 'danger', terminal: true })
+  })
+
+  test('projects web search structured results once and suppresses duplicate model/log output', () => {
+    const structured = {
+      query: 'agena',
+      results: [{ title: 'Agena', url: 'https://example.test/agena', description: 'Result' }],
+    }
+    const part = operationPart({
+      name: 'web.search',
+      operation: {
+        result: {
+          state: 'completed',
+          structured,
+          model_preview: { text: 'Found one result' },
+          content: [
+            { type: 'json', value: structured },
+            { type: 'log', text: 'Found one result' },
+          ],
+        },
+      },
+    })
+    const projected = operationPresentation(part)
+    expect(projected.modelOutput).toBe('')
+    expect(projected.blocks).toEqual([
+      {
+        type: 'search_results',
+        query: 'agena',
+        results: structured.results,
+      },
+    ])
+  })
+
+  test('retains request identities for inline interaction and permission ownership', () => {
+    const part = operationPart({
+      operation: {
+        user_input: {
+          requests: [{ request: { request_id: 'input-1', questions: [] }, reply: null }],
+        },
+        authorization: {
+          permissions: [{ request: { request_id: 'permission-1', action: { kind: 'network_access' } } }],
+        },
+      },
+    })
+    expect(partInteractionRequestIds(part)).toEqual(['input-1', 'permission-1'])
+  })
+})

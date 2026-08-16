@@ -398,13 +398,8 @@ export function useChatRunUi(opts: {
     for (let i = blocks.length - 1; i >= 0; i -= 1) {
       const b = blocks[i]
       if (!b) continue
-      if (b.kind === 'activity') {
-        const parts = b.parts
-        return Array.isArray(parts) && parts.length > 0
-      }
-      if (b.kind === 'message' || b.kind === 'revert') {
-        return false
-      }
+      if (b.kind === 'message') return b.hasActivity && b.displayParts.length > 0
+      if (b.kind === 'revert') return false
     }
     return false
   })

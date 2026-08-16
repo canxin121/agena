@@ -44,12 +44,44 @@ const sections = computed((): Array<{ category: string; items: ShortcutItem[] }>
     {
       category: String(t('help.dialog.sections.navigationCommands')),
       items: [
-        { keys: `${m}+.`, description: String(t('help.dialog.shortcuts.showKeyboardShortcuts')), icon: RiQuestionLine },
+        {
+          keys: `Ctrl+H / ${m}+.`,
+          description: String(t('help.dialog.shortcuts.showKeyboardShortcuts')),
+          icon: RiQuestionLine,
+        },
         {
           keys: `${m}+L`,
           description: String(t('help.dialog.shortcuts.toggleSessionSidebar')),
           icon: RiLayoutLeftLine,
         },
+      ],
+    },
+    {
+      category: String(t('help.dialog.sections.transcriptVim')),
+      items: [
+        { keys: 'i / Esc', description: String(t('help.dialog.shortcuts.vimModes')), icon: RiText },
+        { keys: '[count] h/l · j/k', description: String(t('help.dialog.shortcuts.vimMotions')) },
+        { keys: 'Ctrl+K / Ctrl+J', description: String(t('help.dialog.shortcuts.vimMessages')) },
+        { keys: 'gg / [count]G / G', description: String(t('help.dialog.shortcuts.vimBounds')) },
+        { keys: 'H / M / L · zt / zz / zb', description: String(t('help.dialog.shortcuts.vimViewport')) },
+        { keys: 'Ctrl+U/D · Ctrl+B/F · Ctrl+E/Y', description: String(t('help.dialog.shortcuts.vimScroll')) },
+        { keys: '/ / ? · n / N', description: String(t('help.dialog.shortcuts.vimSearch')) },
+        { keys: 'Enter', description: String(t('help.dialog.shortcuts.vimStructure')) },
+      ],
+    },
+    {
+      category: String(t('help.dialog.sections.transcriptSelection')),
+      items: [
+        { keys: 'v / V / Ctrl+V', description: String(t('help.dialog.shortcuts.vimVisual')) },
+        { keys: 'y / yy / Y', description: String(t('help.dialog.shortcuts.vimYank')) },
+        {
+          keys: 'iw / aw · im / am · iM / aM · ip / ap',
+          description: String(t('help.dialog.shortcuts.vimTextObjects')),
+        },
+        { keys: 'w/b/e · W/B/E · ge/gE', description: String(t('help.dialog.shortcuts.vimWords')) },
+        { keys: 'o / gv', description: String(t('help.dialog.shortcuts.vimReselect')) },
+        { keys: 'f/F/t/T · ;/,', description: String(t('help.dialog.shortcuts.vimFind')) },
+        { keys: 'Ctrl+O / Ctrl+I', description: String(t('help.dialog.shortcuts.vimJumps')) },
       ],
     },
     {
@@ -61,9 +93,10 @@ const sections = computed((): Array<{ category: string; items: ShortcutItem[] }>
           icon: RiAddLine,
         },
         { keys: `${m}+Enter`, description: String(t('help.dialog.shortcuts.sendMessage')) },
-        { keys: `${m}+I`, description: String(t('help.dialog.shortcuts.focusChatInput')), icon: RiText },
+        { keys: `i`, description: String(t('help.dialog.shortcuts.focusChatInput')), icon: RiText },
+        { keys: `Ctrl+P`, description: String(t('help.dialog.shortcuts.openPlan')) },
         {
-          keys: `Esc Esc`,
+          keys: `Ctrl+C`,
           description: String(t('help.dialog.shortcuts.abortActiveRunDouble')),
           icon: RiCloseCircleLine,
         },

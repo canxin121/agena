@@ -1,26 +1,14 @@
 import { router } from '@/router'
 import { useChatStore } from '@/stores/chat'
-import { useDirectorySessionStore } from '@/stores/directorySessionStore'
-import { useSessionActivityStore } from '@/stores/sessionActivity'
 import { useSettingsStore } from '@/stores/settings'
-import { useToastsStore } from '@/stores/toasts'
 import { useUiStore } from '@/stores/ui'
 import { patchSessionIdInQuery } from '@/app/navigation/sessionQuery'
 import { isEmbeddedWorkspacePaneContext, withEmbeddedWorkspaceScopeQuery } from '@/app/windowScope'
 import { i18n } from '@/i18n'
 
-type ModifierLabel = 'cmd' | 'ctrl'
-type SessionStatusLike = { type?: string } | null
-type ChatStatusSource = { selectedSessionStatus?: { status?: SessionStatusLike } }
-
 function hasModifier(e: KeyboardEvent): boolean {
   // Treat Meta on macOS, Ctrl elsewhere.
   return e.metaKey || e.ctrlKey
-}
-
-function modifierLabel(): ModifierLabel {
-  if (typeof navigator === 'undefined') return 'ctrl'
-  return /Macintosh|Mac OS X/.test(navigator.userAgent || '') ? 'cmd' : 'ctrl'
 }
 
 function keyLower(e: KeyboardEvent): string {
@@ -30,50 +18,18 @@ function keyLower(e: KeyboardEvent): string {
 export function installKeyboardShortcuts(): () => void {
   const ui = useUiStore()
   const chat = useChatStore()
-  const directorySessions = useDirectorySessionStore()
   const settings = useSettingsStore()
-  const activity = useSessionActivityStore()
-  const toasts = useToastsStore()
-
-  const mod = modifierLabel()
-
-  let abortPrimedUntil: number | null = null
-  let abortPrimedTimer: number | null = null
-
-  const resetAbortPriming = () => {
-    if (abortPrimedTimer !== null) {
-      window.clearTimeout(abortPrimedTimer)
-      abortPrimedTimer = null
-    }
-    abortPrimedUntil = null
-    ui.clearAbortPrompt()
-  }
 
   const isOnSettingsPage = () => router.currentRoute.value.path.startsWith('/settings')
 
-  const isOverlayOpen = () => {
-    return Boolean(ui.isHelpDialogOpen || (ui.isCompactLayout && ui.isSessionSwitcherOpen) || isOnSettingsPage())
-  }
-
-  const canAbortNow = (): boolean => {
-    const sid = chat.selectedSessionId
-    if (!sid) return false
-
-    // Align keyboard abort gate with sidebar/runtime authority.
-    if (directorySessions.isSessionRuntimeActive(sid, { includeCooldown: false })) {
-      return true
+  const onKeyDown = (e: KeyboardEvent) => {
+    // TUI parity: Ctrl+H is contextual help from every main-surface mode.
+    if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && keyLower(e) === 'h') {
+      e.preventDefault()
+      ui.toggleHelpDialog()
+      return
     }
 
-    const st = (chat as ChatStatusSource).selectedSessionStatus?.status ?? null
-    const statusType = typeof st?.type === 'string' ? st.type : ''
-    if (statusType === 'busy' || statusType === 'retry') return true
-    if (statusType === 'idle') return false
-
-    const phase = activity.snapshot[sid]?.type
-    return phase === 'busy'
-  }
-
-  const onKeyDown = (e: KeyboardEvent) => {
     // Cmd/Ctrl+.: help dialog
     if (hasModifier(e) && !e.shiftKey && keyLower(e) === '.') {
       e.preventDefault()
@@ -100,8 +56,10 @@ export function installKeyboardShortcuts(): () => void {
       return
     }
 
-    // Cmd/Ctrl+I: focus chat input
-    if (hasModifier(e) && !e.shiftKey && keyLower(e) === 'i') {
+    // Cmd+I remains an application shortcut on macOS. Plain `i` enters
+    // INSERT mode and Ctrl+I is Vim jump-forward while the transcript owns
+    // focus, matching the TUI keymap.
+    if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && keyLower(e) === 'i') {
       e.preventDefault()
       const textarea = document.querySelector<HTMLTextAreaElement>('textarea[data-chat-input="true"]')
       textarea?.focus()
@@ -164,63 +122,15 @@ export function installKeyboardShortcuts(): () => void {
       }
     }
 
-    // Esc: close settings, else double-Esc abort gating.
+    // Esc closes Settings. On chat it belongs to the TUI-parity Vim surface:
+    // INSERT -> NAVIGATE, cancel Visual selection, or collapse an interaction.
+    // Ctrl+C owns run interruption.
     if (e.key === 'Escape') {
       if (isOnSettingsPage()) {
         e.preventDefault()
         void router.push('/chat')
-        resetAbortPriming()
         return
       }
-
-      if (isOverlayOpen() || ui.activeMainTab !== 'chat') {
-        resetAbortPriming()
-        return
-      }
-
-      const sid = chat.selectedSessionId
-      if (!sid || !canAbortNow()) {
-        resetAbortPriming()
-        return
-      }
-
-      const now = Date.now()
-      if (abortPrimedUntil && now < abortPrimedUntil) {
-        e.preventDefault()
-        resetAbortPriming()
-        void chat
-          .abortSession(sid)
-          .then((ok) => {
-            if (!ok) {
-              toasts.push('error', i18n.global.t('chat.toasts.failedToAbortRun'))
-            }
-          })
-          .catch(() => {
-            toasts.push('error', i18n.global.t('chat.toasts.failedToAbortRun'))
-          })
-        return
-      }
-
-      e.preventDefault()
-      const expiresAt = ui.armAbortPrompt(sid, 3000)
-      abortPrimedUntil = expiresAt
-      toasts.push(
-        'info',
-        i18n.global.t('chat.toasts.pressEscAgainToAbort', { modKey: mod === 'cmd' ? 'Cmd' : 'Ctrl' }),
-        2000,
-      )
-      if (abortPrimedTimer !== null) {
-        window.clearTimeout(abortPrimedTimer)
-      }
-      abortPrimedTimer = window.setTimeout(
-        () => {
-          if (abortPrimedUntil && Date.now() >= abortPrimedUntil) {
-            resetAbortPriming()
-          }
-        },
-        Math.max(0, expiresAt - now),
-      )
-      return
     }
   }
 
@@ -228,6 +138,5 @@ export function installKeyboardShortcuts(): () => void {
 
   return () => {
     window.removeEventListener('keydown', onKeyDown)
-    resetAbortPriming()
   }
 }

@@ -146,6 +146,21 @@ test('tool-call parts read canonical operation invocation and result fields', ()
     output: 'README contents',
     metadata: { cache: true },
   })
+  assert.equal(part?.agenaKind, 'tool_call')
+  assert.equal(part?.agenaRole, 'assistant')
+  assert.equal(part?.partState, 'completed')
+  assert.deepEqual(part?.agenaContent, {
+    name: 'agena.fs.read',
+    input: { path: 'README.md' },
+    operation: {
+      invocation: { name: 'agena.fs.read', input: { path: 'README.md' } },
+      model_output: { text: 'README contents' },
+      result: {
+        structured: { bytes: 42 },
+        metadata: { cache: true },
+      },
+    },
+  })
 })
 
 test('tool-call parts retain structured results when no display text exists', () => {

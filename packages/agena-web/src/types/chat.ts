@@ -31,7 +31,16 @@ export type Session = {
 }
 
 // Agena part execution states → tool status mapping in reducers.ts.
-export type PartState = 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'
+export type PartState =
+  | 'pending'
+  | 'in_progress'
+  | 'completed'
+  | 'policy_denied'
+  | 'user_declined'
+  | 'capability_unavailable'
+  | 'tool_unavailable'
+  | 'failed'
+  | 'cancelled'
 
 export type MessageInfo = {
   id: string
@@ -45,6 +54,11 @@ export type MessageInfo = {
   adapterID?: string
   // Durable numeric ids that back this message (agena run marker).
   runId?: number
+  // Preserve the run marker's durable state/content. Transcript projection
+  // uses these fields for TUI-parity lifecycle chrome and assistant-run
+  // folding instead of inferring state from the presence of text.
+  runState?: string
+  runContent?: JsonLike
   [k: string]: JsonLike
 }
 
@@ -65,6 +79,16 @@ export type MessagePart = {
   text?: string
   // Agena part state (string wire value, e.g. "completed").
   partState?: string
+  // Lossless Agena transcript identity. The frontend presentation layer must
+  // be able to project the same open-set part kinds as the TUI; flattening a
+  // tool call down to {tool,input,output} discards operation sections,
+  // interaction records, attachments, lifecycle, and future part kinds.
+  agenaKind?: string
+  agenaRole?: string
+  agenaSummary?: string | null
+  agenaContent?: JsonLike
+  runId?: number | null
+  parentPartId?: number | null
   // For tool parts (ToolInvocation.vue contract).
   tool?: string
   state?: JsonLike

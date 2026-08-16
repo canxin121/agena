@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import type { TranscriptDisplayPart } from '../src/components/chat/messageList.types'
-import { resolveTranscriptPageTarget, transcriptPartNavigationText } from '../src/pages/chat/transcriptNavigation'
+import {
+  resolveTranscriptPageTarget,
+  transcriptPartNavigationText,
+  transcriptScrollBoundary,
+} from '../src/pages/chat/transcriptNavigation'
 
 function part(overrides: Partial<TranscriptDisplayPart> = {}): TranscriptDisplayPart {
   return {
@@ -51,4 +55,15 @@ test('page movement clamps to the transcript boundary', () => {
     }),
     { top: 0, boundary: 'start' },
   )
+})
+
+test('scroll boundary clamps to top and bottom for wheel cursor follow', () => {
+  assert.equal(transcriptScrollBoundary({ scrollTop: 600, clientHeight: 400, scrollHeight: 1_000 }), 'bottom')
+  assert.equal(transcriptScrollBoundary({ scrollTop: 599.5, clientHeight: 400, scrollHeight: 1_000 }), 'bottom')
+  assert.equal(transcriptScrollBoundary({ scrollTop: 0, clientHeight: 400, scrollHeight: 1_000 }), 'top')
+  assert.equal(transcriptScrollBoundary({ scrollTop: 1, clientHeight: 400, scrollHeight: 1_000 }), 'top')
+  assert.equal(transcriptScrollBoundary({ scrollTop: 300, clientHeight: 400, scrollHeight: 1_000 }), null)
+  // Non-scrollable content never reports a top clamp (a bottom clamp is fine).
+  assert.equal(transcriptScrollBoundary({ scrollTop: 0, clientHeight: 400, scrollHeight: 300 }), 'bottom')
+  assert.equal(transcriptScrollBoundary({ scrollTop: 0, clientHeight: 400, scrollHeight: 400 }), 'bottom')
 })

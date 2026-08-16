@@ -46,3 +46,26 @@ export function resolveTranscriptPageTarget(input: {
     input.direction === 'down' && top >= maxTop ? 'end' : input.direction === 'up' && top <= 0 ? 'start' : null
   return { top, boundary }
 }
+
+export type TranscriptScrollBoundary = 'top' | 'bottom' | null
+
+/**
+ * Detect whether the scroll viewport has reached the top or bottom of its
+ * scrollable range. Wheel scrolls re-anchor the transcript cursor to a fixed
+ * screen position, so without a boundary clamp content that never passes
+ * through that anchor (the very first/last line) would be unreachable; callers
+ * land the cursor on the boundary line when this returns a boundary.
+ */
+export function transcriptScrollBoundary(input: {
+  scrollTop: number
+  clientHeight: number
+  scrollHeight: number
+}): TranscriptScrollBoundary {
+  const scrollTop = Number.isFinite(input.scrollTop) ? Math.max(0, input.scrollTop) : 0
+  const clientHeight = Number.isFinite(input.clientHeight) ? Math.max(0, input.clientHeight) : 0
+  const scrollHeight = Number.isFinite(input.scrollHeight) ? Math.max(0, input.scrollHeight) : 0
+  const maxScrollTop = Math.max(0, scrollHeight - clientHeight)
+  if (scrollTop >= maxScrollTop - 1) return 'bottom'
+  if (maxScrollTop > 0 && scrollTop <= 1) return 'top'
+  return null
+}

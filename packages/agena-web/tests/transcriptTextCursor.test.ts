@@ -7,6 +7,8 @@ import {
   transcriptLinePosition,
   transcriptOffsetAtLineColumn,
   transcriptParagraphRange,
+  transcriptSelectionEnd,
+  transcriptSelectionText,
   transcriptVisualLineRange,
   transcriptWordRange,
 } from '../src/pages/chat/transcriptTextCursor'
@@ -105,5 +107,29 @@ describe('transcript text cursor', () => {
 
     const backward = transcriptVisualLineRange(text, text.indexOf('three'), text.indexOf('beta'))
     expect(text.slice(backward.start, backward.end)).toBe('beta two\ngamma three')
+  })
+
+  test('character selections include the final grapheme in either direction', () => {
+    const text = '你🙂好 world'
+    const anchor = 0
+    // head lands at the start of 好; the grapheme at the head is included like
+    // the original visual-mode yank semantics.
+    expect(transcriptSelectionText(text, anchor, '你🙂'.length)).toBe('你🙂好')
+    // head lands at the start of the emoji; the emoji grapheme is included.
+    expect(transcriptSelectionText(text, anchor, '你'.length)).toBe('你🙂')
+    // Reversed anchor/head order yields the same text.
+    expect(transcriptSelectionText(text, '你🙂'.length, anchor)).toBe('你🙂好')
+    // Offsets beyond the text clamp to the end.
+    expect(transcriptSelectionText(text, 3, 999)).toBe(text.slice(3))
+    // Selection ending at the very end of the text stays at the end.
+    expect(transcriptSelectionText(text, 0, text.length)).toBe(text)
+  })
+
+  test('transcriptSelectionEnd extends to the end of the containing grapheme', () => {
+    const text = 'a🙂b'
+    expect(transcriptSelectionEnd(text, 0)).toBe(1)
+    expect(transcriptSelectionEnd(text, 1)).toBe('a🙂'.length)
+    expect(transcriptSelectionEnd(text, 2)).toBe('a🙂'.length)
+    expect(transcriptSelectionEnd(text, text.length)).toBe(text.length)
   })
 })

@@ -2,7 +2,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Comput
 
 import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { copyTextToClipboard } from '@/lib/clipboard'
-import { resolveTranscriptPageTarget } from './transcriptNavigation'
+import { resolveTranscriptPageTarget, transcriptScrollBoundary } from './transcriptNavigation'
 import { resolveTranscriptVimAction, type TranscriptVimAction, type TranscriptVimMode } from './transcriptVim'
 import {
   collectTranscriptSearchMatches,
@@ -20,6 +20,8 @@ import {
   transcriptLineRange,
   transcriptOffsetAtLineColumn,
   transcriptParagraphRange,
+  transcriptSelectionEnd,
+  transcriptSelectionText,
   transcriptVisualLineRange,
   transcriptWordRange,
 } from './transcriptTextCursor'
@@ -122,6 +124,9 @@ export function useChatTranscriptVim(opts: {
   let scrollSuppressionFrame = 0
   let scrollFollowSuppressed = false
   let cursorScreenAnchor: { x: number; y: number } | null = null
+  let mouseSelecting = false
+  let mouseSelection: { anchor: CursorPoint; head: CursorPoint } | null = null
+  let suppressMouseClickUntil = 0
   let mountedRoot: HTMLElement | null = null
   let mountedScroll: HTMLElement | null = null
   let transcriptResizeObserver: ResizeObserver | null = null
@@ -810,7 +815,7 @@ export function useChatTranscriptVim(opts: {
       const end = globalOffsetForPoint(endPoint, model)
       if (!range || start === null || end === null) continue
       ranges.push(range)
-      lines.push(model.text.slice(Math.min(start, end), inclusiveGraphemeEnd(model.text, Math.max(start, end))))
+      lines.push(transcriptSelectionText(model.text, start, end))
     }
     return ranges.length ? { ranges, text: lines.join('\n') } : null
   }
@@ -905,7 +910,7 @@ export function useChatTranscriptVim(opts: {
 
     clearVisualBlockHighlight()
 
-    if (ownsNativeSelection) {
+    if (ownsNativeSelection && !mouseSelection) {
       window.getSelection()?.removeAllRanges()
       ownsNativeSelection = false
     }
@@ -938,6 +943,12 @@ export function useChatTranscriptVim(opts: {
     cursorOverlay.style.top = `${top}px`
     cursorOverlay.style.width = `${Math.max(2, right - left)}px`
     cursorOverlay.style.height = `${Math.max(2, bottom - top)}px`
+
+    // Mouse drag selections persist independently of the vim cursor; re-apply
+    // the highlight so cursor updates and scrolls don't drop it.
+    if (mouseSelection && !mode.value.startsWith('VISUAL')) {
+      applyMouseSelectionHighlight()
+    }
   }
 
   function installCursorWithoutReveal(
@@ -957,6 +968,7 @@ export function useChatTranscriptVim(opts: {
 
   function followCursorAfterScroll() {
     scrollFollowFrame = 0
+    if (mouseSelecting) return
     if (scrollFollowSuppressed) {
       scheduleCursorPlacement()
       return
@@ -965,6 +977,33 @@ export function useChatTranscriptVim(opts: {
       removeCursorOverlay()
       return
     }
+    const scroll = opts.scrollEl.value
+    if (!scroll) {
+      syncNativeSelection()
+      return
+    }
+
+    // The cursor follows a fixed screen anchor while the viewport scrolls, so
+    // content that never passes through the anchor (the very last/first line
+    // when the anchor sits above/below it) would be unreachable by wheel.
+    // Match the TUI's move_cursor_by_wheel clamping: once the viewport reaches
+    // the top/bottom of the scrollable range, land the cursor on the boundary
+    // line instead of leaving it glued to the stale anchor row.
+    const boundary = transcriptScrollBoundary({
+      scrollTop: scroll.scrollTop,
+      clientHeight: scroll.clientHeight,
+      scrollHeight: scroll.scrollHeight,
+    })
+    if (boundary) {
+      const model = textEntries()
+      const entry = boundary === 'bottom' ? model.entries.at(-1) : model.entries[0]
+      if (entry) {
+        const offset = boundary === 'bottom' ? transcriptLineRange(entry.text, entry.text.length).start : 0
+        installCursorWithoutReveal({ key: entry.key, offset }, { updatePreferredX: false })
+        return
+      }
+    }
+
     if (!cursorScreenAnchor) {
       syncNativeSelection()
       return
@@ -982,21 +1021,145 @@ export function useChatTranscriptVim(opts: {
     scrollFollowFrame = window.requestAnimationFrame(followCursorAfterScroll)
   }
 
+  function samePoint(left: CursorPoint, right: CursorPoint): boolean {
+    return left.key === right.key && left.offset === right.offset
+  }
+
+  function mouseSelectionRange(): Range | null {
+    const selection = mouseSelection
+    if (!selection) return null
+    return rangeBetweenPoints(selection.anchor, selection.head, true)
+  }
+
+  function mouseSelectionText(): string {
+    const selection = mouseSelection
+    if (!selection) return ''
+    const model = textEntries()
+    const anchor = globalOffsetForPoint(selection.anchor, model)
+    const head = globalOffsetForPoint(selection.head, model)
+    if (anchor === null || head === null) return ''
+    return transcriptSelectionText(model.text, anchor, head)
+  }
+
+  function applyMouseSelectionHighlight() {
+    if (!mouseSelection) return
+    const range = mouseSelectionRange()
+    const selection = window.getSelection()
+    if (!range || !selection) return
+    selection.removeAllRanges()
+    selection.addRange(range)
+    ownsNativeSelection = true
+  }
+
+  function clearMouseSelection() {
+    mouseSelecting = false
+    if (mouseSelection) {
+      mouseSelection = null
+      if (ownsNativeSelection) {
+        window.getSelection()?.removeAllRanges()
+        ownsNativeSelection = false
+      }
+    }
+  }
+
+  function onTranscriptPointerMove(event: PointerEvent) {
+    if (!mouseSelecting || !mouseSelection) return
+    event.preventDefault()
+    const scroll = opts.scrollEl.value
+    if (!scroll) return
+    const bounds = scroll.getBoundingClientRect()
+    if (event.clientY < bounds.top || event.clientY > bounds.bottom) {
+      const delta = event.clientY < bounds.top ? event.clientY - bounds.top : event.clientY - bounds.bottom
+      scroll.scrollTop = Math.max(0, Math.min(scroll.scrollHeight - scroll.clientHeight, scroll.scrollTop + delta))
+    }
+    const model = textEntries()
+    const boundary = transcriptCaretBoundaryAtPoint(event.clientX, event.clientY)
+    const point =
+      (boundary ? pointForDomBoundary(boundary, model) : null) || pointAtViewportPosition(event.clientX, event.clientY)
+    if (!point) return
+    mouseSelection = { anchor: mouseSelection.anchor, head: point }
+    installCursorWithoutReveal(point, { updatePreferredX: false, preserveScreenAnchor: true })
+  }
+
+  function onTranscriptPointerUp(event: PointerEvent) {
+    if (!mouseSelecting) return
+    mouseSelecting = false
+    window.removeEventListener('pointermove', onTranscriptPointerMove, true)
+    window.removeEventListener('pointerup', onTranscriptPointerUp, true)
+    window.removeEventListener('pointercancel', onTranscriptPointerCancel, true)
+    event.preventDefault()
+    if (!mouseSelection) return
+    if (samePoint(mouseSelection.anchor, mouseSelection.head)) {
+      clearMouseSelection()
+      scheduleCursorPlacement()
+      return
+    }
+    applyMouseSelectionHighlight()
+    // A browser still dispatches `click` after a drag; suppress it so a drag
+    // ending on a link or toggle does not trigger navigation/activation.
+    suppressMouseClickUntil = Date.now() + 350
+  }
+
+  function onTranscriptPointerCancel() {
+    if (!mouseSelecting) return
+    mouseSelecting = false
+    window.removeEventListener('pointermove', onTranscriptPointerMove, true)
+    window.removeEventListener('pointerup', onTranscriptPointerUp, true)
+    window.removeEventListener('pointercancel', onTranscriptPointerCancel, true)
+    clearMouseSelection()
+    scheduleCursorPlacement()
+  }
+
   function onTranscriptPointerDown(event: PointerEvent) {
-    if (opts.enabled && !opts.enabled.value) return
     if (event.button !== 0 || !(event.target instanceof Element)) return
+    const scroll = opts.scrollEl.value
+    if (!scroll) return
     if (event.target.closest('[data-transcript-chrome="true"]')) return
     const transcriptNode = event.target.closest<HTMLElement>(NODE_SELECTOR)
-    if (!transcriptNode || !opts.pageRef.value?.contains(transcriptNode)) return
+    const insideTranscript =
+      Boolean(transcriptNode && opts.pageRef.value?.contains(transcriptNode)) || scroll.contains(event.target)
+    if (!insideTranscript) return
 
     const model = textEntries()
     const boundary = transcriptCaretBoundaryAtPoint(event.clientX, event.clientY)
     const point =
       (boundary ? pointForDomBoundary(boundary, model) : null) || pointAtViewportPosition(event.clientX, event.clientY)
     if (!point) return
+    // Mouse interaction always positions the cursor (keyboard navigation stays
+    // gated by the focused pane), matching the TUI. A drag becomes the mouse
+    // selection, so any active vim visual selection is released first.
+    if (mode.value.startsWith('VISUAL')) cancelVisual()
     if (mode.value === 'INSERT') mode.value = 'NAVIGATE'
     installCursorWithoutReveal(point, { updatePreferredX: true })
+    clearMouseSelection()
+    mouseSelection = { anchor: point, head: point }
+    mouseSelecting = true
+    // Own the selection: suppress the browser's native selection/drag so the
+    // transcript selection model stays consistent.
+    event.preventDefault()
+    window.addEventListener('pointermove', onTranscriptPointerMove, true)
+    window.addEventListener('pointerup', onTranscriptPointerUp, true)
+    window.addEventListener('pointercancel', onTranscriptPointerCancel, true)
     scheduleCursorPlacement()
+  }
+
+  function onTranscriptCopy(event: ClipboardEvent) {
+    if (!mouseSelection) return
+    const text = mouseSelectionText()
+    if (!text) return
+    event.preventDefault()
+    clearMouseSelection()
+    scheduleCursorPlacement()
+    void copyRawText(text)
+  }
+
+  function onTranscriptClickCapture(event: MouseEvent) {
+    if (Date.now() >= suppressMouseClickUntil) return
+    const target = event.target
+    if (!(target instanceof Element)) return
+    if (!opts.scrollEl.value?.contains(target)) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
   }
 
   const selectedNodeKeys = computed(() => {
@@ -1014,11 +1177,6 @@ export function useChatTranscriptVim(opts: {
         .filter(Boolean),
     )
   })
-
-  function inclusiveGraphemeEnd(text: string, offset: number): number {
-    const grapheme = transcriptGraphemes(text).find((item) => offset >= item.start && offset < item.end)
-    return grapheme?.end ?? Math.max(0, Math.min(text.length, offset))
-  }
 
   function visualSelectionText(): string {
     const model = textEntries()
@@ -1041,9 +1199,7 @@ export function useChatTranscriptVim(opts: {
       }
     }
 
-    const start = Math.min(anchor, head)
-    const end = inclusiveGraphemeEnd(model.text, Math.max(anchor, head))
-    return model.text.slice(start, end)
+    return transcriptSelectionText(model.text, anchor, head)
   }
 
   async function copyRawText(value: string) {
@@ -1465,7 +1621,7 @@ export function useChatTranscriptVim(opts: {
           destinationGlobal > originGlobal
         const end = forwardWordExclusive
           ? destinationGlobal
-          : inclusiveGraphemeEnd(model.text, Math.max(originGlobal, destinationGlobal))
+          : transcriptSelectionEnd(model.text, Math.max(originGlobal, destinationGlobal))
         await copyRawText(model.text.slice(start, end))
       }
     }
@@ -1579,6 +1735,39 @@ export function useChatTranscriptVim(opts: {
   }
 
   function executeAction(event: KeyboardEvent, action: TranscriptVimAction): boolean {
+    if (action.type === 'interrupt') {
+      // With an active mouse selection, Ctrl+C means copy — leave it to the
+      // browser's `copy` event instead of aborting the run.
+      if (mouseSelection) return false
+      if (opts.draft.value.trim()) opts.clearComposer()
+      else if (opts.canAbort.value) void opts.abortRun()
+      return true
+    }
+    if (action.type === 'copy') {
+      if (mouseSelection) {
+        const text = mouseSelectionText()
+        clearMouseSelection()
+        scheduleCursorPlacement()
+        if (text) void copyRawText(text)
+        return true
+      }
+      void yankSelectionOrStartOperator()
+      return true
+    }
+    if (action.type === 'cancel') {
+      if (mouseSelection) {
+        clearMouseSelection()
+        scheduleCursorPlacement()
+        return true
+      }
+      if (mode.value.startsWith('VISUAL')) cancelVisual()
+      else clearPending()
+      return true
+    }
+    // Any other action replaces the mouse selection, mirroring the TUI where a
+    // pointer selection is cancelled once the cursor moves or the mode changes.
+    clearMouseSelection()
+
     if (action.type === 'count') {
       countPrefix.value += String(action.digit)
       commandEcho.value = ''
@@ -1595,15 +1784,6 @@ export function useChatTranscriptVim(opts: {
     }
     if (action.type === 'visual') {
       startVisual(action.mode)
-      return true
-    }
-    if (action.type === 'cancel') {
-      if (mode.value.startsWith('VISUAL')) cancelVisual()
-      else clearPending()
-      return true
-    }
-    if (action.type === 'copy') {
-      void yankSelectionOrStartOperator()
       return true
     }
     if (action.type === 'yank-line') {
@@ -1709,11 +1889,6 @@ export function useChatTranscriptVim(opts: {
       // embedded workspace routing keeps the same behavior.
       return false
     }
-    if (action.type === 'interrupt') {
-      if (opts.draft.value.trim()) opts.clearComposer()
-      else if (opts.canAbort.value) void opts.abortRun()
-      return true
-    }
     // Unknown future actions remain available to application-level shortcuts.
     return false
   }
@@ -1735,6 +1910,9 @@ export function useChatTranscriptVim(opts: {
       }
       const action = resolveTranscriptVimAction(event)
       if (action?.type === 'interrupt') {
+        // An active mouse selection means Ctrl+C copies the selection; let the
+        // browser's `copy` event handle it instead of clearing the composer.
+        if (mouseSelection) return
         event.preventDefault()
         event.stopPropagation()
         if (opts.draft.value.trim()) opts.clearComposer()
@@ -1813,6 +1991,7 @@ export function useChatTranscriptVim(opts: {
       cursorOffset.value = 0
       preferredViewportX.value = null
       cursorScreenAnchor = null
+      clearMouseSelection()
       visualAnchorOffset.value = 0
       searchQuery.value = ''
       searchMatches.value = []
@@ -1860,6 +2039,8 @@ export function useChatTranscriptVim(opts: {
     root?.addEventListener('pointerdown', onTranscriptPointerDown, true)
     window.addEventListener('keydown', onKeydown)
     window.addEventListener('resize', onTranscriptResize)
+    document.addEventListener('copy', onTranscriptCopy)
+    document.addEventListener('click', onTranscriptClickCapture, true)
     mountedScroll?.addEventListener('scroll', onTranscriptScroll, { passive: true })
   })
   onBeforeUnmount(() => {
@@ -1870,10 +2051,13 @@ export function useChatTranscriptVim(opts: {
     mountedRoot?.removeEventListener('pointerdown', onTranscriptPointerDown, true)
     window.removeEventListener('keydown', onKeydown)
     window.removeEventListener('resize', onTranscriptResize)
+    document.removeEventListener('copy', onTranscriptCopy)
+    document.removeEventListener('click', onTranscriptClickCapture, true)
     mountedScroll?.removeEventListener('scroll', onTranscriptScroll)
     if (placementFrame) window.cancelAnimationFrame(placementFrame)
     if (scrollFollowFrame) window.cancelAnimationFrame(scrollFollowFrame)
     if (scrollSuppressionFrame) window.cancelAnimationFrame(scrollSuppressionFrame)
+    clearMouseSelection()
     clearVisualBlockHighlight()
     removeCursorOverlay()
     if (ownsNativeSelection) window.getSelection()?.removeAllRanges()

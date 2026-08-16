@@ -239,3 +239,26 @@ export function transcriptParagraphRange(text: string, offset: number, around: b
   const delimiter = relativeEnd < after.length && around ? (after.startsWith('\r\n\r\n', relativeEnd) ? 4 : 2) : 0
   return { start, end: cursor + relativeEnd + delimiter }
 }
+
+/**
+ * Extend an offset so the final grapheme is included when the offset falls
+ * inside one (character-mode selection end).
+ */
+export function transcriptSelectionEnd(text: string, offset: number): number {
+  const clamped = Math.max(0, Math.min(text.length, offset))
+  const grapheme = transcriptGraphemes(text).find((item) => clamped >= item.start && clamped < item.end)
+  return grapheme?.end ?? clamped
+}
+
+/**
+ * Slice transcript text between two offsets, extending the upper bound so the
+ * final grapheme is included when it falls inside one (character-mode
+ * selection). The returned range is independent of argument order.
+ */
+export function transcriptSelectionText(text: string, start: number, end: number): string {
+  const clampedStart = Math.max(0, Math.min(text.length, start))
+  const clampedEnd = Math.max(0, Math.min(text.length, end))
+  const lower = Math.min(clampedStart, clampedEnd)
+  const upper = Math.max(clampedStart, clampedEnd)
+  return text.slice(lower, transcriptSelectionEnd(text, upper))
+}

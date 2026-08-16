@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { onClickOutside } from '@vueuse/core'
 import { RiListUnordered } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 import { renderMarkdown, type MarkdownUiLabels } from '@/lib/markdown'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { withEmbeddedWorkspaceScopeQuery } from '@/app/windowScope'
+import { resolveWorkspaceFileLink, resolveWorkspaceMediaUrl } from '@/lib/workspaceLinks'
+import { useDirectoryStore } from '@/stores/directory'
 import { useToastsStore } from '@/stores/toasts'
 import { useUiStore, type ImageViewerItem } from '@/stores/ui'
 
@@ -31,6 +35,7 @@ const props = withDefaults(
 
 const html = ref('')
 const rootEl = ref<HTMLElement | null>(null)
+const route = useRoute()
 let timer: number | null = null
 let copiedTimer: number | null = null
 let mermaidTimer: number | null = null
@@ -257,7 +262,9 @@ function scrollToHeading(id: string) {
 }
 
 const toasts = useToastsStore()
+const directoryStore = useDirectoryStore()
 const ui = useUiStore()
+const router = useRouter()
 const { t } = useI18n()
 
 function buildMarkdownLabels(): Partial<MarkdownUiLabels> {
@@ -535,9 +542,14 @@ function resolveImageSrcForViewer(rawSrc: string): string {
   if (!src) return ''
   if (src.startsWith('data:') || src.startsWith('blob:')) return src
 
-  // The browser client has no server-side workspace file URL scheme: media URLs
-  // rendered by the server (absolute http(s) URLs or data URIs) pass through.
-  return src
+  const workspaceRoot = String(directoryStore.currentDirectory || '').trim()
+  if (!workspaceRoot) return src
+
+  const mediaUrl = resolveWorkspaceMediaUrl(src, {
+    workspaceRoot,
+    baseFilePath: props.sourcePath,
+  })
+  return mediaUrl || src
 }
 
 function openMarkdownImagePreview(targetImage: HTMLImageElement): boolean {
@@ -575,6 +587,33 @@ function openMarkdownImagePreview(targetImage: HTMLImageElement): boolean {
   return true
 }
 
+function openWorkspaceLink(href: string): boolean {
+  const workspaceRoot = String(directoryStore.currentDirectory || '').trim()
+  if (!workspaceRoot) return false
+
+  const resolved = resolveWorkspaceFileLink(href, {
+    workspaceRoot,
+    baseFilePath: props.sourcePath,
+  })
+  if (!resolved?.path) return false
+
+  const query: Record<string, string> = {
+    filePath: resolved.path,
+  }
+  if (resolved.line) query.fileLine = String(resolved.line)
+  if (resolved.column) query.fileColumn = String(resolved.column)
+  if (resolved.anchor) query.fileAnchor = String(resolved.anchor)
+
+  const fileName = resolved.path.split('/').filter(Boolean).pop() || String(t('nav.files'))
+  ui.openWorkspaceWindow('files', {
+    activate: true,
+    query,
+    title: fileName,
+    matchKeys: ['filePath'],
+  })
+  void router.push({ path: '/files', query: withEmbeddedWorkspaceScopeQuery(query, route.query) })
+  return true
+}
 
 function hashString(input: string): string {
   // Small non-cryptographic hash for caching rendered diagrams.
@@ -716,6 +755,17 @@ async function handleRootClick(event: MouseEvent) {
       if (!rawId) return
 
       if (scrollToAnchor(rawId)) return
+      const decoded = decodeAnchorId(rawId)
+      if (props.sourcePath && /^(?:L\d+(?:C\d+)?|\d+(?::\d+)?)$/i.test(decoded)) {
+        // Support line-style fragments in markdown previews (e.g. #L42 / #42:3)
+        // by treating them as "open current file at location".
+        void openWorkspaceLink(`${props.sourcePath}#${decoded}`)
+      }
+      return
+    }
+
+    if (href && openWorkspaceLink(href)) {
+      event.preventDefault()
       return
     }
   }
@@ -768,6 +818,11 @@ function applyRequestedAnchorReveal() {
 
   if (scrollToAnchor(anchor)) {
     lastRevealAnchorKey = key
+    return
+  }
+
+  if (sourcePath && /^(?:L\d+(?:C\d+)?|\d+(?::\d+)?)$/i.test(anchor) && openWorkspaceLink(`${sourcePath}#${anchor}`)) {
+    lastRevealAnchorKey = key
   }
 }
 
@@ -801,6 +856,13 @@ watch(
     }, delay)
   },
   { immediate: true },
+)
+
+watch(
+  () => [directoryStore.currentDirectory, props.sourcePath] as const,
+  () => {
+    void nextTick(() => hydrateWorkspaceMedia())
+  },
 )
 
 watch(

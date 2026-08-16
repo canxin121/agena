@@ -2,6 +2,8 @@ import { nextTick, onBeforeUnmount, ref, type Ref } from 'vue'
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
+import { patchSessionIdInQuery } from '@/app/navigation/sessionQuery'
+import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import type { JsonValue } from '@/types/json'
 import { buildAssistantErrorCopyText } from './assistantError'
 
@@ -52,7 +54,7 @@ type MessageLike = {
 type ChatLike = {
   selectedSessionId: string | null
   selectSession: (sessionId: string) => Promise<void>
-  forkSession: (sessionId: string, opts?: { at_message_id?: number }) => Promise<{ id?: string } | null>
+  forkSession: (sessionId: string, opts?: { at_message_id?: number }) => Promise<JsonValue | null>
   revertToMessage: (sessionId: string, messageId: string, opts?: { restoreComposer?: boolean }) => Promise<void>
   consumePendingComposer: () => PendingComposer
   refreshMessages: (sessionId: string, opts?: { silent?: boolean }) => Promise<void>
@@ -94,6 +96,7 @@ export function useChatMessageActions(opts: {
   const {
     chat,
     toasts,
+    route,
     router,
     draft,
     attachedFiles,
@@ -142,10 +145,18 @@ export function useChatMessageActions(opts: {
     const sid = chat.selectedSessionId
     if (!sid) return
     const atMessageId = Number(messageId)
-    const created = await chat.forkSession(sid, Number.isFinite(atMessageId) ? { at_message_id: atMessageId } : undefined)
+    const created = await chat.forkSession(
+      sid,
+      Number.isFinite(atMessageId) && atMessageId > 0 ? { at_message_id: atMessageId } : undefined,
+    )
     const newId = typeof created?.id === 'string' ? created.id.trim() : ''
     if (!newId) return
-    await router.replace({ path: '/chat' })
+    const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
+    if (isEmbeddedWorkspacePane) {
+      await router.replace({ path: '/chat', query: patchSessionIdInQuery(route.query, newId) })
+    } else {
+      await router.replace({ path: '/chat' })
+    }
     await chat.selectSession(newId).catch(() => {})
     await nextTick()
     scrollToBottom('auto')

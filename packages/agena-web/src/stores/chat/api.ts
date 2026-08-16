@@ -459,6 +459,28 @@ export async function createSession(workspaceId?: number): Promise<Session> {
   return session
 }
 
+/** POST /api/v1/workspaces — create a workspace (project) by path. Returns the new workspace id. */
+export async function createWorkspace(path: string): Promise<number> {
+  const created = await apiJson<JsonValue>('/api/v1/workspaces', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  const record = asRecord(created)
+  const id = record?.id
+  if (typeof id !== 'number' || !Number.isFinite(id)) {
+    throw new Error('Server did not return a workspace id')
+  }
+  return id
+}
+
+/** DELETE /api/v1/workspaces/{id} — remove a workspace (project). */
+export async function deleteWorkspace(workspaceId: string): Promise<void> {
+  const wid = String(workspaceId || '').trim()
+  if (!wid) throw new Error('Missing workspace id')
+  await apiJson(`/api/v1/workspaces/${encodeURIComponent(wid)}`, { method: 'DELETE' })
+}
+
 /** DELETE /api/v1/sessions/{id} */
 export async function deleteSession(sessionId: string): Promise<void> {
   await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
@@ -472,6 +494,15 @@ export async function patchSessionTitle(sessionId: string, title: string): Promi
     body: JSON.stringify({ title }),
   })
   const session = toSession(updated)
+  if (!session) throw new Error('Server did not return a session')
+  return session
+}
+
+/** GET /api/v1/sessions/{id} — single session read-back (replaces opencode locateSession). */
+export async function getSession(sessionId: string): Promise<Session> {
+  const session = toSession(
+    await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`),
+  )
   if (!session) throw new Error('Server did not return a session')
   return session
 }

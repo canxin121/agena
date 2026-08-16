@@ -19,7 +19,8 @@ import type {
 } from '@/components/chat/messageList.types'
 import { formatTimeHMS } from '@/i18n/intl'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
-import { mediaKindFromHref } from '@/lib/mediaKind'
+import { buildWorkspaceRawFileUrl, extractWorkspacePathFromFileUrl, mediaKindFromHref } from '@/lib/workspaceLinks'
+import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore, type ImageViewerItem } from '@/stores/ui'
 
 const props = defineProps<{
@@ -73,17 +74,32 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const directoryStore = useDirectoryStore()
 const ui = useUiStore()
 
 type OptimisticFile = OptimisticUserMessage['files'][number]
 
-function resolveWorkspacePathForOptimisticFile(_file: OptimisticFile): string {
-  // The browser client has no server-side workspace file URL scheme, so file
-  // parts are referenced directly by their `url` (server-served or data/blob).
-  return ''
+function resolveWorkspacePathForOptimisticFile(file: OptimisticFile): string {
+  const workspaceRoot = String(directoryStore.currentDirectory || '').trim()
+  if (!workspaceRoot) return ''
+
+  const serverPath = typeof file?.serverPath === 'string' ? file.serverPath.trim() : ''
+  if (serverPath) {
+    return extractWorkspacePathFromFileUrl(serverPath, workspaceRoot) || ''
+  }
+
+  const url = typeof file?.url === 'string' ? file.url.trim() : ''
+  if (!url) return ''
+  return extractWorkspacePathFromFileUrl(url, workspaceRoot) || ''
 }
 
 function openOptimisticFile(file: OptimisticFile) {
+  const targetPath = resolveWorkspacePathForOptimisticFile(file)
+  if (targetPath) {
+    ui.requestWorkspaceDockFile(targetPath, 'open')
+    return
+  }
+
   const url = typeof file?.url === 'string' ? file.url.trim() : ''
   if (!url) return
   window.open(url, '_blank', 'noopener,noreferrer')
@@ -109,6 +125,12 @@ function optimisticFileLabel(file: OptimisticFile): string {
 }
 
 function optimisticFilePreviewUrl(file: OptimisticFile): string {
+  const workspaceRoot = String(directoryStore.currentDirectory || '').trim()
+  const path = resolveWorkspacePathForOptimisticFile(file)
+  if (workspaceRoot && path) {
+    return buildWorkspaceRawFileUrl(workspaceRoot, path)
+  }
+
   const url = typeof file?.url === 'string' ? file.url.trim() : ''
   if (!url) return ''
   if (url.startsWith('data:') || url.startsWith('blob:')) return url

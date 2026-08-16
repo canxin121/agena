@@ -18,9 +18,12 @@ import {
 
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
 import MessageList from '@/components/chat/MessageList.vue'
+import PluginChatMounts from '@/components/chat/PluginChatMounts.vue'
+import PluginChatOverlayMounts from '@/components/chat/PluginChatOverlayMounts.vue'
 import ChatHeader from '@/components/chat/ChatHeader.vue'
 import Composer from '@/components/chat/Composer.vue'
 import RenameSessionDialog from '@/components/chat/RenameSessionDialog.vue'
+import AttachProjectDialog from '@/components/chat/AttachProjectDialog.vue'
 import AttachmentsPanel from '@/components/chat/AttachmentsPanel.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
@@ -58,6 +61,8 @@ const {
   attachmentsBusy,
   attachmentsPanelOpen,
   draft,
+  chatSidebarPluginMounts,
+  chatOverlayBottomPluginMounts,
 
   // Message list.
   renderBlocks,
@@ -113,8 +118,10 @@ const {
   removeAttachment,
   clearAttachments,
   openFilePicker,
+  openProjectAttachDialog,
   toggleAttachmentsPanel,
   setAttachmentsPanelOpen,
+  closeAttachmentsPanel,
 
   // Header actions.
   canAbort,
@@ -174,6 +181,10 @@ const {
   renameDraft,
   renameBusy,
   saveRename,
+  attachProjectDialogOpen,
+  attachProjectPath,
+  sessionDirectory,
+  addProjectAttachment,
 
   // Message actions.
   isStreamingAssistantMessage,
@@ -221,6 +232,21 @@ const attachmentsCountLabel = computed(() => {
   if (n > 99) return '99+'
   return String(n)
 })
+
+function handleAttachProjectFromPanel() {
+  closeAttachmentsPanel()
+  openProjectAttachDialog()
+}
+
+const overlayReservePx = ref(0)
+
+function handleOverlayReserve(px: number) {
+  if (!Number.isFinite(px) || px <= 0) {
+    overlayReservePx.value = 0
+    return
+  }
+  overlayReservePx.value = Math.max(0, Math.floor(px))
+}
 
 // Resolve popover anchors to the trigger button element.
 // This keeps desktop popups aligned with the button that opened them.
@@ -346,6 +372,8 @@ void sessionActionsMenuRef
               @clearSessionError="chat.selectedSessionId ? chat.clearSessionError(chat.selectedSessionId) : undefined"
             />
 
+            <div v-if="overlayReservePx > 0" :style="{ height: `${overlayReservePx}px` }" aria-hidden="true" />
+
             <div ref="bottomEl" class="h-px w-full" aria-hidden="true" />
           </div>
         </div>
@@ -408,6 +436,18 @@ void sessionActionsMenuRef
           </IconButton>
         </div>
 
+        <div
+          v-if="chat.selectedSessionId && !ui.isSessionSwitcherOpen && !composerFullscreenActive"
+          class="pointer-events-none absolute inset-x-0 bottom-2 z-30"
+        >
+          <div class="chat-column">
+            <PluginChatOverlayMounts
+              :mounts="chatOverlayBottomPluginMounts"
+              :is-mobile-pointer="ui.isMobilePointer"
+              @reserve-change="handleOverlayReserve"
+            />
+          </div>
+        </div>
       </template>
 
       <template #bottom>
@@ -429,6 +469,7 @@ void sessionActionsMenuRef
                 :mobile-pointer="ui.isMobilePointer"
                 @abort="abortRun"
               />
+              <PluginChatMounts :mounts="chatSidebarPluginMounts" />
 
               <Composer
                 ref="composerRef"
@@ -673,6 +714,15 @@ void sessionActionsMenuRef
     @save="saveRename"
   />
 
+  <AttachProjectDialog
+    :open="attachProjectDialogOpen"
+    v-model:path="attachProjectPath"
+    :base-path="sessionDirectory"
+    :attached-count="attachedFiles.length"
+    @update:open="(v) => (attachProjectDialogOpen = v)"
+    @add="addProjectAttachment"
+  />
+
   <AttachmentsPanel
     :open="attachmentsPanelOpen"
     :is-mobile-pointer="ui.isMobilePointer"
@@ -687,6 +737,7 @@ void sessionActionsMenuRef
     @remove="removeAttachment"
     @clear="clearAttachments"
     @attachLocal="openFilePicker"
+    @attachProject="handleAttachProjectFromPanel"
   />
 </template>
 

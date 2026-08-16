@@ -34,7 +34,9 @@ test('Keyboard tap markers stay limited to allowed controls', async () => {
   }
 
   const expected = [
+    'components/TerminalKeybar.vue',
     'components/chat/Composer.vue',
+    'components/chat/PluginChatOverlayMounts.vue',
     'components/ui/OptionMenu.vue',
     'pages/chat/ChatPageView.vue',
   ].sort()

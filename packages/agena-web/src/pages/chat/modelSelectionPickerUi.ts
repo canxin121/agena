@@ -57,6 +57,9 @@ export function useModelSelectionPickerUi(opts: {
   modelPickerQuery: Ref<string>
   agentPickerQuery: Ref<string>
   onOpenComposerPicker: () => void
+  commandOpen: Ref<boolean>
+  commandQuery: Ref<string>
+  commandIndex: Ref<number>
 }) {
   const {
     composerControlsRef,
@@ -68,6 +71,9 @@ export function useModelSelectionPickerUi(opts: {
     modelPickerQuery,
     agentPickerQuery,
     onOpenComposerPicker,
+    commandOpen,
+    commandQuery,
+    commandIndex,
   } = opts
 
   function closeComposerPicker() {
@@ -84,6 +90,9 @@ export function useModelSelectionPickerUi(opts: {
     }
 
     onOpenComposerPicker()
+    commandOpen.value = false
+    commandQuery.value = ''
+    commandIndex.value = 0
 
     if (composerPickerOpen.value) {
       composerPickerOpen.value = null

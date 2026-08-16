@@ -1,6 +1,8 @@
 import { computed, ref, type Ref } from 'vue'
 
 import { apiJson } from '../../lib/api'
+import { extractConfigDefaults } from './modelSelectionDefaults'
+import type { OpencodeConfigResponse } from '../../stores/opencodeConfig'
 import type { JsonValue as JsonLike } from '../../types/json'
 
 // ---------------------------------------------------------------------------
@@ -19,6 +21,13 @@ import type { JsonValue as JsonLike } from '../../types/json'
 export type Provider = { id: string; name?: string; models?: JsonLike }
 export type Agent = { name: string; description?: string; mode?: string; hidden?: boolean; disable?: boolean }
 export type ModelMetaRecord = Record<string, JsonLike>
+
+export type OpencodeConfigStoreLike = {
+  data: OpencodeConfigResponse['config'] | null
+  scope: string
+  exists: boolean | null
+  refresh: (opts: { scope: 'project' | 'user'; directory: string | null }) => Promise<void>
+}
 
 type AgenaProviderSummary = {
   provider_id?: string
@@ -69,24 +78,31 @@ export function isSelectablePrimaryAgent(agent: Agent | null | undefined): boole
   return true
 }
 
-export function useModelSelectionCatalog(opts: { sessionDirectory: Ref<string> }) {
-  // The agena server owns the workspace; keep the sessionDirectory ref accepted
-  // for signature compatibility (no ?directory= query is sent anymore).
-  void opts.sessionDirectory
+export function useModelSelectionCatalog(opts: {
+  opencodeConfig: OpencodeConfigStoreLike
+  sessionDirectory: Ref<string>
+}) {
+  const { opencodeConfig, sessionDirectory } = opts
 
+  const projectConfigLayer = ref<ModelMetaRecord | null>(null)
+  const userConfigLayer = ref<ModelMetaRecord | null>(null)
   const providerDefaultModels = ref<Record<string, string>>({})
 
   const providers = ref<Provider[]>([])
   const agents = ref<Agent[]>([])
   const catalogLoading = ref(false)
 
-  // Agena has no per-session share toggle; sharing is available.
-  const shareDisabled = computed(() => false)
+  const resolvedOpencodeConfig = computed(() => {
+    return projectConfigLayer.value || userConfigLayer.value || {}
+  })
 
-  // Agena derives defaults server-side from the provider list; no client config
-  // layers exist anymore.
-  const projectConfigDefaults = computed(() => ({ defaultAgent: '', defaultProvider: '', defaultModel: '' }))
-  const userConfigDefaults = computed(() => ({ defaultAgent: '', defaultProvider: '', defaultModel: '' }))
+  const shareDisabled = computed(() => {
+    const cfg = resolvedOpencodeConfig.value
+    return String(cfg?.share || '').trim() === 'disabled'
+  })
+
+  const projectConfigDefaults = computed(() => extractConfigDefaults(projectConfigLayer.value))
+  const userConfigDefaults = computed(() => extractConfigDefaults(userConfigLayer.value))
 
   const fallbackAgent = computed(() => (agents.value[0]?.name || '').trim())
 
@@ -103,10 +119,93 @@ export function useModelSelectionCatalog(opts: { sessionDirectory: Ref<string> }
   })
 
   function ensureDefaultProviderInList(list: Provider[]) {
-    const def = (providerDefaultModels.value['__default__'] || '').trim()
+    const def = (projectConfigDefaults.value.defaultProvider || userConfigDefaults.value.defaultProvider || '').trim()
     if (!def) return list
     if (list.some((p) => p.id === def)) return list
     return [...list, { id: def, name: def, models: {} }]
+  }
+
+  function mergeProviderLists(primary: Provider[], fallback: Provider[]) {
+    const fallbackMap = new Map<string, Provider>()
+    for (const p of fallback) fallbackMap.set(p.id, p)
+
+    const out: Provider[] = []
+    const seen = new Set<string>()
+    for (const p of primary) {
+      const existing = fallbackMap.get(p.id)
+      out.push(existing ? { ...existing, ...p, models: p.models || existing.models } : p)
+      seen.add(p.id)
+    }
+    for (const p of fallback) {
+      if (!seen.has(p.id)) out.push(p)
+    }
+    return out
+  }
+
+  function providerListFromConfig(): Provider[] {
+    const cfg = resolvedOpencodeConfig.value
+    const out: Provider[] = []
+    const providerMap = cfg?.provider
+    if (!isRecord(providerMap)) return out
+
+    for (const [id, value] of Object.entries(providerMap)) {
+      const label = String(id).trim()
+      if (!label) continue
+      const valueRecord = asRecord(value)
+      const name = typeof valueRecord.name === 'string' ? valueRecord.name : undefined
+      const modelsRaw = valueRecord.models
+      const models = Array.isArray(modelsRaw) || isRecord(modelsRaw) ? modelsRaw : undefined
+      out.push({ id: label, name, models })
+    }
+    return out
+  }
+
+  function agentListFromConfig(): Agent[] {
+    const cfg = resolvedOpencodeConfig.value
+    const entries: Agent[] = []
+    const agentMap = cfg?.agent
+    const modeMap = cfg?.mode
+
+    const readMap = (map: ModelMetaRecord | null | undefined) => {
+      if (!isRecord(map)) return
+      for (const [name, value] of Object.entries(map)) {
+        const label = String(name).trim()
+        if (!label) continue
+
+        const rec = asRecord(value)
+        const description = typeof rec.description === 'string' ? rec.description : undefined
+        const mode = typeof rec.mode === 'string' ? rec.mode : undefined
+        const hidden = typeof rec.hidden === 'boolean' ? rec.hidden : undefined
+        const disable = typeof rec.disable === 'boolean' ? rec.disable : undefined
+
+        if (disable === true) continue
+        if (hidden === true) continue
+        if (mode === 'subagent') continue
+        if (!mode && (label === 'general' || label === 'explore')) continue
+
+        entries.push({ name: label, description, mode, hidden, disable })
+      }
+    }
+
+    readMap(isRecord(agentMap) ? agentMap : undefined)
+    if (isRecord(modeMap)) {
+      const decorated: ModelMetaRecord = {}
+      for (const [k, v] of Object.entries(modeMap)) {
+        decorated[k] = { ...asRecord(v), mode: 'primary' }
+      }
+      readMap(decorated)
+    }
+
+    const defaultAgent = (
+      projectConfigDefaults.value.defaultAgent ||
+      userConfigDefaults.value.defaultAgent ||
+      ''
+    ).trim()
+    if (defaultAgent && !entries.some((a) => a.name === defaultAgent)) {
+      entries.push({ name: defaultAgent })
+    }
+
+    return entries.filter(isSelectablePrimaryAgent)
   }
 
   function modelMetaFor(providerId: string, modelId: string): ModelMetaRecord | null {
@@ -127,7 +226,42 @@ export function useModelSelectionCatalog(opts: { sessionDirectory: Ref<string> }
       const candidate = remoteModels[mid]
       return isRecord(candidate) ? candidate : null
     }
+
+    const fromCfg = providerListFromConfig().find((p) => p.id === pid)
+    const cfgModels = fromCfg?.models
+    if (Array.isArray(cfgModels)) {
+      const match = cfgModels.find((m) => {
+        const rec = asRecord(m)
+        return readString(rec.id as JsonLike) === mid || readString(rec.model_id as JsonLike) === mid
+      })
+      return isRecord(match) ? match : null
+    }
+    if (isRecord(cfgModels) && !Array.isArray(cfgModels)) {
+      const candidate = cfgModels[mid]
+      return isRecord(candidate) ? candidate : null
+    }
+
     return null
+  }
+
+  async function refreshOpencodeConfig() {
+    const dir = sessionDirectory.value
+    const scope = dir ? 'project' : 'user'
+    projectConfigLayer.value = null
+    userConfigLayer.value = null
+
+    try {
+      await opencodeConfig.refresh({ scope, directory: dir || null })
+    } catch {
+      // ignore
+    }
+
+    if (scope === 'project' && opencodeConfig.exists !== false) {
+      projectConfigLayer.value = isRecord(opencodeConfig.data) ? opencodeConfig.data : {}
+    }
+    if (scope === 'user') {
+      userConfigLayer.value = isRecord(opencodeConfig.data) ? opencodeConfig.data : {}
+    }
   }
 
   function providerFromSummary(summary: AgenaProviderSummary, models: JsonLike[]): Provider {
@@ -152,6 +286,10 @@ export function useModelSelectionCatalog(opts: { sessionDirectory: Ref<string> }
     if (catalogLoading.value) return
     catalogLoading.value = true
     try {
+      // Keep the config layers for defaults even though agena has no config
+      // endpoint; the opencodeConfig store is a local stub.
+      await refreshOpencodeConfig()
+
       // GET /api/v1/providers → summaries; agena has no separate agent catalog.
       const summaries: AgenaProviderSummary[] = await apiJson<AgenaProviderSummary[]>('/api/v1/providers')
       const list = Array.isArray(summaries) ? summaries : []
@@ -185,15 +323,15 @@ export function useModelSelectionCatalog(opts: { sessionDirectory: Ref<string> }
         if (next.some((p) => p.id === pid)) continue
         next.push(providerFromSummary(summary, []))
       }
-      providers.value = ensureDefaultProviderInList(next)
+      providers.value = ensureDefaultProviderInList(mergeProviderLists(next, providerListFromConfig()))
 
-      // No /api/agent endpoint in agena → empty agent list; the picker shows
-      // only the "auto" default entry.
-      agents.value = []
+      // No /api/agent endpoint in agena → derive agents from the (stubbed) config
+      // layers; the picker shows the "auto" default entry when that is empty.
+      agents.value = agentListFromConfig()
     } catch {
       providerDefaultModels.value = {}
-      providers.value = []
-      agents.value = []
+      providers.value = ensureDefaultProviderInList(providerListFromConfig())
+      agents.value = agentListFromConfig()
     } finally {
       catalogLoading.value = false
     }

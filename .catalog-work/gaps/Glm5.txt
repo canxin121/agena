@@ -1,2 +1,0 @@
-glm5.2
-glm5.2-fast

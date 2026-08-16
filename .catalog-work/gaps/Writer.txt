@@ -1,7 +1,0 @@
-palmyra-creative
-palmyra-creative-122b
-palmyra-fin-70b-32k
-palmyra-med-70b
-palmyra-med-70b-32k
-palmyra-x4
-palmyra-x5

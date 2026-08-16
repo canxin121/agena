@@ -1,5 +1,0 @@
-muse-glimmer-30b
-muse-spark-1-1
-muse-spark-1.1
-muse-spark-1.2
-muse-spark-1.2-contributor

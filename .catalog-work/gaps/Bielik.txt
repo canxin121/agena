@@ -1,2 +1,0 @@
-bielik-11b-v2.6-instruct
-bielik-11b-v3.0-instruct

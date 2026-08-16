@@ -1,4 +1,0 @@
-auto-model
-auto-model-basic
-auto-model-premium
-auto-model-standard

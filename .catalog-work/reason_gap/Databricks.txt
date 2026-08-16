@@ -1,6 +1,0 @@
-databricks-gemini-2-5-flash
-databricks-gemini-2-5-pro
-databricks-glm-5-2
-databricks-gpt-oss-120b
-databricks-gpt-oss-20b
-databricks-kimi-k2-7-code

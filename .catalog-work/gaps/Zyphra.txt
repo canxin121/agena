@@ -1,2 +1,0 @@
-zamba2-7b-instruct
-zamba2-7b-instruct-v2

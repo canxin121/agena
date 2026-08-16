@@ -1,5 +1,0 @@
-hermes-4-405b
-hermes-4-70b
-hermes-high
-hermes-low
-hermes-medium

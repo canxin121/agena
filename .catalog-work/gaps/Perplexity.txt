@@ -1,8 +1,0 @@
-grok-4.1-fast-non-reasoning
-perplexity-academic-researcher
-sonar
-sonar-deep-research
-sonar-pro
-sonar-pro-search
-sonar-reasoning
-sonar-reasoning-pro

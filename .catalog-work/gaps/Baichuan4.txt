@@ -1,2 +1,0 @@
-baichuan4-air
-baichuan4-turbo

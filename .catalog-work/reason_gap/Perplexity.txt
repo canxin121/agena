@@ -1,4 +1,0 @@
-perplexity-academic-researcher
-sonar-pro-search
-sonar-reasoning
-sonar-reasoning-pro

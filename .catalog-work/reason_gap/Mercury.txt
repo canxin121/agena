@@ -1,2 +1,0 @@
-mercury-2
-mercury-edit-2

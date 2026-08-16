@@ -1,2 +1,0 @@
-z-ai-glm-5-turbo
-z-ai-glm-5v-turbo

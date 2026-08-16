@@ -1,2 +1,0 @@
-apertus-70b
-apertus-v1.5-70b

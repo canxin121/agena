@@ -1,3 +1,0 @@
-yi-large
-yi-lightning
-yi-medium-200k

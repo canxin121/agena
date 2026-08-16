@@ -1,2 +1,0 @@
-multilingual-e5-large-instruct
-multilingual-v2

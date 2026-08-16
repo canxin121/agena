@@ -1,3 +1,0 @@
-veo3.1
-veo3.1-fast
-veo3.1-lite

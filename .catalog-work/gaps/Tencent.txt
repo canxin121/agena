@@ -1,7 +1,0 @@
-hunyuan-2.0-instruct
-hunyuan-2.0-thinking
-hunyuan-a13b-instruct
-hunyuan-mt-7b
-hunyuan-t1
-hunyuan-turbos
-hunyuan-turbos-20250226

@@ -1,3 +1,0 @@
-cogito-v1-preview-qwen-32b
-cogito-v2-1-671b
-cogito-v2.1-671b

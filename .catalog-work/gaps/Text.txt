@@ -1,5 +1,0 @@
-text-max
-text-multilingual-embedding-002
-text-prime
-text-standard
-text-to-audio

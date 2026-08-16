@@ -1,3 +1,0 @@
-phi-4-mini-reasoning
-phi-4-reasoning
-phi-4-reasoning-plus

@@ -1,9 +1,0 @@
-wan-v2-6
-wan-v2.5-t2v-preview
-wan-v2.6-i2v
-wan-v2.6-i2v-flash
-wan-v2.6-r2v
-wan-v2.6-r2v-flash
-wan-v2.6-t2v
-wan-v2.7-r2v
-wan-v2.7-t2v

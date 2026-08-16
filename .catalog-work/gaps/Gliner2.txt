@@ -1,5 +1,0 @@
-gliner2-base-v1
-gliner2-large-v1
-gliner2-multi-large-v1
-gliner2-multi-v1
-gliner2-privacy-filter-pii-multi

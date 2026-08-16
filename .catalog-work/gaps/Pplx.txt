@@ -1,2 +1,0 @@
-pplx-embed-v1-0.6b
-pplx-embed-v1-4b

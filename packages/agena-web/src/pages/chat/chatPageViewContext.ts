@@ -109,7 +109,7 @@ export type ChatPageViewContext = {
   optimisticUser: MaybeRef<OptimisticUserMessage | null>
   showOptimisticUser: MaybeRef<boolean>
 
-  activityInitiallyExpandedForPart: (part: DynamicRecord) => boolean
+  activityInitiallyExpandedForPart: (part: TranscriptDisplayPart) => boolean
   activityCollapseSignal: MaybeRef<number>
   MAX_VISIBLE_ACTIVITY_COLLAPSED: number
   isActivityExpanded: (key: string) => boolean

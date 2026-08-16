@@ -44,13 +44,12 @@ import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageEntry } from '@/types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import {
-  DEFAULT_CHAT_ACTIVITY_EXPAND_KEYS,
   DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS,
-  normalizeChatActivityDefaultExpanded,
+  chatActivityKindIdForTranscriptPart,
   normalizeChatToolActivityFilters,
   normalizeChatToolExpansionOverrides,
+  resolveChatActivityKindDefaultExpanded,
   resolveChatToolDefaultExpanded,
-  type ChatActivityExpandKey,
   type ChatToolExpansionOverrides,
 } from '@/lib/chatActivity'
 
@@ -761,13 +760,7 @@ const settingsData = computed<JsonObject>(() => asRecord(settings.data))
 
 const activityAutoCollapseOnIdle = computed(() => settingsData.value.chatActivityAutoCollapseOnIdle !== false)
 
-const activityDefaultExpandedKeys = computed<ChatActivityExpandKey[]>(() => {
-  const s = settingsData.value
-  if (s && Object.prototype.hasOwnProperty.call(s, 'chatActivityDefaultExpanded')) {
-    return normalizeChatActivityDefaultExpanded(s.chatActivityDefaultExpanded)
-  }
-  return DEFAULT_CHAT_ACTIVITY_EXPAND_KEYS.slice()
-})
+const activityKindDefaultExpanded = computed<string[]>(() => resolveChatActivityKindDefaultExpanded(settingsData.value))
 
 const activityDefaultExpandedToolSet = computed<Set<string>>(() => {
   const s = settingsData.value
@@ -781,27 +774,18 @@ const activityDefaultExpandedToolOverrides = computed<ChatToolExpansionOverrides
   normalizeChatToolExpansionOverrides(settings.data?.chatToolActivityDefaultExpandedOverrides),
 )
 
-function activityExpandKeyForPart(part: JsonObject): ChatActivityExpandKey | '' {
-  const t = String(part?.type || '')
-    .trim()
-    .toLowerCase()
-  if (t === 'tool' || (!t && typeof part?.tool === 'string')) return 'tool'
-  if (t === 'reasoning' || t === 'thinking' || t === 'reasoning_content' || t === 'reasoning_details') return 'thinking'
-  if (t.includes('justification')) return 'justification'
-  return (t as ChatActivityExpandKey) || ''
-}
-
-function activityInitiallyExpandedForPart(part: JsonObject): boolean {
-  const key = activityExpandKeyForPart(part)
-  if (!key) return false
-  if (key === 'tool') {
+function activityInitiallyExpandedForPart(part: TranscriptDisplayPart): boolean {
+  const activityKind = chatActivityKindIdForTranscriptPart(part.kind, part.source.agenaKind)
+  if (!activityKind) return false
+  if (activityKind === 'operation') {
     return resolveChatToolDefaultExpanded(
-      part?.tool,
+      part.source.tool,
       activityDefaultExpandedToolOverrides.value,
       activityDefaultExpandedToolSet.value,
+      activityKindDefaultExpanded.value.includes('operation'),
     )
   }
-  return activityDefaultExpandedKeys.value.includes(key)
+  return activityKindDefaultExpanded.value.includes(activityKind)
 }
 
 const showThinking = computed(() => settingsData.value.showReasoningTraces !== false)
@@ -836,7 +820,7 @@ function transcriptPartExpanded(part: TranscriptDisplayPart): boolean {
     return Boolean(activityExpandedByBlockKey.value[part.key])
   }
   if (part.defaultExpanded) return true
-  return activityInitiallyExpandedForPart(part.source as JsonObject)
+  return activityInitiallyExpandedForPart(part)
 }
 
 function setTranscriptPartExpanded(part: TranscriptDisplayPart, expanded: boolean) {

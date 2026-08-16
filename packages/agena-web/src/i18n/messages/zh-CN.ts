@@ -1833,19 +1833,55 @@ export default {
       chat: {
         label: '聊天',
         showTimestamps: '显示时间戳',
+        showReasoning: '显示思考过程',
         autoCollapseActivity: '助手完成后自动收起活动信息',
-        activityDetails: '活动详情',
+        activityDetails: '可折叠 Part 默认状态',
         activityTable: {
-          type: '类型',
-          summary: '摘要',
-          transport: '摘要',
-          expand: '展开',
+          type: 'Part 类型',
+          expand: '默认打开',
         },
-        toolDetails: '工具详情',
+        pluginActivityKind: '插件注册的 Part 展示类型。',
+        activityKinds: {
+          reasoning: {
+            label: '思考过程',
+            description: 'think Part 的推理内容。',
+          },
+          operation: {
+            label: '工具操作',
+            description: 'tool_call Part；具体工具可以在下表单独覆盖。',
+          },
+          resource: {
+            label: '资源',
+            description: 'file_ref Part 的文件、图片和其他资源。',
+          },
+          skill_reference: {
+            label: '技能引用',
+            description: 'skill_ref Part 的技能说明和内容。',
+          },
+          interaction: {
+            label: '用户交互',
+            description: 'interaction Part；等待回答时始终打开。',
+          },
+          hook: {
+            label: 'Hook',
+            description: 'hook Part 的插件生命周期信息。',
+          },
+          error: {
+            label: '错误',
+            description: 'error Part 的结构化错误详情。',
+          },
+          notice: {
+            label: '通知',
+            description: 'notice、system_notification 和 compaction Part。',
+          },
+          text: {
+            label: '中间文本',
+            description: '最终回答之前的 assistant text 片段。',
+          },
+        },
+        toolDetails: '工具默认状态',
         toolDetailsTable: {
           tool: '工具',
-          summary: '摘要',
-          transport: '摘要',
           expand: '默认打开',
         },
         searchTools: '搜索工具',
@@ -1856,10 +1892,6 @@ export default {
         toolDetailsCount: '显示 {shown} / {total} 个工具',
         toolDetailsHint:
           '每个已注册执行工具和 Tool API 函数都有独立的默认打开状态。重置会移除精确覆盖并恢复继承的分类默认值。',
-        activitySummaryHelp:
-          '活动传输默认是全量详情。Expand 仅控制默认展开状态；' + '若未自定义传输策略，仍保持全量传输。',
-        activityTransportHelp:
-          '活动传输默认是全量详情。Expand 仅控制默认展开状态；' + '若未自定义传输策略，仍保持全量传输。',
       },
     },
   },

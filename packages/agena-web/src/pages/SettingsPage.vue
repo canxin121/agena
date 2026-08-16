@@ -31,20 +31,17 @@ import { buildLocalePickerOptions } from '@/pages/loginLocaleOptions'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
 import {
-  CHAT_ACTIVITY_EXPAND_KEYS,
-  DEFAULT_CHAT_ACTIVITY_EXPAND_KEYS,
+  BUILTIN_CHAT_ACTIVITY_KINDS,
   DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS,
-  DEFAULT_CHAT_ACTIVITY_SUMMARY_FILTERS,
   DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS,
-  normalizeChatActivityFilters,
-  normalizeChatActivityDefaultExpanded,
+  normalizeChatActivityKindCatalog,
+  normalizeChatActivityKindDefaultExpanded,
   normalizeChatToolActivityFilters,
   normalizeChatToolExpansionOverrides,
   normalizeChatToolPreferenceId,
+  resolveChatActivityKindDefaultExpanded,
   resolveChatToolDefaultExpanded,
-  ACTIVITY_DEFAULT_EXPANDED_OPTIONS as activityDefaultExpandedOptions,
-  type ChatActivityType,
-  type ChatActivityExpandKey,
+  type ChatActivityKindCatalogItem,
   type ChatToolExpansionOverrides,
   type ChatToolActivityType,
 } from '@/lib/chatActivity'
@@ -55,7 +52,7 @@ const workspacePane = useWorkspacePaneContext()
 const route = useRoute()
 const router = useRouter()
 const { startDesktopSidebarResize } = useDesktopSidebarResize()
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 const SETTINGS_LAST_SECTION_KEY = localStorageKeys.settings.lastRoute
 
@@ -226,64 +223,34 @@ const monoFontPickerOptions = computed(() => [
 
 const showChatTimestamps = makeSetting('showChatTimestamps', true)
 const showReasoningTraces = makeSetting('showReasoningTraces', true)
-const showTextJustificationActivity = makeSetting('showTextJustificationActivity', true)
 
 const chatActivityAutoCollapseOnIdle = makeSetting('chatActivityAutoCollapseOnIdle', true)
 
-const chatActivityDefaultExpanded = computed<ChatActivityExpandKey[]>({
+const chatActivityKindDefaultExpanded = computed<string[]>({
   get() {
-    const s = settings.data
-    if (s && Object.prototype.hasOwnProperty.call(s, 'chatActivityDefaultExpanded')) {
-      return normalizeChatActivityDefaultExpanded(s.chatActivityDefaultExpanded)
-    }
-    return DEFAULT_CHAT_ACTIVITY_EXPAND_KEYS.slice()
+    return resolveChatActivityKindDefaultExpanded(settings.data)
   },
   set(value) {
-    void settings.save({ chatActivityDefaultExpanded: value })
+    void settings.save({
+      chatActivityKindDefaultExpanded: normalizeChatActivityKindDefaultExpanded(value),
+    })
   },
 })
 
-function activityDefaultExpandedEnabled(id: ChatActivityExpandKey): boolean {
-  return chatActivityDefaultExpanded.value.includes(id)
+function activityKindDefaultExpandedEnabled(id: string): boolean {
+  return chatActivityKindDefaultExpanded.value.includes(id)
 }
 
-function toggleActivityDefaultExpanded(id: ChatActivityExpandKey) {
-  const next = new Set(chatActivityDefaultExpanded.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  const ordered = CHAT_ACTIVITY_EXPAND_KEYS.filter((t) => next.has(t))
-  chatActivityDefaultExpanded.value = ordered
-}
-
-function activitySummaryEnabled(id: ChatActivityExpandKey): boolean {
-  if (id === 'thinking') return showReasoningTraces.value
-  if (id === 'justification') return showTextJustificationActivity.value
-  return chatActivitySummaryFilters.value.includes(id as ChatActivityType)
-}
-
-function setActivitySummaryEnabled(id: ChatActivityExpandKey, enabled: boolean) {
-  if (id === 'thinking') {
-    showReasoningTraces.value = enabled
-  } else if (id === 'justification') {
-    showTextJustificationActivity.value = enabled
-  } else {
-    const next = new Set(chatActivitySummaryFilters.value)
-    if (enabled) next.add(id as ChatActivityType)
-    else next.delete(id as ChatActivityType)
-    const ordered = DEFAULT_CHAT_ACTIVITY_SUMMARY_FILTERS.filter((t) => next.has(t))
-    chatActivitySummaryFilters.value = ordered
-  }
-
-  if (!enabled) {
-    const nextExpanded = new Set(chatActivityDefaultExpanded.value)
-    if (nextExpanded.delete(id)) {
-      chatActivityDefaultExpanded.value = CHAT_ACTIVITY_EXPAND_KEYS.filter((t) => nextExpanded.has(t))
-    }
-  }
-}
-
-function toggleActivitySummary(id: ChatActivityExpandKey) {
-  setActivitySummaryEnabled(id, !activitySummaryEnabled(id))
+function toggleActivityKindDefaultExpanded(id: string) {
+  const normalizedId = String(id || '').trim()
+  if (!normalizedId) return
+  const next = new Set(chatActivityKindDefaultExpanded.value)
+  if (next.has(normalizedId)) next.delete(normalizedId)
+  else next.add(normalizedId)
+  const catalogOrder = activityKindOptions.value.map((item) => item.id)
+  const ordered = catalogOrder.filter((item) => next.has(item))
+  const remaining = [...next].filter((item) => !catalogOrder.includes(item)).sort()
+  chatActivityKindDefaultExpanded.value = [...ordered, ...remaining]
 }
 
 const chatActivityDefaultExpandedToolFilters = computed<ChatToolActivityType[]>({
@@ -307,6 +274,7 @@ type ToolCatalogItem = {
 
 type ToolCatalogResponse = {
   permission_tools?: ToolCatalogItem[]
+  activity_kinds?: unknown
 }
 
 type ToolExpansionOption = {
@@ -327,6 +295,7 @@ const TOOL_API_FUNCTIONS: ToolExpansionOption[] = [
 ]
 
 const toolCatalogItems = ref<ToolCatalogItem[]>([])
+const activityKindCatalogItems = ref<ChatActivityKindCatalogItem[]>(BUILTIN_CHAT_ACTIVITY_KINDS.slice())
 const toolCatalogLoading = ref(false)
 const toolCatalogError = ref('')
 const toolCatalogQuery = ref('')
@@ -338,11 +307,27 @@ async function loadChatToolCatalog() {
   try {
     const response = await apiJson<ToolCatalogResponse>('/api/v1/plugins/ui')
     toolCatalogItems.value = Array.isArray(response?.permission_tools) ? response.permission_tools : []
+    const activityKinds = normalizeChatActivityKindCatalog(response?.activity_kinds)
+    activityKindCatalogItems.value = activityKinds.length ? activityKinds : BUILTIN_CHAT_ACTIVITY_KINDS.slice()
   } catch (error) {
     toolCatalogError.value = error instanceof Error ? error.message : String(error)
   } finally {
     toolCatalogLoading.value = false
   }
+}
+
+const activityKindOptions = computed(() => activityKindCatalogItems.value)
+
+function activityKindLabel(item: ChatActivityKindCatalogItem): string {
+  const key = `settings.appearance.chat.activityKinds.${item.id}.label`
+  return te(key) ? String(t(key)) : item.label
+}
+
+function activityKindDescription(item: ChatActivityKindCatalogItem): string {
+  const key = `settings.appearance.chat.activityKinds.${item.id}.description`
+  if (te(key)) return String(t(key))
+  if (item.category === 'plugin') return String(t('settings.appearance.chat.pluginActivityKind'))
+  return item.id
 }
 
 const toolActivityOptions = computed<ToolExpansionOption[]>(() => {
@@ -387,6 +372,7 @@ function toolDefaultExpandedEnabled(toolId: string): boolean {
     toolId,
     chatToolActivityDefaultExpandedOverrides.value,
     legacyExpandedToolCategories.value,
+    activityKindDefaultExpandedEnabled('operation'),
   )
 }
 
@@ -411,22 +397,6 @@ function resetToolDefaultExpanded(toolId: string) {
   delete next[id]
   chatToolActivityDefaultExpandedOverrides.value = next
 }
-
-const chatActivitySummaryFilters = computed<ChatActivityType[]>({
-  get() {
-    const s = settings.data
-    if (s && Object.prototype.hasOwnProperty.call(s, 'chatActivitySummaryFilters')) {
-      return normalizeChatActivityFilters(s.chatActivitySummaryFilters)
-    }
-    if (s && Object.prototype.hasOwnProperty.call(s, 'chatActivityFilters')) {
-      return normalizeChatActivityFilters(s.chatActivityFilters)
-    }
-    return DEFAULT_CHAT_ACTIVITY_SUMMARY_FILTERS.slice()
-  },
-  set(value) {
-    void settings.save({ chatActivitySummaryFilters: value })
-  },
-})
 
 const dirtyHint = computed(() => (settings.error ? settings.error : null))
 </script>
@@ -592,6 +562,10 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                     {{ t('settings.appearance.chat.showTimestamps') }}
                   </label>
                   <label class="inline-flex items-center gap-2 text-sm">
+                    <input type="checkbox" v-model="showReasoningTraces" />
+                    {{ t('settings.appearance.chat.showReasoning') }}
+                  </label>
+                  <label class="inline-flex items-center gap-2 text-sm">
                     <input type="checkbox" v-model="chatActivityAutoCollapseOnIdle" />
                     {{ t('settings.appearance.chat.autoCollapseActivity') }}
                   </label>
@@ -607,36 +581,28 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                               {{ t('settings.appearance.chat.activityTable.type') }}
                             </th>
                             <th class="px-3 py-2 text-center font-medium">
-                              {{ t('settings.appearance.chat.activityTable.summary') }}
-                            </th>
-                            <th class="px-3 py-2 text-center font-medium">
                               {{ t('settings.appearance.chat.activityTable.expand') }}
                             </th>
                           </tr>
                         </thead>
                         <tbody>
                           <tr
-                            v-for="opt in activityDefaultExpandedOptions"
+                            v-for="opt in activityKindOptions"
                             :key="`activity-matrix-${opt.id}`"
                             class="border-t border-border/50"
                           >
                             <td class="px-3 py-2 align-top">
-                              <div>{{ opt.label }}</div>
-                              <div class="text-[11px] text-muted-foreground">{{ opt.description }}</div>
+                              <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                <span>{{ activityKindLabel(opt) }}</span>
+                                <code class="font-mono text-[10px] text-muted-foreground">{{ opt.id }}</code>
+                              </div>
+                              <div class="text-[11px] text-muted-foreground">{{ activityKindDescription(opt) }}</div>
                             </td>
                             <td class="px-3 py-2 text-center align-middle">
                               <input
                                 type="checkbox"
-                                :checked="activitySummaryEnabled(opt.id)"
-                                @change="toggleActivitySummary(opt.id)"
-                              />
-                            </td>
-                            <td class="px-3 py-2 text-center align-middle">
-                              <input
-                                type="checkbox"
-                                :checked="activityDefaultExpandedEnabled(opt.id)"
-                                :disabled="!activitySummaryEnabled(opt.id)"
-                                @change="toggleActivityDefaultExpanded(opt.id)"
+                                :checked="activityKindDefaultExpandedEnabled(opt.id)"
+                                @change="toggleActivityKindDefaultExpanded(opt.id)"
                               />
                             </td>
                           </tr>
@@ -752,10 +718,6 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                     <div class="mt-2 text-[11px] text-muted-foreground">
                       {{ t('settings.appearance.chat.toolDetailsHint') }}
                     </div>
-                  </div>
-
-                  <div class="text-xs text-muted-foreground">
-                    {{ t('settings.appearance.chat.activitySummaryHelp') }}
                   </div>
                 </div>
               </div>

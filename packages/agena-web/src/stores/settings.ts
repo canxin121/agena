@@ -39,6 +39,8 @@ export type Settings = {
   chatActivityAutoCollapseOnIdle?: boolean
   chatActivitySummaryFilters?: string[]
   chatToolActivitySummaryFilters?: string[]
+  chatActivityKindDefaultExpanded?: string[]
+  // Legacy OpenCode activity keys; read only for preference migration.
   chatActivityDefaultExpanded?: string[]
   chatActivityDefaultExpandedToolFilters?: string[]
   chatToolActivityDefaultExpandedOverrides?: Record<string, boolean>

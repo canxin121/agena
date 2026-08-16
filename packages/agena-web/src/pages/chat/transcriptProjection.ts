@@ -330,7 +330,7 @@ function projectPart(part: MessagePartLike, role: string, answerPartId: string |
     source: part,
     ...fields,
     toggleable,
-    defaultExpanded: kind === 'answer' || kind === 'reasoning' || kind === 'text' || pendingInteraction,
+    defaultExpanded: kind === 'answer' || kind === 'text' || pendingInteraction,
   }
 }
 

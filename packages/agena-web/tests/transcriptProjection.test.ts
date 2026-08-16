@@ -49,6 +49,7 @@ describe('TUI-parity transcript projection', () => {
       'answer',
     ])
     expect(blocks[1]?.kind === 'message' ? blocks[1].displayParts[0]?.copyText : '').toBe('full reasoning')
+    expect(blocks[1]?.kind === 'message' ? blocks[1].displayParts[0]?.defaultExpanded : true).toBe(false)
     expect(blocks[1]?.kind === 'message' ? blocks[1].displayParts[3]?.defaultExpanded : false).toBe(true)
   })
 

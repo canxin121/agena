@@ -1,10 +1,112 @@
 import type { JsonValue } from '@/types/json'
 
-export type ChatActivityType = 'tool' | 'step-start' | 'step-finish' | 'snapshot' | 'patch' | 'retry' | 'compaction'
+export type ChatActivityKindCategory = 'builtin' | 'plugin'
 
-// Controls UI default expansion and detail summary inclusion.
-// These include activity-like parts that aren't part of ChatActivityType filters.
-export type ChatActivityExpandKey = ChatActivityType | 'thinking' | 'justification'
+export type ChatActivityKindCatalogItem = {
+  id: string
+  category: ChatActivityKindCategory
+  label: string
+}
+
+// Mirrors agena_domain::builtin_activity_kinds. The server response remains
+// authoritative and can append plugin-contributed kinds at runtime.
+export const BUILTIN_CHAT_ACTIVITY_KINDS: ChatActivityKindCatalogItem[] = [
+  { id: 'reasoning', category: 'builtin', label: 'Reasoning' },
+  { id: 'operation', category: 'builtin', label: 'Operation' },
+  { id: 'resource', category: 'builtin', label: 'Resource' },
+  { id: 'skill_reference', category: 'builtin', label: 'Skill reference' },
+  { id: 'interaction', category: 'builtin', label: 'Interaction' },
+  { id: 'hook', category: 'builtin', label: 'Hook' },
+  { id: 'error', category: 'builtin', label: 'Error' },
+  { id: 'notice', category: 'builtin', label: 'Notice' },
+  { id: 'text', category: 'builtin', label: 'Text' },
+]
+
+export const DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED = ['reasoning']
+
+const LEGACY_ACTIVITY_KIND_ALIASES: Record<string, string> = {
+  thinking: 'reasoning',
+  compaction: 'notice',
+}
+
+function normalizedStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const id = item.trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+export function normalizeChatActivityKindCatalog(value: unknown): ChatActivityKindCatalogItem[] {
+  if (!Array.isArray(value)) return []
+  const out: ChatActivityKindCatalogItem[] = []
+  const seen = new Set<string>()
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const item = raw as Record<string, unknown>
+    const id = typeof item.id === 'string' ? item.id.trim() : ''
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push({
+      id,
+      category: item.category === 'plugin' ? 'plugin' : 'builtin',
+      label: typeof item.label === 'string' && item.label.trim() ? item.label.trim() : id,
+    })
+  }
+  return out
+}
+
+export function normalizeChatActivityKindDefaultExpanded(value: unknown): string[] {
+  return normalizedStringList(value)
+}
+
+export function migrateLegacyChatActivityDefaultExpanded(value: unknown): string[] {
+  const expanded = new Set(DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED)
+  const builtinIds = new Set(BUILTIN_CHAT_ACTIVITY_KINDS.map((item) => item.id))
+  for (const legacyId of normalizedStringList(value)) {
+    const normalizedLegacyId = legacyId.toLowerCase()
+    const id = LEGACY_ACTIVITY_KIND_ALIASES[normalizedLegacyId] || normalizedLegacyId
+    if (builtinIds.has(id)) expanded.add(id)
+  }
+  return [...expanded]
+}
+
+export function resolveChatActivityKindDefaultExpanded(settings: unknown): string[] {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    return DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED.slice()
+  }
+  const record = settings as Record<string, unknown>
+  if (Object.prototype.hasOwnProperty.call(record, 'chatActivityKindDefaultExpanded')) {
+    return normalizeChatActivityKindDefaultExpanded(record.chatActivityKindDefaultExpanded)
+  }
+  if (Object.prototype.hasOwnProperty.call(record, 'chatActivityDefaultExpanded')) {
+    return migrateLegacyChatActivityDefaultExpanded(record.chatActivityDefaultExpanded)
+  }
+  return DEFAULT_CHAT_ACTIVITY_KIND_EXPANDED.slice()
+}
+
+export function chatActivityKindIdForTranscriptPart(partKind: unknown, durablePartKind: unknown): string {
+  const presentation = typeof partKind === 'string' ? partKind.trim().toLowerCase() : ''
+  const durableId = typeof durablePartKind === 'string' ? durablePartKind.trim() : ''
+  const durable = durableId.toLowerCase()
+  if (presentation === 'reasoning') return 'reasoning'
+  if (presentation === 'operation') return 'operation'
+  if (presentation === 'resource') return 'resource'
+  if (presentation === 'skill') return 'skill_reference'
+  if (presentation === 'interaction') return 'interaction'
+  if (presentation === 'error') return 'error'
+  if (presentation === 'text_segment') return 'text'
+  if (presentation === 'notice') return durable === 'hook' ? 'hook' : 'notice'
+  if (presentation === 'compaction') return 'notice'
+  if (presentation === 'unknown') return durableId
+  return ''
+}
 
 export type KnownChatToolActivityType =
   | 'read'
@@ -33,29 +135,6 @@ export type KnownChatToolActivityType =
 export type ChatToolActivityType = KnownChatToolActivityType | (string & {})
 export type ChatToolExpansionOverrides = Record<string, boolean>
 
-export const DEFAULT_CHAT_ACTIVITY_FILTERS: ChatActivityType[] = [
-  'tool',
-  'step-start',
-  'step-finish',
-  'snapshot',
-  'patch',
-  'retry',
-  'compaction',
-]
-
-export const DEFAULT_CHAT_ACTIVITY_SUMMARY_FILTERS: ChatActivityType[] = DEFAULT_CHAT_ACTIVITY_FILTERS
-
-export const CHAT_ACTIVITY_EXPAND_KEYS: ChatActivityExpandKey[] = [
-  'snapshot',
-  'patch',
-  'retry',
-  'compaction',
-  'thinking',
-  'justification',
-]
-
-export const DEFAULT_CHAT_ACTIVITY_EXPAND_KEYS: ChatActivityExpandKey[] = []
-
 export const DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS: ChatToolActivityType[] = [
   'read',
   'list',
@@ -81,8 +160,6 @@ export const DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS: ChatToolActivityType[] = [
   'unknown',
 ]
 
-export const DEFAULT_CHAT_TOOL_ACTIVITY_SUMMARY_FILTERS: ChatToolActivityType[] = DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS
-
 export const DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS: ChatToolActivityType[] = [
   'edit',
   'write',
@@ -90,9 +167,7 @@ export const DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS: ChatToolActivityType[]
   'multiedit',
 ]
 
-const CHAT_ACTIVITY_SET = new Set(DEFAULT_CHAT_ACTIVITY_FILTERS)
 const CHAT_TOOL_ACTIVITY_SET = new Set(DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS)
-const CHAT_ACTIVITY_EXPAND_SET = new Set(CHAT_ACTIVITY_EXPAND_KEYS)
 
 export function isKnownChatToolActivityType(value: string): value is KnownChatToolActivityType {
   return CHAT_TOOL_ACTIVITY_SET.has(value as KnownChatToolActivityType)
@@ -161,6 +236,7 @@ export function resolveChatToolDefaultExpanded(
   toolName: unknown,
   overrides: ChatToolExpansionOverrides,
   legacyExpandedCategories: ReadonlySet<string>,
+  operationDefaultExpanded = false,
 ): boolean {
   const exactTool = normalizeChatToolPreferenceId(toolName)
   if (exactTool && Object.prototype.hasOwnProperty.call(overrides, exactTool)) {
@@ -170,30 +246,8 @@ export function resolveChatToolDefaultExpanded(
   const category = normalizeChatToolActivityId(exactTool)
   if (!category) return legacyExpandedCategories.has('unknown')
   if (legacyExpandedCategories.has(category)) return true
-  if (isKnownChatToolActivityType(category)) return false
-  return legacyExpandedCategories.has('unknown')
-}
-
-export function normalizeChatActivityFilters(value: JsonValue): ChatActivityType[] {
-  const requested = new Set<string>()
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      if (typeof item !== 'string') continue
-      const key = item.trim().toLowerCase()
-      if (!CHAT_ACTIVITY_SET.has(key as ChatActivityType)) continue
-      requested.add(key)
-    }
-  }
-
-  // Tool activity is controlled by chatActivityToolFilters; keep top-level tool
-  // activity always enabled.
-  requested.add('tool')
-
-  const out: ChatActivityType[] = []
-  for (const key of DEFAULT_CHAT_ACTIVITY_FILTERS) {
-    if (requested.has(key)) out.push(key)
-  }
-  return out
+  if (isKnownChatToolActivityType(category)) return operationDefaultExpanded
+  return legacyExpandedCategories.has('unknown') || operationDefaultExpanded
 }
 
 export function normalizeChatToolActivityFilters(value: JsonValue): ChatToolActivityType[] {
@@ -213,63 +267,3 @@ export function normalizeChatToolActivityFilters(value: JsonValue): ChatToolActi
   }
   return out
 }
-
-export function normalizeChatActivityDefaultExpanded(value: JsonValue): ChatActivityExpandKey[] {
-  const requested = new Set<string>()
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      if (typeof item !== 'string') continue
-      const key = item.trim().toLowerCase()
-      if (!CHAT_ACTIVITY_EXPAND_SET.has(key as ChatActivityExpandKey)) continue
-      requested.add(key)
-    }
-  }
-
-  const out: ChatActivityExpandKey[] = []
-  for (const key of CHAT_ACTIVITY_EXPAND_KEYS) {
-    if (requested.has(key)) out.push(key)
-  }
-  return out
-}
-
-export const ACTIVITY_DEFAULT_EXPANDED_OPTIONS: Array<{
-  id: ChatActivityExpandKey
-  label: string
-  description: string
-}> = [
-  { id: 'snapshot', label: 'Snapshots', description: 'Snapshot payloads.' },
-  { id: 'patch', label: 'Patches', description: 'Patch payloads.' },
-  { id: 'retry', label: 'Retries', description: 'Retry state metadata.' },
-  { id: 'compaction', label: 'Compaction', description: 'Memory compaction markers.' },
-  { id: 'thinking', label: 'Thinking', description: 'Reasoning / thinking traces.' },
-  { id: 'justification', label: 'Justification', description: 'Text justification activity.' },
-]
-
-export const TOOL_ACTIVITY_OPTIONS: Array<{
-  id: ChatToolActivityType
-  label: string
-  description: string
-}> = [
-  { id: 'read', label: 'Read', description: 'Read a file.' },
-  { id: 'list', label: 'List', description: 'List directory contents.' },
-  { id: 'glob', label: 'Glob', description: 'Match files by glob.' },
-  { id: 'grep', label: 'Grep', description: 'Search file contents.' },
-  { id: 'edit', label: 'Edit', description: 'Edit file content.' },
-  { id: 'write', label: 'Write', description: 'Create or overwrite files.' },
-  { id: 'apply_patch', label: 'Apply Patch', description: 'Apply patch sets.' },
-  { id: 'multiedit', label: 'Multi-Edit', description: 'Batch file edits.' },
-  { id: 'bash', label: 'Bash', description: 'Shell commands.' },
-  { id: 'task', label: 'Task', description: 'Delegated task execution.' },
-  { id: 'webfetch', label: 'Web Fetch', description: 'Fetch a URL.' },
-  { id: 'websearch', label: 'Web Search', description: 'Search the web.' },
-  { id: 'codesearch', label: 'Code Search', description: 'Search code on the web.' },
-  { id: 'skill', label: 'Skill', description: 'Run a skill tool.' },
-  { id: 'lsp', label: 'LSP', description: 'Language server queries.' },
-  { id: 'todowrite', label: 'Todo Write', description: 'Update todo list.' },
-  { id: 'todoread', label: 'Todo Read', description: 'Read todo list.' },
-  { id: 'question', label: 'Question', description: 'Ask user questions.' },
-  { id: 'batch', label: 'Batch', description: 'Batch tool execution.' },
-  { id: 'plan_enter', label: 'Plan Enter', description: 'Enter plan mode.' },
-  { id: 'plan_exit', label: 'Plan Exit', description: 'Exit plan mode.' },
-  { id: 'unknown', label: 'Unknown', description: 'Unknown/custom plugin tools.' },
-]

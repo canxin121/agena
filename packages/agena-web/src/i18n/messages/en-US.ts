@@ -1836,19 +1836,55 @@ export default {
       chat: {
         label: 'Chat',
         showTimestamps: 'Show timestamps',
+        showReasoning: 'Show reasoning traces',
         autoCollapseActivity: 'Auto-collapse activity after assistant finishes',
-        activityDetails: 'Activity details',
+        activityDetails: 'Collapsible part defaults',
         activityTable: {
-          type: 'Type',
-          summary: 'Summary',
-          transport: 'Summary',
-          expand: 'Expand',
+          type: 'Part type',
+          expand: 'Default open',
         },
-        toolDetails: 'Tool details',
+        pluginActivityKind: 'A part presentation kind registered by a plugin.',
+        activityKinds: {
+          reasoning: {
+            label: 'Reasoning',
+            description: 'Reasoning content from think parts.',
+          },
+          operation: {
+            label: 'Tool operation',
+            description: 'Tool-call parts; individual tools can override this below.',
+          },
+          resource: {
+            label: 'Resource',
+            description: 'Files, images, and other resources from file_ref parts.',
+          },
+          skill_reference: {
+            label: 'Skill reference',
+            description: 'Skill instructions and content from skill_ref parts.',
+          },
+          interaction: {
+            label: 'User interaction',
+            description: 'Interaction parts; pending requests always open.',
+          },
+          hook: {
+            label: 'Hook',
+            description: 'Plugin lifecycle information from hook parts.',
+          },
+          error: {
+            label: 'Error',
+            description: 'Structured failure details from error parts.',
+          },
+          notice: {
+            label: 'Notice',
+            description: 'Notice, system_notification, and compaction parts.',
+          },
+          text: {
+            label: 'Intermediate text',
+            description: 'Assistant text segments before the final answer.',
+          },
+        },
+        toolDetails: 'Tool defaults',
         toolDetailsTable: {
           tool: 'Tool',
-          summary: 'Summary',
-          transport: 'Summary',
           expand: 'Default open',
         },
         searchTools: 'Search tools',
@@ -1859,10 +1895,6 @@ export default {
         toolDetailsCount: '{shown} of {total} tools',
         toolDetailsHint:
           'Each registered execution tool and Tool API function has its own default open state. Reset removes the exact override and restores the inherited category default.',
-        activitySummaryHelp:
-          'Activity transport defaults to full details. Expand only controls the default open state; if transport strategy is not customized, transport still remains full.',
-        activityTransportHelp:
-          'Activity transport defaults to full details. Expand only controls the default open state; if transport strategy is not customized, transport still remains full.',
       },
     },
   },

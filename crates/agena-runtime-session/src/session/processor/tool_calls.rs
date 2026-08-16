@@ -182,6 +182,23 @@ impl SessionProcessor {
                     end_ms: None,
                 },
             );
+            // `ensure_pending_tool_call_part` records the provider's model-side
+            // call id as soon as the stream exposes it. Rebuilding the final
+            // invocation must carry that identity forward: Responses replays
+            // correlate `function_call` and `function_call_output` by this
+            // exact id. Dropping it here made persisted calls fall back to an
+            // unrelated local sequence number on every follow-up request.
+            if let Some(operation_id) = pending
+                .id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                operation.metadata.insert(
+                    OPERATION_ID_METADATA_KEY.to_owned(),
+                    serde_json::Value::String(operation_id.to_owned()),
+                );
+            }
             if invocation
                 .tool_api_call
                 .as_ref()

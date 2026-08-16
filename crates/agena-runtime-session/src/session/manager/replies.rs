@@ -200,10 +200,32 @@ fn pending_operation_for_resolved(
 ) -> OperationPart {
     let mut operation = OperationPart::pending(resolved.call_id, invocation, title, lifecycle);
     operation.authorization = authorization;
+    let operation_id = resolved.operation_id.trim();
+    if !operation_id.is_empty() {
+        operation.metadata.insert(
+            OPERATION_ID_METADATA_KEY.to_owned(),
+            serde_json::Value::String(operation_id.to_owned()),
+        );
+    }
     if let Some(identity) = resolved.advertised_tool_identity.as_deref() {
         operation.set_advertised_tool_identity(identity.to_string());
     }
     operation
+}
+
+/// Carry protocol/runtime metadata across an Operation lifecycle replacement.
+///
+/// Tool completion/failure constructors intentionally start with empty metadata,
+/// but the pending Operation owns durable correlation state such as the model's
+/// provider call id (`agena.operation_id`). Losing that state changes the call
+/// identity on the next provider replay and can detach a function output from
+/// the function call that produced it. Newly-created terminal metadata wins on
+/// key conflicts; pending-only context fills the remaining keys.
+fn inherit_operation_context(target: &mut OperationPart, source: OperationPart) {
+    target.user_input = source.user_input;
+    for (key, value) in source.metadata {
+        target.metadata.entry(key).or_insert(value);
+    }
 }
 
 fn operation_authorization(

@@ -1,8 +1,8 @@
 use super::{
     AppError, Arc, ExecutionStatus, OperationPart, PersistedPermissionRule, SessionManager,
-    SessionManagerState, SessionPendingTool, completed_lifecycle, operation_authorization,
-    resolve_pending_tool, terminal_operation_title, text_result_blocks,
-    update_resolved_tool_message,
+    SessionManagerState, SessionPendingTool, completed_lifecycle, inherit_operation_context,
+    operation_authorization, operation_from_part, resolve_pending_tool, terminal_operation_title,
+    text_result_blocks, update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::store::{
@@ -50,6 +50,9 @@ impl SessionManager {
                 );
                 operation.authorization = authorization.clone();
                 operation.set_title(title.clone());
+                if let Some(existing) = operation_from_part(tool_part) {
+                    inherit_operation_context(&mut operation, existing);
+                }
                 tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
                     tool_call_from_operation(&operation),
                 ))
@@ -96,6 +99,9 @@ impl SessionManager {
                 );
                 operation.authorization = authorization.clone();
                 operation.set_title(title.clone());
+                if let Some(existing) = operation_from_part(tool_part) {
+                    inherit_operation_context(&mut operation, existing);
+                }
                 tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
                     tool_call_from_operation(&operation),
                 ))
@@ -143,6 +149,9 @@ impl SessionManager {
                 );
                 operation.authorization = authorization.clone();
                 operation.set_title(title.clone());
+                if let Some(existing) = operation_from_part(tool_part) {
+                    inherit_operation_context(&mut operation, existing);
+                }
                 tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
                     tool_call_from_operation(&operation),
                 ))
@@ -196,6 +205,9 @@ impl SessionManager {
                 );
                 operation.authorization = authorization.clone();
                 operation.set_title(title.clone());
+                if let Some(existing) = operation_from_part(tool_part) {
+                    inherit_operation_context(&mut operation, existing);
+                }
                 tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
                     tool_call_from_operation(&operation),
                 ))

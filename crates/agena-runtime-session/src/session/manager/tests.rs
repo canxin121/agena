@@ -29,7 +29,7 @@ use super::{
     SessionSubtaskRequest, SessionUserRunRequest, merge_system_prompts,
 };
 use crate::provider::{ModelRuntime, ProviderError};
-use crate::session::manager::replies::operation_id_from_part;
+use crate::session::manager::replies::{operation_from_part, operation_id_from_part};
 use crate::session::manager::runs::run_visible_text_lossy;
 use crate::session::store::{
     OPERATION_ID_METADATA_KEY, ProcessorPartIdAllocator, interaction_from_request,
@@ -1548,6 +1548,10 @@ impl MixedToolHelpBatchProvider {
     fn request_count(&self) -> usize {
         self.requests.lock().expect("request lock").len()
     }
+
+    fn requests(&self) -> Vec<CompletionRequest> {
+        self.requests.lock().expect("request lock").clone()
+    }
 }
 
 #[async_trait::async_trait]
@@ -2013,6 +2017,10 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
             _ => None,
         })
         .expect("replayed tools_search call id");
+    assert_eq!(
+        replayed_call_id, "call_tools_search_1",
+        "the persisted replay must keep the provider-issued call id rather than replacing it with the local call sequence"
+    );
     assert!(
         replayed_tool_turn.parts.iter().any(|part| {
             matches!(
@@ -2081,11 +2089,145 @@ async fn stable_run_continues_after_mixed_failed_and_completed_parallel_tool_bat
         2,
         "the terminal batch must trigger exactly one follow-up model turn"
     );
+    let requests = provider.requests();
+    let replayed_tool_turn = requests[1]
+        .turns
+        .iter()
+        .find(|run| {
+            run.role == Role::Assistant
+                && run.parts.iter().any(|part| {
+                    matches!(part, CompletionInputPart::ToolCall { function, .. }
+                        if function.function_name() == "tools_help")
+                })
+        })
+        .expect("second request must replay the mixed tool-calling turn");
+    for expected_id in ["call_invalid_help", "call_valid_help"] {
+        assert!(
+            replayed_tool_turn.parts.iter().any(|part| {
+                matches!(part, CompletionInputPart::ToolCall { id, .. } if id == expected_id)
+            }),
+            "the replayed function call must keep provider id {expected_id}: {:#?}",
+            replayed_tool_turn.parts
+        );
+        assert!(
+            replayed_tool_turn.parts.iter().any(|part| {
+                matches!(part, CompletionInputPart::ToolResult { tool_call_id, .. }
+                    if tool_call_id == expected_id)
+            }),
+            "the replayed terminal result must correlate with provider id {expected_id}: {:#?}",
+            replayed_tool_turn.parts
+        );
+    }
     assert!(completed.parts().iter().any(|part| {
         part.kind == "text"
             && part.content.get("text").and_then(serde_json::Value::as_str)
                 == Some("MIXED_TOOL_BATCH_OK")
     }));
+}
+
+#[tokio::test]
+async fn policy_denied_terminal_transition_preserves_operation_metadata() {
+    let manager = test_manager().await;
+    let session = create(&manager, "policy-denied operation identity").await;
+    let run_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            run_marker_content("continue", None, None, None, None),
+        )
+        .await
+        .expect("start assistant run");
+    let mut operation = agena_runtime_contracts::part::OperationPart::pending(
+        7,
+        ToolInvocation::new("fixture.denied", StructuredObject::default()),
+        "Denied fixture",
+        TimeRange {
+            start_ms: 1,
+            end_ms: None,
+        },
+    );
+    operation.metadata.insert(
+        OPERATION_ID_METADATA_KEY.to_owned(),
+        serde_json::json!("call_policy_denied_1"),
+    );
+    operation.metadata.insert(
+        "fixture.runtime_context".to_owned(),
+        serde_json::json!({"preserve": true}),
+    );
+    let tool_part = new_part_from_content(
+        "tool_call",
+        PartRole::Assistant,
+        &TypedContent::ToolCall(tool_call_from_operation(&operation)),
+        PartState::InProgress,
+    )
+    .expect("build pending tool part");
+    let created = manager
+        .store
+        .append_parts(session.id, run_id, vec![tool_part])
+        .await
+        .expect("append pending tool part");
+    let tool_part_id = created[0].part_id;
+    let session = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("load pending tool");
+    let pending = session
+        .pending_tool_by_part_id(tool_part_id)
+        .expect("resolve pending tool");
+    let session_id = session.id;
+
+    manager
+        .apply_tool_policy_denied(
+            session,
+            &pending,
+            agena_domain::PolicyDeniedResult {
+                action: agena_domain::PermissionAction::Tool {
+                    tool_name: "fixture.denied".to_owned(),
+                    qualifier: None,
+                },
+                related_actions: Vec::new(),
+                denied_actions: Vec::new(),
+                reason: "fixture policy denial".to_owned(),
+                explanation: String::new(),
+                source: Some("test".to_owned()),
+                scope: None,
+                operator: None,
+                authority: agena_domain::PermissionAuthorityKind::StaticPolicy,
+                rule_id: None,
+                rule_revision_ms: None,
+                trace: Vec::new(),
+            },
+            manager.execution_state(),
+        )
+        .await
+        .expect("persist policy-denied terminal result");
+
+    let reloaded = manager
+        .store
+        .load_session(session_id)
+        .await
+        .expect("reload terminal tool");
+    let tool_part = reloaded
+        .parts()
+        .iter()
+        .find(|part| part.part_id == tool_part_id)
+        .expect("terminal tool part");
+    assert!(tool_part.state.is_terminal());
+    let operation = operation_from_part(tool_part).expect("decode terminal operation");
+    assert_eq!(
+        operation
+            .metadata
+            .get(OPERATION_ID_METADATA_KEY)
+            .and_then(serde_json::Value::as_str),
+        Some("call_policy_denied_1")
+    );
+    assert_eq!(
+        operation.metadata.get("fixture.runtime_context"),
+        Some(&serde_json::json!({"preserve": true})),
+        "terminal constructors must inherit all runtime metadata, not only the provider call id"
+    );
 }
 
 #[tokio::test]

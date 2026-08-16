@@ -6,13 +6,13 @@ use super::{
     StreamingToolExecution, ToolError, ToolInvocationExecution, ToolPermissionCheck, Utc,
     ask_user_title, assistant_message_id, background_operation_from_execution,
     background_operation_id, completed_lifecycle, execution_control_to_app_error,
-    is_authorization_phase_title, operation_authorization, operation_blocks_from_tool_output,
-    operation_from_part, operation_permission_approved_actions, pending_operation_for_resolved,
-    pending_tool_part_not_found_error, permission_action_key, permission_request_id,
-    push_unique_permission_action, requested_background_kind, reserve_background_external_id,
-    resolve_pending_tool, responses_api_request_metadata, run_abort_reason,
-    should_execute_pending_tools_concurrently, terminal_operation_title, tool_name,
-    update_resolved_tool_message,
+    inherit_operation_context, is_authorization_phase_title, operation_authorization,
+    operation_blocks_from_tool_output, operation_from_part, operation_permission_approved_actions,
+    pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
+    permission_request_id, push_unique_permission_action, requested_background_kind,
+    reserve_background_external_id, resolve_pending_tool, responses_api_request_metadata,
+    run_abort_reason, should_execute_pending_tools_concurrently, terminal_operation_title,
+    tool_name, update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -1951,14 +1951,19 @@ impl SessionManager {
                     resolved.pending.part.part_id
                 )))
             })?;
+            let existing = operation_from_part(tool_part);
+            let mut operation = pending_operation_for_resolved(
+                &resolved,
+                prepared.invocation,
+                prepared.title_override.unwrap_or(current_title),
+                resolved.lifecycle.clone(),
+                authorization,
+            );
+            if let Some(existing) = existing {
+                inherit_operation_context(&mut operation, existing);
+            }
             tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
-                tool_call_from_operation(&pending_operation_for_resolved(
-                    &resolved,
-                    prepared.invocation,
-                    prepared.title_override.unwrap_or(current_title),
-                    resolved.lifecycle.clone(),
-                    authorization,
-                )),
+                tool_call_from_operation(&operation),
             ))
             .expect("operation content is always JSON serializable");
             session_changed = true;
@@ -3040,12 +3045,12 @@ impl SessionManager {
                 resolved.lifecycle.clone(),
                 authorization.clone(),
             );
-            // Preserve any user-input records already recorded on this
-            // operation (a tool may ask more than once before completing) and
-            // add this pending request. `push_pending` is a no-op on a
-            // duplicate request id, mirroring the re-request dedup.
+            // Preserve the operation's protocol/runtime context, including
+            // any earlier asks (a tool may ask more than once), then add this
+            // request. `push_pending` is a no-op on a duplicate request id,
+            // mirroring the re-request dedup.
             if let Some(existing) = operation_from_part(tool_part) {
-                operation.user_input = existing.user_input;
+                inherit_operation_context(&mut operation, existing);
             }
             operation.user_input.push_pending(request.clone());
             tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
@@ -3569,11 +3574,10 @@ impl SessionManager {
                     .iter()
                     .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone()))),
             );
-            // The completion payload replaces the operation, not its asks:
-            // preserve user-input records so the answered question renders
-            // read-only inside this same terminal activity.
+            // The completion payload replaces the operation, but provider
+            // correlation metadata and answered asks belong to its identity.
             if let Some(existing) = operation_from_part(tool_part) {
-                operation.user_input = existing.user_input;
+                inherit_operation_context(&mut operation, existing);
             }
             tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
                 tool_call_from_operation(&operation),

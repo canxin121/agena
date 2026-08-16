@@ -151,11 +151,14 @@ impl App {
             Some(KeyAction::PageDown) => state.presentation.move_selection_page(1, 10),
             Some(KeyAction::Home) => state.presentation.move_selection_home(),
             Some(KeyAction::End) => state.presentation.move_selection_end(),
-            Some(KeyAction::NextTab | KeyAction::PreviousTab) if !typing => {
-                state.presentation.toggle_focus();
+            // Tab / Shift+Tab jump between the hub's sections (skipping empty
+            // buckets), wrapping at the ends.
+            Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) if !typing => {
+                let delta = if matches!(action, KeyAction::NextTab) { 1 } else { -1 };
+                state.presentation.move_selection_section(delta);
             }
             Some(KeyAction::Open) => {
-                let Some(selected) = state.presentation.selected_session().cloned() else {
+                let Some(selected) = state.presentation.selected_item().cloned() else {
                     return false;
                 };
                 if selected.is_new_session {

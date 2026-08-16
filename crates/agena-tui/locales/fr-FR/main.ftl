@@ -17,6 +17,7 @@ hub-action-list = liste des sessions
 hub-action-refresh = actualiser
 hub-hint-move = déplacer
 hub-hint-focus = focus
+hub-hint-section = section
 hub-hint-open = ouvrir
 hub-hint-back = retour
 hub-section-attention = Nécessite une attention

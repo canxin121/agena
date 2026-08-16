@@ -2,25 +2,24 @@
 //!
 //! The hub is the landing view of the TUI. It groups the sessions the server
 //! reports as needing attention, currently running, and recently used, and
-//! offers a create-new-session action. Like the other session surfaces in
-//! this crate it owns only the display projection; the final application maps
-//! selection to session-open effects and keeps response/error handling at the
-//! application boundary.
+//! offers a create-new-session action. It renders as a single list box whose
+//! first row is the "+ new session" action; each non-empty bucket appears below
+//! it as an in-list header followed by its rows. Like the other session
+//! surfaces in this crate it owns only the display projection; the final
+//! application maps selection to session-open effects and keeps
+//! response/error handling at the application boundary.
 
 use std::borrow::Cow;
 
 use agena_tui::i18n::I18n;
 use agena_tui_components::theme::{accent_color, danger_color, muted_style, selection_style};
-use agena_tui_components::{
-    ListPanelSpec, SectionedListFocus, SectionedListSection, SectionedListState, ShortcutHint,
-    build_accented_two_line_list_item, build_shortcut_line, render_list_panel,
-};
+use agena_tui_components::{build_accented_two_line_list_item, build_shortcut_line, ShortcutHint};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
 /// A session entry shown in a hub section.
@@ -39,8 +38,8 @@ pub struct SessionHubItem {
     pub is_new_session: bool,
 }
 
-/// Identity of a hub section. Ordering of the sections is fixed by the
-/// renderer: new session (action), then running, then attention, then recent.
+/// Identity of a hub section. Ordering of the sections is fixed by the App:
+/// new session (action), then running, then attention, then recent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionHubSectionKind {
     New,
@@ -58,15 +57,6 @@ impl SessionHubSectionKind {
             Self::Recent => "hub-section-recent",
         }
     }
-
-    pub fn empty_localization_key(self) -> &'static str {
-        match self {
-            Self::New => "hub-empty-new",
-            Self::Running => "hub-empty-running",
-            Self::Attention => "hub-empty-attention",
-            Self::Recent => "hub-empty-recent",
-        }
-    }
 }
 
 /// A section of the hub. Items are display-only projections built by the App.
@@ -82,81 +72,55 @@ impl SessionHubSection {
     }
 }
 
-impl SectionedListSection for SessionHubSection {
-    type Item = SessionHubItem;
-
-    fn items(&self) -> &[Self::Item] {
-        &self.items
-    }
+/// A row of the flattened hub list: either a section header (not selectable)
+/// or a session row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HubRow {
+    /// Section label line drawn inside the single hub box. Never selectable.
+    Header(SessionHubSectionKind),
+    /// A selectable session row (including the "+ new session" action row).
+    Item(SessionHubItem),
 }
 
 /// Display projection of the session hub.
+///
+/// The hub is one flat list. The new-session action rows come first and carry
+/// no header — the create action is the first option of the hub — and every
+/// other section that has items appears as a header line followed by its rows.
+/// Empty sections are dropped entirely, so an empty bucket can never sit
+/// between the user and the recent sessions. Navigation moves over the
+/// selectable rows only; Tab / Shift+Tab jump between sections.
 #[derive(Debug, Clone)]
 pub struct SessionHubPresentation {
-    pub state: SectionedListState<SessionHubSection>,
+    /// Full section catalog from the last overview (unfiltered). Re-filtered
+    /// on every query edit, so the server call itself stays un-filtered.
+    sections: Vec<SessionHubSection>,
+    /// Flattened visible rows derived from `sections` through the filter.
+    rows: Vec<HubRow>,
+    /// Flat index into `rows` of the selected row (always an item row when the
+    /// list is non-empty).
+    selection: usize,
+    /// Current client-side filter (trimmed, lowercased). Empty lists all rows.
+    query: String,
 }
 
 impl SessionHubPresentation {
-    /// An empty hub in the given focus. The initial route is created before
-    /// the first overview response lands, so it starts with no sections.
-    pub fn empty(focus: SectionedListFocus) -> Self {
+    /// An empty hub. The initial route is created before the first overview
+    /// response lands, so it starts with no rows.
+    pub fn empty() -> Self {
         Self {
-            state: SectionedListState::new(Vec::new(), 0, 0, focus),
+            sections: Vec::new(),
+            rows: Vec::new(),
+            selection: 0,
+            query: String::new(),
         }
     }
 
-    /// Replace the section catalog while preserving the current selection and
-    /// focus, then clamp the selection to the new data.
+    /// Replace the section catalog and re-derive the visible rows, preserving
+    /// the selected row by identity when it survives the rebuild.
     pub fn set_sections(&mut self, sections: Vec<SessionHubSection>) {
-        let selected_section = self.state.selected_section_index();
-        let selected_item = self.state.selected_item_index();
-        let focus = self.state.focus();
-        self.state = SectionedListState::new(sections, selected_section, selected_item, focus);
-    }
-
-    /// Total number of selectable session rows across all sections.
-    pub fn total_count(&self) -> usize {
-        self.state.sections().iter().map(|section| section.items.len()).sum()
-    }
-
-    pub fn move_selection(&mut self, delta: isize) {
-        self.state.move_selection(delta);
-    }
-
-    pub fn move_selection_page(&mut self, delta: isize, page_size: usize) {
-        self.state.move_selection_page(delta, page_size);
-    }
-
-    pub fn move_selection_home(&mut self) {
-        self.state.move_selection_home();
-    }
-
-    pub fn move_selection_end(&mut self) {
-        self.state.move_selection_end();
-    }
-
-    /// Toggle between the section-navigation focus and the items focus.
-    pub fn toggle_focus(&mut self) {
-        let next = match self.state.focus() {
-            SectionedListFocus::Navigation => SectionedListFocus::Items,
-            SectionedListFocus::Items => SectionedListFocus::Navigation,
-        };
-        self.state.set_focus(next);
-    }
-
-    /// The session to open on Enter: only meaningful while focused on items
-    /// and a row is selected.
-    pub fn selected_session(&self) -> Option<&SessionHubItem> {
-        if self.state.focus() != SectionedListFocus::Items {
-            return None;
-        }
-        self.state.selected_item()
-    }
-
-    /// Keep the item selection off a section that has no rows when the focus
-    /// switches to items, mirroring the permission studio's clamp behavior.
-    pub fn clamp_selection(&mut self) {
-        self.state.clamp_selection();
+        self.sections = sections;
+        self.rebuild_rows();
     }
 
     /// Filter the sections to rows matching `query` (case-insensitive substring
@@ -164,42 +128,170 @@ impl SessionHubPresentation {
     /// Selection is preserved by identity when the selected row still matches,
     /// otherwise it lands on the first row.
     pub fn set_query(&mut self, query: &str) {
-        let previous = self.selected_session().cloned();
-        let query = query.trim().to_lowercase();
-        let sections = self
-            .state
-            .sections()
+        self.query = query.trim().to_lowercase();
+        self.rebuild_rows();
+    }
+
+    /// Total number of selectable session rows.
+    pub fn total_count(&self) -> usize {
+        self.item_indices().len()
+    }
+
+    /// The visible rows (headers and items) in display order.
+    pub fn rows(&self) -> &[HubRow] {
+        &self.rows
+    }
+
+    /// Flat index into `rows` of the selected row.
+    pub fn selection(&self) -> usize {
+        self.selection
+    }
+
+    /// The session to open on Enter.
+    pub fn selected_item(&self) -> Option<&SessionHubItem> {
+        match self.rows.get(self.selection) {
+            Some(HubRow::Item(item)) => Some(item),
+            _ => None,
+        }
+    }
+
+    /// Move the selection `delta` rows over the selectable rows only, crossing
+    /// section boundaries and skipping header lines, so `↑/↓` can always reach
+    /// every bucket.
+    pub fn move_selection(&mut self, delta: isize) {
+        let items = self.item_indices();
+        if items.is_empty() {
+            return;
+        }
+        let current = items
+            .iter()
+            .position(|&index| index == self.selection)
+            .unwrap_or(0);
+        let target = (current as isize + delta).clamp(0, items.len() as isize - 1) as usize;
+        self.selection = items[target];
+    }
+
+    /// Move the selection by a page of `page_size` selectable rows.
+    pub fn move_selection_page(&mut self, delta: isize, page_size: usize) {
+        let items = self.item_indices();
+        if items.is_empty() {
+            return;
+        }
+        let current = items
+            .iter()
+            .position(|&index| index == self.selection)
+            .unwrap_or(0);
+        let target = (current as isize + delta * page_size as isize)
+            .clamp(0, items.len() as isize - 1) as usize;
+        self.selection = items[target];
+    }
+
+    pub fn move_selection_home(&mut self) {
+        if let Some(&first) = self.item_indices().first() {
+            self.selection = first;
+        }
+    }
+
+    pub fn move_selection_end(&mut self) {
+        if let Some(&last) = self.item_indices().last() {
+            self.selection = last;
+        }
+    }
+
+    /// Jump to the first row of the section `delta` steps away (wrapping).
+    /// Tab / Shift+Tab use this; empty sections are already hidden from
+    /// `rows`, so the cursor never lands on an empty bucket.
+    pub fn move_selection_section(&mut self, delta: isize) {
+        let spans = self.section_spans();
+        if spans.len() <= 1 {
+            return;
+        }
+        let current = spans
+            .iter()
+            .position(|(_, first, count)| {
+                self.selection >= *first && self.selection < first + count
+            })
+            .unwrap_or(0);
+        let next = (current as isize + delta).rem_euclid(spans.len() as isize) as usize;
+        self.selection = spans[next].1;
+    }
+
+    /// Keep the selection on the nearest selectable row after a rebuild.
+    pub fn clamp_selection(&mut self) {
+        let items = self.item_indices();
+        if items.is_empty() {
+            self.selection = 0;
+            return;
+        }
+        if items.contains(&self.selection) {
+            return;
+        }
+        self.selection = items
+            .iter()
+            .min_by_key(|&&index| (index as isize - self.selection as isize).unsigned_abs())
+            .copied()
+            .unwrap_or(items[0]);
+    }
+
+    /// Re-flatten `self.sections` through the current filter into `self.rows`,
+    /// preserving the selected row by identity when it survives.
+    fn rebuild_rows(&mut self) {
+        let previous = self.selected_item().cloned();
+        let filtered = self
+            .sections
             .iter()
             .map(|section| {
-                let items = if query.is_empty() {
+                let items = if self.query.is_empty() {
                     section.items.clone()
                 } else {
                     section
                         .items
                         .iter()
-                        .filter(|item| item.is_new_session || session_matches(item, &query))
+                        .filter(|item| item.is_new_session || session_matches(item, &self.query))
                         .cloned()
                         .collect()
                 };
                 SessionHubSection::new(section.kind, items)
             })
             .collect::<Vec<_>>();
-        let focus = self.state.focus();
-        let (section_index, item_index) = match previous {
-            Some(previous) => sections
-                .iter()
-                .enumerate()
-                .find_map(|(section_index, section)| {
-                    section
-                        .items
-                        .iter()
-                        .position(|item| *item == previous)
-                        .map(|item_index| (section_index, item_index))
-                })
-                .unwrap_or((0, 0)),
-            None => (0, 0),
-        };
-        self.state = SectionedListState::new(sections, section_index, item_index, focus);
+        self.rows = build_rows(filtered);
+        self.selection = previous
+            .and_then(|previous| {
+                self.rows
+                    .iter()
+                    .position(|row| matches!(row, HubRow::Item(item) if *item == previous))
+            })
+            .unwrap_or(0);
+        self.clamp_selection();
+    }
+
+    /// Flat row indices of every selectable item row, in display order.
+    fn item_indices(&self) -> Vec<usize> {
+        self.rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| match row {
+                HubRow::Item(_) => Some(index),
+                HubRow::Header(_) => None,
+            })
+            .collect()
+    }
+
+    /// For every visible section, `(kind, flat row of its first item, item
+    /// count)`. The new-session rows come first and carry no header, so they
+    /// form the initial span.
+    fn section_spans(&self) -> Vec<(SessionHubSectionKind, usize, usize)> {
+        let mut spans: Vec<(SessionHubSectionKind, usize, usize)> = Vec::new();
+        for (index, row) in self.rows.iter().enumerate() {
+            match row {
+                HubRow::Header(kind) => spans.push((*kind, index + 1, 0)),
+                HubRow::Item(_) => match spans.last_mut() {
+                    Some(span) => span.2 += 1,
+                    None => spans.push((SessionHubSectionKind::New, index, 1)),
+                },
+            }
+        }
+        spans
     }
 }
 
@@ -210,12 +302,31 @@ fn session_matches(item: &SessionHubItem, query_lower: &str) -> bool {
         || item.session_id.to_string().contains(query_lower)
 }
 
+/// Flatten sections into display rows. The new-session action rows are first
+/// and carry no header — the create action is the first option of the hub —
+/// and every other section that has items appears as a header line followed by
+/// its rows. Empty sections are dropped entirely so an empty bucket can never
+/// sit between the user and the recent sessions.
+fn build_rows(sections: Vec<SessionHubSection>) -> Vec<HubRow> {
+    let mut rows = Vec::new();
+    for section in sections {
+        if section.items.is_empty() {
+            continue;
+        }
+        if section.kind != SessionHubSectionKind::New {
+            rows.push(HubRow::Header(section.kind));
+        }
+        rows.extend(section.items.into_iter().map(HubRow::Item));
+    }
+    rows
+}
+
 /// Renders the session hub home screen into `area`.
 ///
 /// `loading` and `error` are application-owned response state: loading hides
 /// the empty state while the first overview response is in flight, and an
-/// error is drawn as a banner above (possibly stale) sections. `search_active`
-/// is whether the user is composing a search (shown as an active filter box);
+/// error is drawn as a banner above (possibly stale) rows. `search_active` is
+/// whether the user is composing a search (shown as an active filter box);
 /// `query` is the live filter — when non-empty the list narrows to matching
 /// rows.
 pub fn render_session_hub(
@@ -291,8 +402,7 @@ pub fn render_session_hub(
         content_area = rows[1];
     }
 
-    let sections = presentation.state.sections();
-    if sections.is_empty() {
+    if presentation.rows().is_empty() {
         let message = if loading {
             i18n.text("overlay-picker-loading")
         } else {
@@ -303,13 +413,13 @@ pub fn render_session_hub(
             content_area,
         );
     } else {
-        render_sections(frame, content_area, presentation, i18n);
+        render_rows(frame, content_area, presentation, i18n);
     }
 
     frame.render_widget(
         Paragraph::new(build_shortcut_line([
             ShortcutHint::new("↑/↓", i18n.text("hub-hint-move")),
-            ShortcutHint::new("Tab", i18n.text("hub-hint-focus")),
+            ShortcutHint::new("Tab", i18n.text("hub-hint-section")),
             ShortcutHint::new("Enter", i18n.text("hub-hint-open")),
             ShortcutHint::new("Esc", i18n.text("hub-hint-back")),
         ])),
@@ -317,178 +427,52 @@ pub fn render_session_hub(
     );
 }
 
-fn render_sections(
+/// Draws the single hub list: section headers and session rows inside one box.
+fn render_rows(
     frame: &mut Frame<'_>,
     area: Rect,
     presentation: &SessionHubPresentation,
     i18n: &I18n,
 ) {
-    let sections = presentation.state.sections();
-    let focus = presentation.state.focus();
-    let selected_section = presentation.state.selected_section_index();
-    let selected_item = presentation.state.selected_item_index();
-
-    let section_areas = split_section_areas(area, sections);
-    for (index, section) in sections.iter().enumerate() {
-        let section_area = section_areas
-            .get(index)
-            .copied()
-            .unwrap_or(Rect::ZERO);
-        let is_selected = index == selected_section;
-        let navigation_selected = is_selected && focus == SectionedListFocus::Navigation;
-        let item_selected =
-            is_selected && focus == SectionedListFocus::Items;
-        render_section(
-            frame,
-            section_area,
-            section,
-            i18n.text(section.kind.localization_key()),
-            i18n.text(section.kind.empty_localization_key()),
-            navigation_selected,
-            if item_selected { Some(selected_item) } else { None },
-        );
-    }
-}
-
-fn split_section_areas(area: Rect, sections: &[SessionHubSection]) -> Vec<Rect> {
-    if sections.is_empty() || area.height == 0 {
-        return Vec::new();
-    }
-    // The new-session action section is always a single fixed-height row at
-    // the top; every other section shares the remaining space proportionally
-    // to its row count so non-empty sections never get starved.
-    let (new_index, new_area, remaining) = match sections.iter().position(|section| {
-        section.kind == SessionHubSectionKind::New && !section.items.is_empty()
-    }) {
-        Some(index) => {
-            let new_area = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: 1.min(area.height),
-            };
-            let remaining = Rect {
-                x: area.x,
-                y: area.y + 1,
-                width: area.width,
-                height: area.height.saturating_sub(1),
-            };
-            (Some(index), new_area, remaining)
-        }
-        None => (None, Rect::ZERO, area),
-    };
-    let mut areas = vec![Rect::ZERO; sections.len()];
-    if let Some(index) = new_index {
-        areas[index] = new_area;
-    }
-    if remaining.height == 0 {
-        return areas;
-    }
-    let total = sections
-        .iter()
-        .enumerate()
-        .map(|(index, section)| {
-            if Some(index) == new_index {
-                0
-            } else {
-                section.items.len().max(1) as u32
-            }
-        })
-        .sum::<u32>()
-        .max(1);
-    let constraints = sections
-        .iter()
-        .enumerate()
-        .map(|(index, section)| {
-            if Some(index) == new_index {
-                Constraint::Length(1)
-            } else {
-                Constraint::Ratio(section.items.len().max(1) as u32, total)
-            }
-        })
-        .collect::<Vec<_>>();
-    let rest_areas = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(remaining)
-        .to_vec();
-    for (index, area) in rest_areas.into_iter().enumerate() {
-        if areas[index] == Rect::ZERO {
-            areas[index] = area;
-        }
-    }
-    areas
-}
-
-fn render_section(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    section: &SessionHubSection,
-    title: String,
-    empty_message: String,
-    navigation_selected: bool,
-    item_selected: Option<usize>,
-) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    if section.items.is_empty() {
-        let border_style = if navigation_selected {
-            Style::default().fg(accent_color())
-        } else {
-            Style::default()
-        };
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(format!(" {} ", title));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(empty_message, muted_style()))),
-            inner,
-        );
-        return;
-    }
-
-    let items = section
-        .items
-        .iter()
-        .map(|item| {
-            build_accented_two_line_list_item(
+    let mut list_items = Vec::with_capacity(presentation.rows().len());
+    // The selected List row counts every rendered line before it, so headers
+    // (1 line) and two-line session rows both contribute their height.
+    let mut selected_list_row = 0usize;
+    let mut flat_row = 0usize;
+    for (index, row) in presentation.rows().iter().enumerate() {
+        let item = match row {
+            HubRow::Header(kind) => ListItem::new(Line::from(Span::styled(
+                format!(" {} ", i18n.text(kind.localization_key())),
+                Style::default()
+                    .fg(accent_color())
+                    .add_modifier(Modifier::BOLD),
+            ))),
+            HubRow::Item(item) => build_accented_two_line_list_item(
                 Cow::Borrowed(item.label.as_str()),
                 None,
                 Some(Cow::Borrowed(item.detail.as_str())),
-            )
-        })
-        .collect::<Vec<ListItem<'_>>>();
-
-    let highlight_style = if item_selected.is_some() {
-        selection_style()
-    } else if navigation_selected {
-        Style::default()
-            .fg(accent_color())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-
-    let spec = ListPanelSpec::new(
-        Some(Cow::Owned(title)),
-        &items,
-        item_selected,
-        highlight_style,
-        Cow::Borrowed("> "),
-    );
-    render_list_panel(frame, area, &spec);
+            ),
+        };
+        if index == presentation.selection() {
+            selected_list_row = flat_row;
+        }
+        flat_row += item.height();
+        list_items.push(item);
+    }
+    let list = List::new(list_items)
+        .highlight_style(selection_style())
+        .highlight_symbol("> ");
+    let mut state = ListState::default();
+    state.select(Some(selected_list_row));
+    frame.render_stateful_widget(list, area, &mut state);
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        SessionHubItem, SessionHubPresentation, SessionHubSection, SessionHubSectionKind,
+        HubRow, SessionHubItem, SessionHubPresentation, SessionHubSection,
+        SessionHubSectionKind,
     };
-    use agena_tui_components::SectionedListFocus;
 
     fn item(id: i64) -> SessionHubItem {
         SessionHubItem {
@@ -515,105 +499,141 @@ mod tests {
     }
 
     #[test]
-    fn set_sections_preserves_selection_and_focus() {
-        let mut presentation = SessionHubPresentation::empty(SectionedListFocus::Items);
+    fn builds_one_box_with_new_session_first_and_hides_empty_sections() {
+        let mut presentation = SessionHubPresentation::empty();
         presentation.set_sections(vec![
-            section(SessionHubSectionKind::Attention, &[1, 2]),
-            section(SessionHubSectionKind::Running, &[3]),
+            SessionHubSection::new(SessionHubSectionKind::New, vec![new_session_item()]),
+            section(SessionHubSectionKind::Running, &[]), // empty → hidden
+            section(SessionHubSectionKind::Attention, &[3]),
+            section(SessionHubSectionKind::Recent, &[4]),
         ]);
+        let rows = presentation.rows();
+        assert_eq!(rows.len(), 5, "new row + attention (header+row) + recent (header+row)");
+        assert_eq!(rows[0], HubRow::Item(new_session_item()));
+        assert_eq!(rows[1], HubRow::Header(SessionHubSectionKind::Attention));
+        assert_eq!(rows[2], HubRow::Item(item(3)));
+        assert_eq!(rows[3], HubRow::Header(SessionHubSectionKind::Recent));
+        assert_eq!(rows[4], HubRow::Item(item(4)));
+        // No Running header — the empty bucket was dropped.
+        assert!(!rows.contains(&HubRow::Header(SessionHubSectionKind::Running)));
+        // Selection lands on the first row: the create action.
+        assert!(presentation.selected_item().map(|r| r.is_new_session).unwrap_or(false));
         assert_eq!(presentation.total_count(), 3);
-        assert_eq!(
-            presentation.state.selected_section_index(),
-            0,
-            "selection lands on the first non-empty section by default"
-        );
-        assert_eq!(presentation.state.focus(), SectionedListFocus::Items);
-
-        // Move to the second section's only item, then reload with fewer rows.
-        presentation.state.set_focus(SectionedListFocus::Navigation);
-        presentation.state.move_selection(1);
-        presentation.state.set_focus(SectionedListFocus::Items);
-        assert_eq!(presentation.selected_session().map(|s| s.session_id), Some(3));
-
-        presentation.set_sections(vec![section(SessionHubSectionKind::Recent, &[9])]);
-        assert_eq!(presentation.selected_session().map(|s| s.session_id), Some(9));
     }
 
     #[test]
-    fn selected_session_requires_items_focus() {
-        let mut presentation = SessionHubPresentation::empty(SectionedListFocus::Navigation);
+    fn arrows_cross_sections_and_skip_headers() {
+        let mut presentation = SessionHubPresentation::empty();
         presentation.set_sections(vec![
-            section(SessionHubSectionKind::Attention, &[1]),
-            section(SessionHubSectionKind::Running, &[]),
-            section(SessionHubSectionKind::Recent, &[2]),
+            SessionHubSection::new(SessionHubSectionKind::New, vec![new_session_item()]),
+            section(SessionHubSectionKind::Running, &[1, 2]),
+            section(SessionHubSectionKind::Recent, &[3]),
         ]);
-        assert_eq!(presentation.selected_session(), None);
-        presentation.toggle_focus();
-        assert_eq!(presentation.selected_session().map(|s| s.session_id), Some(1));
+        // rows: new, H(running), 1, 2, H(recent), 3
+        presentation.move_selection(1);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(1));
+        presentation.move_selection(1);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(2));
+        // Crosses the recent header without stopping on it.
+        presentation.move_selection(1);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(3));
+        // Clamped at the end.
+        presentation.move_selection(1);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(3));
+        // Back over the running section.
+        presentation.move_selection(-2);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(1));
+    }
+
+    #[test]
+    fn tab_jumps_between_groups_and_wraps() {
+        let mut presentation = SessionHubPresentation::empty();
+        presentation.set_sections(vec![
+            SessionHubSection::new(SessionHubSectionKind::New, vec![new_session_item()]),
+            section(SessionHubSectionKind::Running, &[1, 2]),
+            section(SessionHubSectionKind::Attention, &[]), // empty → skipped
+            section(SessionHubSectionKind::Recent, &[3]),
+        ]);
+        // Tab from the create row lands on the first running session.
+        presentation.move_selection_section(1);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(1));
+        // Tab again jumps past the empty attention section to recent.
+        presentation.move_selection_section(1);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(3));
+        // Wraps back to the create row.
+        presentation.move_selection_section(1);
+        assert!(presentation.selected_item().map(|s| s.is_new_session).unwrap_or(false));
+        // Shift+Tab walks back: recent → running → create.
+        presentation.move_selection_section(-1);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(3));
+        presentation.move_selection_section(-1);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(1));
+    }
+
+    #[test]
+    fn tab_reaches_recent_when_running_and_attention_are_empty() {
+        // Regression: with no running/attention sessions the user must still be
+        // able to Tab straight to the recent sessions.
+        let mut presentation = SessionHubPresentation::empty();
+        presentation.set_sections(vec![
+            SessionHubSection::new(SessionHubSectionKind::New, vec![new_session_item()]),
+            section(SessionHubSectionKind::Running, &[]),
+            section(SessionHubSectionKind::Attention, &[]),
+            section(SessionHubSectionKind::Recent, &[7, 8]),
+        ]);
+        presentation.move_selection_section(1);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(7));
     }
 
     #[test]
     fn query_filters_rows_and_keeps_the_new_session_action() {
-        let mut presentation = SessionHubPresentation::empty(SectionedListFocus::Items);
-        let mut sections = vec![
-            SessionHubSection::new(
-                SessionHubSectionKind::New,
-                vec![new_session_item()],
-            ),
+        let mut presentation = SessionHubPresentation::empty();
+        presentation.set_sections(vec![
+            SessionHubSection::new(SessionHubSectionKind::New, vec![new_session_item()]),
             section(SessionHubSectionKind::Running, &[1, 2]),
             section(SessionHubSectionKind::Attention, &[3]),
             section(SessionHubSectionKind::Recent, &[4]),
-        ];
-        // A synthetic new-session row placed outside the New section must
-        // survive filtering too: only the New section emits it today, but the
-        // filter treats action rows as always-visible.
-        sections.push(SessionHubSection::new(
-            SessionHubSectionKind::Recent,
-            vec![SessionHubItem {
-                is_new_session: true,
-                ..item(5)
-            }],
-        ));
-        presentation.set_sections(sections);
-
+        ]);
         presentation.set_query("session 3");
-
-        let ids: Vec<i64> = presentation
-            .state
-            .sections()
-            .iter()
-            .flat_map(|section| section.items.iter().map(|row| row.session_id))
-            .collect();
-        assert_eq!(
-            ids,
-            vec![0, 3, 5],
-            "the new-session action row, the matching row, and any action row all survive"
-        );
-        // Selection stays on the previously selected (new-session) row.
-        assert!(
-            presentation
-                .selected_session()
-                .map(|row| row.is_new_session)
-                .unwrap_or(false)
-        );
+        // Visible rows: the create action + header(attention) + the match.
+        assert_eq!(presentation.total_count(), 2);
+        assert_eq!(presentation.rows().len(), 3);
+        // Selection stays on the create row by identity.
+        assert!(presentation.selected_item().map(|r| r.is_new_session).unwrap_or(false));
+        // Down lands on the matching row.
+        presentation.move_selection(1);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(3));
     }
 
     #[test]
     fn query_selection_survives_by_identity_when_selected_row_still_matches() {
-        let mut presentation = SessionHubPresentation::empty(SectionedListFocus::Items);
+        let mut presentation = SessionHubPresentation::empty();
         presentation.set_sections(vec![
+            SessionHubSection::new(SessionHubSectionKind::New, vec![new_session_item()]),
             section(SessionHubSectionKind::Running, &[1, 2]),
-            section(SessionHubSectionKind::Attention, &[3]),
+            section(SessionHubSectionKind::Recent, &[3]),
         ]);
-        // Select the second row of the Running section.
-        presentation.move_selection(1);
-        assert_eq!(presentation.selected_session().map(|s| s.session_id), Some(2));
+        // Select the second running row.
+        presentation.move_selection(2);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(2));
         // Filtering to "session 2" keeps row 2 selected even though the list
         // shrank around it.
         presentation.set_query("session 2");
-        assert_eq!(presentation.selected_session().map(|s| s.session_id), Some(2));
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(2));
         // Clearing the query restores the full list and keeps row 2 selected.
         presentation.set_query("");
-        assert_eq!(presentation.selected_session().map(|s| s.session_id), Some(2));
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(2));
+    }
+
+    #[test]
+    fn selection_clamps_to_nearest_item_when_sections_shrink() {
+        let mut presentation = SessionHubPresentation::empty();
+        presentation.set_sections(vec![section(SessionHubSectionKind::Running, &[1, 2, 3, 4])]);
+        presentation.move_selection_end();
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(4));
+        // The previously selected session is gone after a refresh; selection
+        // clamps to the nearest row of the new list.
+        presentation.set_sections(vec![section(SessionHubSectionKind::Recent, &[9])]);
+        assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(9));
     }
 }

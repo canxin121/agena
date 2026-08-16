@@ -17,6 +17,7 @@ hub-action-list = 세션 목록
 hub-action-refresh = 새로고침
 hub-hint-move = 이동
 hub-hint-focus = 포커스
+hub-hint-section = 섹션
 hub-hint-open = 열기
 hub-hint-back = 뒤로
 hub-section-attention = 주의 필요

@@ -17,6 +17,7 @@ hub-action-list = 工作階段清單
 hub-action-refresh = 重新整理
 hub-hint-move = 移動
 hub-hint-focus = 焦點
+hub-hint-section = 分組
 hub-hint-open = 開啟
 hub-hint-back = 返回
 hub-section-attention = 需要關注

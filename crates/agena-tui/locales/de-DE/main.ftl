@@ -17,6 +17,7 @@ hub-action-list = Sitzungsliste
 hub-action-refresh = aktualisieren
 hub-hint-move = bewegen
 hub-hint-focus = Fokus
+hub-hint-section = Abschnitt
 hub-hint-open = öffnen
 hub-hint-back = zurück
 hub-section-attention = Benötigt Aufmerksamkeit

@@ -972,9 +972,8 @@ pub(super) struct HubState {
 
 impl HubState {
     pub(super) fn new() -> Self {
-        use agena_tui_components::SectionedListFocus;
         Self {
-            presentation: SessionHubPresentation::empty(SectionedListFocus::Items),
+            presentation: SessionHubPresentation::empty(),
             loading: true,
             request_id: 0,
             error: None,

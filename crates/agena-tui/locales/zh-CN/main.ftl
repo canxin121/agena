@@ -45,6 +45,7 @@ hub-action-list = 会话列表
 hub-action-refresh = 刷新
 hub-hint-move = 移动
 hub-hint-focus = 焦点
+hub-hint-section = 分组
 hub-hint-open = 打开
 hub-hint-back = 返回
 hub-section-attention = 需要关注

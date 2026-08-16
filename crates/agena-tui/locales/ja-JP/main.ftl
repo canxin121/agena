@@ -17,6 +17,7 @@ hub-action-list = セッション一覧
 hub-action-refresh = 更新
 hub-hint-move = 移動
 hub-hint-focus = フォーカス
+hub-hint-section = セクション
 hub-hint-open = 開く
 hub-hint-back = 戻る
 hub-section-attention = 対応が必要

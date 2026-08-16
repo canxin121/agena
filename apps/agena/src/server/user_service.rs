@@ -122,10 +122,6 @@ fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
     let workspace = fs::canonicalize(&workspace).unwrap_or(workspace);
     arguments.push("--workspace".into());
     arguments.push(workspace.into_os_string());
-    if let Some(web_dir) = &args.web_dir {
-        arguments.push("--web-dir".into());
-        arguments.push(web_dir.as_os_str().to_owned());
-    }
 
     Ok(arguments)
 }

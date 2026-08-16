@@ -738,11 +738,6 @@ pub struct ServerArgs {
     pub ui_password: Option<String>,
     #[arg(long = "workspace", env = "AGENA_WORKSPACE_ROOT", value_name = "PATH")]
     pub workspace_root: Option<PathBuf>,
-    /// Directory containing the built web frontend (dist/). When present, the
-    /// server serves the SPA and its assets at the root, with an index.html
-    /// fallback for history-mode routes.
-    #[arg(long = "web-dir", env = "AGENA_SERVER_WEB_DIR", value_name = "PATH")]
-    pub web_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

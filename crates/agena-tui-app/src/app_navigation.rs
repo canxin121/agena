@@ -281,20 +281,39 @@ impl App {
         if self.transcript.session_id == Some(session_id)
             && let Some(execution) = self.transcript.execution.as_ref()
         {
+            // The server's session state machine (`SessionResource.state`) is
+            // the single authoritative source: it is derived from persisted
+            // run markers, pending interactions, and the execution lease, so
+            // it survives disconnects and needs no client-side tracking.
+            // Pending interactive asks refine *what* the awaiting is for — a
+            // permission ask stays under SessionState::Running (permissions
+            // are not user-input interactions), so it is surfaced here rather
+            // than folded into Running.
             if let Some(kind) = pending_interactive_kind_for_execution(execution) {
                 return match kind {
                     PendingInteractiveKind::Permission => SessionActivity::AwaitingPermission,
                     PendingInteractiveKind::UserInput => SessionActivity::AwaitingUserInput,
                 };
             }
-            if execution.workflow_state == agena_api::resource::WorkflowState::Blocked {
-                return SessionActivity::Blocked;
-            }
-            if execution.active_execution.is_some() {
-                return SessionActivity::Running;
+            match execution.session.state {
+                agena_api::resource::SessionState::Running
+                | agena_api::resource::SessionState::Creating => {
+                    return SessionActivity::Running;
+                }
+                agena_api::resource::SessionState::AwaitingUser => {
+                    return SessionActivity::AwaitingUserInput;
+                }
+                // Interrupted (stale lease) and Failed are abnormal states;
+                // surface them as blocked rather than silently idle.
+                agena_api::resource::SessionState::Interrupted
+                | agena_api::resource::SessionState::Failed => return SessionActivity::Blocked,
+                agena_api::resource::SessionState::Ready => {}
             }
         }
 
+        // No authoritative execution view yet (submit/continue is still in
+        // flight before the first SSE refresh). The client-side run tracker
+        // covers this short window only.
         if self
             .run_activity
             .is_active(RunActivityTarget::Session(session_id))

@@ -50,66 +50,19 @@ fn notifications_operational(app: &App) -> bool {
         .is_some_and(|context| context.capabilities.terminal_notifications.is_operational())
 }
 
-/// The activity projected to the terminal title, honoring the `agena.terminal`
-/// plugin's hook-driven state when it is loaded.
+/// The activity projected to the terminal title and progress bar.
 ///
-/// The plugin observes the session lifecycle hooks (`run.pre`, `run.post`,
-/// `agent.stop`, ...) and publishes an `agena.terminal.activity` display
-/// segment. When present, it is the authoritative idle/running/blocked source.
-/// Permission and user-input waits are not observable through a plugin hook, so
-/// the App's own pending-interactive state always wins for those.
-fn effective_terminal_activity(app: &App) -> SessionActivity {
-    let app_activity = app.current_session_activity();
-    // Pending interactive requests are only visible to the App. Prefer them.
-    if matches!(
-        app_activity,
-        SessionActivity::AwaitingPermission | SessionActivity::AwaitingUserInput
-    ) {
-        return app_activity;
-    }
-    // Otherwise consult the plugin's lifecycle state when it is loaded.
-    match plugin_terminal_activity(app) {
-        Some(activity @ (SessionActivity::Running | SessionActivity::Blocked)) => activity,
-        Some(SessionActivity::Idle) => SessionActivity::Idle,
-        // Plugin unknown/absent → fall back to the App's own projection.
-        _ => app_activity,
-    }
-}
-
-/// Reads the `agena.terminal.activity` display contribution published by the
-/// bundled terminal plugin, if loaded.
-fn plugin_terminal_activity(app: &App) -> Option<SessionActivity> {
-    let contribution =
-        crate::app_backend::plugin_effects::plugin_display_contributions(&app.application)
-            .into_iter()
-            .find(|contribution| {
-                contribution.contribution.id == "agena.terminal.activity"
-                    && matches!(
-                        (
-                            contribution.contribution.kind,
-                            &contribution.contribution.content,
-                        ),
-                        (
-                            agena_plugin_host::ContributionKind::TerminalActivity,
-                            agena_plugin_host::PluginDisplayContent::TerminalActivity { .. },
-                        )
-                    )
-            })?;
-    match contribution.contribution.content {
-        agena_plugin_host::PluginDisplayContent::TerminalActivity { value } => match value.trim() {
-            "idle" => Some(SessionActivity::Idle),
-            "running" => Some(SessionActivity::Running),
-            "blocked" => Some(SessionActivity::Blocked),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
+/// This is the single unified projection: the App's `current_session_activity`
+/// derives from the server's authoritative session state machine
+/// (`SessionResource.state`), with pending-interactive requests refining what
+/// an awaiting state is for. The bundled `agena.terminal` plugin also publishes
+/// a hook-driven `agena.terminal.activity` display segment, but hooks only
+/// observe idle/running/blocked and can lag the server lease, so it is *not*
+/// consulted here — the state machine is the source of truth.
 fn current_title_text(app: &App) -> String {
     let session_title = app.current_or_selected_session_title();
     let workspace = crate::app_backend::plugin_effects::workspace_name(&app.application);
-    let activity = effective_terminal_activity(app);
+    let activity = app.current_session_activity();
     let state = match activity {
         SessionActivity::Idle => None,
         SessionActivity::Running => Some(app.i18n.text("terminal-title-working")),
@@ -194,7 +147,7 @@ fn progress_operational(app: &App) -> bool {
 /// indicator; interactive waits map to the paused/warning state and a
 /// blocked run to the error state.
 fn current_progress_state(app: &App) -> ProgressState {
-    match effective_terminal_activity(app) {
+    match app.current_session_activity() {
         SessionActivity::Idle => ProgressState::Clear,
         SessionActivity::Running => ProgressState::Working,
         SessionActivity::AwaitingPermission | SessionActivity::AwaitingUserInput => {
@@ -285,7 +238,7 @@ fn take_plugin_notify(app: &mut App) -> Option<NotificationMethod> {
 /// for the queued event. Derived from the current session and activity so the
 /// alert is meaningful even when it lands after the user has tabbed away.
 fn notification_summary(app: &App) -> String {
-    let activity = effective_terminal_activity(app);
+    let activity = app.current_session_activity();
     let session = app.current_or_selected_session_title().unwrap_or_default();
     let state = match activity {
         SessionActivity::Idle => None,

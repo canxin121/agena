@@ -2022,6 +2022,201 @@ mod interaction_part_routing_tests {
 }
 
 #[cfg(test)]
+mod session_activity_state_machine_tests {
+    use chrono::Utc;
+    use ratatui::layout::Rect;
+
+    use super::super::{App, I18n, LaunchOptions, TuiBackend};
+    use crate::app_types::SessionActivity;
+    use agena_api::resource::{
+        ExecutionAccess, PendingInteractiveRequest, PendingInteractiveRequestResource,
+        PermissionActionResource, PermissionRequest, SessionExecutionResource,
+        SessionExecutionContextResource, SessionLifecycleState, SessionRelationKind,
+        SessionResource, SessionState, SessionTranscriptPart, SessionUsageResource,
+        WorkflowState,
+    };
+
+    const SESSION_ID: i64 = 7;
+    const WIDTH: u16 = 80;
+    const HEIGHT: u16 = 24;
+
+    fn app_with_execution(state: SessionState) -> App {
+        let mut app = App::new_with_backend(
+            TuiBackend::remote_mock(),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        app.layout.transcript_body = Rect::new(0, 0, WIDTH, HEIGHT);
+        app.transcript.session_id = Some(SESSION_ID);
+        app.transcript
+            .apply_execution(execution_with(state, Vec::new(), Vec::new()));
+        app
+    }
+
+    fn execution_with(
+        state: SessionState,
+        pending: Vec<PendingInteractiveRequestResource>,
+        parts: Vec<SessionTranscriptPart>,
+    ) -> SessionExecutionResource {
+        SessionExecutionResource {
+            session: SessionResource {
+                id: SESSION_ID,
+                parent_id: None,
+                depth: 0,
+                root_id: SESSION_ID,
+                workspace_id: 1,
+                title: "Test session".to_owned(),
+                version: 1,
+                relation_kind: SessionRelationKind::Root,
+                lifecycle_state: SessionLifecycleState::Ready,
+                state,
+                source_cutoff_seq_global: None,
+                source_message_id: None,
+                is_subagent: false,
+                task_id: None,
+                subtask_access: None,
+                subtask_status: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                message_count: 1,
+                child_session_count: 0,
+                last_message_at: None,
+            },
+            parts,
+            workflow_state: WorkflowState::Quiescent,
+            // Deliberately absent: the server state machine must drive the
+            // activity even without a client-visible in-flight execution.
+            active_execution: None,
+            latest_event_seq: Some(2),
+            automation: None,
+            background_activities: Vec::new(),
+            execution: SessionExecutionContextResource {
+                agent_id: "test".to_owned(),
+                execution_access: ExecutionAccess::Inherit,
+                selected_permission: Default::default(),
+                effective_permission: Default::default(),
+                permission_ceiling: Default::default(),
+                model_provider_id: None,
+                model_adapter_id: None,
+                model_id: None,
+                model_thinking_mode: None,
+                model_speed_mode: None,
+                model_verbosity: None,
+                model_parallel_tool_calls: None,
+                effective_workspace_root: None,
+                task_id: None,
+                subtask_status: None,
+                subtask_started_at: None,
+                subtask_finished_at: None,
+                subtask_failure: None,
+            },
+            pending_interactive_requests: pending,
+            usage: SessionUsageResource {
+                measured_prompt_tokens: None,
+                current_tokens: 0,
+                projected_tokens: None,
+                limit_tokens: None,
+                limit_basis: None,
+                reserved_tokens: None,
+                model_context_window_tokens: None,
+                model_max_input_tokens: None,
+                model_max_output_tokens: None,
+            },
+        }
+    }
+
+    fn permission_request() -> PendingInteractiveRequestResource {
+        PendingInteractiveRequestResource {
+            session_id: SESSION_ID,
+            parent_session_id: None,
+            task_id: None,
+            request: PendingInteractiveRequest::Permission {
+                request: PermissionRequest {
+                    request_id: "host:1:2:0".to_owned(),
+                    session_id: Some(SESSION_ID),
+                    action: PermissionActionResource::Tool {
+                        tool_name: "fs.write".to_owned(),
+                        qualifier: None,
+                    },
+                    related_actions: Vec::new(),
+                    requested_actions: Vec::new(),
+                    reason: "write the requested file".to_owned(),
+                    explanation: String::new(),
+                    source: Some("static_policy".to_owned()),
+                    scope: None,
+                    operator: None,
+                    trace: Vec::new(),
+                    created_at: Utc::now(),
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn running_state_is_active_even_without_a_client_execution_view() {
+        let app = app_with_execution(SessionState::Running);
+        assert_eq!(
+            app.session_activity(SESSION_ID),
+            SessionActivity::Running,
+            "SessionState::Running must be active even when active_execution \
+             is absent (the old client-side view would have read Idle)"
+        );
+    }
+
+    #[test]
+    fn creating_state_is_active() {
+        let app = app_with_execution(SessionState::Creating);
+        assert_eq!(app.session_activity(SESSION_ID), SessionActivity::Running);
+    }
+
+    #[test]
+    fn awaiting_user_with_a_permission_ask_is_awaiting_permission() {
+        let mut app = app_with_execution(SessionState::AwaitingUser);
+        app.transcript.execution.as_mut().unwrap().pending_interactive_requests =
+            vec![permission_request()];
+        assert_eq!(
+            app.session_activity(SESSION_ID),
+            SessionActivity::AwaitingPermission
+        );
+    }
+
+    #[test]
+    fn awaiting_user_without_a_pending_request_still_awaits_input() {
+        let app = app_with_execution(SessionState::AwaitingUser);
+        assert_eq!(
+            app.session_activity(SESSION_ID),
+            SessionActivity::AwaitingUserInput,
+            "AwaitingUser without a visible request is still an awaiting state"
+        );
+    }
+
+    #[test]
+    fn interrupted_and_failed_surface_as_blocked() {
+        assert_eq!(
+            app_with_execution(SessionState::Interrupted).session_activity(SESSION_ID),
+            SessionActivity::Blocked
+        );
+        assert_eq!(
+            app_with_execution(SessionState::Failed).session_activity(SESSION_ID),
+            SessionActivity::Blocked
+        );
+    }
+
+    #[test]
+    fn ready_state_is_idle_even_with_a_client_execution_view() {
+        let mut app = app_with_execution(SessionState::Ready);
+        // A stale client-side execution view must not keep the session
+        // "working" — the server state machine owns the truth.
+        app.transcript.execution.as_mut().unwrap().active_execution =
+            Some(agena_api::resource::ActiveExecutionResource {
+                execution_id: uuid::Uuid::new_v4(),
+                phase: agena_api::resource::ExecutionPhase::StreamingModel,
+            });
+        assert_eq!(app.session_activity(SESSION_ID), SessionActivity::Idle);
+    }
+}
+
+#[cfg(test)]
 mod transcript_character_cursor_tests {
     use super::super::{
         ExecutionStatus, RunResource, RunRole, RunStatus, TranscriptFixture,

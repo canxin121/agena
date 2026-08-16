@@ -99,6 +99,9 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     if let Some(workspace_root) = &args.workspace_root {
         command.arg("--workspace").arg(workspace_root);
     }
+    if let Some(web_dir) = &args.web_dir {
+        command.arg("--web-dir").arg(web_dir);
+    }
     if let Some(password) = &args.ui_password {
         command.env("AGENA_SERVER_UI_PASSWORD", password);
     }

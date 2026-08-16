@@ -338,12 +338,12 @@ async fn resolve_public_target(url: &Url) -> Result<Vec<SocketAddr>, String> {
     let port = url
         .port_or_known_default()
         .ok_or_else(|| "remote image URL has no known port".to_string())?;
-    let addresses = match url
+    let (addresses, domain_routed) = match url
         .host()
         .ok_or_else(|| "remote image URL has no host".to_string())?
     {
-        Host::Ipv4(address) => vec![SocketAddr::new(IpAddr::V4(address), port)],
-        Host::Ipv6(address) => vec![SocketAddr::new(IpAddr::V6(address), port)],
+        Host::Ipv4(address) => (vec![SocketAddr::new(IpAddr::V4(address), port)], false),
+        Host::Ipv6(address) => (vec![SocketAddr::new(IpAddr::V6(address), port)], false),
         Host::Domain(host) => {
             let resolved = tokio::time::timeout(
                 REMOTE_IMAGE_DNS_TIMEOUT,
@@ -352,7 +352,10 @@ async fn resolve_public_target(url: &Url) -> Result<Vec<SocketAddr>, String> {
             .await
             .map_err(|_| format!("remote image DNS lookup timed out for {host}"))?
             .map_err(|error| format!("cannot resolve remote image host {host}: {error}"))?;
-            resolved.collect::<BTreeSet<_>>().into_iter().collect()
+            (
+                resolved.collect::<BTreeSet<_>>().into_iter().collect(),
+                true,
+            )
         }
     };
     if addresses.is_empty() {
@@ -361,13 +364,33 @@ async fn resolve_public_target(url: &Url) -> Result<Vec<SocketAddr>, String> {
     if let Some(address) = addresses
         .iter()
         .map(SocketAddr::ip)
-        .find(|address| !is_public_address(*address))
+        .find(|address| !is_permitted_remote_address(*address, domain_routed))
     {
         return Err(format!(
             "remote image host resolves to a non-public address ({address})"
         ));
     }
     Ok(addresses)
+}
+
+fn is_permitted_remote_address(address: IpAddr, domain_routed: bool) -> bool {
+    is_public_address(address) || domain_routed && is_synthetic_proxy_address(address)
+}
+
+/// Clash, Surge, and similar transparent DNS proxies commonly reserve
+/// 198.18.0.0/15 as a synthetic address pool. The original hostname still
+/// supplies TLS SNI and the HTTP Host header, and reqwest remains pinned to the
+/// resolver result. Permit this range only for a hostname resolution; a URL
+/// that directly names a benchmark-range IP remains blocked.
+fn is_synthetic_proxy_address(address: IpAddr) -> bool {
+    let address = match address {
+        IpAddr::V4(address) => Some(address),
+        IpAddr::V6(address) => address.to_ipv4_mapped(),
+    };
+    address.is_some_and(|address| {
+        let [first, second, _, _] = address.octets();
+        first == 198 && matches!(second, 18 | 19)
+    })
 }
 
 fn is_public_address(address: IpAddr) -> bool {
@@ -455,6 +478,19 @@ mod tests {
         }
         for address in ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111"] {
             assert!(is_public_address(address.parse().unwrap()), "{address}");
+        }
+
+        for address in ["198.18.0.1", "198.19.255.254", "::ffff:198.18.0.1"] {
+            let address = address.parse().unwrap();
+            assert!(!is_public_address(address), "{address}");
+            assert!(
+                is_permitted_remote_address(address, true),
+                "a hostname may use the system DNS proxy pool: {address}"
+            );
+            assert!(
+                !is_permitted_remote_address(address, false),
+                "a literal benchmark-range URL must remain blocked: {address}"
+            );
         }
     }
 

@@ -116,6 +116,10 @@ pub fn router(state: AppState) -> Router {
                 "/api/v1/model-catalog/refresh",
                 post(rest::refresh_model_catalog),
             )
+            .route(
+                "/api/v1/sessions/{session_id}/media",
+                get(rest::download_session_media_file),
+            )
             .route("/api/v1/git/status", get(rest::get_git_status))
             .route("/api/v1/snapshots", get(rest::get_snapshot_status))
             .route("/api/v1/git/stage", post(rest::stage_git_changes))
@@ -164,6 +168,10 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/plugins/{plugin_id}/ui/actions/{action_id}",
                 post(rest::run_plugin_ui_action),
+            )
+            .route(
+                "/api/v1/plugins/{plugin_id}/commands/{command_id}",
+                post(rest::run_plugin_command),
             )
             .route(
                 "/api/v1/plugins/{plugin_id}/logs",
@@ -244,12 +252,72 @@ pub fn router(state: AppState) -> Router {
             )
             .route("/api/v1/providers", get(rest::list_providers))
             .route(
+                "/api/v1/providers/client-versions/refresh",
+                post(rest::refresh_provider_client_versions),
+            )
+            .route(
+                "/api/v1/providers/aws-profiles",
+                get(rest::list_aws_profile_names),
+            )
+            .route(
                 "/api/v1/providers/models",
                 post(rest::list_provider_adapter_models),
             )
             .route(
                 "/api/v1/providers/{provider_id}/models",
                 get(rest::list_provider_models).post(rest::list_saved_provider_adapter_models),
+            )
+            .route(
+                "/api/v1/providers/{provider_id}/configured-models",
+                get(rest::list_configured_provider_adapter_models),
+            )
+            .route(
+                "/api/v1/providers/{provider_id}/configured-local-models",
+                get(rest::list_configured_provider_models),
+            )
+            .route(
+                "/api/v1/provider-studio/draft",
+                get(rest::get_provider_studio_draft),
+            )
+            .route(
+                "/api/v1/provider-studio/draft/models",
+                post(rest::list_provider_studio_draft_models),
+            )
+            .route(
+                "/api/v1/provider-studio/draft/model",
+                post(rest::get_provider_studio_model_draft),
+            )
+            .route(
+                "/api/v1/provider-studio/save",
+                post(rest::save_provider_studio_draft),
+            )
+            .route(
+                "/api/v1/provider-studio/save-adapter",
+                post(rest::save_provider_studio_adapter),
+            )
+            .route(
+                "/api/v1/provider-studio/save-model",
+                post(rest::save_provider_studio_model),
+            )
+            .route(
+                "/api/v1/provider-studio/delete-provider",
+                post(rest::delete_provider_studio_provider),
+            )
+            .route(
+                "/api/v1/provider-studio/delete-adapter",
+                post(rest::delete_provider_studio_adapter),
+            )
+            .route(
+                "/api/v1/provider-studio/delete-model",
+                post(rest::delete_provider_studio_model),
+            )
+            .route(
+                "/api/v1/provider-studio/auth/start",
+                post(rest::start_provider_studio_auth),
+            )
+            .route(
+                "/api/v1/provider-studio/auth/continue",
+                post(rest::continue_provider_studio_auth),
             )
             .route(
                 "/api/v1/workspaces",
@@ -528,9 +596,7 @@ mod router_contract_tests {
             serde_json::from_slice(&body).expect("decode shared health response");
         assert_eq!(health.status, "ok");
         assert_eq!(health.generation, 1);
-        let server = health
-            .server
-            .expect("health identifies the server");
+        let server = health.server.expect("health identifies the server");
         assert_eq!(server.pid, std::process::id());
         assert_eq!(server.protocol_version, agena_api::PROTOCOL_VERSION);
 
@@ -828,6 +894,267 @@ mod router_contract_tests {
         assert_eq!(error.problem.user.fallback, "The resource was not found.");
 
         let _ = std::fs::remove_dir_all(workspace_path);
+    }
+
+    #[tokio::test]
+    async fn provider_studio_draft_route_serves_the_thin_tui() {
+        let workspace = tempfile::tempdir().expect("create Provider Studio workspace");
+        let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
+            workspace_root: Some(workspace.path().to_path_buf()),
+            database_url: Some("sqlite::memory:".to_owned()),
+            initialize_schema: true,
+            tracing_reload_handle: None,
+            ..RuntimeBootstrapRequest::default()
+        })
+        .await
+        .expect("build Provider Studio test runtime");
+        let app = router(AppState::from_application(application_for_test(&runtime)));
+
+        let response = app
+            .oneshot(
+                Request::get("/api/v1/provider-studio/draft")
+                    .body(axum::body::Body::empty())
+                    .expect("build Provider Studio draft request"),
+            )
+            .await
+            .expect("serve Provider Studio draft request");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read Provider Studio draft response");
+        let draft: agena_application::provider_studio::ProviderConfigDraft =
+            serde_json::from_slice(&body).expect("decode Provider Studio draft response");
+        assert!(draft.source_provider_id.is_none());
+        assert!(draft.provider_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn thin_tui_plugin_and_workspace_resources_are_server_owned() {
+        let workspace = tempfile::tempdir().expect("create remote workspace fixture");
+        std::fs::create_dir_all(workspace.path().join("src")).expect("create source directory");
+        std::fs::create_dir_all(workspace.path().join("target")).expect("create ignored directory");
+        std::fs::write(workspace.path().join("src/main.rs"), b"fn main() {}\n")
+            .expect("write remote workspace file");
+        std::fs::write(workspace.path().join("target/generated.bin"), b"ignored")
+            .expect("write ignored workspace file");
+        std::fs::write(workspace.path().join(".gitignore"), b"target/\n")
+            .expect("write workspace ignore file");
+        let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
+            workspace_root: Some(workspace.path().to_path_buf()),
+            database_url: Some("sqlite::memory:".to_owned()),
+            initialize_schema: true,
+            tracing_reload_handle: None,
+            ..RuntimeBootstrapRequest::default()
+        })
+        .await
+        .expect("build remote resource test runtime");
+        let app = router(AppState::from_application(application_for_test(&runtime)));
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/api/v1/plugins/ui")
+                    .body(axum::body::Body::empty())
+                    .expect("build plugin UI request"),
+            )
+            .await
+            .expect("serve plugin UI request");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read plugin UI response");
+        let plugin_ui: serde_json::Value =
+            serde_json::from_slice(&body).expect("decode plugin UI response");
+        assert!(
+            plugin_ui
+                .get("permission_tools")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|tools| !tools.is_empty())
+        );
+        assert!(
+            plugin_ui
+                .get("activity_kinds")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind["id"] == "reasoning"))
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/v1/workspaces/resolve")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({
+                            "path": workspace.path().display().to_string(),
+                            "create_if_missing": true
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build workspace resolve request"),
+            )
+            .await
+            .expect("resolve remote workspace");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read workspace response");
+        let workspace_resource: agena_api::resource::WorkspaceResource =
+            serde_json::from_slice(&body).expect("decode workspace response");
+
+        let command = plugin_ui
+            .pointer("/catalog/studio/commands")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|commands| {
+                commands.iter().find(|command| {
+                    command
+                        .pointer("/action/kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("invoke_command")
+                })
+            })
+            .expect("built-in catalog exposes a server-executed command");
+        let plugin_id = command["plugin_id"]
+            .as_str()
+            .expect("command plugin id")
+            .to_owned();
+        let action_id = command["id"]
+            .as_str()
+            .expect("command action id")
+            .to_owned();
+        let command_id = command["action"]["command"]
+            .as_str()
+            .expect("server command id")
+            .to_owned();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/v1/sessions")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({
+                            "workspace_id": workspace_resource.id,
+                            "title": "plugin action contract"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build plugin action session request"),
+            )
+            .await
+            .expect("create plugin action session");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read plugin action session");
+        let session: agena_api::resource::SessionResource =
+            serde_json::from_slice(&body).expect("decode plugin action session");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(format!(
+                    "/api/v1/plugins/{plugin_id}/ui/actions/{action_id}"
+                ))
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::json!({
+                        "session_id": session.id,
+                        "input": {},
+                        "slash": "/contract",
+                        "raw": ""
+                    })
+                    .to_string(),
+                ))
+                .expect("build plugin action request"),
+            )
+            .await
+            .expect("serve plugin action request");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read plugin action response");
+        let action: serde_json::Value =
+            serde_json::from_slice(&body).expect("decode plugin action response");
+        assert_eq!(action["plugin_id"], plugin_id);
+        assert_eq!(action["action_id"], action_id);
+        assert!(action.get("result").is_some());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/api/v1/plugins/{plugin_id}/commands/{command_id}"))
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({
+                            "session_id": session.id,
+                            "input": {},
+                            "slash": "/contract",
+                            "raw": "nested"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build direct plugin command request"),
+            )
+            .await
+            .expect("serve direct plugin command request");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read direct plugin command response");
+        let direct: serde_json::Value =
+            serde_json::from_slice(&body).expect("decode direct plugin command response");
+        assert_eq!(direct["command_id"], command_id);
+        assert!(direct.get("result").is_some());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(format!(
+                    "/api/v1/workspaces/{}/files?depth=64&limit=50000&respect_ignores=true",
+                    workspace_resource.id
+                ))
+                .body(axum::body::Body::empty())
+                .expect("build workspace tree request"),
+            )
+            .await
+            .expect("serve workspace tree request");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read workspace tree response");
+        let tree: agena_application::dto::WorkspaceFileTreeResource =
+            serde_json::from_slice(&body).expect("decode workspace tree response");
+        assert!(tree.entries.iter().any(|node| {
+            node.path == "src"
+                && node
+                    .children
+                    .iter()
+                    .any(|child| child.path == "src/main.rs" && child.size == Some(13))
+        }));
+        assert!(
+            !tree.entries.iter().any(|node| node.path == "target"),
+            "ignore-aware TUI inventory must omit generated directories"
+        );
+
+        let response = app
+            .oneshot(
+                Request::get(format!(
+                    "/api/v1/workspaces/{}/download?path=src%2Fmain.rs",
+                    workspace_resource.id
+                ))
+                .body(axum::body::Body::empty())
+                .expect("build workspace download request"),
+            )
+            .await
+            .expect("serve workspace download request");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(
+            response.headers()[http::header::CONTENT_DISPOSITION],
+            "attachment; filename=\"main.rs\""
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read workspace download body");
+        assert_eq!(&body[..], b"fn main() {}\n");
     }
 
     // Runs on a multi-thread runtime like the real server. The session-state
@@ -1786,9 +2113,7 @@ mod router_contract_tests {
             .expect("bind server");
         let address = listener.local_addr().expect("server address");
         let server = tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("serve server");
+            axum::serve(listener, app).await.expect("serve server");
         });
         let url = format!("http://{address}");
         let client = AgenaClient::new(url.as_str()).expect("build setup client");
@@ -2090,6 +2415,86 @@ mod router_contract_tests {
                 .map(|problem| problem.user.fallback.as_str()),
             Some("The operator workspace was not found.")
         );
+        provider.await.expect("empty fake provider exits");
+    }
+
+    #[tokio::test]
+    async fn session_media_endpoint_confines_files_to_the_owning_session() {
+        let (provider_url, _requests, provider) = spawn_fake_responses_provider(Vec::new()).await;
+        let server = start_test_server(provider_url.as_str()).await;
+        let client = AgenaClient::new(server.url.as_str()).expect("build media client");
+        let first = client
+            .create_session(server.workspace_id, "first media session", None)
+            .await
+            .expect("create first media session");
+        let second = client
+            .create_session(server.workspace_id, "second media session", None)
+            .await
+            .expect("create second media session");
+
+        let canonical_workspace = server
+            ._workspace
+            .path()
+            .canonicalize()
+            .expect("canonicalize media test workspace");
+        let project_state = agena_runtime_tools::project_state_dir(&canonical_workspace);
+        let generated = project_state.join("generated_images");
+        let first_root = generated.join(first.id.to_string());
+        let second_root = generated.join(second.id.to_string());
+        std::fs::create_dir_all(&first_root).expect("create first session media directory");
+        std::fs::create_dir_all(&second_root).expect("create second session media directory");
+        let image = first_root.join("generated.png");
+        std::fs::write(&image, b"session-owned image").expect("write session media fixture");
+        let outside = generated.join("outside.bin");
+        std::fs::write(&outside, b"must stay private").expect("write traversal fixture");
+
+        let (filename, bytes) = client
+            .download_session_media_file(first.id, "generated.png")
+            .await
+            .expect("download media owned by the session");
+        assert_eq!(filename, "generated.png");
+        assert_eq!(bytes, b"session-owned image");
+
+        let relative_escape = client
+            .download_session_media_file(first.id, "../outside.bin")
+            .await
+            .expect_err("relative traversal must be rejected");
+        let absolute_escape = client
+            .download_session_media_file(first.id, outside.to_string_lossy().as_ref())
+            .await
+            .expect_err("absolute traversal must be rejected");
+        let cross_session = client
+            .download_session_media_file(second.id, image.to_string_lossy().as_ref())
+            .await
+            .expect_err("one session must not read another session's media");
+        for error in [relative_escape, absolute_escape, cross_session] {
+            assert_eq!(
+                error
+                    .problem()
+                    .map(|problem| problem.user.fallback.as_str()),
+                Some("session media path escapes the managed artifact directory")
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let link = first_root.join("outside-link.bin");
+            symlink(&outside, &link).expect("create media escape symlink");
+            let symlink_escape = client
+                .download_session_media_file(first.id, "outside-link.bin")
+                .await
+                .expect_err("symlink traversal must be rejected");
+            assert_eq!(
+                symlink_escape
+                    .problem()
+                    .map(|problem| problem.user.fallback.as_str()),
+                Some("session media path escapes the managed artifact directory")
+            );
+        }
+
+        std::fs::remove_dir_all(project_state).expect("remove isolated session media state");
         provider.await.expect("empty fake provider exits");
     }
 

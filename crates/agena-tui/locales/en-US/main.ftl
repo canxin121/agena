@@ -1456,6 +1456,7 @@ flash-run-cancelling-quit = cancelling the active run; press Ctrl+C again to qui
 flash-external-editor-failed = external editor failed: {$error}
 flash-config-dir-prepare-failed = failed to prepare config directory {$path}: {$error}
 flash-config-file-create-failed = failed to create config file {$path}: {$error}
+flash-server-config-edit-in-settings = The config file belongs to the server. Edit its values in Settings instead of opening a client-local path.
 flash-clipboard-image-attached = clipboard image attached: {$width}x{$height} {$format}
 flash-clipboard-image-attach-failed = clipboard image attach failed: {$error}
 flash-attach-images-only = The image picker can attach image files only.

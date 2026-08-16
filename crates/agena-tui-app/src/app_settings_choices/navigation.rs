@@ -1,31 +1,9 @@
 impl App {
     pub(crate) fn open_runtime_config_in_editor(&mut self) {
-        let path = crate::app_backend::config::config_path(&self.application);
-        if !path.exists() {
-            if let Some(parent) = path.parent()
-                && let Err(error) = fs::create_dir_all(parent)
-            {
-                self.flash_error(self.i18n.text_args(
-                    "flash-config-dir-prepare-failed",
-                    &agena_tui::fl_args!(
-                        "path" => parent.display().to_string(),
-                        "error" => error.to_string(),
-                    ),
-                ));
-                return;
-            }
-            if let Err(error) = fs::write(&path, "") {
-                self.flash_error(self.i18n.text_args(
-                    "flash-config-file-create-failed",
-                    &agena_tui::fl_args!(
-                        "path" => path.display().to_string(),
-                        "error" => error.to_string(),
-                    ),
-                ));
-                return;
-            }
-        }
-        self.pending_ui_action = Some(UiAction::OpenPath { path });
+        self.flash_warning(ui_text::t(
+            &self.i18n,
+            "flash-server-config-edit-in-settings",
+        ));
     }
 
     pub(crate) fn build_permission_rule_studio_overlay(
@@ -196,7 +174,7 @@ impl App {
 }
 use crate::{
     App, CommandPaletteCommand, CommandPaletteOverlay, Editor, PermissionRuleDraft,
-    PermissionRuleStudioOverlay, Route, SessionNavigationQuery, UiAction, commands, fs,
+    PermissionRuleStudioOverlay, Route, SessionNavigationQuery, commands,
     permission_rule_studio_items, plugin_command_detail, plugin_command_slash_name,
     refresh_permission_rule_studio_dialog, ui_text,
 };

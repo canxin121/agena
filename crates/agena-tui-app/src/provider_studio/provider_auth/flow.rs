@@ -13,9 +13,7 @@ use super::{
     provider_studio_missing_start_auth_field, provider_studio_required_field_summary,
 };
 use crate::ui_text;
-use agena_application::provider_studio::{
-    ProviderDraftAuthActionResult, ProviderDraftAuthError,
-};
+use agena_application::provider_studio::{ProviderDraftAuthActionResult, ProviderDraftAuthError};
 
 pub(crate) fn provider_studio_start_auth_summary(
     i18n: &I18n,
@@ -474,29 +472,19 @@ pub(crate) fn provider_studio_auth_details_summary(
 // ─────────────────────────────────────────────────────────────────────────────
 // Interactive draft authentication flow.
 //
-// Interactive OAuth (`start_provider_draft_auth` /
-// `continue_provider_draft_auth`) drives the runtime's in-process draft
-// authentication service. The TUI is a pure HTTP client with no embedded
-// runtime and no public server endpoint for the interactive auth session, so
-// these degrade to a clear error; the Provider Studio itself is unavailable in
-// remote client mode.
+// Interactive OAuth is owned by the server's runtime. The TUI forwards the
+// serializable draft and receives the updated pending/completed draft state.
 
 pub(crate) async fn start_provider_draft_auth(
     application: &crate::TuiBackend,
     draft: ProviderConfigDraft,
 ) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
-    let _ = (application, draft);
-    Err(ProviderDraftAuthError::other(
-        "interactive provider authentication is unavailable in remote TUI mode until it has a public server API",
-    ))
+    application.start_provider_draft_auth(draft).await
 }
 
 pub(crate) async fn continue_provider_draft_auth(
     application: &crate::TuiBackend,
     draft: ProviderConfigDraft,
 ) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
-    let _ = (application, draft);
-    Err(ProviderDraftAuthError::other(
-        "interactive provider authentication is unavailable in remote TUI mode until it has a public server API",
-    ))
+    application.continue_provider_draft_auth(draft).await
 }

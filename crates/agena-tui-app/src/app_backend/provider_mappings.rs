@@ -11,27 +11,40 @@ use crate::app_backend::inspector::{InspectorRow, summarize_named_mode};
 
 /// Enabled adapters and their configured model ids for `provider_id`.
 ///
-/// No server endpoint exposes the in-process provider catalog's
-/// configured-routing projection; the Provider Studio (the only consumer) is
-/// unavailable in remote client mode, so this degrades to an empty list.
 pub(crate) fn configured_provider_model_routes(
     application: &crate::TuiBackend,
     provider_id: Option<&str>,
 ) -> Vec<(String, String)> {
-    let _ = (application, provider_id);
-    Vec::new()
+    let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+    application
+        .configured_provider_adapter_models(provider_id)
+        .into_iter()
+        .filter(|adapter| adapter.enabled)
+        .flat_map(|adapter| {
+            let adapter_id = adapter.adapter_id;
+            adapter.models.into_iter().map(move |model| {
+                (
+                    model.adapter_id.unwrap_or_else(|| adapter_id.clone()),
+                    model.id,
+                )
+            })
+        })
+        .collect()
 }
 
 /// Configured adapter model resources for `provider_id`, enriched from the
 /// model catalog so the Provider Studio draft shows complete display data.
 ///
-/// Provider Studio has no public server API; degrade to an empty list.
 pub(crate) fn configured_provider_adapter_models(
     application: &crate::TuiBackend,
     provider_id: Option<&str>,
 ) -> Vec<ProviderAdapterModelsResource> {
-    let _ = (application, provider_id);
-    Vec::new()
+    let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+    application.configured_provider_adapter_models(provider_id)
 }
 
 pub(crate) fn list_local_provider_models(
@@ -163,12 +176,41 @@ pub(crate) fn model_verbosity_values(
 }
 
 pub(crate) async fn refresh_model_catalog(application: &crate::TuiBackend) -> Result<()> {
-    application
-        .client()
-        .refresh_model_catalog()
-        .await
-        .context("failed to refresh the model catalog through the server")?;
-    Ok(())
+    let _: agena_api::resource::ModelCatalogRefreshResponse = serde_json::from_value(
+        application
+            .client()
+            .refresh_model_catalog()
+            .await
+            .context("failed to start the model catalog refresh through the server")?,
+    )
+    .context("the server returned an undecodable model catalog refresh task")?;
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        application.refresh_model_catalog_cache("", 0, 1).await?;
+        let page = application.model_catalog();
+        if let Some(result) = completed_model_catalog_refresh(&page.summary) {
+            return result;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(anyhow!(
+                "model catalog refresh did not finish within 120 seconds"
+            ));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+fn completed_model_catalog_refresh(
+    summary: &agena_application::dto::ModelCatalogResponse,
+) -> Option<Result<()>> {
+    if summary.refreshing {
+        return None;
+    }
+    Some(match summary.last_failure.as_ref() {
+        Some(failure) => Err(anyhow!(failure.user.fallback.clone())),
+        None => Ok(()),
+    })
 }
 
 fn preferred_model_display_name(models: Vec<ProviderModel>, model: &ModelRef) -> Option<String> {
@@ -184,4 +226,29 @@ fn preferred_model_display_name(models: Vec<ProviderModel>, model: &ModelRef) ->
         .and_then(|candidate| candidate.display_name)
         .map(|display_name| display_name.trim().to_owned())
         .filter(|display_name| !display_name.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::completed_model_catalog_refresh;
+
+    fn catalog_summary(refreshing: bool) -> agena_application::dto::ModelCatalogResponse {
+        agena_application::dto::ModelCatalogResponse {
+            refreshing,
+            last_refresh_at: None,
+            last_successful_source: None,
+            last_failure: None,
+            model_count: 17,
+        }
+    }
+
+    #[test]
+    fn model_catalog_refresh_is_not_complete_while_server_is_refreshing() {
+        assert!(completed_model_catalog_refresh(&catalog_summary(true)).is_none());
+        assert!(
+            completed_model_catalog_refresh(&catalog_summary(false))
+                .expect("completed refresh outcome")
+                .is_ok()
+        );
+    }
 }

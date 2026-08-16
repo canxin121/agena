@@ -81,6 +81,28 @@ pub async fn download_workspace_file(
         bytes,
     ))
 }
+
+pub async fn download_session_media_file(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    AxumQuery(query): AxumQuery<WorkspaceFileDownloadQuery>,
+) -> Result<impl IntoResponse, ServerError> {
+    let (filename, bytes) = state
+        .service()
+        .read_session_media_file(session_id, query)
+        .await
+        .map_err(server_error_from_application)?;
+    Ok((
+        [
+            ("content-type", "application/octet-stream".to_string()),
+            (
+                "content-disposition",
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        bytes,
+    ))
+}
 use super::{
     AppState, AxumQuery, IntoResponse, Json, Path, ServerError, State, WorkspaceFileDownloadQuery,
     WorkspaceFileTreeQuery, WorkspaceFileUploadRequest, WorkspaceListQuery, WorkspacePathRequest,

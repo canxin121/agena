@@ -280,7 +280,7 @@ impl LoadedPlugin {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Summary of a plugin authority and capabilities.
 pub struct PluginAuthoritySummary {
     pub trust_level: String,
@@ -289,7 +289,7 @@ pub struct PluginAuthoritySummary {
     pub tool_capabilities: BTreeMap<String, Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Inspection view of a plugin.
 pub struct PluginInspect {
     pub status: crate::status::PluginStatus,

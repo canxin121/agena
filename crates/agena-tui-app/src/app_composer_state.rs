@@ -20,10 +20,7 @@ impl App {
                     agena_tui::choice::refresh(&mut dialog.presentation);
                 }
                 Overlay::PathBrowser(dialog) => {
-                    Self::refresh_path_browser_overlay_with_root(
-                        self.application.workspace_root(),
-                        dialog,
-                    );
+                    Self::refresh_path_browser_overlay(&self.application, dialog);
                 }
                 _ => {}
             }
@@ -35,7 +32,11 @@ impl App {
             return false;
         };
         let resolved = self.resolve_workspace_path(path.as_path());
-        if !resolved.exists() || !resolved.is_file() {
+        if self
+            .application
+            .workspace_path_metadata(resolved.as_path())
+            .is_none_or(|metadata| metadata.is_directory)
+        {
             return false;
         }
 
@@ -53,7 +54,7 @@ impl App {
         self.stage_resource(path, resource)
     }
 
-    /// Commits a browser choice as a local path reference. Neither files nor
+    /// Commits a browser choice as a server workspace path reference. Neither files nor
     /// directories are read, archived, or Base64-encoded into the message.
     pub(crate) fn stage_file_browser_attachment(
         &mut self,
@@ -70,20 +71,22 @@ impl App {
         images_only: bool,
     ) -> UiResult<agena_domain::ResourceActivity> {
         let resolved = self.resolve_workspace_path(path);
-        let metadata = std::fs::metadata(&resolved).map_err(crate::UiFailure::internal)?;
-        let is_directory = metadata.is_dir();
-        if !is_directory && !metadata.is_file() {
-            return Err(crate::UiFailure::message(format!(
-                "attachment path is neither a file nor a directory: {}",
-                resolved.display()
-            )));
-        }
+        let metadata = self
+            .application
+            .workspace_path_metadata(resolved.as_path())
+            .ok_or_else(|| {
+                crate::UiFailure::message(format!(
+                    "attachment path is not a regular server workspace file or directory: {}",
+                    resolved.display()
+                ))
+            })?;
+        let is_directory = metadata.is_directory;
         let kind = if is_directory {
             AttachmentKind::File
         } else {
             AttachmentKind::detect("", resolved.file_name().and_then(|name| name.to_str()))
         };
-        // A selected directory remains a local path reference even from the
+        // A selected directory remains a workspace path reference even from the
         // image browser; it is not image content and must not be read.
         if images_only && !is_directory && kind != AttachmentKind::Image {
             return Err(crate::UiFailure::message(ui_text::t(
@@ -119,7 +122,7 @@ impl App {
             },
             name,
             media_type: is_directory.then_some("inode/directory".to_owned()),
-            size_bytes: (!is_directory).then_some(metadata.len()),
+            size_bytes: (!is_directory).then_some(metadata.size.unwrap_or_default()),
             width: None,
             height: None,
             duration_ms: None,
@@ -161,8 +164,16 @@ impl App {
         resource: agena_domain::ResourceActivity,
     ) -> UiResult<()> {
         let resolved = self.resolve_workspace_path(path);
-        let metadata = std::fs::metadata(&resolved).map_err(crate::UiFailure::internal)?;
-        let is_directory = metadata.is_dir();
+        let metadata = self
+            .application
+            .workspace_path_metadata(resolved.as_path())
+            .ok_or_else(|| {
+                crate::UiFailure::message(format!(
+                    "attachment path is no longer available on the server: {}",
+                    resolved.display()
+                ))
+            })?;
+        let is_directory = metadata.is_directory;
         let label = attachment_chip_label(
             &self.i18n,
             resolved.as_path(),
@@ -176,7 +187,7 @@ impl App {
             is_directory,
             resource.width,
             resource.height,
-            metadata.len(),
+            metadata.size.unwrap_or_default(),
         );
         let placeholder = self.make_unique_composer_placeholder(attachment_placeholder_base(
             &self.i18n,
@@ -464,7 +475,9 @@ impl App {
                 Ok(())
             }
             UiAction::EditComposerExternally => self.edit_composer_externally(terminal),
-            UiAction::DownloadTerminalFile { path } => self.download_terminal_file(terminal, &path),
+            UiAction::DownloadTerminalFile { path, remove_after } => {
+                self.download_terminal_file(terminal, &path, remove_after)
+            }
             UiAction::ExportTranscript { path } => {
                 self.export_transcript_to_editor(terminal, path.as_deref())
             }
@@ -513,7 +526,9 @@ impl App {
         &mut self,
         terminal: &mut TerminalRuntime,
         path: &Path,
+        remove_after: bool,
     ) -> Result<()> {
+        let _cleanup = TemporaryDownloadCleanup::new(path, remove_after);
         let context = terminal.context().clone();
         let providers = download_providers(&context);
         if providers.is_empty() {
@@ -550,6 +565,22 @@ impl App {
         }
         self.flash_error(crate::UiFailure::internal(failures.join("; ")));
         Ok(())
+    }
+}
+
+struct TemporaryDownloadCleanup(Option<std::path::PathBuf>);
+
+impl TemporaryDownloadCleanup {
+    fn new(path: &Path, remove_after: bool) -> Self {
+        Self(remove_after.then(|| path.to_path_buf()))
+    }
+}
+
+impl Drop for TemporaryDownloadCleanup {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 

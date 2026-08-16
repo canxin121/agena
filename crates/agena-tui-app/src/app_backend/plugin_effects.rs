@@ -199,14 +199,10 @@ pub(crate) async fn refresh_plan_display(
 }
 
 /// Plugin notifications emitted through the unified `host.notify` entry.
-/// Notifications are push events; no server HTTP endpoint exposes
-/// the host's in-memory notification queue, so remote client mode degrades to
-/// an empty queue.
 pub(crate) fn plugin_host_notifications(
     application: &super::TuiBackend,
 ) -> Vec<agena_plugin_host::HostNotification> {
-    let _ = application;
-    Vec::new()
+    application.plugin_notifications()
 }
 
 /// Human-readable workspace name derived from the workspace root's file name.
@@ -242,11 +238,7 @@ pub(crate) fn plugin_inspect(
     application: &super::TuiBackend,
     plugin_id: &str,
 ) -> Option<agena_plugin_host::PluginInspect> {
-    let _ = (application, plugin_id);
-    // `PluginInspect` is a Serialize-only host DTO whose members are not all
-    // deserializable; no public server response reproduces it. Degrade to
-    // None in remote client mode.
-    None
+    application.plugin_inspect(plugin_id)
 }
 
 pub(crate) fn plugin_logs(
@@ -255,10 +247,7 @@ pub(crate) fn plugin_logs(
     after_seq: Option<u64>,
     limit: usize,
 ) -> Vec<agena_plugin_host::PluginLogRecord> {
-    let _ = (application, plugin_id, after_seq, limit);
-    // Log reading is synchronous in the TUI event loop and the workbench has
-    // no async load path; degrade to an empty log view in remote client mode.
-    Vec::new()
+    application.plugin_logs(plugin_id, after_seq, limit)
 }
 
 pub(crate) fn plugin_slash_commands(
@@ -286,56 +275,138 @@ pub(crate) fn plugin_slash_commands(
 /// Invoke a plugin command from a `/` slash command, resolving its effect
 /// (message, prompt, workbench, URL, or a tool invocation) over HTTP.
 ///
-/// Nested in-process command dispatch has no public server endpoint and is
-/// refused with a clear error.
 pub(crate) async fn invoke_plugin_slash_command(
     application: &super::TuiBackend,
     entry: &agena_plugin_host::PluginCommandCatalogItem,
     session_id: Option<i64>,
     raw: &str,
 ) -> Result<PluginCommandEffect> {
+    const MAX_COMMAND_DEPTH: usize = 8;
+
     let backend = application;
 
     let plugin_id = entry.plugin_id.to_string();
-    let action = entry.command.action.clone();
-    let input = plugin_command_input(&entry.command, raw)?;
+    let slash = entry.command.slash.clone();
+    let mut action = entry.command.action.clone();
+    let mut input = plugin_command_input(&entry.command, raw)?;
+    let mut depth = 0usize;
 
-    match action {
-        agena_plugin_host::PluginUiAction::None => Ok(PluginCommandEffect::None),
-        agena_plugin_host::PluginUiAction::SubmitPrompt { prompt } => {
-            Ok(PluginCommandEffect::SubmitPrompt(prompt))
+    loop {
+        if depth > MAX_COMMAND_DEPTH {
+            return Err(anyhow!("plugin command recursion limit exceeded"));
         }
-        agena_plugin_host::PluginUiAction::OpenPluginWorkbench { tab } => {
-            Ok(PluginCommandEffect::OpenPluginWorkbench { plugin_id, tab })
-        }
-        agena_plugin_host::PluginUiAction::OpenUrl { url } => {
-            Ok(PluginCommandEffect::OpenUrl(url))
-        }
-        agena_plugin_host::PluginUiAction::InvokeTool {
-            tool,
-            input: base_input,
-            submit_output_as_prompt,
-        } => {
-            let output = invoke_plugin_workbench_tool(
-                backend,
-                plugin_id.as_str(),
-                tool.as_str(),
-                merge_plugin_command_input(base_input, Some(input)),
-                session_id,
-            )
-            .await?;
-            if output.trim().is_empty() {
-                return Ok(PluginCommandEffect::None);
+        match action {
+            agena_plugin_host::PluginUiAction::None => return Ok(PluginCommandEffect::None),
+            agena_plugin_host::PluginUiAction::SubmitPrompt { prompt } => {
+                return Ok(PluginCommandEffect::SubmitPrompt(prompt));
             }
-            Ok(if submit_output_as_prompt {
-                PluginCommandEffect::SubmitPrompt(output)
-            } else {
-                PluginCommandEffect::Message(output)
-            })
+            agena_plugin_host::PluginUiAction::OpenPluginWorkbench { tab } => {
+                return Ok(PluginCommandEffect::OpenPluginWorkbench { plugin_id, tab });
+            }
+            agena_plugin_host::PluginUiAction::OpenUrl { url } => {
+                return Ok(PluginCommandEffect::OpenUrl(url));
+            }
+            agena_plugin_host::PluginUiAction::InvokeTool {
+                tool,
+                input: base_input,
+                submit_output_as_prompt,
+            } => {
+                let output = invoke_plugin_workbench_tool(
+                    backend,
+                    plugin_id.as_str(),
+                    tool.as_str(),
+                    merge_plugin_command_input(base_input, Some(input)),
+                    session_id,
+                )
+                .await?;
+                if output.trim().is_empty() {
+                    return Ok(PluginCommandEffect::None);
+                }
+                return Ok(if submit_output_as_prompt {
+                    PluginCommandEffect::SubmitPrompt(output)
+                } else {
+                    PluginCommandEffect::Message(output)
+                });
+            }
+            agena_plugin_host::PluginUiAction::InvokeCommand {
+                command,
+                input: base_input,
+            } => {
+                let session_id = session_id.ok_or_else(|| {
+                    anyhow!("plugin command invocation requires an active session")
+                })?;
+                let response = backend
+                    .client()
+                    .invoke_plugin_command(
+                        plugin_id.as_str(),
+                        command.as_str(),
+                        merge_plugin_command_input(base_input, Some(input)),
+                        session_id,
+                        slash.as_deref(),
+                        raw,
+                    )
+                    .await
+                    .context("failed to invoke plugin command through the server")?;
+                let _ = backend.refresh_plugin_presentation_snapshot().await;
+                let output = response
+                    .get("result")
+                    .cloned()
+                    .filter(|value| !value.is_null())
+                    .map(serde_json::from_value::<agena_plugin_host::PluginCommandOutput>)
+                    .transpose()
+                    .context("the server returned an undecodable plugin command output")?
+                    .unwrap_or_default();
+                match output {
+                    agena_plugin_host::PluginCommandOutput::None => {
+                        return Ok(PluginCommandEffect::None);
+                    }
+                    agena_plugin_host::PluginCommandOutput::Message { text } => {
+                        return Ok(PluginCommandEffect::Message(text));
+                    }
+                    agena_plugin_host::PluginCommandOutput::SubmitPrompt { prompt } => {
+                        return Ok(PluginCommandEffect::SubmitPrompt(prompt));
+                    }
+                    agena_plugin_host::PluginCommandOutput::OpenPluginWorkbench { tab } => {
+                        return Ok(PluginCommandEffect::OpenPluginWorkbench { plugin_id, tab });
+                    }
+                    agena_plugin_host::PluginCommandOutput::OpenUrl { url } => {
+                        return Ok(PluginCommandEffect::OpenUrl(url));
+                    }
+                    agena_plugin_host::PluginCommandOutput::InvokeTool {
+                        tool,
+                        input: next_input,
+                        submit_output_as_prompt,
+                    } => {
+                        action = agena_plugin_host::PluginUiAction::InvokeTool {
+                            tool,
+                            input: next_input,
+                            submit_output_as_prompt,
+                        };
+                        input = serde_json::json!({});
+                    }
+                    agena_plugin_host::PluginCommandOutput::InvokeCommand {
+                        command,
+                        input: next_input,
+                    } => {
+                        action = backend
+                            .plugin_catalog()
+                            .and_then(|catalog| {
+                                catalog.studio.commands.into_iter().find_map(|entry| {
+                                    (entry.plugin_id.to_string() == plugin_id
+                                        && entry.command.id == command)
+                                        .then_some(entry.command.action)
+                                })
+                            })
+                            .unwrap_or(agena_plugin_host::PluginUiAction::InvokeCommand {
+                                command,
+                                input: next_input.clone(),
+                            });
+                        input = next_input.unwrap_or_else(|| serde_json::json!({}));
+                    }
+                }
+                depth += 1;
+            }
         }
-        agena_plugin_host::PluginUiAction::InvokeCommand { .. } => Err(anyhow!(
-            "nested plugin command dispatch is unavailable in remote TUI mode until it has a public server API"
-        )),
     }
 }
 
@@ -375,10 +446,12 @@ pub(crate) async fn replace_permission_rule(
 ) -> Result<PermissionRuleResource> {
     let result = application
         .client()
-        .command(Command::ReplacePermissionRule(ReplacePermissionRuleParams {
-            rule_id,
-            rule: params,
-        }))
+        .command(Command::ReplacePermissionRule(
+            ReplacePermissionRuleParams {
+                rule_id,
+                rule: params,
+            },
+        ))
         .await?;
     let CommandResult::PermissionRule(rule) = result else {
         bail!("server returned the wrong permission-rule result");
@@ -408,7 +481,10 @@ pub(crate) async fn create_commit(
     message: String,
 ) -> Result<(String, String)> {
     let commit: agena_application::dto::GitCommitResource = serde_json::from_value(
-        application.client().create_git_commit(message).await?,
+        application
+            .client()
+            .create_git_commit_in_workspace(Some(application.workspace_id()), message)
+            .await?,
     )
     .context("the server returned an undecodable git commit result")?;
     Ok((commit.commit, commit.summary))
@@ -424,7 +500,13 @@ pub(crate) async fn create_pr(
     let pull_request: agena_application::dto::GitPullRequestResource = serde_json::from_value(
         application
             .client()
-            .create_git_pull_request(title, body, base, head)
+            .create_git_pull_request_in_workspace(
+                Some(application.workspace_id()),
+                title,
+                body,
+                base,
+                head,
+            )
             .await?,
     )
     .context("the server returned an undecodable git pull-request result")?;

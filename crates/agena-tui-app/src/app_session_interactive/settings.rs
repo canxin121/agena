@@ -25,7 +25,7 @@ impl App {
         } else {
             "overlay-attach-no-match"
         };
-        self.overlay = Some(Overlay::PathBrowser(self.build_path_browser_overlay(
+        let overlay = self.build_path_browser_overlay(
             ui_text::t(&self.i18n, title_key),
             ui_text::t(&self.i18n, prompt_key),
             ui_text::t(&self.i18n, "overlay-attach-browser-footer"),
@@ -33,7 +33,10 @@ impl App {
             PathBrowserMode::AnyPath,
             self.application.workspace_root().display().to_string(),
             PathBrowserTarget::FileAttachment { images_only },
-        )));
+        );
+        let directory = overlay.current_directory.clone();
+        self.overlay = Some(Overlay::PathBrowser(overlay));
+        self.request_path_browser_directory_refresh(directory);
     }
 
     pub(crate) fn request_terminal_download(&mut self, raw_path: &str) {
@@ -47,53 +50,40 @@ impl App {
             self.flash_warning("Use a path relative to the current workspace.".to_string());
             return;
         }
-
-        let workspace = match fs::canonicalize(self.application.workspace_root()) {
-            Ok(workspace) => workspace,
-            Err(error) => {
-                self.flash_error(format!("Could not access the current workspace: {error}"));
-                return;
-            }
-        };
-        let path = self.resolve_workspace_path(requested);
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                self.flash_warning(format!(
-                    "Could not access download path {}: {error}",
-                    path.display()
+        if requested.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        }) {
+            self.flash_warning("Download paths cannot leave the current workspace.".to_string());
+            return;
+        }
+        let relative = requested.to_string_lossy().replace('\\', "/");
+        self.dispatch_backend_operation(
+            move |application| async move {
+                let (filename, bytes) = application.download_workspace_file(&relative).await?;
+                let path = std::env::temp_dir().join(format!(
+                    "agena-download-{}-{filename}",
+                    uuid::Uuid::new_v4().simple()
                 ));
-                return;
-            }
-        };
-        if metadata.file_type().is_symlink() {
-            self.flash_warning("Symbolic links cannot be downloaded.".to_string());
-            return;
-        }
-        if !metadata.is_file() {
-            self.flash_warning("Only regular workspace files can be downloaded.".to_string());
-            return;
-        }
-
-        let canonical_path = match fs::canonicalize(&path) {
-            Ok(path) => path,
-            Err(error) => {
-                self.flash_warning(format!(
-                    "Could not resolve download path {}: {error}",
-                    path.display()
-                ));
-                return;
-            }
-        };
-        if !canonical_path.starts_with(workspace) {
-            self.flash_warning(
-                "Only files inside the current workspace can be downloaded.".to_string(),
-            );
-            return;
-        }
-        self.pending_ui_action = Some(UiAction::DownloadTerminalFile {
-            path: canonical_path,
-        });
+                std::fs::write(path.as_path(), bytes).map_err(|error| {
+                    anyhow::anyhow!("failed to stage terminal download: {error}")
+                })?;
+                Ok::<_, anyhow::Error>(path)
+            },
+            |app, result| match result {
+                Ok(path) => {
+                    app.pending_ui_action = Some(UiAction::DownloadTerminalFile {
+                        path,
+                        remove_after: true,
+                    });
+                }
+                Err(error) => app.flash_error(error),
+            },
+        );
     }
 
     pub(crate) fn open_rename_session_overlay(&mut self) {
@@ -130,6 +120,18 @@ impl App {
         let session_id = self.current_or_selected_session_id();
         self.dispatch_backend_operation(
             move |application| async move {
+                let (config, catalog, plugins, providers, aws_profiles) = tokio::join!(
+                    application.refresh_config_sources(),
+                    application.refresh_model_catalog_cache("", 0, 1),
+                    application.refresh_plugin_presentation_snapshot(),
+                    application.refresh_provider_runtime_snapshot(),
+                    application.refresh_aws_profiles(),
+                );
+                config?;
+                catalog?;
+                plugins?;
+                providers?;
+                aws_profiles?;
                 let permission = match session_id {
                     Some(session_id) => Some(
                         crate::app_backend::permission_studio::get_session_permission_studio_state(
@@ -413,6 +415,6 @@ impl App {
 use crate::{
     App, JsonValue, Overlay, Path, PathBrowserMode, PathBrowserTarget, Route, SettingsPickerAction,
     SettingsStudioFocus, SettingsStudioItem, SettingsStudioOverlay, SettingsStudioPresentation,
-    SettingsStudioSection, SettingsStudioSectionId, UiAction, UiResult, fs, get_json_path, min,
+    SettingsStudioSection, SettingsStudioSectionId, UiAction, UiResult, get_json_path, min,
     settings_studio_file_items, settings_studio_model_catalog_items, ui_text,
 };

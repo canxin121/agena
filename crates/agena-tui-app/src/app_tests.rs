@@ -5557,3 +5557,63 @@ mod new_session_model_stack_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod provider_studio_route_tests {
+    use super::super::{App, I18n, LaunchOptions, Route, TuiBackend};
+
+    #[tokio::test]
+    async fn provider_studio_opens_for_the_http_tui_backend() {
+        let mut app = App::new_with_backend(
+            TuiBackend::remote_mock(),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+
+        app.open_provider_studio(None);
+
+        let Route::ProviderStudio(dialog) = &app.current_route else {
+            panic!("Provider Studio should be a reachable TUI route");
+        };
+        assert!(dialog.draft.source_provider_id.is_none());
+        assert!(dialog.draft.provider_id.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod path_browser_paste_tests {
+    use super::super::{App, I18n, LaunchOptions, Overlay, TuiBackend};
+
+    #[test]
+    fn pasted_path_enqueues_an_authoritative_directory_refresh() {
+        let mut app = App::new_with_backend(
+            TuiBackend::remote_mock(),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        app.request_file_attachment(false);
+
+        let initial_request = app
+            .command_rx
+            .as_mut()
+            .expect("command receiver")
+            .try_recv()
+            .expect("opening the browser requests its initial directory");
+        drop(initial_request);
+
+        app.handle_paste("target/".to_owned());
+
+        let Overlay::PathBrowser(dialog) = app.overlay.as_ref().expect("path browser overlay")
+        else {
+            panic!("file attachment should keep the path browser open");
+        };
+        assert!(dialog.presentation.input.text().ends_with("target/"));
+        let pasted_path_request = app
+            .command_rx
+            .as_mut()
+            .expect("command receiver")
+            .try_recv()
+            .expect("pasting a path must request the displayed server directory");
+        drop(pasted_path_request);
+    }
+}

@@ -3,7 +3,6 @@ use std::{
     future::Future,
     path::PathBuf,
     pin::Pin,
-    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -439,11 +438,10 @@ pub(super) struct PlanDisplayRefreshState {
 
 pub struct App {
     /// Cloneable transport boundary. In remote mode this contains only an API
-    /// client and client-local workspace context, never a Runtime or store.
+    /// client and server workspace identity, never a Runtime or store.
     pub(super) application: crate::TuiBackend,
     /// Lazy workspace file index for file mentions. `Application` carries no
     /// file index; the TUI owns the cached directory listing.
-    pub(super) file_index: Arc<OnceLock<Vec<PathBuf>>>,
     pub(super) i18n: I18n,
     pub(super) tx: Sender<AppMessage>,
     pub(super) rx: Receiver<AppMessage>,
@@ -787,7 +785,7 @@ pub(super) type UiCommand = Pin<Box<dyn Future<Output = UiCompletion> + Send + '
 pub(super) enum UiAction {
     CopyText { text: String, success: String },
     EditComposerExternally,
-    DownloadTerminalFile { path: PathBuf },
+    DownloadTerminalFile { path: PathBuf, remove_after: bool },
     ExportTranscript { path: Option<PathBuf> },
     OpenPath { path: PathBuf },
     PageTranscript,

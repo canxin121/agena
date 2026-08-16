@@ -629,7 +629,11 @@ impl App {
     ) -> PathBrowserOverlay {
         let workspace_root = self.application.workspace_root();
         let initial_path = App::resolve_browser_input_path_with_root(workspace_root, &initial);
-        let current_directory = if initial_path.is_dir() {
+        let current_directory = if self
+            .application
+            .workspace_path_metadata(initial_path.as_path())
+            .is_some_and(|metadata| metadata.is_directory)
+        {
             initial_path
         } else {
             initial_path
@@ -657,7 +661,7 @@ impl App {
             path_actions: Default::default(),
             current_directory,
         };
-        Self::refresh_path_browser_overlay_with_root(workspace_root, &mut overlay);
+        Self::refresh_path_browser_overlay(&self.application, &mut overlay);
         overlay
     }
 

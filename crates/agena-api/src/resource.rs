@@ -483,6 +483,10 @@ pub struct DefaultSelectionResource {
     pub thinking_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

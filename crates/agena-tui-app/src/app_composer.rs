@@ -278,9 +278,35 @@ impl App {
             agena_domain::ActivityPayload::Resource(resource) => {
                 if let agena_domain::ResourceReference::WorkspacePath { path } = &resource.reference
                 {
-                    self.pending_ui_action = Some(UiAction::OpenPath {
-                        path: self.resolve_workspace_path(std::path::Path::new(path)),
-                    });
+                    let path = path.clone();
+                    if self
+                        .application
+                        .workspace_path_metadata(std::path::Path::new(path.as_str()))
+                        .is_some_and(|metadata| metadata.is_directory)
+                    {
+                        self.flash_info(ui_text::t(&self.i18n, "flash-large-paste-no-file-view"));
+                        return;
+                    }
+                    self.dispatch_backend_operation(
+                        move |application| async move {
+                            let (filename, bytes) =
+                                application.download_workspace_file(&path).await?;
+                            let local_path = std::env::temp_dir().join(format!(
+                                "agena-open-{}-{filename}",
+                                uuid::Uuid::new_v4().simple()
+                            ));
+                            std::fs::write(local_path.as_path(), bytes).map_err(|error| {
+                                anyhow::anyhow!("failed to stage server file for editing: {error}")
+                            })?;
+                            Ok::<_, anyhow::Error>(local_path)
+                        },
+                        |app, result| match result {
+                            Ok(path) => {
+                                app.pending_ui_action = Some(UiAction::OpenPath { path });
+                            }
+                            Err(error) => app.flash_error(error),
+                        },
+                    );
                 } else {
                     self.flash_info(ui_text::t(&self.i18n, "flash-large-paste-no-file-view"));
                 }
@@ -497,7 +523,6 @@ impl App {
         let mut actions = BTreeMap::new();
         for (index, path) in crate::app_backend::file_index::search_workspace_files(
             &self.application,
-            &self.file_index,
             query,
             MAX_FILE_MENTION_SUGGESTIONS,
         )

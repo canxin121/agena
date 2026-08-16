@@ -114,6 +114,14 @@ impl ApplicationService {
         control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
     ) -> ApplicationResult<GitStatusResource> {
         let workspace_root = PathBuf::from(&self.workspace_root);
+        self.git_status_at(control, workspace_root).await
+    }
+
+    async fn git_status_at(
+        &self,
+        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
+        workspace_root: PathBuf,
+    ) -> ApplicationResult<GitStatusResource> {
         let (git_available, gh_available) =
             tokio::join!(command_available("git"), command_available("gh"));
 
@@ -286,7 +294,7 @@ impl ApplicationService {
         let status = self.git_status(control.clone()).await?;
         if !status.git_available || !status.repo {
             return Err(ApplicationError::bad_request(
-                "the runtime workspace is not a git repository",
+                "the selected workspace is not a git repository",
             ));
         }
 
@@ -321,10 +329,31 @@ impl ApplicationService {
         request: GitCommitRequest,
     ) -> ApplicationResult<GitCommitResource> {
         let workspace_root = PathBuf::from(&self.workspace_root);
-        let status = self.git_status(control.clone()).await?;
+        self.git_commit_at(control, request, workspace_root).await
+    }
+
+    pub async fn git_commit_for_workspace(
+        &self,
+        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
+        workspace_id: i64,
+        request: GitCommitRequest,
+    ) -> ApplicationResult<GitCommitResource> {
+        let workspace_root = self.git_workspace_root(workspace_id).await?;
+        self.git_commit_at(control, request, workspace_root).await
+    }
+
+    async fn git_commit_at(
+        &self,
+        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
+        request: GitCommitRequest,
+        workspace_root: PathBuf,
+    ) -> ApplicationResult<GitCommitResource> {
+        let status = self
+            .git_status_at(control.clone(), workspace_root.clone())
+            .await?;
         if !status.git_available || !status.repo {
             return Err(ApplicationError::bad_request(
-                "the runtime workspace is not a git repository",
+                "the selected workspace is not a git repository",
             ));
         }
         if status.staged_files == 0 {
@@ -353,7 +382,7 @@ impl ApplicationService {
         Ok(GitCommitResource {
             commit: git_output(&workspace_root, ["rev-parse", "HEAD"]).await?,
             summary: git_output(&workspace_root, ["log", "-1", "--pretty=%s"]).await?,
-            status: self.git_status(control).await?,
+            status: self.git_status_at(control, workspace_root).await?,
         })
     }
 
@@ -363,10 +392,31 @@ impl ApplicationService {
         request: GitPullRequestCreateRequest,
     ) -> ApplicationResult<GitPullRequestResource> {
         let workspace_root = PathBuf::from(&self.workspace_root);
-        let status = self.git_status(control).await?;
+        self.git_create_pull_request_at(control, request, workspace_root)
+            .await
+    }
+
+    pub async fn git_create_pull_request_for_workspace(
+        &self,
+        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
+        workspace_id: i64,
+        request: GitPullRequestCreateRequest,
+    ) -> ApplicationResult<GitPullRequestResource> {
+        let workspace_root = self.git_workspace_root(workspace_id).await?;
+        self.git_create_pull_request_at(control, request, workspace_root)
+            .await
+    }
+
+    async fn git_create_pull_request_at(
+        &self,
+        control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
+        request: GitPullRequestCreateRequest,
+        workspace_root: PathBuf,
+    ) -> ApplicationResult<GitPullRequestResource> {
+        let status = self.git_status_at(control, workspace_root.clone()).await?;
         if !status.git_available || !status.repo {
             return Err(ApplicationError::bad_request(
-                "the runtime workspace is not a git repository",
+                "the selected workspace is not a git repository",
             ));
         }
         if !status.gh_available {
@@ -419,6 +469,33 @@ impl ApplicationService {
             ));
         }
         Ok(GitPullRequestResource { url })
+    }
+
+    async fn git_workspace_root(&self, workspace_id: i64) -> ApplicationResult<PathBuf> {
+        let path = self
+            .workspace_repository
+            .path_by_id(workspace_id)
+            .await
+            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                ApplicationError::not_found_with_diagnostic(
+                    "The workspace was not found.",
+                    format!("workspace not found: {workspace_id}"),
+                )
+            })?;
+        let path = PathBuf::from(path);
+        let canonical = path.canonicalize().map_err(|error| {
+            ApplicationError::bad_request_with_diagnostic(
+                "The workspace cannot be used for Git operations.",
+                format!("failed to resolve workspace {}: {error}", path.display()),
+            )
+        })?;
+        if !canonical.is_dir() {
+            return Err(ApplicationError::bad_request(
+                "the selected Git workspace is not a directory",
+            ));
+        }
+        Ok(canonical)
     }
 }
 

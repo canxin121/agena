@@ -8,6 +8,19 @@ pub async fn get_plugin_ui_catalog(
     let plugin_runtime = state.plugin_runtime();
     Ok(Json(PluginUiCatalogResponse {
         catalog: plugin_runtime.plugin_ui_catalog(),
+        permission_tools: plugin_runtime
+            .permission_tool_catalog()
+            .into_iter()
+            .map(
+                |tool| agena_application::dto::PermissionToolCatalogResource {
+                    name: tool.name,
+                    summary: tool.summary,
+                    tags: tool.tags,
+                },
+            )
+            .collect(),
+        notifications: plugin_runtime.host_notifications(),
+        activity_kinds: state.application().activity_kind_catalog(),
         tool_registry_generation: plugin_runtime.tool_registry_generation(),
         tool_registry_last_event: plugin_runtime
             .tool_registry_events_since(None, 1)
@@ -103,23 +116,16 @@ pub async fn run_plugin_ui_action(
             })?)
         }
         agena_plugin_host::PluginUiAction::InvokeCommand { command, input } => {
-            let session_id = request.session_id.ok_or_else(|| {
-                ServerError::bad_request("This plugin action requires an active session.")
-            })?;
-            let session_services = state.application().session_execution_services()?;
-            let output = session_services
-                .plugin_commands
-                .invoke_session_plugin_command(agena_runtime::SessionPluginCommandRequest {
-                    session_id,
-                    plugin_id: plugin_id.clone(),
-                    command_id: command.clone(),
-                    input: merge_plugin_ui_input(input.clone(), request.input),
-                    slash: None,
-                    raw: String::new(),
-                    workspace_root: None,
-                })
-                .await
-                .map_err(|error| ServerError::internal(error.to_string()))?;
+            let output = invoke_plugin_command_for_ui(
+                &state,
+                plugin_id.as_str(),
+                command.as_str(),
+                merge_plugin_ui_input(input.clone(), request.input),
+                request.session_id,
+                request.slash,
+                request.raw,
+            )
+            .await?;
             Some(serde_json::to_value(output).map_err(|error| {
                 ServerError::internal(format!("failed to encode plugin command result: {error}"))
             })?)
@@ -136,6 +142,78 @@ pub async fn run_plugin_ui_action(
         "action": action,
         "result": result,
     })))
+}
+
+pub async fn run_plugin_command(
+    State(state): State<AppState>,
+    Path((plugin_id, command_id)): Path<(String, String)>,
+    Json(request): Json<PluginUiRequestContext>,
+) -> Result<impl IntoResponse, ServerError> {
+    let output = invoke_plugin_command_for_ui(
+        &state,
+        plugin_id.as_str(),
+        command_id.as_str(),
+        request.input.unwrap_or_else(|| serde_json::json!({})),
+        request.session_id,
+        request.slash,
+        request.raw,
+    )
+    .await?;
+    Ok(Json(serde_json::json!({
+        "plugin_id": plugin_id,
+        "command_id": command_id,
+        "result": output,
+    })))
+}
+
+async fn invoke_plugin_command_for_ui(
+    state: &AppState,
+    plugin_id: &str,
+    command_id: &str,
+    input: serde_json::Value,
+    session_id: Option<i64>,
+    slash: Option<String>,
+    raw: String,
+) -> Result<agena_plugin_host::PluginCommandOutput, ServerError> {
+    let session_id = session_id.ok_or_else(|| {
+        ServerError::bad_request("This plugin command requires an active session.")
+    })?;
+    let session = state
+        .service()
+        .get_session(session_id)
+        .await
+        .map_err(server_error_from_application)?
+        .ok_or_else(|| {
+            ServerError::not_found_with_diagnostic(
+                "The session was not found.",
+                format!("session not found: {session_id}"),
+            )
+        })?;
+    let workspace = state
+        .service()
+        .get_workspace(session.workspace_id)
+        .await
+        .map_err(server_error_from_application)?
+        .ok_or_else(|| {
+            ServerError::not_found_with_diagnostic(
+                "The workspace was not found.",
+                format!("workspace not found: {}", session.workspace_id),
+            )
+        })?;
+    let session_services = state.application().session_execution_services()?;
+    session_services
+        .plugin_commands
+        .invoke_session_plugin_command(agena_runtime::SessionPluginCommandRequest {
+            session_id,
+            plugin_id: plugin_id.to_owned(),
+            command_id: command_id.to_owned(),
+            input,
+            slash,
+            raw,
+            workspace_root: Some(workspace.path),
+        })
+        .await
+        .map_err(|error| ServerError::internal(error.to_string()))
 }
 
 pub async fn list_plugin_logs(
@@ -332,5 +410,5 @@ async fn invoke_plugin_tool_for_ui(
 use super::{
     AppState, AxumQuery, Deserialize, IntoResponse, Json, Path, PluginInspectResponse,
     PluginLogListQuery, PluginLogListResponse, PluginUiCatalogResponse, PluginUiInvokeToolRequest,
-    PluginUiRequestContext, ServerError, State, items_json,
+    PluginUiRequestContext, ServerError, State, items_json, server_error_from_application,
 };

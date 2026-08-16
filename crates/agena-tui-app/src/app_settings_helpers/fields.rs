@@ -165,10 +165,7 @@ pub(crate) fn settings_studio_activity_kind_items(
     sources: &ConfigJsonSources,
 ) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
     let mut items = Vec::new();
-    // The TUI is a pure HTTP client; the runtime's activity-kind catalog is
-    // not exposed over the public API, so the built-in kinds are used.
-    let _ = application;
-    let kinds = agena_domain::builtin_activity_kinds();
+    let kinds = application.activity_kinds();
     for kind in kinds {
         let path = format!("ui.tui.transcript.activity_kinds.{}", kind.id);
         let label_key = format!("settings-activity-kind-{}-label", kind.id);

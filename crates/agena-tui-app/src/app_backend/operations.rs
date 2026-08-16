@@ -198,7 +198,7 @@ pub(crate) async fn present_interactive_request(
 /// Render the terminal diagnostic summary from the server's runtime
 /// status projection.
 pub(crate) async fn runtime_snapshot_summary(application: &TuiBackend) -> Result<String> {
-    let status = application.client().runtime_status().await?;
+    let status = application.refresh_runtime_status_cache().await?;
     Ok(format!(
         "generation {} · loaded {} · {} providers · {} plugins",
         status.generation,
@@ -257,15 +257,31 @@ pub(crate) async fn delete_workspace_config_setting(
         .context("failed to delete workspace config setting")
 }
 
-/// Refresh provider client versions from the remote registry.
-///
-/// No server HTTP endpoint exposes this, so it degrades to a clear
-/// unavailable error in remote client mode.
+/// Refresh provider client versions from the server-owned registry and then
+/// converge the synchronous settings cache on the persisted result.
 pub(crate) async fn refresh_provider_client_versions(
     application: &TuiBackend,
 ) -> Result<agena_provider::ProviderClientVersions> {
-    let _ = application;
-    anyhow::bail!(
-        "provider client version refresh is unavailable in remote TUI mode until it has a public server API"
-    )
+    let value = application
+        .client()
+        .refresh_provider_client_versions()
+        .await
+        .context("failed to refresh provider client versions")?;
+    let string = |key: &str| -> Result<String> {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .with_context(|| format!("server omitted provider client version `{key}`"))
+    };
+    let versions = agena_provider::ProviderClientVersions {
+        codex: string("codex")?,
+        claude: string("claude")?,
+        gemini: string("gemini")?,
+    };
+    application
+        .refresh_config_sources()
+        .await
+        .context("versions were refreshed but settings cache refresh failed")?;
+    Ok(versions)
 }

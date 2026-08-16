@@ -36,6 +36,7 @@ impl App {
         }
         let mut pending_session_search_request: Option<(SessionViewMode, Option<i64>, String)> =
             None;
+        let mut pending_path_browser_refresh = None;
         if self.overlay.is_none() {
             // Pasting onto an expanded pending interaction part inserts the
             // text into its custom-feedback field ("everything is a part").
@@ -180,9 +181,13 @@ impl App {
                 }
                 Overlay::PathBrowser(dialog) => {
                     dialog.presentation.input.insert_str(text.as_str());
-                    Self::refresh_path_browser_overlay_with_root(
-                        self.application.workspace_root(),
-                        dialog,
+                    Self::refresh_path_browser_overlay(&self.application, dialog);
+                    pending_path_browser_refresh = Some(
+                        Self::path_browser_directory_and_needle_for_overlay(
+                            &self.application,
+                            dialog,
+                        )
+                        .0,
                     );
                 }
                 Overlay::SessionSearch(dialog) => {
@@ -213,6 +218,9 @@ impl App {
                 }
                 Overlay::Confirm(_) => {}
                 Overlay::Permission(_) => {}
+            }
+            if let Some(directory) = pending_path_browser_refresh {
+                self.request_path_browser_directory_refresh(directory);
             }
             if let Some((mode, scope_session_id, query)) = pending_session_search_request {
                 match mode {

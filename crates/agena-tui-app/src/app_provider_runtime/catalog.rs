@@ -109,10 +109,6 @@ impl App {
     }
 
     pub(crate) fn open_provider_studio(&mut self, initial_provider: Option<&str>) {
-        if self.application.is_remote() {
-            self.flash_warning("Provider Studio is unavailable in remote TUI mode until it has a public server API");
-            return;
-        }
         let providers =
             crate::app_backend::operations::list_configured_providers(&self.application);
         let provider_rows = provider_studio_provider_rows(&self.i18n, providers.as_slice());

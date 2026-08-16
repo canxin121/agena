@@ -752,9 +752,18 @@ impl Application {
         &self,
         request: crate::dto::GitCommitRequest,
     ) -> Result<crate::dto::GitCommitResource, ApplicationError> {
-        self.service
-            .git_commit(self.execution_control.clone(), request)
-            .await
+        match request.workspace_id {
+            Some(workspace_id) => {
+                self.service
+                    .git_commit_for_workspace(self.execution_control.clone(), workspace_id, request)
+                    .await
+            }
+            None => {
+                self.service
+                    .git_commit(self.execution_control.clone(), request)
+                    .await
+            }
+        }
     }
 
     /// Creates a pull request through the application-owned Git use case.
@@ -762,9 +771,22 @@ impl Application {
         &self,
         request: crate::dto::GitPullRequestCreateRequest,
     ) -> Result<crate::dto::GitPullRequestResource, ApplicationError> {
-        self.service
-            .git_create_pull_request(self.execution_control.clone(), request)
-            .await
+        match request.workspace_id {
+            Some(workspace_id) => {
+                self.service
+                    .git_create_pull_request_for_workspace(
+                        self.execution_control.clone(),
+                        workspace_id,
+                        request,
+                    )
+                    .await
+            }
+            None => {
+                self.service
+                    .git_create_pull_request(self.execution_control.clone(), request)
+                    .await
+            }
+        }
     }
 
     pub fn workspace_root(&self) -> &std::path::Path {
@@ -943,6 +965,8 @@ impl Application {
                 model: selection.model,
                 thinking_mode: selection.thinking_mode,
                 speed_mode: selection.speed_mode,
+                verbosity: selection.verbosity,
+                parallel_tool_calls: selection.parallel_tool_calls,
             })
         };
 

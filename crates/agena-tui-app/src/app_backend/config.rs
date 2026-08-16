@@ -12,21 +12,6 @@ use agena_application::dto::{
 use anyhow::{Context, Result};
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-
-/// Absolute path to the resolved global configuration file. In remote mode the
-/// path comes from the server's settings read model; when that is not yet
-/// loaded, a workspace-anchored placeholder is returned.
-pub(crate) fn config_path(application: &crate::TuiBackend) -> PathBuf {
-    application
-        .config_sources()
-        .map(|sources| sources.config_path)
-        .unwrap_or_else(|| {
-            application
-                .workspace_root()
-                .join(".agena-remote-config-unavailable")
-        })
-}
 
 /// The ordered JSON configuration sources that apply for this workspace.
 pub(crate) fn config_json_sources(application: &crate::TuiBackend) -> Result<ConfigJsonSources> {

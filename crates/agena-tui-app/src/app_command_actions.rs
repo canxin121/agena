@@ -333,8 +333,16 @@ impl App {
     }
 
     pub(crate) fn handle_export_command(&mut self, args: &str) {
-        let requested_path = non_empty_owned(args.to_string())
-            .map(|value| self.resolve_workspace_path(Path::new(value.as_str())));
+        let requested_path = non_empty_owned(args.to_string()).map(|value| {
+            let path = Path::new(value.as_str());
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| std::env::temp_dir())
+                    .join(path)
+            }
+        });
         self.pending_ui_action = Some(UiAction::ExportTranscript {
             path: requested_path,
         });

@@ -421,6 +421,7 @@ impl App {
                 match self.build_plugin_workbench("") {
                     Ok(workbench) => {
                         self.current_route = Route::PluginWorkbench(Box::new(workbench));
+                        self.request_plugin_workbench_refresh();
                     }
                     Err(error) => self.flash_error(error),
                 }

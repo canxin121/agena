@@ -1456,6 +1456,7 @@ flash-run-cancelling-quit = 正在取消当前运行；再按一次 Ctrl+C 直�
 flash-external-editor-failed = 外部编辑器失败：{$error}
 flash-config-dir-prepare-failed = 准备配置目录 {$path} 失败：{$error}
 flash-config-file-create-failed = 创建配置文件 {$path} 失败：{$error}
+flash-server-config-edit-in-settings = 配置文件位于服务端。请直接在“设置”中编辑配置值，不能将服务端路径作为客户端本地文件打开。
 flash-clipboard-image-attached = 已附加剪贴板图片：{$width}x{$height} {$format}
 flash-clipboard-image-attach-failed = 附加剪贴板图片失败：{$error}
 flash-attach-images-only = 图片选择器只能附加图片文件。

@@ -2,17 +2,18 @@
 //! results, migrated from `agena-tui-backend/src/backend_drafts/provider_draft_auth.rs`.
 //!
 //! The interactive auth flow entry points (`start_provider_draft_auth` /
-//! `continue_provider_draft_auth`) remain in the TUI backend, but the types
-//! they operate on migrate here.
+//! `continue_provider_draft_auth`) live on [`crate::Application`], while the
+//! transport-safe draft and result types they operate on live here.
 
 use anyhow::{Result, anyhow};
+use serde::{Deserialize, Serialize};
 
 use super::catalog::credential_issuer_label;
 use super::draft_config::ProviderConfigDraft;
 use super::save::parse_credential_issuer;
 use agena_provider::CredentialIssuer;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Kind of a draft provider authentication flow.
 pub enum ProviderDraftAuthKind {
     Unset,
@@ -330,7 +331,7 @@ impl ProviderDraftAuthKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 /// Secret source kind of a draft provider.
 pub enum ProviderDraftSecretSourceKind {
     #[default]
@@ -360,7 +361,7 @@ impl ProviderDraftSecretSourceKind {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Draft OAuth tokens of a provider.
 pub struct ProviderOAuthTokensDraft {
     pub refresh_token: String,
@@ -368,7 +369,7 @@ pub struct ProviderOAuthTokensDraft {
     pub expires_at_ms: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Draft browser auth session of a provider.
 pub struct ProviderBrowserAuthSessionDraft {
     pub authorize_url: String,
@@ -385,7 +386,7 @@ impl ProviderBrowserAuthSessionDraft {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Draft device auth session of a provider.
 pub struct ProviderDeviceAuthSessionDraft {
     pub verification_url: String,
@@ -403,7 +404,7 @@ impl ProviderDeviceAuthSessionDraft {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 /// Kind of interactive login in a draft auth flow.
 pub enum ProviderDraftInteractiveLoginKind {
     Browser,
@@ -428,7 +429,7 @@ impl ProviderDraftInteractiveLoginKind {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Draft credential for the OpenAI ChatGPT provider.
 pub struct OpenAiChatgptCredentialDraft {
     pub login_kind: ProviderDraftInteractiveLoginKind,
@@ -449,7 +450,7 @@ impl OpenAiChatgptCredentialDraft {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Draft credential for the GitHub Copilot provider.
 pub struct GithubCopilotCredentialDraft {
     pub enterprise_domain: String,
@@ -457,7 +458,7 @@ pub struct GithubCopilotCredentialDraft {
     pub device: Option<ProviderDeviceAuthSessionDraft>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Draft credential for the GitLab provider.
 pub struct GitlabCredentialDraft {
     pub redirect_uri: String,
@@ -466,7 +467,7 @@ pub struct GitlabCredentialDraft {
     pub browser: Option<ProviderBrowserAuthSessionDraft>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Bundle of draft credentials for a provider.
 pub struct ProviderCredentialDraftBundle {
     pub openai_chatgpt: OpenAiChatgptCredentialDraft,
@@ -619,7 +620,7 @@ pub(crate) fn provider_credential_drafts(
 
 use agena_provider::AuthData;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Message sent to the draft auth flow.
 pub enum ProviderDraftAuthMessage {
     OpenaiBrowserStarted,
@@ -633,7 +634,7 @@ pub enum ProviderDraftAuthMessage {
     GitlabCredentialCaptured,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Field of the draft auth form.
 pub enum ProviderDraftAuthField {
     RedirectUri,
@@ -641,7 +642,7 @@ pub enum ProviderDraftAuthField {
     CallbackUrl,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Error of the draft auth flow.
 pub enum ProviderDraftAuthError {
     UnsupportedInteractiveLogin,
@@ -662,7 +663,7 @@ impl ProviderDraftAuthError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Result of a draft auth action.
 pub struct ProviderDraftAuthActionResult {
     pub draft: ProviderConfigDraft,
@@ -670,7 +671,7 @@ pub struct ProviderDraftAuthActionResult {
     pub clipboard_text: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Result of saving a provider studio draft.
 pub enum ProviderStudioSaveResult {
     ProviderDraftSaved {
@@ -704,7 +705,7 @@ pub enum ProviderStudioSaveResult {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Field that failed to save in the provider studio.
 pub enum ProviderStudioSaveField {
     ProviderId,
@@ -716,7 +717,7 @@ pub enum ProviderStudioSaveField {
     CredentialIssuer,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Validation error when saving a provider studio draft.
 pub enum ProviderStudioSaveValidationError {
     FieldRequired(ProviderStudioSaveField),
@@ -741,7 +742,7 @@ pub enum ProviderStudioSaveValidationError {
     BedrockKeyPairRequired,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Error when saving a provider studio draft.
 pub enum ProviderStudioSaveError {
     Validation(ProviderStudioSaveValidationError),
@@ -796,7 +797,7 @@ fn provider_backend_problem(
     failure.into()
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Details of a provider draft authentication.
 pub struct ProviderDraftAuthDetails {
     pub base_url: String,

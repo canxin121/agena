@@ -2,6 +2,7 @@
 //! `agena-tui-backend/src/backend_drafts/provider_draft_config.rs`.
 
 use anyhow::{Result, anyhow};
+use serde::{Deserialize, Serialize};
 
 use super::catalog::{credential_issuer_label, optional_non_empty, parse_oauth_expires_at_ms};
 use super::draft_auth_data::{
@@ -16,7 +17,7 @@ use agena_provider::{
     ProviderOverlay, ProviderSecretSourceOverlay,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Draft provider configuration edited in the studio.
 pub struct ProviderConfigDraft {
     pub source_provider_id: Option<String>,

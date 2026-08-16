@@ -79,6 +79,8 @@ pub struct GitStageRequest {
 #[derive(Debug, Clone, Deserialize)]
 /// Request to commit staged changes.
 pub struct GitCommitRequest {
+    #[serde(default)]
+    pub workspace_id: Option<i64>,
     pub message: String,
 }
 
@@ -93,6 +95,8 @@ pub struct GitCommitResource {
 #[derive(Debug, Clone, Deserialize)]
 /// Request to create a pull request.
 pub struct GitPullRequestCreateRequest {
+    #[serde(default)]
+    pub workspace_id: Option<i64>,
     pub title: String,
     #[serde(default)]
     pub body: Option<String>,

@@ -109,10 +109,16 @@ impl ApplicationService {
             ));
         }
 
-        let depth = query.depth.unwrap_or(2).min(8);
-        let mut remaining = query.limit.unwrap_or(500).clamp(1, 2_000);
-        let entries =
-            read_workspace_entries(root.as_path(), target.as_path(), depth, &mut remaining)?;
+        // Interactive clients may request a bounded whole-workspace snapshot
+        // so their synchronous file pickers never inspect the client host's
+        // filesystem. Defaults stay small for ordinary REST callers.
+        let depth = query.depth.unwrap_or(2).min(64);
+        let mut remaining = query.limit.unwrap_or(500).clamp(1, 50_000);
+        let entries = if query.respect_ignores {
+            read_ignored_workspace_entries(root.as_path(), target.as_path(), depth, &mut remaining)?
+        } else {
+            read_workspace_entries(root.as_path(), target.as_path(), depth, &mut remaining)?
+        };
 
         Ok(WorkspaceFileTreeResource {
             workspace_id,
@@ -204,6 +210,76 @@ impl ApplicationService {
             })
             .collect();
 
+        Ok((filename, bytes))
+    }
+
+    /// Read a runtime-managed image artifact for a session. These files live
+    /// outside the workspace, so the ordinary workspace download endpoint
+    /// must not be widened to expose them. The session-to-workspace relation
+    /// and the managed artifact root are both resolved on the server.
+    pub async fn read_session_media_file(
+        &self,
+        session_id: i64,
+        query: WorkspaceFileDownloadQuery,
+    ) -> ApplicationResult<(String, Vec<u8>)> {
+        const MAX_SESSION_MEDIA_BYTES: u64 = 20 * 1024 * 1024;
+
+        let session = self.ensure_session_model(session_id).await?;
+        let workspace_path = self
+            .workspace_repository
+            .path_by_id(session.workspace_id)
+            .await
+            .map_err(|error| ApplicationError::internal(error.to_string()))?
+            .ok_or_else(|| {
+                ApplicationError::not_found_with_diagnostic(
+                    "The workspace was not found.",
+                    format!("workspace not found: {}", session.workspace_id),
+                )
+            })?;
+        let managed_root = agena_runtime_tools::project_state_dir(Path::new(&workspace_path))
+            .join("generated_images")
+            .join(session_id.to_string());
+        let managed_root = managed_root
+            .canonicalize()
+            .map_err(|error| workspace_fs_error(managed_root.as_path(), error))?;
+        let requested = PathBuf::from(query.path.trim());
+        if requested.as_os_str().is_empty() {
+            return Err(ApplicationError::bad_request(
+                "session media path is required",
+            ));
+        }
+        let target = if requested.is_absolute() {
+            requested
+        } else {
+            managed_root.join(requested)
+        };
+        let target = target
+            .canonicalize()
+            .map_err(|error| workspace_fs_error(target.as_path(), error))?;
+        if !target.starts_with(&managed_root) {
+            return Err(ApplicationError::bad_request(
+                "session media path escapes the managed artifact directory",
+            ));
+        }
+        let metadata = fs::metadata(target.as_path())
+            .map_err(|error| workspace_fs_error(target.as_path(), error))?;
+        if !metadata.is_file() {
+            return Err(ApplicationError::bad_request(
+                "the selected session media path is not a regular file",
+            ));
+        }
+        if metadata.len() > MAX_SESSION_MEDIA_BYTES {
+            return Err(ApplicationError::bad_request(
+                "session media exceeds the 20 MiB presentation limit",
+            ));
+        }
+        let filename = target
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(sanitize_upload_filename)
+            .unwrap_or_else(|| "session-media".to_owned());
+        let bytes = fs::read(target.as_path())
+            .map_err(|error| workspace_fs_error(target.as_path(), error))?;
         Ok((filename, bytes))
     }
 
@@ -510,6 +586,107 @@ fn read_workspace_entries(
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
     Ok(nodes)
+}
+
+fn read_ignored_workspace_entries(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    remaining: &mut usize,
+) -> ApplicationResult<Vec<WorkspaceFileNode>> {
+    let mut builder = ignore::WalkBuilder::new(dir);
+    builder
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .ignore(true)
+        .follow_links(false)
+        .parents(true)
+        .require_git(false)
+        .max_depth(Some(depth.saturating_add(1)))
+        .filter_entry(|entry| !matches!(entry.file_name().to_str(), Some(".git" | ".hg" | ".svn")));
+
+    let mut nodes = std::collections::BTreeMap::<String, WorkspaceFileNode>::new();
+    let mut children = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for entry in builder.build() {
+        let entry = entry.map_err(|error| {
+            ApplicationError::internal(format!(
+                "workspace ignore-aware walk failed for {}: {error}",
+                dir.display()
+            ))
+        })?;
+        if entry.path() == dir {
+            continue;
+        }
+        if *remaining == 0 {
+            break;
+        }
+        let metadata = fs::symlink_metadata(entry.path())
+            .map_err(|error| workspace_fs_error(entry.path(), error))?;
+        let file_type = metadata.file_type();
+        let kind = if file_type.is_dir() {
+            WorkspaceFileKind::Directory
+        } else if file_type.is_file() {
+            WorkspaceFileKind::File
+        } else if file_type.is_symlink() {
+            WorkspaceFileKind::Symlink
+        } else {
+            WorkspaceFileKind::Other
+        };
+        let path = entry
+            .path()
+            .strip_prefix(root)
+            .map(workspace_relative_path)
+            .unwrap_or_else(|_| entry.path().display().to_string());
+        let parent = Path::new(path.as_str())
+            .parent()
+            .map(workspace_relative_path)
+            .unwrap_or_default();
+        *remaining -= 1;
+        children.entry(parent).or_default().push(path.clone());
+        nodes.insert(
+            path.clone(),
+            WorkspaceFileNode {
+                name: entry.file_name().to_string_lossy().to_string(),
+                path,
+                kind,
+                size: (kind == WorkspaceFileKind::File).then_some(metadata.len()),
+                children: Vec::new(),
+            },
+        );
+    }
+
+    fn assemble(
+        parent: &str,
+        nodes: &mut std::collections::BTreeMap<String, WorkspaceFileNode>,
+        children: &std::collections::BTreeMap<String, Vec<String>>,
+    ) -> Vec<WorkspaceFileNode> {
+        let mut output = children
+            .get(parent)
+            .into_iter()
+            .flatten()
+            .filter_map(|path| {
+                let mut node = nodes.remove(path)?;
+                node.children = assemble(path, nodes, children);
+                Some(node)
+            })
+            .collect::<Vec<_>>();
+        output.sort_by(|left, right| {
+            let left_dir = left.kind == WorkspaceFileKind::Directory;
+            let right_dir = right.kind == WorkspaceFileKind::Directory;
+            right_dir
+                .cmp(&left_dir)
+                .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+        });
+        output
+    }
+
+    let base = dir
+        .strip_prefix(root)
+        .map(workspace_relative_path)
+        .unwrap_or_default();
+    Ok(assemble(base.as_str(), &mut nodes, &children))
 }
 
 fn workspace_relative_path(path: &Path) -> String {

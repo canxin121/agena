@@ -19,20 +19,62 @@ pub(crate) async fn get_session_permission_studio_state(
 ) -> Result<SessionPermissionStudioState> {
     let execution =
         crate::app_backend::operations::get_session_state(application, session_id).await?;
-    let effective_permission: agena_domain::PermissionConfig = serde_json::from_value(
-        serde_json::to_value(&execution.execution.effective_permission)
-            .context("failed to serialize effective permission resource")?,
-    )
-    .context("failed to decode effective permission resource")?;
-    // The current public execution resource exposes the effective policy, not
-    // the pre-resolution selected policy. The TUI is a pure HTTP client, so
-    // the permission studio opens read-only from the authoritative effective
-    // projection.
-    let permission = effective_permission.clone();
+    let (permission, effective_permission) = permission_configs_from_resources(
+        &execution.execution.selected_permission,
+        &execution.execution.effective_permission,
+    )?;
     Ok(SessionPermissionStudioState {
         session_id,
         session_title: execution.session.title.clone(),
         permission,
         effective_permission,
     })
+}
+
+fn permission_configs_from_resources(
+    selected: &agena_api::resource::PermissionConfigResource,
+    effective: &agena_api::resource::PermissionConfigResource,
+) -> Result<(
+    agena_domain::PermissionConfig,
+    agena_domain::PermissionConfig,
+)> {
+    let selected = serde_json::from_value(
+        serde_json::to_value(selected)
+            .context("failed to serialize selected permission resource")?,
+    )
+    .context("failed to decode selected permission resource")?;
+    let effective = serde_json::from_value(
+        serde_json::to_value(effective)
+            .context("failed to serialize effective permission resource")?,
+    )
+    .context("failed to decode effective permission resource")?;
+    Ok((selected, effective))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::permission_configs_from_resources;
+
+    #[test]
+    fn selected_and_effective_permission_remain_distinct() {
+        let selected = serde_json::from_value(serde_json::json!({
+            "tools": { "default": "ask" }
+        }))
+        .expect("selected permission resource");
+        let effective = serde_json::from_value(serde_json::json!({
+            "tools": { "default": "deny" }
+        }))
+        .expect("effective permission resource");
+
+        let (selected, effective) =
+            permission_configs_from_resources(&selected, &effective).expect("decode permissions");
+        assert_eq!(
+            selected.tools.and_then(|tools| tools.default),
+            Some(agena_domain::PermissionMode::Ask)
+        );
+        assert_eq!(
+            effective.tools.and_then(|tools| tools.default),
+            Some(agena_domain::PermissionMode::Deny)
+        );
+    }
 }

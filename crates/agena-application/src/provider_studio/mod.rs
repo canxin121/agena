@@ -6,8 +6,8 @@
 //! `backend_auth.rs`, and `backend_events.rs`.
 //!
 //! The interactive auth flow entry points (`start_provider_draft_auth` /
-//! `continue_provider_draft_auth`) remain in the TUI backend; the types they
-//! operate on are re-exported here per the R7 brief §2.
+//! `continue_provider_draft_auth`) are exposed by [`crate::Application`]; the
+//! transport-safe types they operate on are re-exported here.
 
 // The submodules are `pub(crate)` so the crate-root `application_*.rs` modules
 // can reach the migrated helpers; nothing here is part of the public API beyond
@@ -28,3 +28,12 @@ pub use draft_auth_data::{
     ProviderStudioSaveResult, ProviderStudioSaveValidationError,
 };
 pub use draft_config::ProviderConfigDraft;
+
+/// Build an editable model configuration from public provider metadata when
+/// the model has no explicit file-level override yet.
+pub fn provider_model_draft_value_from_resource(
+    model_id: &str,
+    provider_model: Option<&agena_api::resource::ProviderModelResource>,
+) -> serde_json::Value {
+    catalog::provider_model_json_for_model_id(&[], model_id, provider_model)
+}

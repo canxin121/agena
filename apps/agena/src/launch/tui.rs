@@ -149,10 +149,9 @@ pub fn init_tui_tracing(
 }
 
 pub async fn run_remote(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> {
-    let workspace_root = args.workspace_root.clone().unwrap_or(env::current_dir()?);
     let backend = TuiBackend::connect_remote_authenticated(
         args.server_url.as_str(),
-        workspace_root,
+        args.workspace_root.clone(),
         args.server_token.as_deref(),
         args.server_password.as_deref(),
     )

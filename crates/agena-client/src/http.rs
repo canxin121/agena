@@ -29,9 +29,9 @@ use agena_api::{
     },
     resource::{
         BackgroundActivityResource, HealthResponse, PermissionRuleResource,
-        ProviderAdapterModelsRequest, ProviderAdapterModelsResponse, RunOptions,
-        SavedProviderAdapterModelsRequest, SessionExecutionResource, SessionOverviewResource,
-        SessionResource, WorkspaceResource,
+        ProviderAdapterModelsRequest, ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
+        RunOptions, SavedProviderAdapterModelsRequest, SessionExecutionResource,
+        SessionOverviewResource, SessionResource, WorkspaceResource,
     },
 };
 use futures_util::{StreamExt, TryStreamExt as _};
@@ -46,6 +46,7 @@ use crate::ws::SubscriptionEvent;
 const MAX_JSON_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_TEXT_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_BINARY_RESPONSE_BYTES: usize = 100 * 1024 * 1024;
 const MAX_SSE_EVENT_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Default)]
@@ -96,10 +97,7 @@ impl ClientAuthentication {
 
     fn replace_bearer(&self, token: &str) -> Result<(), ClientError> {
         let token = bearer_header(token)?;
-        *self
-            .bearer
-            .write()
-            .expect("server bearer lock poisoned") = Some(token);
+        *self.bearer.write().expect("server bearer lock poisoned") = Some(token);
         self.generation.fetch_add(1, Ordering::Release);
         Ok(())
     }
@@ -292,9 +290,7 @@ impl AgenaClient {
             .filter(|token| !token.trim().is_empty())
             .map(str::to_owned)
             .ok_or_else(|| {
-                ClientError::Protocol(
-                    "server authentication returned no bearer token".to_owned(),
-                )
+                ClientError::Protocol("server authentication returned no bearer token".to_owned())
             })
     }
 
@@ -541,9 +537,7 @@ impl AgenaClient {
     ) -> Result<agena_api::resource::ServerIdentityResource, ClientError> {
         let health = self.health().await?;
         let server = health.server.ok_or_else(|| {
-            ClientError::Protocol(
-                "the endpoint does not expose a server identity".to_owned(),
-            )
+            ClientError::Protocol("the endpoint does not expose a server identity".to_owned())
         })?;
         if server.protocol_version != agena_api::PROTOCOL_VERSION {
             return Err(ClientError::Protocol(format!(
@@ -571,6 +565,160 @@ impl AgenaClient {
         self.post_json(
             &format!("/api/v1/providers/{provider_id}/models"),
             serde_json::to_value(request)?,
+        )
+        .await
+    }
+
+    /// Return the server's saved provider routing projection. Unlike the
+    /// provider model listing, this excludes discovered but unconfigured
+    /// models and preserves each adapter's enabled state.
+    pub async fn configured_provider_adapter_models(
+        &self,
+        provider_id: &str,
+    ) -> Result<Vec<ProviderAdapterModelsResource>, ClientError> {
+        self.get_json(&format!(
+            "/api/v1/providers/{provider_id}/configured-models"
+        ))
+        .await
+    }
+
+    /// Return only models implied by the server's saved provider
+    /// configuration, without triggering live provider discovery.
+    pub async fn configured_provider_models(
+        &self,
+        provider_id: &str,
+    ) -> Result<agena_api::resource::ProviderModelsResponse, ClientError> {
+        self.get_json(&format!(
+            "/api/v1/providers/{provider_id}/configured-local-models"
+        ))
+        .await
+    }
+
+    /// Fetch, persist, and activate the server's current provider client
+    /// versions.
+    pub async fn refresh_provider_client_versions(&self) -> Result<serde_json::Value, ClientError> {
+        self.post_json(
+            "/api/v1/providers/client-versions/refresh",
+            serde_json::json!({}),
+        )
+        .await
+    }
+
+    pub async fn aws_profile_names(&self) -> Result<serde_json::Value, ClientError> {
+        self.get_json("/api/v1/providers/aws-profiles").await
+    }
+
+    /// Read a server-owned workspace file tree.
+    pub async fn workspace_file_tree(
+        &self,
+        workspace_id: i64,
+        path: Option<&str>,
+        depth: usize,
+        limit: usize,
+        respect_ignores: bool,
+    ) -> Result<serde_json::Value, ClientError> {
+        let mut url = self.endpoint(&format!("/api/v1/workspaces/{workspace_id}/files"));
+        {
+            let mut query = url.query_pairs_mut();
+            if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
+                query.append_pair("path", path);
+            }
+            query.append_pair("depth", &depth.to_string());
+            query.append_pair("limit", &limit.to_string());
+            if respect_ignores {
+                query.append_pair("respect_ignores", "true");
+            }
+        }
+        let response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        self.parse_json(response).await
+    }
+
+    /// Download bytes from the server-owned workspace. The returned filename
+    /// is reduced to a client-safe final path component even if the remote
+    /// server sends an unsafe Content-Disposition header.
+    pub async fn download_workspace_file(
+        &self,
+        workspace_id: i64,
+        path: &str,
+    ) -> Result<(String, Vec<u8>), ClientError> {
+        let mut url = self.endpoint(&format!("/api/v1/workspaces/{workspace_id}/download"));
+        url.query_pairs_mut().append_pair("path", path);
+        self.download_binary_file(url).await
+    }
+
+    /// Download a runtime-managed image belonging to a server session. The
+    /// server confines this path to that session's generated-media directory.
+    pub async fn download_session_media_file(
+        &self,
+        session_id: i64,
+        path: &str,
+    ) -> Result<(String, Vec<u8>), ClientError> {
+        let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/media"));
+        url.query_pairs_mut().append_pair("path", path);
+        self.download_binary_file(url).await
+    }
+
+    async fn download_binary_file(&self, url: url::Url) -> Result<(String, Vec<u8>), ClientError> {
+        let mut response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        if !response.status().is_success() {
+            let _: serde_json::Value = self.parse_json(response).await?;
+            unreachable!("a non-success response cannot decode as success JSON");
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_BINARY_RESPONSE_BYTES as u64)
+        {
+            return Err(ClientError::Protocol(
+                "workspace download exceeds the 100 MiB client limit".to_owned(),
+            ));
+        }
+        let filename = response
+            .headers()
+            .get(reqwest::header::CONTENT_DISPOSITION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split("filename=\"").nth(1))
+            .and_then(|value| value.split('"').next())
+            .map(sanitize_download_filename)
+            .unwrap_or_else(|| "workspace-file".to_owned());
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if bytes.len().saturating_add(chunk.len()) > MAX_BINARY_RESPONSE_BYTES {
+                return Err(ClientError::Protocol(
+                    "workspace download exceeds the 100 MiB client limit".to_owned(),
+                ));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok((filename, bytes))
+    }
+
+    pub async fn provider_studio_draft(
+        &self,
+        provider_id: Option<&str>,
+    ) -> Result<serde_json::Value, ClientError> {
+        let mut url = self.endpoint("/api/v1/provider-studio/draft");
+        if let Some(provider_id) = provider_id {
+            url.query_pairs_mut()
+                .append_pair("provider_id", provider_id);
+        }
+        let response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        self.parse_json(response).await
+    }
+
+    pub async fn provider_studio_operation(
+        &self,
+        operation: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.post_json(
+            &format!("/api/v1/provider-studio/{}", operation.trim_matches('/')),
+            body,
         )
         .await
     }
@@ -689,6 +837,65 @@ impl AgenaClient {
             }),
         )
         .await
+    }
+
+    /// Invoke a declarative plugin UI action. Command actions execute on the
+    /// server so command hooks retain server-owned session/runtime context.
+    pub async fn invoke_plugin_ui_action(
+        &self,
+        plugin_id: &str,
+        action_id: &str,
+        input: serde_json::Value,
+        session_id: Option<i64>,
+        slash: Option<&str>,
+        raw: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        let mut url = self.endpoint("/api/v1/plugins");
+        url.path_segments_mut()
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
+            .push(plugin_id)
+            .push("ui")
+            .push("actions")
+            .push(action_id);
+        let body = serde_json::json!({
+            "input": input,
+            "session_id": session_id,
+            "slash": slash,
+            "raw": raw,
+        });
+        let response = self
+            .send_request(reqwest::Method::POST, url, Some(&body), None)
+            .await?;
+        self.parse_json(response).await
+    }
+
+    /// Invoke a plugin command directly in a server-owned session. This is
+    /// also the continuation path for `PluginCommandOutput::InvokeCommand`.
+    pub async fn invoke_plugin_command(
+        &self,
+        plugin_id: &str,
+        command_id: &str,
+        input: serde_json::Value,
+        session_id: i64,
+        slash: Option<&str>,
+        raw: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        let mut url = self.endpoint("/api/v1/plugins");
+        url.path_segments_mut()
+            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
+            .push(plugin_id)
+            .push("commands")
+            .push(command_id);
+        let body = serde_json::json!({
+            "input": input,
+            "session_id": session_id,
+            "slash": slash,
+            "raw": raw,
+        });
+        let response = self
+            .send_request(reqwest::Method::POST, url, Some(&body), None)
+            .await?;
+        self.parse_json(response).await
     }
 
     /// Control a background activity (`pause`, `resume`, or `delete`) through
@@ -1199,9 +1406,17 @@ impl AgenaClient {
         &self,
         message: String,
     ) -> Result<serde_json::Value, ClientError> {
+        self.create_git_commit_in_workspace(None, message).await
+    }
+
+    pub async fn create_git_commit_in_workspace(
+        &self,
+        workspace_id: Option<i64>,
+        message: String,
+    ) -> Result<serde_json::Value, ClientError> {
         self.post_json(
             "/api/v1/git/commits",
-            serde_json::json!({ "message": message }),
+            serde_json::json!({ "workspace_id": workspace_id, "message": message }),
         )
         .await
     }
@@ -1213,9 +1428,22 @@ impl AgenaClient {
         base: Option<String>,
         head: Option<String>,
     ) -> Result<serde_json::Value, ClientError> {
+        self.create_git_pull_request_in_workspace(None, title, body, base, head)
+            .await
+    }
+
+    pub async fn create_git_pull_request_in_workspace(
+        &self,
+        workspace_id: Option<i64>,
+        title: String,
+        body: Option<String>,
+        base: Option<String>,
+        head: Option<String>,
+    ) -> Result<serde_json::Value, ClientError> {
         self.post_json(
             "/api/v1/git/pull-requests",
             serde_json::json!({
+                "workspace_id": workspace_id,
                 "title": title,
                 "body": body,
                 "base": base,
@@ -2014,19 +2242,44 @@ impl AgenaClient {
     }
 }
 
+fn sanitize_download_filename(value: &str) -> String {
+    let filename = value
+        .rsplit(['/', '\\'])
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "." && *value != "..")
+        .unwrap_or("workspace-file");
+    let sanitized = filename
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(240)
+        .collect::<String>();
+    if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
+        "workspace-file".to_owned()
+    } else {
+        sanitized
+    }
+}
+
 #[cfg(test)]
 mod sse_contract_tests {
     use super::AgenaClient;
     use axum::{
         Json, Router,
-        extract::State,
+        extract::{Path as AxumPath, Query as AxumQuery, State},
         http::{HeaderMap, StatusCode, header},
         response::{IntoResponse, Response},
         routing::{get, post},
     };
     use futures_util::StreamExt as _;
     use std::sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2041,6 +2294,332 @@ mod sse_contract_tests {
                 .join(name),
         )
         .expect("checked-in client fixture must be readable")
+    }
+
+    #[derive(Clone, Default)]
+    struct ThinClientFixture {
+        requests: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+    }
+
+    async fn fixture_workspace_tree(
+        State(state): State<ThinClientFixture>,
+        AxumPath(workspace_id): AxumPath<i64>,
+        AxumQuery(query): AxumQuery<std::collections::HashMap<String, String>>,
+    ) -> Json<serde_json::Value> {
+        state.requests.lock().expect("fixture lock").push((
+            "workspace_tree".to_owned(),
+            serde_json::json!({ "workspace_id": workspace_id, "query": query }),
+        ));
+        Json(serde_json::json!({
+            "workspace_id": workspace_id,
+            "root": "/server/workspace",
+            "path": "",
+            "entries": []
+        }))
+    }
+
+    async fn fixture_workspace_download(
+        State(state): State<ThinClientFixture>,
+        AxumPath(workspace_id): AxumPath<i64>,
+        AxumQuery(query): AxumQuery<std::collections::HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        state.requests.lock().expect("fixture lock").push((
+            "workspace_download".to_owned(),
+            serde_json::json!({ "workspace_id": workspace_id, "query": query }),
+        ));
+        (
+            [
+                (header::CONTENT_TYPE, "application/octet-stream"),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"../..\\result.txt\"",
+                ),
+            ],
+            b"server bytes".to_vec(),
+        )
+    }
+
+    async fn fixture_session_media_download(
+        State(state): State<ThinClientFixture>,
+        AxumPath(session_id): AxumPath<i64>,
+        AxumQuery(query): AxumQuery<std::collections::HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        state.requests.lock().expect("fixture lock").push((
+            "session_media_download".to_owned(),
+            serde_json::json!({ "session_id": session_id, "query": query }),
+        ));
+        (
+            [
+                (header::CONTENT_TYPE, "application/octet-stream"),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"generated.png\"",
+                ),
+            ],
+            b"generated image bytes".to_vec(),
+        )
+    }
+
+    async fn fixture_plugin_action(
+        State(state): State<ThinClientFixture>,
+        AxumPath((plugin_id, action_id)): AxumPath<(String, String)>,
+        Json(body): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        state.requests.lock().expect("fixture lock").push((
+            "plugin_action".to_owned(),
+            serde_json::json!({
+                "plugin_id": plugin_id,
+                "action_id": action_id,
+                "body": body
+            }),
+        ));
+        Json(serde_json::json!({
+            "plugin_id": plugin_id,
+            "action_id": action_id,
+            "action": { "kind": "invoke_command", "command": "run" },
+            "result": { "kind": "message", "text": "done" }
+        }))
+    }
+
+    async fn fixture_plugin_command(
+        State(state): State<ThinClientFixture>,
+        AxumPath((plugin_id, command_id)): AxumPath<(String, String)>,
+        Json(body): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        state.requests.lock().expect("fixture lock").push((
+            "plugin_command".to_owned(),
+            serde_json::json!({
+                "plugin_id": plugin_id,
+                "command_id": command_id,
+                "body": body
+            }),
+        ));
+        Json(serde_json::json!({
+            "plugin_id": plugin_id,
+            "command_id": command_id,
+            "result": { "kind": "submit_prompt", "prompt": "continue" }
+        }))
+    }
+
+    async fn fixture_configured_provider_models(
+        State(state): State<ThinClientFixture>,
+        AxumPath(provider_id): AxumPath<String>,
+    ) -> Json<serde_json::Value> {
+        state.requests.lock().expect("fixture lock").push((
+            "configured_provider_models".to_owned(),
+            serde_json::json!({ "provider_id": provider_id }),
+        ));
+        Json(serde_json::json!([{
+            "adapter_id": "responses",
+            "enabled": false,
+            "models": [{
+                "provider_id": provider_id,
+                "adapter_id": "responses",
+                "id": "configured-only",
+                "native_compaction": false,
+                "capabilities": {},
+                "metadata": {},
+                "thinking_modes": [],
+                "speed_modes": {}
+            }]
+        }]))
+    }
+
+    async fn fixture_configured_local_models(
+        State(state): State<ThinClientFixture>,
+        AxumPath(provider_id): AxumPath<String>,
+    ) -> Json<serde_json::Value> {
+        state.requests.lock().expect("fixture lock").push((
+            "configured_local_models".to_owned(),
+            serde_json::json!({ "provider_id": provider_id }),
+        ));
+        Json(serde_json::json!({
+            "provider_id": provider_id,
+            "models": [{
+                "provider_id": provider_id,
+                "adapter_id": "responses",
+                "id": "saved-model",
+                "native_compaction": false,
+                "capabilities": {},
+                "metadata": {},
+                "thinking_modes": [],
+                "speed_modes": {}
+            }]
+        }))
+    }
+
+    async fn fixture_git_commit(
+        State(state): State<ThinClientFixture>,
+        Json(body): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        state
+            .requests
+            .lock()
+            .expect("fixture lock")
+            .push(("git_commit".to_owned(), body.clone()));
+        Json(body)
+    }
+
+    async fn fixture_git_pull_request(
+        State(state): State<ThinClientFixture>,
+        Json(body): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        state
+            .requests
+            .lock()
+            .expect("fixture lock")
+            .push(("git_pull_request".to_owned(), body.clone()));
+        Json(body)
+    }
+
+    async fn spawn_thin_client_fixture() -> (String, ThinClientFixture, tokio::task::JoinHandle<()>)
+    {
+        let state = ThinClientFixture::default();
+        let router = Router::new()
+            .route(
+                "/api/v1/workspaces/{workspace_id}/files",
+                get(fixture_workspace_tree),
+            )
+            .route(
+                "/api/v1/workspaces/{workspace_id}/download",
+                get(fixture_workspace_download),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/media",
+                get(fixture_session_media_download),
+            )
+            .route(
+                "/api/v1/plugins/{plugin_id}/ui/actions/{action_id}",
+                post(fixture_plugin_action),
+            )
+            .route(
+                "/api/v1/plugins/{plugin_id}/commands/{command_id}",
+                post(fixture_plugin_command),
+            )
+            .route(
+                "/api/v1/providers/{provider_id}/configured-models",
+                get(fixture_configured_provider_models),
+            )
+            .route(
+                "/api/v1/providers/{provider_id}/configured-local-models",
+                get(fixture_configured_local_models),
+            )
+            .route("/api/v1/git/commits", post(fixture_git_commit))
+            .route("/api/v1/git/pull-requests", post(fixture_git_pull_request))
+            .with_state(state.clone());
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind thin-client fixture");
+        let address = listener.local_addr().expect("thin-client fixture address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("serve thin-client fixture");
+        });
+        (format!("http://{address}"), state, server)
+    }
+
+    #[tokio::test]
+    async fn thin_client_methods_preserve_remote_paths_and_plugin_context() {
+        let (url, state, server) = spawn_thin_client_fixture().await;
+        let client = AgenaClient::new(url).expect("build thin client");
+
+        let tree = client
+            .workspace_file_tree(42, Some("src"), 64, 50_000, true)
+            .await
+            .expect("load server workspace tree");
+        assert_eq!(tree["workspace_id"], 42);
+        let (filename, bytes) = client
+            .download_workspace_file(42, "src/result.txt")
+            .await
+            .expect("download server workspace file");
+        assert_eq!(filename, "result.txt");
+        assert_eq!(bytes, b"server bytes");
+        let action = client
+            .invoke_plugin_ui_action(
+                "example.plugin",
+                "open",
+                serde_json::json!({ "value": 7 }),
+                Some(9),
+                Some("/example"),
+                "value=7",
+            )
+            .await
+            .expect("invoke plugin action");
+        assert_eq!(action["result"]["text"], "done");
+        let command = client
+            .invoke_plugin_command(
+                "example.plugin",
+                "continue",
+                serde_json::json!({ "step": 2 }),
+                9,
+                Some("/example"),
+                "step=2",
+            )
+            .await
+            .expect("invoke nested plugin command");
+        assert_eq!(command["result"]["prompt"], "continue");
+        let configured = client
+            .configured_provider_adapter_models("example.provider")
+            .await
+            .expect("load configured provider routes");
+        assert_eq!(configured.len(), 1);
+        assert!(!configured[0].enabled);
+        assert_eq!(configured[0].models[0].id, "configured-only");
+        let configured_local = client
+            .configured_provider_models("example.provider")
+            .await
+            .expect("load configured local models");
+        assert_eq!(configured_local.models.len(), 1);
+        assert_eq!(configured_local.models[0].id, "saved-model");
+        let (media_name, media_bytes) = client
+            .download_session_media_file(9, "/server/managed/generated.png")
+            .await
+            .expect("download session-managed media");
+        assert_eq!(media_name, "generated.png");
+        assert_eq!(media_bytes, b"generated image bytes");
+        let commit = client
+            .create_git_commit_in_workspace(Some(42), "bind workspace".to_owned())
+            .await
+            .expect("create workspace-bound commit");
+        assert_eq!(commit["workspace_id"], 42);
+        let pull_request = client
+            .create_git_pull_request_in_workspace(
+                Some(42),
+                "Workspace PR".to_owned(),
+                None,
+                Some("main".to_owned()),
+                None,
+            )
+            .await
+            .expect("create workspace-bound pull request");
+        assert_eq!(pull_request["workspace_id"], 42);
+
+        let requests = state.requests.lock().expect("fixture lock").clone();
+        assert_eq!(requests[0].1["query"]["path"], "src");
+        assert_eq!(requests[0].1["query"]["depth"], "64");
+        assert_eq!(requests[0].1["query"]["respect_ignores"], "true");
+        assert_eq!(requests[1].1["query"]["path"], "src/result.txt");
+        assert_eq!(requests[2].1["plugin_id"], "example.plugin");
+        assert_eq!(requests[2].1["action_id"], "open");
+        assert_eq!(requests[2].1["body"]["session_id"], 9);
+        assert_eq!(requests[2].1["body"]["slash"], "/example");
+        assert_eq!(requests[2].1["body"]["raw"], "value=7");
+        assert_eq!(requests[3].1["command_id"], "continue");
+        assert_eq!(requests[3].1["body"]["input"]["step"], 2);
+        assert_eq!(requests[3].1["body"]["raw"], "step=2");
+        assert_eq!(requests[4].1["provider_id"], "example.provider");
+        assert_eq!(requests[5].1["provider_id"], "example.provider");
+        assert_eq!(requests[6].1["session_id"], 9);
+        assert_eq!(
+            requests[6].1["query"]["path"],
+            "/server/managed/generated.png"
+        );
+        assert_eq!(requests[7].1["workspace_id"], 42);
+        assert_eq!(requests[7].1["message"], "bind workspace");
+        assert_eq!(requests[8].1["workspace_id"], 42);
+        assert_eq!(requests[8].1["base"], "main");
+        server.abort();
     }
 
     #[derive(Clone, Default)]

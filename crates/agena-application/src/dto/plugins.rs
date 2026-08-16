@@ -8,10 +8,28 @@ pub struct PluginInspectResponse {
 /// Plugin UI catalog with the tool registry generation it reflects.
 pub struct PluginUiCatalogResponse {
     pub catalog: agena_plugin_host::PluginUiCatalog,
+    /// Registered tools available to permission-policy editors.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_tools: Vec<PermissionToolCatalogResource>,
+    /// Recent plugin notification intents, newest last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notifications: Vec<agena_plugin_host::HostNotification>,
+    /// Built-in and plugin-contributed transcript activity kinds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activity_kinds: Vec<agena_domain::ActivityKind>,
     pub tool_registry_generation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_registry_last_event:
         Option<agena_plugin_host::sdk::host_api::ToolRegistryChangedEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Presentation-neutral registered tool metadata used by permission UIs.
+pub struct PermissionToolCatalogResource {
+    pub name: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -21,6 +39,12 @@ pub struct PluginUiRequestContext {
     pub input: Option<serde_json::Value>,
     #[serde(default)]
     pub session_id: Option<i64>,
+    /// Slash spelling and raw argument text are presentation context exposed
+    /// to command hooks. They never participate in authorization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slash: Option<String>,
+    #[serde(default)]
+    pub raw: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -31,6 +31,9 @@ pub struct WorkspaceFileTreeQuery {
     pub depth: Option<usize>,
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Apply workspace ignore files and omit VCS metadata while walking.
+    #[serde(default)]
+    pub respect_ignores: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -48,7 +51,7 @@ pub struct WorkspaceFileUploadRequest {
     pub mime: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// A file uploaded into a workspace. `path` is relative to the workspace root
 /// and is the value clients should reference as a workspace attachment.
 pub struct WorkspaceFileUploadResource {
@@ -60,7 +63,7 @@ pub struct WorkspaceFileUploadResource {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 /// Kind of a workspace file entry.
 pub enum WorkspaceFileKind {
@@ -70,7 +73,7 @@ pub enum WorkspaceFileKind {
     Other,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// A node in a workspace file tree.
 pub struct WorkspaceFileNode {
     pub name: String,
@@ -82,7 +85,7 @@ pub struct WorkspaceFileNode {
     pub children: Vec<WorkspaceFileNode>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// A workspace file tree.
 pub struct WorkspaceFileTreeResource {
     pub workspace_id: i64,

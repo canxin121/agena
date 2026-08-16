@@ -2,7 +2,7 @@
 //! of session execution.
 //!
 //! The TUI is a pure HTTP client. [`TuiBackend`] contains only the public API
-//! client plus client-local workspace context; it never owns a Runtime,
+//! client plus the server workspace identity; it never owns a Runtime,
 //! scheduler, provider client, session store, or execution lease.
 
 use std::{
@@ -24,6 +24,7 @@ use agena_api::{
 };
 use agena_client::{AgenaClient, SubscriptionEvent};
 use anyhow::{Context, Result, bail};
+use base64::Engine as _;
 use tokio::sync::mpsc;
 
 use super::{LiveEvent, SessionRefresh};
@@ -33,30 +34,235 @@ pub enum BackendMode {
     Remote,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionSubscriptionDispatch {
+    Ignore,
+    RefreshPluginRuntime,
+    Emit { refresh_plugin_presentation: bool },
+}
+
+fn classify_session_subscription_event(
+    event: &SubscriptionEvent,
+    session_id: i64,
+) -> SessionSubscriptionDispatch {
+    match event {
+        SubscriptionEvent::SessionChanged(change) => {
+            if change.session_id() != session_id {
+                return SessionSubscriptionDispatch::Ignore;
+            }
+            let refresh_plugin_presentation = matches!(
+                change,
+                agena_api::live::SessionChangeResource::PartAdded { part, .. }
+                    | agena_api::live::SessionChangeResource::PartUpdated { part, .. }
+                    if part.kind == "run"
+            );
+            SessionSubscriptionDispatch::Emit {
+                refresh_plugin_presentation,
+            }
+        }
+        SubscriptionEvent::RuntimeSignal(signal) => match signal.session_id {
+            None if signal.kind == "tool_registry_changed" => {
+                SessionSubscriptionDispatch::RefreshPluginRuntime
+            }
+            None => SessionSubscriptionDispatch::Ignore,
+            Some(signal_session_id) if signal_session_id != session_id => {
+                SessionSubscriptionDispatch::Ignore
+            }
+            Some(_) => SessionSubscriptionDispatch::Emit {
+                refresh_plugin_presentation: signal.kind == "plugin",
+            },
+        },
+        SubscriptionEvent::Lagged(_) => SessionSubscriptionDispatch::Emit {
+            refresh_plugin_presentation: true,
+        },
+    }
+}
+
 #[derive(Clone)]
 pub struct TuiBackend {
     inner: Arc<RemoteBackend>,
+    /// Server-owned workspace path used only as a resource identity.
     workspace_root: Arc<PathBuf>,
+    /// Empty client-local confinement root for media that has not been
+    /// fetched through the authenticated workspace API.
+    media_workspace: Arc<tempfile::TempDir>,
 }
 
 struct RemoteBackend {
     client: AgenaClient,
     workspace_id: i64,
-    providers: Vec<ProviderSummaryResource>,
-    models: HashMap<String, Vec<agena_domain::Model>>,
+    providers: tokio::sync::RwLock<Vec<ProviderSummaryResource>>,
+    models: tokio::sync::RwLock<HashMap<String, Vec<agena_domain::Model>>>,
+    configured_provider_adapter_models: tokio::sync::RwLock<
+        HashMap<String, Vec<agena_api::resource::ProviderAdapterModelsResource>>,
+    >,
+    provider_drafts: tokio::sync::RwLock<
+        HashMap<String, agena_application::provider_studio::ProviderConfigDraft>,
+    >,
     /// Cached configuration-source read model assembled over HTTP. Loaded at
     /// connect and refreshed before settings-studio rebuilds; settings reads
     /// are synchronous in the TUI event loop.
     config_sources: tokio::sync::RwLock<Option<agena_application::dto::ConfigJsonSources>>,
+    /// Authoritative runtime projection, including the fully resolved default
+    /// provider/model selection after provider-level defaults are applied.
+    runtime_status: tokio::sync::RwLock<Option<agena_api::resource::RuntimeStatusResponse>>,
     /// Cached plugin UI catalog (display contributions, theme palettes, slash
     /// commands) fetched from the server. Plugin reads are synchronous in the
     /// TUI event loop.
     plugin_catalog: tokio::sync::RwLock<Option<agena_plugin_host::PluginUiCatalog>>,
     /// Cached plugin statuses fetched from the server.
     plugin_statuses: tokio::sync::RwLock<Vec<agena_plugin_host::status::PluginStatus>>,
+    /// Cached plugin details and logs used by the synchronous workbench model.
+    plugin_inspects: tokio::sync::RwLock<HashMap<String, agena_plugin_host::PluginInspect>>,
+    plugin_logs: tokio::sync::RwLock<HashMap<String, Vec<agena_plugin_host::PluginLogRecord>>>,
+    /// Plugin-adjacent presentation metadata returned with the UI catalog.
+    permission_tools:
+        tokio::sync::RwLock<Vec<agena_application::dto::PermissionToolCatalogResource>>,
+    plugin_notifications: tokio::sync::RwLock<Vec<agena_plugin_host::HostNotification>>,
+    activity_kinds: tokio::sync::RwLock<Vec<agena_domain::ActivityKind>>,
+    /// Server-owned workspace inventory used by synchronous pickers/search.
+    workspace_files: tokio::sync::RwLock<Option<agena_application::dto::WorkspaceFileTreeResource>>,
+    workspace_file_index: tokio::sync::RwLock<Vec<PathBuf>>,
+    /// Non-ignore-aware, shallow directory pages for path browsers. Keeping
+    /// this separate prevents ignored build/config paths from disappearing
+    /// while the workspace-wide mention index remains ignore-aware. Writes
+    /// are single in-memory inserts, so a synchronous lock lets the TUI read
+    /// authoritative pages instead of treating transient async lock
+    /// contention as an empty directory.
+    workspace_directory_cache:
+        std::sync::RwLock<HashMap<String, Vec<agena_application::dto::WorkspaceFileNode>>>,
+    workspace_image_data_urls: tokio::sync::RwLock<HashMap<String, String>>,
+    /// Server-side credential environment metadata.
+    aws_profiles: tokio::sync::RwLock<Vec<String>>,
     /// Cached model-catalog page fetched from the server. The settings studio
     /// reads model counts synchronously inside the TUI event loop.
     model_catalog: tokio::sync::RwLock<Option<agena_application::dto::ModelCatalogListResponse>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WorkspacePathMetadata {
+    pub(crate) is_directory: bool,
+    pub(crate) size: Option<u64>,
+}
+
+fn find_workspace_file_node<'a>(
+    nodes: &'a [agena_application::dto::WorkspaceFileNode],
+    relative: &Path,
+) -> Option<&'a agena_application::dto::WorkspaceFileNode> {
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    for node in nodes {
+        if node.path == relative {
+            return Some(node);
+        }
+        if let Some(found) = find_workspace_file_node(&node.children, Path::new(&relative)) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn collect_workspace_file_paths(
+    nodes: &[agena_application::dto::WorkspaceFileNode],
+    output: &mut Vec<PathBuf>,
+) {
+    for node in nodes {
+        if node.kind == agena_application::dto::WorkspaceFileKind::File {
+            output.push(PathBuf::from(&node.path));
+        }
+        collect_workspace_file_paths(&node.children, output);
+    }
+}
+
+fn workspace_image_references(value: &serde_json::Value, output: &mut Vec<(String, String)>) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                workspace_image_references(value, output);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            let is_image = object
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind == "image");
+            if is_image
+                && let Some(source) = object.get("source").and_then(serde_json::Value::as_object)
+                && source
+                    .get("source")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|source| source == "local_path")
+                && let Some(path) = source.get("path").and_then(serde_json::Value::as_str)
+            {
+                let mime = object
+                    .get("mime")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|mime| mime.starts_with("image/"))
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| image_mime_from_path(path));
+                output.push((path.to_owned(), mime));
+            }
+            for value in object.values() {
+                workspace_image_references(value, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn replace_workspace_image_references(
+    value: &mut serde_json::Value,
+    images: &HashMap<String, String>,
+) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                replace_workspace_image_references(value, images);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            let replacement = object
+                .get("source")
+                .and_then(serde_json::Value::as_object)
+                .filter(|source| {
+                    source
+                        .get("source")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|source| source == "local_path")
+                })
+                .and_then(|source| source.get("path"))
+                .and_then(serde_json::Value::as_str)
+                .and_then(|path| images.get(path))
+                .cloned();
+            if let Some(url) = replacement {
+                object.insert(
+                    "source".to_owned(),
+                    serde_json::json!({ "source": "data_url", "url": url }),
+                );
+            }
+            for value in object.values_mut() {
+                replace_workspace_image_references(value, images);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn image_mime_from_path(path: &str) -> String {
+    match Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        Some("bmp") => "image/bmp",
+        Some("ico") => "image/x-icon",
+        _ => "image/png",
+    }
+    .to_owned()
 }
 
 impl TuiBackend {
@@ -66,12 +272,12 @@ impl TuiBackend {
         server_url: impl AsRef<str>,
         workspace_root: PathBuf,
     ) -> Result<Self> {
-        Self::connect_remote_authenticated(server_url, workspace_root, None, None).await
+        Self::connect_remote_authenticated(server_url, Some(workspace_root), None, None).await
     }
 
     pub async fn connect_remote_authenticated(
         server_url: impl AsRef<str>,
-        workspace_root: PathBuf,
+        workspace_root: Option<PathBuf>,
         server_token: Option<&str>,
         server_password: Option<&str>,
     ) -> Result<Self> {
@@ -79,6 +285,14 @@ impl TuiBackend {
             AgenaClient::connect_server(server_url.as_ref(), server_token, server_password)
                 .await
                 .context("server readiness/authentication handshake failed")?;
+        let runtime_status = client
+            .runtime_status()
+            .await
+            .context("failed to load the server runtime status")?;
+        let workspace_root = match workspace_root {
+            Some(workspace_root) => workspace_root,
+            None => PathBuf::from(runtime_status.workspace_root.as_str()),
+        };
         let workspace = client
             .command(Command::ResolveWorkspace(
                 agena_api::commands::ResolveWorkspaceParams {
@@ -91,18 +305,16 @@ impl TuiBackend {
         let CommandResult::Workspace(workspace) = workspace else {
             bail!("server returned the wrong result while resolving the workspace");
         };
+        let workspace_root = PathBuf::from(workspace.path.as_str());
         let providers = match client.query(Query::ListProviders).await? {
             QueryResult::Providers(providers) => providers,
             _ => bail!("server returned the wrong provider-list result"),
         };
         let mut models = HashMap::new();
+        let mut configured_provider_adapter_models = HashMap::new();
         for provider in &providers {
             let response = client
-                .query(Query::ListProviderModels(
-                    agena_api::queries::ListProviderModelsParams {
-                        provider_id: provider.provider_id.clone(),
-                    },
-                ))
+                .configured_provider_models(provider.provider_id.as_str())
                 .await
                 .with_context(|| {
                     format!(
@@ -110,12 +322,10 @@ impl TuiBackend {
                         provider.provider_id
                     )
                 })?;
-            let QueryResult::ProviderModels(response) = response else {
-                bail!("server returned the wrong provider-model result");
-            };
-            let provider_models = response
-                .models
-                .into_iter()
+            let resources = response.models;
+            let provider_models = resources
+                .iter()
+                .cloned()
                 .map(provider_model_from_resource)
                 .collect::<Result<Vec<_>>>()
                 .with_context(|| {
@@ -125,24 +335,59 @@ impl TuiBackend {
                     )
                 })?;
             models.insert(provider.provider_id.clone(), provider_models);
+            let configured = client
+                .configured_provider_adapter_models(provider.provider_id.as_str())
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to load configured routes for provider {} from the server",
+                        provider.provider_id
+                    )
+                })?;
+            configured_provider_adapter_models.insert(provider.provider_id.clone(), configured);
         }
         let backend = Self {
             inner: Arc::new(RemoteBackend {
                 client,
                 workspace_id: workspace.id,
-                providers,
-                models,
+                providers: tokio::sync::RwLock::new(providers),
+                models: tokio::sync::RwLock::new(models),
+                configured_provider_adapter_models: tokio::sync::RwLock::new(
+                    configured_provider_adapter_models,
+                ),
+                provider_drafts: Default::default(),
                 config_sources: Default::default(),
+                runtime_status: tokio::sync::RwLock::new(Some(runtime_status)),
                 plugin_catalog: Default::default(),
                 plugin_statuses: Default::default(),
+                plugin_inspects: Default::default(),
+                plugin_logs: Default::default(),
+                permission_tools: Default::default(),
+                plugin_notifications: Default::default(),
+                activity_kinds: Default::default(),
+                workspace_files: Default::default(),
+                workspace_file_index: Default::default(),
+                workspace_directory_cache: Default::default(),
+                workspace_image_data_urls: Default::default(),
+                aws_profiles: Default::default(),
                 model_catalog: Default::default(),
             }),
             workspace_root: Arc::new(workspace_root),
+            media_workspace: Arc::new(
+                tempfile::tempdir().context("failed to prepare the TUI media cache")?,
+            ),
         };
         // Config/plugin snapshots are presentation metadata; a failure here
         // must not prevent the client from connecting and driving sessions.
         let _ = backend.refresh_config_sources().await;
+        let _ = backend.refresh_provider_drafts().await;
         let _ = backend.refresh_plugin_runtime_snapshot().await;
+        let _ = backend.refresh_model_catalog_cache("", 0, 1).await;
+        let _ = backend.refresh_workspace_file_tree().await;
+        let _ = backend
+            .refresh_workspace_directory(backend.workspace_root())
+            .await;
+        let _ = backend.refresh_aws_profiles().await;
         Ok(backend)
     }
 
@@ -156,6 +401,14 @@ impl TuiBackend {
 
     pub fn workspace_root(&self) -> &Path {
         self.workspace_root.as_path()
+    }
+
+    pub(crate) fn workspace_id(&self) -> i64 {
+        self.inner.workspace_id
+    }
+
+    pub(crate) fn media_workspace_root(&self) -> &Path {
+        self.media_workspace.path()
     }
 
     /// Access to the HTTP client for operations ported to REST.
@@ -174,6 +427,22 @@ impl TuiBackend {
             .and_then(|guard| guard.clone())
     }
 
+    pub(crate) fn runtime_status(&self) -> Option<agena_api::resource::RuntimeStatusResponse> {
+        self.inner
+            .runtime_status
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    pub(crate) async fn refresh_runtime_status_cache(
+        &self,
+    ) -> Result<agena_api::resource::RuntimeStatusResponse> {
+        let status = self.inner.client.runtime_status().await?;
+        *self.inner.runtime_status.write().await = Some(status.clone());
+        Ok(status)
+    }
+
     /// The resolved UI preferences projected from the server's effective
     /// configuration, for launching the terminal with the same
     /// theme/graphics/locale as an embedded runtime.
@@ -183,8 +452,8 @@ impl TuiBackend {
 
     /// Refresh the cached configuration-source read model from the server:
     /// the global config file, the workspace config file, and the resolved
-    /// effective document. `applied_layers` is not exposed over HTTP and is
-    /// left empty (the settings studio then reports "built-in defaults").
+    /// effective document. The resolved-config endpoint wraps the effective
+    /// value and layer metadata in `{ config, meta }`.
     pub(crate) async fn refresh_config_sources(
         &self,
     ) -> Result<agena_application::dto::ConfigJsonSources> {
@@ -192,7 +461,8 @@ impl TuiBackend {
         let client = &self.inner.client;
         let global = client.settings_layer_value("global", "").await?;
         let workspace = client.settings_layer_value("workspace", "").await?;
-        let effective = client.resolved_config().await?;
+        let resolved = client.resolved_config().await?;
+        let (effective, applied_layers) = config_and_layers_from_resolved_response(resolved)?;
         let config_path = global
             .get("config_path")
             .and_then(serde_json::Value::as_str)
@@ -216,7 +486,7 @@ impl TuiBackend {
             config_found,
             project_config_path,
             project_config_found,
-            applied_layers: Vec::new(),
+            applied_layers,
             file: global
                 .get("value")
                 .cloned()
@@ -229,6 +499,22 @@ impl TuiBackend {
         };
         *self.inner.config_sources.write().await = Some(sources.clone());
         Ok(sources)
+    }
+
+    async fn refresh_after_config_edit(&self, path: &str) -> Result<()> {
+        self.refresh_config_sources().await?;
+        let path = path.trim();
+        let root = path.split('.').next().unwrap_or_default();
+        match root {
+            "providers" if !matches!(path, "providers.default" | "providers.default_selection") => {
+                self.refresh_provider_runtime_snapshot().await?;
+                return Ok(());
+            }
+            "plugins" => self.refresh_plugin_runtime_snapshot().await?,
+            _ => {}
+        }
+        self.refresh_runtime_status_cache().await?;
+        Ok(())
     }
 
     /// The cached plugin UI catalog, if loaded from the server.
@@ -253,21 +539,411 @@ impl TuiBackend {
     /// Refresh the cached plugin snapshot from the server: statuses and the
     /// combined TUI/studio UI catalog.
     pub(crate) async fn refresh_plugin_runtime_snapshot(&self) -> Result<()> {
+        self.refresh_plugin_presentation_snapshot().await?;
         let client = &self.inner.client;
-        let catalog_response = client.plugin_ui_catalog().await?;
+        let statuses = plugin_statuses_from_response(client.plugin_statuses().await?)?;
+        let mut inspects = self.inner.plugin_inspects.read().await.clone();
+        let mut logs = self.inner.plugin_logs.read().await.clone();
+        inspects.retain(|plugin_id, _| {
+            statuses
+                .iter()
+                .any(|status| status.plugin_id.to_string() == *plugin_id)
+        });
+        logs.retain(|plugin_id, _| {
+            statuses
+                .iter()
+                .any(|status| status.plugin_id.to_string() == *plugin_id)
+        });
+        let mut requests = tokio::task::JoinSet::new();
+        for status in &statuses {
+            let plugin_id = status.plugin_id.to_string();
+            let client = client.clone();
+            requests.spawn(async move {
+                let (inspect, logs) = tokio::join!(
+                    client.plugin_inspect(plugin_id.as_str()),
+                    client.plugin_logs(plugin_id.as_str(), None, 200),
+                );
+                (plugin_id, inspect, logs)
+            });
+        }
+        while let Some(result) = requests.join_next().await {
+            let Ok((plugin_id, inspect, plugin_logs)) = result else {
+                continue;
+            };
+            if let Ok(value) = inspect
+                && let Some(value) = value.get("plugin").cloned()
+                && let Ok(inspect) =
+                    serde_json::from_value::<agena_plugin_host::PluginInspect>(value)
+            {
+                inspects.insert(plugin_id.clone(), inspect);
+            }
+            if let Ok(value) = plugin_logs
+                && let Some(value) = value.get("logs").cloned()
+                && let Ok(records) =
+                    serde_json::from_value::<Vec<agena_plugin_host::PluginLogRecord>>(value)
+            {
+                logs.insert(plugin_id, records);
+            }
+        }
+        *self.inner.plugin_statuses.write().await = statuses;
+        *self.inner.plugin_inspects.write().await = inspects;
+        *self.inner.plugin_logs.write().await = logs;
+        Ok(())
+    }
+
+    /// Refresh only frame-consumed plugin presentation metadata. This is
+    /// intentionally separate from workbench status/inspect/log reads so a
+    /// run lifecycle signal costs one HTTP request instead of one per plugin.
+    pub(crate) async fn refresh_plugin_presentation_snapshot(&self) -> Result<()> {
+        let catalog_response = self.inner.client.plugin_ui_catalog().await?;
         let catalog = catalog_response
             .get("catalog")
             .cloned()
             .unwrap_or(serde_json::Value::Null);
         let catalog = serde_json::from_value::<agena_plugin_host::PluginUiCatalog>(catalog)
             .context("the server returned an undecodable plugin UI catalog")?;
-        let statuses = serde_json::from_value::<Vec<agena_plugin_host::status::PluginStatus>>(
-            client.plugin_statuses().await?,
-        )
-        .context("the server returned undecodable plugin statuses")?;
+        let permission_tools = catalog_response
+            .get("permission_tools")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .context("the server returned an undecodable permission tool catalog")?
+            .unwrap_or_default();
+        let notifications = catalog_response
+            .get("notifications")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .context("the server returned undecodable plugin notifications")?
+            .unwrap_or_default();
+        let activity_kinds = catalog_response
+            .get("activity_kinds")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .context("the server returned undecodable activity kinds")?
+            .unwrap_or_else(agena_domain::builtin_activity_kinds);
         *self.inner.plugin_catalog.write().await = Some(catalog);
-        *self.inner.plugin_statuses.write().await = statuses;
+        *self.inner.permission_tools.write().await = permission_tools;
+        *self.inner.plugin_notifications.write().await = notifications;
+        *self.inner.activity_kinds.write().await = activity_kinds;
         Ok(())
+    }
+
+    pub(crate) fn permission_tools(
+        &self,
+    ) -> Vec<agena_application::dto::PermissionToolCatalogResource> {
+        self.inner
+            .permission_tools
+            .try_read()
+            .ok()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn plugin_notifications(&self) -> Vec<agena_plugin_host::HostNotification> {
+        self.inner
+            .plugin_notifications
+            .try_read()
+            .ok()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn activity_kinds(&self) -> Vec<agena_domain::ActivityKind> {
+        self.inner
+            .activity_kinds
+            .try_read()
+            .ok()
+            .map(|guard| guard.clone())
+            .filter(|kinds| !kinds.is_empty())
+            .unwrap_or_else(agena_domain::builtin_activity_kinds)
+    }
+
+    pub(crate) async fn refresh_workspace_file_tree(&self) -> Result<()> {
+        let value = self
+            .inner
+            .client
+            .workspace_file_tree(self.inner.workspace_id, None, 64, 50_000, true)
+            .await?;
+        let tree: agena_application::dto::WorkspaceFileTreeResource = serde_json::from_value(value)
+            .context("the server returned an undecodable workspace file tree")?;
+        let mut index = Vec::new();
+        collect_workspace_file_paths(&tree.entries, &mut index);
+        index.sort();
+        *self.inner.workspace_files.write().await = Some(tree);
+        *self.inner.workspace_file_index.write().await = index;
+        Ok(())
+    }
+
+    pub(crate) fn workspace_file_index(&self) -> Vec<PathBuf> {
+        self.inner
+            .workspace_file_index
+            .try_read()
+            .ok()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) async fn refresh_workspace_directory(&self, path: &Path) -> Result<()> {
+        let relative = self.workspace_relative_path(path);
+        if relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            bail!("workspace directory path is outside the active server workspace");
+        }
+        let relative_text = relative.to_string_lossy().replace('\\', "/");
+        let value = self
+            .inner
+            .client
+            .workspace_file_tree(
+                self.inner.workspace_id,
+                (!relative_text.is_empty()).then_some(relative_text.as_str()),
+                0,
+                5_000,
+                false,
+            )
+            .await?;
+        let tree: agena_application::dto::WorkspaceFileTreeResource = serde_json::from_value(value)
+            .context("the server returned an undecodable workspace directory")?;
+        self.inner
+            .workspace_directory_cache
+            .write()
+            .map_err(|_| anyhow::anyhow!("workspace directory cache lock poisoned"))?
+            .insert(tree.path, tree.entries);
+        Ok(())
+    }
+
+    pub(crate) fn workspace_directory_entries(
+        &self,
+        path: &Path,
+    ) -> Vec<agena_application::dto::WorkspaceFileNode> {
+        let relative = self.workspace_relative_path(path);
+        let relative_text = relative.to_string_lossy().replace('\\', "/");
+        if let Some(entries) = self
+            .inner
+            .workspace_directory_cache
+            .read()
+            .ok()
+            .and_then(|guard| guard.get(relative_text.as_str()).cloned())
+        {
+            return entries;
+        }
+        let tree = self
+            .inner
+            .workspace_files
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.clone());
+        let Some(tree) = tree else {
+            return Vec::new();
+        };
+        if relative.as_os_str().is_empty() {
+            return tree.entries;
+        }
+        find_workspace_file_node(&tree.entries, relative.as_path())
+            .filter(|node| node.kind == agena_application::dto::WorkspaceFileKind::Directory)
+            .map(|node| node.children.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn workspace_path_metadata(&self, path: &Path) -> Option<WorkspacePathMetadata> {
+        let relative = self.workspace_relative_path(path);
+        if relative.as_os_str().is_empty() {
+            return Some(WorkspacePathMetadata {
+                is_directory: true,
+                size: None,
+            });
+        }
+        let node = self
+            .inner
+            .workspace_files
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .and_then(|tree| find_workspace_file_node(&tree.entries, relative.as_path()).cloned())
+            .or_else(|| {
+                self.inner
+                    .workspace_directory_cache
+                    .read()
+                    .ok()
+                    .and_then(|guard| {
+                        guard.values().find_map(|entries| {
+                            find_workspace_file_node(entries, relative.as_path()).cloned()
+                        })
+                    })
+            })?;
+        match node.kind {
+            agena_application::dto::WorkspaceFileKind::Directory => Some(WorkspacePathMetadata {
+                is_directory: true,
+                size: None,
+            }),
+            agena_application::dto::WorkspaceFileKind::File => Some(WorkspacePathMetadata {
+                is_directory: false,
+                size: node.size,
+            }),
+            agena_application::dto::WorkspaceFileKind::Symlink
+            | agena_application::dto::WorkspaceFileKind::Other => None,
+        }
+    }
+
+    fn workspace_relative_path(&self, path: &Path) -> PathBuf {
+        let relative = if path.is_absolute() {
+            path.strip_prefix(self.workspace_root())
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|_| path.to_path_buf())
+        } else {
+            path.to_path_buf()
+        };
+        // Cache keys come back from the server without trailing separators.
+        // Rebuild from components so equivalent client inputs such as
+        // `target`, `target/`, and `./target` address the same page.
+        relative.components().collect()
+    }
+
+    pub(crate) async fn refresh_aws_profiles(&self) -> Result<()> {
+        let value = self.inner.client.aws_profile_names().await?;
+        let profiles = value
+            .get("profiles")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .context("the server returned undecodable AWS profile names")?
+            .unwrap_or_default();
+        *self.inner.aws_profiles.write().await = profiles;
+        Ok(())
+    }
+
+    pub(crate) fn aws_profiles(&self) -> Vec<String> {
+        self.inner
+            .aws_profiles
+            .try_read()
+            .ok()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) async fn download_workspace_file(&self, path: &str) -> Result<(String, Vec<u8>)> {
+        self.inner
+            .client
+            .download_workspace_file(self.inner.workspace_id, path)
+            .await
+            .context("failed to download the server workspace file")
+    }
+
+    async fn download_server_image(
+        &self,
+        session_id: i64,
+        path: &str,
+    ) -> Result<(String, Vec<u8>)> {
+        let requested = Path::new(path);
+        let workspace_relative = if requested.is_absolute() {
+            requested.strip_prefix(self.workspace_root()).ok()
+        } else {
+            Some(requested)
+        };
+        if let Some(relative) = workspace_relative {
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            if let Ok(download) = self.download_workspace_file(relative.as_str()).await {
+                return Ok(download);
+            }
+        }
+        self.inner
+            .client
+            .download_session_media_file(session_id, path)
+            .await
+            .context("failed to download server-managed session media")
+    }
+
+    async fn localize_workspace_images(&self, execution: &mut SessionExecutionResource) {
+        const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+
+        let mut references = Vec::new();
+        for part in &execution.parts {
+            workspace_image_references(&part.content, &mut references);
+        }
+        references.sort();
+        references.dedup();
+        if references.is_empty() {
+            return;
+        }
+
+        let mut localized = self.inner.workspace_image_data_urls.read().await.clone();
+        for (path, mime) in references {
+            if localized.contains_key(path.as_str()) {
+                continue;
+            }
+            if self
+                .workspace_path_metadata(Path::new(path.as_str()))
+                .and_then(|metadata| metadata.size)
+                .is_some_and(|size| size > MAX_IMAGE_BYTES)
+            {
+                continue;
+            }
+            let Ok((_, bytes)) = self
+                .download_server_image(execution.session.id, path.as_str())
+                .await
+            else {
+                continue;
+            };
+            if bytes.len() as u64 > MAX_IMAGE_BYTES {
+                continue;
+            }
+            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+            localized.insert(path, format!("data:{mime};base64,{encoded}"));
+        }
+        *self.inner.workspace_image_data_urls.write().await = localized.clone();
+        for part in &mut execution.parts {
+            replace_workspace_image_references(&mut part.content, &localized);
+        }
+    }
+
+    async fn localized_execution(
+        &self,
+        mut execution: SessionExecutionResource,
+    ) -> SessionExecutionResource {
+        self.localize_workspace_images(&mut execution).await;
+        execution
+    }
+
+    pub(crate) fn plugin_inspect(
+        &self,
+        plugin_id: &str,
+    ) -> Option<agena_plugin_host::PluginInspect> {
+        self.inner
+            .plugin_inspects
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.get(plugin_id.trim()).cloned())
+    }
+
+    pub(crate) fn plugin_logs(
+        &self,
+        plugin_id: &str,
+        after_seq: Option<u64>,
+        limit: usize,
+    ) -> Vec<agena_plugin_host::PluginLogRecord> {
+        let mut records = self
+            .inner
+            .plugin_logs
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.get(plugin_id.trim()).cloned())
+            .unwrap_or_default();
+        if let Some(after_seq) = after_seq {
+            records.retain(|record| record.seq > after_seq);
+        }
+        if records.len() > limit {
+            records.drain(..records.len() - limit);
+        }
+        records
     }
 
     pub async fn invoke_plugin_ui_tool(
@@ -289,39 +965,114 @@ impl TuiBackend {
                     "failed to invoke plugin tool `{tool_name}` through the server: {error}"
                 ))
             })?;
-        serde_json::from_value(response).map_err(|error| {
+        let response = serde_json::from_value(response).map_err(|error| {
             agena_application::ApplicationError::internal(format!(
                 "plugin tool `{tool_name}` returned a response this TUI cannot decode: {error}"
             ))
-        })
+        })?;
+        let _ = self.refresh_plugin_presentation_snapshot().await;
+        Ok(response)
     }
 
-    /// Build the Provider Studio draft for `provider_id` (or a fresh draft for
-    /// a not-yet-configured provider). No HTTP endpoint exposes the full draft
-    /// projection, so this remains unavailable from a remote client.
+    /// Build the Provider Studio draft from the authenticated server snapshot.
+    /// Draft reads stay synchronous because provider-workbench navigation runs
+    /// in the terminal event loop; the cache is refreshed at connect and after
+    /// every provider mutation.
     pub fn provider_config_draft(
         &self,
-        _provider_id: Option<&str>,
+        provider_id: Option<&str>,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderConfigDraft,
         agena_application::ApplicationError,
     > {
-        Err(agena_application::ApplicationError::internal(
-            "Provider Studio draft editing is unavailable in remote client mode because it has no public server API",
-        ))
+        let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            let mut draft = agena_application::provider_studio::ProviderConfigDraft::new_empty();
+            draft.normalize_shape();
+            return Ok(draft);
+        };
+        self.inner
+            .provider_drafts
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.get(provider_id).cloned())
+            .ok_or_else(|| {
+                agena_application::ApplicationError::internal(format!(
+                    "provider draft is not loaded: {provider_id}"
+                ))
+            })
     }
 
     pub async fn list_draft_provider_adapter_models(
         &self,
-        _draft: &agena_application::provider_studio::ProviderConfigDraft,
-        _adapter_ids: &[String],
+        draft: &agena_application::provider_studio::ProviderConfigDraft,
+        adapter_ids: &[String],
     ) -> std::result::Result<
         agena_api::resource::ProviderAdapterModelsResponse,
         agena_application::ApplicationError,
     > {
-        Err(agena_application::ApplicationError::internal(
-            "Provider Studio draft discovery is unavailable in remote client mode because it has no public server API",
-        ))
+        let value = self
+            .client()
+            .provider_studio_operation(
+                "draft/models",
+                serde_json::json!({
+                    "draft": draft,
+                    "adapter_ids": adapter_ids,
+                }),
+            )
+            .await
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "failed to list provider draft models through the server: {error}"
+                ))
+            })?;
+        serde_json::from_value(value).map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "the server returned undecodable provider draft models: {error}"
+            ))
+        })
+    }
+
+    pub async fn start_provider_draft_auth(
+        &self,
+        draft: agena_application::provider_studio::ProviderConfigDraft,
+    ) -> std::result::Result<
+        agena_application::provider_studio::ProviderDraftAuthActionResult,
+        agena_application::provider_studio::ProviderDraftAuthError,
+    > {
+        self.provider_studio_auth_operation("auth/start", draft)
+            .await
+    }
+
+    pub async fn continue_provider_draft_auth(
+        &self,
+        draft: agena_application::provider_studio::ProviderConfigDraft,
+    ) -> std::result::Result<
+        agena_application::provider_studio::ProviderDraftAuthActionResult,
+        agena_application::provider_studio::ProviderDraftAuthError,
+    > {
+        self.provider_studio_auth_operation("auth/continue", draft)
+            .await
+    }
+
+    async fn provider_studio_auth_operation(
+        &self,
+        operation: &str,
+        draft: agena_application::provider_studio::ProviderConfigDraft,
+    ) -> std::result::Result<
+        agena_application::provider_studio::ProviderDraftAuthActionResult,
+        agena_application::provider_studio::ProviderDraftAuthError,
+    > {
+        let value = self
+            .client()
+            .provider_studio_operation(operation, serde_json::json!({ "draft": draft }))
+            .await
+            .map_err(agena_application::provider_studio::ProviderDraftAuthError::other)?;
+        let result: std::result::Result<
+            agena_application::provider_studio::ProviderDraftAuthActionResult,
+            agena_application::provider_studio::ProviderDraftAuthError,
+        > = serde_json::from_value(value)
+            .map_err(agena_application::provider_studio::ProviderDraftAuthError::other)?;
+        result
     }
 
     pub async fn list_saved_provider_adapter_models(
@@ -349,84 +1100,284 @@ impl TuiBackend {
 
     pub fn provider_model_draft_value(
         &self,
-        _draft: &agena_application::provider_studio::ProviderConfigDraft,
-        _adapter_id: &str,
-        _model_id: &str,
-        _provider_model: Option<&agena_api::resource::ProviderModelResource>,
+        draft: &agena_application::provider_studio::ProviderConfigDraft,
+        adapter_id: &str,
+        model_id: &str,
+        provider_model: Option<&agena_api::resource::ProviderModelResource>,
     ) -> std::result::Result<serde_json::Value, agena_application::ApplicationError> {
-        Err(agena_application::ApplicationError::internal(
-            "Provider Studio model editing is unavailable in remote client mode because it has no public server API",
-        ))
+        let adapter_id = adapter_id.trim();
+        let model_id = model_id.trim();
+        if adapter_id.is_empty() || model_id.is_empty() {
+            return Err(agena_application::ApplicationError::internal(
+                "adapter id and model id are required",
+            ));
+        }
+        if let Some(provider_id) = draft.source_provider_id.as_deref()
+            && let Some(value) = self.config_sources().and_then(|sources| {
+                sources
+                    .file
+                    .get("providers")?
+                    .get(provider_id)?
+                    .get("adapters")?
+                    .get(adapter_id)?
+                    .get("models")?
+                    .get(model_id)
+                    .cloned()
+            })
+            && !value.is_null()
+        {
+            return Ok(value);
+        }
+        Ok(
+            agena_application::provider_studio::provider_model_draft_value_from_resource(
+                model_id,
+                provider_model,
+            ),
+        )
     }
 
     pub async fn save_provider_draft(
         &self,
-        _draft: agena_application::provider_studio::ProviderConfigDraft,
-        _adapter_model_lists: &[agena_api::resource::ProviderAdapterModelsResource],
-        _selected_adapter_ids: &[String],
-        _selected_model_keys: &std::collections::BTreeSet<String>,
+        draft: agena_application::provider_studio::ProviderConfigDraft,
+        adapter_model_lists: &[agena_api::resource::ProviderAdapterModelsResource],
+        selected_adapter_ids: &[String],
+        selected_model_keys: &std::collections::BTreeSet<String>,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
     > {
-        Err(remote_provider_studio_error())
+        self.provider_studio_save_operation(
+            "save",
+            serde_json::json!({
+                "draft": draft,
+                "adapter_model_lists": adapter_model_lists,
+                "selected_adapter_ids": selected_adapter_ids,
+                "selected_model_keys": selected_model_keys,
+            }),
+        )
+        .await
     }
 
     pub async fn save_provider_adapter_matches(
         &self,
-        _draft: agena_application::provider_studio::ProviderConfigDraft,
-        _adapter_models: agena_api::resource::ProviderAdapterModelsResource,
+        draft: agena_application::provider_studio::ProviderConfigDraft,
+        adapter_models: agena_api::resource::ProviderAdapterModelsResource,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
     > {
-        Err(remote_provider_studio_error())
+        self.provider_studio_save_operation(
+            "save-adapter",
+            serde_json::json!({
+                "draft": draft,
+                "adapter_models": adapter_models,
+            }),
+        )
+        .await
     }
 
     pub async fn save_provider_model_value(
         &self,
-        _draft: agena_application::provider_studio::ProviderConfigDraft,
-        _adapter_id: &str,
-        _model_id: &str,
-        _model_value: serde_json::Value,
+        draft: agena_application::provider_studio::ProviderConfigDraft,
+        adapter_id: &str,
+        model_id: &str,
+        model_value: serde_json::Value,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
     > {
-        Err(remote_provider_studio_error())
+        self.provider_studio_save_operation(
+            "save-model",
+            serde_json::json!({
+                "draft": draft,
+                "adapter_id": adapter_id,
+                "model_id": model_id,
+                "model_value": model_value,
+            }),
+        )
+        .await
     }
 
     pub async fn delete_provider_model(
         &self,
-        _draft: agena_application::provider_studio::ProviderConfigDraft,
-        _adapter_id: &str,
-        _model_id: &str,
+        draft: agena_application::provider_studio::ProviderConfigDraft,
+        adapter_id: &str,
+        model_id: &str,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
     > {
-        Err(remote_provider_studio_error())
+        self.provider_studio_save_operation(
+            "delete-model",
+            serde_json::json!({
+                "draft": draft,
+                "adapter_id": adapter_id,
+                "model_id": model_id,
+            }),
+        )
+        .await
     }
 
     pub async fn delete_provider(
         &self,
-        _provider_id: &str,
+        provider_id: &str,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
     > {
-        Err(remote_provider_studio_error())
+        self.provider_studio_save_operation(
+            "delete-provider",
+            serde_json::json!({ "provider_id": provider_id }),
+        )
+        .await
     }
 
     pub async fn delete_provider_adapter(
         &self,
-        _draft: agena_application::provider_studio::ProviderConfigDraft,
-        _adapter_id: &str,
+        draft: agena_application::provider_studio::ProviderConfigDraft,
+        adapter_id: &str,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
     > {
-        Err(remote_provider_studio_error())
+        self.provider_studio_save_operation(
+            "delete-adapter",
+            serde_json::json!({
+                "draft": draft,
+                "adapter_id": adapter_id,
+            }),
+        )
+        .await
+    }
+
+    async fn provider_studio_save_operation(
+        &self,
+        operation: &str,
+        body: serde_json::Value,
+    ) -> std::result::Result<
+        agena_application::provider_studio::ProviderStudioSaveResult,
+        agena_application::provider_studio::ProviderStudioSaveError,
+    > {
+        let value = self
+            .client()
+            .provider_studio_operation(operation, body)
+            .await
+            .map_err(provider_studio_transport_error)?;
+        let result = serde_json::from_value::<
+            std::result::Result<
+                agena_application::provider_studio::ProviderStudioSaveResult,
+                agena_application::provider_studio::ProviderStudioSaveError,
+            >,
+        >(value)
+        .map_err(provider_studio_transport_error)?;
+        if result.is_ok() {
+            self.refresh_config_sources()
+                .await
+                .map_err(provider_studio_transport_error)?;
+            self.refresh_provider_runtime_snapshot()
+                .await
+                .map_err(provider_studio_transport_error)?;
+        }
+        result
+    }
+
+    async fn refresh_provider_drafts(&self) -> Result<()> {
+        let providers = self.inner.providers.read().await.clone();
+        let mut drafts = self.inner.provider_drafts.read().await.clone();
+        drafts.retain(|provider_id, _| {
+            providers
+                .iter()
+                .any(|provider| provider.provider_id == *provider_id)
+        });
+        let mut failures = Vec::new();
+        for provider in providers {
+            let provider_id = provider.provider_id;
+            let response = self
+                .client()
+                .provider_studio_draft(Some(provider_id.as_str()))
+                .await;
+            match response {
+                Ok(value) => match serde_json::from_value(value) {
+                    Ok(draft) => {
+                        drafts.insert(provider_id, draft);
+                    }
+                    Err(error) => failures.push(format!(
+                        "{provider_id}: the server returned an undecodable draft: {error}"
+                    )),
+                },
+                Err(error) => failures.push(format!("{provider_id}: {error}")),
+            }
+        }
+        *self.inner.provider_drafts.write().await = drafts;
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            tracing::warn!(
+                failed_provider_count = failures.len(),
+                diagnostics = ?failures,
+                "some Provider Studio drafts could not be refreshed"
+            );
+            bail!(
+                "failed to refresh {} Provider Studio draft(s): {}",
+                failures.len(),
+                failures.join("; ")
+            )
+        }
+    }
+
+    pub(crate) async fn refresh_provider_runtime_snapshot(&self) -> Result<()> {
+        let providers = match self.client().query(Query::ListProviders).await? {
+            QueryResult::Providers(providers) => providers,
+            _ => bail!("server returned the wrong provider-list result"),
+        };
+        let mut models = HashMap::new();
+        let mut configured_adapter_models = HashMap::new();
+        let mut drafts = self
+            .inner
+            .provider_drafts
+            .try_read()
+            .ok()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+        drafts.retain(|provider_id, _| {
+            providers
+                .iter()
+                .any(|provider| provider.provider_id == *provider_id)
+        });
+        for provider in &providers {
+            let response = self
+                .client()
+                .configured_provider_models(provider.provider_id.as_str())
+                .await?;
+            let resources = response.models;
+            let provider_models = resources
+                .iter()
+                .cloned()
+                .map(provider_model_from_resource)
+                .collect::<Result<Vec<_>>>()?;
+            models.insert(provider.provider_id.clone(), provider_models);
+            configured_adapter_models.insert(
+                provider.provider_id.clone(),
+                self.client()
+                    .configured_provider_adapter_models(provider.provider_id.as_str())
+                    .await?,
+            );
+
+            if let Ok(value) = self
+                .client()
+                .provider_studio_draft(Some(provider.provider_id.as_str()))
+                .await
+                && let Ok(draft) = serde_json::from_value(value)
+            {
+                drafts.insert(provider.provider_id.clone(), draft);
+            }
+        }
+        *self.inner.providers.write().await = providers;
+        *self.inner.models.write().await = models;
+        *self.inner.configured_provider_adapter_models.write().await = configured_adapter_models;
+        *self.inner.provider_drafts.write().await = drafts;
+        self.refresh_runtime_status_cache().await?;
+        Ok(())
     }
 
     /// Set a GLOBAL config file setting through the server, reloading the
@@ -449,11 +1400,17 @@ impl TuiBackend {
                     "failed to set global config setting `{path}` through the server: {error}"
                 ))
             })?;
-        serde_json::from_value(response).map_err(|error| {
+        let response = serde_json::from_value(response).map_err(|error| {
             agena_application::ApplicationError::internal(format!(
                 "the server returned an undecodable config edit response: {error}"
             ))
-        })
+        })?;
+        self.refresh_after_config_edit(path).await.map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "the setting was saved but the TUI could not refresh its configuration snapshot: {error:#}"
+            ))
+        })?;
+        Ok(response)
     }
 
     /// Delete a GLOBAL config file setting through the server, reloading the
@@ -474,11 +1431,17 @@ impl TuiBackend {
                     "failed to delete global config setting `{path}` through the server: {error}"
                 ))
             })?;
-        serde_json::from_value(response).map_err(|error| {
+        let response = serde_json::from_value(response).map_err(|error| {
             agena_application::ApplicationError::internal(format!(
                 "the server returned an undecodable config edit response: {error}"
             ))
-        })
+        })?;
+        self.refresh_after_config_edit(path).await.map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "the setting was deleted but the TUI could not refresh its configuration snapshot: {error:#}"
+            ))
+        })?;
+        Ok(response)
     }
 
     /// Set a WORKSPACE-scoped config file setting through the server,
@@ -500,11 +1463,17 @@ impl TuiBackend {
                     "failed to set workspace config setting `{path}` through the server: {error}"
                 ))
             })?;
-        serde_json::from_value(response).map_err(|error| {
+        let response = serde_json::from_value(response).map_err(|error| {
             agena_application::ApplicationError::internal(format!(
                 "the server returned an undecodable config edit response: {error}"
             ))
-        })
+        })?;
+        self.refresh_after_config_edit(path).await.map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "the workspace setting was saved but the TUI could not refresh its configuration snapshot: {error:#}"
+            ))
+        })?;
+        Ok(response)
     }
 
     /// Delete a WORKSPACE-scoped config file setting through the server,
@@ -525,11 +1494,17 @@ impl TuiBackend {
                     "failed to delete workspace config setting `{path}` through the server: {error}"
                 ))
             })?;
-        serde_json::from_value(response).map_err(|error| {
+        let response = serde_json::from_value(response).map_err(|error| {
             agena_application::ApplicationError::internal(format!(
                 "the server returned an undecodable config edit response: {error}"
             ))
-        })
+        })?;
+        self.refresh_after_config_edit(path).await.map_err(|error| {
+            agena_application::ApplicationError::internal(format!(
+                "the workspace setting was deleted but the TUI could not refresh its configuration snapshot: {error:#}"
+            ))
+        })?;
+        Ok(response)
     }
 
     /// Set the global default provider selection through the server. The
@@ -564,11 +1539,19 @@ impl TuiBackend {
                     "failed to set provider default selection through the server: {error}"
                 ))
             })?;
-        serde_json::from_value(response).map_err(|error| {
+        let response = serde_json::from_value(response).map_err(|error| {
             agena_application::ApplicationError::internal(format!(
                 "the server returned an undecodable config edit response: {error}"
             ))
-        })
+        })?;
+        self.refresh_after_config_edit("providers.default_selection")
+            .await
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "the default model was saved but the TUI could not refresh its configuration snapshot: {error:#}"
+                ))
+            })?;
+        Ok(response)
     }
 
     /// Set a session's selected permission policy through the server.
@@ -577,18 +1560,17 @@ impl TuiBackend {
         session_id: i64,
         permission: agena_domain::PermissionConfig,
     ) -> std::result::Result<SessionExecutionResource, agena_application::ApplicationError> {
-        let resource: agena_api::resource::PermissionConfigResource = serde_json::from_value(
-            serde_json::to_value(permission).map_err(|error| {
+        let resource: agena_api::resource::PermissionConfigResource =
+            serde_json::from_value(serde_json::to_value(permission).map_err(|error| {
                 agena_application::ApplicationError::internal(format!(
                     "failed to encode session permission: {error}"
                 ))
-            })?,
-        )
-        .map_err(|error| {
-            agena_application::ApplicationError::internal(format!(
-                "failed to encode session permission: {error}"
-            ))
-        })?;
+            })?)
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "failed to encode session permission: {error}"
+                ))
+            })?;
         self.client()
             .set_session_permission(session_id, resource)
             .await
@@ -699,7 +1681,9 @@ impl TuiBackend {
     }
 
     pub async fn get_session_state(&self, session_id: i64) -> Result<SessionExecutionResource> {
-        Ok(self.client().get_session_state(session_id).await?)
+        let mut execution = self.client().get_session_state(session_id).await?;
+        self.localize_workspace_images(&mut execution).await;
+        Ok(execution)
     }
 
     pub async fn refresh_session(
@@ -712,7 +1696,9 @@ impl TuiBackend {
         // correctness path. Reading on every refresh also converges
         // after SSE lag or reconnect without depending on replay.
         let _ = force;
-        let execution = self.client().get_session_state(session_id).await?;
+        let execution = self
+            .localized_execution(self.client().get_session_state(session_id).await?)
+            .await;
         let latest_event_seq = execution.latest_event_seq;
         let event_count = after_seq
             .zip(latest_event_seq)
@@ -731,14 +1717,15 @@ impl TuiBackend {
         document: agena_domain::ComposerDocument,
         options: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        Ok(self
+        let execution = self
             .client()
             .submit_message(agena_api::commands::SubmitRunParams {
                 session_id,
                 options,
                 document,
             })
-            .await?)
+            .await?;
+        Ok(self.localized_execution(execution).await)
     }
 
     pub async fn continue_session(
@@ -746,7 +1733,8 @@ impl TuiBackend {
         session_id: i64,
         options: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        Ok(self.client().continue_run(session_id, options).await?)
+        let execution = self.client().continue_run(session_id, options).await?;
+        Ok(self.localized_execution(execution).await)
     }
 
     pub async fn compact_session(
@@ -754,7 +1742,8 @@ impl TuiBackend {
         session_id: i64,
         options: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        Ok(self.client().compact_session(session_id, options).await?)
+        let execution = self.client().compact_session(session_id, options).await?;
+        Ok(self.localized_execution(execution).await)
     }
 
     pub async fn update_session_selection(
@@ -762,10 +1751,11 @@ impl TuiBackend {
         session_id: i64,
         options: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        Ok(self
+        let execution = self
             .client()
             .update_session_selection(session_id, options)
-            .await?)
+            .await?;
+        Ok(self.localized_execution(execution).await)
     }
 
     pub async fn cancel_run(
@@ -789,7 +1779,8 @@ impl TuiBackend {
                 expected_version: None,
             }))
             .await?;
-        execution_result(result, "session rewind")
+        let execution = execution_result(result, "session rewind")?;
+        Ok(self.localized_execution(execution).await)
     }
 
     pub async fn fork_session(
@@ -805,7 +1796,8 @@ impl TuiBackend {
                 title,
             }))
             .await?;
-        execution_result(result, "session fork")
+        let execution = execution_result(result, "session fork")?;
+        Ok(self.localized_execution(execution).await)
     }
 
     pub async fn reply_permission(
@@ -814,14 +1806,15 @@ impl TuiBackend {
         options: RunOptions,
         reply: PermissionReply,
     ) -> Result<SessionExecutionResource> {
-        Ok(self
+        let execution = self
             .client()
             .reply_permission(agena_api::commands::ReplyPermissionParams {
                 session_id,
                 options,
                 reply,
             })
-            .await?)
+            .await?;
+        Ok(self.localized_execution(execution).await)
     }
 
     pub async fn reply_user_input(
@@ -830,14 +1823,15 @@ impl TuiBackend {
         options: RunOptions,
         reply: UserInputReply,
     ) -> Result<SessionExecutionResource> {
-        Ok(self
+        let execution = self
             .client()
             .reply_user_input(agena_api::commands::ReplyUserInputParams {
                 session_id,
                 options,
                 reply,
             })
-            .await?)
+            .await?;
+        Ok(self.localized_execution(execution).await)
     }
 
     pub async fn mark_interactive_request_presented(
@@ -845,10 +1839,11 @@ impl TuiBackend {
         session_id: i64,
         request_id: String,
     ) -> Result<SessionExecutionResource> {
-        Ok(self
+        let execution = self
             .client()
             .mark_interactive_request_presented(session_id, request_id.as_str())
-            .await?)
+            .await?;
+        Ok(self.localized_execution(execution).await)
     }
 
     pub async fn list_providers(&self) -> Result<Vec<ProviderSummaryResource>> {
@@ -856,7 +1851,12 @@ impl TuiBackend {
     }
 
     pub(crate) fn provider_summaries(&self) -> Vec<ProviderSummaryResource> {
-        self.inner.providers.clone()
+        self.inner
+            .providers
+            .try_read()
+            .ok()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
     }
 
     pub(crate) fn list_local_provider_models(
@@ -866,18 +1866,29 @@ impl TuiBackend {
         Ok(self
             .inner
             .models
-            .get(provider_id.trim())
-            .cloned()
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.get(provider_id.trim()).cloned())
             .unwrap_or_default())
+    }
+
+    pub(crate) fn configured_provider_adapter_models(
+        &self,
+        provider_id: &str,
+    ) -> Vec<agena_api::resource::ProviderAdapterModelsResource> {
+        self.inner
+            .configured_provider_adapter_models
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.get(provider_id.trim()).cloned())
+            .unwrap_or_default()
     }
 
     /// The cached model-catalog page, if one has been loaded from the server.
     /// Synchronous because the settings studio reads model counts inside the
     /// TUI event loop. An empty response is returned when nothing is cached
     /// yet, so sync consumers can render without blocking on HTTP.
-    pub(crate) fn model_catalog(
-        &self,
-    ) -> agena_application::dto::ModelCatalogListResponse {
+    pub(crate) fn model_catalog(&self) -> agena_application::dto::ModelCatalogListResponse {
         self.inner
             .model_catalog
             .try_read()
@@ -944,25 +1955,84 @@ impl TuiBackend {
                 ))
             });
         }
-        self.inner
-            .providers
-            .first()
-            .and_then(|provider| {
-                self.inner
-                    .models
-                    .get(provider.provider_id.as_str())
-                    .and_then(|models| {
-                        models
-                            .iter()
-                            .find(|model| model.id.as_ref() == provider.defaults.model)
-                            .or_else(|| models.first())
-                    })
+        if let Some(selection) = self
+            .runtime_status()
+            .and_then(|status| status.default_selection)
+            && let (Some(provider_id), Some(model_id)) =
+                (selection.provider.as_deref(), selection.model.as_deref())
+        {
+            return match selection.adapter.as_deref() {
+                Some(adapter_id) => {
+                    agena_domain::ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
+                }
+                None => agena_domain::ModelRef::try_new(provider_id, model_id),
+            }
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "server default model reference is invalid: {error}"
+                ))
+            });
+        }
+        if let Some(sources) = self.config_sources()
+            && let Some(selection) = sources
+                .effective
+                .get("providers")
+                .and_then(|providers| providers.get("default_selection"))
+                .and_then(|value| {
+                    serde_json::from_value::<agena_domain::ModelSelectionConfig>(value.clone()).ok()
+                })
+            && let (Some(provider_id), Some(model_id)) =
+                (selection.provider.as_deref(), selection.model.as_deref())
+        {
+            return match selection.adapter.as_deref() {
+                Some(adapter_id) => {
+                    agena_domain::ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
+                }
+                None => agena_domain::ModelRef::try_new(provider_id, model_id),
+            }
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "configured default model reference is invalid: {error}"
+                ))
+            });
+        }
+
+        let providers = self.provider_summaries();
+        let configured_default = self.config_sources().and_then(|sources| {
+            sources
+                .effective
+                .get("providers")?
+                .get("default")?
+                .as_str()
+                .map(str::to_owned)
+        });
+        let provider = configured_default
+            .as_deref()
+            .and_then(|provider_id| {
+                providers
+                    .iter()
+                    .find(|provider| provider.provider_id == provider_id)
             })
-            .map(agena_domain::Model::reference)
+            .or_else(|| providers.first())
             .ok_or_else(|| {
                 agena_application::ApplicationError::internal(
-                    "server exposes no configured model",
+                    "server exposes no configured provider",
                 )
+            })?;
+        let models = self
+            .list_local_provider_models(provider.provider_id.as_str())
+            .map_err(|error| {
+                agena_application::ApplicationError::internal(format!(
+                    "failed to read the cached provider models: {error}"
+                ))
+            })?;
+        models
+            .iter()
+            .find(|model| model.id.as_ref() == provider.defaults.model)
+            .or_else(|| models.first())
+            .map(agena_domain::Model::reference)
+            .ok_or_else(|| {
+                agena_application::ApplicationError::internal("server exposes no configured model")
             })
     }
 
@@ -976,18 +2046,34 @@ impl TuiBackend {
         let Some(model) = self.configured_model(&model_ref) else {
             return (None, None);
         };
-        let thinking = model
-            .thinking_modes
-            .iter()
-            .find(|mode| mode.is_default)
-            .or_else(|| model.thinking_modes.first())
-            .and_then(|mode| mode.selector().map(|selector| selector.into_owned()));
-        let speed = model
-            .speed_modes
-            .iter()
-            .find(|(_, mode)| mode.is_default)
-            .or_else(|| model.speed_modes.iter().next())
-            .map(|(name, _)| name.clone());
+        let configured_modes = if request.model.is_none() {
+            self.runtime_status()
+                .and_then(|status| status.default_selection)
+        } else {
+            None
+        };
+        let thinking = configured_modes
+            .as_ref()
+            .and_then(|selection| selection.thinking_mode.clone())
+            .or_else(|| {
+                model
+                    .thinking_modes
+                    .iter()
+                    .find(|mode| mode.is_default)
+                    .or_else(|| model.thinking_modes.first())
+                    .and_then(|mode| mode.selector().map(|selector| selector.into_owned()))
+            });
+        let speed = configured_modes
+            .as_ref()
+            .and_then(|selection| selection.speed_mode.clone())
+            .or_else(|| {
+                model
+                    .speed_modes
+                    .iter()
+                    .find(|(_, mode)| mode.is_default)
+                    .or_else(|| model.speed_modes.iter().next())
+                    .map(|(name, _)| name.clone())
+            });
         (thinking, speed)
     }
 
@@ -996,13 +2082,39 @@ impl TuiBackend {
     /// handler never blocks. Any event causes snapshot convergence; lag and
     /// transport closure are also surfaced as forced refreshes.
     pub fn subscribe_session_events(&self, session_id: i64) -> mpsc::Receiver<LiveEvent> {
+        let backend = self.clone();
         let client = self.client().clone();
         let (tx, rx) = mpsc::channel(256);
         tokio::spawn(async move {
             loop {
-                let connection = match client.connect_session(session_id).await {
-                    Ok(connection) => connection,
+                // Subscribe before reading the snapshot. Global scope is
+                // required for session-less runtime signals such as dynamic
+                // tool-registry changes; session mutations are filtered below.
+                let mut subscription = match client.stream_changes(agena_api::Scope::Global).await {
+                    Ok(subscription) => subscription,
                     Err(_) => {
+                        if tx
+                            .send(LiveEvent {
+                                snapshot: None,
+                                event: None,
+                                force_refresh: true,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                        tokio::select! {
+                            _ = tx.closed() => return,
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                        }
+                        continue;
+                    }
+                };
+                let snapshot = match backend.get_session_state(session_id).await {
+                    Ok(snapshot) => snapshot,
+                    Err(_) => {
+                        drop(subscription);
                         if tx
                             .send(LiveEvent {
                                 snapshot: None,
@@ -1023,7 +2135,7 @@ impl TuiBackend {
                 };
                 if tx
                     .send(LiveEvent {
-                        snapshot: Some(connection.snapshot),
+                        snapshot: Some(snapshot),
                         event: None,
                         force_refresh: false,
                     })
@@ -1032,23 +2144,26 @@ impl TuiBackend {
                 {
                     return;
                 }
-                let mut subscription = connection.subscription;
                 while let Some(item) = subscription.recv().await {
-                    let force_refresh = match item {
-                        Ok(SubscriptionEvent::SessionChanged(change)) => {
-                            if change.session_id() != session_id {
+                    let (force_refresh, refresh_plugin_presentation) = match item.as_ref() {
+                        Err(_) => (true, true),
+                        Ok(event) => match classify_session_subscription_event(event, session_id) {
+                            SessionSubscriptionDispatch::Ignore => continue,
+                            SessionSubscriptionDispatch::RefreshPluginRuntime => {
+                                let _ = backend.refresh_plugin_runtime_snapshot().await;
                                 continue;
                             }
-                            false
-                        }
-                        Ok(SubscriptionEvent::RuntimeSignal(signal)) => {
-                            if signal.session_id != Some(session_id) {
-                                continue;
-                            }
-                            false
-                        }
-                        Ok(SubscriptionEvent::Lagged(_)) | Err(_) => true,
+                            SessionSubscriptionDispatch::Emit {
+                                refresh_plugin_presentation,
+                            } => (
+                                matches!(event, SubscriptionEvent::Lagged(_)),
+                                refresh_plugin_presentation,
+                            ),
+                        },
                     };
+                    if refresh_plugin_presentation {
+                        let _ = backend.refresh_plugin_presentation_snapshot().await;
+                    }
                     if tx
                         .send(LiveEvent {
                             snapshot: None,
@@ -1117,14 +2232,28 @@ impl TuiBackend {
             inner: Arc::new(RemoteBackend {
                 client: AgenaClient::new("http://127.0.0.1:9").expect("mock client"),
                 workspace_id: 1,
-                providers: Vec::new(),
-                models: HashMap::new(),
+                providers: Default::default(),
+                models: Default::default(),
+                configured_provider_adapter_models: Default::default(),
+                provider_drafts: Default::default(),
                 config_sources: Default::default(),
+                runtime_status: Default::default(),
                 plugin_catalog: Default::default(),
                 plugin_statuses: Default::default(),
+                plugin_inspects: Default::default(),
+                plugin_logs: Default::default(),
+                permission_tools: Default::default(),
+                plugin_notifications: Default::default(),
+                activity_kinds: Default::default(),
+                workspace_files: Default::default(),
+                workspace_file_index: Default::default(),
+                workspace_directory_cache: Default::default(),
+                workspace_image_data_urls: Default::default(),
+                aws_profiles: Default::default(),
                 model_catalog: Default::default(),
             }),
             workspace_root: Arc::new(PathBuf::from(std::env::temp_dir())),
+            media_workspace: Arc::new(tempfile::tempdir().expect("mock media workspace")),
         }
     }
 }
@@ -1180,17 +2309,57 @@ fn provider_model_from_resource(
     serde_json::from_value(value).map_err(anyhow::Error::from)
 }
 
-fn remote_provider_studio_error() -> agena_application::provider_studio::ProviderStudioSaveError {
+fn plugin_statuses_from_response(
+    value: serde_json::Value,
+) -> Result<Vec<agena_plugin_host::status::PluginStatus>> {
+    serde_json::from_value(
+        value
+            .get("items")
+            .cloned()
+            .context("the plugin-status response has no `items` field")?,
+    )
+    .context("the server returned undecodable plugin statuses")
+}
+
+fn config_and_layers_from_resolved_response(
+    value: serde_json::Value,
+) -> Result<(serde_json::Value, Vec<String>)> {
+    let effective = value
+        .get("config")
+        .cloned()
+        .context("the resolved-config response has no `config` field")?;
+    if !effective.is_object() {
+        bail!("the resolved-config response contains a non-object `config` field");
+    }
+    let applied_layers = value
+        .pointer("/meta/applied_layers")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|layer| {
+            layer
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+    Ok((effective, applied_layers))
+}
+
+fn provider_studio_transport_error(
+    error: impl std::fmt::Display,
+) -> agena_application::provider_studio::ProviderStudioSaveError {
+    tracing::error!(diagnostic = %error, "Provider Studio transport failed");
     let failure = agena_failure::Failure::new(
-        agena_failure::FailureCode::new("tui.remote_feature_unavailable"),
+        agena_failure::FailureCode::new("tui.provider_studio_transport_failed"),
         agena_failure::FailureCategory::DependencyUnavailable,
         agena_failure::FailureResponsibility::System,
         agena_failure::RetryDirective::AfterRefresh,
         agena_failure::RecoveryDirective::OpenSettings,
         agena_failure::FailureImpact::RequestRejected,
         agena_failure::UserPresentation::new(
-            "tui.remote_feature_unavailable",
-            "Provider Studio is unavailable in remote TUI mode until it has a public server API.",
+            "tui.provider_studio_transport_failed",
+            "Provider Studio could not synchronize with the server.",
         ),
     );
     agena_application::provider_studio::ProviderStudioSaveError::Other(failure.into())
@@ -1235,34 +2404,386 @@ mod tests {
     }
 
     #[test]
+    fn global_tool_registry_signal_bypasses_session_filter_for_plugin_refresh() {
+        let event = SubscriptionEvent::RuntimeSignal(agena_api::live::RuntimeSignalResource {
+            kind: "tool_registry_changed".to_owned(),
+            session_id: None,
+            payload: serde_json::json!({ "generation": 4 }),
+        });
+        assert_eq!(
+            classify_session_subscription_event(&event, 99),
+            SessionSubscriptionDispatch::RefreshPluginRuntime
+        );
+    }
+
+    #[test]
     fn remote_backend_has_no_embedded_application_fallback() {
-        let model = agena_domain::Model::new("example", "model-1");
+        let first_model = agena_domain::Model::new("first", "model-1");
+        let selected_model = agena_domain::Model::new("selected", "model-2");
         let backend = TuiBackend {
             inner: Arc::new(RemoteBackend {
                 client: AgenaClient::new("http://127.0.0.1:9").expect("client"),
                 workspace_id: 7,
-                providers: vec![ProviderSummaryResource {
-                    provider_id: "example".to_owned(),
-                    defaults: agena_api::resource::ProviderDefaultsResource {
-                        adapter: None,
-                        model: "model-1".to_owned(),
+                providers: tokio::sync::RwLock::new(vec![
+                    ProviderSummaryResource {
+                        provider_id: "first".to_owned(),
+                        defaults: agena_api::resource::ProviderDefaultsResource {
+                            adapter: None,
+                            model: "model-1".to_owned(),
+                        },
+                        adapters: Vec::new(),
                     },
-                    adapters: Vec::new(),
-                }],
-                models: HashMap::from([("example".to_owned(), vec![model])]),
+                    ProviderSummaryResource {
+                        provider_id: "selected".to_owned(),
+                        defaults: agena_api::resource::ProviderDefaultsResource {
+                            adapter: Some("responses".to_owned()),
+                            model: "model-2".to_owned(),
+                        },
+                        adapters: Vec::new(),
+                    },
+                ]),
+                models: tokio::sync::RwLock::new(HashMap::from([
+                    ("first".to_owned(), vec![first_model]),
+                    ("selected".to_owned(), vec![selected_model]),
+                ])),
+                configured_provider_adapter_models: Default::default(),
+                provider_drafts: Default::default(),
                 config_sources: Default::default(),
+                runtime_status: Default::default(),
                 plugin_catalog: Default::default(),
                 plugin_statuses: Default::default(),
+                plugin_inspects: Default::default(),
+                plugin_logs: Default::default(),
+                permission_tools: Default::default(),
+                plugin_notifications: Default::default(),
+                activity_kinds: Default::default(),
+                workspace_files: Default::default(),
+                workspace_file_index: Default::default(),
+                workspace_directory_cache: Default::default(),
+                workspace_image_data_urls: Default::default(),
+                aws_profiles: Default::default(),
                 model_catalog: Default::default(),
             }),
             workspace_root: Arc::new(PathBuf::from("/workspace")),
+            media_workspace: Arc::new(tempfile::tempdir().expect("test media workspace")),
         };
+        *backend
+            .inner
+            .config_sources
+            .try_write()
+            .expect("config cache lock") = Some(agena_application::dto::ConfigJsonSources {
+            config_path: PathBuf::from("/config/agena.json"),
+            config_found: true,
+            project_config_path: PathBuf::from("/workspace/.agena/agena.json"),
+            project_config_found: false,
+            applied_layers: Vec::new(),
+            file: serde_json::Value::Null,
+            project_file: serde_json::Value::Null,
+            effective: serde_json::json!({
+                "providers": {
+                    "default": "selected",
+                    "default_selection": {
+                        "provider": "selected",
+                        "adapter": "responses",
+                        "model": "model-2"
+                    }
+                }
+            }),
+        });
 
         assert_eq!(backend.mode(), BackendMode::Remote);
         let resolved = backend
             .resolved_model_for_run_options(&RunOptions::default())
             .expect("resolve cached remote default");
-        assert_eq!(resolved.provider_id.as_ref(), "example");
-        assert_eq!(resolved.model_id.as_ref(), "model-1");
+        assert_eq!(resolved.provider_id.as_ref(), "selected");
+        assert_eq!(
+            resolved.adapter_id.as_ref().map(AsRef::as_ref),
+            Some("responses")
+        );
+        assert_eq!(resolved.model_id.as_ref(), "model-2");
+    }
+
+    #[test]
+    fn provider_studio_uses_saved_routes_not_discovered_model_listing() {
+        let backend = TuiBackend::remote_mock();
+        backend
+            .inner
+            .models
+            .try_write()
+            .expect("model cache lock")
+            .insert(
+                "example".to_owned(),
+                vec![
+                    agena_domain::Model::new("example", "configured"),
+                    agena_domain::Model::new("example", "discovered-only"),
+                ],
+            );
+        backend
+            .inner
+            .configured_provider_adapter_models
+            .try_write()
+            .expect("configured route cache lock")
+            .insert(
+                "example".to_owned(),
+                vec![agena_api::resource::ProviderAdapterModelsResource {
+                    adapter_id: "responses".to_owned(),
+                    enabled: false,
+                    resolved_base_url: None,
+                    models: vec![agena_api::resource::ProviderModelResource::configured(
+                        "responses",
+                        "configured",
+                    )],
+                    failure: None,
+                }],
+            );
+
+        let routes = crate::app_backend::provider_mappings::configured_provider_model_routes(
+            &backend,
+            Some("example"),
+        );
+        assert!(
+            routes.is_empty(),
+            "disabled adapter routes are not selected"
+        );
+        let adapters = crate::app_backend::provider_mappings::configured_provider_adapter_models(
+            &backend,
+            Some("example"),
+        );
+        assert_eq!(adapters.len(), 1);
+        assert!(!adapters[0].enabled);
+        assert_eq!(adapters[0].models.len(), 1);
+        assert_eq!(adapters[0].models[0].id, "configured");
+    }
+
+    #[test]
+    fn plugin_status_cache_decodes_the_server_items_envelope() {
+        let plugin_id =
+            agena_plugin_host::PluginKey::new("agena", "settings").expect("valid plugin id");
+        let status = agena_plugin_host::status::PluginStatus::initial(&plugin_id, "static");
+        let decoded = plugin_statuses_from_response(serde_json::json!({
+            "items": [status]
+        }))
+        .expect("decode plugin status response");
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].plugin_id.to_string(), "agena.settings");
+    }
+
+    #[test]
+    fn config_cache_decodes_the_resolved_config_envelope() {
+        let (config, layers) = config_and_layers_from_resolved_response(serde_json::json!({
+            "config": {
+                "providers": {
+                    "default": "selected",
+                    "default_selection": {
+                        "provider": "selected",
+                        "adapter": "responses",
+                        "model": "model-2"
+                    }
+                }
+            },
+            "meta": {
+                "applied_layers": [
+                    {"source": "default", "description": "built-in defaults"},
+                    {"source": "file", "description": "file:/config/agena.json"}
+                ]
+            }
+        }))
+        .expect("decode resolved config response");
+
+        assert_eq!(
+            config.pointer("/providers/default_selection/model"),
+            Some(&serde_json::json!("model-2"))
+        );
+        assert_eq!(layers, vec!["built-in defaults", "file:/config/agena.json"]);
+    }
+
+    #[test]
+    fn provider_studio_can_create_a_fresh_draft_in_remote_mode() {
+        let backend = TuiBackend::remote_mock();
+        let draft = backend
+            .provider_config_draft(None)
+            .expect("new provider draft");
+
+        assert!(draft.provider_id.is_empty());
+        assert!(draft.source_provider_id.is_none());
+    }
+
+    #[test]
+    fn server_workspace_tree_drives_file_index_and_metadata() {
+        let backend = TuiBackend::remote_mock();
+        let tree = agena_application::dto::WorkspaceFileTreeResource {
+            workspace_id: 1,
+            root: backend.workspace_root().display().to_string(),
+            path: String::new(),
+            entries: vec![agena_application::dto::WorkspaceFileNode {
+                name: "src".to_owned(),
+                path: "src".to_owned(),
+                kind: agena_application::dto::WorkspaceFileKind::Directory,
+                size: None,
+                children: vec![agena_application::dto::WorkspaceFileNode {
+                    name: "main.rs".to_owned(),
+                    path: "src/main.rs".to_owned(),
+                    kind: agena_application::dto::WorkspaceFileKind::File,
+                    size: Some(42),
+                    children: Vec::new(),
+                }],
+            }],
+        };
+        let mut index = Vec::new();
+        collect_workspace_file_paths(&tree.entries, &mut index);
+        *backend
+            .inner
+            .workspace_files
+            .try_write()
+            .expect("workspace tree lock") = Some(tree);
+        *backend
+            .inner
+            .workspace_file_index
+            .try_write()
+            .expect("workspace index lock") = index;
+
+        assert_eq!(
+            backend.workspace_file_index(),
+            [PathBuf::from("src/main.rs")]
+        );
+        assert!(
+            backend
+                .workspace_path_metadata(Path::new("src"))
+                .is_some_and(|metadata| metadata.is_directory)
+        );
+        assert_eq!(
+            backend
+                .workspace_path_metadata(Path::new("src/main.rs"))
+                .and_then(|metadata| metadata.size),
+            Some(42)
+        );
+        assert_eq!(
+            backend.workspace_directory_entries(Path::new("src")).len(),
+            1
+        );
+
+        backend
+            .inner
+            .workspace_directory_cache
+            .write()
+            .expect("workspace directory cache lock")
+            .insert(
+                String::new(),
+                vec![agena_application::dto::WorkspaceFileNode {
+                    name: "target".to_owned(),
+                    path: "target".to_owned(),
+                    kind: agena_application::dto::WorkspaceFileKind::Directory,
+                    size: None,
+                    children: Vec::new(),
+                }],
+            );
+        assert_eq!(
+            backend.workspace_directory_entries(backend.workspace_root())[0].name,
+            "target",
+            "path browsing uses the non-ignore-aware shallow cache"
+        );
+        assert!(
+            backend
+                .workspace_path_metadata(Path::new("target"))
+                .is_some_and(|metadata| metadata.is_directory)
+        );
+        backend
+            .inner
+            .workspace_directory_cache
+            .write()
+            .expect("workspace directory cache lock")
+            .insert(
+                "target".to_owned(),
+                vec![agena_application::dto::WorkspaceFileNode {
+                    name: "debug".to_owned(),
+                    path: "target/debug".to_owned(),
+                    kind: agena_application::dto::WorkspaceFileKind::Directory,
+                    size: None,
+                    children: Vec::new(),
+                }],
+            );
+        assert_eq!(
+            backend.workspace_directory_entries(Path::new("target/"))[0].name,
+            "debug",
+            "equivalent trailing-separator paths share a directory cache key"
+        );
+        assert_eq!(
+            backend.workspace_file_index(),
+            [PathBuf::from("src/main.rs")],
+            "ignored paths do not enter the mention-search index"
+        );
+    }
+
+    #[test]
+    fn workspace_image_references_are_localized_only_in_the_client_projection() {
+        let mut content = serde_json::json!({
+            "attachments": [{
+                "kind": "image",
+                "mime": "image/png",
+                "source": { "source": "local_path", "path": "images/result.png" }
+            }]
+        });
+        let original = content.clone();
+        let mut references = Vec::new();
+        workspace_image_references(&content, &mut references);
+        assert_eq!(
+            references,
+            [("images/result.png".to_owned(), "image/png".to_owned())]
+        );
+
+        replace_workspace_image_references(
+            &mut content,
+            &HashMap::from([(
+                "images/result.png".to_owned(),
+                "data:image/png;base64,iVBORw0KGgo=".to_owned(),
+            )]),
+        );
+        assert_eq!(
+            content.pointer("/attachments/0/source/source"),
+            Some(&serde_json::json!("data_url"))
+        );
+        assert_eq!(
+            original.pointer("/attachments/0/source/source"),
+            Some(&serde_json::json!("local_path")),
+            "the authoritative server projection must not be mutated"
+        );
+    }
+
+    #[test]
+    fn plugin_presentation_metadata_is_read_from_remote_caches() {
+        let backend = TuiBackend::remote_mock();
+        *backend
+            .inner
+            .permission_tools
+            .try_write()
+            .expect("permission tool lock") =
+            vec![agena_application::dto::PermissionToolCatalogResource {
+                name: "agena.shell.exec".to_owned(),
+                summary: "Run a command".to_owned(),
+                tags: vec!["shell".to_owned()],
+            }];
+        *backend
+            .inner
+            .activity_kinds
+            .try_write()
+            .expect("activity kind lock") = vec![agena_domain::ActivityKind {
+            id: "example.trace".to_owned(),
+            category: agena_domain::ActivityKindCategory::Plugin,
+            label: "Trace".to_owned(),
+        }];
+        *backend
+            .inner
+            .plugin_notifications
+            .try_write()
+            .expect("notification lock") = vec![agena_plugin_host::HostNotification {
+            plugin_id: "agena.terminal".to_owned(),
+            body: "done".to_owned(),
+            ..Default::default()
+        }];
+
+        assert_eq!(backend.permission_tools()[0].name, "agena.shell.exec");
+        assert_eq!(backend.activity_kinds()[0].id, "example.trace");
+        assert_eq!(backend.plugin_notifications()[0].body, "done");
     }
 }

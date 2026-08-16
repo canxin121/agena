@@ -27,6 +27,85 @@ use crate::provider_studio::catalog::{
 };
 use crate::{Application, ApplicationError};
 
+/// Discover AWS profile names in the server process environment. Provider
+/// adapters consume credentials on the server, so clients must never inspect
+/// their own HOME for this catalog.
+pub fn list_aws_profile_names() -> Vec<String> {
+    let credentials_path = std::env::var("AWS_SHARED_CREDENTIALS_FILE")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|home| std::path::PathBuf::from(home).join(".aws/credentials"))
+        });
+    let config_path = std::env::var("AWS_CONFIG_FILE")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|home| std::path::PathBuf::from(home).join(".aws/config"))
+        });
+    let mut profiles = std::collections::BTreeSet::new();
+    if let Some(path) = credentials_path
+        && let Ok(text) = std::fs::read_to_string(path)
+    {
+        profiles.extend(parse_aws_profile_names(
+            text.as_str(),
+            AwsProfileFileKind::Credentials,
+        ));
+    }
+    if let Some(path) = config_path
+        && let Ok(text) = std::fs::read_to_string(path)
+    {
+        profiles.extend(parse_aws_profile_names(
+            text.as_str(),
+            AwsProfileFileKind::Config,
+        ));
+    }
+    profiles.into_iter().collect()
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AwsProfileFileKind {
+    Credentials,
+    Config,
+}
+
+fn parse_aws_profile_names(text: &str, kind: AwsProfileFileKind) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if !line.starts_with('[') || !line.ends_with(']') {
+            continue;
+        }
+        let section = line.trim_start_matches('[').trim_end_matches(']').trim();
+        match kind {
+            AwsProfileFileKind::Credentials => {
+                if !section.is_empty() {
+                    names.insert(section.to_owned());
+                }
+            }
+            AwsProfileFileKind::Config => {
+                if section.eq_ignore_ascii_case("default") {
+                    names.insert("default".to_owned());
+                } else if section.len() > "profile ".len()
+                    && section
+                        .get(.."profile ".len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("profile "))
+                {
+                    let profile = section["profile ".len()..].trim();
+                    if !profile.is_empty() {
+                        names.insert(profile.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    names.into_iter().collect()
+}
+
 pub fn list_providers_response(state: &Application) -> Vec<ProviderSummaryResource> {
     state
         .provider_catalog()
@@ -82,6 +161,36 @@ pub async fn list_provider_models_response(
             fallback
         }
     };
+    Ok(ProviderModelsResponse {
+        provider_id,
+        models: models
+            .into_iter()
+            .map(provider_model_resource_from_domain)
+            .collect(),
+    })
+}
+
+/// Return only models implied by saved server configuration. Thin clients use
+/// this for session/default-model choices so opening the TUI never performs
+/// provider network discovery and never offers an unconfigured model.
+pub fn list_configured_provider_models_response(
+    state: &Application,
+    provider_id: String,
+) -> Result<ProviderModelsResponse, ApplicationError> {
+    let provider_id_value = ProviderId::new(provider_id.clone());
+    if !state
+        .provider_catalog()
+        .contains_provider(&provider_id_value)
+    {
+        return Err(ApplicationError::not_found_with_diagnostic(
+            "The provider was not found.",
+            format!("provider {provider_id} not found"),
+        ));
+    }
+    let models = state
+        .provider_catalog()
+        .configured_local_models(&provider_id_value)
+        .map_err(|error| ApplicationError::internal(error.to_string()))?;
     Ok(ProviderModelsResponse {
         provider_id,
         models: models
@@ -473,7 +582,7 @@ fn provider_adapter_models_resource(
 /// `list_models` responses are in arbitrary order, and the Provider Studio
 /// shows the live list directly, so the rows are ordered here for display.
 fn sort_models_alphabetically(models: &mut [ProviderModelResource]) {
-    models.sort_by(|left, right| left.id.to_lowercase().cmp(&right.id.to_lowercase()));
+    models.sort_by_key(|model| model.id.to_lowercase());
 }
 
 fn map_provider_catalog_error(error: ProviderCatalogError) -> ApplicationError {
@@ -493,7 +602,10 @@ fn map_provider_catalog_error(error: ProviderCatalogError) -> ApplicationError {
 
 #[cfg(test)]
 mod tests {
-    use super::{enrich_listing_model_from_catalog, sort_models_alphabetically};
+    use super::{
+        AwsProfileFileKind, enrich_listing_model_from_catalog, parse_aws_profile_names,
+        sort_models_alphabetically,
+    };
     use agena_domain::{Model, ReasoningEffort, ThinkingRequest};
     use agena_provider::{CatalogModelRecord, ConfiguredModelThinkingMode};
 
@@ -575,5 +687,21 @@ mod tests {
         sort_models_alphabetically(&mut models);
         let ids = models.into_iter().map(|model| model.id).collect::<Vec<_>>();
         assert_eq!(ids, ["gpt-4o-mini", "gpt-5", "GPT-5.1", "O1", "o3-mini",]);
+    }
+
+    #[test]
+    fn aws_profile_sections_follow_credentials_and_config_file_rules() {
+        let credentials = parse_aws_profile_names(
+            "[default]\n[team.prod]\n[developer profile]\n",
+            AwsProfileFileKind::Credentials,
+        );
+        assert_eq!(credentials, ["default", "developer profile", "team.prod"]);
+
+        let config = parse_aws_profile_names(
+            "[default]\n[profile team.prod]\n[PROFILE Developer Profile]\n\
+             [sso-session company]\n[services local]\n",
+            AwsProfileFileKind::Config,
+        );
+        assert_eq!(config, ["Developer Profile", "default", "team.prod"]);
     }
 }

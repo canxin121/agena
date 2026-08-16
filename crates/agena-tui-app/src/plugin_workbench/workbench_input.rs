@@ -128,6 +128,26 @@ impl App {
         }
     }
 
+    pub(crate) fn request_plugin_workbench_refresh(&mut self) {
+        self.dispatch_backend_operation(
+            |application| async move { application.refresh_plugin_runtime_snapshot().await },
+            |app, result| match result {
+                Ok(()) => {
+                    let route = std::mem::replace(&mut app.current_route, Route::Main);
+                    app.current_route = match route {
+                        Route::PluginWorkbench(mut dialog) => {
+                            app.refresh_plugin_workbench(&mut dialog);
+                            Route::PluginWorkbench(dialog)
+                        }
+                        route => route,
+                    };
+                    app.flash_success("refreshed plugin workbench".to_owned());
+                }
+                Err(error) => app.flash_error(error),
+            },
+        );
+    }
+
     pub(crate) fn refresh_restored_plugin_workbench(
         &self,
         dialog: PluginWorkbenchOverlay,
@@ -261,7 +281,7 @@ impl App {
             PluginWorkbenchNavigationEffect::KeepOpen => {
                 match handle_plugin_workbench_list_key(&mut dialog.list, key) {
                     PluginWorkbenchListEffect::Refresh => {
-                        self.refresh_plugin_workbench(dialog);
+                        self.request_plugin_workbench_refresh();
                         false
                     }
                     PluginWorkbenchListEffect::KeepOpen => false,

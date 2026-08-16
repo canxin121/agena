@@ -24,7 +24,7 @@ impl App {
         apply_math_graphics_appearance(&mut launch);
         let math_render_context = agena_tui_media::MathRenderContext::new(
             launch.math_graphics.as_ref(),
-            application.workspace_root(),
+            application.media_workspace_root(),
         );
         let (tx, rx) = tokio::sync::mpsc::channel(APP_MESSAGE_QUEUE_CAPACITY);
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(UI_COMMAND_QUEUE_CAPACITY);
@@ -60,7 +60,6 @@ impl App {
         transcript.set_math_render_context(math_render_context.clone());
         let mut app = Self {
             application,
-            file_index: Arc::new(OnceLock::new()),
             i18n: i18n.clone(),
             tx,
             rx,
@@ -214,7 +213,7 @@ impl App {
         apply_math_graphics_appearance(&mut self.launch);
         self.math_render_context = agena_tui_media::MathRenderContext::new(
             self.launch.math_graphics.as_ref(),
-            self.application.workspace_root(),
+            self.application.media_workspace_root(),
         );
         self.transcript
             .set_math_render_context(self.math_render_context.clone());
@@ -549,8 +548,6 @@ use agena_tui::main_focus::Focus;
 use agena_tui::status_line::StatusLinePresentation;
 use agena_tui_media::MathGraphicsRenderer;
 use agena_tui_session::session_list::SessionListPresentation;
-use std::sync::{Arc, OnceLock};
-
 #[cfg(test)]
 mod tests {
     use agena_tui::presentation_config::ColorSchemePreference;

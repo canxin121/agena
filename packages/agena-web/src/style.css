@@ -764,12 +764,15 @@ mark[data-agena-search-match] {
   margin: 0 -1px;
   padding: 0 1px;
   border-radius: 2px;
-  background: oklch(var(--ring) / 0.24);
+  background: oklch(var(--ring) / 0.34);
   color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
   box-decoration-break: clone;
 }
 
 mark[data-agena-search-active='true'] {
-  background: oklch(var(--ring) / 0.44);
-  outline: 1px solid oklch(var(--ring) / 0.72);
+  background: oklch(var(--ring) / 0.52);
+  outline: 1px solid oklch(var(--ring) / 0.78);
 }

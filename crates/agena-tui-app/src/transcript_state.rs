@@ -3194,7 +3194,7 @@ fn transcript_word_class(grapheme: &str, big_word: bool) -> TranscriptWordClass 
     } else if big_word
         || grapheme
             .chars()
-            .all(|character| character == '_' || character.is_alphanumeric())
+            .any(|character| character == '_' || character.is_alphanumeric())
     {
         TranscriptWordClass::Keyword
     } else {
@@ -3215,66 +3215,94 @@ fn transcript_word_motion_target(
     (current < len).then_some(())?;
 
     if forward && !to_end {
+        // Vim fwd_word(): always move at least one grapheme, leave the current
+        // word run, cross whitespace, and land on the next word start.
         let current_class = class_at(current);
         let mut index = current.saturating_add(1);
+        if index >= len {
+            return Some(len.saturating_sub(1));
+        }
         if current_class != TranscriptWordClass::Whitespace {
             while index < len && class_at(index) == current_class {
                 index = index.saturating_add(1);
+            }
+            if index >= len {
+                return Some(len.saturating_sub(1));
             }
         }
         while index < len && class_at(index) == TranscriptWordClass::Whitespace {
             index = index.saturating_add(1);
         }
-        return (index < len).then_some(index);
+        return Some(index.min(len.saturating_sub(1)));
     }
 
     if forward {
-        let mut index = current;
-        if class_at(index) == TranscriptWordClass::Whitespace {
-            while index < len && class_at(index) == TranscriptWordClass::Whitespace {
+        // Vim end_word(): move one grapheme first. Inside the current word, go
+        // to its end; otherwise cross whitespace and go to the next word end.
+        let current_class = class_at(current);
+        let mut index = current.saturating_add(1);
+        if index >= len {
+            return Some(len.saturating_sub(1));
+        }
+        if current_class != TranscriptWordClass::Whitespace && class_at(index) == current_class {
+            while index < len && class_at(index) == current_class {
                 index = index.saturating_add(1);
             }
-            if index == len {
-                return None;
-            }
+            return Some(index.saturating_sub(1).max(current));
         }
-        let class = class_at(index);
-        while index.saturating_add(1) < len && class_at(index.saturating_add(1)) == class {
+        while index < len && class_at(index) == TranscriptWordClass::Whitespace {
+            index = index.saturating_add(1);
+        }
+        if index >= len {
+            return Some(len.saturating_sub(1));
+        }
+        let target_class = class_at(index);
+        while index.saturating_add(1) < len && class_at(index.saturating_add(1)) == target_class {
             index = index.saturating_add(1);
         }
         return Some(index);
     }
 
     if !to_end {
-        let current_class = class_at(current);
-        if current_class != TranscriptWordClass::Whitespace
-            && current > 0
-            && class_at(current.saturating_sub(1)) == current_class
-        {
-            let mut index = current;
-            while index > 0 && class_at(index.saturating_sub(1)) == current_class {
-                index = index.saturating_sub(1);
-            }
-            return Some(index);
+        // Vim bck_word(): step one grapheme backward, skip whitespace, then
+        // move to the start of the preceding word run.
+        if current == 0 {
+            return None;
         }
-        let mut index = current.checked_sub(1)?;
+        let mut index = current.saturating_sub(1);
         while class_at(index) == TranscriptWordClass::Whitespace {
-            index = index.checked_sub(1)?;
+            if index == 0 {
+                return Some(0);
+            }
+            index = index.saturating_sub(1);
         }
-        let class = class_at(index);
-        while index > 0 && class_at(index.saturating_sub(1)) == class {
+        let target_class = class_at(index);
+        while index > 0 && class_at(index.saturating_sub(1)) == target_class {
             index = index.saturating_sub(1);
         }
         return Some(index);
     }
 
-    let mut index = current.checked_sub(1)?;
-    while class_at(index) == TranscriptWordClass::Whitespace {
-        index = index.checked_sub(1)?;
+    // Vim bckend_word(): step one grapheme backward, leave the current word
+    // run, cross whitespace, and stop on the previous word end.
+    if current == 0 {
+        return None;
     }
-    let class = class_at(index);
-    while index.saturating_add(1) < len && class_at(index.saturating_add(1)) == class {
-        index = index.saturating_add(1);
+    let current_class = class_at(current);
+    let mut index = current.saturating_sub(1);
+    if current_class != TranscriptWordClass::Whitespace {
+        while index > 0 && class_at(index) == current_class {
+            index = index.saturating_sub(1);
+        }
+        if index == 0 && class_at(0) == current_class {
+            index = 0;
+        }
+    }
+    while index > 0 && class_at(index) == TranscriptWordClass::Whitespace {
+        index = index.saturating_sub(1);
+    }
+    if index == 0 && class_at(index) == TranscriptWordClass::Whitespace {
+        return Some(0);
     }
     Some(index)
 }
@@ -3732,10 +3760,12 @@ mod word_motion_tests {
         assert_eq!(target(text, 4, false, false, false), Some(0));
 
         assert_eq!(target(text, 0, true, true, false), Some(2));
-        assert_eq!(target(text, 2, true, true, false), Some(2));
+        assert_eq!(target(text, 2, true, true, false), Some(6));
         assert_eq!(target(text, 3, true, true, false), Some(6));
+        assert_eq!(target(text, 6, true, true, false), Some(12));
 
         assert_eq!(target(text, 8, false, true, false), Some(6));
+        assert_eq!(target(text, 5, false, true, false), Some(2));
     }
 
     #[test]
@@ -3747,5 +3777,23 @@ mod word_motion_tests {
         assert_eq!(target(text, 0, true, true, false), Some(2));
         assert_eq!(target(text, 0, true, false, true), Some(9));
         assert_eq!(target(text, 0, true, true, true), Some(6));
+
+        assert_eq!(target(text, 4, false, false, false), Some(3));
+        assert_eq!(target(text, 4, false, true, false), Some(3));
+    }
+
+    #[test]
+    fn unicode_punctuation_uses_the_same_word_class_rules() {
+        let text = "中文，继续";
+
+        assert_eq!(target(text, 0, true, false, false), Some(2));
+        assert_eq!(target(text, 0, true, true, false), Some(1));
+        assert_eq!(target(text, 2, true, true, false), Some(4));
+    }
+
+    #[test]
+    fn motions_reach_final_words_and_leading_whitespace_like_vim() {
+        assert_eq!(target("one foo", 4, true, false, false), Some(6));
+        assert_eq!(target("   foo", 3, false, true, false), Some(0));
     }
 }

@@ -953,6 +953,7 @@ export function useChatTranscriptVim(opts: {
   }
 
   function handleSearchKeydown(event: KeyboardEvent) {
+    event.stopPropagation()
     if (event.key === 'Escape') {
       event.preventDefault()
       closeSearch(false)

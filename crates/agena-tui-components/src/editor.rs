@@ -15,7 +15,6 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::search_picker::SearchPickerInput;
 
-const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
 #[derive(Debug, Clone, Default)]
 /// A text editor widget.
 pub struct Editor {
@@ -1390,14 +1389,8 @@ fn is_altgr(modifiers: KeyModifiers) -> bool {
         && modifiers.contains(KeyModifiers::ALT)
 }
 
-fn is_word_separator(ch: char) -> bool {
-    WORD_SEPARATORS.contains(ch)
-}
-
 fn is_word_grapheme(grapheme: &str) -> bool {
-    grapheme
-        .chars()
-        .any(|ch| !ch.is_whitespace() && !is_word_separator(ch))
+    grapheme.chars().any(|ch| ch == '_' || ch.is_alphanumeric())
 }
 
 #[cfg(test)]
@@ -1621,6 +1614,22 @@ mod tests {
         assert_eq!(editor.cursor(), 7);
         editor.handle_line_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
         assert_eq!(editor.cursor(), 13);
+    }
+
+    #[test]
+    fn word_motion_uses_unicode_punctuation_and_letters() {
+        let mut editor = Editor::from_text("你好，世界".to_string());
+        editor.set_cursor(editor.text().len());
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), "你好，".len());
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), 0);
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), "你好".len());
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), editor.text().len());
     }
 
     #[test]

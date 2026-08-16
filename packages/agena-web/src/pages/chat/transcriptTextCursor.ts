@@ -97,37 +97,43 @@ function transcriptWordMotionTarget(
   const classify = (candidate: number) => wordClass(graphemes[candidate]?.text || '', options.bigWord)
 
   if (options.forward && !options.toEnd) {
+    // Vim fwd_word(): always move at least one grapheme, then leave the
+    // current word run, cross whitespace, and land on the next word start.
     const currentClass = classify(current)
     let index = current + 1
+    if (index >= len) return len - 1
     if (currentClass !== 'space') {
       while (index < len && classify(index) === currentClass) index += 1
+      if (index >= len) return len - 1
     }
     while (index < len && classify(index) === 'space') index += 1
-    return index < len ? index : -1
+    return index < len ? index : len - 1
   }
 
   if (options.forward) {
-    let index = current
-    if (classify(index) === 'space') {
-      while (index < len && classify(index) === 'space') index += 1
-      if (index === len) return -1
+    // Vim end_word(): move one grapheme first. Inside the current word, go to
+    // its end; otherwise cross whitespace and go to the next word end.
+    const currentClass = classify(current)
+    let index = current + 1
+    if (index >= len) return len - 1
+    if (currentClass !== 'space' && classify(index) === currentClass) {
+      while (index < len && classify(index) === currentClass) index += 1
+      return Math.max(current, index - 1)
     }
-    const target = classify(index)
-    while (index + 1 < len && classify(index + 1) === target) index += 1
+    while (index < len && classify(index) === 'space') index += 1
+    if (index >= len) return len - 1
+    const targetClass = classify(index)
+    while (index + 1 < len && classify(index + 1) === targetClass) index += 1
     return index
   }
 
   if (!options.toEnd) {
-    const currentClass = classify(current)
-    if (currentClass !== 'space' && current > 0 && classify(current - 1) === currentClass) {
-      let index = current
-      while (index > 0 && classify(index - 1) === currentClass) index -= 1
-      return index
-    }
+    // Vim bck_word(): step one grapheme backward, skip whitespace, then move
+    // to the start of the preceding word run.
     if (current === 0) return -1
     let index = current - 1
     while (classify(index) === 'space') {
-      if (index === 0) return -1
+      if (index === 0) return 0
       index -= 1
     }
     const target = classify(index)
@@ -135,15 +141,16 @@ function transcriptWordMotionTarget(
     return index
   }
 
+  // Vim bckend_word(): step one grapheme backward, leave the current word run,
+  // cross whitespace, and stop on the previous word end.
   if (current === 0) return -1
+  const currentClass = classify(current)
   let index = current - 1
-  while (classify(index) === 'space') {
-    if (index === 0) return -1
-    index -= 1
+  if (currentClass !== 'space') {
+    while (index >= 0 && classify(index) === currentClass) index -= 1
   }
-  const target = classify(index)
-  while (index + 1 < len && classify(index + 1) === target) index += 1
-  return index
+  while (index >= 0 && classify(index) === 'space') index -= 1
+  return index >= 0 ? index : 0
 }
 
 export function moveTranscriptWord(

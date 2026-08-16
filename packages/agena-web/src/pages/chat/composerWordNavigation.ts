@@ -2,7 +2,7 @@ import { transcriptGraphemes } from './transcriptTextCursor'
 
 export type ComposerTextRange = { start: number; end: number }
 
-const COMPOSER_WORD_SEPARATOR = /[`~!@#$%^&*()\-=+\[\]{}|;:'",.<>/?\\]/u
+const COMPOSER_WORD_CHARACTER = /[\p{L}\p{N}_]/u
 
 function clampComposerOffset(text: string, offset: number): number {
   const graphemes = transcriptGraphemes(text)
@@ -15,7 +15,7 @@ function clampComposerOffset(text: string, offset: number): number {
 }
 
 function isComposerWordGrapheme(grapheme: string): boolean {
-  return Array.from(grapheme).some((character) => !/\s/u.test(character) && !COMPOSER_WORD_SEPARATOR.test(character))
+  return Array.from(grapheme).some((character) => COMPOSER_WORD_CHARACTER.test(character))
 }
 
 function previousAtomicBoundary(text: string, position: number): number {

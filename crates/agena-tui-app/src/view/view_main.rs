@@ -5,15 +5,7 @@ pub(crate) fn highlight_search_line(
     active_match: bool,
     has_match: bool,
 ) -> Line<'static> {
-    let line_style = if active_match {
-        base_style.patch(agena_tui_components::theme::selection_style())
-    } else if has_match {
-        base_style
-            .fg(agena_tui_components::theme::accent_color())
-            .add_modifier(Modifier::UNDERLINED)
-    } else {
-        base_style
-    };
+    let line_style = base_style;
     if !has_match || query.trim().is_empty() {
         return Line::from(Span::styled(text.to_string(), line_style));
     }
@@ -31,7 +23,7 @@ pub(crate) fn highlight_search_line(
             ));
         }
         let match_style = if active_match {
-            line_style
+            line_style.patch(agena_tui_components::theme::selection_style())
         } else {
             line_style
                 .fg(agena_tui_components::theme::accent_color())
@@ -1134,8 +1126,9 @@ fn background_activity_summary<'a>(kinds: impl IntoIterator<Item = &'a str>) -> 
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        background_activity_summary, highlight_search_line_with_rich, line_plain_text,
-        transcript_line_is_in_block, transcript_surface_top_right_parts, transcript_visible_range,
+        background_activity_summary, highlight_search_line, highlight_search_line_with_rich,
+        line_plain_text, transcript_line_is_in_block, transcript_surface_top_right_parts,
+        transcript_visible_range,
     };
     use ratatui::style::{Color, Style};
     use ratatui::text::{Line, Span};
@@ -1179,6 +1172,21 @@ mod tests {
 
         assert_eq!(unchanged.spans.len(), 2);
         assert_eq!(line_plain_text(&unchanged), "alpha beta");
+    }
+
+    #[test]
+    fn search_highlight_only_colors_the_matching_span() {
+        let base = Style::default().fg(Color::White);
+        let highlighted = highlight_search_line("alpha beta", base, "beta", false, true);
+
+        assert_eq!(line_plain_text(&highlighted), "alpha beta");
+        assert_eq!(highlighted.spans.len(), 2);
+        assert_eq!(highlighted.spans[0].content.as_ref(), "alpha ");
+        assert_eq!(highlighted.spans[0].style.fg, Some(Color::White));
+
+        let active = highlight_search_line("alpha beta", base, "beta", true, true);
+        assert_eq!(active.spans[0].content.as_ref(), "alpha ");
+        assert_eq!(active.spans[0].style.fg, Some(Color::White));
     }
 
     #[test]

@@ -39,10 +39,28 @@ describe('transcript text cursor', () => {
 
   test('e and ge stop at the current and previous word end instead of advancing too far', () => {
     const text = 'one two three'
-    expect(moveTranscriptWord(text, 2, { forward: true, toEnd: true, bigWord: false })).toBe(2)
-    expect(moveTranscriptWord(text, 3, { forward: true, toEnd: true, bigWord: false })).toBe(6)
+    expect(moveTranscriptWord(text, 2, { forward: true, toEnd: true, bigWord: false })).toBe(6)
+    expect(moveTranscriptWord(text, 2, { forward: true, toEnd: true, bigWord: false, count: 2 })).toBe(12)
+    expect(moveTranscriptWord(text, 5, { forward: false, toEnd: true, bigWord: false })).toBe(2)
     expect(moveTranscriptWord(text, text.indexOf('three'), { forward: false, toEnd: true, bigWord: false })).toBe(6)
     expect(moveTranscriptWord(text, 8, { forward: true, toEnd: true, bigWord: false, count: 2 })).toBe(12)
+  })
+
+  test('e from the end of a word moves to the next word end like Vim', () => {
+    const text = 'one two three'
+    expect(moveTranscriptWord(text, 2, { forward: true, toEnd: true, bigWord: false })).toBe(6)
+    expect(moveTranscriptWord(text, 6, { forward: true, toEnd: true, bigWord: false })).toBe(12)
+  })
+
+  test('ge from inside a word moves to the previous word end like Vim', () => {
+    const text = 'one two three'
+    expect(moveTranscriptWord(text, 5, { forward: false, toEnd: true, bigWord: false })).toBe(2)
+    expect(moveTranscriptWord(text, 10, { forward: false, toEnd: true, bigWord: false })).toBe(6)
+  })
+
+  test('w reaches the last character of a final word and ge reaches leading whitespace', () => {
+    expect(moveTranscriptWord('one foo', 4, { forward: true, toEnd: false, bigWord: false })).toBe(6)
+    expect(moveTranscriptWord('   foo', 3, { forward: false, toEnd: true, bigWord: false })).toBe(0)
   })
 
   test('backward word starts skip whitespace and respect repeated motion', () => {
@@ -51,6 +69,15 @@ describe('transcript text cursor', () => {
     expect(
       moveTranscriptWord(text, text.indexOf('two') + 1, { forward: false, toEnd: false, bigWord: false, count: 2 }),
     ).toBe(0)
+  })
+
+  test('word classes use Unicode punctuation and letters instead of ASCII-only rules', () => {
+    const text = '中文，继续'
+    expect(moveTranscriptWord(text, 0, { forward: true, toEnd: false, bigWord: false })).toBe(2)
+    expect(moveTranscriptWord(text, 0, { forward: true, toEnd: true, bigWord: false })).toBe(1)
+    expect(moveTranscriptWord(text, 2, { forward: true, toEnd: true, bigWord: false })).toBe(4)
+    expect(moveTranscriptWord(text, text.indexOf('继续'), { forward: false, toEnd: false, bigWord: false })).toBe(2)
+    expect(moveTranscriptWord(text, text.indexOf('继续'), { forward: false, toEnd: true, bigWord: false })).toBe(2)
   })
 
   test('find respects direction, count, and till offsets on the current line', () => {

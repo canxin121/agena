@@ -29,4 +29,12 @@ describe('composer word navigation', () => {
     expect(composerWordRangeBefore(text, text.length)).toEqual({ start: 8, end: 13 })
     expect(composerWordRangeAfter(text, 0)).toEqual({ start: 0, end: 3 })
   })
+
+  test('non-ASCII punctuation also separates composer words', () => {
+    const text = '你好，世界'
+    expect(previousComposerWordBoundary(text, text.length)).toBe(3)
+    expect(nextComposerWordBoundary(text, 0)).toBe(2)
+    expect(composerWordRangeBefore(text, text.length)).toEqual({ start: 3, end: 5 })
+    expect(composerWordRangeAfter(text, 0)).toEqual({ start: 0, end: 2 })
+  })
 })

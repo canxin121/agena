@@ -595,7 +595,7 @@ void sessionActionsMenuRef
                     />
 
                     <div
-                      class="composer-controls-surface flex w-full flex-row items-center justify-between gap-2 border-t border-border/60 bg-background/60 p-2 sm:px-2.5"
+                      class="composer-controls-surface flex w-full flex-row items-center justify-between gap-2 rounded-b-xl border-t border-border/60 bg-background/60 p-2 sm:px-2.5"
                     >
                       <!-- Region 1: attachments, actions, model, and server-supported run modes. -->
                       <div

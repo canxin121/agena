@@ -96,7 +96,7 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
   <div class="min-w-0">
     <button
       type="button"
-      class="group/headline flex w-full min-w-0 items-baseline gap-2 py-1 text-left outline-none"
+      class="group/headline flex w-full min-w-0 items-baseline gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/35 focus-visible:ring-1 focus-visible:ring-ring/50"
       :aria-expanded="expanded"
       data-transcript-vim-toggle="true"
       @click="toggleOuter"
@@ -128,7 +128,7 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
       </span>
     </button>
 
-    <div v-if="expanded" class="ml-5 border-l border-border/60 pl-4 pb-1">
+    <div v-if="expanded" class="ml-5 rounded-r-md border-l border-border/60 bg-muted/[0.08] pb-1 pl-4 pr-1">
       <div v-if="operation.userInputs.length" class="space-y-4 py-1 text-sm">
         <section v-for="interaction in operation.userInputs" :key="interaction.requestId || interaction.title">
           <AttentionPanel
@@ -191,7 +191,7 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
         <template v-else>
           <button
             type="button"
-            class="flex items-center gap-2 py-1 text-xs font-semibold text-primary outline-none"
+            class="flex items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-primary outline-none hover:bg-muted/40"
             :aria-expanded="permissionsExpanded"
             @click="permissionsExpanded = !permissionsExpanded"
           >
@@ -239,7 +239,7 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
       <section v-if="!operation.userInputs.length && operation.input !== null" class="py-1">
         <button
           type="button"
-          class="flex items-center gap-2 py-1 text-xs font-semibold text-primary outline-none"
+          class="flex items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-primary outline-none hover:bg-muted/40"
           :aria-expanded="inputExpanded"
           @click="inputExpanded = !inputExpanded"
         >
@@ -262,7 +262,7 @@ function interactionAnswers(interaction: InteractionPresentation, questionIndex:
       <section v-if="!operation.userInputs.length && hasOutput" class="py-1">
         <button
           type="button"
-          class="flex items-center gap-2 py-1 text-xs font-semibold text-primary outline-none"
+          class="flex items-center gap-2 rounded-md px-1 py-1 text-xs font-semibold text-primary outline-none hover:bg-muted/40"
           :aria-expanded="outputExpanded"
           @click="outputExpanded = !outputExpanded"
         >

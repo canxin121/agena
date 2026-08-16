@@ -200,7 +200,7 @@ function forwardPartToggle(part: TranscriptDisplayPart, expanded: boolean) {
           @node-select="$emit('nodeSelect', $event)"
         />
 
-        <div v-else class="border-y border-border/60 py-2 text-sm" data-transcript-node="revert">
+        <div v-else class="rounded-md border border-border/60 px-3 py-2 text-sm" data-transcript-node="revert">
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
               <div class="font-medium text-muted-foreground">
@@ -253,14 +253,14 @@ function forwardPartToggle(part: TranscriptDisplayPart, expanded: boolean) {
               v-for="file in optimisticUser.files"
               :key="String(file.url || file.serverPath || file.filename)"
               type="button"
-              class="inline-flex min-w-0 items-center gap-2 border-y border-border/50 px-2 py-1 font-mono text-[11px] hover:text-primary"
+              class="inline-flex min-w-0 items-center gap-2 rounded-md border border-border/50 px-2 py-1 font-mono text-[11px] hover:bg-muted/35 hover:text-primary"
               @click="openOptimisticFile(file)"
             >
               <img
                 v-if="optimisticIsImage(file) && optimisticFileUrl(file)"
                 :src="optimisticFileUrl(file)"
                 alt=""
-                class="h-8 w-8 object-cover"
+                class="h-8 w-8 rounded object-cover"
               />
               <RiFileLine v-else class="h-3.5 w-3.5 shrink-0" />
               <span class="max-w-56 truncate">{{ optimisticFileLabel(file) }}</span>
@@ -286,7 +286,7 @@ function forwardPartToggle(part: TranscriptDisplayPart, expanded: boolean) {
         <span class="font-semibold text-rose-700 dark:text-rose-300">system</span>
         <span v-if="sessionErrorAtLabel()" class="font-mono text-[10px]">{{ sessionErrorAtLabel() }}</span>
       </header>
-      <div class="ml-7 border-l-2 border-rose-500/60 py-1 pl-3 text-sm text-rose-800 dark:text-rose-200">
+      <div class="ml-7 rounded-r-md border-l-2 border-rose-500/60 py-1 pl-3 text-sm text-rose-800 dark:text-rose-200">
         <div class="font-semibold">{{ sessionErrorClassificationLabel() }}</div>
         <div class="mt-1 break-words">{{ sessionErrorBody() }}</div>
         <div class="mt-2 flex items-center gap-2" data-transcript-chrome="true">

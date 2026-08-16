@@ -159,28 +159,15 @@ pub fn render_entry_detailed_with_interactions(
                     first_content_id: activities[0].id,
                 };
                 let expanded = expansions.get(&key).copied().unwrap_or(false);
-                // An Activity the user can currently see as expanded is
-                // pinned within the run. Appending newer Activities may fold
-                // untouched older siblings, but it must never hide that node.
+                // Run folding is purely positional. Individual Activity
+                // expansion controls that Activity's body only and must not
+                // exempt an old Activity from the collapsed prefix.
                 let hidden_when_collapsed = activities
                     .iter()
                     .enumerate()
-                    .map(|(foldable_index, part)| {
-                        let activity_key = TranscriptNodeKey::Activity {
-                            entry_id: message.id,
-                            content_id: part.id,
-                        };
-                        let activity_expanded =
-                            expansions.get(&activity_key).copied().unwrap_or_else(|| {
-                                defaults.default_expanded(activity_kind_id_for_part(part))
-                            });
-                        foldable_index < collapsed_prefix_len && !activity_expanded
-                    })
+                    .map(|(foldable_index, _part)| foldable_index < collapsed_prefix_len)
                     .collect::<Vec<_>>();
-                let hidden_count = hidden_when_collapsed
-                    .iter()
-                    .filter(|hidden| **hidden)
-                    .count();
+                let hidden_count = collapsed_prefix_len;
                 if hidden_count > 0 {
                     // Message headers belong exclusively to the message-level
                     // parent selection. An activity summary must never make
@@ -1635,7 +1622,7 @@ mod tests {
     }
 
     #[test]
-    fn individually_expanded_activity_is_not_hidden_when_new_activities_extend_the_run() {
+    fn individually_expanded_activity_does_not_escape_the_count_based_fold() {
         let now = Utc::now();
         let activity = |part_id: i64| {
             TranscriptFixture::reasoning_part(
@@ -1661,7 +1648,7 @@ mod tests {
             entry_id: TranscriptEntryId::StoredMessage(18),
             content_id: TranscriptContentId::StoredPart(41),
         };
-        let expansions = std::collections::BTreeMap::from([(activity_key.clone(), true)]);
+        let mut expansions = std::collections::BTreeMap::from([(activity_key.clone(), true)]);
         let defaults = TranscriptDetailDefaults {
             activity_default_expanded: false,
             kind_defaults: std::collections::BTreeMap::new(),
@@ -1677,22 +1664,35 @@ mod tests {
         message.parts.extend([activity(46), activity(47)]);
         let after = render_entry_detailed(&message, 80, &I18n::english(), &defaults, &expansions);
         assert!(
-            after
+            after.nodes.iter().all(|node| node.key != activity_key),
+            "an old Activity must stay behind the count-based fold even when its own body was open"
+        );
+        let summary_key = after
+            .nodes
+            .iter()
+            .find(|node| {
+                matches!(
+                    node.key,
+                    TranscriptNodeKey::ActivitySummary {
+                        entry_id: TranscriptEntryId::StoredMessage(18),
+                        ..
+                    }
+                ) && !node.expanded
+            })
+            .map(|node| node.key.clone())
+            .expect("count-based fold summary");
+
+        expansions.insert(summary_key, true);
+        let revealed =
+            render_entry_detailed(&message, 80, &I18n::english(), &defaults, &expansions);
+        assert!(
+            revealed
                 .nodes
                 .iter()
                 .find(|node| node.key == activity_key)
                 .is_some_and(|node| node.expanded),
-            "an explicitly expanded Activity must remain visible when it moves into the old prefix"
+            "opening the run fold reveals the Activity with its own expansion state preserved"
         );
-        assert!(after.nodes.iter().any(|node| {
-            matches!(
-                node.key,
-                TranscriptNodeKey::ActivitySummary {
-                    entry_id: TranscriptEntryId::StoredMessage(18),
-                    ..
-                }
-            ) && !node.expanded
-        }));
     }
 
     #[test]
@@ -2031,6 +2031,62 @@ mod tests {
         assert!(text.contains("• line_count: 5"), "{text}");
         assert!(text.contains("• options:"), "{text}");
         assert!(text.contains("◦ follow_symlinks: true"), "{text}");
+    }
+
+    #[test]
+    fn exact_tool_default_overrides_the_operation_activity_kind() {
+        let now = Utc::now();
+        let operation = OperationPartResource {
+            call_id: 7,
+            invocation: ToolInvocationResource {
+                name: "fs.read".to_owned(),
+                plugin_name: Some("agena.fs".to_owned()),
+                ..Default::default()
+            },
+            title: "fs.read · README.md".to_owned(),
+            summary: "Read README.md".to_owned(),
+            ..Default::default()
+        };
+        let message = entry(
+            3,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
+            now,
+            vec![TranscriptFixture::operation_part(
+                9,
+                3,
+                now,
+                ExecutionStatus::Completed,
+                operation,
+            )],
+        );
+        let key = TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::StoredMessage(3),
+            content_id: TranscriptContentId::StoredPart(9),
+        };
+        let defaults = TranscriptDetailDefaults {
+            activity_default_expanded: true,
+            kind_defaults: std::collections::BTreeMap::from([
+                (agena_domain::ACTIVITY_KIND_OPERATION.to_owned(), true),
+                ("tool:agena.fs.read".to_owned(), false),
+            ]),
+        };
+
+        let rendered = render_entry_detailed(
+            &message,
+            100,
+            &I18n::english(),
+            &defaults,
+            &Default::default(),
+        );
+        assert!(
+            rendered
+                .nodes
+                .iter()
+                .find(|node| node.key == key)
+                .is_some_and(|node| !node.expanded),
+            "the exact tool setting must win over the broad operation default"
+        );
     }
 
     #[test]

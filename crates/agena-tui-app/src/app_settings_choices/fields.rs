@@ -78,6 +78,13 @@ impl App {
                 )
                 .as_str(),
             )),
+            path if path.starts_with("ui.tui.transcript.activity_kinds.")
+                && path.contains("tool:") =>
+            {
+                Some(boolean_choice_items(
+                    ui_text::t(&self.i18n, "settings-field-activity-tool-description").as_str(),
+                ))
+            }
             path if path.starts_with("ui.tui.transcript.activity_kinds.") => {
                 Some(boolean_choice_items(
                     ui_text::t(&self.i18n, "settings-field-activity-kind-description").as_str(),

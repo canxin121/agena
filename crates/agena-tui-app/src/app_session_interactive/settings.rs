@@ -1,8 +1,9 @@
 use super::super::{
     permission_config_from_json_value, permission_override_summary,
-    settings_studio_activity_kind_items, settings_studio_field_items,
-    settings_studio_harness_items, settings_studio_permission_items, settings_studio_plugin_items,
-    settings_studio_provider_approval_model_item, settings_studio_provider_items,
+    settings_studio_activity_kind_items, settings_studio_activity_tool_items,
+    settings_studio_field_items, settings_studio_harness_items, settings_studio_permission_items,
+    settings_studio_plugin_items, settings_studio_provider_approval_model_item,
+    settings_studio_provider_items,
 };
 
 impl App {
@@ -220,6 +221,11 @@ impl App {
         let mut ui_items =
             settings_studio_field_items(&self.i18n, &sources, SettingsStudioSectionId::Interface);
         ui_items.extend(settings_studio_activity_kind_items(
+            &self.i18n,
+            &self.application,
+            &sources,
+        ));
+        ui_items.extend(settings_studio_activity_tool_items(
             &self.i18n,
             &self.application,
             &sources,

@@ -174,35 +174,6 @@ pub(crate) fn is_activity_node(part: &TranscriptEntryPart) -> bool {
     )
 }
 
-/// Stable activity-kind id for a transcript part, used to resolve default
-/// expansion from transcript settings. Returns `None` for lifecycle-only
-/// markers that have no user-visible activity kind.
-pub(crate) fn activity_kind_id_for_part(part: &TranscriptEntryPart) -> Option<&'static str> {
-    match transcript_part_content(part) {
-        TranscriptPartContent::Text(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
-        // User documents group multiple activities and text; no single kind.
-        TranscriptPartContent::UserDocument(_) => None,
-        TranscriptPartContent::Activity(content) => match content {
-            TranscriptActivityContent::Reasoning(_) => Some(agena_domain::ACTIVITY_KIND_REASONING),
-            TranscriptActivityContent::Operation(_) => Some(agena_domain::ACTIVITY_KIND_OPERATION),
-            TranscriptActivityContent::Attachment(_) => Some(agena_domain::ACTIVITY_KIND_RESOURCE),
-            TranscriptActivityContent::SkillReference(_) => {
-                Some(agena_domain::ACTIVITY_KIND_SKILL_REFERENCE)
-            }
-            TranscriptActivityContent::Error(_) => Some(agena_domain::ACTIVITY_KIND_ERROR),
-            TranscriptActivityContent::Hook(_) => Some(agena_domain::ACTIVITY_KIND_HOOK),
-            TranscriptActivityContent::Request(_) => Some(agena_domain::ACTIVITY_KIND_INTERACTION),
-            TranscriptActivityContent::TextSegment(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
-            // The answer defaults to expanded independently of the global
-            // activity default; resolve kind overrides as usual so a user may
-            // still collapse assistant answers globally if they choose.
-            TranscriptActivityContent::Answer(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
-            TranscriptActivityContent::Canonical(payload) => activity_kind_id_for_payload(payload),
-            TranscriptActivityContent::AssistantReplyLifecycle(_) => None,
-        },
-    }
-}
-
 fn activity_kind_id_for_payload(payload: &agena_domain::ActivityPayload) -> Option<&'static str> {
     match payload {
         agena_domain::ActivityPayload::Resource(_) => Some(agena_domain::ACTIVITY_KIND_RESOURCE),
@@ -219,6 +190,58 @@ fn activity_kind_id_for_payload(payload: &agena_domain::ActivityPayload) -> Opti
         agena_domain::ActivityPayload::Error(_) => Some(agena_domain::ACTIVITY_KIND_ERROR),
         agena_domain::ActivityPayload::Notice(_) => Some(agena_domain::ACTIVITY_KIND_NOTICE),
     }
+}
+
+fn operation_tool_preference_ids(name: &str, plugin_name: Option<&str>) -> Vec<String> {
+    let raw = name.trim().to_ascii_lowercase();
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    let plugin = plugin_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+    let mut candidates = Vec::new();
+    let mut push = |candidate: String| {
+        if !candidate.is_empty() && !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    };
+
+    if raw.starts_with("agena.") {
+        push(raw.clone());
+    } else if let Some(plugin) = plugin.as_deref() {
+        let short_plugin = plugin.strip_prefix("agena.").unwrap_or(plugin);
+        if raw == short_plugin || raw.starts_with(format!("{short_plugin}.").as_str()) {
+            push(format!("agena.{raw}"));
+        } else {
+            push(format!("{plugin}.{raw}"));
+        }
+    } else if raw.contains('.') {
+        push(format!("agena.{raw}"));
+    }
+
+    push(raw.clone());
+    if let Some(short) = raw.strip_prefix("agena.") {
+        push(short.to_owned());
+    }
+    candidates
+}
+
+fn operation_default_expanded(
+    defaults: &TranscriptDetailDefaults,
+    name: &str,
+    plugin_name: Option<&str>,
+) -> bool {
+    for tool_id in operation_tool_preference_ids(name, plugin_name) {
+        if let Some(expanded) = defaults
+            .kind_defaults
+            .get(format!("tool:{tool_id}").as_str())
+        {
+            return *expanded;
+        }
+    }
+    defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_OPERATION))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1423,7 +1446,11 @@ pub(crate) fn render_part_node(
                 content_id: part.id,
             };
             let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
-                defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_OPERATION))
+                operation_default_expanded(
+                    defaults,
+                    tool.invocation.name.as_str(),
+                    tool.invocation.plugin_name.as_deref(),
+                )
             });
             // Canonical single-activity shape: a tool operation carrying a
             // user-input record IS the interaction part. Render the pending
@@ -1742,9 +1769,8 @@ pub(crate) fn render_part_node(
                     };
                     // Answered user-input requests render as a foldable
                     // Activity, so the full "用户输入已答复" dump does not read
-                    // like AI reply prose. The interaction kind id is already
-                    // wired through `activity_kind_id_for_part`, so the per-kind
-                    // transcript expansion setting applies here too.
+                    // like AI reply prose. Resolve the interaction kind
+                    // directly so the per-kind transcript setting applies.
                     let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
                         defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_INTERACTION))
                     });
@@ -2335,10 +2361,14 @@ fn render_activity_canonical(
     // default, so a multi-step tool run reads as a stack of blocks with one
     // visible answer at the end.
     let is_text_segment = matches!(payload, agena_domain::ActivityPayload::TextSegment(_));
-    let default_expanded = if is_text_segment {
-        false
-    } else {
-        defaults.default_expanded(activity_kind_id_for_payload(payload))
+    let default_expanded = match payload {
+        agena_domain::ActivityPayload::TextSegment(_) => false,
+        agena_domain::ActivityPayload::Operation(operation) => operation_default_expanded(
+            defaults,
+            operation.invocation.name.as_str(),
+            operation.invocation.plugin_name.as_deref(),
+        ),
+        _ => defaults.default_expanded(activity_kind_id_for_payload(payload)),
     };
     let expanded = expansions.get(&key).copied().unwrap_or(default_expanded);
     let (_, canonical_title, summary, error) = activity_presentation(payload);

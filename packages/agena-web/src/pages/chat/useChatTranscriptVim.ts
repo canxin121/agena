@@ -2,6 +2,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Comput
 
 import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { resolveTranscriptPageTarget } from './transcriptNavigation'
 import { resolveTranscriptVimAction, type TranscriptVimAction, type TranscriptVimMode } from './transcriptVim'
 import {
   clampTranscriptOffset,
@@ -397,10 +398,28 @@ export function useChatTranscriptVim(opts: {
   function movePage(direction: 'up' | 'down', half: boolean) {
     const scroll = opts.scrollEl.value
     if (!scroll) return
-    const amount = scroll.clientHeight * (half ? 0.5 : 0.9) * (direction === 'down' ? 1 : -1)
-    scroll.scrollBy({ top: amount, behavior: 'auto' })
-    window.requestAnimationFrame(() => selectElement(nearestNodeAtViewportRatio(direction === 'down' ? 0.75 : 0.25)))
-    takeCount()
+    const target = resolveTranscriptPageTarget({
+      scrollTop: scroll.scrollTop,
+      clientHeight: scroll.clientHeight,
+      scrollHeight: scroll.scrollHeight,
+      direction,
+      half,
+      count: takeCount(),
+    })
+    scroll.scrollTo({ top: target.top, behavior: 'auto' })
+    window.requestAnimationFrame(() => {
+      if (target.boundary) {
+        const entries = textEntries().entries
+        const entry = target.boundary === 'end' ? entries.at(-1) : entries[0]
+        if (!entry) return
+        setCursorPoint({
+          key: entry.key,
+          offset: target.boundary === 'end' ? transcriptLineRange(entry.text, entry.text.length).start : 0,
+        })
+        return
+      }
+      selectElement(nearestNodeAtViewportRatio(direction === 'down' ? 0.75 : 0.25))
+    })
   }
 
   function scrollLine(direction: 'up' | 'down') {

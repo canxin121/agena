@@ -7,6 +7,8 @@ import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import type { AttentionLike, MessageLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { getAssistantErrorInfo } from '@/pages/chat/assistantError'
+import { foldTranscriptActivityRun } from '@/pages/chat/transcriptActivityFolding'
+import { transcriptPartNavigationText } from '@/pages/chat/transcriptNavigation'
 import { partStatusPresentation } from '@/pages/chat/transcriptPartPresentation'
 import { useI18n } from 'vue-i18n'
 
@@ -91,18 +93,13 @@ const transcriptRows = computed<TranscriptRow[]>(() => {
       if (part) run.push(part)
       index += 1
     }
-    const prefixLength = Math.max(0, run.length - COLLAPSED_ACTIVITY_VISIBLE_COUNT)
     const summaryKey = `activity-summary:${messageId.value}:${run[0]?.id || index}`
     const expanded = Boolean(activityRunExpanded.value[summaryKey])
-    const hidden = run.slice(0, prefixLength).filter((part) => !props.isPartExpanded(part))
-    if (hidden.length) {
-      rows.push({ kind: 'summary', key: summaryKey, hiddenCount: hidden.length, expanded })
+    const folded = foldTranscriptActivityRun(run, expanded, COLLAPSED_ACTIVITY_VISIBLE_COUNT)
+    if (folded.hiddenCount) {
+      rows.push({ kind: 'summary', key: summaryKey, hiddenCount: folded.hiddenCount, expanded })
     }
-    for (let runIndex = 0; runIndex < run.length; runIndex += 1) {
-      const part = run[runIndex]
-      if (!part) continue
-      const hiddenWhenCollapsed = runIndex < prefixLength && !props.isPartExpanded(part)
-      if (!expanded && hiddenWhenCollapsed) continue
+    for (const part of folded.visibleParts) {
       rows.push({ kind: 'part', key: part.key, part })
     }
   }
@@ -130,12 +127,16 @@ function toggleActivitySummary(key: string) {
   activityRunExpanded.value = { ...activityRunExpanded.value, [key]: !activityRunExpanded.value[key] }
   emit('nodeSelect', key)
 }
+
+function partNavigationText(part: TranscriptDisplayPart): string {
+  return transcriptPartNavigationText(part, props.isPartExpanded(part))
+}
 </script>
 
 <template>
   <article
     :id="`msg-${messageId}`"
-    class="group/message relative min-w-0 scroll-mt-16 py-2"
+    class="group/message relative min-w-0 scroll-mt-16 rounded-lg px-1 py-2"
     :class="[
       active(messageNodeKey) ? 'bg-primary/[0.055] outline outline-1 outline-primary/30' : '',
       selected(messageNodeKey) ? 'bg-primary/10' : '',
@@ -242,13 +243,13 @@ function toggleActivitySummary(key: string) {
 
     <div
       class="mt-0.5 min-w-0"
-      :class="role === 'user' ? 'border-l-2 border-primary/35 pl-2' : ''"
+      :class="role === 'user' ? 'rounded-r-md border-l-2 border-primary/35 pl-2' : ''"
       data-transcript-copy-root="true"
     >
       <div
         v-for="row in transcriptRows"
         :key="row.key"
-        class="min-w-0 scroll-mt-20"
+        class="min-w-0 scroll-mt-20 rounded-md px-1"
         :class="[
           active(row.key) ? 'bg-primary/[0.055] outline outline-1 outline-primary/30' : '',
           selected(row.key) ? 'bg-primary/10' : '',
@@ -261,7 +262,9 @@ function toggleActivitySummary(key: string) {
         :data-part-kind="row.kind === 'part' ? row.part.kind : 'activity_summary'"
         :data-toggleable="row.kind === 'summary' || row.part.toggleable ? 'true' : 'false'"
         :data-copy-text="
-          row.kind === 'summary' ? t('chat.messages.activity.moreCount', { count: row.hiddenCount }) : row.part.copyText
+          row.kind === 'summary'
+            ? t('chat.messages.activity.moreCount', { count: row.hiddenCount })
+            : partNavigationText(row.part)
         "
         tabindex="-1"
         @pointerdown="$emit('nodeSelect', row.key)"
@@ -270,7 +273,7 @@ function toggleActivitySummary(key: string) {
         <button
           v-if="row.kind === 'summary'"
           type="button"
-          class="flex w-full items-center gap-2 py-1 text-left font-mono text-[11px] text-muted-foreground hover:text-foreground"
+          class="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left font-mono text-[11px] text-muted-foreground hover:bg-muted/35 hover:text-foreground"
           data-transcript-toggle="true"
           :aria-expanded="row.expanded"
           @click="toggleActivitySummary(row.key)"
@@ -298,7 +301,7 @@ function toggleActivitySummary(key: string) {
 
       <div
         v-if="fallbackError"
-        class="ml-7 border-l border-rose-400/60 py-1 pl-3 text-sm text-rose-700 dark:text-rose-300"
+        class="ml-7 rounded-r-md border-l border-rose-400/60 py-1 pl-3 text-sm text-rose-700 dark:text-rose-300"
       >
         {{ fallbackError }}
       </div>

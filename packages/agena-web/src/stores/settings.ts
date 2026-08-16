@@ -41,6 +41,7 @@ export type Settings = {
   chatToolActivitySummaryFilters?: string[]
   chatActivityDefaultExpanded?: string[]
   chatActivityDefaultExpandedToolFilters?: string[]
+  chatToolActivityDefaultExpandedOverrides?: Record<string, boolean>
   diffLayoutPreference?: 'dynamic' | 'inline' | 'side-by-side'
   diffViewMode?: 'single' | 'stacked'
 }

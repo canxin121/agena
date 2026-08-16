@@ -11,6 +11,9 @@ import {
   normalizeChatActivityDefaultExpanded,
   normalizeChatActivityFilters,
   normalizeChatToolActivityId,
+  normalizeChatToolExpansionOverrides,
+  normalizeChatToolPreferenceId,
+  resolveChatToolDefaultExpanded,
 } from '../src/lib/chatActivity'
 
 test('activity defaults enable Agena transport detail types without an Agent category', () => {
@@ -67,4 +70,22 @@ test('Agena namespaced tools map to the existing activity categories', () => {
   assert.equal(normalizeChatToolActivityId('interaction.ask'), 'question')
   assert.equal(normalizeChatToolActivityId('tasks.run'), 'task')
   assert.equal(normalizeChatToolActivityId('custom.plugin_tool'), 'custom.plugin_tool')
+})
+
+test('exact tool expansion overrides do not collapse into broad categories', () => {
+  assert.equal(normalizeChatToolPreferenceId('agena.fs.read'), 'fs.read')
+  assert.equal(normalizeChatToolPreferenceId('fs.read_many'), 'fs.read_many')
+
+  const overrides = normalizeChatToolExpansionOverrides({
+    'agena.fs.read': true,
+    'fs.read_many': false,
+    'agena.shell.run': 'invalid',
+  })
+  const legacy = new Set<string>(['edit', 'write', 'apply_patch', 'multiedit'])
+
+  assert.deepEqual(overrides, { 'fs.read': true, 'fs.read_many': false })
+  assert.equal(resolveChatToolDefaultExpanded('fs.read', overrides, legacy), true)
+  assert.equal(resolveChatToolDefaultExpanded('agena.fs.read_many', overrides, legacy), false)
+  assert.equal(resolveChatToolDefaultExpanded('fs.replace', overrides, legacy), true)
+  assert.equal(resolveChatToolDefaultExpanded('fs.glob', overrides, legacy), false)
 })

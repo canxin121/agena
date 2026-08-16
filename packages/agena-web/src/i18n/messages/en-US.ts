@@ -1849,9 +1849,16 @@ export default {
           tool: 'Tool',
           summary: 'Summary',
           transport: 'Summary',
-          expand: 'Expand',
+          expand: 'Default open',
         },
-        toolDetailsHint: 'Tool expand defaults are configured per tool.',
+        searchTools: 'Search tools',
+        refreshTools: 'Refresh tool catalog',
+        loadingTools: 'Loading registered tools...',
+        noTools: 'No matching tools.',
+        resetToolDefault: 'Use inherited default',
+        toolDetailsCount: '{shown} of {total} tools',
+        toolDetailsHint:
+          'Each registered execution tool and Tool API function has its own default open state. Reset removes the exact override and restores the inherited category default.',
         activitySummaryHelp:
           'Activity transport defaults to full details. Expand only controls the default open state; if transport strategy is not customized, transport still remains full.',
         activityTransportHelp:

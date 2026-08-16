@@ -9,7 +9,7 @@ test('narrow composer layout keeps requested chip rows and pinned actions', () =
 
   assert.ok(
     source.includes(
-      'composer-controls-surface flex w-full flex-row items-center justify-between gap-2 border-t border-border/60 bg-background/60 p-2 sm:px-2.5',
+      'composer-controls-surface flex w-full flex-row items-center justify-between gap-2 rounded-b-xl border-t border-border/60 bg-background/60 p-2 sm:px-2.5',
     ),
   )
 })

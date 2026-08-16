@@ -2030,10 +2030,9 @@ mod session_activity_state_machine_tests {
     use crate::app_types::SessionActivity;
     use agena_api::resource::{
         ExecutionAccess, PendingInteractiveRequest, PendingInteractiveRequestResource,
-        PermissionActionResource, PermissionRequest, SessionExecutionResource,
-        SessionExecutionContextResource, SessionLifecycleState, SessionRelationKind,
-        SessionResource, SessionState, SessionTranscriptPart, SessionUsageResource,
-        WorkflowState,
+        PermissionActionResource, PermissionRequest, SessionExecutionContextResource,
+        SessionExecutionResource, SessionLifecycleState, SessionRelationKind, SessionResource,
+        SessionState, SessionTranscriptPart, SessionUsageResource, WorkflowState,
     };
 
     const SESSION_ID: i64 = 7;
@@ -2172,8 +2171,11 @@ mod session_activity_state_machine_tests {
     #[test]
     fn awaiting_user_with_a_permission_ask_is_awaiting_permission() {
         let mut app = app_with_execution(SessionState::AwaitingUser);
-        app.transcript.execution.as_mut().unwrap().pending_interactive_requests =
-            vec![permission_request()];
+        app.transcript
+            .execution
+            .as_mut()
+            .unwrap()
+            .pending_interactive_requests = vec![permission_request()];
         assert_eq!(
             app.session_activity(SESSION_ID),
             SessionActivity::AwaitingPermission
@@ -3919,8 +3921,9 @@ mod transcript_expansion_tests {
     fn activity_expansion_survives_a_full_parts_refresh() {
         // A `hook` part projects to a toggleable Activity whose content id is
         // the part id (design 4.1.1). Expansion state is keyed by that id, so a
-        // full parts re-merge (the v2 refresh path, `merge_parts`) must keep
-        // the user-expanded Activity open while folding untouched siblings.
+        // full parts re-merge (the v2 refresh path, `merge_parts`) must retain
+        // its body state even if a later count-based run fold temporarily
+        // hides the whole old prefix.
         let hook = parts_fixtures::hook(
             4,
             "assistant",
@@ -3982,8 +3985,9 @@ mod transcript_expansion_tests {
                 .any(|line| line.text.contains("scanned 3 workspaces"))
         );
 
-        // A full parts refresh appends sibling hooks; the user-expanded
-        // Activity must stay open and untouched siblings fold into a summary.
+        // A full parts refresh appends sibling hooks. The count-based run fold
+        // hides the old prefix regardless of an individual Activity's body
+        // state, but opening the run fold must restore that body state.
         transcript.merge_parts(vec![
             parts_fixtures::run(1, "user", "completed"),
             parts_fixtures::text(2, "user", "list tools"),
@@ -3998,19 +4002,32 @@ mod transcript_expansion_tests {
             parts_fixtures::hook(11, "assistant", "Run audit", "audited 7 modules"),
         ]);
 
-        let expanded_after_new_content = transcript
+        assert!(
+            transcript
+                .rendered(100)
+                .nodes
+                .iter()
+                .all(|node| node.key != key),
+            "individual expansion must not pin an old Activity outside the run fold"
+        );
+        let summary_key = transcript
+            .rendered(100)
+            .nodes
+            .iter()
+            .find(|node| {
+                matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }) && !node.expanded
+            })
+            .map(|node| node.key.clone())
+            .expect("collapsed count-based run summary");
+        transcript.node_expansions.insert(summary_key, true);
+        transcript.invalidate_render();
+        let revealed = transcript
             .rendered(100)
             .nodes
             .iter()
             .find(|node| node.key == key)
-            .expect("expanded Activity remains rendered after a full parts refresh");
-        assert!(expanded_after_new_content.expanded);
-        assert!(
-            transcript.rendered(100).nodes.iter().any(|node| {
-                matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }) && !node.expanded
-            }),
-            "the run may still fold untouched Activities without hiding the user-expanded one"
-        );
+            .expect("opening the run fold reveals the previously expanded Activity");
+        assert!(revealed.expanded);
     }
 
     #[test]

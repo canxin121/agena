@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { RiRefreshLine, RiResetLeftLine } from '@remixicon/vue'
 
 import { useSettingsStore, type Settings } from '../stores/settings'
 import { useUiStore } from '@/stores/ui'
@@ -25,21 +26,24 @@ import {
 } from '@/components/settings/sidebar/settingsSidebarNavigation'
 import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
+import { apiJson } from '@/lib/api'
 import { buildLocalePickerOptions } from '@/pages/loginLocaleOptions'
 import {
   CHAT_ACTIVITY_EXPAND_KEYS,
   DEFAULT_CHAT_ACTIVITY_EXPAND_KEYS,
   DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS,
   DEFAULT_CHAT_ACTIVITY_SUMMARY_FILTERS,
-  DEFAULT_CHAT_TOOL_ACTIVITY_SUMMARY_FILTERS,
   DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS,
   normalizeChatActivityFilters,
   normalizeChatActivityDefaultExpanded,
   normalizeChatToolActivityFilters,
+  normalizeChatToolExpansionOverrides,
+  normalizeChatToolPreferenceId,
+  resolveChatToolDefaultExpanded,
   ACTIVITY_DEFAULT_EXPANDED_OPTIONS as activityDefaultExpandedOptions,
-  TOOL_ACTIVITY_OPTIONS as toolActivityOptions,
   type ChatActivityType,
   type ChatActivityExpandKey,
+  type ChatToolExpansionOverrides,
   type ChatToolActivityType,
 } from '@/lib/chatActivity'
 
@@ -97,6 +101,7 @@ onMounted(() => {
   if (!settings.data && !settings.loading) {
     void settings.refresh()
   }
+  void loadChatToolCatalog()
 })
 
 watch(
@@ -286,34 +291,117 @@ const chatActivityDefaultExpandedToolFilters = computed<ChatToolActivityType[]>(
   },
 })
 
-function activityDefaultExpandedToolEnabled(id: ChatToolActivityType): boolean {
-  return chatActivityDefaultExpandedToolFilters.value.includes(id)
+type ToolCatalogItem = {
+  name?: string
+  summary?: string
+  tags?: string[]
 }
 
-function toggleActivityDefaultExpandedTool(id: ChatToolActivityType) {
-  const next = new Set(chatActivityDefaultExpandedToolFilters.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  const ordered = DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS.filter((t) => next.has(t))
-  chatActivityDefaultExpandedToolFilters.value = ordered
+type ToolCatalogResponse = {
+  permission_tools?: ToolCatalogItem[]
 }
 
-function toggleToolDetailSummary(id: ChatToolActivityType) {
-  const next = new Set(chatToolActivitySummaryFilters.value)
-  if (next.has(id)) {
-    next.delete(id)
-  } else {
-    next.add(id)
-  }
-  const ordered = DEFAULT_CHAT_TOOL_ACTIVITY_SUMMARY_FILTERS.filter((t) => next.has(t))
-  chatToolActivitySummaryFilters.value = ordered
+type ToolExpansionOption = {
+  id: string
+  label: string
+  description: string
+}
 
-  if (!next.has(id)) {
-    const expanded = new Set(chatActivityDefaultExpandedToolFilters.value)
-    if (expanded.delete(id)) {
-      chatActivityDefaultExpandedToolFilters.value = DEFAULT_CHAT_TOOL_ACTIVITY_FILTERS.filter((t) => expanded.has(t))
-    }
+const TOOL_API_FUNCTIONS: ToolExpansionOption[] = [
+  { id: 'tools_list', label: 'tools_list', description: 'Enumerate execution tools.' },
+  { id: 'tools_search', label: 'tools_search', description: 'Search execution tools.' },
+  { id: 'tools_help', label: 'tools_help', description: 'Inspect execution-tool contracts.' },
+  { id: 'tools_tags', label: 'tools_tags', description: 'List execution-tool tags.' },
+  { id: 'tools_call', label: 'tools_call', description: 'Invoke an execution tool.' },
+  { id: 'plugins_list', label: 'plugins_list', description: 'Enumerate tool plugins.' },
+  { id: 'plugins_search', label: 'plugins_search', description: 'Search tool plugins.' },
+  { id: 'plugins_tags', label: 'plugins_tags', description: 'List tool-plugin tags.' },
+]
+
+const toolCatalogItems = ref<ToolCatalogItem[]>([])
+const toolCatalogLoading = ref(false)
+const toolCatalogError = ref('')
+const toolCatalogQuery = ref('')
+
+async function loadChatToolCatalog() {
+  if (toolCatalogLoading.value) return
+  toolCatalogLoading.value = true
+  toolCatalogError.value = ''
+  try {
+    const response = await apiJson<ToolCatalogResponse>('/api/v1/plugins/ui')
+    toolCatalogItems.value = Array.isArray(response?.permission_tools) ? response.permission_tools : []
+  } catch (error) {
+    toolCatalogError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    toolCatalogLoading.value = false
   }
+}
+
+const toolActivityOptions = computed<ToolExpansionOption[]>(() => {
+  const byId = new Map<string, ToolExpansionOption>()
+  for (const option of TOOL_API_FUNCTIONS) byId.set(option.id, option)
+  for (const item of toolCatalogItems.value) {
+    const label = String(item.name || '').trim()
+    const id = normalizeChatToolPreferenceId(label)
+    if (!id) continue
+    const summary = String(item.summary || '').trim()
+    const tags = Array.isArray(item.tags) ? item.tags.map((tag) => String(tag).trim()).filter(Boolean) : []
+    byId.set(id, {
+      id,
+      label,
+      description: summary || tags.join(' · '),
+    })
+  }
+  return [...byId.values()].sort((a, b) => a.label.localeCompare(b.label))
+})
+
+const filteredToolActivityOptions = computed(() => {
+  const query = toolCatalogQuery.value.trim().toLowerCase()
+  if (!query) return toolActivityOptions.value
+  return toolActivityOptions.value.filter((option) => {
+    return `${option.label}\n${option.description}`.toLowerCase().includes(query)
+  })
+})
+
+const chatToolActivityDefaultExpandedOverrides = computed<ChatToolExpansionOverrides>({
+  get() {
+    return normalizeChatToolExpansionOverrides(settings.data?.chatToolActivityDefaultExpandedOverrides)
+  },
+  set(value) {
+    void settings.save({ chatToolActivityDefaultExpandedOverrides: value })
+  },
+})
+
+const legacyExpandedToolCategories = computed(() => new Set<string>(chatActivityDefaultExpandedToolFilters.value))
+
+function toolDefaultExpandedEnabled(toolId: string): boolean {
+  return resolveChatToolDefaultExpanded(
+    toolId,
+    chatToolActivityDefaultExpandedOverrides.value,
+    legacyExpandedToolCategories.value,
+  )
+}
+
+function toolDefaultExpandedCustomized(toolId: string): boolean {
+  const id = normalizeChatToolPreferenceId(toolId)
+  return Boolean(id && Object.prototype.hasOwnProperty.call(chatToolActivityDefaultExpandedOverrides.value, id))
+}
+
+function toggleToolDefaultExpanded(toolId: string) {
+  const id = normalizeChatToolPreferenceId(toolId)
+  if (!id) return
+  chatToolActivityDefaultExpandedOverrides.value = {
+    ...chatToolActivityDefaultExpandedOverrides.value,
+    [id]: !toolDefaultExpandedEnabled(id),
+  }
+}
+
+function resetToolDefaultExpanded(toolId: string) {
+  const id = normalizeChatToolPreferenceId(toolId)
+  if (!id || !toolDefaultExpandedCustomized(id)) return
+  const next = { ...chatToolActivityDefaultExpandedOverrides.value }
+  delete next[id]
+  chatToolActivityDefaultExpandedOverrides.value = next
 }
 
 const chatActivitySummaryFilters = computed<ChatActivityType[]>({
@@ -331,26 +419,6 @@ const chatActivitySummaryFilters = computed<ChatActivityType[]>({
     void settings.save({ chatActivitySummaryFilters: value })
   },
 })
-
-const chatToolActivitySummaryFilters = computed<ChatToolActivityType[]>({
-  get() {
-    const s = settings.data
-    if (s && Object.prototype.hasOwnProperty.call(s, 'chatToolActivitySummaryFilters')) {
-      return normalizeChatToolActivityFilters(s.chatToolActivitySummaryFilters)
-    }
-    if (s && Object.prototype.hasOwnProperty.call(s, 'chatActivityToolFilters')) {
-      return normalizeChatToolActivityFilters(s.chatActivityToolFilters)
-    }
-    return DEFAULT_CHAT_TOOL_ACTIVITY_SUMMARY_FILTERS.slice()
-  },
-  set(value) {
-    void settings.save({ chatToolActivitySummaryFilters: value })
-  },
-})
-
-function toolActivityEnabled(id: ChatToolActivityType): boolean {
-  return chatToolActivitySummaryFilters.value.includes(id)
-}
 
 const dirtyHint = computed(() => (settings.error ? settings.error : null))
 </script>
@@ -568,8 +636,38 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                   </div>
 
                   <div class="mt-1">
-                    <div class="text-xs font-medium text-muted-foreground">
-                      {{ t('settings.appearance.chat.toolDetails') }}
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div class="text-xs font-medium text-muted-foreground">
+                          {{ t('settings.appearance.chat.toolDetails') }}
+                        </div>
+                        <div class="mt-0.5 text-[11px] text-muted-foreground">
+                          {{
+                            t('settings.appearance.chat.toolDetailsCount', {
+                              shown: filteredToolActivityOptions.length,
+                              total: toolActivityOptions.length,
+                            })
+                          }}
+                        </div>
+                      </div>
+                      <div class="flex min-w-0 items-center gap-2">
+                        <input
+                          v-model="toolCatalogQuery"
+                          type="search"
+                          class="h-8 min-w-0 w-56 max-w-[55vw] rounded-md border border-input bg-transparent px-2.5 text-xs outline-none focus:border-ring"
+                          :placeholder="t('settings.appearance.chat.searchTools')"
+                        />
+                        <button
+                          type="button"
+                          class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
+                          :title="t('settings.appearance.chat.refreshTools')"
+                          :aria-label="t('settings.appearance.chat.refreshTools')"
+                          :disabled="toolCatalogLoading"
+                          @click="loadChatToolCatalog"
+                        >
+                          <RiRefreshLine class="h-4 w-4" :class="toolCatalogLoading ? 'animate-spin' : ''" />
+                        </button>
+                      </div>
                     </div>
                     <div class="mt-2 overflow-x-auto rounded-md border border-border/60">
                       <table class="min-w-full text-sm">
@@ -579,37 +677,63 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                               {{ t('settings.appearance.chat.toolDetailsTable.tool') }}
                             </th>
                             <th class="px-3 py-2 text-center font-medium">
-                              {{ t('settings.appearance.chat.toolDetailsTable.summary') }}
-                            </th>
-                            <th class="px-3 py-2 text-center font-medium">
                               {{ t('settings.appearance.chat.toolDetailsTable.expand') }}
                             </th>
+                            <th class="w-10 px-2 py-2" aria-label="Reset"></th>
                           </tr>
                         </thead>
                         <tbody>
+                          <tr v-if="toolCatalogLoading && toolActivityOptions.length === TOOL_API_FUNCTIONS.length">
+                            <td
+                              colspan="3"
+                              class="border-t border-border/50 px-3 py-6 text-center text-xs text-muted-foreground"
+                            >
+                              {{ t('settings.appearance.chat.loadingTools') }}
+                            </td>
+                          </tr>
+                          <tr v-else-if="toolCatalogError && toolActivityOptions.length === TOOL_API_FUNCTIONS.length">
+                            <td
+                              colspan="3"
+                              class="border-t border-border/50 px-3 py-4 text-xs text-rose-700 dark:text-rose-300"
+                            >
+                              {{ toolCatalogError }}
+                            </td>
+                          </tr>
+                          <tr v-else-if="filteredToolActivityOptions.length === 0">
+                            <td
+                              colspan="3"
+                              class="border-t border-border/50 px-3 py-6 text-center text-xs text-muted-foreground"
+                            >
+                              {{ t('settings.appearance.chat.noTools') }}
+                            </td>
+                          </tr>
                           <tr
-                            v-for="opt in toolActivityOptions"
+                            v-for="opt in filteredToolActivityOptions"
                             :key="`tool-matrix-${opt.id}`"
                             class="border-t border-border/50"
                           >
                             <td class="px-3 py-2 align-top">
-                              <div>{{ opt.label }}</div>
+                              <div class="font-mono text-xs">{{ opt.label }}</div>
                               <div class="text-[11px] text-muted-foreground">{{ opt.description }}</div>
                             </td>
                             <td class="px-3 py-2 text-center align-middle">
                               <input
                                 type="checkbox"
-                                :checked="toolActivityEnabled(opt.id)"
-                                @change="toggleToolDetailSummary(opt.id)"
+                                :checked="toolDefaultExpandedEnabled(opt.id)"
+                                @change="toggleToolDefaultExpanded(opt.id)"
                               />
                             </td>
-                            <td class="px-3 py-2 text-center align-middle">
-                              <input
-                                type="checkbox"
-                                :checked="activityDefaultExpandedToolEnabled(opt.id)"
-                                :disabled="!toolActivityEnabled(opt.id)"
-                                @change="toggleActivityDefaultExpandedTool(opt.id)"
-                              />
+                            <td class="px-2 py-2 text-center align-middle">
+                              <button
+                                type="button"
+                                class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/50 hover:text-foreground disabled:invisible"
+                                :title="t('settings.appearance.chat.resetToolDefault')"
+                                :aria-label="t('settings.appearance.chat.resetToolDefault')"
+                                :disabled="!toolDefaultExpandedCustomized(opt.id)"
+                                @click="resetToolDefaultExpanded(opt.id)"
+                              >
+                                <RiResetLeftLine class="h-3.5 w-3.5" />
+                              </button>
                             </td>
                           </tr>
                         </tbody>

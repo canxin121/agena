@@ -125,7 +125,7 @@ function isAudio(mime: string, label: string): boolean {
   <div v-else class="min-w-0">
     <button
       type="button"
-      class="group/headline flex w-full min-w-0 items-baseline gap-2 py-1 text-left outline-none"
+      class="group/headline flex w-full min-w-0 items-baseline gap-2 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/35 focus-visible:ring-1 focus-visible:ring-ring/50"
       :aria-expanded="expanded"
       data-transcript-vim-toggle="true"
       @click="toggle"
@@ -158,7 +158,7 @@ function isAudio(mime: string, label: string): boolean {
       >
     </button>
 
-    <div v-if="expanded" class="ml-5 min-w-0 border-l border-border/60 pb-1 pl-4">
+    <div v-if="expanded" class="ml-5 min-w-0 rounded-r-md border-l border-border/60 bg-muted/[0.08] pb-1 pl-4 pr-1">
       <div v-if="part.kind === 'answer' || part.kind === 'text_segment'" class="py-1 text-sm leading-relaxed">
         <MarkdownRenderer
           :content="body"
@@ -178,7 +178,7 @@ function isAudio(mime: string, label: string): boolean {
         <div v-for="attachment in attachments" :key="attachment.key" class="min-w-0">
           <button
             type="button"
-            class="flex w-full min-w-0 items-center gap-2 py-1 text-left font-mono text-xs hover:text-primary"
+            class="flex w-full min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left font-mono text-xs hover:bg-muted/40 hover:text-primary"
             @click="openAttachment(attachment.path, attachment.url)"
           >
             <span aria-hidden="true">›</span>
@@ -189,7 +189,7 @@ function isAudio(mime: string, label: string): boolean {
             v-if="isImage(attachment.mime, attachment.label) && attachmentUrl(attachment.path, attachment.url)"
             :src="attachmentUrl(attachment.path, attachment.url)"
             :alt="attachment.label"
-            class="mt-1 max-h-96 max-w-full cursor-zoom-in object-contain"
+            class="mt-1 max-h-96 max-w-full cursor-zoom-in rounded-md object-contain"
             @click="openAttachment(attachment.path, attachment.url)"
           />
           <video
@@ -197,7 +197,7 @@ function isAudio(mime: string, label: string): boolean {
             :src="attachmentUrl(attachment.path, attachment.url)"
             controls
             preload="metadata"
-            class="mt-1 max-h-96 max-w-full"
+            class="mt-1 max-h-96 max-w-full rounded-md"
           />
           <audio
             v-else-if="isAudio(attachment.mime, attachment.label) && attachmentUrl(attachment.path, attachment.url)"

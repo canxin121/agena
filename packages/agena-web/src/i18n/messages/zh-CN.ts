@@ -1846,9 +1846,16 @@ export default {
           tool: '工具',
           summary: '摘要',
           transport: '摘要',
-          expand: '展开',
+          expand: '默认打开',
         },
-        toolDetailsHint: '工具展开默认值按工具分别配置。',
+        searchTools: '搜索工具',
+        refreshTools: '刷新工具目录',
+        loadingTools: '正在加载已注册工具...',
+        noTools: '没有匹配的工具。',
+        resetToolDefault: '恢复继承的默认值',
+        toolDetailsCount: '显示 {shown} / {total} 个工具',
+        toolDetailsHint:
+          '每个已注册执行工具和 Tool API 函数都有独立的默认打开状态。重置会移除精确覆盖并恢复继承的分类默认值。',
         activitySummaryHelp:
           '活动传输默认是全量详情。Expand 仅控制默认展开状态；' + '若未自定义传输策略，仍保持全量传输。',
         activityTransportHelp:

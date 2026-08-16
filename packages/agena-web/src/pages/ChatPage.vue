@@ -40,11 +40,12 @@ import type { JsonObject, JsonValue } from '@/types/json'
 import {
   DEFAULT_CHAT_ACTIVITY_EXPAND_KEYS,
   DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS,
-  isKnownChatToolActivityType,
-  normalizeChatToolActivityId,
   normalizeChatActivityDefaultExpanded,
   normalizeChatToolActivityFilters,
+  normalizeChatToolExpansionOverrides,
+  resolveChatToolDefaultExpanded,
   type ChatActivityExpandKey,
+  type ChatToolExpansionOverrides,
 } from '@/lib/chatActivity'
 
 type ComposerActionItem = { id: string; label: string; description?: string; icon?: Component; disabled?: boolean }
@@ -708,6 +709,10 @@ const activityDefaultExpandedToolSet = computed<Set<string>>(() => {
   return new Set(DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS)
 })
 
+const activityDefaultExpandedToolOverrides = computed<ChatToolExpansionOverrides>(() =>
+  normalizeChatToolExpansionOverrides(settings.data?.chatToolActivityDefaultExpandedOverrides),
+)
+
 function activityExpandKeyForPart(part: JsonObject): ChatActivityExpandKey | '' {
   const t = String(part?.type || '')
     .trim()
@@ -722,11 +727,11 @@ function activityInitiallyExpandedForPart(part: JsonObject): boolean {
   const key = activityExpandKeyForPart(part)
   if (!key) return false
   if (key === 'tool') {
-    const toolId = normalizeChatToolActivityId(part?.tool)
-    if (!toolId) return activityDefaultExpandedToolSet.value.has('unknown')
-    if (activityDefaultExpandedToolSet.value.has(toolId)) return true
-    if (isKnownChatToolActivityType(toolId)) return false
-    return activityDefaultExpandedToolSet.value.has('unknown')
+    return resolveChatToolDefaultExpanded(
+      part?.tool,
+      activityDefaultExpandedToolOverrides.value,
+      activityDefaultExpandedToolSet.value,
+    )
   }
   return activityDefaultExpandedKeys.value.includes(key)
 }

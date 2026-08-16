@@ -43,8 +43,8 @@ defineExpose({ shellEl, textareaEl, openFilePicker })
 <template>
   <div
     ref="shellEl"
-    class="composer-shell relative flex flex-col overflow-visible border border-input bg-background/85"
-    :class="fullscreen ? 'composer-fullscreen' : ''"
+    class="composer-shell relative flex flex-col overflow-visible rounded-xl border border-input bg-background/85 shadow-sm"
+    :class="fullscreen ? 'composer-fullscreen rounded-none' : ''"
     data-oc-keyboard-tap="keep"
     @dragover.prevent
     @drop.prevent="$emit('drop', $event)"
@@ -67,7 +67,7 @@ defineExpose({ shellEl, textareaEl, openFilePicker })
       <button
         type="button"
         :data-oc-keyboard-tap="fullscreen ? 'blur' : 'keep'"
-        class="flex h-6 w-6 items-center justify-center text-muted-foreground/80 hover:bg-secondary/60 hover:text-foreground"
+        class="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/80 hover:bg-secondary/60 hover:text-foreground"
         :title="fullscreen ? t('chat.composer.editor.collapse') : t('chat.composer.editor.open')"
         :aria-label="fullscreen ? t('chat.composer.editor.collapse') : t('chat.composer.editor.open')"
         @pointerdown.prevent

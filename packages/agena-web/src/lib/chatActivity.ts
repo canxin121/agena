@@ -31,6 +31,7 @@ export type KnownChatToolActivityType =
   | 'unknown'
 
 export type ChatToolActivityType = KnownChatToolActivityType | (string & {})
+export type ChatToolExpansionOverrides = Record<string, boolean>
 
 export const DEFAULT_CHAT_ACTIVITY_FILTERS: ChatActivityType[] = [
   'tool',
@@ -129,6 +130,48 @@ export function normalizeChatToolActivityId(value: unknown): string {
   }
 
   return raw
+}
+
+/**
+ * Stable exact identity used by per-tool presentation preferences.
+ *
+ * Runtime parts commonly use `fs.read` while the plugin catalog advertises
+ * `agena.fs.read`. The leading Agena registry namespace is transport metadata,
+ * not a different tool, so both shapes share one preference key. Unlike
+ * `normalizeChatToolActivityId`, this function never folds tools into broad
+ * categories such as `read` or `bash`.
+ */
+export function normalizeChatToolPreferenceId(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return raw.startsWith('agena.') ? raw.slice('agena.'.length) : raw
+}
+
+export function normalizeChatToolExpansionOverrides(value: unknown): ChatToolExpansionOverrides {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out: ChatToolExpansionOverrides = {}
+  for (const [rawTool, rawExpanded] of Object.entries(value as Record<string, unknown>)) {
+    const tool = normalizeChatToolPreferenceId(rawTool)
+    if (!tool || typeof rawExpanded !== 'boolean') continue
+    out[tool] = rawExpanded
+  }
+  return out
+}
+
+export function resolveChatToolDefaultExpanded(
+  toolName: unknown,
+  overrides: ChatToolExpansionOverrides,
+  legacyExpandedCategories: ReadonlySet<string>,
+): boolean {
+  const exactTool = normalizeChatToolPreferenceId(toolName)
+  if (exactTool && Object.prototype.hasOwnProperty.call(overrides, exactTool)) {
+    return overrides[exactTool] === true
+  }
+
+  const category = normalizeChatToolActivityId(exactTool)
+  if (!category) return legacyExpandedCategories.has('unknown')
+  if (legacyExpandedCategories.has(category)) return true
+  if (isKnownChatToolActivityType(category)) return false
+  return legacyExpandedCategories.has('unknown')
 }
 
 export function normalizeChatActivityFilters(value: JsonValue): ChatActivityType[] {

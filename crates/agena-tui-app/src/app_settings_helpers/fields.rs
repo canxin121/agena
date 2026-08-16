@@ -167,7 +167,13 @@ pub(crate) fn settings_studio_activity_kind_items(
     let mut items = Vec::new();
     let kinds = application.activity_kinds();
     for kind in kinds {
-        let path = format!("ui.tui.transcript.activity_kinds.{}", kind.id);
+        let path = agena_domain::format_json_path(&[
+            "ui".to_owned(),
+            "tui".to_owned(),
+            "transcript".to_owned(),
+            "activity_kinds".to_owned(),
+            kind.id.clone(),
+        ]);
         let label_key = format!("settings-activity-kind-{}-label", kind.id);
         let description_key = format!("settings-activity-kind-{}-description", kind.id);
         // Missing locale keys fall back to the key itself, so resolve now and
@@ -222,6 +228,96 @@ pub(crate) fn settings_studio_activity_kind_items(
         ));
     }
     items
+}
+
+/// Dynamic Interface items for every concrete tool in the live registry.
+///
+/// Tool overrides share the open-ended `activity_kinds` map using a `tool:`
+/// selector prefix. Quoted JSON-path segments preserve dotted tool names as a
+/// single map key instead of accidentally creating nested configuration.
+pub(crate) fn settings_studio_activity_tool_items(
+    i18n: &I18n,
+    application: &crate::TuiBackend,
+    sources: &ConfigJsonSources,
+) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
+    let mut tools = agena_domain::ToolApiFunction::ALL
+        .into_iter()
+        .map(|function| {
+            let summary = match function {
+                agena_domain::ToolApiFunction::List => "Enumerate execution tools.",
+                agena_domain::ToolApiFunction::Search => "Search execution tools.",
+                agena_domain::ToolApiFunction::Help => "Inspect execution-tool contracts.",
+                agena_domain::ToolApiFunction::Tags => "List execution-tool tags.",
+                agena_domain::ToolApiFunction::Call => "Invoke an execution tool.",
+                agena_domain::ToolApiFunction::PluginsList => "Enumerate tool plugins.",
+                agena_domain::ToolApiFunction::PluginsSearch => "Search tool plugins.",
+                agena_domain::ToolApiFunction::PluginsTags => "List tool-plugin tags.",
+            };
+            (function.function_name().to_owned(), summary.to_owned())
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for tool in application.permission_tools() {
+        let name = tool.name.trim().to_ascii_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+        tools.insert(name, tool.summary);
+    }
+
+    tools
+        .into_iter()
+        .map(|(name, summary)| {
+            let selector = format!("tool:{name}");
+            let path = agena_domain::format_json_path(&[
+                "ui".to_owned(),
+                "tui".to_owned(),
+                "transcript".to_owned(),
+                "activity_kinds".to_owned(),
+                selector,
+            ]);
+            let description = if summary.trim().is_empty() {
+                ui_text::t(i18n, "settings-field-activity-tool-description")
+            } else {
+                summary
+            };
+            let field = SettingsFieldSpec {
+                section: SettingsStudioSectionId::Interface,
+                path: path.clone(),
+                label_key: "settings-field-activity-tool-label",
+                description_key: "settings-field-activity-tool-description",
+                kind: SettingsFieldKind::Bool,
+                label_override: Some(name),
+                description_override: Some(description),
+            };
+            let file_value =
+                get_json_path(&sources.file, Some(path.as_str())).unwrap_or(JsonValue::Null);
+            let effective_value =
+                get_json_path(&sources.effective, Some(path.as_str())).unwrap_or(JsonValue::Null);
+            let effective_summary = settings_field_effective_summary(&effective_value);
+            let current_summary = if file_value.is_null() {
+                ui_text::t(i18n, "settings-source-unset")
+            } else {
+                format_setting_value_inline(&file_value)
+            };
+            let source_rows = settings_source_rows_for_config_path(
+                i18n,
+                sources,
+                path.as_str(),
+                current_summary.clone(),
+                effective_summary.clone(),
+            );
+            SettingsStudioItem::from_parts(
+                settings_field_display_label(i18n, &field),
+                effective_summary.clone(),
+                settings_field_display_description(i18n, &field),
+                Some(path.clone()),
+                Some(current_summary),
+                Some(effective_summary),
+                source_rows,
+                SettingsPickerAction::EditField(field),
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn settings_studio_field_items(

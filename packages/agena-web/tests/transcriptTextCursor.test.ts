@@ -31,6 +31,26 @@ describe('transcript text cursor', () => {
     expect(moveTranscriptWord(text, 4, { forward: true, toEnd: true, bigWord: false })).toBe(6)
     expect(moveTranscriptWord(text, text.indexOf('three'), { forward: false, toEnd: true, bigWord: false })).toBe(6)
     expect(moveTranscriptWord(text, 0, { forward: true, toEnd: true, bigWord: true })).toBe(6)
+    expect(moveTranscriptWord(text, 0, { forward: true, toEnd: false, bigWord: true })).toBe(9)
+    expect(moveTranscriptWord(text, 6, { forward: true, toEnd: false, bigWord: false })).toBe(9)
+    expect(moveTranscriptWord(text, 2, { forward: true, toEnd: false, bigWord: false })).toBe(3)
+    expect(moveTranscriptWord(text, 2, { forward: true, toEnd: false, bigWord: false, count: 2 })).toBe(4)
+  })
+
+  test('e and ge stop at the current and previous word end instead of advancing too far', () => {
+    const text = 'one two three'
+    expect(moveTranscriptWord(text, 2, { forward: true, toEnd: true, bigWord: false })).toBe(2)
+    expect(moveTranscriptWord(text, 3, { forward: true, toEnd: true, bigWord: false })).toBe(6)
+    expect(moveTranscriptWord(text, text.indexOf('three'), { forward: false, toEnd: true, bigWord: false })).toBe(6)
+    expect(moveTranscriptWord(text, 8, { forward: true, toEnd: true, bigWord: false, count: 2 })).toBe(12)
+  })
+
+  test('backward word starts skip whitespace and respect repeated motion', () => {
+    const text = 'one   two'
+    expect(moveTranscriptWord(text, text.indexOf('two') + 1, { forward: false, toEnd: false, bigWord: false })).toBe(6)
+    expect(
+      moveTranscriptWord(text, text.indexOf('two') + 1, { forward: false, toEnd: false, bigWord: false, count: 2 }),
+    ).toBe(0)
   })
 
   test('find respects direction, count, and till offsets on the current line', () => {

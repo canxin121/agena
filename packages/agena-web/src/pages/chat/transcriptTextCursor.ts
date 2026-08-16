@@ -87,6 +87,65 @@ function wordClass(value: string, bigWord: boolean): WordClass {
   return 'punctuation'
 }
 
+function transcriptWordMotionTarget(
+  graphemes: Grapheme[],
+  current: number,
+  options: { forward: boolean; toEnd: boolean; bigWord: boolean },
+): number {
+  const len = graphemes.length
+  if (current < 0 || current >= len) return -1
+  const classify = (candidate: number) => wordClass(graphemes[candidate]?.text || '', options.bigWord)
+
+  if (options.forward && !options.toEnd) {
+    const currentClass = classify(current)
+    let index = current + 1
+    if (currentClass !== 'space') {
+      while (index < len && classify(index) === currentClass) index += 1
+    }
+    while (index < len && classify(index) === 'space') index += 1
+    return index < len ? index : -1
+  }
+
+  if (options.forward) {
+    let index = current
+    if (classify(index) === 'space') {
+      while (index < len && classify(index) === 'space') index += 1
+      if (index === len) return -1
+    }
+    const target = classify(index)
+    while (index + 1 < len && classify(index + 1) === target) index += 1
+    return index
+  }
+
+  if (!options.toEnd) {
+    const currentClass = classify(current)
+    if (currentClass !== 'space' && current > 0 && classify(current - 1) === currentClass) {
+      let index = current
+      while (index > 0 && classify(index - 1) === currentClass) index -= 1
+      return index
+    }
+    if (current === 0) return -1
+    let index = current - 1
+    while (classify(index) === 'space') {
+      if (index === 0) return -1
+      index -= 1
+    }
+    const target = classify(index)
+    while (index > 0 && classify(index - 1) === target) index -= 1
+    return index
+  }
+
+  if (current === 0) return -1
+  let index = current - 1
+  while (classify(index) === 'space') {
+    if (index === 0) return -1
+    index -= 1
+  }
+  const target = classify(index)
+  while (index + 1 < len && classify(index + 1) === target) index += 1
+  return index
+}
+
 export function moveTranscriptWord(
   text: string,
   offset: number,
@@ -95,41 +154,11 @@ export function moveTranscriptWord(
   const graphemes = transcriptGraphemes(text)
   if (!graphemes.length) return 0
   let index = graphemeIndexAt(graphemes, offset)
-  const classify = (candidate: number) => wordClass(graphemes[candidate]?.text || '', options.bigWord)
 
   for (let motion = 0; motion < Math.max(1, options.count || 1); motion += 1) {
-    if (options.forward && !options.toEnd) {
-      const current = classify(index)
-      if (current !== 'space') {
-        while (index + 1 < graphemes.length && classify(index + 1) === current) index += 1
-        if (index + 1 < graphemes.length) index += 1
-      }
-      while (index + 1 < graphemes.length && classify(index) === 'space') index += 1
-      continue
-    }
-
-    if (!options.forward && !options.toEnd) {
-      if (index > 0) index -= 1
-      while (index > 0 && classify(index) === 'space') index -= 1
-      const current = classify(index)
-      while (index > 0 && classify(index - 1) === current) index -= 1
-      continue
-    }
-
-    if (options.forward) {
-      const current = classify(index)
-      const alreadyAtEnd = index + 1 >= graphemes.length || classify(index + 1) !== current
-      if (current === 'space' || alreadyAtEnd) {
-        if (index + 1 < graphemes.length) index += 1
-        while (index + 1 < graphemes.length && classify(index) === 'space') index += 1
-      }
-      const target = classify(index)
-      while (index + 1 < graphemes.length && classify(index + 1) === target) index += 1
-      continue
-    }
-
-    if (index > 0) index -= 1
-    while (index > 0 && classify(index) === 'space') index -= 1
+    const target = transcriptWordMotionTarget(graphemes, index, options)
+    if (target < 0 || target === index) break
+    index = target
   }
 
   return graphemes[index]?.start ?? 0

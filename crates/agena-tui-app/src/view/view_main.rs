@@ -46,6 +46,75 @@ pub(crate) fn highlight_search_line(
     Line::from(spans)
 }
 
+pub(crate) fn highlight_search_line_with_rich(
+    rich_line: Option<&Line<'static>>,
+    text: &str,
+    base_style: Style,
+    query: &str,
+    active_match: bool,
+    has_match: bool,
+) -> Line<'static> {
+    if !has_match || query.trim().is_empty() {
+        return rich_line
+            .cloned()
+            .unwrap_or_else(|| Line::from(Span::styled(text.to_string(), base_style)));
+    }
+    let Some(rich_line) = rich_line else {
+        return highlight_search_line(text, base_style, query, active_match, has_match);
+    };
+    let ranges = find_search_ranges(text, query);
+    if ranges.is_empty() {
+        return rich_line.clone();
+    }
+
+    let mut spans = Vec::new();
+    let mut offset = 0_usize;
+    for span in &rich_line.spans {
+        let span_text = span.content.as_ref();
+        let span_start = offset;
+        let span_end = span_start.saturating_add(span_text.len());
+        let mut cursor: usize = span_start;
+        for range in &ranges {
+            if range.end <= span_start || range.start >= span_end {
+                continue;
+            }
+            let match_start = range.start.max(span_start);
+            let match_end = range.end.min(span_end);
+            if match_start > cursor
+                && let Some(slice) = span_text
+                    .get(cursor.saturating_sub(span_start)..match_start.saturating_sub(span_start))
+            {
+                spans.push(Span::styled(slice.to_string(), span.style));
+            }
+            if match_start < match_end
+                && let Some(slice) = span_text.get(
+                    match_start.saturating_sub(span_start)..match_end.saturating_sub(span_start),
+                )
+            {
+                let match_style = if active_match {
+                    span.style
+                        .patch(agena_tui_components::theme::selection_style())
+                } else {
+                    span.style
+                        .fg(agena_tui_components::theme::accent_color())
+                        .add_modifier(Modifier::UNDERLINED)
+                };
+                spans.push(Span::styled(slice.to_string(), match_style));
+            }
+            cursor = cursor.max(match_end);
+        }
+        if cursor < span_end
+            && let Some(slice) = span_text.get(cursor.saturating_sub(span_start)..)
+        {
+            spans.push(Span::styled(slice.to_string(), span.style));
+        }
+        offset = span_end;
+    }
+    let mut highlighted = Line::from(spans);
+    highlighted.style = rich_line.style;
+    highlighted
+}
+
 impl App {
     pub(crate) fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
@@ -261,12 +330,13 @@ impl App {
                     let idx = visible_start.saturating_add(offset);
                     let line_is_active = active_match == Some(idx);
                     let line_has_match = rendered.search_matches.binary_search(&idx).is_ok();
-                    let mut rendered_line = if !line_has_match && search_query.trim().is_empty() {
+                    let mut rendered_line = if !line_has_match {
                         line.rich_line.clone().unwrap_or_else(|| {
                             Line::from(Span::styled(line.text.clone(), line.style))
                         })
                     } else {
-                        highlight_search_line(
+                        highlight_search_line_with_rich(
+                            line.rich_line.as_ref(),
                             line.text.as_str(),
                             line.style,
                             search_query.as_str(),
@@ -1064,9 +1134,52 @@ fn background_activity_summary<'a>(kinds: impl IntoIterator<Item = &'a str>) -> 
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        background_activity_summary, transcript_line_is_in_block,
-        transcript_surface_top_right_parts, transcript_visible_range,
+        background_activity_summary, highlight_search_line_with_rich, line_plain_text,
+        transcript_line_is_in_block, transcript_surface_top_right_parts, transcript_visible_range,
     };
+    use ratatui::style::{Color, Style};
+    use ratatui::text::{Line, Span};
+
+    #[test]
+    fn search_highlight_keeps_rich_spans_around_matches() {
+        let rich = Line::from(vec![
+            Span::styled("alpha", Style::default().fg(Color::Red)),
+            Span::styled(" beta", Style::default().fg(Color::Blue)),
+        ]);
+
+        let highlighted = highlight_search_line_with_rich(
+            Some(&rich),
+            "alpha beta",
+            Style::default(),
+            "beta",
+            false,
+            true,
+        );
+
+        assert_eq!(line_plain_text(&highlighted), "alpha beta");
+        assert_eq!(highlighted.spans[0].content.as_ref(), "alpha");
+        assert_eq!(highlighted.spans[0].style.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn search_highlight_leaves_non_match_lines_unchanged() {
+        let rich = Line::from(vec![
+            Span::styled("alpha", Style::default().fg(Color::Red)),
+            Span::styled(" beta", Style::default().fg(Color::Blue)),
+        ]);
+
+        let unchanged = highlight_search_line_with_rich(
+            Some(&rich),
+            "alpha beta",
+            Style::default(),
+            "beta",
+            false,
+            false,
+        );
+
+        assert_eq!(unchanged.spans.len(), 2);
+        assert_eq!(line_plain_text(&unchanged), "alpha beta");
+    }
 
     #[test]
     fn block_selection_range_excludes_rows_outside_the_block() {

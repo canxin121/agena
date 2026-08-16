@@ -26,13 +26,19 @@ import { useChatCommands } from './chat/useChatCommands'
 import { useChatSessionActions } from './chat/useChatSessionActions'
 import { useChatRunUi } from './chat/useChatRunUi'
 import { useChatTranscriptVim } from './chat/useChatTranscriptVim'
+import {
+  composerWordRangeAfter,
+  composerWordRangeBefore,
+  nextComposerWordBoundary,
+  previousComposerWordBoundary,
+} from './chat/composerWordNavigation'
 import PlanViewerDialog from '@/components/chat/PlanViewerDialog.vue'
 import { openComposerInputMenu } from './chat/composerInputMenus'
 import { formatTimeHM } from '@/i18n/intl'
 import { useChatRenderBlocks } from './chat/useChatRenderBlocks'
 import { useChatMessageActions } from './chat/useChatMessageActions'
 import { deriveSendRunConfig } from './chat/modelSendDefaults'
-import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageEntry } from '@/types/chat'
@@ -81,6 +87,8 @@ type OutgoingMessagePart =
 const route = useRoute()
 const router = useRouter()
 const chat = useChatStore()
+const workspacePane = useWorkspacePaneContext()
+const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
 const directoryStore = useDirectoryStore()
 const directorySessions = useDirectorySessionStore()
 const activity = useSessionActivityStore()
@@ -593,12 +601,72 @@ const {
   resetComposerHeight,
 } = composerLayout
 
+function composerTextarea(): HTMLTextAreaElement | null {
+  return getComposerTextareaEl(composerRef.value)
+}
+
+function setComposerCaret(position: number) {
+  void nextTick(() => {
+    const textarea = composerTextarea()
+    if (!textarea) return
+    textarea.focus()
+    textarea.setSelectionRange(position, position)
+  })
+}
+
+function applyComposerEdit(start: number, end: number, replacement: string, cursor: number) {
+  const value = draft.value
+  if (start < 0 || end < start || end > value.length) return
+  draft.value = `${value.slice(0, start)}${replacement}${value.slice(end)}`
+  handleDraftInput()
+  setComposerCaret(cursor)
+}
+
+function handleComposerWordKeydown(event: KeyboardEvent): boolean {
+  const textarea = composerTextarea()
+  if (!textarea) return false
+  if (!event.altKey && !event.ctrlKey) return false
+  if (event.shiftKey) return false
+
+  const cursor = textarea.selectionStart ?? 0
+  const selectionEnd = textarea.selectionEnd ?? cursor
+  const wordLeft = event.key === 'ArrowLeft' || (event.altKey && event.code === 'KeyB')
+  const wordRight = event.key === 'ArrowRight' || (event.altKey && event.code === 'KeyF')
+
+  if (wordLeft || wordRight) {
+    event.preventDefault()
+    const base = wordLeft ? Math.min(cursor, selectionEnd) : Math.max(cursor, selectionEnd)
+    const target = wordLeft
+      ? previousComposerWordBoundary(textarea.value, base)
+      : nextComposerWordBoundary(textarea.value, base)
+    setComposerCaret(target)
+    return true
+  }
+
+  const deleteBackward = event.key === 'Backspace'
+  const deleteForward = event.key === 'Delete'
+  if (!deleteBackward && !deleteForward) return false
+
+  event.preventDefault()
+  if (cursor !== selectionEnd) {
+    applyComposerEdit(cursor, selectionEnd, '', cursor)
+    return true
+  }
+  const range = deleteBackward
+    ? composerWordRangeBefore(textarea.value, cursor)
+    : composerWordRangeAfter(textarea.value, cursor)
+  if (range.start === range.end) return true
+  applyComposerEdit(range.start, range.end, '', range.start)
+  return true
+}
+
 function handleDraftKeydown(e: KeyboardEvent) {
   if (composerFullscreenActive.value && e.key === 'Escape' && !commandOpen.value) {
     e.preventDefault()
     closeEditorFullscreen()
     return
   }
+  if (handleComposerWordKeydown(e)) return
   handleDraftKeydownInner(e)
 }
 
@@ -1004,6 +1072,7 @@ const {
 } = runUi
 
 const transcriptVim = useChatTranscriptVim({
+  enabled: isFocusedWorkspacePane,
   pageRef,
   scrollEl,
   composerRef,
@@ -1370,11 +1439,8 @@ onMounted(async () => {
   // MainLayout already refreshes these, but keep Chat resilient on direct navigation.
   if (!chat.sessions.length) await chat.refreshSessions().catch(() => {})
 
-  const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
-  const sidFromQuery = isEmbeddedWorkspacePane
-    ? readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
-    : ''
-  if (sidFromQuery && sidFromQuery !== chat.selectedSessionId) {
+  const sidFromQuery = readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
+  if (sidFromQuery) {
     await chat.selectSession(sidFromQuery).catch(() => {})
   }
 

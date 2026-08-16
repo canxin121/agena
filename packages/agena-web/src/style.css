@@ -759,3 +759,17 @@
     @apply text-sky-500;
   }
 }
+
+mark[data-agena-search-match] {
+  margin: 0 -1px;
+  padding: 0 1px;
+  border-radius: 2px;
+  background: oklch(var(--ring) / 0.24);
+  color: inherit;
+  box-decoration-break: clone;
+}
+
+mark[data-agena-search-active='true'] {
+  background: oklch(var(--ring) / 0.44);
+  outline: 1px solid oklch(var(--ring) / 0.72);
+}

@@ -5,6 +5,12 @@ import { copyTextToClipboard } from '@/lib/clipboard'
 import { resolveTranscriptPageTarget } from './transcriptNavigation'
 import { resolveTranscriptVimAction, type TranscriptVimAction, type TranscriptVimMode } from './transcriptVim'
 import {
+  collectTranscriptSearchMatches,
+  nextTranscriptSearchMatchIndex,
+  transcriptSearchRanges,
+  type TranscriptSearchMatch,
+} from './transcriptSearch'
+import {
   clampTranscriptOffset,
   findTranscriptCharacter,
   moveTranscriptGrapheme,
@@ -48,6 +54,7 @@ function cssEscape(value: string): string {
 }
 
 export function useChatTranscriptVim(opts: {
+  enabled?: Readonly<Ref<boolean>>
   pageRef: Ref<HTMLElement | null>
   scrollEl: Ref<HTMLElement | null>
   composerRef: Ref<ComposerExpose | null>
@@ -78,7 +85,7 @@ export function useChatTranscriptVim(opts: {
   const searchOpen = ref(false)
   const searchQuery = ref('')
   const searchForward = ref(true)
-  const searchMatches = ref<string[]>([])
+  const searchMatches = ref<TranscriptSearchMatch[]>([])
   const searchMatchIndex = ref(-1)
   const jumpHistory = ref<CursorPoint[]>([])
   const jumpHistoryIndex = ref(0)
@@ -781,30 +788,110 @@ export function useChatTranscriptVim(opts: {
     setCursorPoint({ key: object.entry.key, offset: headOffset })
   }
 
+  let searchHighlightQueued = false
+  let applyingSearchHighlight = false
+  let searchHighlightObserver: MutationObserver | null = null
+
+  function removeSearchHighlights(root: HTMLElement) {
+    for (const mark of Array.from(root.querySelectorAll<HTMLElement>('mark[data-agena-search-match]'))) {
+      const parent = mark.parentNode
+      if (!parent) continue
+      parent.replaceChild(document.createTextNode(mark.textContent || ''), mark)
+      parent.normalize()
+    }
+  }
+
+  function wrapSearchRange(startNode: Text, startOffset: number, endNode: Text, endOffset: number, active: boolean) {
+    const range = document.createRange()
+    range.setStart(startNode, Math.max(0, Math.min(startNode.data.length, startOffset)))
+    range.setEnd(endNode, Math.max(0, Math.min(endNode.data.length, endOffset)))
+    if (range.collapsed) return
+    const mark = document.createElement('mark')
+    mark.dataset.agenaSearchMatch = 'true'
+    if (active) mark.dataset.agenaSearchActive = 'true'
+    mark.append(range.extractContents())
+    range.insertNode(mark)
+  }
+
+  function applySearchHighlightNow() {
+    const root = opts.pageRef.value
+    if (!root) return
+    applyingSearchHighlight = true
+    try {
+      removeSearchHighlights(root)
+      const query = searchQuery.value.trim()
+      if (!query || !searchMatches.value.length) return
+      const activeMatch = searchMatchIndex.value >= 0 ? searchMatches.value[searchMatchIndex.value] : null
+      const activeKey = activeMatch?.key || ''
+      for (const element of cursorElements()) {
+        const key = keyForElement(element)
+        const nodes = selectableTextNodes(element)
+        if (!nodes.length) continue
+        let combined = ''
+        const mapping: { node: Text; start: number; end: number }[] = []
+        for (const node of nodes) {
+          mapping.push({ node, start: combined.length, end: combined.length + node.data.length })
+          combined += node.data
+        }
+        const ranges = transcriptSearchRanges(combined, query)
+        if (!ranges.length) continue
+        const keyMatches = searchMatches.value.filter((match) => match.key === key)
+        const activeOrdinal = activeKey === key ? keyMatches.indexOf(activeMatch as TranscriptSearchMatch) : -1
+        for (let rangeIndex = ranges.length - 1; rangeIndex >= 0; rangeIndex -= 1) {
+          const range = ranges[rangeIndex]
+          const startMapping = mapping.find((item) => range.start >= item.start && range.start <= item.end)
+          const endMapping = mapping.find((item) => range.end >= item.start && range.end <= item.end)
+          if (!startMapping || !endMapping) continue
+          wrapSearchRange(
+            startMapping.node,
+            range.start - startMapping.start,
+            endMapping.node,
+            range.end - endMapping.start,
+            rangeIndex === activeOrdinal,
+          )
+        }
+      }
+    } finally {
+      queueMicrotask(() => {
+        applyingSearchHighlight = false
+      })
+    }
+  }
+
+  function scheduleSearchHighlight() {
+    if (searchHighlightQueued) return
+    searchHighlightQueued = true
+    void nextTick(() => {
+      searchHighlightQueued = false
+      applySearchHighlightNow()
+    })
+  }
+
   function refreshSearchMatches() {
-    const query = searchQuery.value.trim().toLocaleLowerCase()
+    const query = searchQuery.value.trim()
     if (!query) {
       searchMatches.value = []
       searchMatchIndex.value = -1
+      scheduleSearchHighlight()
       return
     }
-    searchMatches.value = cursorElements()
-      .filter((element) => cleanNodeCopyText(element).toLocaleLowerCase().includes(query))
-      .map(keyForElement)
-      .filter(Boolean)
-    searchMatchIndex.value = searchMatches.value.length ? 0 : -1
+    searchMatches.value = collectTranscriptSearchMatches(textEntries().entries, query)
+    searchMatchIndex.value = -1
+    scheduleSearchHighlight()
   }
 
   function isNodeSearchMatch(key: string): boolean {
-    return searchMatches.value.includes(key)
+    return searchMatches.value.some((match) => match.key === key)
   }
 
   function openSearch(forward: boolean) {
     searchForward.value = forward
     searchOpen.value = true
     mode.value = 'SEARCH'
+    searchMatchIndex.value = -1
     removeCursorOverlay()
     commandEcho.value = forward ? '/' : '?'
+    refreshSearchMatches()
     nextTick(() => {
       opts.searchInputRef.value?.focus()
       opts.searchInputRef.value?.select()
@@ -814,15 +901,6 @@ export function useChatTranscriptVim(opts: {
   function setSearchQuery(query: string) {
     searchQuery.value = query
     refreshSearchMatches()
-    if (searchMatches.value.length) {
-      const activeIndex = searchMatches.value.indexOf(activeNodeKey.value)
-      searchMatchIndex.value = activeIndex >= 0 ? activeIndex : 0
-      const element = elementForKey(searchMatches.value[searchMatchIndex.value] || '')
-      const offset = element
-        ? cleanNodeCopyText(element).toLocaleLowerCase().indexOf(query.trim().toLocaleLowerCase())
-        : 0
-      selectElement(element, { center: true, offset: Math.max(0, offset) })
-    }
   }
 
   function closeSearch(clear = false) {
@@ -832,25 +910,46 @@ export function useChatTranscriptVim(opts: {
       searchQuery.value = ''
       searchMatches.value = []
       searchMatchIndex.value = -1
+      scheduleSearchHighlight()
     }
     ensureActive()?.focus({ preventScroll: true })
     syncNativeSelection()
   }
 
+  function selectSearchMatch(match: TranscriptSearchMatch, recordJump: boolean) {
+    const element = elementForKey(match.key)
+    if (!element) return
+    searchMatchIndex.value = searchMatches.value.indexOf(match)
+    selectElement(element, { center: true, recordJump, offset: match.textStart })
+    scheduleSearchHighlight()
+  }
+
   function jumpSearch(reverse: boolean) {
     if (!searchMatches.value.length) refreshSearchMatches()
     if (!searchMatches.value.length) return
-    const direction = (searchForward.value ? 1 : -1) * (reverse ? -1 : 1)
-    const current = searchMatches.value.indexOf(activeNodeKey.value)
-    const base = current >= 0 ? current : searchMatchIndex.value >= 0 ? searchMatchIndex.value : 0
-    const next = (base + direction + searchMatches.value.length) % searchMatches.value.length
-    searchMatchIndex.value = next
-    pushJumpMark()
-    const element = elementForKey(searchMatches.value[next] || '')
-    const offset = element
-      ? cleanNodeCopyText(element).toLocaleLowerCase().indexOf(searchQuery.value.trim().toLocaleLowerCase())
-      : 0
-    selectElement(element, { center: true, offset: Math.max(0, offset) })
+    const forward = searchForward.value !== reverse
+    const point = cursorPoint()
+    const activeMatch = searchMatchIndex.value >= 0 ? searchMatches.value[searchMatchIndex.value] : null
+    const cursorGlobal = point ? globalOffsetForPoint(point) : 0
+    let anchor = cursorGlobal ?? 0
+    if (
+      activeMatch &&
+      cursorGlobal !== null &&
+      cursorGlobal >= activeMatch.globalStart &&
+      cursorGlobal < activeMatch.globalEnd
+    ) {
+      anchor = forward ? activeMatch.globalEnd : activeMatch.globalStart
+    }
+    const next = nextTranscriptSearchMatchIndex(searchMatches.value, anchor, forward)
+    const match = searchMatches.value[next]
+    if (!match) return
+    selectSearchMatch(match, true)
+    if (searchOpen.value) {
+      void nextTick(() => {
+        opts.searchInputRef.value?.focus()
+        opts.searchInputRef.value?.setSelectionRange(searchQuery.value.length, searchQuery.value.length)
+      })
+    }
   }
 
   function handleSearchKeydown(event: KeyboardEvent) {
@@ -861,6 +960,7 @@ export function useChatTranscriptVim(opts: {
     }
     if (event.key === 'Enter') {
       event.preventDefault()
+      jumpSearch(false)
       closeSearch(false)
       return
     }
@@ -1221,6 +1321,7 @@ export function useChatTranscriptVim(opts: {
   }
 
   function onKeydown(event: KeyboardEvent) {
+    if (opts.enabled && !opts.enabled.value) return
     if (!opts.pageRef.value?.isConnected || event.defaultPrevented) return
     const target = event.target
     const textarea = composerTextarea(opts.composerRef.value)
@@ -1311,6 +1412,7 @@ export function useChatTranscriptVim(opts: {
       searchQuery.value = ''
       searchMatches.value = []
       searchMatchIndex.value = -1
+      scheduleSearchHighlight()
       jumpHistory.value = []
       jumpHistoryIndex.value = 0
       clearPending()
@@ -1328,15 +1430,27 @@ export function useChatTranscriptVim(opts: {
       nextTick(() => {
         ensureActive(true)
         syncNativeSelection()
+        scheduleSearchHighlight()
       }),
   )
 
   onMounted(() => {
+    const root = opts.pageRef.value
+    if (root && typeof MutationObserver !== 'undefined') {
+      searchHighlightObserver = new MutationObserver(() => {
+        if (applyingSearchHighlight) return
+        if (!searchOpen.value && !searchQuery.value.trim()) return
+        scheduleSearchHighlight()
+      })
+      searchHighlightObserver.observe(root, { childList: true, subtree: true, characterData: true })
+    }
     window.addEventListener('keydown', onKeydown)
     window.addEventListener('resize', scheduleCursorPlacement)
     opts.scrollEl.value?.addEventListener('scroll', scheduleCursorPlacement, { passive: true })
   })
   onBeforeUnmount(() => {
+    searchHighlightObserver?.disconnect()
+    searchHighlightObserver = null
     window.removeEventListener('keydown', onKeydown)
     window.removeEventListener('resize', scheduleCursorPlacement)
     opts.scrollEl.value?.removeEventListener('scroll', scheduleCursorPlacement)

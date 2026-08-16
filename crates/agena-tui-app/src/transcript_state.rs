@@ -3691,3 +3691,61 @@ mod activity_v2_tests {
         assert!(!transcript.v2_activities.contains_key(&activity_id));
     }
 }
+
+#[cfg(test)]
+mod word_motion_tests {
+    use super::*;
+
+    fn positions(text: &str) -> Vec<TranscriptGraphemePosition> {
+        let mut column = 0_usize;
+        text.graphemes(true)
+            .map(|grapheme| {
+                let position = TranscriptGraphemePosition {
+                    position: TranscriptTextPosition { line: 0, column },
+                    grapheme: grapheme.to_owned(),
+                };
+                column = column.saturating_add(grapheme.len());
+                position
+            })
+            .collect()
+    }
+
+    fn target(
+        text: &str,
+        current: usize,
+        forward: bool,
+        to_end: bool,
+        big_word: bool,
+    ) -> Option<usize> {
+        transcript_word_motion_target(&positions(text), current, forward, to_end, big_word)
+    }
+
+    #[test]
+    fn vim_word_motions_match_start_end_and_backward_end_rules() {
+        let text = "one two three";
+
+        assert_eq!(target(text, 0, true, false, false), Some(4));
+        assert_eq!(target(text, 1, true, false, false), Some(4));
+        assert_eq!(target(text, 4, true, false, false), Some(8));
+
+        assert_eq!(target(text, 5, false, false, false), Some(4));
+        assert_eq!(target(text, 4, false, false, false), Some(0));
+
+        assert_eq!(target(text, 0, true, true, false), Some(2));
+        assert_eq!(target(text, 2, true, true, false), Some(2));
+        assert_eq!(target(text, 3, true, true, false), Some(6));
+
+        assert_eq!(target(text, 8, false, true, false), Some(6));
+    }
+
+    #[test]
+    fn word_motions_treat_punctuation_and_word_runs_like_vim() {
+        let text = "one.two  three";
+
+        assert_eq!(target(text, 0, true, false, false), Some(3));
+        assert_eq!(target(text, 3, true, false, false), Some(4));
+        assert_eq!(target(text, 0, true, true, false), Some(2));
+        assert_eq!(target(text, 0, true, false, true), Some(9));
+        assert_eq!(target(text, 0, true, true, true), Some(6));
+    }
+}

@@ -485,6 +485,81 @@ mod tests {
     }
 
     #[test]
+    fn answer_body_renders_independently_selectable_markdown_blocks() {
+        // Regression: the final assistant answer used to own its whole body as
+        // one opaque child section, so block/line selection and the `vim` /
+        // `yam` / `gq` text objects could only grab the entire part. The body
+        // must project as one MarkdownBlock node per block — the exact shape
+        // plain message text uses — so it operates like body text.
+        let now = Utc::now();
+        let part = TranscriptEntryPart {
+            id: TranscriptContentId::StoredPart(9),
+            status: PartExecutionStatusResource::Completed,
+            content: TranscriptPartContent::Activity(TranscriptActivityContent::Answer(Box::new(
+                agena_domain::TextSegmentActivity {
+                    text: "Introduction.\n\n```rust\nlet answer = 42;\n```\n\n- first\n- second"
+                        .to_owned(),
+                },
+            ))),
+        };
+        let message = entry(
+            3,
+            agena_api::resource::RunRole::Assistant,
+            RunStatus::Completed,
+            now,
+            vec![part],
+        );
+
+        let rendered = render_entry_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            &TranscriptDetailDefaults {
+                activity_default_expanded: true,
+                kind_defaults: std::collections::BTreeMap::new(),
+            },
+            &Default::default(),
+        );
+
+        // The answer keeps its toggleable headline node; the body is NOT one
+        // opaque ActivitySection child.
+        let activity = rendered
+            .nodes
+            .iter()
+            .find(|node| matches!(&node.key, TranscriptNodeKey::Activity { .. }))
+            .expect("answer headline node");
+        assert_eq!(activity.kind, TranscriptNodeKind::Activity);
+        assert!(activity.toggleable);
+        assert!(activity.expanded);
+        assert!(
+            !rendered
+                .nodes
+                .iter()
+                .any(|node| matches!(&node.key, TranscriptNodeKey::ActivitySection { .. })),
+            "answer body must not be a single opaque section"
+        );
+
+        // One MarkdownBlock node per body block, with per-block copy text and
+        // all of it living inside the expanded answer.
+        let block_nodes = rendered
+            .nodes
+            .iter()
+            .filter(|node| matches!(&node.key, TranscriptNodeKey::MarkdownBlock { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(block_nodes.len(), 3);
+        assert_eq!(block_nodes[0].kind, TranscriptNodeKind::MarkdownParagraph);
+        assert_eq!(block_nodes[1].kind, TranscriptNodeKind::MarkdownCode);
+        assert_eq!(block_nodes[1].copy_text, "let answer = 42;");
+        assert_eq!(block_nodes[2].kind, TranscriptNodeKind::MarkdownList);
+        assert!(
+            block_nodes
+                .iter()
+                .all(|node| node.start_line >= activity.end_line
+                    && node.end_line <= rendered.lines.len())
+        );
+    }
+
+    #[test]
     fn pending_interaction_part_renders_the_inline_document_when_expanded() {
         let now = Utc::now();
         let part = TranscriptEntryPart {

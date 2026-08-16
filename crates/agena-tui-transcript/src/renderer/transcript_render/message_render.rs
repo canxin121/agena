@@ -4,12 +4,13 @@ use super::super::{
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
     ToolOutputPreview, TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey,
     TranscriptNodeKind, UnicodeWidthStr, concise_text, format_occurred_time, format_timestamp,
-    json_value_to_markdown, push_activity_headline, push_expanded_markdown,
+    json_value_to_markdown, markdown_blocks, push_activity_headline, push_expanded_markdown,
     push_expanded_tool_text, push_label_value, push_markdown_document, push_markdown_rule,
     push_section_heading, push_single_line, push_wrapped_line, render_entry_detailed,
-    render_expanded_tool_text_block, strip_terminal_ansi_sequences, style_for_role,
-    tool_output_copy_text, transcript_message_parts, transcript_part_content,
-    transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
+    render_expanded_tool_text_block, render_markdown_block, should_suppress_markdown_block,
+    strip_terminal_ansi_sequences, style_for_role, tool_output_copy_text, transcript_message_parts,
+    transcript_part_content, transcript_spinner_placeholder, trim_empty_line_edges,
+    truncate_display_width,
 };
 use super::operation_render::render_tool_execution_with_sections;
 use super::request_render::{preview_for_part, render_user_input_request};
@@ -876,6 +877,65 @@ fn rendered_activity_section_node(
     })
 }
 
+/// Render the expanded answer body as one [`TranscriptNodeKey::MarkdownBlock`]
+/// node per Markdown block — the exact projection plain message text uses — so
+/// block/line selection, text objects (`vim`/`yam`/`gq`) and copy all operate
+/// on the answer identically to body text.
+fn append_answer_markdown_blocks(
+    message: &TranscriptEntry,
+    part: &TranscriptEntryPart,
+    text: &str,
+    width: u16,
+    out: &mut Vec<RenderedLine>,
+    children: &mut Vec<RenderedTranscriptNode>,
+) {
+    let blocks = markdown_blocks(text);
+    for (block_index, block) in blocks.iter().enumerate() {
+        if should_suppress_markdown_block(blocks.as_slice(), block_index) {
+            continue;
+        }
+        if block.leading_blank_line && !out.is_empty() {
+            out.push(
+                RenderedLine::plain("    ".to_owned(), Style::default())
+                    .with_copy_projection(String::new(), 4),
+            );
+        }
+        let start_line = out.len();
+        render_markdown_block(out, "    ", block, width);
+        if out.len() > start_line {
+            let semantic_unit_count = out[start_line..]
+                .iter()
+                .filter_map(|line| line.navigation_unit)
+                .fold((None, 0_usize), |(previous, count), unit| {
+                    (
+                        Some(unit),
+                        count.saturating_add(usize::from(previous != Some(unit))),
+                    )
+                })
+                .1;
+            let atomic = if block.kind == TranscriptNodeKind::MarkdownMath {
+                semantic_unit_count <= 1
+            } else {
+                block.kind.uses_atomic_navigation()
+            };
+            children.push(RenderedTranscriptNode {
+                key: TranscriptNodeKey::MarkdownBlock {
+                    entry_id: message.id,
+                    content_id: part.id,
+                    block_index,
+                },
+                kind: block.kind,
+                start_line,
+                end_line: out.len(),
+                copy_text: block.copy_text.clone(),
+                atomic,
+                toggleable: false,
+                expanded: true,
+            });
+        }
+    }
+}
+
 fn canonical_resource_attachment(resource: &agena_domain::ResourceActivity) -> PartAttachment {
     let kind = match resource.kind {
         agena_domain::ResourceKind::Image => PartAttachmentKind::Image,
@@ -1257,9 +1317,12 @@ pub(crate) fn render_part_node(
         // body), but the user may collapse or expand it like any other
         // activity part. Interstitial TextSegments render through the
         // canonical path and stay collapsed; the answer is its own toggleable
-        // node so it is never folded with the working notes. Like canonical
-        // activities, the node owns only its headline range and the body is a
-        // child section, so selection and navigation match every other block.
+        // node so it is never folded with the working notes. The node owns
+        // only its headline range; the body renders as one MarkdownBlock
+        // child per block — the same projection plain message text uses — so
+        // per-block/per-line selection, text objects (`vim`/`yam`/`gq`) and
+        // copy operate on the answer exactly as on body text instead of
+        // forcing whole-part selection.
         TranscriptPartContent::Activity(TranscriptActivityContent::Answer(answer)) => {
             let key = TranscriptNodeKey::Activity {
                 entry_id: message.id,
@@ -1277,33 +1340,23 @@ pub(crate) fn render_part_node(
             );
             let headline_end = out.len();
             let mut children = Vec::new();
-            let body_start = out.len();
             if expanded {
-                push_markdown_document(out, "    ", answer.text.as_str(), width);
-            }
-            if let Some(child) = rendered_activity_section_node(
-                TranscriptNodeKey::ActivitySection {
-                    entry_id: message.id,
-                    content_id: part.id,
-                    section: TranscriptActivitySection::Detail(0),
-                },
-                body_start,
-                out.len(),
-                answer.text.clone(),
-                false,
-                true,
-                out,
-            ) {
-                children.push(child);
+                append_answer_markdown_blocks(
+                    message,
+                    part,
+                    answer.text.as_str(),
+                    width,
+                    out,
+                    &mut children,
+                );
             }
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
-                copy_text: if expanded {
-                    answer.text.clone()
-                } else {
-                    String::new()
-                },
+                // The Markdown block children own the answer body's copy; the
+                // toggle node contributes nothing so an aggregate copy of the
+                // entry contains each block exactly once.
+                copy_text: String::new(),
                 toggleable: true,
                 expanded,
                 end_line: Some(headline_end),

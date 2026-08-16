@@ -1149,7 +1149,13 @@ mod tests {
             content_part(2, "text", "user", serde_json::json!({ "text": "hi" })),
             run(3, "assistant", "cancelled"),
             run(5, "assistant", "completed"),
-            content_part_for(5, 6, "text", "assistant", serde_json::json!({ "text": "answer" })),
+            content_part_for(
+                5,
+                6,
+                "text",
+                "assistant",
+                serde_json::json!({ "text": "answer" }),
+            ),
         ];
         let entries = parts_entries(&parts);
         assert_eq!(entries.len(), 2);

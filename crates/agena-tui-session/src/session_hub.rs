@@ -13,7 +13,7 @@ use std::borrow::Cow;
 
 use agena_tui::i18n::I18n;
 use agena_tui_components::theme::{accent_color, danger_color, muted_style, selection_style};
-use agena_tui_components::{build_accented_two_line_list_item, build_shortcut_line, ShortcutHint};
+use agena_tui_components::{ShortcutHint, build_accented_two_line_list_item, build_shortcut_line};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -382,7 +382,10 @@ pub fn render_session_hub(
         };
         Line::from(Span::styled(prompt, accent_color()))
     } else {
-        Line::from(Span::styled(i18n.text("hub-search-placeholder"), muted_style()))
+        Line::from(Span::styled(
+            i18n.text("hub-search-placeholder"),
+            muted_style(),
+        ))
     };
     frame.render_widget(Paragraph::new(search_title), search_area);
 
@@ -435,11 +438,7 @@ fn render_rows(
     i18n: &I18n,
 ) {
     let mut list_items = Vec::with_capacity(presentation.rows().len());
-    // The selected List row counts every rendered line before it, so headers
-    // (1 line) and two-line session rows both contribute their height.
-    let mut selected_list_row = 0usize;
-    let mut flat_row = 0usize;
-    for (index, row) in presentation.rows().iter().enumerate() {
+    for row in presentation.rows() {
         let item = match row {
             HubRow::Header(kind) => ListItem::new(Line::from(Span::styled(
                 format!(" {} ", i18n.text(kind.localization_key())),
@@ -453,25 +452,22 @@ fn render_rows(
                 Some(Cow::Borrowed(item.detail.as_str())),
             ),
         };
-        if index == presentation.selection() {
-            selected_list_row = flat_row;
-        }
-        flat_row += item.height();
         list_items.push(item);
     }
     let list = List::new(list_items)
         .highlight_style(selection_style())
         .highlight_symbol("> ");
+    // `selected` is the ITEM index, not a line offset; the List widget itself
+    // scrolls to the selected item (honoring multi-line item heights).
     let mut state = ListState::default();
-    state.select(Some(selected_list_row));
+    state.select(Some(presentation.selection()));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        HubRow, SessionHubItem, SessionHubPresentation, SessionHubSection,
-        SessionHubSectionKind,
+        HubRow, SessionHubItem, SessionHubPresentation, SessionHubSection, SessionHubSectionKind,
     };
 
     fn item(id: i64) -> SessionHubItem {
@@ -508,7 +504,11 @@ mod tests {
             section(SessionHubSectionKind::Recent, &[4]),
         ]);
         let rows = presentation.rows();
-        assert_eq!(rows.len(), 5, "new row + attention (header+row) + recent (header+row)");
+        assert_eq!(
+            rows.len(),
+            5,
+            "new row + attention (header+row) + recent (header+row)"
+        );
         assert_eq!(rows[0], HubRow::Item(new_session_item()));
         assert_eq!(rows[1], HubRow::Header(SessionHubSectionKind::Attention));
         assert_eq!(rows[2], HubRow::Item(item(3)));
@@ -517,7 +517,12 @@ mod tests {
         // No Running header — the empty bucket was dropped.
         assert!(!rows.contains(&HubRow::Header(SessionHubSectionKind::Running)));
         // Selection lands on the first row: the create action.
-        assert!(presentation.selected_item().map(|r| r.is_new_session).unwrap_or(false));
+        assert!(
+            presentation
+                .selected_item()
+                .map(|r| r.is_new_session)
+                .unwrap_or(false)
+        );
         assert_eq!(presentation.total_count(), 3);
     }
 
@@ -562,7 +567,12 @@ mod tests {
         assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(3));
         // Wraps back to the create row.
         presentation.move_selection_section(1);
-        assert!(presentation.selected_item().map(|s| s.is_new_session).unwrap_or(false));
+        assert!(
+            presentation
+                .selected_item()
+                .map(|s| s.is_new_session)
+                .unwrap_or(false)
+        );
         // Shift+Tab walks back: recent → running → create.
         presentation.move_selection_section(-1);
         assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(3));
@@ -599,7 +609,12 @@ mod tests {
         assert_eq!(presentation.total_count(), 2);
         assert_eq!(presentation.rows().len(), 3);
         // Selection stays on the create row by identity.
-        assert!(presentation.selected_item().map(|r| r.is_new_session).unwrap_or(false));
+        assert!(
+            presentation
+                .selected_item()
+                .map(|r| r.is_new_session)
+                .unwrap_or(false)
+        );
         // Down lands on the matching row.
         presentation.move_selection(1);
         assert_eq!(presentation.selected_item().map(|s| s.session_id), Some(3));

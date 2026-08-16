@@ -6,6 +6,8 @@
  * rules forbid exporting types from .vue files.
  */
 
+import type { SessionState } from '@/types/chat'
+
 export type SessionResource = {
   id: number
   parent_id?: number | null
@@ -16,7 +18,7 @@ export type SessionResource = {
   version: number
   relation_kind: 'root' | 'child' | 'fork' | 'rewind' | 'subagent'
   lifecycle_state: string
-  state: 'creating' | 'ready' | 'running' | 'awaiting_user' | 'interrupted' | 'failed'
+  state: SessionState
   is_subagent: boolean
   message_count: number
   child_session_count: number

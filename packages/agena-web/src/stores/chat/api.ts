@@ -8,8 +8,9 @@
 // server rejects unknown fields, including the old Agent/profile selection.
 
 import { apiJson } from '../../lib/api'
+import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
-import type { MessageEntry, MessageError, MessagePart, MessageInfo, Session } from '../../types/chat'
+import type { MessageEntry, MessageError, MessagePart, MessageInfo, Session, SessionState } from '../../types/chat'
 import { compareChatIds } from './messageIndex'
 
 // --- agena wire projections ------------------------------------------------
@@ -27,7 +28,7 @@ export type AgenaSession = {
   version?: number
   relation_kind?: string
   lifecycle_state?: string
-  state?: string
+  state?: SessionState
   is_subagent?: boolean
   message_count?: number
   child_session_count?: number
@@ -64,10 +65,7 @@ export type AgenaSessionParts = {
 export type AgenaExecutionState = {
   session: AgenaSession
   parts: AgenaPart[]
-  workflow_state: 'quiescent' | 'tool_pending' | 'blocked' | string
-  active_execution?: { execution_id: string; phase?: string } | null
   latest_event_seq?: number | null
-  pending_interactive_requests?: JsonValue[]
   execution?: {
     agent_id?: string
     model_provider_id?: string | null
@@ -130,13 +128,9 @@ export type SendMessageResponse = {
 }
 
 export type SessionExecutionStatus = {
-  state: string
-  workflow_state: string
-  active_execution?: { execution_id?: string; phase?: string } | null
-  pending_interactive_requests?: JsonValue[]
+  state: SessionState
   execution?: AgenaExecutionState['execution']
   usage?: AgenaExecutionState['usage']
-  running: boolean
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -164,6 +158,7 @@ function toSession(s: unknown): Session | null {
   return {
     ...(rec as unknown as Session),
     id,
+    state: normalizeSessionState(rec.state),
     ...(title ? { title } : {}),
     ...(lastAt ? { last_message_at: lastAt } : {}),
     ...(created ? { created_at: created } : {}),
@@ -783,9 +778,16 @@ export async function getSession(sessionId: string): Promise<Session> {
   return session
 }
 
-/** GET /api/v1/sessions/{id}/state — execution + parts + pending interactions. */
+/** GET /api/v1/sessions/{id}/state — execution + parts + tagged session state. */
 export async function getSessionExecution(sessionId: string): Promise<AgenaExecutionState> {
-  return await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/state`)
+  const raw = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/state`)
+  return {
+    ...raw,
+    session: {
+      ...raw.session,
+      state: normalizeSessionState(raw.session?.state),
+    },
+  }
 }
 
 /** GET /api/v1/sessions/{id}/parts — ordered part snapshot (reconnect catch-up). */
@@ -989,19 +991,11 @@ export async function getSessionExecutionStatus(sessionId: string): Promise<Sess
   if (!sid) return null
   try {
     const state = await getSessionExecution(sid)
-    const workflow = String(state.workflow_state || '')
-    const s = String(state.session?.state || 'ready')
-    const active = state.active_execution ?? null
+    const s = normalizeSessionState(state.session?.state)
     return {
       state: s,
-      workflow_state: workflow,
-      active_execution: active,
-      pending_interactive_requests: Array.isArray(state.pending_interactive_requests)
-        ? state.pending_interactive_requests
-        : [],
       execution: state.execution,
       usage: state.usage,
-      running: s === 'running' || s === 'creating' || (active != null && typeof active.execution_id === 'string'),
     }
   } catch {
     return null

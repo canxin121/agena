@@ -529,7 +529,7 @@ mod router_contract_tests {
         },
         resource::{
             PermissionActionResource, PermissionReply, PermissionReplyKind, RunOptions,
-            SessionExecutionResource, SessionState, UserInputReply, UserInputReplyKind,
+            SessionExecutionResource, UserInputReply, UserInputReplyKind,
         },
     };
     use agena_application::Application;
@@ -1265,7 +1265,13 @@ mod router_contract_tests {
             .expect("read session state body");
         let state: agena_application::dto::SessionExecutionResource =
             serde_json::from_slice(&body).expect("decode shared session execution resource");
-        assert!(state.pending_interactive_requests.is_empty());
+        assert!(
+            state
+                .session
+                .state
+                .pending_interactive_requests()
+                .is_empty()
+        );
 
         let _ = std::fs::remove_dir_all(workspace_path);
     }
@@ -2175,8 +2181,8 @@ mod router_contract_tests {
                 tokio::time::Instant::now() < deadline,
                 "timed out waiting for session {session_id}: state={:?}, workflow={:?}, pending={}, parts={:#?}",
                 execution.session.state,
-                execution.workflow_state,
-                execution.pending_interactive_requests.len(),
+                execution.session.state.workflow_state(),
+                execution.session.state.pending_interactive_requests().len(),
                 execution.parts,
             );
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -2345,7 +2351,7 @@ mod router_contract_tests {
             .expect("read authoritative post-lag execution snapshot");
         assert_eq!(converged.session.title, final_title);
         assert_eq!(converged.session.version, snapshot.version);
-        assert_eq!(converged.session.state, SessionState::Ready);
+        assert_eq!(converged.session.state.as_str(), "ready");
         provider.await.expect("empty fake provider exits");
     }
 
@@ -2532,10 +2538,10 @@ mod router_contract_tests {
 
         let client_b = AgenaClient::new(server.url.as_str()).expect("build second client");
         let running = wait_for_execution(&client_b, session_id, |execution| {
-            execution.session.state == SessionState::Running
+            execution.session.state.is_running()
         })
         .await;
-        assert!(running.active_execution.is_some());
+        assert!(running.session.state.active_execution().is_some());
         let overview = client_b
             .session_overview(Some(server.workspace_id), 10)
             .await
@@ -2549,12 +2555,18 @@ mod router_contract_tests {
 
         release_tx.send(()).expect("release fake provider response");
         let completed = wait_for_execution(&client_b, session_id, |execution| {
-            execution.session.state == SessionState::Ready
+            execution.session.state.as_str() == "ready"
                 && execution_text(execution).contains("completed after disconnect")
         })
         .await;
-        assert!(completed.active_execution.is_none());
-        assert!(completed.pending_interactive_requests.is_empty());
+        assert!(completed.session.state.active_execution().is_none());
+        assert!(
+            completed
+                .session
+                .state
+                .pending_interactive_requests()
+                .is_empty()
+        );
         provider.await.expect("fake provider exits");
     }
 
@@ -2583,10 +2595,14 @@ mod router_contract_tests {
 
         let client_b = AgenaClient::new(server.url.as_str()).expect("build reply client B");
         let pending = wait_for_execution(&client_b, session_id, |execution| {
-            !execution.pending_interactive_requests.is_empty()
+            !execution
+                .session
+                .state
+                .pending_interactive_requests()
+                .is_empty()
         })
         .await;
-        let request_id = pending.pending_interactive_requests[0]
+        let request_id = pending.session.state.pending_interactive_requests()[0]
             .request
             .request_id()
             .to_owned();
@@ -2615,11 +2631,17 @@ mod router_contract_tests {
             .expect("fake provider receives continuation")
             .expect("continuation provider request exists");
         let completed = wait_for_execution(&client_c, session_id, |execution| {
-            execution.session.state == SessionState::Ready
+            execution.session.state.as_str() == "ready"
                 && execution_text(execution).contains("continued after reply")
         })
         .await;
-        assert!(completed.pending_interactive_requests.is_empty());
+        assert!(
+            completed
+                .session
+                .state
+                .pending_interactive_requests()
+                .is_empty()
+        );
         provider.await.expect("fake provider exits");
         assert!(
             requests.recv().await.is_none(),
@@ -2675,18 +2697,22 @@ mod router_contract_tests {
         let client_b = AgenaClient::new(server.url.as_str()).expect("build permission client B");
         let pending = wait_for_execution(&client_b, session_id, |execution| {
             execution
-                .pending_interactive_requests
+                .session
+                .state
+                .pending_interactive_requests()
                 .iter()
                 .any(|pending| pending.request.as_permission().is_some())
         })
         .await;
         let pending_permission = pending
-            .pending_interactive_requests
+            .session
+            .state
+            .pending_interactive_requests()
             .iter()
             .find(|pending| pending.request.as_permission().is_some())
             .expect("one durable permission request");
         assert!(
-            pending.active_execution.is_some(),
+            pending.session.state.active_execution().is_some(),
             "permission wait must remain owned by the original server execution: {pending:#?}"
         );
         assert_eq!(pending_permission.session_id, session_id);
@@ -2726,11 +2752,17 @@ mod router_contract_tests {
             .expect("fake provider receives exactly one permission continuation")
             .expect("permission continuation provider request exists");
         let completed = wait_for_execution(&client_c, session_id, |execution| {
-            execution.session.state == SessionState::Ready
+            execution.session.state.as_str() == "ready"
                 && execution_text(execution).contains("continued after permission reply")
         })
         .await;
-        assert!(completed.pending_interactive_requests.is_empty());
+        assert!(
+            completed
+                .session
+                .state
+                .pending_interactive_requests()
+                .is_empty()
+        );
         provider.await.expect("fake provider exits");
         assert!(
             requests.recv().await.is_none(),
@@ -2789,9 +2821,14 @@ mod router_contract_tests {
         let client_a = AgenaClient::new(server.url.as_str()).expect("build submitting client");
         let submitted = submit_test_run(&client_a, server.workspace_id, "cancel race").await;
         let session_id = submitted.session.id;
-        let execution_id = submitted
-            .active_execution
-            .as_ref()
+        let running = wait_for_execution(&client_a, session_id, |execution| {
+            execution.session.state.active_execution().is_some()
+        })
+        .await;
+        let execution_id = running
+            .session
+            .state
+            .active_execution()
             .expect("submitted run is active")
             .execution_id;
         tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
@@ -2815,7 +2852,8 @@ mod router_contract_tests {
         provider.await.expect("fake provider exits");
 
         let terminal = wait_for_execution(&client_b, session_id, |execution| {
-            execution.session.state == SessionState::Ready && execution.active_execution.is_none()
+            execution.session.state.as_str() == "ready"
+                && execution.session.state.active_execution().is_none()
         })
         .await;
         let assistant_runs = terminal

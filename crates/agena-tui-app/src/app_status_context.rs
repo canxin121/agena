@@ -8,10 +8,12 @@ impl App {
             SessionActivity::AwaitingPermission => {
                 Some(ui_text::t(&self.i18n, "session-awaiting-approval"))
             }
-            SessionActivity::AwaitingUserInput => {
+            SessionActivity::AwaitingInteraction => {
                 Some(ui_text::t(&self.i18n, "session-awaiting-user-input"))
             }
-            SessionActivity::Blocked => Some(ui_text::t(&self.i18n, "session-blocked")),
+            SessionActivity::NeedsRecovery => {
+                Some(ui_text::t(&self.i18n, "session-state-interrupted"))
+            }
         }
     }
 

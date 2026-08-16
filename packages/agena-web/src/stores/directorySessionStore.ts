@@ -7,17 +7,17 @@ import { apiJson } from '@/lib/api'
 import { normalizeDirectories } from '@/features/sessions/model/projects'
 import type { DirectoryEntry } from '@/features/sessions/model/types'
 import { normalizeDirForCompare } from '@/features/sessions/model/labels'
-import type { Session } from '@/types/chat'
+import { normalizeSessionState, sessionStateKind, sessionStateNeedsAttention, type Session } from '@/types/chat'
 import type { SseEvent } from '@/lib/sse'
 import { defaultChatSidebarUiPrefs, patchChatSidebarUiPrefs, type ChatSidebarUiPrefs } from '@/data/chatSidebarUiPrefs'
 import { useChatStore } from './chat'
 
 import {
-  normalizeRuntime,
-  runtimeFromAgenaSession,
-  runtimeIsActive,
-  runtimeStateEquivalent,
-  type SessionRuntimeState,
+  sessionStateHasAttention,
+  sessionStateIsActive,
+  stateSnapshotEquivalent,
+  stateSnapshotFromAgenaSession,
+  type SessionStateSnapshot,
 } from './directorySessionRuntime'
 import type { JsonObject as UnknownRecord, JsonValue } from '@/types/json'
 
@@ -74,13 +74,13 @@ function pinnedSessionIdSet(sessions: UnknownRecord[]): Set<string> {
   )
 }
 
-function runtimeMapFromAgenaSessions(sessions: UnknownRecord[]): Record<string, SessionRuntimeState> {
-  const runtime: Record<string, SessionRuntimeState> = {}
+function stateMapFromAgenaSessions(sessions: UnknownRecord[]): Record<string, SessionStateSnapshot> {
+  const states: Record<string, SessionStateSnapshot> = {}
   for (const session of sessions) {
     const id = agenaSessionId(session)
-    if (id) runtime[id] = runtimeFromAgenaSession(session)
+    if (id) states[id] = stateSnapshotFromAgenaSession(session)
   }
-  return runtime
+  return states
 }
 
 async function fetchAgenaWorkspaces(opts?: {
@@ -175,10 +175,13 @@ async function fetchAgenaSessions(opts?: {
 function overviewFromSessions(sessions: UnknownRecord[]): AgenaOverviewWire {
   const overview: AgenaOverviewWire = { attention: [], running: [], recent: [] }
   for (const session of sessions) {
-    const state = typeof session.state === 'string' ? session.state.trim() : ''
-    if (state === 'awaiting_user' || state === 'interrupted') overview.attention.push(session)
-    else if (state === 'running' || state === 'creating') overview.running.push(session)
-    else overview.recent.push(session)
+    const state = normalizeSessionState(session.state)
+    const kind = sessionStateKind(state)
+    if (kind === 'awaiting_interaction' || kind === 'interrupted' || kind === 'failed') {
+      overview.attention.push(session)
+    } else if (kind === 'running' || kind === 'creating') {
+      overview.running.push(session)
+    } else overview.recent.push(session)
   }
   return overview
 }
@@ -218,20 +221,21 @@ function toSidebarRowFromAgenaSession(
 function filterOverviewByWorkspace(
   overview: AgenaOverviewWire,
   workspaceId: string,
-): { sessions: UnknownRecord[]; running: number; blocked: number } {
+): { sessions: UnknownRecord[]; running: number; attention: number } {
   const sessions: UnknownRecord[] = []
   let running = 0
-  let blocked = 0
+  let attention = 0
   for (const bucket of [overview.recent, overview.running, overview.attention]) {
     for (const session of bucket) {
       if (agenaWorkspaceId(session) !== workspaceId) continue
       sessions.push(session)
-      const state = typeof session.state === 'string' ? session.state.trim() : ''
-      if (state === 'running' || state === 'creating') running += 1
-      if (state === 'awaiting_user' || state === 'interrupted') blocked += 1
+      const state = normalizeSessionState(session.state)
+      const kind = sessionStateKind(state)
+      if (kind === 'running' || kind === 'creating') running += 1
+      if (sessionStateNeedsAttention(state)) attention += 1
     }
   }
-  return { sessions, running, blocked }
+  return { sessions, running, attention }
 }
 
 const SIDEBAR_DIRECTORIES_PAGE_SIZE = 15
@@ -262,9 +266,9 @@ type DirectorySidebarView = {
   sessionCount: number
   rootPage: number
   rootPageCount: number
-  hasActiveOrBlocked: boolean
+  hasActiveOrAttention: boolean
   hasRunningSessions: boolean
-  hasBlockedSessions: boolean
+  hasAttentionSessions: boolean
   pinnedRows: SidebarSessionRow[]
   recentRows: SidebarSessionRow[]
   recentParentById: Record<string, string | null>
@@ -410,17 +414,17 @@ function buildDirectorySessionView(input: {
       isExpanded: input.expandedParents.has(row.id),
     }))
 
-  const states = input.sessions.map((session) => String(session.state || '').trim())
-  const hasRunningSessions = states.some((state) => state === 'running' || state === 'creating')
-  const hasBlockedSessions = states.some((state) => state === 'awaiting_user' || state === 'interrupted')
+  const states = input.sessions.map((session) => normalizeSessionState(session.state))
+  const hasRunningSessions = states.some((state) => sessionStateIsActive({ state, updatedAt: 0 }))
+  const hasAttentionSessions = states.some((state) => sessionStateHasAttention({ state, updatedAt: 0 }))
 
   return {
     sessionCount: rowsById.size,
     rootPage,
     rootPageCount,
-    hasActiveOrBlocked: hasRunningSessions || hasBlockedSessions,
+    hasActiveOrAttention: hasRunningSessions || hasAttentionSessions,
     hasRunningSessions,
-    hasBlockedSessions,
+    hasAttentionSessions,
     pinnedRows,
     recentRows,
     recentParentById: parentById,
@@ -595,9 +599,9 @@ function directorySidebarViewEquivalent(left: DirectorySidebarView, right: Direc
     left.sessionCount === right.sessionCount &&
     left.rootPage === right.rootPage &&
     left.rootPageCount === right.rootPageCount &&
-    left.hasActiveOrBlocked === right.hasActiveOrBlocked &&
+    left.hasActiveOrAttention === right.hasActiveOrAttention &&
     left.hasRunningSessions === right.hasRunningSessions &&
-    left.hasBlockedSessions === right.hasBlockedSessions &&
+    left.hasAttentionSessions === right.hasAttentionSessions &&
     sessionRowsEquivalent(left.pinnedRows, right.pinnedRows) &&
     sessionRowsEquivalent(left.recentRows, right.recentRows) &&
     nullableStringRecordEquivalent(left.recentParentById, right.recentParentById) &&
@@ -619,17 +623,16 @@ function directorySidebarByIdEquivalent(
   return true
 }
 
-function runtimeMapEquivalent(
-  left: Record<string, SessionRuntimeState>,
-  right: Record<string, SessionRuntimeState>,
+function stateMapEquivalent(
+  left: Record<string, SessionStateSnapshot>,
+  right: Record<string, SessionStateSnapshot>,
 ): boolean {
   const leftKeys = Object.keys(left)
   const rightKeys = Object.keys(right)
   if (leftKeys.length !== rightKeys.length) return false
   for (const key of leftKeys) {
     if (!hasOwn(right, key)) return false
-    if (!runtimeStateEquivalent(left[key], right[key])) return false
-    if (left[key].updatedAt !== right[key].updatedAt) return false
+    if (!stateSnapshotEquivalent(left[key], right[key])) return false
   }
   return true
 }
@@ -784,21 +787,17 @@ function normalizeDirectorySidebarSection(raw: JsonValue, directoryId: string): 
       : []
   const recentRootIds = recentRootIdsRaw.map((value) => String(value || '').trim()).filter(Boolean)
 
-  const hasRunningSessions = section.hasRunningSessions === true || section.has_running_sessions === true
-  const hasBlockedSessions = section.hasBlockedSessions === true || section.has_blocked_sessions === true
-  const hasActiveOrBlocked =
-    section.hasActiveOrBlocked === true ||
-    section.has_active_or_blocked === true ||
-    hasRunningSessions ||
-    hasBlockedSessions
+  const hasRunningSessions = section.hasRunningSessions === true
+  const hasAttentionSessions = section.hasAttentionSessions === true
+  const hasActiveOrAttention = section.hasActiveOrAttention === true || hasRunningSessions || hasAttentionSessions
 
   return {
     sessionCount,
     rootPage,
     rootPageCount,
-    hasActiveOrBlocked,
+    hasActiveOrAttention,
     hasRunningSessions,
-    hasBlockedSessions,
+    hasAttentionSessions,
     pinnedRows,
     recentRows,
     recentParentById,
@@ -982,7 +981,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
   const chat = useChatStore()
   const directoriesById = ref<Record<string, DirectoryEntry>>({})
   const directoryOrder = ref<string[]>([])
-  const runtimeBySessionId = ref<Record<string, SessionRuntimeState>>({})
+  const stateBySessionId = ref<Record<string, SessionStateSnapshot>>({})
 
   const directorySidebarById = ref<Record<string, DirectorySidebarView>>({})
   const pinnedFooterView = ref<SidebarFooterView>({ total: 0, page: 0, pageCount: 1, rows: [] })
@@ -1551,13 +1550,16 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     return executeSidebarCommand({ type: 'setFooterPage', kind, page: target }, opts)
   }
 
-  function parseRuntimeMap(raw: JsonValue): Record<string, SessionRuntimeState> {
-    const runtimePayload = asRecord(raw) || {}
-    const next: Record<string, SessionRuntimeState> = {}
-    for (const [sessionIdRaw, runtimeRaw] of Object.entries(runtimePayload)) {
+  function parseStateMap(raw: JsonValue): Record<string, SessionStateSnapshot> {
+    const statePayload = asRecord(raw) || {}
+    const next: Record<string, SessionStateSnapshot> = {}
+    for (const [sessionIdRaw, stateRaw] of Object.entries(statePayload)) {
       const sessionId = String(sessionIdRaw || '').trim()
       if (!sessionId) continue
-      next[sessionId] = normalizeRuntime((asRecord(runtimeRaw) as Partial<SessionRuntimeState>) || undefined)
+      next[sessionId] = stateSnapshotFromAgenaSession({
+        state: asRecord(stateRaw as JsonValue)?.state,
+        updated_at: asRecord(stateRaw as JsonValue)?.updatedAt,
+      })
     }
     return next
   }
@@ -1613,11 +1615,9 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       runningFooterView: enrichFooterView(normalizedViewRaw.runningFooterView, knownRows),
     }
 
-    const nextRuntimeBySessionId = parseRuntimeMap(
-      (stateRecord.runtimeBySessionId ?? stateRecord.runtime_by_session_id) as JsonValue,
-    )
-    if (!runtimeMapEquivalent(runtimeBySessionId.value, nextRuntimeBySessionId)) {
-      runtimeBySessionId.value = nextRuntimeBySessionId
+    const nextStateBySessionId = parseStateMap(stateRecord.stateBySessionId as JsonValue)
+    if (!stateMapEquivalent(stateBySessionId.value, nextStateBySessionId)) {
+      stateBySessionId.value = nextStateBySessionId
     }
     if (!directorySidebarByIdEquivalent(directorySidebarById.value, normalizedView.directorySidebarById)) {
       directorySidebarById.value = normalizedView.directorySidebarById
@@ -1738,7 +1738,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         recentFooter: footerView(overview.recent, uiPrefs.value.recentSessionsPage) as unknown as JsonValue,
         runningFooter: footerView(overview.running, uiPrefs.value.runningSessionsPage) as unknown as JsonValue,
       },
-      runtimeBySessionId: runtimeMapFromAgenaSessions(allOverview) as unknown as JsonValue,
+      stateBySessionId: stateMapFromAgenaSessions(allOverview) as unknown as JsonValue,
       focus: null,
     }
   }
@@ -2218,47 +2218,42 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
   function statusLabelForSessionId(sessionId: string): { label: string; dotClass: string } {
     const sid = String(sessionId || '').trim()
-    const runtime = runtimeBySessionId.value[sid]
-    if (!runtime) return { label: String(i18n.global.t('chat.sidebar.sessionRow.status.idle')), dotClass: '' }
-
-    if (runtime.displayState === 'needsPermission') {
-      return {
-        label: String(i18n.global.t('chat.sidebar.sessionRow.status.needsPermission')),
-        dotClass: 'bg-amber-500',
+    const snapshot = stateBySessionId.value[sid]
+    const state = snapshot?.state
+    const kind = sessionStateKind(state)
+    if (state?.kind === 'awaiting_interaction') {
+      const request = state.data.requests?.[0]
+      const requestKind = request && typeof request === 'object' && !Array.isArray(request) ? request.kind : undefined
+      if (requestKind === 'permission') {
+        return {
+          label: String(i18n.global.t('chat.sidebar.sessionRow.status.needsPermission')),
+          dotClass: 'bg-amber-500',
+        }
       }
-    }
-    if (runtime.displayState === 'needsReply') {
       return {
         label: String(i18n.global.t('chat.sidebar.sessionRow.status.needsReply')),
         dotClass: 'bg-sky-500',
       }
     }
-    if (runtime.displayState === 'retrying') {
+    if (kind === 'interrupted' || kind === 'failed') {
       return {
-        label: String(i18n.global.t('chat.sidebar.sessionRow.status.retrying')),
-        dotClass: 'bg-primary animate-pulse',
+        label: String(i18n.global.t('chat.sidebar.sessionRow.status.needsRecovery')),
+        dotClass: 'bg-destructive',
       }
     }
-    if (runtime.displayState === 'running') {
+    if (kind === 'running' || kind === 'creating') {
       return {
         label: String(i18n.global.t('chat.sidebar.sessionRow.status.running')),
         dotClass: 'bg-primary animate-pulse',
       }
     }
-    if (runtime.displayState === 'coolingDown') {
-      return {
-        label: String(i18n.global.t('chat.sidebar.sessionRow.status.coolingDown')),
-        dotClass: 'bg-primary/70',
-      }
-    }
-
     return { label: String(i18n.global.t('chat.sidebar.sessionRow.status.idle')), dotClass: '' }
   }
 
-  function isSessionRuntimeActive(sessionId: string, opts?: { includeCooldown?: boolean }): boolean {
+  function isSessionStateActive(sessionId: string): boolean {
     const sid = String(sessionId || '').trim()
     if (!sid) return false
-    return runtimeIsActive(runtimeBySessionId.value[sid], opts)
+    return sessionStateIsActive(stateBySessionId.value[sid])
   }
 
   async function bootstrapWithStaleWhileRevalidate() {
@@ -2292,7 +2287,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
     directoriesById.value = {}
     directoryOrder.value = []
-    runtimeBySessionId.value = {}
+    stateBySessionId.value = {}
 
     directorySidebarById.value = {}
     pinnedFooterView.value = { total: 0, page: 0, pageCount: 1, rows: [] }
@@ -2309,7 +2304,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
   return {
     directoriesById,
-    runtimeBySessionId,
+    stateBySessionId,
     directorySidebarById,
     pinnedFooterView,
     recentFooterView,
@@ -2335,7 +2330,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     commandSetFooterPage,
     resolveDirectoryForSession,
     statusLabelForSessionId,
-    isSessionRuntimeActive,
+    isSessionStateActive,
     applyGlobalEvent,
     scheduleSidebarRecoverySync,
     revalidateFromApi,

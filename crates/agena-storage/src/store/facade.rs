@@ -1103,7 +1103,7 @@ where
     async fn reconcile(&self, session_id: i64) -> Result<(), StoreError> {
         let presentation = self.derive_presentation(session_id).await?;
         if presentation.state != SessionState::Interrupted {
-            // Running and AwaitingUser must be preserved; Ready/Failed have no
+            // Running and AwaitingInteraction must be preserved; Ready/Failed have no
             // crashed in-flight marker to reconcile. Recovery is idempotent.
             return Ok(());
         }
@@ -2492,7 +2492,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_interaction_gates_to_awaiting_user() {
+    async fn pending_interaction_gates_to_awaiting_interaction() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;
         let outcome = facade
@@ -2524,7 +2524,7 @@ mod tests {
             .expect("append interaction");
 
         let awaiting = facade.session_state(session_id).await.expect("state");
-        assert_eq!(awaiting.state, SessionState::AwaitingUser);
+        assert_eq!(awaiting.state, SessionState::AwaitingInteraction);
         let pending = awaiting.pending_interaction.expect("pending interaction");
         assert_eq!(pending.kind, "ask_user");
         assert_eq!(pending.prompt, "which?");
@@ -3352,7 +3352,7 @@ mod tests {
         assert!(seen.lock().expect("seen lock").is_empty());
         assert_eq!(
             facade.session_state(session_id).await.expect("state").state,
-            SessionState::AwaitingUser
+            SessionState::AwaitingInteraction
         );
     }
 

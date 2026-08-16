@@ -10,6 +10,7 @@ import { useToastsStore } from '@/stores/toasts'
 import Button from '@/components/ui/Button.vue'
 import SessionHubRow from '@/components/hub/SessionHubRow.vue'
 import type { HubRowKind, SessionResource } from '@/components/hub/types'
+import { normalizeSessionState, sessionStateKind } from '@/types/chat'
 
 /** Response of GET /api/v1/sessions/overview. */
 interface SessionOverview {
@@ -99,9 +100,11 @@ async function loadOverview() {
       generated_at: new Date().toISOString(),
     }
     for (const session of sessions) {
-      if (session.state === 'awaiting_user' || session.state === 'interrupted') {
+      const state = normalizeSessionState(session.state)
+      const kind = sessionStateKind(state)
+      if (kind === 'awaiting_interaction' || kind === 'interrupted' || kind === 'failed') {
         next.attention.push(session)
-      } else if (session.state === 'running' || session.state === 'creating') {
+      } else if (kind === 'running' || kind === 'creating') {
         next.running.push(session)
       } else if (next.recent.length < 50) {
         next.recent.push(session)

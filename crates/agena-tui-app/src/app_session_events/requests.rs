@@ -459,7 +459,7 @@ impl App {
             .transcript
             .execution
             .as_ref()
-            .and_then(|execution| execution.active_execution.as_ref())
+            .and_then(|execution| execution.session.state.active_execution())
             .map(|execution| agena_domain::ExecutionId(execution.execution_id))
         else {
             self.flash_info(ui_text::t(&self.i18n, "flash-run-cancelled"));

@@ -239,11 +239,16 @@ impl ApplicationService {
                 agena_domain::ExecutionLifecycle::Terminal { .. } => None,
             });
 
+        let mut session_resource = session_resource;
+        session_resource.state = session_resource.state.with_execution_snapshot(
+            active_execution,
+            workflow_state_from_domain(context.workflow_state),
+            pending_interactive_requests,
+        );
+
         Ok(SessionExecutionResource {
             session: session_resource,
             parts: transcript,
-            workflow_state: workflow_state_from_domain(context.workflow_state),
-            active_execution,
             latest_event_seq: self
                 .latest_session_event_seq(session_queries, session_id)
                 .await?,
@@ -275,7 +280,6 @@ impl ApplicationService {
                 subtask_finished_at: context.subtask_finished_at,
                 subtask_failure: context.subtask_failure.map(Into::into),
             },
-            pending_interactive_requests,
             usage: session_usage_resource(session_queries, session_id).await?,
         })
     }
@@ -348,7 +352,9 @@ const fn workflow_state_from_domain(
     match value {
         agena_domain::WorkflowState::Quiescent => agena_api::resource::WorkflowState::Quiescent,
         agena_domain::WorkflowState::ToolPending => agena_api::resource::WorkflowState::ToolPending,
-        agena_domain::WorkflowState::Blocked => agena_api::resource::WorkflowState::Blocked,
+        agena_domain::WorkflowState::AwaitingInteraction => {
+            agena_api::resource::WorkflowState::AwaitingInteraction
+        }
     }
 }
 

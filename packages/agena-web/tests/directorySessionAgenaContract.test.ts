@@ -3,17 +3,30 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import test from 'node:test'
 
-import { runtimeFromAgenaSession } from '../src/stores/directorySessionRuntime'
+import { stateSnapshotFromAgenaSession } from '../src/stores/directorySessionRuntime'
 
-test('Agena session lifecycle states map to visible sidebar runtime states', () => {
+test('Agena session lifecycle states stay canonical tagged SessionState values', () => {
   assert.equal(
-    runtimeFromAgenaSession({ state: 'running', updated_at: '2026-08-16T08:00:00Z' }).displayState,
+    stateSnapshotFromAgenaSession({
+      state: { kind: 'running', data: { workflow: 'quiescent' } },
+      updated_at: '2026-08-16T08:00:00Z',
+    }).state.kind,
     'running',
   )
-  assert.equal(runtimeFromAgenaSession({ state: 'creating' }).displayState, 'running')
-  assert.equal(runtimeFromAgenaSession({ state: 'awaiting_user' }).displayState, 'needsReply')
-  assert.equal(runtimeFromAgenaSession({ state: 'interrupted' }).displayState, 'needsReply')
-  assert.equal(runtimeFromAgenaSession({ state: 'ready' }).displayState, 'idle')
+  assert.equal(stateSnapshotFromAgenaSession({ state: { kind: 'creating' } }).state.kind, 'creating')
+  assert.equal(
+    stateSnapshotFromAgenaSession({
+      state: { kind: 'awaiting_interaction', data: { requests: [] } },
+    }).state.kind,
+    'awaiting_interaction',
+  )
+  assert.equal(
+    stateSnapshotFromAgenaSession({
+      state: { kind: 'interrupted', data: { reason: 'lease_lost' } },
+    }).state.kind,
+    'interrupted',
+  )
+  assert.equal(stateSnapshotFromAgenaSession({ state: { kind: 'ready', data: {} } }).state.kind, 'ready')
 })
 
 test('sidebar uses cursor pagination and hydrates workspaces outside the visible page', () => {

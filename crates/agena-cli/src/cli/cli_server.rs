@@ -180,10 +180,7 @@ impl ServerSessionClient {
                     .query(Query::ListProviders)
                     .await
                     .map_err(|error| {
-                        client_error(
-                            "failed to read the server's provider catalog",
-                            error,
-                        )
+                        client_error("failed to read the server's provider catalog", error)
                     })?;
                 let QueryResult::Providers(providers) = providers else {
                     return Err(AppError::Internal(
@@ -222,9 +219,7 @@ impl ServerSessionClient {
                     search: None,
                 }))
                 .await
-                .map_err(|error| {
-                    client_error("failed to list sessions from the server", error)
-                })?;
+                .map_err(|error| client_error("failed to list sessions from the server", error))?;
             let QueryResult::Sessions(page) = response else {
                 return Err(AppError::Internal(
                     "server returned the wrong session-list result".to_owned(),
@@ -241,8 +236,7 @@ impl ServerSessionClient {
             cursor = page.page.next_cursor;
             if cursor.is_none() {
                 return Err(AppError::Internal(
-                    "server returned a truncated session page without a cursor"
-                        .to_owned(),
+                    "server returned a truncated session page without a cursor".to_owned(),
                 ));
             }
         }
@@ -264,10 +258,7 @@ impl ServerSessionClient {
                 }))
                 .await
                 .map_err(|error| {
-                    client_error(
-                        "failed to list permission rules from server",
-                        error,
-                    )
+                    client_error("failed to list permission rules from server", error)
                 })?;
             let QueryResult::PermissionRules(page) = response else {
                 return Err(AppError::Internal(
@@ -281,8 +272,7 @@ impl ServerSessionClient {
             cursor = page.page.next_cursor;
             if cursor.is_none() {
                 return Err(AppError::Internal(
-                    "server returned a truncated permission-rule page without a cursor"
-                        .to_owned(),
+                    "server returned a truncated permission-rule page without a cursor".to_owned(),
                 ));
             }
         }
@@ -325,9 +315,9 @@ async fn connect_server_client(cli: &AgenaCli) -> Result<AgenaClient, AppError> 
     }
     if !cli.overrides.is_empty() {
         return Err(AppError::Config(
-                "--set overrides belong to the server and cannot be used by thin CLI session commands"
-                    .to_owned(),
-            ));
+            "--set overrides belong to the server and cannot be used by thin CLI session commands"
+                .to_owned(),
+        ));
     }
 
     let server_url = cli
@@ -392,9 +382,10 @@ async fn connect_workspace_bound_client(
 ) -> Result<ServerMcpBackend, AppError> {
     let client = connect_server_client(cli).await?;
     let status: GitStatusResource = decode_server_resource(
-        client.git_status().await.map_err(|error| {
-            client_error("failed to verify the server workspace", error)
-        })?,
+        client
+            .git_status()
+            .await
+            .map_err(|error| client_error("failed to verify the server workspace", error))?,
         "git-status",
     )?;
     ensure_server_workspace_matches(status.workspace_root.as_str(), requested_workspace)?;
@@ -442,9 +433,7 @@ impl AgenaCli {
                 Some(serde_json::json!({ "patch": patch })),
             )
             .await
-            .map_err(|error| {
-                client_error("failed to apply patch through server", error)
-            })?;
+            .map_err(|error| client_error("failed to apply patch through server", error))?;
         let summary: agena_tool::ToolExecutionSummary =
             decode_server_resource(value, "operator-tool-result")?;
         let patch_payload = summary.payload.ok_or_else(|| {
@@ -492,10 +481,7 @@ impl AgenaCli {
         }
         let client = connect_server_client(self).await?;
         let status = client.runtime_status().await.map_err(|error| {
-            client_error(
-                "failed to resolve the server operator workspace",
-                error,
-            )
+            client_error("failed to resolve the server operator workspace", error)
         })?;
         let workspace = client
             .command(Command::ResolveWorkspace(ResolveWorkspaceParams {
@@ -504,10 +490,7 @@ impl AgenaCli {
             }))
             .await
             .map_err(|error| {
-                client_error(
-                    "failed to resolve the server operator workspace",
-                    error,
-                )
+                client_error("failed to resolve the server operator workspace", error)
             })?;
         let CommandResult::Workspace(workspace) = workspace else {
             return Err(AppError::Internal(
@@ -522,10 +505,7 @@ impl AgenaCli {
             )
             .await
             .map_err(|error| {
-                client_error(
-                    "failed to reconnect MCP server through server",
-                    error,
-                )
+                client_error("failed to reconnect MCP server through server", error)
             })?;
         let summary: agena_tool::ToolExecutionSummary =
             decode_server_resource(value, "operator-tool-result")?;
@@ -609,9 +589,7 @@ impl AgenaCli {
             .await
             .map_err(|error| client_error("failed to read server MCP settings", error))?;
         let current = current.get("value").cloned().ok_or_else(|| {
-            AppError::Internal(
-                "server returned an invalid settings-layer response".to_owned(),
-            )
+            AppError::Internal("server returned an invalid settings-layer response".to_owned())
         })?;
         let mut record = mcp_plugin_record(current)?;
         apply_mcp_config_mutation(&mut record, mutation)?;
@@ -639,9 +617,7 @@ impl AgenaCli {
         let value = client
             .set_mcp_bearer_credential(server.as_str(), token, store)
             .await
-            .map_err(|error| {
-                client_error("failed to store MCP credential in server", error)
-            })?;
+            .map_err(|error| client_error("failed to store MCP credential in server", error))?;
         let _: McpCredentialMutationResource =
             decode_server_resource(value, "mcp-credential-result")?;
         println!("MCP credential stored for {server} ({store})");
@@ -681,9 +657,7 @@ impl AgenaCli {
                     redirect_uri.as_str(),
                 )
                 .await
-                .map_err(|error| {
-                    client_error("failed to start MCP OAuth through server", error)
-                })?,
+                .map_err(|error| client_error("failed to start MCP OAuth through server", error))?,
             "mcp-oauth-start",
         )?;
         let expected_state = oauth_state(start.authorization_url.as_str())?;
@@ -708,12 +682,7 @@ impl AgenaCli {
                 callback.issuer,
             )
             .await
-            .map_err(|error| {
-                client_error(
-                    "failed to finish MCP OAuth through server",
-                    error,
-                )
-            })?;
+            .map_err(|error| client_error("failed to finish MCP OAuth through server", error))?;
         let _: McpCredentialMutationResource =
             decode_server_resource(value, "mcp-credential-result")?;
         println!("MCP OAuth credential stored for {server} (keyring)");
@@ -747,10 +716,7 @@ impl AgenaCli {
                 .delete_mcp_oauth_credential(server.as_str(), args.revoke, args.url.as_deref())
                 .await
                 .map_err(|error| {
-                    client_error(
-                        "failed to remove MCP OAuth credential from server",
-                        error,
-                    )
+                    client_error("failed to remove MCP OAuth credential from server", error)
                 })?;
             let _: McpCredentialMutationResource =
                 decode_server_resource(value, "mcp-credential-result")?;
@@ -768,12 +734,7 @@ impl AgenaCli {
         let value = client
             .delete_mcp_bearer_credential(server.as_str(), store)
             .await
-            .map_err(|error| {
-                client_error(
-                    "failed to remove MCP credential from server",
-                    error,
-                )
-            })?;
+            .map_err(|error| client_error("failed to remove MCP credential from server", error))?;
         let _: McpCredentialMutationResource =
             decode_server_resource(value, "mcp-credential-result")?;
         println!("MCP credential removed for {server} ({store})");
@@ -800,9 +761,10 @@ impl AgenaCli {
         .unwrap_or_else(std::env::current_dir)?;
         let client = connect_server_client(self).await?;
         let overview: ServerMemoryOverview = decode_server_resource(
-            client.memory_overview().await.map_err(|error| {
-                client_error("failed to read memories from server", error)
-            })?,
+            client
+                .memory_overview()
+                .await
+                .map_err(|error| client_error("failed to read memories from server", error))?,
             "memory-overview",
         )?;
         ensure_server_workspace_matches(
@@ -854,10 +816,7 @@ impl AgenaCli {
                 None => {
                     let index: ServerPathResource = decode_server_resource(
                         client.ensure_memory_index().await.map_err(|error| {
-                            client_error(
-                                "failed to ensure memory index through server",
-                                error,
-                            )
+                            client_error("failed to ensure memory index through server", error)
                         })?,
                         "memory-index",
                     )?;
@@ -873,9 +832,10 @@ impl AgenaCli {
         server: Option<String>,
     ) -> Result<String, AppError> {
         let client = connect_server_client(self).await?;
-        let runtime = client.runtime_status().await.map_err(|error| {
-            client_error("failed to read MCP status from server", error)
-        })?;
+        let runtime = client
+            .runtime_status()
+            .await
+            .map_err(|error| client_error("failed to read MCP status from server", error))?;
         let mcp = runtime.operator.mcp;
         match server {
             Some(server) => {
@@ -904,10 +864,7 @@ impl AgenaCli {
             })) {
             ConfigSubcommand::Resolve(args) => {
                 let document = client.resolved_config().await.map_err(|error| {
-                    client_error(
-                        "failed to read resolved configuration from server",
-                        error,
-                    )
+                    client_error("failed to read resolved configuration from server", error)
                 })?;
                 render_serialized(args.format, &document)
             }
@@ -938,16 +895,15 @@ impl AgenaCli {
         args: DiagnosticsArgs,
     ) -> Result<String, AppError> {
         let client = connect_server_client(self).await?;
-        let runtime = client.runtime_status().await.map_err(|error| {
-            client_error("failed to read server runtime status", error)
-        })?;
+        let runtime = client
+            .runtime_status()
+            .await
+            .map_err(|error| client_error("failed to read server runtime status", error))?;
         ensure_server_workspace_matches_cli(runtime.workspace_root.as_str())?;
-        let document = client.resolved_config().await.map_err(|error| {
-            client_error(
-                "failed to read server configuration metadata",
-                error,
-            )
-        })?;
+        let document = client
+            .resolved_config()
+            .await
+            .map_err(|error| client_error("failed to read server configuration metadata", error))?;
         let metadata = document.get("meta").cloned().unwrap_or_default();
         let project_path = metadata
             .get("project_config_path")
@@ -1000,10 +956,7 @@ impl AgenaCli {
         let client = connect_server_client(self).await?;
         let snapshot: SnapshotStatusResource = decode_server_resource(
             client.snapshot_status().await.map_err(|error| {
-                client_error(
-                    "failed to read snapshot status from server",
-                    error,
-                )
+                client_error("failed to read snapshot status from server", error)
             })?,
             "snapshot-status",
         )?;
@@ -1064,9 +1017,10 @@ impl AgenaCli {
     ) -> Result<String, AppError> {
         let client = connect_server_client(self).await?;
         let status: GitStatusResource = decode_server_resource(
-            client.git_status().await.map_err(|error| {
-                client_error("failed to read git status from server", error)
-            })?,
+            client
+                .git_status()
+                .await
+                .map_err(|error| client_error("failed to read git status from server", error))?,
             "git-status",
         )?;
         ensure_server_workspace_matches_cli(status.workspace_root.as_str())?;
@@ -1113,10 +1067,7 @@ impl AgenaCli {
                 .create_git_commit(args.message)
                 .await
                 .map_err(|error| {
-                    client_error(
-                        "failed to create git commit through server",
-                        error,
-                    )
+                    client_error("failed to create git commit through server", error)
                 })?,
             "git-commit",
         )?;
@@ -1153,10 +1104,7 @@ impl AgenaCli {
                 .create_git_pull_request(args.title, args.body, args.base, args.head)
                 .await
                 .map_err(|error| {
-                    client_error(
-                        "failed to create pull request through server",
-                        error,
-                    )
+                    client_error("failed to create pull request through server", error)
                 })?,
             "git-pull-request",
         )?;
@@ -1185,9 +1133,7 @@ impl AgenaCli {
                     client_error("failed to read provider authentication from server", error)
                 })?;
                 let items = value.as_array().ok_or_else(|| {
-                    AppError::Internal(
-                        "server returned an invalid auth-provider list".to_owned(),
-                    )
+                    AppError::Internal("server returned an invalid auth-provider list".to_owned())
                 })?;
                 let mut credentials = items
                     .iter()
@@ -1258,12 +1204,7 @@ impl AgenaCli {
                     )));
                 }
             }
-            .map_err(|error| {
-                client_error(
-                    "failed to start browser login through server",
-                    error,
-                )
-            })?;
+            .map_err(|error| client_error("failed to start browser login through server", error))?;
             let start: AuthBrowserStartResource =
                 decode_server_resource(start_value, "auth-browser-start")?;
             prompt_browser_login(start.authorize_url.as_str())?;
@@ -1298,10 +1239,7 @@ impl AgenaCli {
                 AuthLoginKindResource::GithubCopilot => unreachable!("rejected above"),
             }
             .map_err(|error| {
-                client_error(
-                    "failed to finish browser login through server",
-                    error,
-                )
+                client_error("failed to finish browser login through server", error)
             })?;
             let result: AuthLoginResultResource =
                 decode_server_resource(result_value, "auth-login-result")?;
@@ -1338,12 +1276,7 @@ impl AgenaCli {
                 )));
             }
         }
-        .map_err(|error| {
-            client_error(
-                "failed to start device login through server",
-                error,
-            )
-        })?;
+        .map_err(|error| client_error("failed to start device login through server", error))?;
         let start: AuthDeviceStartResource =
             decode_server_resource(start_value, "auth-device-start")?;
         prompt_device_login(&start)?;
@@ -1376,12 +1309,7 @@ impl AgenaCli {
                 }
                 AuthLoginKindResource::Gitlab => unreachable!("rejected above"),
             }
-            .map_err(|error| {
-                client_error(
-                    "failed to poll device login through server",
-                    error,
-                )
-            })?;
+            .map_err(|error| client_error("failed to poll device login through server", error))?;
             let result: AuthLoginResultResource =
                 decode_server_resource(result_value, "auth-login-result")?;
             if result.completed {
@@ -1418,9 +1346,7 @@ impl AgenaCli {
             .and_then(serde_json::Value::as_array)
             .cloned()
             .ok_or_else(|| {
-                AppError::Internal(
-                    "server returned an invalid plugin-status response".to_owned(),
-                )
+                AppError::Internal("server returned an invalid plugin-status response".to_owned())
             })?;
         render_serialized(args.format, &PluginStatusOutput { statuses })
     }
@@ -1435,9 +1361,7 @@ impl AgenaCli {
             .await
             .map_err(|error| client_error("failed to inspect plugin through server", error))?;
         let plugin = value.get("plugin").cloned().ok_or_else(|| {
-            AppError::Internal(
-                "server returned an invalid plugin-inspect response".to_owned(),
-            )
+            AppError::Internal("server returned an invalid plugin-inspect response".to_owned())
         })?;
         render_serialized(args.format, &PluginInspectOutput { plugin })
     }
@@ -1635,8 +1559,7 @@ impl AgenaCli {
                     })?;
                 let CommandResult::PermissionRule(rule) = result else {
                     return Err(AppError::Internal(
-                        "server returned the wrong permission-rule create result"
-                            .to_owned(),
+                        "server returned the wrong permission-rule create result".to_owned(),
                     ));
                 };
                 render_serialized(format, &permission_rule_output(rule)?)
@@ -1656,8 +1579,7 @@ impl AgenaCli {
                     })?;
                 let CommandResult::PermissionRule(rule) = result else {
                     return Err(AppError::Internal(
-                        "server returned the wrong permission-rule replace result"
-                            .to_owned(),
+                        "server returned the wrong permission-rule replace result".to_owned(),
                     ));
                 };
                 render_serialized(format, &permission_rule_output(rule)?)
@@ -1675,8 +1597,7 @@ impl AgenaCli {
                     })?;
                 let CommandResult::PermissionRule(rule) = result else {
                     return Err(AppError::Internal(
-                        "server returned the wrong permission-rule revoke result"
-                            .to_owned(),
+                        "server returned the wrong permission-rule revoke result".to_owned(),
                     ));
                 };
                 render_serialized(args.format, &permission_rule_output(rule)?)
@@ -1748,9 +1669,7 @@ impl AgenaCli {
                         },
                     ))
                     .await
-                    .map_err(|error| {
-                        client_error("failed to export session from server", error)
-                    })?;
+                    .map_err(|error| client_error("failed to export session from server", error))?;
                 let CommandResult::SessionExport { jsonl } = result else {
                     return Err(AppError::Internal(
                         "server returned the wrong session-export result".to_owned(),
@@ -1858,12 +1777,7 @@ impl AgenaCli {
             .client
             .continue_run(session_id, options)
             .await
-            .map_err(|error| {
-                client_error(
-                    "failed to continue session through server",
-                    error,
-                )
-            })?;
+            .map_err(|error| client_error("failed to continue session through server", error))?;
         render_serialized(
             args.format,
             &SessionOutput {
@@ -1885,9 +1799,7 @@ impl AgenaCli {
             .client
             .session_cost_summary(session_id)
             .await
-            .map_err(|error| {
-                client_error("failed to read session cost from server", error)
-            })?;
+            .map_err(|error| client_error("failed to read session cost from server", error))?;
         render_serialized(
             args.format,
             &CostOutput {
@@ -1974,9 +1886,7 @@ impl AgenaCli {
             .client
             .create_session(server.workspace_id, title, None)
             .await
-            .map_err(|error| {
-                client_error("failed to create session through server", error)
-            })?;
+            .map_err(|error| client_error("failed to create session through server", error))?;
         let execution = server
             .client
             .submit_message(SubmitRunParams {
@@ -1987,12 +1897,10 @@ impl AgenaCli {
                 }]),
             })
             .await
-            .map_err(|error| {
-                client_error("failed to submit run through server", error)
-            })?;
-        if execution.workflow_state == agena_api::resource::WorkflowState::Blocked {
+            .map_err(|error| client_error("failed to submit run through server", error))?;
+        if execution.session.state.is_attention() {
             return Err(AppError::Config(
-                "command is blocked awaiting permission or user input".to_owned(),
+                "command requires session interaction or recovery".to_owned(),
             ));
         }
         let text = last_assistant_text(execution.parts.as_slice()).unwrap_or_default();
@@ -2022,9 +1930,7 @@ impl AgenaCli {
                 title: args.title,
             }))
             .await
-            .map_err(|error| {
-                client_error("failed to fork session through server", error)
-            })?;
+            .map_err(|error| client_error("failed to fork session through server", error))?;
         let execution = expect_execution(result, "session-fork")?;
         render_serialized(
             args.format,
@@ -2042,9 +1948,7 @@ fn auth_summary_from_value(value: &serde_json::Value) -> Result<AuthSummary, App
         .and_then(serde_json::Value::as_str)
         .filter(|provider_id| !provider_id.is_empty())
         .ok_or_else(|| {
-            AppError::Internal(
-                "server returned an auth provider without an id".to_owned(),
-            )
+            AppError::Internal("server returned an auth provider without an id".to_owned())
         })?
         .to_owned();
     let string_field = |name: &str| {
@@ -2072,12 +1976,10 @@ fn auth_summary_from_value(value: &serde_json::Value) -> Result<AuthSummary, App
 }
 
 async fn server_providers(client: &AgenaClient) -> Result<Vec<ProviderSummaryResource>, AppError> {
-    let response = client.query(Query::ListProviders).await.map_err(|error| {
-        client_error(
-            "failed to read the server's provider catalog",
-            error,
-        )
-    })?;
+    let response = client
+        .query(Query::ListProviders)
+        .await
+        .map_err(|error| client_error("failed to read the server's provider catalog", error))?;
     let QueryResult::Providers(providers) = response else {
         return Err(AppError::Internal(
             "server returned the wrong provider-list result".to_owned(),
@@ -2097,12 +1999,7 @@ async fn server_provider_models(
             },
         ))
         .await
-        .map_err(|error| {
-            client_error(
-                "failed to read provider models from server",
-                error,
-            )
-        })?;
+        .map_err(|error| client_error("failed to read provider models from server", error))?;
     let QueryResult::ProviderModels(models) = response else {
         return Err(AppError::Internal(
             "server returned the wrong provider-model result".to_owned(),
@@ -2330,9 +2227,7 @@ fn validate_mcp_oauth_endpoint(endpoint: &str) -> Result<(), AppError> {
 
 fn oauth_state(authorization_url: &str) -> Result<String, AppError> {
     url::Url::parse(authorization_url)
-        .map_err(|_| {
-            AppError::Config("server returned an invalid OAuth URL".to_owned())
-        })?
+        .map_err(|_| AppError::Config("server returned an invalid OAuth URL".to_owned()))?
         .query_pairs()
         .find(|(key, _)| key == "state")
         .map(|(_, value)| value.into_owned())
@@ -2675,7 +2570,7 @@ fn session_detail(execution: &SessionExecutionResource) -> SessionDetail {
         created_at: execution.session.created_at,
         updated_at: execution.session.updated_at,
         message_count: usize::try_from(execution.session.message_count).unwrap_or(usize::MAX),
-        status: workflow_state_from_wire(execution.workflow_state),
+        status: workflow_state_from_wire(execution.session.state.workflow_state()),
         latest_event_seq: execution.latest_event_seq,
     }
 }
@@ -2696,7 +2591,9 @@ const fn workflow_state_from_wire(state: agena_api::resource::WorkflowState) -> 
     match state {
         agena_api::resource::WorkflowState::Quiescent => WorkflowState::Quiescent,
         agena_api::resource::WorkflowState::ToolPending => WorkflowState::ToolPending,
-        agena_api::resource::WorkflowState::Blocked => WorkflowState::Blocked,
+        agena_api::resource::WorkflowState::AwaitingInteraction => {
+            WorkflowState::AwaitingInteraction
+        }
     }
 }
 

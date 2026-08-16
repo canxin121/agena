@@ -99,14 +99,15 @@ pub fn session_meta(i18n: &I18n, id: i64, message_count: u64, updated_at: DateTi
 /// pickers. This is deliberately based on the shared API value rather than a
 /// TUI-local request flag, so reconnecting clients describe the server's
 /// current ownership truth.
-pub fn session_state_label(i18n: &I18n, state: SessionState) -> String {
-    let key = match state {
-        SessionState::Creating => "session-state-creating",
-        SessionState::Ready => "session-state-ready",
-        SessionState::Running => "session-state-running",
-        SessionState::AwaitingUser => "session-state-awaiting-user",
-        SessionState::Interrupted => "session-state-interrupted",
-        SessionState::Failed => "session-state-failed",
+pub fn session_state_label(i18n: &I18n, state: &SessionState) -> String {
+    let key = match state.as_str() {
+        "creating" => "session-state-creating",
+        "ready" => "session-state-ready",
+        "running" => "session-state-running",
+        "awaiting_interaction" => "session-state-awaiting-interaction",
+        "interrupted" => "session-state-interrupted",
+        "failed" => "session-state-failed",
+        _ => "session-state-ready",
     };
     t(i18n, key)
 }
@@ -265,16 +266,18 @@ pub fn transcript_footer_plugin_block(i18n: &I18n, label: &str, body: &str) -> S
 
 pub fn session_workflow_state_label(i18n: &I18n, execution: &SessionExecutionResource) -> String {
     match execution
-        .pending_interactive_requests
+        .session
+        .state
+        .pending_interactive_requests()
         .first()
         .map(|resource| &resource.request)
     {
         Some(PendingInteractiveRequest::Permission { .. }) => t(i18n, "session-awaiting-approval"),
         Some(PendingInteractiveRequest::UserInput { .. }) => t(i18n, "session-awaiting-user-input"),
-        None if execution.workflow_state == agena_api::resource::WorkflowState::Blocked => {
-            t(i18n, "session-blocked")
+        None if execution.session.state.is_awaiting_interaction() => {
+            t(i18n, "session-awaiting-user-input")
         }
-        None if execution.active_execution.is_some() => t(i18n, "session-running"),
+        None if execution.session.state.active_execution().is_some() => t(i18n, "session-running"),
         None => t(i18n, "session-idle"),
     }
 }

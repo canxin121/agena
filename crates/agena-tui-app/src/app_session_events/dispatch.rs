@@ -341,7 +341,7 @@ impl App {
         match result {
             Ok(execution) => {
                 let session_id = execution.session.id;
-                let execution_is_terminal = execution.active_execution.is_none();
+                let execution_is_terminal = execution.session.state.active_execution().is_none();
                 if self.apply_transcript_execution(execution) {
                     self.sync_pending_interactive_after_execution(session_id);
                     self.sync_session_list_selection_to_current_execution();
@@ -407,7 +407,8 @@ impl App {
                     // parked message.
                     if let Some(execution) = refresh.execution {
                         let session_id = execution.session.id;
-                        let execution_is_terminal = execution.active_execution.is_none();
+                        let execution_is_terminal =
+                            execution.session.state.active_execution().is_none();
                         if self.apply_transcript_execution(execution) {
                             self.sync_pending_interactive_after_execution(session_id);
                             self.sync_session_list_selection_to_current_execution();
@@ -432,7 +433,8 @@ impl App {
                 }
                 if let Some(execution) = refresh.execution {
                     let session_id = execution.session.id;
-                    let execution_is_terminal = execution.active_execution.is_none();
+                    let execution_is_terminal =
+                        execution.session.state.active_execution().is_none();
                     if self.apply_transcript_execution(execution) {
                         self.sync_pending_interactive_after_execution(session_id);
                         self.sync_session_list_selection_to_current_execution();
@@ -558,7 +560,7 @@ impl App {
         execution: SessionExecutionResource,
         refresh: bool,
     ) {
-        let execution_is_terminal = execution.active_execution.is_none();
+        let execution_is_terminal = execution.session.state.active_execution().is_none();
         let transcript_is_target = self.transcript.session_id == Some(session_id);
         if transcript_is_target && self.apply_transcript_execution(execution) {
             self.sync_pending_interactive_after_execution(session_id);

@@ -613,7 +613,7 @@ impl App {
                 _ => continue,
             };
             // The `agena.terminal.*` contributions are internal terminal
-            // signals (window-title/activity like `blocked`, `running`, `idle`).
+            // signals (window-title/activity like `interrupted`, `running`, `idle`).
             if contribution.contribution.id.starts_with("agena.terminal.") {
                 continue;
             }

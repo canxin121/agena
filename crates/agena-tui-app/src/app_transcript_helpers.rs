@@ -96,7 +96,7 @@ pub(crate) fn pending_interactive_kind(
 pub(crate) fn pending_interactive_kind_for_execution(
     execution: &SessionExecutionResource,
 ) -> Option<PendingInteractiveKind> {
-    pending_interactive_kind(execution.pending_interactive_requests.as_slice())
+    pending_interactive_kind(execution.session.state.pending_interactive_requests())
 }
 
 pub(crate) fn execution_update_is_stale(
@@ -143,7 +143,9 @@ pub(crate) fn permission_overlay_matches_pending_request(
 ) -> bool {
     execution.is_some_and(|execution| {
         execution
-            .pending_interactive_requests
+            .session
+            .state
+            .pending_interactive_requests()
             .iter()
             .filter(|request| request.session_id == overlay.session_id)
             .filter_map(|request| request.request.as_permission())
@@ -155,7 +157,9 @@ pub(crate) fn execution_pending_flash_key(
     execution: &SessionExecutionResource,
 ) -> Option<&'static str> {
     match execution
-        .pending_interactive_requests
+        .session
+        .state
+        .pending_interactive_requests()
         .first()
         .map(|resource| &resource.request)
     {
@@ -172,15 +176,22 @@ pub(crate) fn execution_pending_flash_key(
 pub(crate) fn pending_interactive_counts_for_execution(
     execution: &SessionExecutionResource,
 ) -> (usize, usize) {
-    execution.pending_interactive_requests.iter().fold(
-        (0, 0),
-        |(permission_count, user_input_count), request| match &request.request {
-            PendingInteractiveRequest::Permission { .. } => {
-                (permission_count + 1, user_input_count)
-            }
-            PendingInteractiveRequest::UserInput { .. } => (permission_count, user_input_count + 1),
-        },
-    )
+    execution
+        .session
+        .state
+        .pending_interactive_requests()
+        .iter()
+        .fold(
+            (0, 0),
+            |(permission_count, user_input_count), request| match &request.request {
+                PendingInteractiveRequest::Permission { .. } => {
+                    (permission_count + 1, user_input_count)
+                }
+                PendingInteractiveRequest::UserInput { .. } => {
+                    (permission_count, user_input_count + 1)
+                }
+            },
+        )
 }
 
 pub(crate) fn preferred_visible_session_selection(

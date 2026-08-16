@@ -1,170 +1,89 @@
-import type { SessionRuntimeSnapshot } from '../data/directorySessionSnapshotDb'
+import type { SessionState } from '../types/chat'
+import {
+  normalizeSessionState,
+  sessionStateIsBusy,
+  sessionStateKind,
+  sessionStateNeedsAttention,
+  sessionStateNeedsRecovery,
+} from '../types/chat'
 
-export type SessionRuntimeState = {
-  statusType: 'idle' | 'busy' | 'retry' | 'unknown'
-  phase: 'idle' | 'busy' | 'cooldown' | 'unknown'
-  attention: 'permission' | 'question' | null
-  displayState: 'idle' | 'running' | 'retrying' | 'coolingDown' | 'needsPermission' | 'needsReply' | 'unknown'
+/**
+ * The directory store only keeps the canonical server state and the server
+ * timestamp used to order snapshots. It deliberately has no second
+ * status/phase/display-state state machine.
+ */
+export type SessionStateSnapshot = {
+  state: SessionState
   updatedAt: number
 }
 
-type RuntimeInput = Partial<SessionRuntimeState> | SessionRuntimeSnapshot | null | undefined
+type StateInput =
+  | SessionState
+  | SessionStateSnapshot
+  | { state?: unknown; updatedAt?: unknown; updated_at?: unknown }
+  | null
+  | undefined
 
-export function normalizeRuntime(input?: RuntimeInput): SessionRuntimeState {
-  const statusType =
-    input?.statusType === 'idle' || input?.statusType === 'busy' || input?.statusType === 'retry'
-      ? input.statusType
-      : 'unknown'
-  const phase =
-    input?.phase === 'idle' || input?.phase === 'busy' || input?.phase === 'cooldown' ? input.phase : 'unknown'
-  const attention = input?.attention === 'permission' || input?.attention === 'question' ? input.attention : null
-  const displayState =
-    input?.displayState === 'idle' ||
-    input?.displayState === 'running' ||
-    input?.displayState === 'retrying' ||
-    input?.displayState === 'coolingDown' ||
-    input?.displayState === 'needsPermission' ||
-    input?.displayState === 'needsReply'
-      ? input.displayState
-      : 'unknown'
-  const updatedAt = typeof input?.updatedAt === 'number' && Number.isFinite(input.updatedAt) ? input.updatedAt : 0
-  return { statusType, phase, attention, displayState, updatedAt }
+function updatedAtFrom(input: StateInput): number {
+  if (!input || typeof input !== 'object') return 0
+  const value = input as { updatedAt?: unknown; updated_at?: unknown }
+  if (typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt)) {
+    return Math.max(0, Math.floor(value.updatedAt))
+  }
+  if (typeof value.updated_at === 'number' && Number.isFinite(value.updated_at)) {
+    return Math.max(0, Math.floor(value.updated_at))
+  }
+  if (typeof value.updated_at === 'string') {
+    const parsed = Date.parse(value.updated_at)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
 }
 
-export function runtimeFromAgenaSession(session: Record<string, unknown>): SessionRuntimeState {
-  const state = typeof session.state === 'string' ? session.state.trim() : ''
-  const rawUpdatedAt = session.updated_at
-  const updatedAt =
-    typeof rawUpdatedAt === 'number' && Number.isFinite(rawUpdatedAt)
-      ? rawUpdatedAt
-      : typeof rawUpdatedAt === 'string' && Number.isFinite(Date.parse(rawUpdatedAt))
-        ? Date.parse(rawUpdatedAt)
-        : 0
-  if (state === 'running' || state === 'creating') {
-    return normalizeRuntime({
-      statusType: 'busy',
-      phase: 'busy',
-      attention: null,
-      displayState: 'running',
-      updatedAt,
-    })
-  }
-  if (state === 'awaiting_user' || state === 'interrupted') {
-    return normalizeRuntime({
-      statusType: 'idle',
-      phase: 'idle',
-      attention: 'question',
-      displayState: 'needsReply',
-      updatedAt,
-    })
-  }
-  return normalizeRuntime({
-    statusType: 'idle',
-    phase: 'idle',
-    attention: null,
-    displayState: 'idle',
-    updatedAt,
+function stateFrom(input: StateInput): SessionState {
+  if (!input || typeof input !== 'object') return normalizeSessionState(null)
+  if (typeof (input as SessionState).kind === 'string') return normalizeSessionState(input)
+  return normalizeSessionState((input as { state?: unknown }).state)
+}
+
+export function normalizeSessionStateSnapshot(input?: StateInput): SessionStateSnapshot {
+  return { state: stateFrom(input), updatedAt: updatedAtFrom(input) }
+}
+
+export function stateSnapshotFromAgenaSession(session: Record<string, unknown>): SessionStateSnapshot {
+  return normalizeSessionStateSnapshot({
+    state: session.state,
+    updated_at: session.updated_at,
   })
 }
 
-function readIncomingUpdatedAt(input: RuntimeInput): { provided: boolean; value: number } {
-  if (!input || typeof input !== 'object') {
-    return { provided: false, value: 0 }
-  }
-  if (!Object.prototype.hasOwnProperty.call(input, 'updatedAt')) {
-    return { provided: false, value: 0 }
-  }
-
-  const raw = (input as { updatedAt?: number }).updatedAt
-  const value = typeof raw === 'number' && Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0
-  return { provided: true, value }
+export function sessionStateKindOf(snapshot?: SessionStateSnapshot | null) {
+  return sessionStateKind(snapshot?.state)
 }
 
-function readIncomingAttention(input: RuntimeInput): { provided: boolean; value: 'permission' | 'question' | null } {
-  if (!input || typeof input !== 'object') {
-    return { provided: false, value: null }
-  }
-  if (!Object.prototype.hasOwnProperty.call(input, 'attention')) {
-    return { provided: false, value: null }
-  }
-  const raw = (input as { attention?: 'permission' | 'question' | null }).attention
-  if (raw === null || raw === 'permission' || raw === 'question') {
-    return { provided: true, value: raw }
-  }
-  return { provided: false, value: null }
+export function sessionStateIsActive(snapshot?: SessionStateSnapshot | null): boolean {
+  const kind = sessionStateKindOf(snapshot)
+  return kind === 'creating' || sessionStateIsBusy(snapshot?.state)
 }
 
-export function mergeRuntimeState(
-  current: SessionRuntimeState | undefined,
-  incomingRaw: RuntimeInput,
-): SessionRuntimeState {
-  const incoming = normalizeRuntime(incomingRaw)
-  const incomingUpdatedAt = readIncomingUpdatedAt(incomingRaw)
-
-  if (!current) {
-    return normalizeRuntime({
-      ...incoming,
-      updatedAt: incomingUpdatedAt.provided ? incomingUpdatedAt.value : 0,
-    })
-  }
-
-  const existing = normalizeRuntime(current)
-  const preferIncoming = incomingUpdatedAt.provided
-    ? incomingUpdatedAt.value >= existing.updatedAt
-    : existing.updatedAt <= 0
-
-  const statusType = preferIncoming
-    ? incoming.statusType !== 'unknown'
-      ? incoming.statusType
-      : existing.statusType
-    : existing.statusType !== 'unknown'
-      ? existing.statusType
-      : incoming.statusType
-
-  const phase = preferIncoming
-    ? incoming.phase !== 'unknown'
-      ? incoming.phase
-      : existing.phase
-    : existing.phase !== 'unknown'
-      ? existing.phase
-      : incoming.phase
-
-  const incomingAttention = readIncomingAttention(incomingRaw)
-  const attention = incomingAttention.provided && preferIncoming ? incomingAttention.value : existing.attention
-  const displayState = preferIncoming
-    ? incoming.displayState !== 'unknown'
-      ? incoming.displayState
-      : existing.displayState
-    : existing.displayState !== 'unknown'
-      ? existing.displayState
-      : incoming.displayState
-
-  return normalizeRuntime({
-    statusType,
-    phase,
-    attention,
-    displayState,
-    updatedAt: incomingUpdatedAt.provided ? Math.max(existing.updatedAt, incomingUpdatedAt.value) : existing.updatedAt,
-  })
+export function sessionStateHasAttention(snapshot?: SessionStateSnapshot | null): boolean {
+  return sessionStateNeedsAttention(snapshot?.state)
 }
 
-export function runtimeIsActive(runtime?: SessionRuntimeState | null, opts?: { includeCooldown?: boolean }): boolean {
-  if (!runtime) return false
-  if (runtime.displayState === 'needsPermission' || runtime.displayState === 'needsReply') return true
-  if (runtime.displayState === 'running' || runtime.displayState === 'retrying') return true
-  if (opts?.includeCooldown && runtime.displayState === 'coolingDown') return true
-  if (runtime.attention) return true
-  if (runtime.statusType === 'busy' || runtime.statusType === 'retry') return true
-  if (runtime.phase === 'busy') return true
-  if (opts?.includeCooldown && runtime.phase === 'cooldown') return true
-  return false
+export function sessionStateNeedsRecoveryOf(snapshot?: SessionStateSnapshot | null): boolean {
+  return sessionStateNeedsRecovery(snapshot?.state)
 }
 
-export function runtimeStateEquivalent(left: SessionRuntimeState, right: SessionRuntimeState): boolean {
-  return (
-    left.statusType === right.statusType &&
-    left.phase === right.phase &&
-    left.attention === right.attention &&
-    left.displayState === right.displayState
-  )
+export function mergeSessionStateSnapshot(
+  current: SessionStateSnapshot | undefined,
+  incoming: StateInput,
+): SessionStateSnapshot {
+  const next = normalizeSessionStateSnapshot(incoming)
+  if (!current) return next
+  if (next.updatedAt <= 0 || next.updatedAt >= current.updatedAt) return next
+  return current
+}
+
+export function stateSnapshotEquivalent(left: SessionStateSnapshot, right: SessionStateSnapshot): boolean {
+  return left.updatedAt === right.updatedAt && JSON.stringify(left.state) === JSON.stringify(right.state)
 }

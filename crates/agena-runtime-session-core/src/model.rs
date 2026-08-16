@@ -799,7 +799,7 @@ impl Session {
 
     fn workflow_runtime_snapshot(&self) -> WorkflowRuntimeState {
         let state = if self.blocked() {
-            WorkflowState::Blocked
+            WorkflowState::AwaitingInteraction
         } else if self.next_pending_tool().is_some() {
             WorkflowState::ToolPending
         } else {
@@ -1245,7 +1245,7 @@ mod parts_projection_tests {
         )]);
         assert_eq!(session.parts().len(), 1);
         assert!(session.blocked());
-        assert_eq!(session.workflow_state(), WorkflowState::Blocked);
+        assert_eq!(session.workflow_state(), WorkflowState::AwaitingInteraction);
     }
 
     #[test]
@@ -1529,7 +1529,7 @@ mod parts_projection_tests {
             other => panic!("expected answered tool to remain queued, got {other:?}"),
         }
         assert!(session.blocked());
-        assert_eq!(session.workflow_state(), WorkflowState::Blocked);
+        assert_eq!(session.workflow_state(), WorkflowState::AwaitingInteraction);
     }
 
     #[test]

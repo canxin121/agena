@@ -30,7 +30,9 @@ impl App {
                 let transcript_contains_target =
                     self.transcript.execution.as_ref().is_some_and(|execution| {
                         execution
-                            .pending_interactive_requests
+                            .session
+                            .state
+                            .pending_interactive_requests()
                             .iter()
                             .any(|request| request.session_id == session_id)
                     });
@@ -108,7 +110,9 @@ impl App {
                 let transcript_contains_target =
                     self.transcript.execution.as_ref().is_some_and(|execution| {
                         execution
-                            .pending_interactive_requests
+                            .session
+                            .state
+                            .pending_interactive_requests()
                             .iter()
                             .any(|request| request.session_id == session_id)
                     });
@@ -218,8 +222,8 @@ impl App {
         match result {
             Ok(mut page) => {
                 page.items.sort_by(|left, right| {
-                    session_state_priority(right.state)
-                        .cmp(&session_state_priority(left.state))
+                    session_state_priority(&right.state)
+                        .cmp(&session_state_priority(&left.state))
                         .then_with(|| right.updated_at.cmp(&left.updated_at))
                         .then_with(|| right.id.cmp(&left.id))
                 });
@@ -825,14 +829,14 @@ impl App {
     }
 }
 
-const fn session_state_priority(state: agena_api::resource::SessionState) -> u8 {
+fn session_state_priority(state: &agena_api::resource::SessionState) -> u8 {
     match state {
-        agena_api::resource::SessionState::AwaitingUser => 5,
-        agena_api::resource::SessionState::Running => 4,
-        agena_api::resource::SessionState::Interrupted => 3,
-        agena_api::resource::SessionState::Failed => 2,
+        agena_api::resource::SessionState::AwaitingInteraction { .. } => 5,
+        agena_api::resource::SessionState::Running { .. } => 4,
+        agena_api::resource::SessionState::Interrupted { .. } => 3,
+        agena_api::resource::SessionState::Failed { .. } => 2,
         agena_api::resource::SessionState::Creating => 1,
-        agena_api::resource::SessionState::Ready => 0,
+        agena_api::resource::SessionState::Ready { .. } => 0,
     }
 }
 use crate::view::model_catalog_presentation_item;

@@ -1226,7 +1226,7 @@ async fn resume_mid_stream_without_a_lease_reconciles_to_ready() {
 }
 
 #[tokio::test]
-async fn resume_mid_ask_without_a_lease_remains_awaiting_user() {
+async fn resume_mid_ask_without_a_lease_remains_awaiting_interaction() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let facade = SessionFacade::with_clock(
@@ -1263,7 +1263,7 @@ async fn resume_mid_ask_without_a_lease_remains_awaiting_user() {
         .expect("derive awaiting user");
     assert_eq!(
         awaiting.state,
-        agena_storage::store::SessionState::AwaitingUser
+        agena_storage::store::SessionState::AwaitingInteraction
     );
     assert_eq!(
         facade
@@ -1271,7 +1271,7 @@ async fn resume_mid_ask_without_a_lease_remains_awaiting_user() {
             .await
             .expect("derive awaiting-user overview state")
             .get(&session_id),
-        Some(&agena_storage::store::SessionState::AwaitingUser)
+        Some(&agena_storage::store::SessionState::AwaitingInteraction)
     );
     let interaction_id = awaiting
         .pending_interaction

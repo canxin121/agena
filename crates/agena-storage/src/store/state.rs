@@ -118,7 +118,7 @@ pub const LEASE_STALENESS_MS: i64 = 15_000;
 
 /// Derive the single `SessionState` from parts + leases (17.3).
 ///
-/// Precedence: Creating → Failed → AwaitingUser (pending interaction wins over
+/// Precedence: Creating → Failed → AwaitingInteraction (pending interaction wins over
 /// an in-flight run) → Running (fresh lease) / Interrupted (stale or none).
 pub fn derive_session_state(
     meta: Option<&SessionMeta>,
@@ -137,7 +137,7 @@ pub fn derive_session_state(
         return SessionState::Failed;
     }
     if !pending_interactions.is_empty() {
-        return SessionState::AwaitingUser;
+        return SessionState::AwaitingInteraction;
     }
     if let Some(_marker) = in_flight_runs.first() {
         return if lease_is_fresh(lease, now_ms) {

@@ -56,7 +56,7 @@ transcript-empty-session = このセッションにはまだメッセージが�
 session-state-creating = 作成中
 session-state-ready = 最近完了
 session-state-running = 実行中
-session-state-awaiting-user = 入力待ち
+session-state-awaiting-interaction = 入力待ち
 session-state-interrupted = 中断
 session-state-failed = 失敗
 

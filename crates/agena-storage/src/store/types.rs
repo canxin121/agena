@@ -763,7 +763,7 @@ pub enum SessionState {
     /// An in-flight run marker with a fresh lease.
     Running,
     /// A pending interaction part gates the session — user's turn.
-    AwaitingUser,
+    AwaitingInteraction,
     /// An in-flight run marker with a stale/no lease (crash) — reconciling.
     Interrupted,
     /// Lifecycle failed, or the last run terminally failed and is not resumable.
@@ -776,7 +776,7 @@ impl SessionState {
             Self::Creating => "creating",
             Self::Ready => "ready",
             Self::Running => "running",
-            Self::AwaitingUser => "awaiting_user",
+            Self::AwaitingInteraction => "awaiting_interaction",
             Self::Interrupted => "interrupted",
             Self::Failed => "failed",
         }
@@ -787,7 +787,7 @@ impl SessionState {
             "creating" => Some(Self::Creating),
             "ready" => Some(Self::Ready),
             "running" => Some(Self::Running),
-            "awaiting_user" => Some(Self::AwaitingUser),
+            "awaiting_interaction" => Some(Self::AwaitingInteraction),
             "interrupted" => Some(Self::Interrupted),
             "failed" => Some(Self::Failed),
             _ => None,
@@ -795,7 +795,7 @@ impl SessionState {
     }
 }
 
-/// A pending interaction the UI must surface when `SessionState::AwaitingUser`.
+/// A pending interaction the UI must surface when `SessionState::AwaitingInteraction`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InteractionRef {
     pub part_id: i64,

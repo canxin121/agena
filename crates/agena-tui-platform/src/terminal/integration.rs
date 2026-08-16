@@ -151,8 +151,8 @@ pub enum ProgressState {
     Working,
     /// State 4 - paused/warning: awaiting permission or user input.
     Awaiting,
-    /// State 2 - error: the run ended blocked.
-    Blocked,
+    /// State 2 - error: the run ended and needs recovery.
+    Error,
 }
 
 impl ProgressState {
@@ -161,7 +161,7 @@ impl ProgressState {
             Self::Clear => 0,
             Self::Working => 3,
             Self::Awaiting => 4,
-            Self::Blocked => 2,
+            Self::Error => 2,
         }
     }
 }
@@ -325,7 +325,7 @@ mod tests {
             vec![b"\x1b]9;4;4\x07".to_vec()]
         );
         assert_eq!(
-            progress_frames(ProgressState::Blocked),
+            progress_frames(ProgressState::Error),
             vec![b"\x1b]9;4;2\x07".to_vec()]
         );
     }

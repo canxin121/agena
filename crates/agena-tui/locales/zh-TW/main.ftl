@@ -56,7 +56,7 @@ transcript-empty-session = 目前工作階段還沒有訊息。
 session-state-creating = 正在建立
 session-state-ready = 最近結束
 session-state-running = 正在執行
-session-state-awaiting-user = 等待你處理
+session-state-awaiting-interaction = 等待你處理
 session-state-interrupted = 已中斷
 session-state-failed = 已失敗
 

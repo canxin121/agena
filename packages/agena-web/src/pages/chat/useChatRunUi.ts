@@ -4,6 +4,7 @@ import type { RenderBlock } from './useChatRenderBlocks'
 import { i18n } from '@/i18n'
 import { formatCompactNumber, formatCurrencyUSD, formatNumber, formatTimeHMS } from '@/i18n/intl'
 import { resolveComposerPrimaryActions } from './composerPrimaryActions'
+import type { SessionState } from '@/types/chat'
 
 type ToastsStore = { push: (kind: 'success' | 'error', message: string) => void }
 
@@ -19,27 +20,13 @@ type ModelSelectionForUsage = {
   selectedModelId: Ref<string>
 }
 
-type SessionStatusLike = {
-  type?: string
-  attempt?: number
-  message?: string
-  next?: number
-}
-
 type ActivitySnapshotEntry = {
   type?: string
 }
 
-type SessionRuntimeLike = {
-  statusType?: string
-  phase?: string
-  displayState?: string
-  attention?: string | null
-}
-
 type DirectorySessionsRuntimeLike = {
-  runtimeBySessionId?: Record<string, SessionRuntimeLike> | null
-  isSessionRuntimeActive?: (sessionId: string, opts?: { includeCooldown?: boolean }) => boolean
+  // Kept optional at the call site while the sidebar owns only canonical
+  // SessionState snapshots. Run UI does not derive status from this store.
 }
 
 type Phase = 'idle' | 'busy' | 'cooldown'
@@ -91,7 +78,7 @@ type MessageLike = {
 
 type ChatLike = {
   selectedSessionId: string | null
-  selectedSessionStatus?: { status?: SessionStatusLike | null } | null
+  selectedSessionState?: SessionState | null
   messages: MessageLike[]
   selectedAttention?: { kind?: string } | null
   abortSession: (sid: string) => Promise<boolean>
@@ -159,8 +146,8 @@ export function useChatRunUi(opts: {
 }) {
   const {
     chat,
-    activity,
-    directorySessions,
+    activity: _activity,
+    directorySessions: _directorySessions,
     toasts,
     modelSelection,
     draft,
@@ -175,72 +162,26 @@ export function useChatRunUi(opts: {
     activityAutoCollapseOnIdle,
   } = opts
 
-  const sessionStatus = computed<SessionStatusLike | null>(() => chat.selectedSessionStatus?.status ?? null)
-  const statusType = computed(() => {
-    const ty = sessionStatus.value?.type
-    return typeof ty === 'string' ? ty : ''
-  })
+  void _directorySessions
+  void _activity
 
-  const selectedSidebarRuntime = computed<SessionRuntimeLike | null>(() => {
-    const sid = String(chat.selectedSessionId || '').trim()
-    if (!sid) return null
-    const bySession = directorySessions?.runtimeBySessionId || null
-    if (!bySession || typeof bySession !== 'object') return null
-    return bySession[sid] || null
-  })
-
-  const sidebarRuntimeActive = computed(() => {
-    const sid = String(chat.selectedSessionId || '').trim()
-    if (!sid) return false
-
-    if (typeof directorySessions?.isSessionRuntimeActive === 'function') {
-      return Boolean(directorySessions.isSessionRuntimeActive(sid, { includeCooldown: false }))
-    }
-
-    const runtime = selectedSidebarRuntime.value
-    if (!runtime) return false
-
-    const displayState = String(runtime.displayState || '').trim()
-    if (displayState === 'needsPermission' || displayState === 'needsReply') return true
-    if (displayState === 'running' || displayState === 'retrying') return true
-
-    const runtimeStatus = String(runtime.statusType || '').trim()
-    if (runtimeStatus === 'busy' || runtimeStatus === 'retry') return true
-
-    const runtimePhase = String(runtime.phase || '').trim()
-    if (runtimePhase === 'busy') return true
-
-    const attention = String(runtime.attention || '').trim()
-    return Boolean(attention)
-  })
+  const sessionState = computed<SessionState>(() => chat.selectedSessionState || { kind: 'ready', data: {} })
+  const stateKind = computed(() => sessionState.value.kind)
+  const canonicalRunActive = computed(() => stateKind.value === 'running' || stateKind.value === 'creating')
 
   const currentPhase = computed<Phase>(() => {
     const sid = String(chat.selectedSessionId || '').trim()
     if (!sid) return 'idle'
 
-    const runtime = selectedSidebarRuntime.value
-    const runtimePhase = String(runtime?.phase || '').trim()
-    if (runtimePhase === 'cooldown') return 'cooldown'
-    if (sidebarRuntimeActive.value) return 'busy'
-
-    // session.status is authoritative; activity can be stale (missed SSE / background tab).
-    if (statusType.value === 'idle') return 'idle'
-    if (statusType.value === 'busy' || statusType.value === 'retry') return 'busy'
-
-    const snapshot = activity.snapshot || {}
-    const phaseRaw = snapshot[sid]?.type
-    return phaseRaw === 'busy' || phaseRaw === 'cooldown' ? phaseRaw : 'idle'
+    // The tagged server state is authoritative. The local submit flag only
+    // covers the short submit-to-refresh window; stale activity events must
+    // never turn Interrupted or Ready back into busy.
+    if (canonicalRunActive.value || awaitingAssistant.value) return 'busy'
+    return 'idle'
   })
 
   const retryStatus = computed<RetryStatus | null>(() => {
-    const s = sessionStatus.value
-    if (!s || s.type !== 'retry') return null
-    return {
-      type: 'retry',
-      attempt: typeof s.attempt === 'number' ? s.attempt : 0,
-      message: typeof s.message === 'string' ? s.message : '',
-      next: typeof s.next === 'number' ? s.next : 0,
-    }
+    return null
   })
 
   const retryNowMs = ref(Date.now())
@@ -275,15 +216,16 @@ export function useChatRunUi(opts: {
   })
 
   watch(
-    () => statusType.value,
+    () => stateKind.value,
     (ty, prev) => {
-      // Match OpenCode CLI semantics: session.idle means the run is complete.
-      if (ty === 'idle' && !sidebarRuntimeActive.value) {
+      if (ty !== 'running' && ty !== 'creating') {
         awaitingAssistant.value = false
         pendingSendAt.value = null
 
         // Auto-collapse activity once the assistant finishes, so the chat stays readable.
-        if (prev && prev !== 'idle' && activityAutoCollapseOnIdle.value) {
+        if (prev === 'running' || prev === 'creating') {
+          if (activityAutoCollapseOnIdle.value) collapseAllActivities()
+        } else if (prev && activityAutoCollapseOnIdle.value) {
           collapseAllActivities()
         }
       }
@@ -415,13 +357,16 @@ export function useChatRunUi(opts: {
     if (hasTailActivity.value) return false
 
     const phase = currentPhase.value
-    const busyLike = phase === 'busy' || statusType.value === 'busy'
+    const busyLike = phase === 'busy' || canonicalRunActive.value
     return Boolean(awaitingAssistant.value || busyLike)
   })
 
   const sessionEnded = computed(() => {
-    if (sidebarRuntimeActive.value) return false
-    return statusType.value === 'idle'
+    return (
+      !canonicalRunActive.value &&
+      !awaitingAssistant.value &&
+      (stateKind.value === 'ready' || stateKind.value === 'interrupted' || stateKind.value === 'failed')
+    )
   })
 
   const aborting = ref(false)
@@ -429,11 +374,9 @@ export function useChatRunUi(opts: {
     if (!chat.selectedSessionId) return false
     return (
       aborting.value === false &&
-      (sidebarRuntimeActive.value ||
-        currentPhase.value === 'busy' ||
+      (currentPhase.value === 'busy' ||
         awaitingAssistant.value ||
-        statusType.value === 'busy' ||
-        statusType.value === 'retry')
+        Boolean(sessionState.value.kind === 'awaiting_interaction' && sessionState.value.data.execution))
     )
   })
 
@@ -486,7 +429,6 @@ export function useChatRunUi(opts: {
 
   return {
     currentPhase,
-    sessionStatus,
     retryStatus,
     retryCountdownLabel,
     retryNextLabel,

@@ -1097,22 +1097,166 @@ pub enum SessionLifecycleState {
     Failed,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 /// Current processing state of a session.
 ///
-/// This is intentionally separate from [`SessionLifecycleState`], which only
-/// describes whether the session record itself was created successfully, and
-/// from [`WorkflowState`], which describes the agent workflow inside a loaded
-/// execution view.
+/// This is the single client-facing execution state. Durable session facts are
+/// derived from parts and leases; the optional live execution and workflow
+/// payloads are attached by the application service when it has a full
+/// execution snapshot.
 pub enum SessionState {
     Creating,
-    #[default]
-    Ready,
-    Running,
-    AwaitingUser,
-    Interrupted,
-    Failed,
+    Ready {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_failure: Option<serde_json::Value>,
+    },
+    Running {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution: Option<ActiveExecutionResource>,
+        workflow: WorkflowState,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        requests: Vec<PendingInteractiveRequestResource>,
+    },
+    AwaitingInteraction {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution: Option<ActiveExecutionResource>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        requests: Vec<PendingInteractiveRequestResource>,
+    },
+    Interrupted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_failure: Option<serde_json::Value>,
+    },
+    Failed {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure: Option<serde_json::Value>,
+    },
+}
+
+impl Default for SessionState {
+    fn default() -> Self {
+        Self::Ready { last_failure: None }
+    }
+}
+
+impl SessionState {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Creating => "creating",
+            Self::Ready { .. } => "ready",
+            Self::Running { .. } => "running",
+            Self::AwaitingInteraction { .. } => "awaiting_interaction",
+            Self::Interrupted { .. } => "interrupted",
+            Self::Failed { .. } => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "creating" => Some(Self::Creating),
+            "ready" => Some(Self::Ready { last_failure: None }),
+            "running" => Some(Self::Running {
+                execution: None,
+                workflow: WorkflowState::Quiescent,
+                requests: Vec::new(),
+            }),
+            "awaiting_interaction" => Some(Self::AwaitingInteraction {
+                run_id: None,
+                execution: None,
+                requests: Vec::new(),
+            }),
+            "interrupted" => Some(Self::Interrupted {
+                run_id: None,
+                reason: None,
+                last_failure: None,
+            }),
+            "failed" => Some(Self::Failed { failure: None }),
+            _ => None,
+        }
+    }
+
+    pub const fn is_running(&self) -> bool {
+        matches!(self, Self::Running { .. })
+    }
+
+    pub const fn is_awaiting_interaction(&self) -> bool {
+        matches!(self, Self::AwaitingInteraction { .. })
+    }
+
+    pub const fn needs_recovery(&self) -> bool {
+        matches!(self, Self::Interrupted { .. })
+    }
+
+    pub const fn is_failed(&self) -> bool {
+        matches!(self, Self::Failed { .. })
+    }
+
+    /// True only while a durable run is still executing. Waiting for a user
+    /// or recovery is attention, not active model work.
+    pub const fn is_busy(&self) -> bool {
+        self.is_running()
+    }
+
+    pub const fn is_attention(&self) -> bool {
+        self.is_awaiting_interaction()
+            || self.needs_recovery()
+            || self.is_failed()
+            || matches!(self, Self::Running { requests, .. } if !requests.is_empty())
+    }
+
+    pub const fn workflow_state(&self) -> WorkflowState {
+        match self {
+            Self::Running { workflow, .. } => *workflow,
+            Self::AwaitingInteraction { .. } => WorkflowState::AwaitingInteraction,
+            _ => WorkflowState::Quiescent,
+        }
+    }
+
+    pub fn active_execution(&self) -> Option<&ActiveExecutionResource> {
+        match self {
+            Self::Running { execution, .. } | Self::AwaitingInteraction { execution, .. } => {
+                execution.as_ref()
+            }
+            _ => None,
+        }
+    }
+
+    pub fn pending_interactive_requests(&self) -> &[PendingInteractiveRequestResource] {
+        match self {
+            Self::Running { requests, .. } | Self::AwaitingInteraction { requests, .. } => {
+                requests.as_slice()
+            }
+            _ => &[],
+        }
+    }
+
+    pub fn with_execution_snapshot(
+        self,
+        execution: Option<ActiveExecutionResource>,
+        workflow: WorkflowState,
+        requests: Vec<PendingInteractiveRequestResource>,
+    ) -> Self {
+        match self {
+            Self::Running { .. } => Self::Running {
+                execution,
+                workflow,
+                requests,
+            },
+            Self::AwaitingInteraction { run_id, .. } => Self::AwaitingInteraction {
+                run_id,
+                execution,
+                requests,
+            },
+            other => other,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1129,22 +1273,45 @@ pub struct SessionOverviewResource {
 
 #[cfg(test)]
 mod session_state_contract_tests {
-    use super::SessionState;
+    use super::{SessionState, WorkflowState};
 
     #[test]
     fn session_processing_states_have_stable_wire_names() {
         let cases = [
             (SessionState::Creating, "creating"),
-            (SessionState::Ready, "ready"),
-            (SessionState::Running, "running"),
-            (SessionState::AwaitingUser, "awaiting_user"),
-            (SessionState::Interrupted, "interrupted"),
-            (SessionState::Failed, "failed"),
+            (SessionState::Ready { last_failure: None }, "ready"),
+            (
+                SessionState::Running {
+                    execution: None,
+                    workflow: WorkflowState::Quiescent,
+                    requests: Vec::new(),
+                },
+                "running",
+            ),
+            (
+                SessionState::AwaitingInteraction {
+                    run_id: None,
+                    execution: None,
+                    requests: Vec::new(),
+                },
+                "awaiting_interaction",
+            ),
+            (
+                SessionState::Interrupted {
+                    run_id: None,
+                    reason: None,
+                    last_failure: None,
+                },
+                "interrupted",
+            ),
+            (SessionState::Failed { failure: None }, "failed"),
         ];
         for (state, expected) in cases {
+            assert_eq!(state.as_str(), expected);
+            let wire = serde_json::to_value(&state).expect("serialize session state");
             assert_eq!(
-                serde_json::to_string(&state).expect("serialize session state"),
-                format!("\"{expected}\"")
+                wire.get("kind").and_then(serde_json::Value::as_str),
+                Some(expected)
             );
         }
     }
@@ -1190,7 +1357,7 @@ pub enum WorkflowState {
     #[default]
     Quiescent,
     ToolPending,
-    Blocked,
+    AwaitingInteraction,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1305,8 +1472,6 @@ pub struct SessionExecutionResource {
     /// The session's v2 parts (ordered parts, including `run` markers).
     /// Replaces the v1 `TranscriptSnapshot` aggregate.
     pub parts: Vec<SessionTranscriptPart>,
-    pub workflow_state: WorkflowState,
-    pub active_execution: Option<ActiveExecutionResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_event_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1317,8 +1482,6 @@ pub struct SessionExecutionResource {
     #[serde(default)]
     pub background_activities: Vec<BackgroundActivityResource>,
     pub execution: SessionExecutionContextResource,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pending_interactive_requests: Vec<PendingInteractiveRequestResource>,
     pub usage: SessionUsageResource,
 }
 
@@ -1334,7 +1497,7 @@ pub struct OperationDetailResource {
     pub streaming: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// A pending interactive request (permission or user input).
 pub struct PendingInteractiveRequestResource {
     pub session_id: i64,

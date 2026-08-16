@@ -45,6 +45,7 @@ import { useSidebarLocate } from '@/layout/chatSidebar/useSidebarLocate'
 import { normalizeSidebarUiPrefsForUi } from '@/features/sessions/model/sidebarUiPrefs'
 import { apiJson } from '@/lib/api'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
+import { sessionStateKind } from '@/types/chat'
 
 const props = withDefaults(
   defineProps<{
@@ -1021,17 +1022,12 @@ async function toggleDirectoryCollapse(directoryId: string, _directoryPath: stri
 
 function hasAttention(sessionId: string): 'permission' | 'question' | null {
   const sid = (sessionId || '').trim()
-  const runtime = directorySessions.runtimeBySessionId?.[sid]
-  const value = runtime?.attention
-  if (value === 'permission' || value === 'question') {
-    return value
-  }
-  if (runtime?.displayState === 'needsPermission') {
-    return 'permission'
-  }
-  if (runtime?.displayState === 'needsReply') {
-    return 'question'
-  }
+  const state = directorySessions.stateBySessionId?.[sid]?.state
+  if (sessionStateKind(state) !== 'awaiting_interaction') return null
+  const request = state?.data.requests?.[0]
+  const kind = request && typeof request === 'object' && !Array.isArray(request) ? request.kind : undefined
+  if (kind === 'permission') return 'permission'
+  if (kind === 'user_input') return 'question'
   return null
 }
 
@@ -1053,16 +1049,16 @@ type DirectorySidebarView = {
   sessionCount: number
   rootPage: number
   rootPageCount: number
-  hasActiveOrBlocked: boolean
+  hasActiveOrAttention: boolean
   hasRunningSessions: boolean
-  hasBlockedSessions: boolean
+  hasAttentionSessions: boolean
   pinnedRows: ThreadSessionRow[]
   recentRows: ThreadSessionRow[]
   recentParentById: Record<string, string | null>
   recentRootIds: string[]
 }
 
-type DirectoryActivityState = 'running' | 'blocked' | 'mixed' | null
+type DirectoryActivityState = 'running' | 'attention' | 'mixed' | null
 
 const flattenedTreeCacheByDirectoryId = new Map<
   string,
@@ -1513,10 +1509,10 @@ function directoryActivityState(p: DirectoryEntry): DirectoryActivityState {
   if (!section) return null
 
   const hasRunning = section.hasRunningSessions === true
-  const hasBlocked = section.hasBlockedSessions === true
-  if (hasRunning && hasBlocked) return 'mixed'
-  if (hasBlocked) return 'blocked'
-  if (hasRunning || section.hasActiveOrBlocked === true) return 'running'
+  const hasAttention = section.hasAttentionSessions === true
+  if (hasRunning && hasAttention) return 'mixed'
+  if (hasAttention) return 'attention'
+  if (hasRunning || section.hasActiveOrAttention === true) return 'running'
   return null
 }
 

@@ -27,7 +27,7 @@ const props = withDefaults(
     multiSelectEnabled?: boolean
     multiSelected?: boolean
     sessionMultiSelectEnabled?: boolean
-    activityState?: 'running' | 'blocked' | 'mixed' | null
+    activityState?: 'running' | 'attention' | 'mixed' | null
     loading?: boolean
     creatingSession?: boolean
   }>(),
@@ -71,8 +71,8 @@ const activityTitle = computed(() => {
   if (props.activityState === 'running') {
     return String(t('chat.sidebar.directoriesList.activity.runningTooltip'))
   }
-  if (props.activityState === 'blocked') {
-    return String(t('chat.sidebar.directoriesList.activity.blockedTooltip'))
+  if (props.activityState === 'attention') {
+    return String(t('chat.sidebar.directoriesList.activity.attentionTooltip'))
   }
   if (props.activityState === 'mixed') {
     return String(t('chat.sidebar.directoriesList.activity.mixedTooltip'))
@@ -84,7 +84,7 @@ const activityDotClass = computed(() => {
   if (props.activityState === 'running') {
     return 'bg-primary animate-pulse'
   }
-  if (props.activityState === 'blocked') {
+  if (props.activityState === 'attention') {
     return 'bg-destructive'
   }
   if (props.activityState === 'mixed') {

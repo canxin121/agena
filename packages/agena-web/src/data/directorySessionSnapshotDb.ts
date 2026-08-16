@@ -1,3 +1,4 @@
+import type { SessionState } from '@/types/chat'
 import type { StrictJsonObject, StrictJsonValue } from '@/types/json'
 import { indexedDbNames } from '@/lib/persistence/storageKeys'
 
@@ -11,26 +12,23 @@ export type SessionSummarySnapshot = StrictJsonObject & {
   id: string
 }
 
-export type SessionRuntimeSnapshot = {
-  statusType?: string
-  phase?: string
-  attention?: 'permission' | 'question' | null
-  displayState?: string
-  updatedAt?: number
+export type SessionStateSnapshot = {
+  state: SessionState
+  updatedAt: number
 }
 
 export type DirectorySessionSnapshot = {
-  schemaVersion: 1
+  schemaVersion: 2
   savedAt: number
   directoryEntries: DirectoryEntrySnapshot[]
   sessionSummaries: SessionSummarySnapshot[]
-  runtimeBySessionId: Record<string, SessionRuntimeSnapshot>
+  stateBySessionId: Record<string, SessionStateSnapshot>
   rootsByDirectoryId: Record<string, string[]>
   childrenByParentSessionId: Record<string, string[]>
 }
 
 const DB_NAME = indexedDbNames.directorySessionSnapshot
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE_NAME = 'snapshots'
 const SNAPSHOT_KEY = 'latest'
 
@@ -63,10 +61,15 @@ function openSnapshotDb(): Promise<IDBDatabase> {
 
   openDbPromise = new Promise((resolve, reject) => {
     const req = window.indexedDB.open(DB_NAME, DB_VERSION)
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME)
+      } else if (event.oldVersion < DB_VERSION) {
+        // The persisted runtime projection was intentionally replaced by the
+        // canonical tagged SessionState. Drop the old snapshot rather than
+        // rehydrating a second, incompatible state machine.
+        req.transaction?.objectStore(STORE_NAME).clear()
       }
     }
     req.onsuccess = () => {
@@ -130,34 +133,30 @@ function normalizeSnapshot(raw: StrictJsonValue): DirectorySessionSnapshot | nul
         .map((entry) => entry as SessionSummarySnapshot)
     : []
 
-  const runtimeBySessionId: Record<string, SessionRuntimeSnapshot> = {}
-  const runtimeBySession = asRecord(obj.runtimeBySessionId)
-  if (runtimeBySession) {
-    for (const [sid, value] of Object.entries(runtimeBySession)) {
+  if (obj.schemaVersion !== 2) return null
+
+  const stateBySessionId: Record<string, SessionStateSnapshot> = {}
+  const stateBySession = asRecord(obj.stateBySessionId)
+  if (stateBySession) {
+    for (const [sid, value] of Object.entries(stateBySession)) {
       const sessionId = String(sid || '').trim()
       if (!sessionId) continue
-      const runtime = asRecord(value)
-      if (!runtime) continue
-      runtimeBySessionId[sessionId] = {
-        statusType: typeof runtime.statusType === 'string' ? runtime.statusType : undefined,
-        phase: typeof runtime.phase === 'string' ? runtime.phase : undefined,
-        attention:
-          runtime.attention === 'permission' || runtime.attention === 'question' || runtime.attention === null
-            ? (runtime.attention as 'permission' | 'question' | null)
-            : undefined,
-        displayState: typeof runtime.displayState === 'string' ? runtime.displayState : undefined,
-        updatedAt:
-          typeof runtime.updatedAt === 'number' && Number.isFinite(runtime.updatedAt) ? runtime.updatedAt : undefined,
-      }
+      const snapshot = asRecord(value)
+      if (!snapshot || !asRecord(snapshot.state)) continue
+      const updatedAt =
+        typeof snapshot.updatedAt === 'number' && Number.isFinite(snapshot.updatedAt)
+          ? Math.max(0, Math.floor(snapshot.updatedAt))
+          : 0
+      stateBySessionId[sessionId] = { state: snapshot.state as SessionState, updatedAt }
     }
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     savedAt: typeof obj.savedAt === 'number' && Number.isFinite(obj.savedAt) ? obj.savedAt : Date.now(),
     directoryEntries: directoryEntries as DirectoryEntrySnapshot[],
     sessionSummaries,
-    runtimeBySessionId,
+    stateBySessionId,
     rootsByDirectoryId: normalizeStringArrayMap(obj.rootsByDirectoryId),
     childrenByParentSessionId: normalizeStringArrayMap(obj.childrenByParentSessionId),
   }
@@ -185,7 +184,7 @@ export async function saveDirectorySessionSnapshot(snapshot: DirectorySessionSna
     store.put(
       {
         ...snapshot,
-        schemaVersion: 1,
+        schemaVersion: 2,
         savedAt: Date.now(),
       },
       SNAPSHOT_KEY,

@@ -309,22 +309,38 @@ fn session_resource_from_storage_meta(
     })
 }
 
-const fn session_state_from_lifecycle(value: agena_domain::SessionLifecycleState) -> SessionState {
+fn session_state_from_lifecycle(value: agena_domain::SessionLifecycleState) -> SessionState {
     match value {
         agena_domain::SessionLifecycleState::Creating => SessionState::Creating,
-        agena_domain::SessionLifecycleState::Ready => SessionState::Ready,
-        agena_domain::SessionLifecycleState::Failed => SessionState::Failed,
+        agena_domain::SessionLifecycleState::Ready => SessionState::Ready { last_failure: None },
+        agena_domain::SessionLifecycleState::Failed => SessionState::Failed { failure: None },
     }
 }
 
-const fn session_state_from_storage(value: agena_storage::store::SessionState) -> SessionState {
+pub(crate) fn session_state_from_storage(
+    value: agena_storage::store::SessionState,
+) -> SessionState {
     match value {
         agena_storage::store::SessionState::Creating => SessionState::Creating,
-        agena_storage::store::SessionState::Ready => SessionState::Ready,
-        agena_storage::store::SessionState::Running => SessionState::Running,
-        agena_storage::store::SessionState::AwaitingUser => SessionState::AwaitingUser,
-        agena_storage::store::SessionState::Interrupted => SessionState::Interrupted,
-        agena_storage::store::SessionState::Failed => SessionState::Failed,
+        agena_storage::store::SessionState::Ready => SessionState::Ready { last_failure: None },
+        agena_storage::store::SessionState::Running => SessionState::Running {
+            execution: None,
+            workflow: agena_api::resource::WorkflowState::Quiescent,
+            requests: Vec::new(),
+        },
+        agena_storage::store::SessionState::AwaitingInteraction => {
+            SessionState::AwaitingInteraction {
+                run_id: None,
+                execution: None,
+                requests: Vec::new(),
+            }
+        }
+        agena_storage::store::SessionState::Interrupted => SessionState::Interrupted {
+            run_id: None,
+            reason: Some("lease_lost".to_owned()),
+            last_failure: None,
+        },
+        agena_storage::store::SessionState::Failed => SessionState::Failed { failure: None },
     }
 }
 
@@ -492,7 +508,7 @@ mod tests {
         assert_eq!(resource.message_count, 2);
         assert_eq!(resource.child_session_count, 1);
         assert!(resource.last_message_at.is_some());
-        assert_eq!(resource.state, SessionState::Running);
+        assert!(resource.state.is_running());
     }
 
     #[tokio::test]

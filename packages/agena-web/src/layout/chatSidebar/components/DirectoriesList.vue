@@ -46,7 +46,7 @@ type ThreadSessionRow = {
   isExpanded: boolean
 }
 
-type DirectoryActivityState = 'running' | 'blocked' | 'mixed' | null
+type DirectoryActivityState = 'running' | 'attention' | 'mixed' | null
 
 type SessionMenuTarget = { directory: DirectoryEntry; session: SessionLike }
 type MenuRefEl = Element | ComponentPublicInstance | null

@@ -56,7 +56,7 @@ transcript-empty-session = Todavia no hay mensajes en esta sesion.
 session-state-creating = creando
 session-state-ready = finalizada recientemente
 session-state-running = en ejecucion
-session-state-awaiting-user = esperando tu respuesta
+session-state-awaiting-interaction = esperando tu respuesta
 session-state-interrupted = interrumpida
 session-state-failed = fallida
 

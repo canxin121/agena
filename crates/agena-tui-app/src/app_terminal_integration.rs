@@ -57,7 +57,7 @@ fn notifications_operational(app: &App) -> bool {
 /// (`SessionResource.state`), with pending-interactive requests refining what
 /// an awaiting state is for. The bundled `agena.terminal` plugin also publishes
 /// a hook-driven `agena.terminal.activity` display segment, but hooks only
-/// observe idle/running/blocked and can lag the server lease, so it is *not*
+/// observe idle/running and can lag the server lease, so it is *not*
 /// consulted here — the state machine is the source of truth.
 fn current_title_text(app: &App) -> String {
     let session_title = app.current_or_selected_session_title();
@@ -67,8 +67,8 @@ fn current_title_text(app: &App) -> String {
         SessionActivity::Idle => None,
         SessionActivity::Running => Some(app.i18n.text("terminal-title-working")),
         SessionActivity::AwaitingPermission => Some(app.i18n.text("terminal-title-permission")),
-        SessionActivity::AwaitingUserInput => Some(app.i18n.text("terminal-title-user-input")),
-        SessionActivity::Blocked => Some(app.i18n.text("terminal-title-blocked")),
+        SessionActivity::AwaitingInteraction => Some(app.i18n.text("terminal-title-user-input")),
+        SessionActivity::NeedsRecovery => Some(app.i18n.text("terminal-title-interrupted")),
     };
     // Terminals without a native OSC 9;4 progress indicator rely on the
     // title alone to show activity, so the state text leads the title where
@@ -144,16 +144,16 @@ fn progress_operational(app: &App) -> bool {
 }
 
 /// The OSC 9;4 progress state for the current activity. `Idle` clears the
-/// indicator; interactive waits map to the paused/warning state and a
-/// blocked run to the error state.
+/// indicator; interactive waits map to the paused/warning state and a session
+/// needing recovery to the error state.
 fn current_progress_state(app: &App) -> ProgressState {
     match app.current_session_activity() {
         SessionActivity::Idle => ProgressState::Clear,
         SessionActivity::Running => ProgressState::Working,
-        SessionActivity::AwaitingPermission | SessionActivity::AwaitingUserInput => {
+        SessionActivity::AwaitingPermission | SessionActivity::AwaitingInteraction => {
             ProgressState::Awaiting
         }
-        SessionActivity::Blocked => ProgressState::Blocked,
+        SessionActivity::NeedsRecovery => ProgressState::Error,
     }
 }
 
@@ -191,7 +191,7 @@ pub(crate) fn sync_terminal_progress(
 /// Emits at most one attention notification, if the terminal supports them.
 /// Locally queued notifications (permission/user-input requests, flash
 /// errors) take precedence; otherwise a one-shot lifecycle notification from
-/// the `agena.terminal` plugin (run completed / blocked) is consumed.
+/// the `agena.terminal` plugin (run completed) is consumed.
 /// Returns the emitted method (or `None` when nothing was queued or the
 /// capability is disabled).
 pub(crate) fn drain_terminal_notification(
@@ -246,10 +246,10 @@ fn notification_summary(app: &App) -> String {
         SessionActivity::AwaitingPermission => {
             Some(app.i18n.text("terminal-notification-permission"))
         }
-        SessionActivity::AwaitingUserInput => {
+        SessionActivity::AwaitingInteraction => {
             Some(app.i18n.text("terminal-notification-user-input"))
         }
-        SessionActivity::Blocked => Some(app.i18n.text("terminal-notification-blocked")),
+        SessionActivity::NeedsRecovery => Some(app.i18n.text("terminal-notification-interrupted")),
     };
     match (session, state) {
         (title, Some(state)) => format!("{title} · {state}"),

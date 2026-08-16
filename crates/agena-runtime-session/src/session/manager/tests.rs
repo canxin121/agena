@@ -579,7 +579,7 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
         .expect("append pending interaction");
 
     // Fault injection through the persistence engine: an open session must
-    // derive AwaitingUser even when the paused run has no lease. Production
+    // derive AwaitingInteraction even when the paused run has no lease. Production
     // manager code itself continues to access chat data only through
     // SessionStore.
     let engine = agena_storage_sqlite::SqliteEngine::new(Arc::new(database));
@@ -594,10 +594,10 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
         .session_state(session.id)
         .await
         .expect("derive awaiting state without a lease");
-    assert_eq!(before.state, SessionState::AwaitingUser);
+    assert_eq!(before.state, SessionState::AwaitingInteraction);
 
     // Exercise the manager's lazy reconciliation-on-open path. If its
-    // AwaitingUser guard regresses, this call terminalizes the paused run.
+    // AwaitingInteraction guard regresses, this call terminalizes the paused run.
     let opened = manager
         .get_session(session.id)
         .await
@@ -623,7 +623,7 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
             .await
             .expect("derive state after open")
             .state,
-        SessionState::AwaitingUser
+        SessionState::AwaitingInteraction
     );
 }
 

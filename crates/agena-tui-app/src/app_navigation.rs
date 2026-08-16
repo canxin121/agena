@@ -98,7 +98,7 @@ impl App {
 
     pub(crate) fn session_search_item(&self, session: SessionResource) -> SessionSearchItem {
         let mut detail_parts = vec![
-            ui_text::session_state_label(&self.i18n, session.state),
+            ui_text::session_state_label(&self.i18n, &session.state),
             ui_text::session_meta(
                 &self.i18n,
                 session.id,
@@ -292,22 +292,25 @@ impl App {
             if let Some(kind) = pending_interactive_kind_for_execution(execution) {
                 return match kind {
                     PendingInteractiveKind::Permission => SessionActivity::AwaitingPermission,
-                    PendingInteractiveKind::UserInput => SessionActivity::AwaitingUserInput,
+                    PendingInteractiveKind::UserInput => SessionActivity::AwaitingInteraction,
                 };
             }
-            match execution.session.state {
-                agena_api::resource::SessionState::Running
+            match &execution.session.state {
+                agena_api::resource::SessionState::Running { .. }
                 | agena_api::resource::SessionState::Creating => {
                     return SessionActivity::Running;
                 }
-                agena_api::resource::SessionState::AwaitingUser => {
-                    return SessionActivity::AwaitingUserInput;
+                agena_api::resource::SessionState::AwaitingInteraction { .. } => {
+                    return SessionActivity::AwaitingInteraction;
                 }
-                // Interrupted (stale lease) and Failed are abnormal states;
-                // surface them as blocked rather than silently idle.
-                agena_api::resource::SessionState::Interrupted
-                | agena_api::resource::SessionState::Failed => return SessionActivity::Blocked,
-                agena_api::resource::SessionState::Ready => {}
+                // Interrupted and failed are recovery/attention states, not
+                // active execution. They must never park a composer message
+                // behind a completion event that can no longer arrive.
+                agena_api::resource::SessionState::Interrupted { .. }
+                | agena_api::resource::SessionState::Failed { .. } => {
+                    return SessionActivity::NeedsRecovery;
+                }
+                agena_api::resource::SessionState::Ready { .. } => {}
             }
         }
 

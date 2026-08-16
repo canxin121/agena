@@ -32,7 +32,7 @@ impl SessionManager {
         if matches!(
             presentation.state,
             agena_storage::store::SessionState::Running
-                | agena_storage::store::SessionState::AwaitingUser
+                | agena_storage::store::SessionState::AwaitingInteraction
         ) {
             return Ok(());
         }
@@ -97,7 +97,7 @@ impl SessionManager {
         if matches!(
             presentation.state,
             agena_storage::store::SessionState::Running
-                | agena_storage::store::SessionState::AwaitingUser
+                | agena_storage::store::SessionState::AwaitingInteraction
         ) {
             return Ok(());
         }

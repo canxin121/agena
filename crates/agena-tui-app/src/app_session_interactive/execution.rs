@@ -106,13 +106,13 @@ impl App {
             return;
         };
         // Only an actively generating run is interrupted. Interactive
-        // phases (permission / user-input / blocked) must not be cancelled
+        // phases (permission / interaction) must not be cancelled
         // because that would discard the pending request.
         let has_active_execution = self
             .transcript
             .execution
             .as_ref()
-            .and_then(|execution| execution.active_execution.as_ref())
+            .and_then(|execution| execution.session.state.active_execution())
             .is_some();
         if self.session_activity(session_id).is_running() && has_active_execution {
             self.request_cancel_run(session_id);

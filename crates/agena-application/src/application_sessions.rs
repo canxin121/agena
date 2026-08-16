@@ -48,13 +48,14 @@ impl Application {
         let mut running = Vec::new();
         let mut recent = Vec::new();
         for session in sessions {
-            match session.state {
-                agena_api::resource::SessionState::AwaitingUser
-                | agena_api::resource::SessionState::Interrupted => attention.push(session),
-                agena_api::resource::SessionState::Running
-                | agena_api::resource::SessionState::Creating => running.push(session),
-                agena_api::resource::SessionState::Ready
-                | agena_api::resource::SessionState::Failed => recent.push(session),
+            if session.state.is_attention() {
+                attention.push(session);
+            } else if session.state.is_running()
+                || matches!(session.state, agena_api::resource::SessionState::Creating)
+            {
+                running.push(session);
+            } else {
+                recent.push(session);
             }
         }
         let sort_recent = |left: &SessionResource, right: &SessionResource| {
@@ -64,8 +65,8 @@ impl Application {
                 .then_with(|| right.id.cmp(&left.id))
         };
         attention.sort_by(|left, right| {
-            session_attention_priority(right.state)
-                .cmp(&session_attention_priority(left.state))
+            session_attention_priority(&right.state)
+                .cmp(&session_attention_priority(&left.state))
                 .then_with(|| sort_recent(left, right))
         });
         running.sort_by(sort_recent);
@@ -645,24 +646,14 @@ impl Application {
 fn session_state_resource(
     state: agena_storage::store::SessionState,
 ) -> agena_api::resource::SessionState {
-    match state {
-        agena_storage::store::SessionState::Creating => agena_api::resource::SessionState::Creating,
-        agena_storage::store::SessionState::Ready => agena_api::resource::SessionState::Ready,
-        agena_storage::store::SessionState::Running => agena_api::resource::SessionState::Running,
-        agena_storage::store::SessionState::AwaitingUser => {
-            agena_api::resource::SessionState::AwaitingUser
-        }
-        agena_storage::store::SessionState::Interrupted => {
-            agena_api::resource::SessionState::Interrupted
-        }
-        agena_storage::store::SessionState::Failed => agena_api::resource::SessionState::Failed,
-    }
+    crate::service::sessions::session_state_from_storage(state)
 }
 
-const fn session_attention_priority(state: agena_api::resource::SessionState) -> u8 {
+fn session_attention_priority(state: &agena_api::resource::SessionState) -> u8 {
     match state {
-        agena_api::resource::SessionState::AwaitingUser => 2,
-        agena_api::resource::SessionState::Interrupted => 1,
+        agena_api::resource::SessionState::AwaitingInteraction { .. } => 2,
+        agena_api::resource::SessionState::Interrupted { .. } => 1,
+        agena_api::resource::SessionState::Running { requests, .. } if !requests.is_empty() => 3,
         _ => 0,
     }
 }

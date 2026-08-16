@@ -79,7 +79,7 @@ impl App {
         }) {
             return false;
         }
-        let is_terminal = execution.active_execution.is_none();
+        let is_terminal = execution.session.state.active_execution().is_none();
         let current_execution_absent = self.transcript.execution.is_none();
         if execution_update_is_stale_with_terminal(
             self.transcript.last_event_seq,
@@ -93,7 +93,7 @@ impl App {
             .transcript
             .execution
             .as_ref()
-            .is_some_and(|current| current.active_execution.is_some());
+            .is_some_and(|current| current.session.state.active_execution().is_some());
         let session_id = execution.session.id;
         let sequence = execution.latest_event_seq;
         self.transcript.apply_execution(execution);
@@ -195,7 +195,9 @@ impl App {
             .as_ref()
             .map(|execution| {
                 execution
-                    .pending_interactive_requests
+                    .session
+                    .state
+                    .pending_interactive_requests()
                     .iter()
                     .filter_map(|request| request.request.as_user_input())
                     .map(|request| request.request_id.clone())
@@ -217,7 +219,9 @@ impl App {
         };
         self.seen_permission_request_ids.retain(|request_id| {
             execution
-                .pending_interactive_requests
+                .session
+                .state
+                .pending_interactive_requests()
                 .iter()
                 .any(|request| {
                     pending_interactive_request_matches_kind(
@@ -228,7 +232,9 @@ impl App {
         });
         self.seen_user_input_request_ids.retain(|request_id| {
             execution
-                .pending_interactive_requests
+                .session
+                .state
+                .pending_interactive_requests()
                 .iter()
                 .any(|request| {
                     pending_interactive_request_matches_kind(

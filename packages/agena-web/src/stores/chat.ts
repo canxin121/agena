@@ -11,6 +11,7 @@ import { setLocalJson, getLocalJson } from '../lib/persist'
 import { useToastsStore } from './toasts'
 import { useDirectoryStore } from './directory'
 import { i18n } from '../i18n'
+import { sessionStateExecution, sessionStateRequests } from '../types/chat'
 import type { SseEvent } from '../lib/sse'
 import type {
   AttentionEvent,
@@ -20,9 +21,8 @@ import type {
   Session,
   SessionErrorEvent,
   SessionRunConfig,
+  SessionState,
   SessionUsage,
-  SessionStatus,
-  SessionStatusEvent,
 } from '../types/chat'
 import type { JsonObject, JsonValue } from '../types/json'
 import { readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
@@ -91,7 +91,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const pendingInputParts = ref<JsonValue[]>([])
 
   const attentionBySession = ref<Record<string, AttentionEvent>>({})
-  const sessionStatusBySession = ref<Record<string, SessionStatusEvent>>({})
   const sessionErrorBySession = ref<Record<string, SessionErrorEvent>>({})
   const sessionRunConfigBySession = ref<Record<string, SessionRunConfig>>({})
   const sessionUsageBySession = ref<Record<string, SessionUsage>>({})
@@ -199,6 +198,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
   }
 
   const selectedSession = computed(() => getSessionById(selectedSessionId.value))
+
+  const selectedSessionState = computed<SessionState>(() => {
+    const state = selectedSession.value?.state
+    return state || { kind: 'ready', data: {} }
+  })
 
   const selectedSessionDirectory = computed<string | null>(() => {
     const sid = selectedSessionId.value
@@ -557,33 +561,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
     attentionRefreshTimerBySession.set(sid, timer)
   }
 
-  function statusFromState(state: string, workflow: string, running: boolean): SessionStatus {
-    if (
-      running ||
-      state === 'running' ||
-      state === 'creating' ||
-      workflow === 'tool_pending' ||
-      workflow === 'blocked'
-    ) {
-      return { type: 'busy' }
-    }
-    return { type: 'idle' }
-  }
-
   async function refreshExecutionStatus(sessionId: string) {
     const sid = (sessionId || '').trim()
     if (!sid) return
     const st = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
     if (!st) return
-    const parsed = statusFromState(st.state, st.workflow_state, st.running)
-    sessionStatusBySession.value = {
-      ...sessionStatusBySession.value,
-      [sid]: {
-        at: Date.now(),
-        payload: { type: 'runtime_signal', properties: { state: st.state, workflow_state: st.workflow_state } },
-        status: parsed,
-      },
-    }
+    upsertSessionCache({ id: sid, state: st.state })
 
     const execution = st.execution
     if (execution && typeof execution === 'object') {
@@ -614,7 +597,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
   }
 
-  /** Translate agena pending_interactive_requests into the AttentionEvent shape. */
+  /** Translate canonical session.state.data.requests into the AttentionEvent shape. */
   function attentionFromPendingRequests(sessionId: string, requests: JsonValue[]): AttentionEvent | null {
     const sid = (sessionId || '').trim()
     if (!sid || !Array.isArray(requests) || requests.length === 0) return null
@@ -696,8 +679,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!sid) return
     const state = await chatApi.getSessionExecution(sid).catch(() => null)
     if (!state) return
-    const requests = state.pending_interactive_requests as JsonValue[] | undefined
-    const next = attentionFromPendingRequests(sid, Array.isArray(requests) ? requests : [])
+    const next = attentionFromPendingRequests(sid, sessionStateRequests(state.session?.state) as JsonValue[])
     if (next) {
       attentionBySession.value = { ...attentionBySession.value, [sid]: next }
       const requestId = readString(asRecord(next.payload.properties).id as JsonValue)
@@ -722,12 +704,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = selectedSessionId.value
     if (!sid) return null
     return attentionBySession.value[sid] ?? null
-  })
-
-  const selectedSessionStatus = computed(() => {
-    const sid = selectedSessionId.value
-    if (!sid) return null
-    return sessionStatusBySession.value[sid] ?? null
   })
 
   const selectedSessionError = computed(() => {
@@ -760,6 +736,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return sid ? sessionDirectoryBySessionId.value[sid] || null : null
   }
 
+  function getSessionState(sessionId: string | null | undefined): SessionState {
+    return getSessionById(sessionId)?.state || { kind: 'ready', data: {} }
+  }
+
   function getSessionHistory(sessionId: string | null | undefined) {
     const sid = String(sessionId || '').trim()
     if (!sid) return { loading: false, exhausted: false, limit: 0 }
@@ -773,11 +753,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
   function getSessionAttention(sessionId: string | null | undefined): AttentionEvent | null {
     const sid = String(sessionId || '').trim()
     return sid ? attentionBySession.value[sid] || null : null
-  }
-
-  function getSessionStatus(sessionId: string | null | undefined): SessionStatusEvent | null {
-    const sid = String(sessionId || '').trim()
-    return sid ? sessionStatusBySession.value[sid] || null : null
   }
 
   function getSessionError(sessionId: string | null | undefined): SessionErrorEvent | null {
@@ -870,11 +845,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const next = { ...sessionDirectoryBySessionId.value }
       delete next[sid]
       sessionDirectoryBySessionId.value = next
-    }
-    {
-      const next = { ...sessionStatusBySession.value }
-      delete next[sid]
-      sessionStatusBySession.value = next
     }
     {
       const next = { ...sessionErrorBySession.value }
@@ -1059,22 +1029,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!sid) return false
     try {
       const st = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
-      const executionId = st?.active_execution?.execution_id
+      const executionId = sessionStateExecution(st?.state)?.execution_id
       if (!executionId) {
-        // Nothing active; just clear UI state.
+        // Nothing active; the canonical state is already terminal or waiting.
         clearAttention(sid)
-        sessionStatusBySession.value = {
-          ...sessionStatusBySession.value,
-          [sid]: { at: Date.now(), payload: { type: 'session.status' }, status: { type: 'idle' } },
-        }
         return true
       }
       await chatApi.cancelSession(sid, executionId)
       clearAttention(sid)
-      sessionStatusBySession.value = {
-        ...sessionStatusBySession.value,
-        [sid]: { at: Date.now(), payload: { type: 'session.status' }, status: { type: 'idle' } },
-      }
       return true
     } catch {
       return false
@@ -1099,7 +1061,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     void questions
     const answersMap: Record<string, string[]> = {}
     const state = await chatApi.getSessionExecution(sessionId).catch(() => null)
-    const requests = state?.pending_interactive_requests as JsonValue[] | undefined
+    const requests = sessionStateRequests(state?.session?.state) as JsonValue[]
     const request = (Array.isArray(requests) ? requests : []).find((r) => {
       const rec = asRecord(r)
       return readString(rec.request_id as JsonValue) === requestId
@@ -1157,9 +1119,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const mid = (messageId || '').trim()
     if (!sid || !mid) return
 
-    // Stop any active run first.
-    const st = sessionStatusBySession.value[sid]?.status?.type
-    if (st && st !== 'idle') {
+    // Stop any active run first. The tagged SessionState is the only source
+    // used to decide whether cancellation is meaningful.
+    const state = getSessionState(sid)
+    if (state.kind === 'running' || state.kind === 'creating' || sessionStateExecution(state)) {
       await abortSession(sid)
     }
 
@@ -1235,7 +1198,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
    *   message.part.removed / removed    → part_removed
    *   session.updated                   → session_meta_updated
    *   session.status / session.idle     → runtime_signal (session execution status)
-   *   permission.asked / question.asked → pending_interactive_requests (via state refresh)
+   *   permission.asked / question.asked → session.state.data.requests (via state refresh)
    */
   function applyEvent(evt: SseEvent) {
     const t = evt.type || ''
@@ -1388,10 +1351,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
             error: { message: msg, rendered: msg, raw: props },
           },
         }
-        sessionStatusBySession.value = {
-          ...sessionStatusBySession.value,
-          [sid]: { at, payload: evt, status: { type: 'idle' } },
-        }
         clearAttention(sid)
       }
     }
@@ -1403,16 +1362,15 @@ const useChatStoreDefinition = defineStore('chat', () => {
     sessionsError,
     selectedSessionId,
     selectedSession,
+    selectedSessionState,
     selectedSessionDirectory,
     messages,
     messagesLoading,
     messagesError,
     selectedAttention,
-    selectedSessionStatus,
     selectedSessionError,
     selectedSessionRunConfig,
     selectedSessionUsage,
-    sessionStatusBySession,
     sessionErrorBySession,
     sessionRunConfigBySession,
     attentionBySession,
@@ -1439,9 +1397,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
     getSessionById,
     getMessagesForSession,
     getSessionDirectory,
+    getSessionState,
     getSessionHistory,
     getSessionAttention,
-    getSessionStatus,
     getSessionError,
     getSessionRunConfig,
     getSessionUsage,
@@ -1499,7 +1457,6 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
       if (property === 'messagesError') return sid === target.selectedSessionId ? target.messagesError : null
       if (property === 'selectedHistory') return target.getSessionHistory(sid)
       if (property === 'selectedAttention') return target.getSessionAttention(sid)
-      if (property === 'selectedSessionStatus') return target.getSessionStatus(sid)
       if (property === 'selectedSessionError') return target.getSessionError(sid)
       if (property === 'selectedSessionRunConfig') return target.getSessionRunConfig(sid)
       if (property === 'selectedSessionUsage') return target.getSessionUsage(sid)

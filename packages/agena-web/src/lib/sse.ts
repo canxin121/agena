@@ -325,7 +325,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
    *   message.part.removed             → session_changed (part_removed)
    *   session.updated                  → session_changed (session_meta_updated)
    *   session.status / idle            → runtime_signal
-   *   permission.asked / question.asked → pending_interactive_requests (state-driven)
+   *   permission.asked / question.asked → session.state.data.requests (state-driven)
    */
   function normalizeAndQueue(raw: JsonLike, meta?: { directory?: string; lastEventId?: string }) {
     if (!isRecord(raw)) return

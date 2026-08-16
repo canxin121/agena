@@ -392,7 +392,7 @@ impl App {
                 .transcript
                 .execution
                 .as_ref()
-                .is_some_and(|execution| execution.active_execution.is_some());
+                .is_some_and(|execution| execution.session.state.active_execution().is_some());
             self.request_refresh(session_id, force || streaming_live);
         }
 

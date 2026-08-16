@@ -551,8 +551,8 @@ mod interaction_part_routing_tests {
         resource::{
             ExecutionAccess, PendingInteractiveRequest, PendingInteractiveRequestResource,
             SessionExecutionContextResource, SessionExecutionResource, SessionLifecycleState,
-            SessionRelationKind, SessionResource, SessionTranscriptPart, SessionUsageResource,
-            WorkflowState,
+            SessionRelationKind, SessionResource, SessionState, SessionTranscriptPart,
+            SessionUsageResource,
         },
     };
     use agena_domain::{UserInputKind, UserInputQuestion, UserInputSource};
@@ -752,11 +752,21 @@ mod interaction_part_routing_tests {
         pending: Vec<PendingInteractiveRequestResource>,
         parts: Vec<SessionTranscriptPart>,
     ) -> SessionExecutionResource {
+        let state = if pending.is_empty() {
+            SessionState::Ready { last_failure: None }
+        } else {
+            SessionState::AwaitingInteraction {
+                run_id: None,
+                execution: None,
+                requests: pending,
+            }
+        };
         SessionExecutionResource {
-            session: session_resource(),
+            session: SessionResource {
+                state,
+                ..session_resource()
+            },
             parts,
-            workflow_state: WorkflowState::Quiescent,
-            active_execution: None,
             latest_event_seq: Some(2),
             automation: None,
             background_activities: Vec::new(),
@@ -780,7 +790,6 @@ mod interaction_part_routing_tests {
                 subtask_finished_at: None,
                 subtask_failure: None,
             },
-            pending_interactive_requests: pending,
             usage: SessionUsageResource {
                 measured_prompt_tokens: None,
                 current_tokens: 0,
@@ -2034,7 +2043,7 @@ mod session_activity_state_machine_tests {
         ExecutionAccess, PendingInteractiveRequest, PendingInteractiveRequestResource,
         PermissionActionResource, PermissionRequest, SessionExecutionContextResource,
         SessionExecutionResource, SessionLifecycleState, SessionRelationKind, SessionResource,
-        SessionState, SessionTranscriptPart, SessionUsageResource, WorkflowState,
+        SessionState, SessionTranscriptPart, SessionUsageResource,
     };
 
     const SESSION_ID: i64 = 7;
@@ -2050,13 +2059,12 @@ mod session_activity_state_machine_tests {
         app.layout.transcript_body = Rect::new(0, 0, WIDTH, HEIGHT);
         app.transcript.session_id = Some(SESSION_ID);
         app.transcript
-            .apply_execution(execution_with(state, Vec::new(), Vec::new()));
+            .apply_execution(execution_with(state, Vec::new()));
         app
     }
 
     fn execution_with(
         state: SessionState,
-        pending: Vec<PendingInteractiveRequestResource>,
         parts: Vec<SessionTranscriptPart>,
     ) -> SessionExecutionResource {
         SessionExecutionResource {
@@ -2086,10 +2094,6 @@ mod session_activity_state_machine_tests {
                 last_message_at: None,
             },
             parts,
-            workflow_state: WorkflowState::Quiescent,
-            // Deliberately absent: the server state machine must drive the
-            // activity even without a client-visible in-flight execution.
-            active_execution: None,
             latest_event_seq: Some(2),
             automation: None,
             background_activities: Vec::new(),
@@ -2113,7 +2117,6 @@ mod session_activity_state_machine_tests {
                 subtask_finished_at: None,
                 subtask_failure: None,
             },
-            pending_interactive_requests: pending,
             usage: SessionUsageResource {
                 measured_prompt_tokens: None,
                 current_tokens: 0,
@@ -2157,7 +2160,11 @@ mod session_activity_state_machine_tests {
 
     #[test]
     fn running_state_is_active_even_without_a_client_execution_view() {
-        let app = app_with_execution(SessionState::Running);
+        let app = app_with_execution(SessionState::Running {
+            execution: None,
+            workflow: agena_api::resource::WorkflowState::Quiescent,
+            requests: Vec::new(),
+        });
         assert_eq!(
             app.session_activity(SESSION_ID),
             SessionActivity::Running,
@@ -2173,13 +2180,12 @@ mod session_activity_state_machine_tests {
     }
 
     #[test]
-    fn awaiting_user_with_a_permission_ask_is_awaiting_permission() {
-        let mut app = app_with_execution(SessionState::AwaitingUser);
-        app.transcript
-            .execution
-            .as_mut()
-            .unwrap()
-            .pending_interactive_requests = vec![permission_request()];
+    fn awaiting_interaction_with_a_permission_ask_is_awaiting_permission() {
+        let app = app_with_execution(SessionState::AwaitingInteraction {
+            run_id: None,
+            execution: None,
+            requests: vec![permission_request()],
+        });
         assert_eq!(
             app.session_activity(SESSION_ID),
             SessionActivity::AwaitingPermission
@@ -2187,37 +2193,39 @@ mod session_activity_state_machine_tests {
     }
 
     #[test]
-    fn awaiting_user_without_a_pending_request_still_awaits_input() {
-        let app = app_with_execution(SessionState::AwaitingUser);
+    fn awaiting_interaction_without_a_pending_request_still_awaits_input() {
+        let app = app_with_execution(SessionState::AwaitingInteraction {
+            run_id: None,
+            execution: None,
+            requests: Vec::new(),
+        });
         assert_eq!(
             app.session_activity(SESSION_ID),
-            SessionActivity::AwaitingUserInput,
-            "AwaitingUser without a visible request is still an awaiting state"
+            SessionActivity::AwaitingInteraction,
+            "AwaitingInteraction without a visible request is still an awaiting state"
         );
     }
 
     #[test]
-    fn interrupted_and_failed_surface_as_blocked() {
+    fn interrupted_and_failed_surface_as_recovery_attention() {
         assert_eq!(
-            app_with_execution(SessionState::Interrupted).session_activity(SESSION_ID),
-            SessionActivity::Blocked
+            app_with_execution(SessionState::Interrupted {
+                run_id: None,
+                reason: Some("lease_lost".to_owned()),
+                last_failure: None,
+            })
+            .session_activity(SESSION_ID),
+            SessionActivity::NeedsRecovery
         );
         assert_eq!(
-            app_with_execution(SessionState::Failed).session_activity(SESSION_ID),
-            SessionActivity::Blocked
+            app_with_execution(SessionState::Failed { failure: None }).session_activity(SESSION_ID),
+            SessionActivity::NeedsRecovery
         );
     }
 
     #[test]
-    fn ready_state_is_idle_even_with_a_client_execution_view() {
-        let mut app = app_with_execution(SessionState::Ready);
-        // A stale client-side execution view must not keep the session
-        // "working" — the server state machine owns the truth.
-        app.transcript.execution.as_mut().unwrap().active_execution =
-            Some(agena_api::resource::ActiveExecutionResource {
-                execution_id: uuid::Uuid::new_v4(),
-                phase: agena_api::resource::ExecutionPhase::StreamingModel,
-            });
+    fn ready_state_is_idle() {
+        let app = app_with_execution(SessionState::Ready { last_failure: None });
         assert_eq!(app.session_activity(SESSION_ID), SessionActivity::Idle);
     }
 }

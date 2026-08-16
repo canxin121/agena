@@ -3187,7 +3187,7 @@ mod tests {
             matches!(acquire, LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs.is_empty())
         );
 
-        // Pending interaction -> AwaitingUser, even when the lease is gone.
+        // Pending interaction -> AwaitingInteraction, even when the lease is gone.
         let paused = engine
             .submit_user_run(
                 session_id,
@@ -3209,7 +3209,7 @@ mod tests {
                 .expect("release paused lease")
         );
         let awaiting = derive_state(&engine, session_id).expect("presentation");
-        assert_eq!(awaiting.state, SessionState::AwaitingUser);
+        assert_eq!(awaiting.state, SessionState::AwaitingInteraction);
         let interaction = awaiting.pending_interaction.expect("pending interaction");
         assert_eq!(interaction.kind, "plan_review");
         let paused_view = engine.load_session(session_id).await.expect("paused view");

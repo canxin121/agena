@@ -631,7 +631,7 @@ fn session_state_projection_sql(now_ms: i64) -> String {
                  WHERE json_type(request.value, '$.reply') IS NULL \
                )) \
              ) \
-         ) THEN 'awaiting_user' \
+         ) THEN 'awaiting_interaction' \
          WHEN EXISTS ( \
            SELECT 1 FROM agena_session_parts spr \
            JOIN agena_parts pr ON pr.part_id = spr.part_id \

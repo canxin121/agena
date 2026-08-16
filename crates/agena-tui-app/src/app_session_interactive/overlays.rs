@@ -156,7 +156,9 @@ impl App {
             .as_ref()
             .map(|execution| {
                 execution
-                    .pending_interactive_requests
+                    .session
+                    .state
+                    .pending_interactive_requests()
                     .iter()
                     .filter_map(|request| request.request.as_user_input())
                     .map(|request| request.request_id.clone())
@@ -202,7 +204,7 @@ impl App {
     pub(crate) fn pending_user_input_overlay_target(&self) -> Option<(i64, UserInputRequest)> {
         let execution = self.transcript.execution.as_ref()?;
         let request = first_pending_interactive_request_by_kind(
-            execution.pending_interactive_requests.as_slice(),
+            execution.session.state.pending_interactive_requests(),
             PendingInteractiveKind::UserInput,
         )?;
         let session_id = request.session_id;
@@ -213,7 +215,7 @@ impl App {
     pub(crate) fn pending_permission_overlay_target(&self) -> Option<(i64, PermissionRequest)> {
         let execution = self.transcript.execution.as_ref()?;
         let request = first_pending_interactive_request_by_kind(
-            execution.pending_interactive_requests.as_slice(),
+            execution.session.state.pending_interactive_requests(),
             PendingInteractiveKind::Permission,
         )?;
         let session_id = request.session_id;
@@ -297,7 +299,7 @@ impl App {
     ) -> Option<PendingInteractiveOverlayTarget> {
         let execution = self.transcript.execution.as_ref()?;
         let resource = first_auto_open_pending_interactive_request(
-            execution.pending_interactive_requests.as_slice(),
+            execution.session.state.pending_interactive_requests(),
             &self.seen_permission_request_ids,
             &self.seen_user_input_request_ids,
         )?;
@@ -369,7 +371,7 @@ impl App {
             return false;
         };
         first_auto_open_pending_interactive_request(
-            execution.pending_interactive_requests.as_slice(),
+            execution.session.state.pending_interactive_requests(),
             &self.seen_permission_request_ids,
             &self.seen_user_input_request_ids,
         )

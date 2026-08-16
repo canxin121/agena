@@ -114,8 +114,7 @@ impl App {
         // of firing the single-letter navigation bindings, so words like
         // "attention" or "recent" can be typed uninterrupted. Arrow keys,
         // PgUp/PgDn, Home/End, Tab, Enter, Esc and Ctrl+* still navigate.
-        let typing = state.search_active
-            && matches!(key.code, crossterm::event::KeyCode::Char(_));
+        let typing = state.search_active && matches!(key.code, crossterm::event::KeyCode::Char(_));
         match resolve_tui_key(KeyContext::Hub, key) {
             Some(KeyAction::Close) => {
                 // Esc with an active search clears the filter and leaves
@@ -154,7 +153,11 @@ impl App {
             // Tab / Shift+Tab jump between the hub's sections (skipping empty
             // buckets), wrapping at the ends.
             Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) if !typing => {
-                let delta = if matches!(action, KeyAction::NextTab) { 1 } else { -1 };
+                let delta = if matches!(action, KeyAction::NextTab) {
+                    1
+                } else {
+                    -1
+                };
                 state.presentation.move_selection_section(delta);
             }
             Some(KeyAction::Open) => {
@@ -202,7 +205,7 @@ impl App {
     /// the TUI.
     pub(crate) fn hub_session_item(&self, session: &SessionResource) -> SessionHubItem {
         let mut detail_parts = vec![
-            ui_text::session_state_label(&self.i18n, session.state),
+            ui_text::session_state_label(&self.i18n, &session.state),
             ui_text::session_meta(
                 &self.i18n,
                 session.id,

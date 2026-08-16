@@ -324,13 +324,16 @@ pub(crate) enum SessionActivity {
     Idle,
     Running,
     AwaitingPermission,
-    AwaitingUserInput,
-    Blocked,
+    AwaitingInteraction,
+    NeedsRecovery,
 }
 
 impl SessionActivity {
     pub(crate) fn is_busy(self) -> bool {
-        self != Self::Idle
+        matches!(
+            self,
+            Self::Running | Self::AwaitingPermission | Self::AwaitingInteraction
+        )
     }
 
     pub(crate) fn is_running(self) -> bool {

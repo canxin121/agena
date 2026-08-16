@@ -68,6 +68,10 @@ const mobileTitle = computed(() => {
   const panelMap: Record<string, string> = {
     settings: String(t('nav.settings')),
     sessions: String(t('nav.chat')),
+    files: String(t('nav.files')),
+    preview: String(t('nav.preview')),
+    terminal: String(t('nav.terminal')),
+    git: String(t('nav.git')),
   }
   const panel = String(route.meta?.mobilePanel || '')
     .trim()
@@ -76,8 +80,11 @@ const mobileTitle = computed(() => {
 
   const tabMap: Record<string, string> = {
     chat: String(t('nav.chat')),
-    hub: String(t('nav.hub')),
     diff: String(t('nav.diff')),
+    files: String(t('nav.files')),
+    preview: String(t('nav.preview')),
+    terminal: String(t('nav.terminal')),
+    git: String(t('nav.git')),
   }
   return tabMap[String(ui.activeMainTab || '')] || String(t('app.title'))
 })
@@ -87,6 +94,10 @@ const mobilePanelToggleLabel = computed(() => {
   const panel = String(route.meta?.mobilePanel || '')
     .trim()
     .toLowerCase()
+  if (panel === 'files') return String(t('header.openFilesPanel'))
+  if (panel === 'preview') return String(t('header.openPreviewPanel'))
+  if (panel === 'terminal') return String(t('header.openTerminalPanel'))
+  if (panel === 'git') return String(t('header.openSourceControlPanel'))
   if (panel === 'settings') return String(t('header.openSettingsPanel'))
   return String(t('header.openSessions'))
 })
@@ -141,11 +152,14 @@ const SETTINGS_LAST_ROUTE_KEY = localStorageKeys.settings.lastRoute
 function getRememberedSettingsRoute(): string {
   try {
     const raw = String(localStorage.getItem(SETTINGS_LAST_ROUTE_KEY) || '').trim()
+    if (raw.startsWith('/settings/plan')) {
+      return `/settings/plugins${raw.slice('/settings/plan'.length)}`
+    }
     if (raw.startsWith('/settings')) return raw
   } catch {
     // ignore
   }
-  return '/settings'
+  return '/settings/opencode/general'
 }
 
 function openSettings() {
@@ -205,11 +219,11 @@ function openHelpDialog() {
         <!-- Connection Status -->
         <span
           class="mr-2 inline-flex h-6 w-6 items-center justify-center rounded-full"
-          :title="health.serverConnected() ? String(t('header.status.online')) : String(t('header.status.offline'))"
+          :title="health.openCodeConnected ? String(t('header.status.online')) : String(t('header.status.offline'))"
           :aria-label="String(t('header.connectionStatus'))"
         >
           <span
-            :class="cn('inline-flex h-2 w-2 rounded-full', health.serverConnected() ? 'bg-emerald-500' : 'bg-rose-500')"
+            :class="cn('inline-flex h-2 w-2 rounded-full', health.openCodeConnected ? 'bg-emerald-500' : 'bg-rose-500')"
           />
         </span>
 

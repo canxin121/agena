@@ -4,6 +4,7 @@ import type { RenderBlock } from '@/components/chat/messageList.types'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
 import type { AttachedFile } from '@/pages/chat/useChatAttachments'
+import type { ChatMount } from '@/plugins/host/mounts'
 import type { MessageEntry } from '@/types/chat'
 import type { JsonObject } from '@/types/json'
 
@@ -93,6 +94,9 @@ export type ChatPageViewContext = {
   attachmentsPanelOpen: MaybeRef<boolean>
   draft: MaybeRef<string>
 
+  chatSidebarPluginMounts: MaybeRef<ChatMount[]>
+  chatOverlayBottomPluginMounts: MaybeRef<ChatMount[]>
+
   renderBlocks: MaybeRef<RenderBlock[]>
   pendingInitialScrollSessionId: MaybeRef<string | null>
   loadingOlder: MaybeRef<boolean>
@@ -146,6 +150,7 @@ export type ChatPageViewContext = {
   removeAttachment: (id: string) => void
   clearAttachments: () => void
   openFilePicker: () => void
+  openProjectAttachDialog: () => void
   toggleAttachmentsPanel: () => void
   setAttachmentsPanelOpen: (open: boolean) => void | Promise<void>
   closeAttachmentsPanel: () => void
@@ -202,7 +207,10 @@ export type ChatPageViewContext = {
   renameDraft: MaybeRef<string>
   renameBusy: MaybeRef<boolean>
   saveRename: () => void | Promise<void>
+  attachProjectDialogOpen: MaybeRef<boolean>
+  attachProjectPath: MaybeRef<string>
   sessionDirectory: MaybeRef<string>
+  addProjectAttachment: () => void | Promise<void>
 
   isStreamingAssistantMessage: (message: MessageRecordLike | null | undefined) => boolean
   handleCopySessionError: () => void | Promise<void>

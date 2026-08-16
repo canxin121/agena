@@ -17,7 +17,7 @@ export type AttachedFile = {
   serverPath?: string
 }
 
-// Attachment handling (local uploads).
+// Attachment handling (local uploads + project file references).
 export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<ComposerExpose | null> }) {
   const { toasts, composerRef } = opts
 
@@ -32,6 +32,9 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
   // Keep local attachments conservative so base64+JSON stays within server body limits.
   const MAX_LOCAL_ATTACHMENT_BYTES = 25 * 1024 * 1024
   const MAX_LOCAL_ATTACHMENT_TOTAL_BYTES = 35 * 1024 * 1024
+
+  const attachProjectDialogOpen = ref(false)
+  const attachProjectPath = ref('')
 
   function formatBytes(bytes: number): string {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
@@ -159,9 +162,72 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
     }
   }
 
+  function openProjectAttachDialog() {
+    attachProjectPath.value = ''
+    attachProjectDialogOpen.value = true
+  }
+
+  function basename(path: string): string {
+    const p = (path || '').replace(/\\/g, '/').trim()
+    if (!p) return 'file'
+    const parts = p.split('/').filter(Boolean)
+    return parts[parts.length - 1] || p
+  }
+
+  function guessMimeFromName(name: string): string {
+    const n = (name || '').toLowerCase()
+    if (n.endsWith('.png')) return 'image/png'
+    if (n.endsWith('.jpg') || n.endsWith('.jpeg')) return 'image/jpeg'
+    if (n.endsWith('.gif')) return 'image/gif'
+    if (n.endsWith('.webp')) return 'image/webp'
+    if (n.endsWith('.svg')) return 'image/svg+xml'
+    if (n.endsWith('.pdf')) return 'application/pdf'
+    if (n.endsWith('.json')) return 'application/json'
+    if (n.endsWith('.md')) return 'text/markdown'
+    if (n.endsWith('.txt')) return 'text/plain'
+    if (n.endsWith('.ts') || n.endsWith('.tsx')) return 'text/plain'
+    if (n.endsWith('.js') || n.endsWith('.jsx')) return 'text/plain'
+    if (n.endsWith('.css')) return 'text/plain'
+    if (n.endsWith('.html')) return 'text/plain'
+    return 'application/octet-stream'
+  }
+
+  async function attachProjectFile(path: string) {
+    const p = (path || '').trim()
+    if (!p) return
+
+    const filename = basename(p)
+    if (attachedFiles.value.some((f) => f.serverPath === p)) return
+
+    // Avoid pulling file contents into the browser. We send a lightweight reference
+    // and let the server expand it into a data: URL when posting.
+    const mime = guessMimeFromName(filename)
+
+    attachedFiles.value = [
+      ...attachedFiles.value,
+      {
+        id: `server-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        filename,
+        size: 0,
+        mime,
+        url: '',
+        serverPath: p,
+      },
+    ]
+  }
+
+  async function addProjectAttachment() {
+    const p = (attachProjectPath.value || '').trim()
+    if (!p) return
+    await attachProjectFile(p)
+    attachProjectPath.value = ''
+  }
+
   return {
     attachedFiles,
     attachmentsBusy,
+    attachProjectDialogOpen,
+    attachProjectPath,
     formatBytes,
     handleDrop,
     handlePaste,
@@ -169,5 +235,7 @@ export function useChatAttachments(opts: { toasts: Toasts; composerRef: Ref<Comp
     removeAttachment,
     clearAttachments,
     openFilePicker,
+    openProjectAttachDialog,
+    addProjectAttachment,
   }
 }

@@ -1,0 +1,76 @@
+export default {
+  app: {
+    title: 'OpenCode Studio',
+  },
+  common: {
+    add: 'إضافة',
+    cancel: 'إلغاء',
+    close: 'إغلاق',
+    clear: 'مسح',
+    create: 'إنشاء',
+    delete: 'حذف',
+    save: 'حفظ',
+    saving: 'جارٍ الحفظ...',
+    saveFailed: 'فشل الحفظ',
+    edit: 'تعديل',
+    open: 'فتح',
+    reveal: 'إظهار',
+    remove: 'إزالة',
+    rename: 'إعادة تسمية',
+    confirm: 'تأكيد',
+    search: 'بحث',
+    searching: 'جارٍ البحث...',
+    loading: 'جارٍ التحميل...',
+    retry: 'إعادة المحاولة',
+    refresh: 'تحديث',
+    reload: 'إعادة تحميل',
+    discard: 'تجاهل',
+    undo: 'تراجع',
+    apply: 'تطبيق',
+    yes: 'نعم',
+    no: 'لا',
+    previousPage: 'الصفحة السابقة',
+    nextPage: 'الصفحة التالية',
+    currentPage: 'الصفحة الحالية',
+    previous: 'السابق',
+    next: 'التالي',
+    continue: 'متابعة',
+    default: 'افتراضي',
+    options: 'الخيارات',
+    copy: 'نسخ',
+    files: 'ملفات',
+    notSet: '(غير مضبوط)',
+    unknown: 'غير معروف',
+  },
+  settings: {
+    appearance: {
+      language: {
+        label: 'اللغة',
+        help: 'تنطبق على واجهة Studio.',
+        options: {
+          enUS: 'الإنجليزية (الولايات المتحدة)',
+          zhCN: 'الصينية المبسطة',
+          esES: 'الإسبانية (إسبانيا)',
+          hiIN: 'الهندية (الهند)',
+          arSA: 'العربية (السعودية)',
+          ptBR: 'البرتغالية (البرازيل)',
+          frFR: 'الفرنسية (فرنسا)',
+        },
+      },
+    },
+    opencodeConfig: {
+      sections: {
+        formatter: {
+          lsp: {
+            options: {
+              mode: {
+                config: 'config',
+                disabled: 'disabled',
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}

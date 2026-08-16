@@ -6,16 +6,23 @@ import {
   RiAiGenerate2,
   RiBrain2Line,
   RiCloseCircleLine,
+  RiFileTextLine,
+  RiFolder6Line,
+  RiGitMergeLine,
   RiLayoutLeftLine,
+  RiRestartLine,
   RiMoonLine,
   RiPaletteLine,
   RiQuestionLine,
   RiSettings3Line,
   RiSunLine,
+  RiTerminalBoxLine,
+  RiTimeLine,
   RiText,
 } from '@remixicon/vue'
 
 import Dialog from '@/components/ui/Dialog.vue'
+import { reloadOpenCodeConfig } from '@/lib/reload'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 
@@ -78,11 +85,22 @@ const sections = computed((): Array<{ category: string; items: ShortcutItem[] }>
       category: String(t('help.dialog.sections.interface')),
       items: [
         { keys: `${m}+/`, description: String(t('help.dialog.shortcuts.cycleTheme')), icon: RiPaletteLine },
+        { keys: `${m}+2`, description: String(t('help.dialog.shortcuts.openDiffPanel')), icon: RiFileTextLine },
+        { keys: `${m}+3`, description: String(t('help.dialog.shortcuts.openFiles')), icon: RiFolder6Line },
+        { keys: `${m}+4`, description: String(t('help.dialog.shortcuts.openTerminal')), icon: RiTerminalBoxLine },
+        { keys: `${m}+5`, description: String(t('help.dialog.shortcuts.openGitPanel')), icon: RiGitMergeLine },
+        { keys: `${m}+T`, description: String(t('help.dialog.shortcuts.openTimeline')), icon: RiTimeLine },
         { keys: `${m}+,`, description: String(t('help.dialog.shortcuts.openSettings')), icon: RiSettings3Line },
       ],
     },
   ]
 })
+
+async function reloadConfiguration() {
+  // Same behavior as the old Command Palette action.
+  await reloadOpenCodeConfig().catch(() => {})
+  window.location.reload()
+}
 
 async function setTheme(mode: 'light' | 'dark' | 'system') {
   if (mode === 'system') {
@@ -108,6 +126,24 @@ async function setTheme(mode: 'light' | 'dark' | 'system') {
             {{ t('help.dialog.quickActions.title') }}
           </div>
           <div class="space-y-1">
+            <button
+              type="button"
+              class="w-full flex items-center justify-between gap-3 rounded-md px-2 py-1 hover:bg-secondary/40 text-left"
+              @click="reloadConfiguration"
+            >
+              <div class="flex items-center gap-2 min-w-0">
+                <RiRestartLine class="h-4 w-4 text-muted-foreground" />
+                <span class="typography-meta text-foreground/90 truncate">{{
+                  t('help.dialog.quickActions.reloadConfig')
+                }}</span>
+              </div>
+              <kbd
+                class="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-mono bg-muted rounded border border-border/30"
+              >
+                {{ t('help.dialog.quickActions.badge') }}
+              </kbd>
+            </button>
+
             <button
               type="button"
               class="w-full flex items-center justify-between gap-3 rounded-md px-2 py-1 hover:bg-secondary/40 text-left"

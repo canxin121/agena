@@ -19,7 +19,13 @@ import {
   buildAssistantErrorMetaEntries,
   getAssistantErrorInfo,
 } from '@/pages/chat/assistantError'
-import { mediaKindFromHref } from '@/lib/mediaKind'
+import {
+  buildWorkspaceRawFileUrl,
+  extractWorkspacePathFromFileUrl,
+  mediaKindFromHref,
+  resolveWorkspaceFileLink,
+} from '@/lib/workspaceLinks'
+import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore, type ImageViewerItem } from '@/stores/ui'
 import type { JsonValue } from '@/types/json'
 import { useI18n } from 'vue-i18n'
@@ -70,6 +76,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const directoryStore = useDirectoryStore()
 const ui = useUiStore()
 const errorDetailsOpen = ref(false)
 
@@ -116,13 +123,27 @@ function audioFileParts(parts: MessagePartLike[]): FilePart[] {
   return getFileParts(parts).filter((part) => isAudioFilePart(part))
 }
 
-function resolveWorkspacePathForFilePart(_part: MessagePartLike): string {
-  // The browser client has no server-side workspace file URL scheme, so file
-  // parts are referenced directly by their `url` (server-served or data/blob).
-  return ''
+function resolveWorkspacePathForFilePart(part: MessagePartLike): string {
+  const workspaceRoot = String(directoryStore.currentDirectory || '').trim()
+  if (!workspaceRoot) return ''
+
+  const serverPath = typeof part?.serverPath === 'string' ? part.serverPath.trim() : ''
+  if (serverPath) {
+    return extractWorkspacePathFromFileUrl(serverPath, workspaceRoot) || ''
+  }
+
+  const url = typeof part?.url === 'string' ? part.url.trim() : ''
+  if (!url) return ''
+  return extractWorkspacePathFromFileUrl(url, workspaceRoot) || ''
 }
 
 function filePartPreviewUrl(part: MessagePartLike): string {
+  const workspaceRoot = String(directoryStore.currentDirectory || '').trim()
+  const path = resolveWorkspacePathForFilePart(part)
+  if (workspaceRoot && path) {
+    return buildWorkspaceRawFileUrl(workspaceRoot, path)
+  }
+
   const url = typeof part?.url === 'string' ? part.url.trim() : ''
   if (!url) return ''
   if (url.startsWith('data:') || url.startsWith('blob:')) return url
@@ -202,10 +223,19 @@ function sourcePathCandidateFromRecord(record: Record<string, JsonValue> | null 
   return ''
 }
 
-function resolveWorkspaceSourcePath(_candidate: string, _baseFilePath?: string): string {
-  // Workspace source paths are not resolvable from the browser client; markdown
-  // media/file links are rendered as-is by the server-provided markdown.
-  return ''
+function resolveWorkspaceSourcePath(candidate: string, baseFilePath?: string): string {
+  const workspaceRoot = String(directoryStore.currentDirectory || '').trim()
+  const input = String(candidate || '').trim()
+  if (!workspaceRoot || !input) return ''
+
+  const fromFileUrl = extractWorkspacePathFromFileUrl(input, workspaceRoot)
+  if (fromFileUrl) return fromFileUrl
+
+  const resolved = resolveWorkspaceFileLink(input, {
+    workspaceRoot,
+    ...(baseFilePath ? { baseFilePath } : {}),
+  })
+  return resolved?.path || ''
 }
 
 const fallbackMessageSourcePath = computed(() => {
@@ -240,6 +270,12 @@ function sourcePathForTextPart(part: MessagePartLike): string {
 }
 
 function openFilePart(part: MessagePartLike) {
+  const targetPath = resolveWorkspacePathForFilePart(part)
+  if (targetPath) {
+    ui.requestWorkspaceDockFile(targetPath, 'open')
+    return
+  }
+
   const url = typeof part?.url === 'string' ? part.url.trim() : ''
   if (!url) return
   window.open(url, '_blank', 'noopener,noreferrer')

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, isRef, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from 'vue'
-import { RiAttachmentLine, RiCloseLine, RiFileUploadLine, RiLoader4Line } from '@remixicon/vue'
+import { RiAttachmentLine, RiCloseLine, RiFileLine, RiFileUploadLine, RiLoader4Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import Button from '@/components/ui/Button.vue'
@@ -60,6 +60,7 @@ const emit = defineEmits<{
   (e: 'remove', id: string): void
   (e: 'clear'): void
   (e: 'attachLocal'): void
+  (e: 'attachProject'): void
 }>()
 
 const panelEl = ref<HTMLElement | null>(null)
@@ -490,6 +491,10 @@ onBeforeUnmount(() => {
             <RiFileUploadLine class="h-4 w-4 mr-1.5" />
             {{ t('chat.attachments.actions.addFromComputer') }}
           </Button>
+          <Button size="xs" variant="outline" class="h-8" @click="$emit('attachProject')">
+            <RiFileLine class="h-4 w-4 mr-1.5" />
+            {{ t('chat.attachments.actions.addFromProject') }}
+          </Button>
           <Button
             size="xs"
             variant="ghost-destructive"
@@ -623,6 +628,10 @@ onBeforeUnmount(() => {
           <Button size="sm" variant="outline" class="h-9" @click="$emit('attachLocal')">
             <RiFileUploadLine class="h-4 w-4 mr-2" />
             {{ t('chat.attachments.actions.addFromComputer') }}
+          </Button>
+          <Button size="sm" variant="outline" class="h-9" @click="$emit('attachProject')">
+            <RiFileLine class="h-4 w-4 mr-2" />
+            {{ t('chat.attachments.actions.addFromProject') }}
           </Button>
           <Button
             size="sm"

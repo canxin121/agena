@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { RiScissorsLine } from '@remixicon/vue'
+import { RiFileTextLine, RiScissorsLine, RiSearchLine } from '@remixicon/vue'
 
 import ChatPageView from './chat/ChatPageView.vue'
 import type { ChatPageViewContext } from './chat/chatPageViewContext'
@@ -10,16 +10,22 @@ import type { ChatPageViewContext } from './chat/chatPageViewContext'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
 import { useChatStore } from '@/stores/chat'
+import { useDirectoryStore } from '@/stores/directory'
+import { useDirectorySessionStore } from '@/stores/directorySessionStore'
+import { useOpencodeConfigStore } from '@/stores/opencodeConfig'
+import { usePluginHostStore } from '@/stores/pluginHost'
 import { useSessionActivityStore } from '@/stores/sessionActivity'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import { useToastsStore } from '@/stores/toasts'
+import { resolveChatMounts, type ChatMount } from '@/plugins/host/mounts'
 
 import { useMessageStreaming } from '@/composables/chat/useMessageStreaming'
 import { useChatAttachments } from './chat/useChatAttachments'
 import { useChatScrollNav } from './chat/useChatScrollNav'
 import { useChatComposerLayout } from './chat/useChatComposerLayout'
 import { useChatModelSelection } from './chat/useChatModelSelection'
+import { useChatCommands } from './chat/useChatCommands'
 import { useChatSessionActions } from './chat/useChatSessionActions'
 import { useChatRunUi } from './chat/useChatRunUi'
 import { openComposerInputMenu } from './chat/composerInputMenus'
@@ -27,6 +33,7 @@ import { formatTimeHM } from '@/i18n/intl'
 import { useChatRenderBlocks } from './chat/useChatRenderBlocks'
 import { useChatMessageActions } from './chat/useChatMessageActions'
 import { deriveSendRunConfig } from './chat/modelSendDefaults'
+import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { MessageEntry } from '@/types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
@@ -60,11 +67,15 @@ type OutgoingMessagePart =
 const route = useRoute()
 const router = useRouter()
 const chat = useChatStore()
+const directoryStore = useDirectoryStore()
+const directorySessions = useDirectorySessionStore()
+const opencodeConfig = useOpencodeConfigStore()
+const pluginHost = usePluginHostStore()
 const activity = useSessionActivityStore()
 const settings = useSettingsStore()
 const ui = useUiStore()
 const toasts = useToastsStore()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const orphanDraft = ref('')
 const draft = computed<string>({
@@ -89,6 +100,8 @@ const attachments = useChatAttachments({ toasts, composerRef })
 const {
   attachedFiles,
   attachmentsBusy,
+  attachProjectDialogOpen,
+  attachProjectPath,
   formatBytes,
   handleDrop,
   handlePaste,
@@ -96,6 +109,8 @@ const {
   removeAttachment,
   clearAttachments,
   openFilePicker,
+  openProjectAttachDialog,
+  addProjectAttachment,
 } = attachments
 
 const editorFullscreen = ref(false)
@@ -115,6 +130,18 @@ const composerActionItems = computed<ComposerActionItem[]>(() => [
     description: String(t('chat.composer.actions.compact.description')),
     icon: RiScissorsLine,
     disabled: !chat.selectedSessionId || compactBusy.value,
+  },
+  {
+    id: 'init',
+    label: String(t('chat.composer.actions.init.label')),
+    description: String(t('chat.composer.actions.init.description')),
+    icon: RiFileTextLine,
+  },
+  {
+    id: 'review',
+    label: String(t('chat.composer.actions.review.label')),
+    description: String(t('chat.composer.actions.review.description')),
+    icon: RiSearchLine,
   },
 ])
 
@@ -136,8 +163,7 @@ const composerActionMenuGroups = computed<OptionMenuGroup[]>(() => [
   },
 ])
 
-// Agena has no client-side workspace concept; the server owns the workspace.
-const sessionDirectory = computed(() => '')
+const sessionDirectory = computed(() => chat.selectedSessionDirectory || directoryStore.currentDirectory || '')
 const composerFullscreenActive = computed(() => editorFullscreen.value || editorClosing.value)
 const sessionTitle = computed(() => {
   const s = asRecord(chat.selectedSession)
@@ -192,6 +218,12 @@ let modelSelection: ReturnType<typeof useChatModelSelection>
 type ModelSlugPickerOption = { value?: string; providerId?: string; modelId?: string }
 type AgentPickerOption = { name?: string; description?: string }
 
+function getComposerTextareaEl(composer: ComposerExpose | null): HTMLTextAreaElement | null {
+  const textarea = composer?.textareaEl
+  if (!textarea) return null
+  return textarea instanceof HTMLTextAreaElement ? textarea : textarea.value
+}
+
 function asRecord(value: JsonValue): JsonObject {
   return typeof value === 'object' && value !== null ? (value as JsonObject) : {}
 }
@@ -208,9 +240,29 @@ function getSelectedSessionRevertId(): string {
   return typeof revert?.messageID === 'string' ? revert.messageID.trim() : ''
 }
 
+const chatCommands = useChatCommands({
+  sessionDirectory,
+  draft,
+  composerRef,
+  composerPickerOpen,
+  getSelectedAgent: () => String(modelSelection?.selectedAgent?.value || ''),
+  setAgentFromCommand: (agent) => modelSelection?.chooseAgent?.(agent),
+  setModelSlugFromCommand: (slug) => modelSelection?.chooseModelSlug?.(slug),
+  onSend: send,
+})
+
+const {
+  commandOpen,
+  commandQuery,
+  commandIndex,
+  loadCommands,
+  insertCommand,
+  handleDraftInput: handleDraftInputBase,
+  handleDraftKeydown: handleDraftKeydownInner,
+} = chatCommands
+
 function handleDraftInput() {
-  // Typing in the composer dismisses the model/agent/variant pickers.
-  composerPickerOpen.value = null
+  handleDraftInputBase()
   ui.setGlobalSelection('chat-input', chat.selectedSessionId || 'composer', {
     meta: { source: 'chat-composer-input' },
   })
@@ -218,6 +270,7 @@ function handleDraftInput() {
 
 modelSelection = useChatModelSelection({
   chat,
+  opencodeConfig,
   sessionDirectory,
   composerControlsRef,
   composerPickerOpen,
@@ -234,6 +287,9 @@ modelSelection = useChatModelSelection({
       closePicker: closeComposerPickerMenu,
     })
   },
+  commandOpen,
+  commandQuery,
+  commandIndex,
 })
 
 const composerPickerTitle = computed(() => {
@@ -521,6 +577,7 @@ const composerLayout = useChatComposerLayout({
   composerBarRef,
   scrollEl,
   composerRef,
+  commandOpen,
   composerPickerOpen,
   modelPickerQuery,
   scrollToBottom,
@@ -537,16 +594,12 @@ const {
 } = composerLayout
 
 function handleDraftKeydown(e: KeyboardEvent) {
-  if (composerFullscreenActive.value && e.key === 'Escape') {
+  if (composerFullscreenActive.value && e.key === 'Escape' && !commandOpen.value) {
     e.preventDefault()
     closeEditorFullscreen()
     return
   }
-  // Enter inserts a newline; Cmd/Ctrl+Enter sends.
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-    e.preventDefault()
-    void send()
-  }
+  handleDraftKeydownInner(e)
 }
 
 type RevertDiffFile = { filename: string; additions: number; deletions: number }
@@ -639,6 +692,30 @@ async function handleUnrevertFromRevertMarker() {
 const settingsData = computed<JsonObject>(() => asRecord(settings.data))
 
 const activityAutoCollapseOnIdle = computed(() => settingsData.value.chatActivityAutoCollapseOnIdle !== false)
+
+const chatMountsBySurface = computed(() => resolveChatMounts(pluginHost.manifestsById))
+
+function withChatMountContext(mounts: ChatMount[]): ChatMount[] {
+  const ctx: Record<string, string> = {}
+  const sid = String(chat.selectedSessionId || '').trim()
+  const cwd = String(sessionDirectory.value || '').trim()
+  const appLocale = String(locale.value || '').trim()
+  if (sid) ctx.sessionId = sid
+  if (cwd) ctx.cwd = cwd
+  if (appLocale) ctx.locale = appLocale
+
+  // Always return fresh mount objects so UI loaders can react to context changes.
+  return mounts.map((mount) => ({
+    ...mount,
+    context: ctx,
+  }))
+}
+
+const chatSidebarPluginMounts = computed(() => withChatMountContext(chatMountsBySurface.value['chat.sidebar']))
+
+const chatOverlayBottomPluginMounts = computed(() =>
+  withChatMountContext(chatMountsBySurface.value['chat.overlay.bottom']),
+)
 
 const activityDefaultExpandedKeys = computed<ChatActivityExpandKey[]>(() => {
   const s = settingsData.value
@@ -780,6 +857,9 @@ async function toggleComposerActionMenu(event?: MouseEvent | PointerEvent) {
   composerActionMenuOpen.value = true
   composerActionMenuAnchorRef.value = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null
   composerActionMenuQuery.value = ''
+  commandOpen.value = false
+  commandQuery.value = ''
+  commandIndex.value = 0
   // Desktop: focus search for quick filtering. Mobile: don't auto-focus (avoid IME popup).
   if (!ui.isTouchPointer) {
     void nextTick(() => sessionActionsMenuRef.value?.focusSearch?.())
@@ -904,6 +984,7 @@ function formatTime(ms?: number): string {
 const runUi = useChatRunUi({
   chat,
   activity,
+  directorySessions,
   toasts,
   modelSelection,
   draft,
@@ -938,12 +1019,16 @@ const {
 } = runUi
 
 function handleSessionActionRequest(actionId: string) {
+  const insertBuiltInCommand = (name: string) => {
+    insertCommand({ name, isBuiltIn: true, scope: 'session' })
+  }
+
   switch (actionId) {
     case 'rename':
       openRenameDialog()
       break
-    case 'fork':
     case 'share':
+    case 'fork':
       void handleForkSession()
       break
     case 'copy-transcript':
@@ -955,8 +1040,17 @@ function handleSessionActionRequest(actionId: string) {
     case 'compact':
       void handleCompactSession()
       break
+    case 'init':
+      insertBuiltInCommand('init')
+      break
+    case 'review':
+      insertBuiltInCommand('review')
+      break
     case 'attach-local':
       openFilePicker()
+      break
+    case 'attach-project':
+      openProjectAttachDialog()
       break
     default:
       break
@@ -976,7 +1070,7 @@ watch(
 
     // Keep existing session behavior: agent/model are driven by the session's run config.
     // For a brand new session (no messages yet), applySessionSelection() will fall back to
-    // the default provider/model.
+    // OpenCode defaults.
     modelSelection.resetSelectionForSessionSwitch()
     modelSelection.applySessionSelection()
     activityExpandedByBlockKey.value = {}
@@ -1046,6 +1140,8 @@ async function send() {
   // If the request fails, we restore it in the catch block.
   draft.value = ''
   clearAttachments()
+  commandOpen.value = false
+  commandQuery.value = ''
   await nextTick()
   scrollToBottom('smooth')
   try {
@@ -1137,7 +1233,10 @@ onMounted(async () => {
   // MainLayout already refreshes these, but keep Chat resilient on direct navigation.
   if (!chat.sessions.length) await chat.refreshSessions().catch(() => {})
 
-  const sidFromQuery = readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
+  const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
+  const sidFromQuery = isEmbeddedWorkspacePane
+    ? readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
+    : ''
   if (sidFromQuery && sidFromQuery !== chat.selectedSessionId) {
     await chat.selectSession(sidFromQuery).catch(() => {})
   }
@@ -1149,6 +1248,7 @@ onMounted(async () => {
 
   await modelSelection.loadProvidersAndAgents()
   modelSelection.applySessionSelection()
+  await loadCommands()
   navIndex.value = Math.max(0, navigableMessageIds.value.length - 1)
 
   void ensureInitialHistoryScrollable(sid)
@@ -1169,6 +1269,12 @@ onMounted(async () => {
 
     // Clicking anywhere else closes picker panels.
     closeComposerPickerMenu()
+
+    // Don't dismiss command suggestions while the user is still interacting
+    // with the textarea.
+    const textarea = getComposerTextareaEl(composerRef.value)
+    if (textarea && textarea.contains(target)) return
+    commandOpen.value = false
   }
   document.addEventListener('pointerdown', commandPointerHandler, true)
 
@@ -1223,6 +1329,7 @@ onMounted(async () => {
 watch(
   () => sessionDirectory.value,
   () => {
+    void loadCommands()
     void modelSelection.loadProvidersAndAgents()
   },
 )
@@ -1262,6 +1369,7 @@ const viewCtx = {
   removeAttachment,
   clearAttachments,
   openFilePicker,
+  openProjectAttachDialog,
   toggleAttachmentsPanel,
   setAttachmentsPanelOpen,
   closeAttachmentsPanel,
@@ -1363,7 +1471,14 @@ const viewCtx = {
   renameDraft,
   renameBusy,
   saveRename,
+  attachProjectDialogOpen,
+  attachProjectPath,
   sessionDirectory,
+  addProjectAttachment,
+
+  // Plugin chat mounts.
+  chatSidebarPluginMounts,
+  chatOverlayBottomPluginMounts,
 } satisfies ChatPageViewContext
 
 onBeforeUnmount(() => {

@@ -869,6 +869,13 @@ const fn message_status_is_terminal(state: RunStatus) -> bool {
 /// surfaced rather than hidden by a later successful turn.
 fn fold_run_status(current: RunStatus, next: RunStatus) -> RunStatus {
     use RunStatus::*;
+    // A cancellation is an interruption, not a result: when a newer run
+    // continues the same reply (the `/continue` case reuses the reply
+    // identity), the cancelled attempt must not keep the block marked
+    // cancelled — the reply is generating again, or has since completed.
+    if current == Cancelled && next != Cancelled {
+        return next;
+    }
     let severity = |status: RunStatus| match status {
         Failed | PolicyDenied | UserDeclined | CapabilityUnavailable | ToolUnavailable => 4,
         Cancelled => 3,
@@ -1107,6 +1114,56 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[1].role, Some(RunRole::Assistant));
         assert_eq!(entries[1].state, RunStatus::Failed);
+    }
+
+    #[test]
+    fn cancelled_then_continued_reply_shows_the_live_continue_not_cancelled() {
+        // Regression: the user cancels a reply, then runs `/continue`. The new
+        // continue run reuses the reply identity and folds onto the cancelled
+        // marker; the block must read as the live continue (InProgress), not
+        // keep the stale "reply cancelled" lifecycle row.
+        let parts = vec![
+            run(1, "user", "completed"),
+            content_part(2, "text", "user", serde_json::json!({ "text": "hi" })),
+            run(3, "assistant", "cancelled"), // cancelled before any content
+            run(5, "assistant", "in_progress"), // /continue regenerating
+        ];
+        let entries = parts_entries(&parts);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].role, Some(RunRole::Assistant));
+        assert_eq!(entries[1].state, RunStatus::InProgress);
+        assert!(!entries[1].parts.iter().any(|part| matches!(
+            &part.content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
+                TranscriptAssistantReplyLifecycle::Cancelled
+            ))
+        )));
+    }
+
+    #[test]
+    fn completed_continue_supersedes_the_cancelled_attempt() {
+        // The `/continue` finished with a real answer: the block is Completed
+        // and renders the answer, never the stale cancellation.
+        let parts = vec![
+            run(1, "user", "completed"),
+            content_part(2, "text", "user", serde_json::json!({ "text": "hi" })),
+            run(3, "assistant", "cancelled"),
+            run(5, "assistant", "completed"),
+            content_part_for(5, 6, "text", "assistant", serde_json::json!({ "text": "answer" })),
+        ];
+        let entries = parts_entries(&parts);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].state, RunStatus::Completed);
+        assert!(!entries[1].parts.iter().any(|part| matches!(
+            &part.content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
+                TranscriptAssistantReplyLifecycle::Cancelled
+            ))
+        )));
+        assert!(entries[1].parts.iter().any(|part| matches!(
+            &part.content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::Answer(_))
+        )));
     }
 
     #[test]

@@ -1211,10 +1211,6 @@ export function useChatTranscriptVim(opts: {
     )
   }
 
-  function isNodeActive(key: string): boolean {
-    return activeNodeKey.value === key
-  }
-
   function isNodeSelected(key: string): boolean {
     return selectedNodeKeys.value.has(key)
   }
@@ -2076,7 +2072,6 @@ export function useChatTranscriptVim(opts: {
     searchMatchIndex,
     searchForward,
     selectNode,
-    isNodeActive,
     isNodeSelected,
     isNodeSearchMatch,
     setSearchQuery,

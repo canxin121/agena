@@ -22,7 +22,6 @@ const props = defineProps<{
   isStreaming: boolean
   collapseSignal: number
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
-  isNodeActive?: (key: string) => boolean
   isNodeSelected?: (key: string) => boolean
   isNodeSearchMatch?: (key: string) => boolean
   sessionId?: string | null
@@ -106,10 +105,6 @@ const transcriptRows = computed<TranscriptRow[]>(() => {
   return rows
 })
 
-function active(key: string): boolean {
-  return props.isNodeActive?.(key) === true
-}
-
 function selected(key: string): boolean {
   return props.isNodeSelected?.(key) === true
 }
@@ -138,7 +133,6 @@ function partNavigationText(part: TranscriptDisplayPart): string {
     :id="`msg-${messageId}`"
     class="group/message relative min-w-0 scroll-mt-16 rounded-lg px-1 py-2"
     :class="[
-      active(messageNodeKey) ? 'bg-primary/[0.055] outline outline-1 outline-primary/30' : '',
       selected(messageNodeKey) ? 'bg-primary/10' : '',
       searchMatch(messageNodeKey) ? 'ring-1 ring-inset ring-amber-400/55' : '',
     ]"
@@ -251,7 +245,6 @@ function partNavigationText(part: TranscriptDisplayPart): string {
         :key="row.key"
         class="min-w-0 scroll-mt-20 rounded-md px-1"
         :class="[
-          active(row.key) ? 'bg-primary/[0.055] outline outline-1 outline-primary/30' : '',
           selected(row.key) ? 'bg-primary/10' : '',
           searchMatch(row.key) ? 'ring-1 ring-inset ring-amber-400/55' : '',
         ]"

@@ -9,7 +9,6 @@ const props = defineProps<{
   draft: string
   fullscreen: boolean
   modeLabel?: string
-  statusLabel?: string
 }>()
 
 const emit = defineEmits<{
@@ -50,8 +49,8 @@ defineExpose({ shellEl, textareaEl, openFilePicker })
     @drop.prevent="$emit('drop', $event)"
   >
     <div
-      v-if="modeLabel || statusLabel"
-      class="pointer-events-none absolute left-2 top-0 z-10 flex max-w-[calc(100%-3.5rem)] -translate-y-1/2 items-center gap-2 bg-background px-1 font-mono text-[10px]"
+      v-if="modeLabel || $slots.status"
+      class="pointer-events-none absolute left-2 top-0 z-10 flex max-w-[calc(100%-3.5rem)] -translate-y-1/2 items-center gap-1.5 bg-background px-1 font-mono text-[10px]"
       aria-hidden="true"
     >
       <span
@@ -60,7 +59,7 @@ defineExpose({ shellEl, textareaEl, openFilePicker })
         :class="modeLabel === 'INSERT' ? 'text-primary' : 'text-emerald-700 dark:text-emerald-300'"
         >{{ modeLabel }}</span
       >
-      <span v-if="statusLabel" class="truncate text-muted-foreground">{{ statusLabel }}</span>
+      <slot name="status" />
     </div>
 
     <div class="absolute top-1 right-1 z-10 flex items-center gap-1">

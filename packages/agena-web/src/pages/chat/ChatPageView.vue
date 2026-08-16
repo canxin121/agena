@@ -92,7 +92,6 @@ const {
   transcriptSearchQuery,
   transcriptSearchSummary,
   selectTranscriptNode,
-  isTranscriptNodeActive,
   isTranscriptNodeSelected,
   isTranscriptNodeSearchMatch,
   setTranscriptSearchQuery,
@@ -176,7 +175,6 @@ const {
 
   // Usage + primary action.
   sessionUsage,
-  formatCompactNumber,
   showComposerStopAction,
   composerStopDisabled,
   composerPrimaryDisabled,
@@ -429,7 +427,6 @@ void sessionActionsMenuRef
                 :awaiting-assistant="awaitingAssistant"
                 :activity-collapse-signal="activityCollapseSignal"
                 :is-part-expanded="transcriptPartExpanded"
-                :is-node-active="isTranscriptNodeActive"
                 :is-node-selected="isTranscriptNodeSelected"
                 :is-node-search-match="isTranscriptNodeSearchMatch"
                 :optimistic-user="optimisticUser"
@@ -551,7 +548,6 @@ void sessionActionsMenuRef
                 v-model:draft="draft"
                 :fullscreen="composerFullscreenActive"
                 :mode-label="transcriptVimModeLabel"
-                :status-label="currentPhase === 'idle' ? '' : currentPhase"
                 class="flex-1 shrink-0 sm:shrink min-h-min"
                 @toggleFullscreen="toggleEditorFullscreen"
                 @drop="handleDrop"
@@ -560,6 +556,66 @@ void sessionActionsMenuRef
                 @draftKeydown="handleDraftKeydown"
                 @filesSelected="handleFileInputChange"
               >
+                <template #status>
+                  <span class="flex items-center gap-1">
+                    <button
+                      ref="modelTriggerRef"
+                      type="button"
+                      data-oc-keyboard-tap="blur"
+                      class="pointer-events-auto flex items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                      :class="composerPickerOpen === 'model' ? 'bg-secondary/60 text-foreground' : ''"
+                      :title="modelHint"
+                      :aria-label="t('chat.composer.picker.modelTitle')"
+                      @mousedown.prevent
+                      @click.stop="toggleComposerPicker('model')"
+                    >
+                      <RiStackLine class="h-3 w-3" />
+                      <span :class="modelChipTextClass">{{
+                        ui.isMobilePointer ? modelChipLabelMobile : modelChipLabel
+                      }}</span>
+                    </button>
+                    <template v-if="hasThinkingModesForSelection">
+                      <span class="text-muted-foreground/50">|</span>
+                      <button
+                        ref="thinkingTriggerRef"
+                        type="button"
+                        data-oc-keyboard-tap="blur"
+                        class="pointer-events-auto flex items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                        :class="composerPickerOpen === 'thinking' ? 'bg-secondary/60 text-foreground' : ''"
+                        :title="thinkingModeHint"
+                        :aria-label="t('chat.composer.picker.thinkingTitle')"
+                        @mousedown.prevent
+                        @click.stop="toggleComposerPicker('thinking')"
+                      >
+                        <RiBrainAi3Line class="h-3 w-3" />
+                        <span :class="modeChipTextClass">{{ thinkingModeChipLabel }}</span>
+                      </button>
+                    </template>
+                    <template v-if="hasSpeedModesForSelection">
+                      <span class="text-muted-foreground/50">|</span>
+                      <button
+                        ref="speedTriggerRef"
+                        type="button"
+                        data-oc-keyboard-tap="blur"
+                        class="pointer-events-auto flex items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                        :class="composerPickerOpen === 'speed' ? 'bg-secondary/60 text-foreground' : ''"
+                        :title="speedModeHint"
+                        :aria-label="t('chat.composer.picker.speedTitle')"
+                        @mousedown.prevent
+                        @click.stop="toggleComposerPicker('speed')"
+                      >
+                        <RiSpeedUpLine class="h-3 w-3" />
+                        <span :class="modeChipTextClass">{{ speedModeChipLabel }}</span>
+                      </button>
+                    </template>
+                    <template v-if="sessionUsage">
+                      <span class="text-muted-foreground/50">|</span>
+                      <span class="text-muted-foreground">{{
+                        sessionUsage.percentUsed !== null ? `${sessionUsage.percentUsed}%` : sessionUsage.tokensLabel
+                      }}</span>
+                    </template>
+                  </span>
+                </template>
                 <template #controls>
                   <div ref="composerControlsRef" class="relative">
                     <OptionMenu
@@ -597,7 +653,7 @@ void sessionActionsMenuRef
                     <div
                       class="composer-controls-surface flex w-full flex-row items-center justify-between gap-2 rounded-b-xl border-t border-border/60 bg-background/60 p-2 sm:px-2.5"
                     >
-                      <!-- Region 1: attachments, actions, model, and server-supported run modes. -->
+                      <!-- Region 1: attachments and actions. -->
                       <div
                         class="flex-1 flex flex-nowrap items-center gap-1 sm:gap-1.5 min-w-0 overflow-x-auto oc-scrollbar-hidden [&>*]:shrink-0"
                         data-oc-keyboard-tap="blur"
@@ -669,75 +725,6 @@ void sessionActionsMenuRef
                           @close="closeComposerActionMenu"
                           @select="runComposerActionMenu"
                         />
-
-                        <ToolbarChipButton
-                          :active="composerPickerOpen === 'model'"
-                          :tooltip="modelHint"
-                          :is-touch-pointer="ui.isTouchPointer"
-                          :title="t('chat.composer.picker.modelTitle')"
-                          :aria-label="t('chat.composer.picker.modelTitle')"
-                          ref="modelTriggerRef"
-                          @mousedown.prevent
-                          @click.stop="toggleComposerPicker('model')"
-                        >
-                          <RiStackLine class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
-                          <span :class="modelChipTextClass">{{
-                            ui.isMobilePointer ? modelChipLabelMobile : modelChipLabel
-                          }}</span>
-                        </ToolbarChipButton>
-
-                        <ToolbarChipButton
-                          v-if="hasThinkingModesForSelection"
-                          :active="composerPickerOpen === 'thinking'"
-                          :tooltip="thinkingModeHint"
-                          :is-touch-pointer="ui.isTouchPointer"
-                          :title="t('chat.composer.picker.thinkingTitle')"
-                          :aria-label="t('chat.composer.picker.thinkingTitle')"
-                          ref="thinkingTriggerRef"
-                          @mousedown.prevent
-                          @click.stop="toggleComposerPicker('thinking')"
-                        >
-                          <RiBrainAi3Line class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
-                          <span :class="modeChipTextClass">{{ thinkingModeChipLabel }}</span>
-                        </ToolbarChipButton>
-
-                        <ToolbarChipButton
-                          v-if="hasSpeedModesForSelection"
-                          :active="composerPickerOpen === 'speed'"
-                          :tooltip="speedModeHint"
-                          :is-touch-pointer="ui.isTouchPointer"
-                          :title="t('chat.composer.picker.speedTitle')"
-                          :aria-label="t('chat.composer.picker.speedTitle')"
-                          ref="speedTriggerRef"
-                          @mousedown.prevent
-                          @click.stop="toggleComposerPicker('speed')"
-                        >
-                          <RiSpeedUpLine class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground" />
-                          <span :class="modeChipTextClass">{{ speedModeChipLabel }}</span>
-                        </ToolbarChipButton>
-                      </div>
-
-                      <!-- Region 2: Tokens usage -->
-                      <div
-                        v-if="sessionUsage"
-                        class="flex-none flex flex-col items-end justify-center text-[10px] leading-tight text-muted-foreground font-mono select-none sm:pr-2"
-                      >
-                        <span class="opacity-80">
-                          {{
-                            ui.isMobilePointer
-                              ? formatCompactNumber(sessionUsage.tokensValue || 0)
-                              : t('chat.page.usage.tokensSuffix', { value: sessionUsage.tokensLabel })
-                          }}
-                        </span>
-                        <span class="inline-flex items-center gap-1 opacity-80">
-                          <span v-if="sessionUsage.percentUsed !== null">{{ sessionUsage.percentUsed }}%</span>
-                          <span
-                            v-if="sessionUsage.costLabel && sessionUsage.costLabel !== '$0.00' && !ui.isMobilePointer"
-                            class="text-[9px]"
-                          >
-                            {{ sessionUsage.costLabel }}
-                          </span>
-                        </span>
                       </div>
 
                       <!-- Region 3: Stop & Send Actions -->

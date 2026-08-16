@@ -43,7 +43,6 @@ const props = defineProps<{
   awaitingAssistant: boolean
   activityCollapseSignal: number
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
-  isNodeActive?: (key: string) => boolean
   isNodeSelected?: (key: string) => boolean
   isNodeSearchMatch?: (key: string) => boolean
   optimisticUser: OptimisticUserMessage | null
@@ -188,7 +187,6 @@ function forwardPartToggle(part: TranscriptDisplayPart, expanded: boolean) {
           :is-streaming="isStreamingAssistantMessage(block.message)"
           :collapse-signal="activityCollapseSignal"
           :is-part-expanded="isPartExpanded"
-          :is-node-active="isNodeActive"
           :is-node-selected="isNodeSelected"
           :is-node-search-match="isNodeSearchMatch"
           :session-id="selectedSessionId"

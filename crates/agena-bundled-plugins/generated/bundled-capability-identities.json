@@ -1137,7 +1137,8 @@
         "tool.execute.before",
         "tool.invoke",
         "command.execute.before",
-        "agent.stop"
+        "agent.stop",
+        "agent.cancel"
       ],
       "id": "agena.plan",
       "tools": [

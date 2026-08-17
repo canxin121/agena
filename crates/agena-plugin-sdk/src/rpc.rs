@@ -160,6 +160,7 @@ pub mod method {
     pub const HOOK_TOOL_FAILURE: &str = "hooks/tool.execute.failure";
     pub const HOOK_TOOL_DEFINITION: &str = "hooks/tool.definition";
     pub const HOOK_AGENT_STOP: &str = "hooks/agent.stop";
+    pub const HOOK_AGENT_CANCEL: &str = "hooks/agent.cancel";
     pub const HOOK_COMMAND_AFTER: &str = "hooks/command.execute.after";
     pub const HOOK_CHAT_MESSAGES_TRANSFORM: &str = "hooks/chat.messages.transform";
     pub const HOOK_PRE_RUN: &str = "hooks/pre_run";

@@ -280,6 +280,11 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(None)
     }
 
+    // -------- agent cancellation --------
+    async fn agent_cancel(&self, _input: AgentCancelInput) -> Result<()> {
+        Ok(())
+    }
+
     // -------- tool definition --------
     async fn tool_definition(
         &self,

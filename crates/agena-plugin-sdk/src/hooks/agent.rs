@@ -33,3 +33,14 @@ pub struct AgentStopPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
+
+// ── agent.cancel ───────────────────────────────────────────────────────────
+
+/// Fired after a user cancellation has been accepted for an active
+/// execution. Plugins use this lifecycle hook to clear execution-local
+/// automation, such as an active workflow plan's autorun flag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCancelInput {
+    pub session_id: i64,
+    pub execution_id: String,
+}

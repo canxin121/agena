@@ -137,4 +137,9 @@ impl PlanPlugin {
     ) -> SdkResult<Option<agena_plugin_host::AgentStopPatch>> {
         self.inner.agent_stop_hook(input).await
     }
+
+    #[hook(agent.cancel)]
+    async fn agent_cancel(&self, input: agena_plugin_host::AgentCancelInput) -> SdkResult<()> {
+        self.inner.agent_cancel_hook(input).await
+    }
 }

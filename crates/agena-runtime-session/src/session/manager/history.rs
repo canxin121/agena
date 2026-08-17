@@ -11,6 +11,7 @@ use crate::{
     },
 };
 use agena_domain::{ExecutionStatus, Role, SessionSummary};
+use agena_plugin_host::AgentCancelInput;
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
 use agena_runtime_contracts::part_content::{
     TypedContent, attachment_from_file_ref, interaction_from_content, operation_from_tool_call,
@@ -109,6 +110,18 @@ impl SessionManager {
         if result != agena_domain::CancellationResult::CancellationRequested {
             return Ok(result);
         }
+        // The execution token is already in the cancellation state. Notify
+        // plugins after that control decision so a hook can clear
+        // execution-local automation (notably plan autorun) without ever
+        // being able to prevent the actual cancellation.
+        self.execution_state()
+            .tool_executor
+            .plugin_manager()
+            .dispatch_agent_cancel(AgentCancelInput {
+                session_id,
+                execution_id: execution_id.to_string(),
+            })
+            .await;
         self.cancel_host_interactive_waiters(session_id).await;
 
         if let Ok(session) = self.store.load_session(session_id).await {

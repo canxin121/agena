@@ -318,6 +318,71 @@ async fn agent_stop_continuation_rides_the_hook_run_message() {
     );
 }
 
+/// A user cancellation must turn off plan autorun before the next execution
+/// can be started. Otherwise the runtime's cancellation signal is followed by
+/// the old `agent.stop` autorun decision and the plan immediately relaunches.
+#[tokio::test]
+async fn agent_cancel_disables_plan_autorun() {
+    let tmp = tempfile::tempdir().unwrap();
+    let client = Arc::new(FakeHostClient::default());
+    let host = build_host(&tmp, Arc::clone(&client) as Arc<dyn HostClient>).await;
+
+    let set: RegisteredTool = host.lookup_tool("agena.plan.set").unwrap();
+    host.invoke_tool(
+        &set,
+        ToolInvokeInput {
+            tool_name: "set".to_string(),
+            session_id: 42,
+            call_id: 7,
+            workspace_root: tmp.path().to_string_lossy().to_string(),
+            input: serde_json::json!({
+                "objective": "Build a widget",
+                "request_approval": false,
+                "steps": [{ "title": "Design the widget" }],
+            }),
+        },
+        None,
+    )
+    .await
+    .expect("active autorun plan must be created");
+
+    host.dispatch_agent_cancel(agena_plugin_host::AgentCancelInput {
+        session_id: 42,
+        execution_id: "execution-42".to_string(),
+    })
+    .await;
+
+    let key = storage_key(
+        HostStorageScope::Session,
+        HostStorageVisibility::Shared,
+        "workflow_plan",
+        "active",
+    );
+    let stored = client
+        .storage
+        .lock()
+        .unwrap()
+        .get(&key)
+        .cloned()
+        .expect("the active plan remains stored");
+    let stored_plan: serde_json::Value = serde_json::from_str(&stored).unwrap();
+    assert_eq!(stored_plan["autorun"], serde_json::Value::Bool(false));
+
+    let patch = host
+        .dispatch_agent_stop(agena_plugin_host::AgentStopInput {
+            session_id: 42,
+            stop_hook_active: false,
+            last_assistant_message: None,
+            run_error: None,
+        })
+        .await
+        .expect("agent.stop dispatch must succeed after cancellation");
+    assert!(
+        patch.continue_with_message.is_none(),
+        "cancelled plan autorun must not relaunch the plan"
+    );
+}
+
 /// A hot-reload (`Runtime::reload_with_cause` with byte-identical config)
 /// builds a successor host whose `previous_plugins` match the current config,
 /// so the host's transport-reuse path is taken. In-proc `Static` plugins must

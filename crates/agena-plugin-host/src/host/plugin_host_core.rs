@@ -1447,6 +1447,56 @@ impl PluginHost {
         })
     }
 
+    // ── agent.cancel ───────────────────────────────────────────────────────
+
+    /// Notify plugins that a user cancellation was accepted for an active
+    /// execution. Cancellation itself has already been requested before this
+    /// method is called, so hook failures are deliberately best-effort and
+    /// never change the cancellation result.
+    pub async fn dispatch_agent_cancel(&self, input: AgentCancelInput) {
+        let timeout = self.timeouts.fast_or(Duration::from_secs(5));
+        for plugin in &self.plugins {
+            if !plugin.subscribes(HookSubscription::AGENT_CANCEL) {
+                continue;
+            }
+
+            let plugin_id = plugin.key().to_string();
+            let params = match serde_json::to_value(&input) {
+                Ok(params) => params,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "agena_plugin_host::agent_cancel",
+                        plugin = %plugin_id,
+                        error = %error,
+                        "failed to serialize agent.cancel input"
+                    );
+                    continue;
+                }
+            };
+            let context = HostCallbackContext {
+                plugin_id: Some(plugin_id.clone()),
+                session_id: Some(input.session_id),
+                ..Default::default()
+            };
+
+            if let Err(error) = host_api::run_in_host_callback_context(
+                context,
+                call_with_timeout(plugin, method::HOOK_AGENT_CANCEL, params, timeout),
+            )
+            .await
+            {
+                tracing::warn!(
+                    target: "agena_plugin_host::agent_cancel",
+                    plugin = %plugin_id,
+                    session_id = input.session_id,
+                    execution_id = %input.execution_id,
+                    error = %error,
+                    "agent.cancel hook failed; cancellation continues"
+                );
+            }
+        }
+    }
+
     // ── command.execute.after ──────────────────────────────────────────────
 
     pub async fn dispatch_command_after(
@@ -1787,14 +1837,14 @@ where
     }
 }
 use super::{
-    AgentStopDispatch, AgentStopHookRun, AgentStopInput, AgentStopPatch, Arc, AuthInput,
-    AuthOutput, BTreeMap, ChatHeadersInput, ChatHeadersPatch, ChatMessageInput, ChatMessagePatch,
-    ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch,
-    ChatSystemTransformInput, ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch,
-    CommandBeforeInput, CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch,
-    Duration, EventEnvelope, HashMap, HookRunRecord, HookRunStatus, HookSubscription,
-    HostCallbackContext, HostDisplayContribution, HostHandle, HostNotification, HostThemePalette,
-    LoadedPlugin, NoopHostClient, NotificationInput, PluginCommandCatalogItem,
+    AgentCancelInput, AgentStopDispatch, AgentStopHookRun, AgentStopInput, AgentStopPatch, Arc,
+    AuthInput, AuthOutput, BTreeMap, ChatHeadersInput, ChatHeadersPatch, ChatMessageInput,
+    ChatMessagePatch, ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatParamsInput,
+    ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch, CommandAfterInput,
+    CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome, CommandBeforeResponse,
+    ConfigInput, ConfigPatch, Duration, EventEnvelope, HashMap, HookRunRecord, HookRunStatus,
+    HookSubscription, HostCallbackContext, HostDisplayContribution, HostHandle, HostNotification,
+    HostThemePalette, LoadedPlugin, NoopHostClient, NotificationInput, PluginCommandCatalogItem,
     PluginCommandInvokeInput, PluginCommandOutput, PluginError, PluginHost, PluginInspect,
     PluginKey, PluginLogRecord, PluginLogStore, PluginStudioControlCatalogItem,
     PluginStudioUiCatalog, PluginStudioViewCatalogItem, PluginToolRegistry, PluginTuiUiCatalog,

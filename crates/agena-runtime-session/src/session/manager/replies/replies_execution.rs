@@ -363,6 +363,11 @@ impl SessionManager {
         // continuation. Grows geometrically up to a cap so a persistently
         // failing run does not hammer the provider with immediate retries.
         let mut failure_retry_backoff_ms: u64 = 250;
+        // Once a plan autorun hook has supplied its full continuation context,
+        // a provider failure before any successful model outcome must retry in
+        // the same way as `/continue`: do not dispatch agent.stop again and
+        // append another copy of the plan context to the transcript.
+        let mut direct_plan_continue_after_failure = false;
         // Bounded safety net for model turns that were cut off by the output
         // limit (`finish_reason == max_tokens`). Each firing consumes budget;
         // a degenerate model that always truncates cannot loop forever.
@@ -721,6 +726,8 @@ impl SessionManager {
                             // next model turn opens a fresh `continue` marker
                             // whose prompt projects the hook message.
                             turn_run_id = None;
+                            direct_plan_continue_after_failure =
+                                dispatch.patch.reason.as_deref() == Some("workflow plan autorun");
                             model_requested = true;
                             continue;
                         }
@@ -773,7 +780,7 @@ impl SessionManager {
                 // hook continues, the run is granted a fresh turn budget
                 // (`model_turns_taken` resets) so it keeps working instead of
                 // immediately re-triggering the budget check.
-                if let Some((continued, continuation_marker)) = self
+                if let Some((continued, continuation_marker, is_plan_autorun)) = self
                     .dispatch_run_failure_continuation(
                         session,
                         state.clone(),
@@ -785,6 +792,7 @@ impl SessionManager {
                 {
                     session = continued;
                     turn_run_id = continuation_marker;
+                    direct_plan_continue_after_failure = is_plan_autorun;
                     model_turns_taken = 0;
                     model_requested = true;
                     continue;
@@ -910,6 +918,7 @@ impl SessionManager {
                 Ok((next_session, outcome, marker_run_id)) => {
                     session = next_session;
                     failure_retry_backoff_ms = 250;
+                    direct_plan_continue_after_failure = false;
                     model_requested = false;
                     turn_run_id = Some(marker_run_id);
                     match should_continue_turn(
@@ -1010,8 +1019,27 @@ impl SessionManager {
                     if control.cancel.is_cancelled() {
                         return Err(AppError::Cancelled);
                     }
+
+                    if direct_plan_continue_after_failure {
+                        let delay = failure_retry_backoff_ms;
+                        failure_retry_backoff_ms = (failure_retry_backoff_ms * 2).min(5_000);
+                        tokio::select! {
+                            biased;
+                            _ = control.cancel.cancelled() => {
+                                return Err(AppError::Cancelled);
+                            }
+                            _ = tokio::time::sleep(
+                                std::time::Duration::from_millis(delay)
+                            ) => {}
+                        }
+                        session = self.store.load_session(session_id).await?;
+                        turn_run_id = None;
+                        model_requested = true;
+                        continue;
+                    }
+
                     session = self.store.load_session(session_id).await?;
-                    if let Some((continued, continuation_marker)) = self
+                    if let Some((continued, continuation_marker, is_plan_autorun)) = self
                         .dispatch_run_failure_continuation(
                             session,
                             state.clone(),
@@ -1023,6 +1051,7 @@ impl SessionManager {
                     {
                         session = continued;
                         turn_run_id = continuation_marker;
+                        direct_plan_continue_after_failure = is_plan_autorun;
                         model_requested = true;
                         continue;
                     }
@@ -1035,7 +1064,7 @@ impl SessionManager {
     /// Surface a run failure to agent.stop hooks and, if a hook asks to
     /// continue (for example the workflow plan autorun), record the
     /// continuation on the hook activity and keep the run alive. Returns
-    /// `Some((session, None))` when the run should continue after backoff
+    /// `Some((session, None, is_plan_autorun))` when the run should continue after backoff
     /// (the hook activity carries the continuation — the caller must let the
     /// next model turn open a fresh `continue` marker so the hook message is
     /// projected into its prompt); `None` when the run should fail with
@@ -1052,7 +1081,7 @@ impl SessionManager {
         control: Arc<ExecutionControl>,
         error: &AppError,
         retry_backoff_ms: &mut u64,
-    ) -> Result<Option<(Session, Option<i64>)>, AppError> {
+    ) -> Result<Option<(Session, Option<i64>, bool)>, AppError> {
         let run_error = error.public_message();
         let stop_input = agena_plugin_host::AgentStopInput {
             session_id: session.id,
@@ -1084,8 +1113,18 @@ impl SessionManager {
                     // message. Backoff rate-limits the retry loop.
                     let delay = *retry_backoff_ms;
                     *retry_backoff_ms = (*retry_backoff_ms * 2).min(5_000);
-                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                    Ok(Some((session, None)))
+                    tokio::select! {
+                        biased;
+                        _ = control.cancel.cancelled() => {
+                            return Err(AppError::Cancelled);
+                        }
+                        _ = tokio::time::sleep(
+                            std::time::Duration::from_millis(delay)
+                        ) => {}
+                    }
+                    let is_plan_autorun =
+                        dispatch.patch.reason.as_deref() == Some("workflow plan autorun");
+                    Ok(Some((session, None, is_plan_autorun)))
                 } else {
                     Ok(None)
                 }

@@ -172,6 +172,7 @@ pub(crate) fn hook_subscription_for_name(name: &str) -> Option<HookSubscription>
         ("session.end", HookSubscription::SESSION_END),
         ("user.prompt.submit", HookSubscription::USER_PROMPT_SUBMIT),
         ("agent.stop", HookSubscription::AGENT_STOP),
+        ("agent.cancel", HookSubscription::AGENT_CANCEL),
         ("pre_run", HookSubscription::PRE_RUN),
         ("post_run", HookSubscription::POST_RUN),
     ];

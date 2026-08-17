@@ -975,6 +975,7 @@ bitflags::bitflags! {
         const PRE_RUN                  = 1 << 27;
         const POST_RUN                 = 1 << 28;
         const NOTIFICATION              = 1 << 29;
+        const AGENT_CANCEL              = 1 << 30;
     }
 }
 
@@ -1060,6 +1061,7 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ("session.end", HookSubscription::SESSION_END),
     ("user.prompt.submit", HookSubscription::USER_PROMPT_SUBMIT),
     ("agent.stop", HookSubscription::AGENT_STOP),
+    ("agent.cancel", HookSubscription::AGENT_CANCEL),
     ("pre_run", HookSubscription::PRE_RUN),
     ("post_run", HookSubscription::POST_RUN),
 ];

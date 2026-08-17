@@ -50,6 +50,7 @@ pub enum PluginHookKind {
     SessionEnd,
     UserPromptSubmit,
     AgentStop,
+    AgentCancel,
     ConfigResolved,
 }
 
@@ -258,6 +259,9 @@ fn plugin_hook_subscription_expr(hook: PluginHookKind) -> proc_macro2::TokenStre
             quote! { ::agena_plugin_sdk::HookSubscription::USER_PROMPT_SUBMIT }
         }
         PluginHookKind::AgentStop => quote! { ::agena_plugin_sdk::HookSubscription::AGENT_STOP },
+        PluginHookKind::AgentCancel => {
+            quote! { ::agena_plugin_sdk::HookSubscription::AGENT_CANCEL }
+        }
         PluginHookKind::ConfigResolved => quote! { ::agena_plugin_sdk::HookSubscription::CONFIG },
     }
 }
@@ -288,6 +292,7 @@ fn plugin_hook_order() -> &'static [PluginHookKind] {
         PluginHookKind::SessionEnd,
         PluginHookKind::UserPromptSubmit,
         PluginHookKind::AgentStop,
+        PluginHookKind::AgentCancel,
         PluginHookKind::ConfigResolved,
     ]
 }
@@ -429,6 +434,12 @@ fn expand_plugin_layer_hook_method_group(
             "agent_stop",
             quote! { ::agena_plugin_sdk::AgentStopInput },
             quote! { Option<::agena_plugin_sdk::AgentStopPatch> },
+            bindings,
+        ),
+        PluginHookKind::AgentCancel => expand_plugin_layer_single_arg_hook_group(
+            "agent_cancel",
+            quote! { ::agena_plugin_sdk::AgentCancelInput },
+            quote! { () },
             bindings,
         ),
         PluginHookKind::ConfigResolved => expand_plugin_layer_single_arg_hook_group(

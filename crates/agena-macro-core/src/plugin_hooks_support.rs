@@ -189,6 +189,7 @@ fn plugin_hook_kind_from_key(key: &str, span: impl quote::ToTokens) -> Result<Pl
         "session.end" => Ok(PluginHookKind::SessionEnd),
         "prompt.submit" => Ok(PluginHookKind::UserPromptSubmit),
         "agent.stop" => Ok(PluginHookKind::AgentStop),
+        "agent.cancel" => Ok(PluginHookKind::AgentCancel),
         "config.resolved" => Ok(PluginHookKind::ConfigResolved),
         other => Err(syn::Error::new_spanned(
             span,
@@ -368,6 +369,7 @@ pub fn plugin_hook_input_segment(hook: PluginHookKind) -> PluginHookExpectedInpu
             PluginHookExpectedInput::Single("UserPromptSubmitInput")
         }
         PluginHookKind::AgentStop => PluginHookExpectedInput::Single("AgentStopInput"),
+        PluginHookKind::AgentCancel => PluginHookExpectedInput::Single("AgentCancelInput"),
         PluginHookKind::ConfigResolved => PluginHookExpectedInput::Single("ConfigInput"),
     }
 }
@@ -408,6 +410,7 @@ pub fn plugin_hook_output_segment(hook: PluginHookKind) -> PluginHookExpectedOut
             PluginHookExpectedOutput::Option("UserPromptSubmitPatch")
         }
         PluginHookKind::AgentStop => PluginHookExpectedOutput::Option("AgentStopPatch"),
+        PluginHookKind::AgentCancel => PluginHookExpectedOutput::Unit,
         PluginHookKind::ConfigResolved => PluginHookExpectedOutput::Option("ConfigPatch"),
     }
 }
@@ -513,6 +516,7 @@ pub fn plugin_hook_name(hook: PluginHookKind) -> &'static str {
         PluginHookKind::SessionEnd => "session.end",
         PluginHookKind::UserPromptSubmit => "prompt.submit",
         PluginHookKind::AgentStop => "agent.stop",
+        PluginHookKind::AgentCancel => "agent.cancel",
         PluginHookKind::ConfigResolved => "config.resolved",
     }
 }

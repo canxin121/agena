@@ -285,6 +285,15 @@ impl<P: Plugin> PluginDispatcher<P> {
                         .await?,
                 )
             }
+            method::HOOK_AGENT_CANCEL => {
+                let i: AgentCancelInput = serde_json::from_value(params)?;
+                let ctx = crate::host_api::HostCallbackContext {
+                    session_id: Some(i.session_id),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                crate::host_api::run_in_host_callback_context(ctx, plugin.agent_cancel(i)).await?;
+                Ok(Value::Object(Default::default()))
+            }
             method::HOOK_COMMAND_AFTER => {
                 let i: CommandAfterInput = serde_json::from_value(params)?;
                 ok_json(&plugin.command_execute_after(i).await?)

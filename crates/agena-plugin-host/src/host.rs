@@ -44,18 +44,19 @@ use crate::sdk::host_api::{
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
-    AgentStopInput, AgentStopPatch, AuthInput, AuthOutput, ChatHeadersInput, ChatHeadersPatch,
-    ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput, ChatMessagesTransformPatch,
-    ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch,
-    CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
-    CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
-    NotificationInput, PluginCommandDefinition, PluginCommandInvokeInput, PluginCommandOutput,
-    PluginDisplayContribution, PluginError, PluginErrorKind, PluginKey, PluginManifest,
-    PluginStudioControl, PluginStudioView, PluginUiAction, PostRunInput, PreRunInput,
-    ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput, SessionStartPatch,
-    ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
-    ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
+    AgentCancelInput, AgentStopInput, AgentStopPatch, AuthInput, AuthOutput, ChatHeadersInput,
+    ChatHeadersPatch, ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput,
+    ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput,
+    ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
+    CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope,
+    EventFilter, HookSubscription, NotificationInput, PluginCommandDefinition,
+    PluginCommandInvokeInput, PluginCommandOutput, PluginDisplayContribution, PluginError,
+    PluginErrorKind, PluginKey, PluginManifest, PluginStudioControl, PluginStudioView,
+    PluginUiAction, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
+    SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch,
+    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput,
+    ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey,
+    ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
     UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;

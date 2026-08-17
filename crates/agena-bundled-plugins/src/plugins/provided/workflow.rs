@@ -382,6 +382,20 @@ impl WorkflowPlugin {
             reason: Some("workflow plan autorun".to_string()),
         }))
     }
+
+    pub(crate) async fn agent_cancel_hook(
+        &self,
+        _input: agena_plugin_host::AgentCancelInput,
+    ) -> SdkResult<()> {
+        let Some(mut plan) = self.load_active_plan().await? else {
+            return Ok(());
+        };
+        if plan.autorun {
+            plan.autorun = false;
+            self.save_active_plan(&plan).await?;
+        }
+        Ok(())
+    }
 }
 
 fn tags_summary(tags: &[String]) -> String {

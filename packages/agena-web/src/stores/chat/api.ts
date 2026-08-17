@@ -59,6 +59,11 @@ export type AgenaSessionParts = {
   session_id: number
   version: number
   parts: AgenaPart[]
+  page?: {
+    returned?: number
+    has_more?: boolean
+    next_cursor?: string | null
+  }
 }
 
 /** SessionExecutionResource — GET /api/v1/sessions/{id}/state. */
@@ -791,20 +796,31 @@ export async function getSessionExecution(sessionId: string): Promise<AgenaExecu
 }
 
 /** GET /api/v1/sessions/{id}/parts — ordered part snapshot (reconnect catch-up). */
-export async function getSessionParts(sessionId: string, limit?: number): Promise<AgenaSessionParts> {
-  const params = typeof limit === 'number' && Number.isFinite(limit) ? `?limit=${Math.floor(limit)}` : ''
-  return await apiJson<AgenaSessionParts>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/parts${params}`)
+export async function getSessionParts(sessionId: string, limit?: number, cursor?: string | null): Promise<AgenaSessionParts> {
+  const params = new URLSearchParams()
+  if (typeof limit === 'number' && Number.isFinite(limit)) params.set('limit', String(Math.floor(limit)))
+  if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  return await apiJson<AgenaSessionParts>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/parts${suffix}`)
 }
 
 /**
  * Load a session's transcript as MessageEntry[].
  * Uses GET /parts (ordered snapshot) with a hard `limit` for the visible window.
  */
-export async function listMessages(sessionId: string, limit: number): Promise<MessageListResponse> {
+export async function listMessages(
+  sessionId: string,
+  limit: number,
+  cursor?: string | null,
+): Promise<MessageListResponse> {
   const sid = String(sessionId || '').trim()
-  if (!sid) return { entries: [], hasMore: false }
-  const parts = await getSessionParts(sid, Math.max(20, Math.min(1000, Math.floor(limit || 200))))
-  return { entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[]), hasMore: false }
+  if (!sid) return { entries: [], hasMore: false, nextCursor: null }
+  const parts = await getSessionParts(sid, Math.max(20, Math.min(200, Math.floor(limit || 50))), cursor)
+  return {
+    entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[]),
+    hasMore: Boolean(parts.page?.has_more),
+    nextCursor: parts.page?.next_cursor ?? null,
+  }
 }
 
 export type SendMessagePayload = RunOptionsPayload & {
@@ -990,7 +1006,16 @@ export async function getSessionExecutionStatus(sessionId: string): Promise<Sess
   const sid = String(sessionId || '').trim()
   if (!sid) return null
   try {
-    const state = await getSessionExecution(sid)
+    const raw = await apiJson<AgenaExecutionState>(
+      `/api/v1/sessions/${encodeURIComponent(sid)}/state?include_parts=false`,
+    )
+    const state = {
+      ...raw,
+      session: {
+        ...raw.session,
+        state: normalizeSessionState(raw.session?.state),
+      },
+    }
     const s = normalizeSessionState(state.session?.state)
     return {
       state: s,

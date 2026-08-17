@@ -5,6 +5,16 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::ApplicationError;
 
+/// Opaque cursor payload for the session-part transcript endpoint. The
+/// transport encodes this value and validates the session id before passing
+/// the storage position to the persistence facade.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct SessionPartCursor {
+    pub session_id: i64,
+    pub created_at_ms: i64,
+    pub part_id: i64,
+}
+
 /// Default page limit used when no limit is requested.
 pub const DEFAULT_PAGE_LIMIT: u64 = 50;
 /// Maximum allowed page limit.

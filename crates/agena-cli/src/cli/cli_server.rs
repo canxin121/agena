@@ -300,7 +300,7 @@ impl ServerSessionClient {
 
     async fn execution(&self, session_id: i64) -> Result<SessionExecutionResource, AppError> {
         self.client
-            .get_session_state(session_id)
+            .get_session_state_with_parts(session_id, true)
             .await
             .map_err(|error| client_error("failed to read session from server", error))
     }

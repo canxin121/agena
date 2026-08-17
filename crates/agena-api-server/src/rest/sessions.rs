@@ -24,15 +24,6 @@ pub async fn session_overview(
     ))
 }
 
-/// Thin adapter: project a session's execution resource through the shared
-/// Application read-back and wrap it in JSON.
-async fn session_execution_json_from_id(
-    state: &AppState,
-    session_id: i64,
-) -> Result<Json<agena_application::dto::SessionExecutionResource>, ServerError> {
-    Ok(Json(state.session_execution_resource(session_id).await?))
-}
-
 async fn assert_if_match_session_version(
     state: &AppState,
     session_id: i64,
@@ -69,8 +60,14 @@ pub async fn get_session(
 pub async fn get_session_state(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
+    AxumQuery(query): AxumQuery<SessionStateQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    session_execution_json_from_id(&state, session_id).await
+    Ok(Json(
+        state
+            .application()
+            .session_execution_resource_with_parts(session_id, query.include_parts)
+            .await?,
+    ))
 }
 
 pub async fn get_session_cost(
@@ -176,14 +173,56 @@ pub async fn list_session_parts(
     AxumQuery(query): AxumQuery<SessionPartListQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
     let store = state.session_store()?;
-    let mut snapshot = crate::live::session_parts(store.as_ref(), session_id).await?;
-    if let Some(limit) = query.limit {
-        let limit = usize::try_from(limit.clamp(1, 1000)).unwrap_or(1000);
-        if snapshot.parts.len() > limit {
-            snapshot.parts.drain(..snapshot.parts.len() - limit);
-        }
+    let limit = agena_application::pagination::normalize_limit(query.limit);
+    let decoded = query
+        .cursor
+        .as_deref()
+        .map(
+            agena_application::pagination::decode_cursor::<
+                agena_application::pagination::SessionPartCursor,
+            >,
+        )
+        .transpose()
+        .map_err(server_error_from_application)?;
+    if let Some(cursor) = decoded
+        && cursor.session_id != session_id
+    {
+        return Err(ServerError::bad_request(
+            "The page cursor belongs to a different session.",
+        ));
     }
-    Ok(Json(snapshot))
+    let before = decoded.map(|cursor| agena_storage::store::PartCursor {
+        created_at_ms: cursor.created_at_ms,
+        part_id: cursor.part_id,
+    });
+    let page = store
+        .load_page(session_id, before, i64::try_from(limit).unwrap_or(i64::MAX))
+        .await
+        .map_err(|error| ServerError::internal(error.to_string()))?;
+    let mut parts = page.parts;
+    let next_cursor = parts.last().map(|part| {
+        agena_application::pagination::encode_cursor(
+            &agena_application::pagination::SessionPartCursor {
+                session_id,
+                created_at_ms: part.created_at_ms,
+                part_id: part.part_id,
+            },
+        )
+    });
+    let next_cursor = next_cursor
+        .transpose()
+        .map_err(server_error_from_application)?;
+    parts.reverse();
+    Ok(Json(agena_api::live::SessionPartsResource {
+        session_id,
+        version: page.meta.version,
+        parts: parts.iter().map(crate::live::project_part).collect(),
+        page: agena_api::pagination::PageInfo {
+            next_cursor,
+            has_more: page.has_more,
+            returned: parts.len() as u64,
+        },
+    }))
 }
 
 pub async fn stream_session_changes(
@@ -476,7 +515,7 @@ use super::{
     AppState, AxumQuery, Deserialize, Event, HeaderMap, Infallible, IntoResponse, Json, Path,
     PermissionReply, ServerError, SessionChangeStreamQuery, SessionCreateRequest,
     SessionForkRequestBody, SessionListQuery, SessionPartListQuery, SessionReplyRequestBody,
-    SessionRewindRequestBody, SessionRunRequest, SessionRunRequestBody, SessionUpdateRequest, Sse,
-    State, UserInputReply, if_match_version, json_http, json_http_found,
+    SessionRewindRequestBody, SessionRunRequest, SessionRunRequestBody, SessionStateQuery,
+    SessionUpdateRequest, Sse, State, UserInputReply, if_match_version, json_http, json_http_found,
     server_error_from_application, sse_error_event, stream,
 };

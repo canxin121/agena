@@ -21,20 +21,21 @@ pub struct SessionTimelineEntry {
     pub created_at_ms: i64,
 }
 
-/// Loads the visible timeline parts through the server's execution
-/// resource and maps them into the TUI's presentation value.
+/// Loads one bounded visible timeline page through the server's cursor-paged
+/// parts endpoint and maps it into the TUI's presentation value. This avoids
+/// asking `/state` for the complete transcript merely to show the timeline
+/// overlay.
 pub(crate) async fn list_session_timeline(
     application: &super::TuiBackend,
     session_id: i64,
     limit: u64,
 ) -> Result<Vec<SessionTimelineEntry>> {
-    let execution = application.get_session_state(session_id).await?;
-    let retain = usize::try_from(limit).unwrap_or(usize::MAX);
-    let skip = execution.parts.len().saturating_sub(retain);
-    Ok(execution
+    let page = application
+        .list_session_parts(session_id, limit, None)
+        .await?;
+    Ok(page
         .parts
         .into_iter()
-        .skip(skip)
         .map(|part| SessionTimelineEntry {
             part_id: part.part_id,
             kind: part.kind,
@@ -42,10 +43,10 @@ pub(crate) async fn list_session_timeline(
             state: part.state,
             summary: part.summary,
             content: part.content,
-            rendered_markdown: None,
+            rendered_markdown: part.rendered_markdown,
             parent_part_id: part.parent_part_id,
             run_id: part.run_id,
-            revision: 0,
+            revision: part.revision,
             created_at_ms: part.created_at_ms,
         })
         .collect())

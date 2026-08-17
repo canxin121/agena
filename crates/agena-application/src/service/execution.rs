@@ -205,6 +205,40 @@ impl ApplicationService {
         session_queries: &dyn agena_runtime::SessionQueryService,
         session_id: i64,
     ) -> ApplicationResult<SessionExecutionResource> {
+        self.session_execution_resource_with_options(
+            execution_control,
+            session_queries,
+            session_id,
+            true,
+        )
+        .await
+    }
+
+    /// Build the session execution shell without materializing the complete
+    /// transcript. Status polling uses this path; callers that need history
+    /// fetch it through the cursor-paged `/parts` endpoint.
+    pub async fn session_execution_resource_without_parts(
+        &self,
+        execution_control: &dyn agena_runtime::SessionExecutionControl,
+        session_queries: &dyn agena_runtime::SessionQueryService,
+        session_id: i64,
+    ) -> ApplicationResult<SessionExecutionResource> {
+        self.session_execution_resource_with_options(
+            execution_control,
+            session_queries,
+            session_id,
+            false,
+        )
+        .await
+    }
+
+    async fn session_execution_resource_with_options(
+        &self,
+        execution_control: &dyn agena_runtime::SessionExecutionControl,
+        session_queries: &dyn agena_runtime::SessionQueryService,
+        session_id: i64,
+        include_parts: bool,
+    ) -> ApplicationResult<SessionExecutionResource> {
         // Runtime execution_context is the public reconcile-on-open boundary:
         // after a server restart it terminalizes a stale in-flight run before
         // projecting workflow and transcript state. Run it before the direct
@@ -219,7 +253,11 @@ impl ApplicationService {
         })?;
 
         let scheduler_jobs = list_scheduled_jobs(execution_control).await;
-        let transcript = session_transcript_parts(session_queries, session_id).await?;
+        let transcript = if include_parts {
+            session_transcript_parts(session_queries, session_id).await?
+        } else {
+            Vec::new()
+        };
         let pending_interactive_requests =
             pending_interactive_requests(session_queries, session_id).await?;
         // Workflow readiness and execution liveness are separate facts. A

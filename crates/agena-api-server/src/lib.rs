@@ -2171,7 +2171,7 @@ mod router_contract_tests {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             let execution = client
-                .get_session_state(session_id)
+                .get_session_state_with_parts(session_id, true)
                 .await
                 .expect("read session execution");
             if predicate(&execution) {

@@ -7,7 +7,7 @@ pub const DEFAULT_LIMIT: u64 = 100;
 /// Maximum page size (server clamps anything above this).
 pub const MAX_LIMIT: u64 = 1000;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 /// Pagination metadata for one page of results.
 pub struct PageInfo {
     /// Opaque cursor pointing at the next page; absent when fully consumed.
@@ -17,7 +17,7 @@ pub struct PageInfo {
     pub returned: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// A page of items together with its [`PageInfo`].
 pub struct PaginatedResponse<T> {
     pub items: Vec<T>,

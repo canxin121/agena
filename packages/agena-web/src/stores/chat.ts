@@ -85,6 +85,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const historyLimitBySession = ref<Record<string, number>>({})
   const historyLoadingBySession = ref<Record<string, boolean>>({})
   const historyExhaustedBySession = ref<Record<string, boolean>>({})
+  const historyCursorBySession = ref<Record<string, string | null>>({})
 
   const composerDraftBySession = ref<Record<string, string>>({})
   const pendingInputText = ref('')
@@ -292,6 +293,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
         delete next[previous]
         historyLoadingBySession.value = next
       }
+      if (Object.prototype.hasOwnProperty.call(historyCursorBySession.value, previous)) {
+        const next = { ...historyCursorBySession.value }
+        delete next[previous]
+        historyCursorBySession.value = next
+      }
     }
 
     if (!sid) return
@@ -465,7 +471,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
       setSessionMessages(sid, ordered)
       pruneSessionMessages(sid)
       markMessagesHydrated(sid)
-      historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: true }
+      historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
+      historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
 
       // Capture run config from the last message that carries provider/model.
       for (let i = ordered.length - 1; i >= 0; i -= 1) {
@@ -531,14 +538,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
     historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: true }
     try {
-      const nextLimit = currentLen + pageSize
-      const page = await chatApi.listMessages(sid, nextLimit)
+      const page = await chatApi.listMessages(sid, pageSize, historyCursorBySession.value[sid] ?? null)
       const normalized = normalizeMessageList(page.entries)
       const merged = mergeMessageLists(normalized, current)
       setSessionMessages(sid, merged)
       historyLimitBySession.value = { ...historyLimitBySession.value, [sid]: merged.length }
-      historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: normalized.length < nextLimit }
-      return normalized.length < nextLimit ? false : true
+      historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
+      historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
+      return page.hasMore === true
     } finally {
       historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: false }
     }
@@ -883,6 +890,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const next = { ...historyExhaustedBySession.value }
       delete next[sid]
       historyExhaustedBySession.value = next
+    }
+    {
+      const next = { ...historyCursorBySession.value }
+      delete next[sid]
+      historyCursorBySession.value = next
     }
 
     sessions.value = sessions.value.filter((s) => s?.id !== sid)

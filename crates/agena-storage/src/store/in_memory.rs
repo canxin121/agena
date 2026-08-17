@@ -22,11 +22,11 @@ use super::{
     BackgroundDelivery, BackgroundDeliveryPhase, BackgroundEventRequest, BackgroundOperation,
     BackgroundOperationPhase, BackgroundOperationTransition, BackgroundSettleOutcome, InFlightRun,
     InteractionAnswerOutcome, LEASE_STALENESS_MS, LeaseAcquire, LeaseState, MaintenanceOutcome,
-    NewBackgroundOperation, NewPart, NewSession, Part, PartDelta, PartRole, PartState,
+    NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta, PartRole, PartState,
     PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta,
-    SessionMetadataPatch, SessionState, SessionSummary, SessionView, StateInputs, StoreError,
-    SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats, apply_part_transition,
-    derive_session_state,
+    SessionMetadataPatch, SessionPartPage, SessionState, SessionSummary, SessionView, StateInputs,
+    StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats,
+    apply_part_transition, derive_session_state,
 };
 use crate::store::jsonl;
 
@@ -488,6 +488,49 @@ impl PersistenceEngine for InMemoryEngine {
         let meta = self.session_meta(session_id).await?;
         let parts = self.ordered_parts(session_id);
         Ok(SessionView { meta, parts })
+    }
+
+    async fn load_session_page(
+        &self,
+        session_id: i64,
+        before: Option<PartCursor>,
+        limit: i64,
+    ) -> Result<SessionPartPage, StoreError> {
+        let meta = self.session_meta(session_id).await?;
+        let take = usize::try_from(limit.max(1).saturating_add(1)).unwrap_or(usize::MAX);
+        let membership = self.membership.read().expect("membership lock");
+        let all_parts = self.parts.read().expect("parts lock");
+        let mut parts = Vec::with_capacity(take.min(16));
+        for part in membership
+            .get(&session_id)
+            .into_iter()
+            .flat_map(|ids| ids.iter().filter_map(|id| all_parts.get(id)))
+        {
+            if before.is_some_and(|before| {
+                (part.created_at_ms, part.part_id) >= (before.created_at_ms, before.part_id)
+            }) {
+                continue;
+            }
+            if parts.len() < take {
+                parts.push(part.clone());
+                parts.sort_unstable_by_key(|part| (part.created_at_ms, part.part_id));
+            } else if parts.first().is_some_and(|oldest| {
+                (part.created_at_ms, part.part_id) > (oldest.created_at_ms, oldest.part_id)
+            }) {
+                parts[0] = part.clone();
+                parts.sort_unstable_by_key(|part| (part.created_at_ms, part.part_id));
+            }
+        }
+        let has_more = parts.len() == take;
+        parts.reverse();
+        if has_more {
+            parts.truncate(take.saturating_sub(1));
+        }
+        Ok(SessionPartPage {
+            meta,
+            parts,
+            has_more,
+        })
     }
 
     async fn newest_member_cursor(
@@ -3262,6 +3305,64 @@ mod tests {
             .await
             .expect("maintenance");
         assert_eq!(outcome.gc_deleted_parts, 2);
+    }
+
+    #[tokio::test]
+    async fn session_part_pages_are_newest_first_and_cursor_disjoint() {
+        let (engine, session_id) = setup().await;
+        for _ in 0..3 {
+            engine
+                .submit_user_run(
+                    session_id,
+                    "owner-a",
+                    vec![text_part("page")],
+                    None,
+                    engine.now_ms(),
+                )
+                .await
+                .expect("append page fixture");
+        }
+
+        let first = engine
+            .load_session_page(session_id, None, 2)
+            .await
+            .expect("load first page");
+        assert_eq!(first.parts.len(), 2);
+        assert!(first.has_more);
+        assert!(first.parts.windows(2).all(|parts| {
+            (parts[0].created_at_ms, parts[0].part_id) > (parts[1].created_at_ms, parts[1].part_id)
+        }));
+
+        let before = PartCursor {
+            created_at_ms: first.parts.last().expect("first page row").created_at_ms,
+            part_id: first.parts.last().expect("first page row").part_id,
+        };
+        let second = engine
+            .load_session_page(session_id, Some(before), 2)
+            .await
+            .expect("load second page");
+        assert_eq!(second.parts.len(), 2);
+        assert!(second.has_more);
+        assert!(second.parts.iter().all(
+            |part| (part.created_at_ms, part.part_id) < (before.created_at_ms, before.part_id)
+        ));
+        assert!(first.parts.iter().all(|first| {
+            second
+                .parts
+                .iter()
+                .all(|second| first.part_id != second.part_id)
+        }));
+
+        let before = PartCursor {
+            created_at_ms: second.parts.last().expect("second page row").created_at_ms,
+            part_id: second.parts.last().expect("second page row").part_id,
+        };
+        let third = engine
+            .load_session_page(session_id, Some(before), 2)
+            .await
+            .expect("load final page");
+        assert_eq!(third.parts.len(), 2);
+        assert!(!third.has_more);
     }
 
     #[tokio::test]

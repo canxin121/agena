@@ -42,6 +42,9 @@ pub struct SessionPartsResource {
     /// Monotonic `sessions.version` high-water mark.
     pub version: i64,
     pub parts: Vec<PartResource>,
+    /// Cursor metadata for newest-first keyset pagination. `parts` itself is
+    /// returned chronologically so renderers can append it directly.
+    pub page: crate::pagination::PageInfo,
 }
 
 /// A committed session mutation. This is observer notification only: it is

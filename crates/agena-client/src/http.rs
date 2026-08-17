@@ -1481,8 +1481,20 @@ impl AgenaClient {
         &self,
         session_id: i64,
     ) -> Result<SessionExecutionResource, ClientError> {
-        self.get_json(&format!("/api/v1/sessions/{session_id}/state"))
-            .await
+        self.get_session_state_with_parts(session_id, false).await
+    }
+
+    /// Fetch the bounded execution shell. Transcript history is deliberately
+    /// omitted unless a caller explicitly opts into the legacy full snapshot.
+    pub async fn get_session_state_with_parts(
+        &self,
+        session_id: i64,
+        include_parts: bool,
+    ) -> Result<SessionExecutionResource, ClientError> {
+        self.get_json(&format!(
+            "/api/v1/sessions/{session_id}/state?include_parts={include_parts}"
+        ))
+        .await
     }
 
     pub async fn session_cost_summary(
@@ -1569,6 +1581,28 @@ impl AgenaClient {
     ) -> Result<agena_api::live::SessionPartsResource, ClientError> {
         self.get_json(&format!("/api/v1/sessions/{session_id}/parts"))
             .await
+    }
+
+    /// Fetch one bounded newest-first cursor page. The response rows are
+    /// chronological, ready for transcript renderers.
+    pub async fn session_parts_page(
+        &self,
+        session_id: i64,
+        limit: u64,
+        cursor: Option<&str>,
+    ) -> Result<agena_api::live::SessionPartsResource, ClientError> {
+        let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/parts"));
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("limit", &limit.to_string());
+            if let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) {
+                query.append_pair("cursor", cursor);
+            }
+        }
+        let response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        self.parse_json(response).await
     }
 
     pub async fn connect_session(&self, session_id: i64) -> Result<SessionConnection, ClientError> {
@@ -2141,12 +2175,9 @@ impl AgenaClient {
                 self.get_json(&format!("/api/v1/sessions/{session_id}"))
                     .await?,
             )),
-            Query::GetSessionState(GetSessionParams { session_id }) => {
-                Ok(QueryResult::SessionState(
-                    self.get_json(&format!("/api/v1/sessions/{session_id}/state"))
-                        .await?,
-                ))
-            }
+            Query::GetSessionState(GetSessionParams { session_id }) => Ok(
+                QueryResult::SessionState(self.get_session_state(session_id).await?),
+            ),
             Query::GetOperationDetail(GetOperationDetailParams {
                 session_id,
                 activity_id,

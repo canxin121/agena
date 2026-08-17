@@ -95,6 +95,15 @@ pub use model_catalog::*;
 pub struct SessionPartListQuery {
     #[serde(default)]
     pub limit: Option<u64>,
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+/// Optional history inclusion for the session execution shell.
+pub struct SessionStateQuery {
+    #[serde(default)]
+    pub include_parts: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

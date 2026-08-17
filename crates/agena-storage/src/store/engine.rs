@@ -14,9 +14,9 @@ use async_trait::async_trait;
 use super::{
     BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationTransition,
     BackgroundSettleOutcome, InteractionAnswerOutcome, LeaseAcquire, NewBackgroundOperation,
-    NewPart, NewSession, Part, PartDelta, PartState, ReconcileOutcome, RunOutcome,
-    SessionListQuery, SessionMeta, SessionMetadataPatch, SessionState, SessionSummary, SessionView,
-    StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
+    NewPart, NewSession, Part, PartCursor, PartDelta, PartState, ReconcileOutcome, RunOutcome,
+    SessionListQuery, SessionMeta, SessionMetadataPatch, SessionPartPage, SessionState,
+    SessionSummary, SessionView, StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
 };
 
 /// A live-update notification derived from an operation and emitted after
@@ -65,9 +65,20 @@ pub trait PersistenceEngine: Send + Sync {
     /// Load a session's metadata.
     async fn session_meta(&self, session_id: i64) -> Result<SessionMeta, StoreError>;
 
-    /// Load a session's metadata plus its parts ordered by
+    /// Load a session's metadata plus all parts ordered by
     /// `(created_at_ms, part_id)` — one membership JOIN.
     async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError>;
+
+    /// Load one newest-first keyset page of session parts. `before` excludes
+    /// that position and is interpreted against the canonical
+    /// `(created_at_ms, part_id)` ordering. The backend fetches one extra row
+    /// to populate `has_more` without counting the complete transcript.
+    async fn load_session_page(
+        &self,
+        session_id: i64,
+        before: Option<PartCursor>,
+        limit: i64,
+    ) -> Result<SessionPartPage, StoreError>;
 
     /// The newest member part's `(created_at_ms, part_id)` cursor, if the
     /// session has any parts. Used by the facade's memory layer for

@@ -24,10 +24,11 @@ use agena_storage::store::{
     BackgroundDelivery, BackgroundDeliveryPhase, BackgroundEventRequest, BackgroundOperation,
     BackgroundOperationKind, BackgroundOperationPhase, BackgroundOperationTransition,
     BackgroundSettleOutcome, InFlightRun, InteractionAnswerOutcome, LeaseAcquire, LeaseState,
-    MaintenanceOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartDelta, PartRole,
-    PartState, PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery,
-    SessionMeta, SessionMetadataPatch, SessionState, SessionSummary, SessionView, StoreError,
-    SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats, apply_part_transition,
+    MaintenanceOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta,
+    PartRole, PartState, PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome,
+    SessionListQuery, SessionMeta, SessionMetadataPatch, SessionPartPage, SessionState,
+    SessionSummary, SessionView, StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord,
+    UsageStats, apply_part_transition,
 };
 use async_trait::async_trait;
 use sea_orm::{
@@ -809,6 +810,51 @@ impl PersistenceEngine for SqliteEngine {
             .collect::<Result<Vec<_>, _>>()
             .map_err(map_db_err)?;
         Ok(SessionView { meta, parts })
+    }
+
+    async fn load_session_page(
+        &self,
+        session_id: i64,
+        before: Option<PartCursor>,
+        limit: i64,
+    ) -> Result<SessionPartPage, StoreError> {
+        let meta = self.session_meta(session_id).await?;
+        let fetch_limit = limit.max(1).saturating_add(1);
+        let mut values = vec![session_id.into()];
+        let position_clause = if let Some(before) = before {
+            values.push(before.created_at_ms.into());
+            values.push(before.created_at_ms.into());
+            values.push(before.part_id.into());
+            " AND (p.created_at_ms < ? OR (p.created_at_ms = ? AND p.part_id < ?))"
+        } else {
+            ""
+        };
+        let rows = self
+            .db()
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT {PART_COLS} FROM agena_parts p \
+                     JOIN agena_session_parts sp ON sp.part_id = p.part_id \
+                     WHERE sp.session_id = ?{position_clause} \
+                     ORDER BY p.created_at_ms DESC, p.part_id DESC LIMIT {fetch_limit}"
+                ),
+                values,
+            ))
+            .await
+            .map_err(map_db_err)?
+            .into_iter()
+            .map(part_from_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(map_db_err)?;
+        let has_more = rows.len() > usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
+        let mut parts = rows;
+        parts.truncate(usize::try_from(limit.max(1)).unwrap_or(usize::MAX));
+        Ok(SessionPartPage {
+            meta,
+            parts,
+            has_more,
+        })
     }
 
     async fn newest_member_cursor(

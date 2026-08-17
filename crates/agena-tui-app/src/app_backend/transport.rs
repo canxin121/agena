@@ -19,7 +19,7 @@ use agena_api::{
     queries::{GetSessionParams, ListSessionsParams, Query, QueryResult},
     resource::{
         PermissionReply, ProviderSummaryResource, RunOptions, SessionExecutionResource,
-        SessionOverviewResource, SessionResource, UserInputReply,
+        SessionOverviewResource, SessionResource, SessionTranscriptPart, UserInputReply,
     },
 };
 use agena_client::{AgenaClient, SubscriptionEvent};
@@ -28,6 +28,22 @@ use base64::Engine as _;
 use tokio::sync::mpsc;
 
 use super::{LiveEvent, SessionRefresh};
+
+const SESSION_TRANSCRIPT_PAGE_SIZE: u64 = 200;
+
+fn transcript_part_from_resource(part: agena_api::live::PartResource) -> SessionTranscriptPart {
+    SessionTranscriptPart {
+        part_id: part.part_id,
+        kind: part.kind,
+        role: part.role,
+        state: part.state,
+        content: part.content,
+        summary: part.summary,
+        created_at_ms: part.created_at_ms,
+        parent_part_id: part.parent_part_id,
+        run_id: part.run_id,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendMode {
@@ -1681,9 +1697,33 @@ impl TuiBackend {
     }
 
     pub async fn get_session_state(&self, session_id: i64) -> Result<SessionExecutionResource> {
-        let mut execution = self.client().get_session_state(session_id).await?;
+        // `/state` is an execution shell. Load only the newest bounded
+        // transcript page separately; older history is fetched through the
+        // cursor-paged parts surface by timeline/history callers.
+        let (mut execution, page) = tokio::try_join!(
+            self.client().get_session_state(session_id),
+            self.client()
+                .session_parts_page(session_id, SESSION_TRANSCRIPT_PAGE_SIZE, None,),
+        )?;
+        execution.parts = page
+            .parts
+            .into_iter()
+            .map(transcript_part_from_resource)
+            .collect();
         self.localize_workspace_images(&mut execution).await;
         Ok(execution)
+    }
+
+    pub async fn list_session_parts(
+        &self,
+        session_id: i64,
+        limit: u64,
+        cursor: Option<&str>,
+    ) -> Result<agena_api::live::SessionPartsResource> {
+        Ok(self
+            .client()
+            .session_parts_page(session_id, limit, cursor)
+            .await?)
     }
 
     pub async fn refresh_session(
@@ -1696,9 +1736,7 @@ impl TuiBackend {
         // correctness path. Reading on every refresh also converges
         // after SSE lag or reconnect without depending on replay.
         let _ = force;
-        let execution = self
-            .localized_execution(self.client().get_session_state(session_id).await?)
-            .await;
+        let execution = self.get_session_state(session_id).await?;
         let latest_event_seq = execution.latest_event_seq;
         let event_count = after_seq
             .zip(latest_event_seq)

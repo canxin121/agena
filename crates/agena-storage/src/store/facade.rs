@@ -35,10 +35,10 @@ use serde_json::{Value, json};
 use super::{
     BackgroundDelivery, BackgroundEventRequest, BackgroundOperation, BackgroundOperationKind,
     BackgroundOperationTransition, BackgroundSettleOutcome, LEASE_STALENESS_MS, LeaseAcquire,
-    MaintenanceOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartDelta, PartState,
-    PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
-    SessionMetadataPatch, SessionPresentation, SessionState, SessionSummary, SessionView,
-    StateInputs, StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
+    MaintenanceOutcome, NewBackgroundOperation, NewPart, NewSession, Part, PartCursor, PartDelta,
+    PartState, PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
+    SessionMetadataPatch, SessionPartPage, SessionPresentation, SessionState, SessionSummary,
+    SessionView, StateInputs, StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
     apply_part_transition, presentation,
 };
 
@@ -92,6 +92,15 @@ pub trait SessionStore: Send + Sync {
     /// Load a session's metadata plus parts ordered by
     /// `(created_at_ms, part_id)` — cache first, then one membership JOIN.
     async fn load(&self, session_id: i64) -> Result<SessionView, StoreError>;
+
+    /// Load one bounded newest-first keyset page without materializing the
+    /// complete session transcript.
+    async fn load_page(
+        &self,
+        session_id: i64,
+        before: Option<PartCursor>,
+        limit: i64,
+    ) -> Result<SessionPartPage, StoreError>;
 
     /// Create a new session row (root, child, fork/rewind, or subagent) and
     /// return its metadata. The engine validates the lineage rules
@@ -1132,6 +1141,25 @@ where
 {
     async fn load(&self, session_id: i64) -> Result<SessionView, StoreError> {
         self.load_cached(session_id).await
+    }
+
+    async fn load_page(
+        &self,
+        session_id: i64,
+        before: Option<PartCursor>,
+        limit: i64,
+    ) -> Result<SessionPartPage, StoreError> {
+        let mut page = self
+            .engine
+            .load_session_page(session_id, before, limit)
+            .await?;
+        let mut view = SessionView {
+            meta: page.meta.clone(),
+            parts: std::mem::take(&mut page.parts),
+        };
+        self.memory.overlay_streaming(session_id, &mut view);
+        page.parts = view.parts;
+        Ok(page)
     }
 
     async fn create_session(&self, new_session: NewSession) -> Result<SessionMeta, StoreError> {
@@ -3485,6 +3513,17 @@ mod tests {
         async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError> {
             self.load_session_calls.fetch_add(1, Ordering::SeqCst);
             self.inner.load_session(session_id).await
+        }
+
+        async fn load_session_page(
+            &self,
+            session_id: i64,
+            before: Option<PartCursor>,
+            limit: i64,
+        ) -> Result<SessionPartPage, StoreError> {
+            self.inner
+                .load_session_page(session_id, before, limit)
+                .await
         }
 
         async fn newest_member_cursor(

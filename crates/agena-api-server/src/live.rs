@@ -155,6 +155,11 @@ pub(crate) async fn session_parts(
         session_id,
         version: view.meta.version,
         parts: view.parts.iter().map(project_part).collect(),
+        page: agena_api::pagination::PageInfo {
+            next_cursor: None,
+            has_more: false,
+            returned: view.parts.len() as u64,
+        },
     })
 }
 

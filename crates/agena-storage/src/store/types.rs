@@ -576,6 +576,29 @@ pub struct SessionView {
     pub parts: Vec<Part>,
 }
 
+/// Stable keyset cursor for the canonical session-part ordering.
+///
+/// The cursor deliberately contains both fields from the ordering key. Part
+/// timestamps are not unique, and using only `part_id` would make the public
+/// page contract depend on an implementation detail of the allocator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PartCursor {
+    pub created_at_ms: i64,
+    pub part_id: i64,
+}
+
+/// One bounded page of a session's persisted parts.
+///
+/// Backends return rows newest-first so the SQL query can use a cheap
+/// `LIMIT + 1` keyset read. The transport/application layer reverses the rows
+/// before handing them to chronological transcript renderers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionPartPage {
+    pub meta: SessionMeta,
+    pub parts: Vec<Part>,
+    pub has_more: bool,
+}
+
 /// Input for creating a new session row.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewSession {

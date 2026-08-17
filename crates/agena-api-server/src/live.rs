@@ -155,6 +155,7 @@ pub(crate) async fn session_parts(
         session_id,
         version: view.meta.version,
         parts: view.parts.iter().map(project_part).collect(),
+        folds: Vec::new(),
         page: agena_api::pagination::PageInfo {
             next_cursor: None,
             has_more: false,

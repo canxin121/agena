@@ -50,6 +50,7 @@ impl TranscriptState {
             transcript_older_in_flight_since: None,
             transcript_older_skip_parts: 0,
             transcript_older_pages_loaded: false,
+            transcript_folds: Vec::new(),
             viewport: TranscriptViewport::default(),
             interaction: TranscriptInteraction::default(),
             search_query: String::new(),
@@ -89,6 +90,7 @@ impl TranscriptState {
         self.transcript_older_in_flight_since = None;
         self.transcript_older_skip_parts = 0;
         self.transcript_older_pages_loaded = false;
+        self.transcript_folds.clear();
         self.viewport.reduce(TranscriptAction::Reset);
         self.interaction = TranscriptInteraction::default();
         self.execution = None;
@@ -111,6 +113,7 @@ impl TranscriptState {
             transcript_next_cursor: self.transcript_next_cursor.clone(),
             transcript_has_more: self.transcript_has_more,
             transcript_older_pages_loaded: self.transcript_older_pages_loaded,
+            transcript_folds: self.transcript_folds.clone(),
             node_expansions: self.node_expansions.clone(),
             activity_summary_visible_counts: self.activity_summary_visible_counts.clone(),
             expanded_operation_activity_ids: self.expanded_operation_activity_ids.clone(),
@@ -130,6 +133,7 @@ impl TranscriptState {
         self.transcript_next_cursor = cache.transcript_next_cursor;
         self.transcript_has_more = cache.transcript_has_more;
         self.transcript_older_pages_loaded = cache.transcript_older_pages_loaded;
+        self.transcript_folds = cache.transcript_folds;
         self.node_expansions = cache.node_expansions;
         self.activity_summary_visible_counts = cache.activity_summary_visible_counts;
         self.expanded_operation_activity_ids = cache.expanded_operation_activity_ids;
@@ -224,6 +228,102 @@ impl TranscriptState {
     pub(crate) fn set_transcript_page(&mut self, next_cursor: Option<String>, has_more: bool) {
         self.transcript_next_cursor = next_cursor;
         self.transcript_has_more = has_more;
+    }
+
+    pub(crate) fn set_transcript_folds(
+        &mut self,
+        folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
+    ) {
+        self.transcript_folds = folds;
+        self.invalidate_render();
+    }
+
+    pub(crate) fn merge_transcript_folds(
+        &mut self,
+        folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
+    ) {
+        for fold in folds {
+            if let Some(existing) = self.transcript_folds.iter_mut().find(|candidate| {
+                candidate.run_id == fold.run_id && candidate.anchor_part_id == fold.anchor_part_id
+            }) {
+                *existing = fold;
+            } else {
+                self.transcript_folds.push(fold);
+            }
+        }
+        self.invalidate_render();
+    }
+
+    pub(crate) fn transcript_fold_for_node(
+        &self,
+        key: &TranscriptNodeKey,
+    ) -> Option<agena_api::live::SessionTranscriptFoldResource> {
+        let TranscriptNodeKey::Activity { content_id, .. } = key else {
+            return None;
+        };
+        let TranscriptContentId::TranscriptFold {
+            run_id,
+            anchor_part_id,
+        } = content_id
+        else {
+            return None;
+        };
+        self.transcript_folds
+            .iter()
+            .find(|fold| fold.run_id == *run_id && fold.anchor_part_id == *anchor_part_id)
+            .cloned()
+    }
+
+    pub(crate) fn merge_fold_parts(
+        &mut self,
+        run_id: i64,
+        anchor_part_id: i64,
+        parts: Vec<agena_api::resource::SessionTranscriptPart>,
+        next_cursor: Option<String>,
+        has_more: bool,
+    ) -> bool {
+        if parts.is_empty() {
+            return false;
+        }
+        let fetched_non_text = parts
+            .iter()
+            .filter(|part| part.kind != "run")
+            .count();
+        let mut by_id = self
+            .parts
+            .iter()
+            .cloned()
+            .map(|part| (part.part_id, part))
+            .collect::<BTreeMap<_, _>>();
+        for part in &parts {
+            by_id.insert(part.part_id, part.clone());
+        }
+        self.parts = by_id.into_values().collect();
+        self.parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
+
+        let next_anchor = parts
+            .iter()
+            .find(|part| part.kind != "run")
+            .map(|part| part.part_id)
+            .unwrap_or(anchor_part_id);
+        let mut remove_fold = false;
+        if let Some(fold) = self.transcript_folds.iter_mut().find(|fold| {
+            fold.run_id == run_id && fold.anchor_part_id == anchor_part_id
+        }) {
+            fold.hidden_count = fold.hidden_count.saturating_sub(fetched_non_text as u64);
+            fold.anchor_part_id = next_anchor;
+            fold.next_cursor = next_cursor;
+            remove_fold = !has_more || fold.hidden_count == 0 || fold.next_cursor.is_none();
+        }
+        if remove_fold {
+            self.transcript_folds.retain(|candidate| {
+                !(candidate.run_id == run_id
+                    && (candidate.anchor_part_id == anchor_part_id
+                        || candidate.anchor_part_id == next_anchor))
+            });
+        }
+        self.invalidate_render();
+        true
     }
 
     /// Return the semantic top-level transcript boundaries after assistant
@@ -1096,7 +1196,10 @@ impl TranscriptState {
         let mut lines = Vec::new();
         let mut nodes = Vec::new();
         let mut line_nodes = Vec::new();
-        let mut entries = agena_tui_transcript::parts_entries(&self.parts);
+        let mut entries = agena_tui_transcript::parts_entries_with_folds(
+            &self.parts,
+            &self.transcript_folds,
+        );
         inject_remembered_failures(&mut entries, &self.reply_failures);
         #[cfg(test)]
         let entries = if self.parts.is_empty() {

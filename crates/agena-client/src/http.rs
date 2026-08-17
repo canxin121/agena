@@ -1605,6 +1605,76 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
+    /// Fetch one presentation-oriented transcript page. The server skips
+    /// folded assistant raw parts before responding, so this endpoint is
+    /// suitable for interactive Web/TUI history while `session_parts_page`
+    /// remains the lossless raw surface.
+    pub async fn session_transcript_page(
+        &self,
+        session_id: i64,
+        limit: u64,
+        cursor: Option<&str>,
+    ) -> Result<agena_api::live::SessionPartsResource, ClientError> {
+        let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/transcript"));
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("limit", &limit.to_string());
+            if let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) {
+                query.append_pair("cursor", cursor);
+            }
+        }
+        let response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        self.parse_json(response).await
+    }
+
+    /// Fetch one server-side expansion chunk for a folded assistant run.
+    pub async fn session_transcript_run_page(
+        &self,
+        session_id: i64,
+        run_id: i64,
+        limit: u64,
+        cursor: Option<&str>,
+    ) -> Result<agena_api::live::SessionPartsResource, ClientError> {
+        let mut url = self.endpoint(&format!(
+            "/api/v1/sessions/{session_id}/transcript/runs/{run_id}"
+        ));
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("limit", &limit.to_string());
+            if let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) {
+                query.append_pair("cursor", cursor);
+            }
+        }
+        let response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        self.parse_json(response).await
+    }
+
+    /// Fetch one server-side expansion chunk for a folded logical assistant
+    /// reply. The opaque cursor carries the full adjacent-run set.
+    pub async fn session_transcript_fold_page(
+        &self,
+        session_id: i64,
+        limit: u64,
+        cursor: &str,
+    ) -> Result<agena_api::live::SessionPartsResource, ClientError> {
+        let mut url = self.endpoint(&format!(
+            "/api/v1/sessions/{session_id}/transcript/folds"
+        ));
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("limit", &limit.to_string());
+            query.append_pair("cursor", cursor);
+        }
+        let response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        self.parse_json(response).await
+    }
+
     pub async fn connect_session(&self, session_id: i64) -> Result<SessionConnection, ClientError> {
         let subscription = self
             .stream_changes(agena_api::Scope::Session { session_id })

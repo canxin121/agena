@@ -374,6 +374,18 @@ pub fn router(state: AppState) -> Router {
                 get(rest::list_session_parts),
             )
             .route(
+                "/api/v1/sessions/{session_id}/transcript",
+                get(rest::list_session_transcript),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/transcript/runs/{run_id}",
+                get(rest::list_session_transcript_run_parts),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/transcript/folds",
+                get(rest::list_session_transcript_fold_parts),
+            )
+            .route(
                 "/api/v1/sessions/{session_id}/changes/stream",
                 get(rest::stream_session_changes),
             )

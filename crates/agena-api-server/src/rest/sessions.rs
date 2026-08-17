@@ -217,6 +217,7 @@ pub async fn list_session_parts(
         session_id,
         version: page.meta.version,
         parts: parts.iter().map(crate::live::project_part).collect(),
+        folds: Vec::new(),
         page: agena_api::pagination::PageInfo {
             next_cursor,
             has_more: page.has_more,

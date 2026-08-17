@@ -15,6 +15,27 @@ pub struct SessionPartCursor {
     pub part_id: i64,
 }
 
+/// Opaque cursor for the presentation-oriented transcript surface. It points
+/// to the beginning of a logical run/message boundary, so a later page can
+/// skip the folded raw prefix without asking the client to walk it.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub struct SessionTranscriptCursor {
+    pub session_id: i64,
+    pub created_at_ms: i64,
+    pub part_id: i64,
+}
+
+/// Cursor used when expanding one server-side folded assistant reply. The
+/// run ids are part of the signed/opaque cursor so a client cannot broaden an
+/// expansion request to unrelated session content.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionTranscriptFoldCursor {
+    pub session_id: i64,
+    pub run_ids: Vec<i64>,
+    pub created_at_ms: i64,
+    pub part_id: i64,
+}
+
 /// Default page limit used when no limit is requested.
 pub const DEFAULT_PAGE_LIMIT: u64 = 50;
 /// Maximum allowed page limit.

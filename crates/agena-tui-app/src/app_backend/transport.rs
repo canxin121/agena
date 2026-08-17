@@ -29,7 +29,7 @@ use tokio::sync::mpsc;
 
 use super::{LiveEvent, SessionRefresh};
 
-pub(crate) const SESSION_TRANSCRIPT_PAGE_SIZE: u64 = 50;
+pub(crate) const SESSION_TRANSCRIPT_PAGE_SIZE: u64 = 3;
 /// Older pages use the largest supported API page. The initial page remains
 /// small so opening a session stays cheap.
 pub(crate) const OLDER_SESSION_TRANSCRIPT_PAGE_SIZE: u64 = 200;
@@ -39,6 +39,7 @@ pub(crate) const MAX_FOLD_SKIP_RAW_PARTS: usize = 8_192;
 #[derive(Debug, Clone)]
 pub(crate) struct SessionTranscriptPage {
     pub parts: Vec<SessionTranscriptPart>,
+    pub folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
 }
@@ -1734,12 +1735,12 @@ impl TuiBackend {
         session_id: i64,
     ) -> Result<SessionStateWithTranscriptPage> {
         // `/state` is an execution shell. Load only the newest bounded
-        // transcript page separately; older history is fetched through the
-        // cursor-paged parts surface by timeline/history callers.
+        // collapsed transcript page separately; the server skips raw folded
+        // activity before it crosses this transport boundary.
         let (mut execution, page_resource) = tokio::try_join!(
             self.client().get_session_state(session_id),
             self.client()
-                .session_parts_page(session_id, SESSION_TRANSCRIPT_PAGE_SIZE, None,),
+                .session_transcript_page(session_id, SESSION_TRANSCRIPT_PAGE_SIZE, None,),
         )?;
         let mut page = SessionTranscriptPage {
             parts: page_resource
@@ -1747,6 +1748,7 @@ impl TuiBackend {
                 .into_iter()
                 .map(transcript_part_from_resource)
                 .collect(),
+            folds: page_resource.folds,
             next_cursor: page_resource.page.next_cursor,
             has_more: page_resource.page.has_more,
         };
@@ -1764,7 +1766,7 @@ impl TuiBackend {
     ) -> Result<SessionTranscriptPage> {
         let page_resource = self
             .client()
-            .session_parts_page(session_id, limit, Some(cursor))
+            .session_transcript_page(session_id, limit, Some(cursor))
             .await?;
         let mut page = SessionTranscriptPage {
             parts: page_resource
@@ -1772,6 +1774,32 @@ impl TuiBackend {
                 .into_iter()
                 .map(transcript_part_from_resource)
                 .collect(),
+            folds: page_resource.folds,
+            next_cursor: page_resource.page.next_cursor,
+            has_more: page_resource.page.has_more,
+        };
+        self.localize_workspace_image_parts(session_id, &mut page.parts)
+            .await;
+        Ok(page)
+    }
+
+    pub(crate) async fn list_session_transcript_fold_page(
+        &self,
+        session_id: i64,
+        limit: u64,
+        cursor: &str,
+    ) -> Result<SessionTranscriptPage> {
+        let page_resource = self
+            .client()
+            .session_transcript_fold_page(session_id, limit, cursor)
+            .await?;
+        let mut page = SessionTranscriptPage {
+            parts: page_resource
+                .parts
+                .into_iter()
+                .map(transcript_part_from_resource)
+                .collect(),
+            folds: page_resource.folds,
             next_cursor: page_resource.page.next_cursor,
             has_more: page_resource.page.has_more,
         };

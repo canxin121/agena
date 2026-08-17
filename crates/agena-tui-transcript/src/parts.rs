@@ -22,10 +22,12 @@ use agena_api::{
     },
     resource::{
         PartAttachment, PartAttachmentKind, PartAttachmentSource, PartSkillReference, RunRole,
-        RunStatus, SessionTranscriptPart, UserInputOption, UserInputQuestion, UserInputReply,
+        RunStatus, SessionTranscriptPart, UserInputOption,
+        UserInputQuestion, UserInputReply,
         UserInputReplyKind, UserInputRequest,
     },
 };
+use agena_api::live::SessionTranscriptFoldResource;
 use agena_domain::TextSegmentActivity;
 use agena_runtime_contracts::part_content::InteractionContent;
 use serde_json::Value;
@@ -44,6 +46,17 @@ use crate::{
 /// later while still belonging to the assistant run that launched it.
 /// Content parts whose referenced marker is absent become their own entry.
 pub fn parts_entries(parts: &[SessionTranscriptPart]) -> Vec<TranscriptEntry<'static>> {
+    parts_entries_with_folds(parts, &[])
+}
+
+/// Project ordered parts and server-provided presentation fold metadata into
+/// the same render model as the lossless projection. Fold markers are inserted
+/// immediately before their first visible activity part; their omitted raw
+/// prefix is fetched by the app when the marker is expanded.
+pub fn parts_entries_with_folds(
+    parts: &[SessionTranscriptPart],
+    folds: &[SessionTranscriptFoldResource],
+) -> Vec<TranscriptEntry<'static>> {
     let marker_ids = parts
         .iter()
         .filter(|part| part.kind == "run")
@@ -101,6 +114,31 @@ pub fn parts_entries(parts: &[SessionTranscriptPart]) -> Vec<TranscriptEntry<'st
             continue;
         }
         entries.push(entry);
+    }
+    for fold in folds {
+        let anchor = TranscriptContentId::StoredPart(fold.anchor_part_id);
+        let Some(entry) = entries
+            .iter_mut()
+            .find(|entry| entry.parts.iter().any(|part| part.id == anchor))
+        else {
+            continue;
+        };
+        let Some(index) = entry.parts.iter().position(|part| part.id == anchor) else {
+            continue;
+        };
+        entry.parts.insert(
+            index,
+            TranscriptEntryPart {
+                id: TranscriptContentId::TranscriptFold {
+                    run_id: fold.run_id,
+                    anchor_part_id: fold.anchor_part_id,
+                },
+                status: PartExecutionStatusResource::Completed,
+                content: TranscriptPartContent::Activity(TranscriptActivityContent::Fold {
+                    hidden_count: usize::try_from(fold.hidden_count).unwrap_or(usize::MAX),
+                }),
+            },
+        );
     }
     entries.into_iter().map(finalize_run_entry).collect()
 }

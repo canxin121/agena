@@ -253,5 +253,6 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
                     .map(|question| question.question.clone()),
             }
         }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Fold { .. }) => None,
     }
 }

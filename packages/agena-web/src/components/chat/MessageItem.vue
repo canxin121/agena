@@ -6,6 +6,7 @@ import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import type { AttentionLike, MessageLike, TranscriptDisplayPart } from '@/components/chat/messageList.types'
+import type { MessageFold } from '@/types/chat'
 import { getAssistantErrorInfo } from '@/pages/chat/assistantError'
 import { foldTranscriptActivityRun } from '@/pages/chat/transcriptActivityFolding'
 import { transcriptPartNavigationText } from '@/pages/chat/transcriptNavigation'
@@ -34,6 +35,7 @@ const emit = defineEmits<{
   (event: 'revert', messageId: string): void
   (event: 'copy', message: MessageLike): void
   (event: 'partToggle', part: TranscriptDisplayPart, expanded: boolean): void
+  (event: 'foldExpand', fold: MessageFold, all: boolean): void
   (event: 'nodeSelect', key: string): void
 }>()
 
@@ -103,13 +105,17 @@ const transcriptRows = computed<TranscriptRow[]>(() => {
       if (part) run.push(part)
       index += 1
     }
-    const summaryKey = `activity-summary:${messageId.value}:${run[0]?.id || index}`
+    const remoteFold = props.message.folds?.find((fold) =>
+      run.some((part) => String(part.id) === String(fold.anchorPartId)),
+    )
+    const summaryKey = `activity-summary:${messageId.value}:${remoteFold?.anchorPartId || run[0]?.id || index}`
     const visibleCount = allActivityRunsExpanded.value
       ? Number.MAX_SAFE_INTEGER
       : (activityRunVisibleCount.value[summaryKey] ?? COLLAPSED_ACTIVITY_VISIBLE_COUNT)
     const folded = foldTranscriptActivityRun(run, visibleCount)
-    if (folded.hiddenCount) {
-      rows.push({ kind: 'summary', key: summaryKey, hiddenCount: folded.hiddenCount, expanded: false })
+    const hiddenCount = (remoteFold?.hiddenCount || 0) + folded.hiddenCount
+    if (hiddenCount) {
+      rows.push({ kind: 'summary', key: summaryKey, hiddenCount, expanded: false })
     }
     for (const part of folded.visibleParts) {
       rows.push({ kind: 'part', key: part.key, part })
@@ -135,6 +141,9 @@ function revealActivitySummary(key: string, hiddenCount: number, all = false) {
   const current = activityRunVisibleCount.value[key] ?? COLLAPSED_ACTIVITY_VISIBLE_COUNT
   const next = all ? Number.MAX_SAFE_INTEGER : current + Math.max(1, Math.min(ACTIVITY_EXPANSION_STEP, hiddenCount))
   activityRunVisibleCount.value = { ...activityRunVisibleCount.value, [key]: next }
+  const anchorPartId = key.slice(key.lastIndexOf(':') + 1)
+  const fold = props.message.folds?.find((candidate) => String(candidate.anchorPartId) === anchorPartId)
+  if (fold) emit('foldExpand', fold, all)
   emit('nodeSelect', key)
 }
 

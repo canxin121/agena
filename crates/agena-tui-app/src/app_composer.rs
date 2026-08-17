@@ -39,10 +39,19 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-transcript-no-selection"));
             return;
         }
+        let server_fold = self
+            .transcript
+            .current_cursor_node_cloned(width)
+            .and_then(|node| self.transcript.transcript_fold_for_node(&node.key));
         let Some((kind, expanded)) = self.transcript.toggle_cursor_node_expansion(width, height)
         else {
             return;
         };
+        if expanded {
+            if let Some(fold) = server_fold {
+                self.request_transcript_fold_parts(fold, false);
+            }
+        }
         self.flash_info(self.i18n.text_args(
             if expanded {
                 "flash-transcript-node-expanded"

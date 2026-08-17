@@ -35,6 +35,24 @@ pub struct PartResource {
     pub provider_state: Option<Value>,
 }
 
+/// Presentation metadata for a folded assistant activity prefix. The prefix
+/// is intentionally absent from `SessionPartsResource.parts`; clients use the
+/// opaque cursor to request the next expansion chunk for this run only.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionTranscriptFoldResource {
+    pub run_id: i64,
+    /// All adjacent assistant runs that make up the folded logical reply.
+    /// `run_id` remains the run containing the first visible anchor for
+    /// compact clients; expansion uses this complete set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub run_ids: Vec<i64>,
+    /// The first activity part currently present in `parts` for this fold.
+    pub anchor_part_id: i64,
+    pub hidden_count: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
 /// Current ordered part snapshot used for initial load and reconnect catch-up.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionPartsResource {
@@ -42,6 +60,10 @@ pub struct SessionPartsResource {
     /// Monotonic `sessions.version` high-water mark.
     pub version: i64,
     pub parts: Vec<PartResource>,
+    /// Fold metadata is populated only by the presentation-oriented
+    /// transcript endpoint. Raw `/parts` pages leave this empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folds: Vec<SessionTranscriptFoldResource>,
     /// Cursor metadata for newest-first keyset pagination. `parts` itself is
     /// returned chronologically so renderers can append it directly.
     pub page: crate::pagination::PageInfo,

@@ -281,6 +281,7 @@ pub(crate) struct TranscriptState {
     /// Once an older page has been prepended, subsequent recent snapshots must
     /// update only their newest window so they do not discard loaded history.
     pub(crate) transcript_older_pages_loaded: bool,
+    pub(crate) transcript_folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
     pub(crate) viewport: TranscriptViewport,
     pub(crate) interaction: TranscriptInteraction,
     pub(crate) search_query: String,
@@ -328,6 +329,7 @@ pub(crate) struct TranscriptCache {
     pub(crate) transcript_next_cursor: Option<String>,
     pub(crate) transcript_has_more: bool,
     pub(crate) transcript_older_pages_loaded: bool,
+    pub(crate) transcript_folds: Vec<agena_api::live::SessionTranscriptFoldResource>,
     pub(crate) node_expansions: BTreeMap<TranscriptNodeKey, bool>,
     pub(crate) activity_summary_visible_counts: BTreeMap<TranscriptNodeKey, usize>,
     pub(crate) expanded_operation_activity_ids: BTreeSet<agena_domain::ActivityId>,

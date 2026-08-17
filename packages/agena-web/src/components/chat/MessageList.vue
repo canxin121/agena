@@ -16,6 +16,7 @@ import type {
   SessionErrorLike,
   TranscriptDisplayPart,
 } from '@/components/chat/messageList.types'
+import type { MessageFold } from '@/types/chat'
 import { formatTimeHMS } from '@/i18n/intl'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
 
@@ -55,6 +56,7 @@ const emit = defineEmits<{
   (event: 'revert', messageId: string): void
   (event: 'copy', message: MessageLike): void
   (event: 'partToggle', part: TranscriptDisplayPart, expanded: boolean): void
+  (event: 'foldExpand', fold: MessageFold, all: boolean): void
   (event: 'nodeSelect', key: string): void
   (event: 'redoFromRevert'): void
   (event: 'unrevertFromRevert'): void
@@ -69,7 +71,8 @@ const hasExpandableTranscript = computed(() =>
   props.renderBlocks.some(
     (block) =>
       block.kind === 'message' &&
-      (block.displayParts.some((part) => part.toggleable) ||
+      (Boolean(block.message.folds?.length) ||
+        block.displayParts.some((part) => part.toggleable) ||
         block.displayParts.filter((part) => part.kind !== 'text' && part.kind !== 'answer').length > 5),
   ),
 )
@@ -164,6 +167,10 @@ function sessionErrorAtLabel(): string {
 function forwardPartToggle(part: TranscriptDisplayPart, expanded: boolean) {
   emit('partToggle', part, expanded)
 }
+
+function forwardFoldExpand(fold: MessageFold, all: boolean) {
+  emit('foldExpand', fold, all)
+}
 </script>
 
 <template>
@@ -246,6 +253,7 @@ function forwardPartToggle(part: TranscriptDisplayPart, expanded: boolean) {
           @revert="$emit('revert', $event)"
           @copy="$emit('copy', $event)"
           @part-toggle="forwardPartToggle"
+          @fold-expand="forwardFoldExpand"
           @node-select="$emit('nodeSelect', $event)"
         />
 

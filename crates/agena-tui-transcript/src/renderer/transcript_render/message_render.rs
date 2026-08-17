@@ -168,10 +168,7 @@ fn is_invisible_activity_run_bridge(parts: &[TranscriptEntryPart], index: usize)
 }
 
 pub(crate) fn is_activity_node(part: &TranscriptEntryPart) -> bool {
-    matches!(
-        transcript_part_content(part),
-        TranscriptPartContent::Activity(_)
-    )
+    matches!(transcript_part_content(part), TranscriptPartContent::Activity(content) if !matches!(content, TranscriptActivityContent::Fold { .. }))
 }
 
 fn activity_kind_id_for_payload(payload: &agena_domain::ActivityPayload) -> Option<&'static str> {
@@ -1313,6 +1310,33 @@ pub(crate) fn render_part_node(
                 copy_text: text.text.clone(),
                 toggleable: false,
                 expanded: true,
+                end_line: None,
+                children: Vec::new(),
+            }
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Fold { hidden_count }) => {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: message.id,
+                content_id: part.id,
+            };
+            let expanded = expansions.get(&key).copied().unwrap_or(false);
+            let summary = i18n.text_args(
+                "message-activity-run-collapsed",
+                &agena_tui::fl_args!("count" => *hidden_count as i64),
+            );
+            push_single_line(
+                out,
+                "  ",
+                summary.as_str(),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+                width,
+            );
+            RenderedNodeDraft {
+                key,
+                kind: TranscriptNodeKind::Activity,
+                copy_text: summary,
+                toggleable: true,
+                expanded,
                 end_line: None,
                 children: Vec::new(),
             }

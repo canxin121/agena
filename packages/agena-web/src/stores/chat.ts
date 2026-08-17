@@ -3,13 +3,7 @@ import { computed, ref } from 'vue'
 
 import * as chatApi from './chat/api'
 import { messageErrorFromAgenaPart, normalizeAgenaPart } from './chat/api'
-import {
-  binarySearchById,
-  compareChatIds,
-  foldedMessageCount,
-  upsertMessageEntryIn,
-  upsertPart,
-} from './chat/messageIndex'
+import { binarySearchById, compareChatIds, upsertMessageEntryIn, upsertPart } from './chat/messageIndex'
 import { createSessionRunConfigPersister, loadSessionRunConfigMap } from './chat/runConfig'
 import { STORAGE_RUN_CONFIG } from './chat/storeKeys'
 import { ApiError } from '../lib/api'
@@ -22,6 +16,7 @@ import type { SseEvent } from '../lib/sse'
 import type {
   AttentionEvent,
   MessageEntry,
+  MessageFold,
   MessageInfo,
   MessagePart,
   Session,
@@ -37,16 +32,9 @@ import { useWorkspacePaneContext, type WorkspacePaneContext } from '@/app/worksp
 // ─── constants ──────────────────────────────────────────────────────────────
 
 const SESSION_PAGE_SIZE = 30
-// Keep session entry cheap. Older pages are fetched only after the user
-// scrolls to the top of the transcript.
-const MESSAGE_PAGE_SIZE = 50
-// Older history is still fetched lazily, but a folded assistant reply may span
-// thousands of raw parts. Use the largest server page for the drain and bound
-// one upward gesture by raw parts, not by the number of cursor pages. This
-// keeps a large folded reply from turning into dozens of manual scrolls while
-// retaining a hard client-side safety limit for malformed/huge transcripts.
-const OLDER_MESSAGE_PAGE_SIZE = 200
-const MAX_FOLD_SKIPPED_OLDER_PARTS = 8_192
+// Keep session entry cheap. The transcript endpoint interprets this as a
+// logical visible-block limit and performs folded raw-part paging server-side.
+const MESSAGE_PAGE_SIZE = 3
 const STORAGE_SELECTED_SESSION = 'agena.chat.selected-session-id.v1'
 
 function isRecord(value: JsonValue): value is JsonObject {
@@ -363,10 +351,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return [...list].sort((a, b) => compareChatIds(String(a?.info?.id ?? ''), String(b?.info?.id ?? '')))
   }
 
-  function messagePartCount(list: MessageEntry[]): number {
-    return list.reduce((total, message) => total + (Array.isArray(message.parts) ? message.parts.length : 0), 0)
-  }
-
   function mergeMessageLists(older: MessageEntry[], newer: MessageEntry[]): MessageEntry[] {
     const map = new Map<string, MessageEntry>()
     for (const m of [...older, ...newer]) {
@@ -374,13 +358,32 @@ const useChatStoreDefinition = defineStore('chat', () => {
       if (!id) continue
       const existing = map.get(id)
       if (existing) {
-        const merged: MessageEntry = { info: { ...existing.info, ...m.info }, parts: [...existing.parts] }
+        const merged: MessageEntry = {
+          info: { ...existing.info, ...m.info },
+          parts: [...existing.parts],
+          ...(existing.folds || m.folds ? { folds: [...(existing.folds || [])] } : {}),
+        }
         const partMap = new Map<string, MessagePart>()
         for (const p of [...merged.parts, ...(m.parts || [])]) {
           const pid = String(p?.id ?? '')
           if (pid) partMap.set(pid, p)
         }
         merged.parts = [...partMap.values()].sort((a, b) => compareChatIds(String(a.id), String(b.id)))
+        const foldMap = new Map<string, MessageFold>()
+        for (const fold of [...(existing.folds || []), ...(m.folds || [])]) {
+          const key = String(fold.runId)
+          const previous = foldMap.get(key)
+          foldMap.set(key, {
+            ...fold,
+            ...(previous || {}),
+            hiddenCount: previous
+              ? Math.min(previous.hiddenCount, Math.max(0, Math.floor(Number(fold.hiddenCount))))
+              : Math.max(0, Math.floor(Number(fold.hiddenCount))),
+          })
+        }
+        const activeFolds = [...foldMap.values()].filter((fold) => fold.hiddenCount > 0 && Boolean(fold.nextCursor))
+        if (activeFolds.length) merged.folds = activeFolds
+        else delete merged.folds
         map.set(id, merged)
       } else {
         map.set(id, m)
@@ -536,45 +539,96 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (historyLoadingBySession.value[sid]) return false
     if (historyExhaustedBySession.value[sid]) return false
 
-    let current = ensureSessionMessages(sid)
     const generation = transcriptCacheGeneration
-    const currentLen = current.length
 
     historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: true }
     try {
-      let cursor = historyCursorBySession.value[sid] ?? null
-      let loadedAny = false
-      let skippedRawParts = 0
-      while (skippedRawParts < MAX_FOLD_SKIPPED_OLDER_PARTS) {
-        const page = await chatApi.listMessages(sid, OLDER_MESSAGE_PAGE_SIZE, cursor)
-        if (generation !== transcriptCacheGeneration) return false
-        const normalized = normalizeMessageList(page.entries)
-        const beforeVisibleMessageCount = foldedMessageCount(current)
-        const merged = mergeMessageLists(normalized, current)
-        setSessionMessages(sid, merged)
-        current = ensureSessionMessages(sid)
-        loadedAny = loadedAny || normalized.length > 0
-        const pagePartCount = messagePartCount(normalized)
-        skippedRawParts += Math.max(1, pagePartCount)
-        historyLimitBySession.value = { ...historyLimitBySession.value, [sid]: merged.length }
-        historyOlderLoadedBySession.value = { ...historyOlderLoadedBySession.value, [sid]: true }
-        historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
-        historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
-
-        const cursorProgressed = Boolean(page.nextCursor && page.nextCursor !== cursor)
-        const reachedVisibleMessage = foldedMessageCount(current) > beforeVisibleMessageCount
-        if (!cursorProgressed || page.hasMore !== true || reachedVisibleMessage) break
-        // This page only extended the currently visible folded assistant
-        // block. Keep all raw parts in memory and continue until a real
-        // top-level boundary appears or the raw-part safety cap is reached.
-        cursor = page.nextCursor ?? null
-      }
-      return loadedAny || current.length > currentLen
+      const cursor = historyCursorBySession.value[sid] ?? null
+      const page = await chatApi.listMessages(sid, MESSAGE_PAGE_SIZE, cursor)
+      if (generation !== transcriptCacheGeneration) return false
+      const normalized = normalizeMessageList(page.entries)
+      const merged = mergeMessageLists(normalized, ensureSessionMessages(sid))
+      setSessionMessages(sid, merged)
+      historyLimitBySession.value = { ...historyLimitBySession.value, [sid]: merged.length }
+      historyOlderLoadedBySession.value = { ...historyOlderLoadedBySession.value, [sid]: true }
+      historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
+      historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
+      return normalized.length > 0
     } finally {
       if (generation === transcriptCacheGeneration) {
         historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: false }
       }
     }
+  }
+
+  async function loadFoldedActivity(sessionId: string, fold: MessageFold, all = false): Promise<boolean> {
+    const sid = (sessionId || '').trim()
+    if (!sid || !fold.nextCursor || !Number.isFinite(fold.runId)) return false
+    if (historyLoadingBySession.value[sid]) return false
+    const generation = transcriptCacheGeneration
+    historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: true }
+    try {
+      let cursor: string | null = fold.nextCursor
+      let loadedAny = false
+      let activeFold = { ...fold }
+      let remaining = Math.max(0, Math.floor(Number(activeFold.hiddenCount)))
+      do {
+        const page = await chatApi.listTranscriptFoldParts(sid, activeFold.runIds, 5, cursor)
+        if (generation !== transcriptCacheGeneration) return false
+        const normalized = normalizeMessageList(page.entries)
+        if (!normalized.length) break
+        const merged = mergeMessageLists(normalized, ensureSessionMessages(sid))
+        setSessionMessages(sid, merged)
+        loadedAny = true
+        const fetchedNonText = normalized.reduce(
+          (total, entry) =>
+            total +
+            entry.parts.filter((part) => {
+              const kind = String(part.agenaKind || part.type || '').toLowerCase()
+              return kind !== 'run'
+            }).length,
+          0,
+        )
+        remaining = Math.max(0, remaining - fetchedNonText)
+        cursor = page.nextCursor ?? null
+        const nextAnchor =
+          normalized
+            .flatMap((entry) => entry.parts)
+            .find((part) => {
+              const kind = String(part.agenaKind || part.type || '').toLowerCase()
+              return kind !== 'run'
+            })?.id || fold.anchorPartId
+        const nextFold: MessageFold = {
+          ...activeFold,
+          anchorPartId: String(nextAnchor),
+          hiddenCount: remaining,
+          nextCursor: cursor,
+        }
+        replaceMessageFold(sid, activeFold, nextFold)
+        activeFold = nextFold
+        if (!all || !page.hasMore || !cursor || remaining <= 0) break
+      } while (all)
+      return loadedAny
+    } finally {
+      if (generation === transcriptCacheGeneration) {
+        historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: false }
+      }
+    }
+  }
+
+  function replaceMessageFold(sessionId: string, previous: MessageFold, next: MessageFold) {
+    const sid = (sessionId || '').trim()
+    if (!sid) return
+    const current = ensureSessionMessages(sid)
+    const target = current.find((entry) =>
+      (entry.folds || []).some((fold) => fold.runId === previous.runId && fold.anchorPartId === previous.anchorPartId),
+    )
+    if (!target) return
+    const folds = (target.folds || [])
+      .map((fold) => (fold.runId === previous.runId && fold.anchorPartId === previous.anchorPartId ? next : fold))
+      .filter((fold) => fold.hiddenCount > 0 && Boolean(fold.nextCursor))
+    if (folds.length) target.folds = folds
+    else delete target.folds
   }
 
   /** Drop transcript pages when the chat page is actually unmounted. */
@@ -1453,6 +1507,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     hydrateSession,
     refreshMessages,
     loadOlderMessages,
+    loadFoldedActivity,
     clearTranscriptCache,
     selectedHistory,
     createSession,

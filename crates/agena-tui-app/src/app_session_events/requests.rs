@@ -323,6 +323,36 @@ impl App {
         });
     }
 
+    pub(crate) fn request_transcript_fold_parts(
+        &mut self,
+        fold: agena_api::live::SessionTranscriptFoldResource,
+        expand_all: bool,
+    ) {
+        let Some(session_id) = self.transcript.session_id else {
+            return;
+        };
+        let Some(cursor) = fold.next_cursor else {
+            return;
+        };
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = application
+                .list_session_transcript_fold_page(session_id, 5, cursor.as_str())
+                .await
+                .map_err(crate::UiFailure::from_backend);
+            let _ = tx
+                .send(AppMessage::TranscriptFoldPartsLoaded {
+                    session_id,
+                    run_id: fold.run_id,
+                    anchor_part_id: fold.anchor_part_id,
+                    expand_all,
+                    result,
+                })
+                .await;
+        });
+    }
+
     /// Park a forced refresh for the periodic tick to consume. `on_tick`
     /// runs one refresh per `REFRESH_INTERVAL_MS`, so a burst of streaming
     /// `PartUpdated` events collapses into a bounded refresh rate; the tick

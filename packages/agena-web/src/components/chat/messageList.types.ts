@@ -1,3 +1,4 @@
+import type { MessageFold } from '@/types/chat'
 import type { JsonValue } from '@/types/json'
 
 export type MessagePartLike = {
@@ -40,6 +41,7 @@ export type MessageLike = {
     [k: string]: JsonValue
   }
   parts: MessagePartLike[]
+  folds?: MessageFold[]
 }
 
 /**

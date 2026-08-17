@@ -58,6 +58,19 @@ impl App {
             AppMessage::TranscriptPartsLoaded { session_id, result } => {
                 self.handle_transcript_parts_loaded(session_id, result)
             }
+            AppMessage::TranscriptFoldPartsLoaded {
+                session_id,
+                run_id,
+                anchor_part_id,
+                expand_all,
+                result,
+            } => self.handle_transcript_fold_parts_loaded(
+                session_id,
+                run_id,
+                anchor_part_id,
+                expand_all,
+                result,
+            ),
             AppMessage::SessionRefreshed { session_id, result } => {
                 self.handle_session_refreshed(session_id, result)
             }
@@ -354,6 +367,7 @@ impl App {
                 if !self.transcript.transcript_older_pages_loaded {
                     self.transcript
                         .set_transcript_page(page.next_cursor, page.has_more);
+                    self.transcript.set_transcript_folds(page.folds);
                 }
                 // A session (re)open can deliver the terminal state of a run
                 // that finished while the user was elsewhere. Drain a parked
@@ -393,6 +407,7 @@ impl App {
                     let visible_progressed = visible_before != visible_after;
                     self.transcript
                         .set_transcript_page(page.next_cursor, page.has_more);
+                    self.transcript.merge_transcript_folds(page.folds);
                     if let Some(execution) = self.transcript.execution.as_mut() {
                         execution.parts = self.transcript.parts.clone();
                     }
@@ -425,6 +440,49 @@ impl App {
                 self.transcript.transcript_older_skip_parts = 0;
                 self.flash_error(error);
             }
+        }
+    }
+
+    pub(crate) fn handle_transcript_fold_parts_loaded(
+        &mut self,
+        session_id: i64,
+        run_id: i64,
+        anchor_part_id: i64,
+        expand_all: bool,
+        result: UiResult<crate::app_backend::SessionTranscriptPage>,
+    ) {
+        if self.transcript.session_id != Some(session_id) {
+            return;
+        }
+        match result {
+            Ok(page) => {
+                let next_cursor = page.next_cursor.clone();
+                let has_more = page.has_more;
+                let loaded = self.transcript.merge_fold_parts(
+                    run_id,
+                    anchor_part_id,
+                    page.parts,
+                    next_cursor,
+                    has_more,
+                );
+                if loaded {
+                    if let Some(execution) = self.transcript.execution.as_mut() {
+                        execution.parts = self.transcript.parts.clone();
+                    }
+                    if expand_all
+                        && page.has_more
+                        && let Some(next_fold) = self
+                            .transcript
+                            .transcript_folds
+                            .iter()
+                            .find(|fold| fold.run_ids.contains(&run_id))
+                            .cloned()
+                    {
+                        self.request_transcript_fold_parts(next_fold, true);
+                    }
+                }
+            }
+            Err(error) => self.flash_error(error),
         }
     }
 

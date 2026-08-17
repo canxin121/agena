@@ -63,6 +63,12 @@ pub enum TranscriptContentId {
     /// persisted Activity.
     AssistantReplyLifecycle(AssistantReplyId),
     StoredPart(i64),
+    /// Presentation-only fold marker supplied by the server-side transcript
+    /// viewport. It is not a durable database part.
+    TranscriptFold {
+        run_id: i64,
+        anchor_part_id: i64,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -105,6 +111,9 @@ pub enum TranscriptActivityContent<'a> {
     Operation(Box<OperationPartResource>),
     Hook(Box<HookPartResource>),
     AssistantReplyLifecycle(TranscriptAssistantReplyLifecycle),
+    /// Presentation-only marker for activity omitted by the server-side
+    /// folded transcript page.
+    Fold { hidden_count: usize },
     Request(Box<RequestPartResource>),
 }
 

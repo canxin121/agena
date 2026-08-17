@@ -84,7 +84,11 @@ impl App {
             }
             Some(KeyAction::ExpandAll) => {
                 self.clear_transcript_pending_command();
+                let folds = self.transcript.transcript_folds.clone();
                 self.transcript.expand_all_transcript_parts(width, height);
+                for fold in folds {
+                    self.request_transcript_fold_parts(fold, true);
+                }
             }
             Some(action @ (KeyAction::MoveLeft | KeyAction::MoveRight)) => {
                 self.cancel_pointer_selection_if_not_visual(width, height);

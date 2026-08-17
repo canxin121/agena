@@ -10,7 +10,15 @@
 import { apiJson } from '../../lib/api'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
-import type { MessageEntry, MessageError, MessagePart, MessageInfo, Session, SessionState } from '../../types/chat'
+import type {
+  MessageEntry,
+  MessageError,
+  MessageFold,
+  MessagePart,
+  MessageInfo,
+  Session,
+  SessionState,
+} from '../../types/chat'
 import { compareChatIds } from './messageIndex'
 
 // --- agena wire projections ------------------------------------------------
@@ -59,6 +67,13 @@ export type AgenaSessionParts = {
   session_id: number
   version: number
   parts: AgenaPart[]
+  folds?: Array<{
+    run_id: number
+    run_ids?: number[]
+    anchor_part_id: number
+    hidden_count: number
+    next_cursor?: string | null
+  }>
   page?: {
     returned?: number
     has_more?: boolean
@@ -128,6 +143,25 @@ export type MessageListResponse = {
   nextCursor?: string | null
 }
 
+function messageFoldsFromWire(folds: AgenaSessionParts['folds']): MessageFold[] {
+  if (!Array.isArray(folds)) return []
+  return folds
+    .filter(
+      (fold) =>
+        Number.isFinite(fold?.run_id) && Number.isFinite(fold?.anchor_part_id) && Number.isFinite(fold?.hidden_count),
+    )
+    .map((fold) => ({
+      runId: Number(fold.run_id),
+      runIds:
+        Array.isArray(fold.run_ids) && fold.run_ids.length
+          ? fold.run_ids.map((runId) => Number(runId)).filter(Number.isFinite)
+          : [Number(fold.run_id)],
+      anchorPartId: String(fold.anchor_part_id),
+      hiddenCount: Math.max(0, Math.floor(Number(fold.hidden_count))),
+      nextCursor: typeof fold.next_cursor === 'string' ? fold.next_cursor : null,
+    }))
+}
+
 export type SendMessageResponse = {
   queued?: boolean
 }
@@ -171,7 +205,7 @@ function toSession(s: unknown): Session | null {
   }
 }
 
-function entriesFromParts(sessionId: string, parts: JsonValue[]): MessageEntry[] {
+function entriesFromParts(sessionId: string, parts: JsonValue[], folds: MessageFold[] = []): MessageEntry[] {
   const list: MessageEntry[] = []
   const map = new Map<string, MessageEntry>()
   const order: string[] = []
@@ -250,7 +284,11 @@ function entriesFromParts(sessionId: string, parts: JsonValue[]): MessageEntry[]
     if (entry && entry.parts) {
       entry.parts.sort((a, b) => compareChatIds(a.id, b.id))
     }
-    if (entry) list.push(entry)
+    if (entry) {
+      const messageFolds = folds.filter((fold) => String(entry?.info.runId || entry?.info.id) === String(fold.runId))
+      if (messageFolds.length) entry.folds = messageFolds
+      list.push(entry)
+    }
   }
   return list
 }
@@ -796,7 +834,11 @@ export async function getSessionExecution(sessionId: string): Promise<AgenaExecu
 }
 
 /** GET /api/v1/sessions/{id}/parts — ordered part snapshot (reconnect catch-up). */
-export async function getSessionParts(sessionId: string, limit?: number, cursor?: string | null): Promise<AgenaSessionParts> {
+export async function getSessionParts(
+  sessionId: string,
+  limit?: number,
+  cursor?: string | null,
+): Promise<AgenaSessionParts> {
   const params = new URLSearchParams()
   if (typeof limit === 'number' && Number.isFinite(limit)) params.set('limit', String(Math.floor(limit)))
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
@@ -805,8 +847,9 @@ export async function getSessionParts(sessionId: string, limit?: number, cursor?
 }
 
 /**
- * Load a session's transcript as MessageEntry[].
- * Uses GET /parts (ordered snapshot) with a hard `limit` for the visible window.
+ * Load a session's collapsed transcript as MessageEntry[].
+ * The server walks raw `/parts` pages internally and returns only visible
+ * tails plus fold cursors; hidden activity never crosses the HTTP boundary.
  */
 export async function listMessages(
   sessionId: string,
@@ -815,7 +858,58 @@ export async function listMessages(
 ): Promise<MessageListResponse> {
   const sid = String(sessionId || '').trim()
   if (!sid) return { entries: [], hasMore: false, nextCursor: null }
-  const parts = await getSessionParts(sid, Math.max(20, Math.min(200, Math.floor(limit || 50))), cursor)
+  const params = new URLSearchParams()
+  params.set('limit', String(Math.max(1, Math.min(12, Math.floor(limit || 8)))))
+  if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
+  const parts = await apiJson<AgenaSessionParts>(
+    `/api/v1/sessions/${encodeURIComponent(sid)}/transcript?${params.toString()}`,
+  )
+  const folds = messageFoldsFromWire(parts.folds)
+  return {
+    entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[], folds),
+    hasMore: Boolean(parts.page?.has_more),
+    nextCursor: parts.page?.next_cursor ?? null,
+  }
+}
+
+/** GET /api/v1/sessions/{id}/transcript/runs/{run_id} — one expansion chunk. */
+export async function listTranscriptRunParts(
+  sessionId: string,
+  runId: number,
+  limit: number,
+  cursor?: string | null,
+): Promise<MessageListResponse> {
+  const sid = String(sessionId || '').trim()
+  if (!sid || !Number.isFinite(runId)) return { entries: [], hasMore: false, nextCursor: null }
+  const params = new URLSearchParams()
+  params.set('limit', String(Math.max(1, Math.min(50, Math.floor(limit || 5)))))
+  if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
+  const parts = await apiJson<AgenaSessionParts>(
+    `/api/v1/sessions/${encodeURIComponent(sid)}/transcript/runs/${encodeURIComponent(String(runId))}?${params.toString()}`,
+  )
+  return {
+    entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[]),
+    hasMore: Boolean(parts.page?.has_more),
+    nextCursor: parts.page?.next_cursor ?? null,
+  }
+}
+
+/** GET /api/v1/sessions/{id}/transcript/folds — one expansion chunk. */
+export async function listTranscriptFoldParts(
+  sessionId: string,
+  runIds: number[],
+  limit: number,
+  cursor?: string | null,
+): Promise<MessageListResponse> {
+  const sid = String(sessionId || '').trim()
+  const ids = runIds.filter((runId) => Number.isFinite(runId))
+  if (!sid || !ids.length) return { entries: [], hasMore: false, nextCursor: null }
+  const params = new URLSearchParams()
+  params.set('limit', String(Math.max(1, Math.min(50, Math.floor(limit || 5)))))
+  if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
+  const parts = await apiJson<AgenaSessionParts>(
+    `/api/v1/sessions/${encodeURIComponent(sid)}/transcript/folds?${params.toString()}`,
+  )
   return {
     entries: entriesFromParts(sid, parts.parts as unknown as JsonValue[]),
     hasMore: Boolean(parts.page?.has_more),

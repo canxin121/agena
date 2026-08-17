@@ -249,9 +249,18 @@ export type MessagePart = {
   [k: string]: JsonLike
 }
 
+export type MessageFold = {
+  runId: number
+  runIds: number[]
+  anchorPartId: string
+  hiddenCount: number
+  nextCursor: string | null
+}
+
 export type MessageEntry = {
   info: MessageInfo
   parts: MessagePart[]
+  folds?: MessageFold[]
 }
 
 export type AttentionEvent = {

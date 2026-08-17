@@ -87,6 +87,7 @@ const {
   activityExpandAllSignal,
   transcriptPartExpanded,
   setTranscriptPartExpanded,
+  loadFoldedActivity,
   transcriptVimModeLabel,
   transcriptVimCommandLabel,
   transcriptSearchOpen,
@@ -441,6 +442,7 @@ void sessionActionsMenuRef
                 @revert="handleRevertFromMessage"
                 @copy="handleCopyMessage"
                 @part-toggle="setTranscriptPartExpanded"
+                @fold-expand="loadFoldedActivity"
                 @node-select="selectTranscriptNode"
                 @redo-from-revert="handleRedoFromRevertMarker"
                 @unrevert-from-revert="handleUnrevertFromRevertMarker"

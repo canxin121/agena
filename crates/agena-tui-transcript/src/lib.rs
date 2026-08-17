@@ -28,8 +28,8 @@ pub use markdown::*;
 pub use math::*;
 pub use navigation::*;
 pub use parts::{
-    last_assistant_reply_text, part_state_is_terminal, parts_entries, parts_have_non_terminal_runs,
-    parts_visible_user_inputs,
+    last_assistant_reply_text, part_state_is_terminal, parts_entries, parts_entries_with_folds,
+    parts_have_non_terminal_runs, parts_visible_user_inputs,
 };
 pub use render_model::*;
 pub use renderer::{

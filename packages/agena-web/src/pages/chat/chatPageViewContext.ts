@@ -4,7 +4,7 @@ import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messa
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
 import type { AttachedFile } from '@/pages/chat/useChatAttachments'
-import type { MessageEntry } from '@/types/chat'
+import type { MessageEntry, MessageFold } from '@/types/chat'
 import type { JsonObject } from '@/types/json'
 
 type DynamicRecord = JsonObject
@@ -121,6 +121,7 @@ export type ChatPageViewContext = {
   isMetaPart: (part: DynamicRecord) => boolean
   transcriptPartExpanded: (part: TranscriptDisplayPart) => boolean
   setTranscriptPartExpanded: (part: TranscriptDisplayPart, expanded: boolean) => void
+  loadFoldedActivity: (fold: MessageFold, all: boolean) => void
   transcriptVimModeLabel: MaybeRef<string>
   transcriptVimCommandLabel: MaybeRef<string>
   transcriptSearchOpen: MaybeRef<boolean>

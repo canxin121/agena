@@ -80,6 +80,18 @@ pub trait PersistenceEngine: Send + Sync {
         limit: i64,
     ) -> Result<SessionPartPage, StoreError>;
 
+    /// Load one newest-first keyset page of content parts owned by a single
+    /// run. Run markers are not returned; callers use this for expanding a
+    /// folded transcript activity sequence without scanning or transferring
+    /// the rest of the session.
+    async fn load_run_page(
+        &self,
+        session_id: i64,
+        run_id: i64,
+        before: Option<PartCursor>,
+        limit: i64,
+    ) -> Result<SessionPartPage, StoreError>;
+
     /// The newest member part's `(created_at_ms, part_id)` cursor, if the
     /// session has any parts. Used by the facade's memory layer for
     /// cross-process catch-up. `sessions.version` advances for every

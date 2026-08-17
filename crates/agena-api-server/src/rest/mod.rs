@@ -70,11 +70,13 @@ mod plugins;
 mod providers;
 mod sessions;
 mod settings;
+mod transcript;
 mod workspaces;
 
 pub use permissions::*;
 pub use sessions::*;
 pub use settings::*;
+pub use transcript::*;
 pub use workspaces::*;
 
 pub use activities::*;

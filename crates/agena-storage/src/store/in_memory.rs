@@ -533,6 +533,45 @@ impl PersistenceEngine for InMemoryEngine {
         })
     }
 
+    async fn load_run_page(
+        &self,
+        session_id: i64,
+        run_id: i64,
+        before: Option<PartCursor>,
+        limit: i64,
+    ) -> Result<SessionPartPage, StoreError> {
+        let meta = self.session_meta(session_id).await?;
+        let take = usize::try_from(limit.max(1).saturating_add(1)).unwrap_or(usize::MAX);
+        let membership = self.membership.read().expect("membership lock");
+        let all_parts = self.parts.read().expect("parts lock");
+        let mut parts = membership
+            .get(&session_id)
+            .into_iter()
+            .flat_map(|ids| ids.iter().filter_map(|id| all_parts.get(id)))
+            .filter(|part| part.run_id == Some(run_id))
+            .filter(|part| {
+                before.is_none_or(|before| {
+                    (part.created_at_ms, part.part_id) < (before.created_at_ms, before.part_id)
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        parts.sort_unstable_by_key(|part| (part.created_at_ms, part.part_id));
+        let has_more = parts.len() > usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
+        if has_more {
+            parts.truncate(usize::try_from(limit.max(1)).unwrap_or(usize::MAX));
+        }
+        parts.reverse();
+        if parts.len() > take.saturating_sub(1) {
+            parts.truncate(take.saturating_sub(1));
+        }
+        Ok(SessionPartPage {
+            meta,
+            parts,
+            has_more,
+        })
+    }
+
     async fn newest_member_cursor(
         &self,
         session_id: i64,

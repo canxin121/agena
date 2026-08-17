@@ -41,7 +41,7 @@ import { deriveSendRunConfig } from './chat/modelSendDefaults'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
-import type { MessageEntry } from '@/types/chat'
+import type { MessageEntry, MessageFold } from '@/types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import {
   DEFAULT_CHAT_ACTIVITY_EXPANDED_TOOL_FILTERS,
@@ -829,13 +829,27 @@ function setTranscriptPartExpanded(part: TranscriptDisplayPart, expanded: boolea
   setActivityExpanded(part.key, expanded)
 }
 
+function loadFoldedActivity(fold: MessageFold, all: boolean) {
+  const sid = chat.selectedSessionId
+  if (!sid) return
+  void chat.loadFoldedActivity(sid, fold, all).catch(() => {})
+}
+
 function expandAllTranscriptParts() {
-  for (const block of renderBlocks.value) {
-    if (block.kind !== 'message') continue
-    for (const part of block.displayParts) {
-      if (part.toggleable) setActivityExpanded(part.key, true)
+  const sid = chat.selectedSessionId
+  void (async () => {
+    for (const block of renderBlocks.value) {
+      if (block.kind !== 'message') continue
+      if (sid) {
+        for (const fold of block.message.folds || []) {
+          await chat.loadFoldedActivity(sid, fold, true).catch(() => {})
+        }
+      }
+      for (const part of block.displayParts) {
+        if (part.toggleable) setActivityExpanded(part.key, true)
+      }
     }
-  }
+  })()
   // The run-level fold is separate from each part's detail expansion. This
   // signal reveals every currently loaded folded activity run without
   // fetching the entire remote transcript.
@@ -1618,6 +1632,7 @@ const viewCtx = {
   isMetaPart,
   transcriptPartExpanded,
   setTranscriptPartExpanded,
+  loadFoldedActivity,
   expandAllTranscriptParts,
 
   // TUI-parity transcript navigation and search.

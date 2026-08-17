@@ -388,7 +388,11 @@ function foldRunState(current: string, next: string): string {
 }
 
 function cloneMessage(message: MessageLike): MessageLike {
-  return { info: { ...message.info }, parts: [...(message.parts || [])] }
+  return {
+    info: { ...message.info },
+    parts: [...(message.parts || [])],
+    ...(message.folds ? { folds: [...message.folds] } : {}),
+  }
 }
 
 export function foldAssistantMessages(messages: MessageLike[]): Array<{ message: MessageLike; runIds: string[] }> {
@@ -400,6 +404,9 @@ export function foldAssistantMessages(messages: MessageLike[]): Array<{ message:
     const previous = folded.at(-1)
     if (role === 'assistant' && previous && text(previous.message.info.role) === 'assistant') {
       previous.message.parts.push(...message.parts)
+      if (message.folds?.length) {
+        previous.message.folds = [...(previous.message.folds || []), ...message.folds]
+      }
       previous.message.parts.sort((a, b) => compareTranscriptIds(String(a.id || ''), String(b.id || '')))
       previous.runIds.push(id)
       const currentState = text(previous.message.info.runState) || 'pending'

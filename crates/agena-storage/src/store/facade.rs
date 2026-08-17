@@ -102,6 +102,17 @@ pub trait SessionStore: Send + Sync {
         limit: i64,
     ) -> Result<SessionPartPage, StoreError>;
 
+    /// Load one bounded newest-first page of content parts for a single run.
+    /// This is the storage primitive used by folded-transcript expansion; it
+    /// never scans or transfers unrelated session history.
+    async fn load_run_page(
+        &self,
+        session_id: i64,
+        run_id: i64,
+        before: Option<PartCursor>,
+        limit: i64,
+    ) -> Result<SessionPartPage, StoreError>;
+
     /// Create a new session row (root, child, fork/rewind, or subagent) and
     /// return its metadata. The engine validates the lineage rules
     /// (root/child/subagent must have a `cutoff_part_id`, branches must have
@@ -1173,6 +1184,30 @@ where
         };
         self.memory.overlay_streaming(session_id, &mut view);
         page.parts = view.parts;
+        Ok(page)
+    }
+
+    async fn load_run_page(
+        &self,
+        session_id: i64,
+        run_id: i64,
+        before: Option<PartCursor>,
+        limit: i64,
+    ) -> Result<SessionPartPage, StoreError> {
+        let mut page = self
+            .engine
+            .load_run_page(session_id, run_id, before, limit)
+            .await?;
+        let mut view = SessionView {
+            meta: page.meta.clone(),
+            parts: std::mem::take(&mut page.parts),
+        };
+        self.memory.overlay_streaming(session_id, &mut view);
+        page.parts = view
+            .parts
+            .into_iter()
+            .filter(|part| part.run_id == Some(run_id))
+            .collect();
         Ok(page)
     }
 
@@ -3565,6 +3600,18 @@ mod tests {
         ) -> Result<SessionPartPage, StoreError> {
             self.inner
                 .load_session_page(session_id, before, limit)
+                .await
+        }
+
+        async fn load_run_page(
+            &self,
+            session_id: i64,
+            run_id: i64,
+            before: Option<PartCursor>,
+            limit: i64,
+        ) -> Result<SessionPartPage, StoreError> {
+            self.inner
+                .load_run_page(session_id, run_id, before, limit)
                 .await
         }
 

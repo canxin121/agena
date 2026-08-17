@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import {
-  RiBarChartLine,
-  RiBrain2Line,
+  RiBugLine,
+  RiComputerLine,
+  RiFlowChart,
   RiPlugLine,
-  RiServerLine,
   RiShieldCheckLine,
   RiSettingsLine,
-  RiTimerLine,
 } from '@remixicon/vue'
 
 import SidebarListItem from '@/components/ui/SidebarListItem.vue'
@@ -21,7 +20,7 @@ const props = withDefaults(
   }>(),
   {
     active: false,
-    icon: 'general',
+    icon: 'interface',
   },
 )
 
@@ -30,12 +29,12 @@ const emit = defineEmits<{
 }>()
 
 const topLevelIcon = computed(() => {
-  if (props.icon === 'providers') return RiServerLine
+  if (props.icon === 'models-providers') return RiComputerLine
   if (props.icon === 'permissions') return RiShieldCheckLine
-  if (props.icon === 'plugins') return RiPlugLine
-  if (props.icon === 'activities') return RiTimerLine
-  if (props.icon === 'memories') return RiBrain2Line
-  if (props.icon === 'usage') return RiBarChartLine
+  if (props.icon === 'plugins-tools') return RiPlugLine
+  if (props.icon === 'runtime-session') return RiFlowChart
+  if (props.icon === 'diagnostics') return RiBugLine
+  if (props.icon === 'interface') return RiSettingsLine
   return RiSettingsLine
 })
 </script>

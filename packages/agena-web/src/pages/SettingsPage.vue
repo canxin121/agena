@@ -11,9 +11,12 @@ import type { AppLocale } from '@/i18n/locale'
 
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SettingsSidebar from '@/components/settings/sidebar/SettingsSidebar.vue'
-import ProvidersPanel from '@/components/settings/ProvidersPanel.vue'
-import PermissionsPanel from '@/components/settings/PermissionsPanel.vue'
-import PluginsPanel from '@/components/settings/PluginsPanel.vue'
+import ModelsProvidersPanel from '@/components/settings/ModelsProvidersPanel.vue'
+import PermissionsWorkbenchPanel from '@/components/settings/PermissionsWorkbenchPanel.vue'
+import PluginsToolsPanel from '@/components/settings/PluginsToolsPanel.vue'
+import RuntimeSessionPanel from '@/components/settings/RuntimeSessionPanel.vue'
+import InterfaceSettingsPanel from '@/components/settings/InterfaceSettingsPanel.vue'
+import DiagnosticsPanel from '@/components/settings/DiagnosticsPanel.vue'
 import ActivitiesPanel from '@/components/settings/ActivitiesPanel.vue'
 import MemoriesPanel from '@/components/settings/MemoriesPanel.vue'
 import UsagePanel from '@/components/settings/UsagePanel.vue'
@@ -22,6 +25,7 @@ import {
   normalizeRememberedSettingsRoute,
   settingsPathForTab,
   settingsTabFromRouteValue,
+  canonicalSettingsTab,
   type SettingsTab,
 } from '@/components/settings/sidebar/settingsSidebarNavigation'
 import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
@@ -56,14 +60,14 @@ const { t, te } = useI18n()
 
 const SETTINGS_LAST_SECTION_KEY = localStorageKeys.settings.lastRoute
 
-const DEFAULT_SECTION: SettingsTab = 'general'
+const DEFAULT_SECTION: SettingsTab = 'interface'
 
 function readInitialSection(): SettingsTab {
   const routeSection = settingsTabFromRouteValue(route.params.section)
-  if (routeSection) return routeSection
+  if (routeSection) return canonicalSettingsTab(routeSection)
   try {
     const remembered = settingsTabFromRouteValue(localStorage.getItem(SETTINGS_LAST_SECTION_KEY))
-    if (remembered) return remembered
+    if (remembered) return canonicalSettingsTab(remembered)
   } catch {
     // ignore
   }
@@ -114,9 +118,9 @@ watch(
   (value) => {
     const section = settingsTabFromRouteValue(value)
     if (section) {
-      activeSection.value = section
+      activeSection.value = canonicalSettingsTab(section)
       try {
-        localStorage.setItem(SETTINGS_LAST_SECTION_KEY, settingsPathForTab(section))
+        localStorage.setItem(SETTINGS_LAST_SECTION_KEY, settingsPathForTab(activeSection.value))
       } catch {
         // ignore storage failures
       }
@@ -431,7 +435,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
         class="flex-1 min-w-0 overflow-y-auto bg-background"
         v-show="!ui.isCompactLayout || !ui.isSessionSwitcherOpen"
       >
-        <div :class="['mx-auto w-full p-4 lg:p-8 space-y-8', activeSection === 'general' ? 'max-w-3xl' : 'max-w-5xl']">
+        <div class="mx-auto w-full max-w-6xl space-y-8 p-4 lg:p-8">
           <div
             v-if="dirtyHint"
             class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-destructive"
@@ -439,8 +443,10 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
             {{ dirtyHint }}
           </div>
 
-          <!-- General Tab: appearance + chat UX -->
-          <div v-if="activeSection === 'general'" class="space-y-6">
+          <!-- Interface: server-backed TUI settings plus browser-only preferences. -->
+          <div v-if="activeSection === 'interface'" class="space-y-6">
+            <InterfaceSettingsPanel />
+            <div class="space-y-6 border-t border-border/60 pt-6">
             <div class="text-lg font-medium">{{ t('settings.appearance.intro') }}</div>
 
             <div class="grid gap-6">
@@ -722,25 +728,38 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                 </div>
               </div>
             </div>
+            </div>
           </div>
 
-          <!-- Providers Tab -->
-          <ProvidersPanel v-else-if="activeSection === 'providers'" />
+          <!-- Models & Providers -->
+          <ModelsProvidersPanel v-else-if="activeSection === 'models-providers'" />
 
-          <!-- Permissions Tab -->
-          <PermissionsPanel v-else-if="activeSection === 'permissions'" />
+          <!-- Permissions -->
+          <PermissionsWorkbenchPanel v-else-if="activeSection === 'permissions'" />
 
-          <!-- Plugins Tab -->
-          <PluginsPanel v-else-if="activeSection === 'plugins'" />
+          <!-- Plugins & Tools -->
+          <PluginsToolsPanel v-else-if="activeSection === 'plugins-tools'" />
 
-          <!-- Activities Tab -->
-          <ActivitiesPanel v-else-if="activeSection === 'activities'" />
+          <!-- Runtime & Session -->
+          <RuntimeSessionPanel v-else-if="activeSection === 'runtime-session'" />
 
-          <!-- Memories Tab -->
-          <MemoriesPanel v-else-if="activeSection === 'memories'" />
-
-          <!-- Usage Tab -->
-          <UsagePanel v-else-if="activeSection === 'usage'" />
+          <!-- Diagnostics also keeps the legacy operational views available
+               without making them top-level TUI settings sections. -->
+          <div v-else-if="activeSection === 'diagnostics'" class="space-y-8">
+            <DiagnosticsPanel />
+            <details class="rounded-lg border border-border/60 p-4">
+              <summary class="cursor-pointer text-sm font-medium">Operational activity history</summary>
+              <div class="mt-5"><ActivitiesPanel /></div>
+            </details>
+            <details class="rounded-lg border border-border/60 p-4">
+              <summary class="cursor-pointer text-sm font-medium">Memories</summary>
+              <div class="mt-5"><MemoriesPanel /></div>
+            </details>
+            <details class="rounded-lg border border-border/60 p-4">
+              <summary class="cursor-pointer text-sm font-medium">Usage</summary>
+              <div class="mt-5"><UsagePanel /></div>
+            </details>
+          </div>
 
           <div v-else class="flex flex-col items-center justify-center h-64 text-muted-foreground">
             <p>{{ t('settings.unknownTab') }}</p>

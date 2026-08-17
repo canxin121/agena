@@ -5,6 +5,7 @@ import { RiArrowDownSLine, RiArrowRightSLine, RiRefreshLine, RiSave3Line } from 
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
+import ApprovalModelPanel from '@/components/settings/ApprovalModelPanel.vue'
 import { apiJson } from '@/lib/api'
 import {
   buildProviderDefaultSettingsPatch,
@@ -399,6 +400,8 @@ onMounted(() => {
       </div>
       <div v-if="defaultSaveError" class="break-words text-xs text-destructive">{{ defaultSaveError }}</div>
     </section>
+
+    <ApprovalModelPanel />
 
     <div class="grid gap-3">
       <div v-if="loading" class="text-sm text-muted-foreground">Loading providers...</div>

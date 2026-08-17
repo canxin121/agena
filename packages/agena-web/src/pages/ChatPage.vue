@@ -1042,7 +1042,6 @@ const {
   retryCountdownLabel,
   retryNextLabel,
   sessionUsage,
-  formatCompactNumber,
   showAssistantPlaceholder,
   sessionEnded,
   aborting,
@@ -1090,7 +1089,6 @@ const {
   searchQuery: transcriptSearchQuery,
   searchSummary: transcriptSearchSummary,
   selectNode: selectTranscriptNode,
-  isNodeActive: isTranscriptNodeActive,
   isNodeSelected: isTranscriptNodeSelected,
   isNodeSearchMatch: isTranscriptNodeSearchMatch,
   setSearchQuery: setTranscriptSearchQuery,
@@ -1617,7 +1615,6 @@ const viewCtx = {
   transcriptSearchQuery,
   transcriptSearchSummary,
   selectTranscriptNode,
-  isTranscriptNodeActive,
   isTranscriptNodeSelected,
   isTranscriptNodeSearchMatch,
   setTranscriptSearchQuery,
@@ -1661,7 +1658,6 @@ const viewCtx = {
 
   // Send/stop.
   sessionUsage,
-  formatCompactNumber,
   showComposerStopAction,
   composerStopDisabled,
   composerPrimaryDisabled,

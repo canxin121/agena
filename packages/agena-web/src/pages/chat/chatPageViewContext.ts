@@ -125,7 +125,6 @@ export type ChatPageViewContext = {
   transcriptSearchQuery: MaybeRef<string>
   transcriptSearchSummary: MaybeRef<string>
   selectTranscriptNode: (key: string) => void
-  isTranscriptNodeActive: (key: string) => boolean
   isTranscriptNodeSelected: (key: string) => boolean
   isTranscriptNodeSearchMatch: (key: string) => boolean
   setTranscriptSearchQuery: (query: string) => void
@@ -205,7 +204,6 @@ export type ChatPageViewContext = {
   speedModeChipLabel: MaybeRef<string>
 
   sessionUsage: MaybeRef<SessionUsageLike | null>
-  formatCompactNumber: (value: number) => string
   showComposerStopAction: MaybeRef<boolean>
   composerStopDisabled: MaybeRef<boolean>
   composerPrimaryDisabled: MaybeRef<boolean>

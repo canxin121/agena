@@ -2,7 +2,7 @@ import { computed, onBeforeUnmount, ref, watch, type ComputedRef, type Ref } fro
 import type { AttachedFile } from './useChatAttachments'
 import type { RenderBlock } from './useChatRenderBlocks'
 import { i18n } from '@/i18n'
-import { formatCompactNumber, formatCurrencyUSD, formatNumber, formatTimeHMS } from '@/i18n/intl'
+import { formatCurrencyUSD, formatNumber, formatTimeHMS } from '@/i18n/intl'
 import { resolveComposerPrimaryActions } from './composerPrimaryActions'
 import type { SessionState } from '@/types/chat'
 
@@ -433,7 +433,6 @@ export function useChatRunUi(opts: {
     retryCountdownLabel,
     retryNextLabel,
     sessionUsage,
-    formatCompactNumber,
     showAssistantPlaceholder,
     sessionEnded,
     aborting,

@@ -267,6 +267,16 @@ pub(crate) struct TranscriptState {
     /// When the current session-state load was issued. Same recovery
     /// contract as `refresh_in_flight_since`.
     pub(crate) state_load_in_flight_since: Option<Instant>,
+    /// Cursor for the next older transcript page. The initial session load
+    /// owns only the newest bounded page; older pages are fetched on demand
+    /// when the user reaches the top of the viewport.
+    pub(crate) transcript_next_cursor: Option<String>,
+    pub(crate) transcript_has_more: bool,
+    pub(crate) transcript_older_loading: bool,
+    pub(crate) transcript_older_in_flight_since: Option<Instant>,
+    /// Once an older page has been prepended, subsequent recent snapshots must
+    /// update only their newest window so they do not discard loaded history.
+    pub(crate) transcript_older_pages_loaded: bool,
     pub(crate) viewport: TranscriptViewport,
     pub(crate) interaction: TranscriptInteraction,
     pub(crate) search_query: String,
@@ -280,6 +290,10 @@ pub(crate) struct TranscriptState {
     pub(crate) last_event_seq: Option<i64>,
     pub(crate) detail_expanded_by_default: TranscriptDetailDefaults,
     pub(crate) node_expansions: BTreeMap<TranscriptNodeKey, bool>,
+    /// Number of older activities currently revealed for each folded
+    /// assistant run. The renderers keep the newest few visible by default;
+    /// repeated expansion reveals another bounded chunk.
+    pub(crate) activity_summary_visible_counts: BTreeMap<TranscriptNodeKey, usize>,
     /// Operation Activity ids whose detail the user has expanded. Live
     /// streaming deltas are only applied to these — collapsing an Activity
     /// removes it, so computation and transfer for its detail stop.
@@ -298,6 +312,20 @@ pub(crate) struct TranscriptState {
     /// interaction parts ("everything is a part").
     pub(crate) interaction_views: BTreeMap<String, agena_tui_transcript::PendingInteractionView>,
     pub(crate) rendered: Option<RenderedTranscript>,
+}
+
+/// Session-scoped in-memory transcript cache. The TUI keeps this across
+/// session switches so scrolling back and forth does not refetch the same
+/// cursor pages; dropping the App drops the cache with the TUI process.
+#[derive(Debug, Clone)]
+pub(crate) struct TranscriptCache {
+    pub(crate) parts: Vec<agena_api::resource::SessionTranscriptPart>,
+    pub(crate) reply_failures: BTreeMap<i64, agena_failure::UserProblem>,
+    pub(crate) transcript_next_cursor: Option<String>,
+    pub(crate) transcript_has_more: bool,
+    pub(crate) transcript_older_pages_loaded: bool,
+    pub(crate) node_expansions: BTreeMap<TranscriptNodeKey, bool>,
+    pub(crate) activity_summary_visible_counts: BTreeMap<TranscriptNodeKey, usize>,
 }
 
 /// A live activity-v2 overlay entry. The TUI keeps this separate from the

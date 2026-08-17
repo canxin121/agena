@@ -235,6 +235,7 @@ context-help-key-visual-select = 进入字符、整行或块级 Visual 选择；
 context-help-key-count = 重复执行后面的 Vim 移动。
 context-help-key-insert-mode = 进入输入框 INSERT 模式。
 context-help-key-toggle = 切换当前值或可展开内容块。
+context-help-key-expand-all = 展开当前已加载的全部 transcript part。
 context-help-key-copy = 复制 Visual 范围、Vim motion、当前行、Markdown 块或完整消息。
 context-help-key-search-transcript = 搜索并重复跳转对话匹配项。
 context-help-key-word = 按单词、WORD 移动，或跳到当前行的行首、首个非空白字符或行尾。

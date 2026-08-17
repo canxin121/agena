@@ -158,7 +158,7 @@ pub(crate) fn collapsed_activity_run_end(
     })
 }
 
-pub(crate) const COLLAPSED_ACTIVITY_VISIBLE_COUNT: usize = 5;
+pub const COLLAPSED_ACTIVITY_VISIBLE_COUNT: usize = 5;
 
 fn is_invisible_activity_run_bridge(parts: &[TranscriptEntryPart], index: usize) -> bool {
     matches!(

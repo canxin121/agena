@@ -564,8 +564,8 @@ const {
   scrollToBottom,
   scheduleScrollToBottom,
   scrollToBottomOnceAfterLoad,
-  ensureInitialHistoryScrollable,
   handleScroll,
+  handleWheel,
   navigableMessageIds,
   navIndex,
   navBottomOffset,
@@ -1151,8 +1151,6 @@ watch(
     // Ensure chips reflect the session's resolved run config even when messages are cached
     // and no reactive length change occurs.
     modelSelection.applySessionSelection()
-
-    void ensureInitialHistoryScrollable(sid)
   },
 )
 
@@ -1436,8 +1434,6 @@ onMounted(async () => {
   await loadCommands()
   navIndex.value = Math.max(0, navigableMessageIds.value.length - 1)
 
-  void ensureInitialHistoryScrollable(sid)
-
   commandPointerHandler = (event: MouseEvent | TouchEvent) => {
     const target = event.target as Node | null
     if (!target) return
@@ -1623,6 +1619,7 @@ const viewCtx = {
 
   // Scroll + nav.
   handleScroll,
+  handleWheel,
   isAtBottom,
   navigableMessageIds,
   navBottomOffset,
@@ -1679,6 +1676,7 @@ const viewCtx = {
 } satisfies ChatPageViewContext
 
 onBeforeUnmount(() => {
+  chat.clearTranscriptCache()
   if (commandPointerHandler) {
     document.removeEventListener('pointerdown', commandPointerHandler, true)
     commandPointerHandler = null

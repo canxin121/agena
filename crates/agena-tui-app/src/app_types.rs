@@ -20,7 +20,10 @@ use agena_domain::UsagePeriod;
 use agena_domain::UsageStats;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-use crate::app_backend::{LiveEvent, SessionPermissionStudioState, SessionRefresh};
+use crate::app_backend::{
+    LiveEvent, SessionPermissionStudioState, SessionRefresh, SessionStateWithTranscriptPage,
+    SessionTranscriptPage,
+};
 use crate::composer_queue::ComposerQueue;
 use crate::notifications::NotificationStore;
 use agena_application::dto::ModelCatalogListResponse;
@@ -486,6 +489,8 @@ pub struct App {
     pub(super) session_composer: SessionComposerState,
     pub(super) session_controller: agena_tui_session::SessionController,
     pub(super) transcript: TranscriptState,
+    /// Per-session transcript pages retained while the TUI stays open.
+    pub(super) transcript_cache: HashMap<i64, TranscriptCache>,
     pub(super) run_options: RunOptionsState,
     pub(super) composer: Editor,
     pub(super) composer_items: Vec<ComposerItem>,
@@ -655,7 +660,11 @@ pub(super) enum AppMessage {
     },
     SessionStateLoaded {
         session_id: i64,
-        result: UiResult<SessionExecutionResource>,
+        result: UiResult<SessionStateWithTranscriptPage>,
+    },
+    TranscriptPartsLoaded {
+        session_id: i64,
+        result: UiResult<SessionTranscriptPage>,
     },
     SessionRefreshed {
         session_id: i64,

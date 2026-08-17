@@ -148,6 +148,9 @@ impl App {
             Focus::Transcript => self.handle_transcript_key(key),
             Focus::Composer => self.handle_composer_key(key),
         }
+        if self.focus == Focus::Transcript {
+            self.request_older_transcript_parts_if_needed();
+        }
         self.maybe_auto_open_pending_interactive_overlay();
     }
 

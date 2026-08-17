@@ -235,6 +235,7 @@ context-help-key-visual-select = Start character, line, or block Visual selectio
 context-help-key-count = Repeat the following Vim motion.
 context-help-key-insert-mode = Enter the composer in INSERT mode.
 context-help-key-toggle = Toggle the selected value or expandable block.
+context-help-key-expand-all = Reveal all currently loaded transcript parts.
 context-help-key-copy = Copy a Visual range, a Vim motion, the current line, Markdown block, or complete message.
 context-help-key-search-transcript = Search and repeat transcript matches.
 context-help-key-word = Move by word, WORD, or to the start, first non-blank, or end of the current line.

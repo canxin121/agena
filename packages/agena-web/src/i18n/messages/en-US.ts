@@ -2267,6 +2267,8 @@ export default {
       loadingOlder: 'Loading older messages...',
       activity: {
         moreCount: '+{count} more...',
+        expandMoreCount: 'Show {count} more...',
+        expandAll: 'Show all',
         hide: 'Hide',
         toolInvocation: {
           toolNames: {

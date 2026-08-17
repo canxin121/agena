@@ -61,11 +61,33 @@ impl SessionManager {
     /// deciding to cancel and this call reaching the manager, so the absence
     /// of a control is a successful no-op rather than an error.
     pub async fn cancel_active_execution(&self, session_id: i64) -> Result<(), AppError> {
+        let root_execution_id = self
+            .execution_registry
+            .execution(session_id)
+            .await
+            .and_then(|lifecycle| match lifecycle {
+                agena_domain::ExecutionLifecycle::Active { execution_id, .. } => {
+                    Some(execution_id.to_string())
+                }
+                agena_domain::ExecutionLifecycle::Terminal { .. } => None,
+            });
         // Signal the requested execution before any database traversal. This
         // keeps Ctrl+C latency independent of session-tree size and storage
         // contention; descendant discovery continues after the active model
         // stream or tool has already received cancellation.
         let root_result = self.execution_registry.cancel_current(session_id).await;
+        if root_result.is_ok()
+            && let Some(execution_id) = root_execution_id
+        {
+            self.execution_state()
+                .tool_executor
+                .plugin_manager()
+                .dispatch_agent_cancel(AgentCancelInput {
+                    session_id,
+                    execution_id,
+                })
+                .await;
+        }
         self.cancel_host_interactive_waiters(session_id).await;
         let cancellation_order = match self.store.load_session(session_id).await {
             Ok(session) => {

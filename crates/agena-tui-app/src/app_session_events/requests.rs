@@ -273,12 +273,47 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result =
-                crate::app_backend::operations::get_session_state(&application, session_id)
-                    .await
-                    .map_err(crate::UiFailure::from_backend);
+            let result = crate::app_backend::operations::get_session_state_with_transcript_page(
+                &application,
+                session_id,
+            )
+            .await
+            .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::SessionStateLoaded { session_id, result })
+                .await;
+        });
+    }
+
+    pub(crate) fn request_older_transcript_parts_if_needed(&mut self) {
+        if self.transcript.viewport_top() != 0
+            || self.transcript.transcript_older_loading
+            || !self.transcript.transcript_has_more
+        {
+            return;
+        }
+        let Some(session_id) = self.transcript.session_id else {
+            return;
+        };
+        let Some(cursor) = self.transcript.transcript_next_cursor.clone() else {
+            return;
+        };
+        self.transcript.transcript_older_loading = true;
+        self.transcript.transcript_older_in_flight_since = Some(Instant::now());
+
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = application
+                .list_session_transcript_page(
+                    session_id,
+                    crate::app_backend::SESSION_TRANSCRIPT_PAGE_SIZE,
+                    cursor.as_str(),
+                )
+                .await
+                .map_err(crate::UiFailure::from_backend);
+            let _ = tx
+                .send(AppMessage::TranscriptPartsLoaded { session_id, result })
                 .await;
         });
     }

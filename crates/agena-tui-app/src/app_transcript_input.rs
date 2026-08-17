@@ -82,6 +82,10 @@ impl App {
                 self.clear_transcript_pending_command();
                 self.toggle_transcript_cursor_node();
             }
+            Some(KeyAction::ExpandAll) => {
+                self.clear_transcript_pending_command();
+                self.transcript.expand_all_transcript_parts(width, height);
+            }
             Some(action @ (KeyAction::MoveLeft | KeyAction::MoveRight)) => {
                 self.cancel_pointer_selection_if_not_visual(width, height);
                 let count = self.transcript_motion_count();

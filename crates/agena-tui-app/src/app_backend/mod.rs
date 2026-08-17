@@ -28,6 +28,9 @@ pub(crate) mod timeline;
 mod transport;
 
 pub use self::transport::{BackendMode, TuiBackend};
+pub(crate) use self::transport::{
+    SESSION_TRANSCRIPT_PAGE_SIZE, SessionStateWithTranscriptPage, SessionTranscriptPage,
+};
 
 pub(crate) use self::inspector::InspectorRow;
 pub(crate) use self::live_events::LiveEvent;

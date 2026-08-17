@@ -106,6 +106,34 @@ pub fn render_entry_detailed_with_interactions(
         crate::interaction_view::PendingInteractionView,
     >,
 ) -> RenderedMessageBlock {
+    render_entry_detailed_with_progressive_expansion(
+        message,
+        width,
+        i18n,
+        defaults,
+        expansions,
+        &std::collections::BTreeMap::new(),
+        interactions,
+    )
+}
+
+/// Like [`render_entry_detailed_with_interactions`], but allows the caller to
+/// reveal a bounded number of older activities from each folded run. A `true`
+/// entry in `expansions` still means "show all" for compatibility with the
+/// ordinary per-part expansion map.
+#[allow(clippy::too_many_arguments)]
+pub fn render_entry_detailed_with_progressive_expansion(
+    message: &TranscriptEntry,
+    width: u16,
+    i18n: &I18n,
+    defaults: &TranscriptDetailDefaults,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+    summary_visible_counts: &std::collections::BTreeMap<TranscriptNodeKey, usize>,
+    interactions: &std::collections::BTreeMap<
+        String,
+        crate::interaction_view::PendingInteractionView,
+    >,
+) -> RenderedMessageBlock {
     let mut lines = Vec::new();
     let mut nodes = Vec::new();
     let header_start = lines.len();
@@ -151,14 +179,32 @@ pub fn render_entry_detailed_with_interactions(
                 // are no exception — a long run of hook rows would otherwise
                 // pile up without ever folding. The run still groups them with
                 // the surrounding tool calls, so the whole block folds as one.
-                let foldable_count = activities.len();
-                let collapsed_prefix_len =
-                    foldable_count.saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_COUNT);
                 let key = TranscriptNodeKey::ActivitySummary {
                     entry_id: message.id,
                     first_content_id: activities[0].id,
                 };
-                let expanded = expansions.get(&key).copied().unwrap_or(false);
+                let foldable_count = activities.len();
+                let expanded_all = expansions.get(&key).copied().unwrap_or(false);
+                let visible_count = if expanded_all {
+                    foldable_count
+                } else {
+                    summary_visible_counts
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(COLLAPSED_ACTIVITY_VISIBLE_COUNT)
+                };
+                let collapsed_prefix_len = foldable_count.saturating_sub(visible_count);
+                // Keep the summary node when the legacy bool map explicitly
+                // expands a run: existing cursor/selection state uses that
+                // stable anchor to collapse it again. Progressive expansion
+                // removes the marker only after its bounded count reaches the
+                // complete run.
+                let hidden_count = if expanded_all {
+                    foldable_count.saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_COUNT)
+                } else {
+                    collapsed_prefix_len
+                };
+                let expanded = expanded_all;
                 // Run folding is purely positional. Individual Activity
                 // expansion controls that Activity's body only and must not
                 // exempt an old Activity from the collapsed prefix.
@@ -167,7 +213,6 @@ pub fn render_entry_detailed_with_interactions(
                     .enumerate()
                     .map(|(foldable_index, _part)| foldable_index < collapsed_prefix_len)
                     .collect::<Vec<_>>();
-                let hidden_count = collapsed_prefix_len;
                 if hidden_count > 0 {
                     // Message headers belong exclusively to the message-level
                     // parent selection. An activity summary must never make
@@ -202,7 +247,7 @@ pub fn render_entry_detailed_with_interactions(
                         expanded,
                     });
                     for (part, hidden) in activities.into_iter().zip(hidden_when_collapsed) {
-                        if !expanded && hidden {
+                        if !expanded_all && hidden {
                             continue;
                         }
                         append_rendered_part_node(

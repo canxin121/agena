@@ -31,7 +31,9 @@ import { useWorkspacePaneContext, type WorkspacePaneContext } from '@/app/worksp
 // ─── constants ──────────────────────────────────────────────────────────────
 
 const SESSION_PAGE_SIZE = 30
-const MESSAGE_PAGE_SIZE = 200
+// Keep session entry cheap. Older pages are fetched only after the user
+// scrolls to the top of the transcript.
+const MESSAGE_PAGE_SIZE = 50
 const STORAGE_SELECTED_SESSION = 'agena.chat.selected-session-id.v1'
 
 function isRecord(value: JsonValue): value is JsonObject {
@@ -272,33 +274,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   async function selectSession(id: string | null) {
     const sid = (id || '').trim()
-    const previous = selectedSessionId.value
     selectedSessionId.value = sid || null
     persistSelectedSession(sid || null)
     messagesError.value = null
-
-    if (previous && previous !== sid) {
-      if (historyLimitBySession.value[previous]) {
-        const next = { ...historyLimitBySession.value }
-        delete next[previous]
-        historyLimitBySession.value = next
-      }
-      if (historyExhaustedBySession.value[previous]) {
-        const next = { ...historyExhaustedBySession.value }
-        delete next[previous]
-        historyExhaustedBySession.value = next
-      }
-      if (historyLoadingBySession.value[previous]) {
-        const next = { ...historyLoadingBySession.value }
-        delete next[previous]
-        historyLoadingBySession.value = next
-      }
-      if (Object.prototype.hasOwnProperty.call(historyCursorBySession.value, previous)) {
-        const next = { ...historyCursorBySession.value }
-        delete next[previous]
-        historyCursorBySession.value = next
-      }
-    }
 
     if (!sid) return
     await hydrateSession(sid)
@@ -308,10 +286,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   function sessionMessageLimit(sessionId: string): number {
     const sid = (sessionId || '').trim()
-    // Agena doesn't expose memory-limit UI prefs; the server owns compaction.
-    const fallbackHistorical = 120
-    const fallbackActive = 240
-    const base = selectedSessionId.value === sid ? fallbackActive : fallbackHistorical
+    const base = MESSAGE_PAGE_SIZE
     const window = typeof historyLimitBySession.value[sid] === 'number' ? Number(historyLimitBySession.value[sid]) : 0
     return window > base ? window : base
   }
@@ -468,15 +443,21 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const page = await chatApi.listMessages(sid, limit)
       if (!isLatestRefreshMessagesRequest(sid, requestSeq)) return
       const ordered = normalizeMessageList(page.entries)
-      setSessionMessages(sid, ordered)
+      const loadedWindow = historyLimitBySession.value[sid] || 0
+      const hasLoadedOlder = loadedWindow > MESSAGE_PAGE_SIZE
+      const nextMessages = hasLoadedOlder ? mergeMessageLists(ordered, ensureSessionMessages(sid)) : ordered
+      setSessionMessages(sid, nextMessages)
       pruneSessionMessages(sid)
       markMessagesHydrated(sid)
-      historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
-      historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
+      historyLimitBySession.value = { ...historyLimitBySession.value, [sid]: nextMessages.length }
+      if (!hasLoadedOlder) {
+        historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
+        historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
+      }
 
       // Capture run config from the last message that carries provider/model.
-      for (let i = ordered.length - 1; i >= 0; i -= 1) {
-        const patch = extractRunConfigFromMessageInfo(ordered[i]?.info)
+      for (let i = nextMessages.length - 1; i >= 0; i -= 1) {
+        const patch = extractRunConfigFromMessageInfo(nextMessages[i]?.info)
         if (patch.providerID || patch.modelID) {
           upsertSessionRunConfig(sid, patch)
           break
@@ -545,10 +526,25 @@ const useChatStoreDefinition = defineStore('chat', () => {
       historyLimitBySession.value = { ...historyLimitBySession.value, [sid]: merged.length }
       historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
       historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
-      return page.hasMore === true
+      // The final page is still a successful load even though it reports no
+      // further cursor. Returning only `hasMore` made the viewport-preserving
+      // prepend path treat that page as a no-op.
+      return merged.length > currentLen || normalized.length > 0
     } finally {
       historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: false }
     }
+  }
+
+  /** Drop transcript pages when the chat page is actually unmounted. */
+  function clearTranscriptCache() {
+    messagesBySession.value = {}
+    messagesHydratedBySession.value = {}
+    historyLimitBySession.value = {}
+    historyLoadingBySession.value = {}
+    historyExhaustedBySession.value = {}
+    historyCursorBySession.value = {}
+    messagesLoading.value = false
+    messagesError.value = null
   }
 
   // ─── execution status + attention ─────────────────────────────────────────
@@ -1391,6 +1387,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     hydrateSession,
     refreshMessages,
     loadOlderMessages,
+    clearTranscriptCache,
     selectedHistory,
     createSession,
     deleteSession,

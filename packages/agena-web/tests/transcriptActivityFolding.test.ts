@@ -19,4 +19,11 @@ test('activity run folding depends only on part count', () => {
     expanded.visibleParts.map((part) => part.id),
     [1, 2, 3, 4, 5, 6, 7, 8, 9],
   )
+
+  const progressive = foldTranscriptActivityRun(parts, 7)
+  assert.equal(progressive.hiddenCount, 2)
+  assert.deepEqual(
+    progressive.visibleParts.map((part) => part.id),
+    [3, 4, 5, 6, 7, 8, 9],
+  )
 })

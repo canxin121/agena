@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { RiCheckLine, RiFileLine, RiLoader4Line, RiSparkling2Line, RiTimeLine } from '@remixicon/vue'
+import { computed } from 'vue'
+import { RiCheckLine, RiLoader4Line, RiSparkling2Line, RiTimeLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
-import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import Button from '@/components/ui/Button.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import MobileSidebarEmptyState from '@/components/ui/MobileSidebarEmptyState.vue'
 import MessageItem from '@/components/chat/MessageItem.vue'
+import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
 import type {
   AttentionLike,
   MessageLike,
@@ -17,9 +18,6 @@ import type {
 } from '@/components/chat/messageList.types'
 import { formatTimeHMS } from '@/i18n/intl'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
-import { buildWorkspaceRawFileUrl, extractWorkspacePathFromFileUrl } from '@/lib/workspaceLinks'
-import { useDirectoryStore } from '@/stores/directory'
-import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
   isCompactLayout: boolean
@@ -64,43 +62,74 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const directoryStore = useDirectoryStore()
-const ui = useUiStore()
-type OptimisticFile = OptimisticUserMessage['files'][number]
 
-function optimisticWorkspacePath(file: OptimisticFile): string {
-  const workspace = String(directoryStore.currentDirectory || '').trim()
-  if (!workspace) return ''
-  const candidate = String(file.serverPath || file.url || '').trim()
-  return candidate ? extractWorkspacePathFromFileUrl(candidate, workspace) || candidate : ''
-}
-
-function optimisticFileUrl(file: OptimisticFile): string {
-  const workspace = String(directoryStore.currentDirectory || '').trim()
-  const path = optimisticWorkspacePath(file)
-  if (workspace && path && !path.startsWith('data:') && !path.startsWith('http')) {
-    return buildWorkspaceRawFileUrl(workspace, path)
+// The pending user turn follows the same canonical part projection as the
+// persisted transcript. It is temporary, but it must not be a second prose
+// renderer that disappears/reappears with a different shape after the server
+// acknowledges the user_send run.
+const optimisticDisplayParts = computed<TranscriptDisplayPart[]>(() => {
+  const message = props.optimisticUser
+  if (!message) return []
+  const status = message.status === 'sending' ? 'in_progress' : 'completed'
+  const parts: TranscriptDisplayPart[] = []
+  if (message.text.trim()) {
+    parts.push({
+      key: `${message.key}:text`,
+      id: `${message.key}:text`,
+      kind: 'text',
+      status,
+      role: 'user',
+      source: {
+        id: `${message.key}:text`,
+        type: 'text',
+        partState: status,
+        agenaKind: 'text',
+        agenaRole: 'user',
+        text: message.text,
+        agenaContent: { text: message.text },
+      },
+      title: '',
+      summary: '',
+      copyText: message.text,
+      toggleable: false,
+      defaultExpanded: true,
+    })
   }
-  return String(file.url || file.serverPath || '').trim()
-}
-
-function optimisticFileLabel(file: OptimisticFile): string {
-  return String(file.filename || file.serverPath || file.url || t('chat.messageItem.fileFallback')).trim()
-}
-
-function openOptimisticFile(file: OptimisticFile) {
-  const path = optimisticWorkspacePath(file)
-  if (path) {
-    ui.requestWorkspaceDockFile(path, 'open')
-    return
+  for (const [index, file] of message.files.entries()) {
+    const id = `${message.key}:file:${index}`
+    const label = String(file.filename || file.serverPath || file.url || t('chat.messageItem.fileFallback')).trim()
+    parts.push({
+      key: id,
+      id,
+      kind: 'resource',
+      status,
+      role: 'user',
+      source: {
+        id,
+        type: 'file',
+        partState: status,
+        agenaKind: 'file_ref',
+        agenaRole: 'user',
+        ...(file.filename ? { filename: file.filename } : {}),
+        ...(file.mime ? { mime: file.mime } : {}),
+        ...(file.url ? { url: file.url } : {}),
+        ...(file.serverPath ? { serverPath: file.serverPath } : {}),
+        agenaContent: {
+          ...(file.filename ? { name: file.filename } : {}),
+          ...(file.mime ? { mime: file.mime } : {}),
+          ...(file.url ? { url: file.url } : {}),
+          ...(file.serverPath ? { path: file.serverPath } : {}),
+        },
+      },
+      title: 'Attachment',
+      summary: label,
+      copyText: label,
+      toggleable: false,
+      defaultExpanded: true,
+    })
   }
-  const url = optimisticFileUrl(file)
-  if (url) window.open(url, '_blank', 'noopener,noreferrer')
-}
-
-function optimisticIsImage(file: OptimisticFile): boolean {
-  return String(file.mime || '').startsWith('image/') || /\.(png|jpe?g|gif|webp|avif)$/i.test(optimisticFileLabel(file))
-}
+  return parts
+})
 
 function sessionErrorClassificationLabel(): string {
   const classification = String(props.sessionError?.error?.classification || '').trim()
@@ -244,26 +273,15 @@ function forwardPartToggle(part: TranscriptDisplayPart, expanded: boolean) {
             </template>
           </span>
         </header>
-        <div class="mt-0.5 border-l-2 border-primary/35 py-1 pl-9 text-sm leading-relaxed">
-          <MarkdownRenderer v-if="optimisticUser.text" :content="optimisticUser.text" />
-          <div v-if="optimisticUser.files.length" class="mt-2 flex flex-wrap gap-2">
-            <button
-              v-for="file in optimisticUser.files"
-              :key="String(file.url || file.serverPath || file.filename)"
-              type="button"
-              class="inline-flex min-w-0 items-center gap-2 rounded-md border border-border/50 px-2 py-1 font-mono text-[11px] hover:bg-muted/35 hover:text-primary"
-              @click="openOptimisticFile(file)"
-            >
-              <img
-                v-if="optimisticIsImage(file) && optimisticFileUrl(file)"
-                :src="optimisticFileUrl(file)"
-                alt=""
-                class="h-8 w-8 rounded object-cover"
-              />
-              <RiFileLine v-else class="h-3.5 w-3.5 shrink-0" />
-              <span class="max-w-56 truncate">{{ optimisticFileLabel(file) }}</span>
-            </button>
-          </div>
+        <div class="mt-0.5 border-l-2 border-primary/35 py-1 pl-7 text-sm leading-relaxed">
+          <AgenaTranscriptPart
+            v-for="part in optimisticDisplayParts"
+            :key="part.key"
+            :part="part"
+            :expanded="true"
+            :collapse-signal="activityCollapseSignal"
+            :session-id="selectedSessionId"
+          />
         </div>
       </article>
 

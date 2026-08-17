@@ -96,6 +96,7 @@ impl App {
             session_composer: SessionComposerState::default(),
             session_controller: agena_tui_session::SessionController::default(),
             transcript,
+            transcript_cache: HashMap::new(),
             run_options: RunOptionsState::default(),
             composer: Editor::default(),
             composer_items: Vec::new(),

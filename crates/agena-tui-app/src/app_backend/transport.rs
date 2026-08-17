@@ -29,9 +29,24 @@ use tokio::sync::mpsc;
 
 use super::{LiveEvent, SessionRefresh};
 
-const SESSION_TRANSCRIPT_PAGE_SIZE: u64 = 200;
+pub(crate) const SESSION_TRANSCRIPT_PAGE_SIZE: u64 = 50;
 
-fn transcript_part_from_resource(part: agena_api::live::PartResource) -> SessionTranscriptPart {
+#[derive(Debug, Clone)]
+pub(crate) struct SessionTranscriptPage {
+    pub parts: Vec<SessionTranscriptPart>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SessionStateWithTranscriptPage {
+    pub execution: SessionExecutionResource,
+    pub page: SessionTranscriptPage,
+}
+
+pub(crate) fn transcript_part_from_resource(
+    part: agena_api::live::PartResource,
+) -> SessionTranscriptPart {
     SessionTranscriptPart {
         part_id: part.part_id,
         kind: part.kind,
@@ -879,10 +894,19 @@ impl TuiBackend {
     }
 
     async fn localize_workspace_images(&self, execution: &mut SessionExecutionResource) {
+        self.localize_workspace_image_parts(execution.session.id, &mut execution.parts)
+            .await;
+    }
+
+    async fn localize_workspace_image_parts(
+        &self,
+        session_id: i64,
+        parts: &mut [SessionTranscriptPart],
+    ) {
         const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 
         let mut references = Vec::new();
-        for part in &execution.parts {
+        for part in parts.iter() {
             workspace_image_references(&part.content, &mut references);
         }
         references.sort();
@@ -903,10 +927,7 @@ impl TuiBackend {
             {
                 continue;
             }
-            let Ok((_, bytes)) = self
-                .download_server_image(execution.session.id, path.as_str())
-                .await
-            else {
+            let Ok((_, bytes)) = self.download_server_image(session_id, path.as_str()).await else {
                 continue;
             };
             if bytes.len() as u64 > MAX_IMAGE_BYTES {
@@ -916,7 +937,7 @@ impl TuiBackend {
             localized.insert(path, format!("data:{mime};base64,{encoded}"));
         }
         *self.inner.workspace_image_data_urls.write().await = localized.clone();
-        for part in &mut execution.parts {
+        for part in parts.iter_mut() {
             replace_workspace_image_references(&mut part.content, &localized);
         }
     }
@@ -1697,21 +1718,61 @@ impl TuiBackend {
     }
 
     pub async fn get_session_state(&self, session_id: i64) -> Result<SessionExecutionResource> {
+        Ok(self
+            .get_session_state_with_transcript_page(session_id)
+            .await?
+            .execution)
+    }
+
+    pub(crate) async fn get_session_state_with_transcript_page(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionStateWithTranscriptPage> {
         // `/state` is an execution shell. Load only the newest bounded
         // transcript page separately; older history is fetched through the
         // cursor-paged parts surface by timeline/history callers.
-        let (mut execution, page) = tokio::try_join!(
+        let (mut execution, page_resource) = tokio::try_join!(
             self.client().get_session_state(session_id),
             self.client()
                 .session_parts_page(session_id, SESSION_TRANSCRIPT_PAGE_SIZE, None,),
         )?;
-        execution.parts = page
-            .parts
-            .into_iter()
-            .map(transcript_part_from_resource)
-            .collect();
+        let mut page = SessionTranscriptPage {
+            parts: page_resource
+                .parts
+                .into_iter()
+                .map(transcript_part_from_resource)
+                .collect(),
+            next_cursor: page_resource.page.next_cursor,
+            has_more: page_resource.page.has_more,
+        };
+        execution.parts = page.parts.clone();
         self.localize_workspace_images(&mut execution).await;
-        Ok(execution)
+        page.parts = execution.parts.clone();
+        Ok(SessionStateWithTranscriptPage { execution, page })
+    }
+
+    pub(crate) async fn list_session_transcript_page(
+        &self,
+        session_id: i64,
+        limit: u64,
+        cursor: &str,
+    ) -> Result<SessionTranscriptPage> {
+        let page_resource = self
+            .client()
+            .session_parts_page(session_id, limit, Some(cursor))
+            .await?;
+        let mut page = SessionTranscriptPage {
+            parts: page_resource
+                .parts
+                .into_iter()
+                .map(transcript_part_from_resource)
+                .collect(),
+            next_cursor: page_resource.page.next_cursor,
+            has_more: page_resource.page.has_more,
+        };
+        self.localize_workspace_image_parts(session_id, &mut page.parts)
+            .await;
+        Ok(page)
     }
 
     pub async fn list_session_parts(

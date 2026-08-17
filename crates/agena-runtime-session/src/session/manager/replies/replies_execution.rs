@@ -368,6 +368,10 @@ impl SessionManager {
         // the same way as `/continue`: do not dispatch agent.stop again and
         // append another copy of the plan context to the transcript.
         let mut direct_plan_continue_after_failure = false;
+        // A broken provider must not keep one autorun execution alive forever
+        // even when cancellation races with a stale continuation request.
+        const DIRECT_PLAN_FAILURE_RETRY_LIMIT: usize = 8;
+        let mut direct_plan_failure_retries = 0usize;
         // Bounded safety net for model turns that were cut off by the output
         // limit (`finish_reason == max_tokens`). Each firing consumes budget;
         // a degenerate model that always truncates cannot loop forever.
@@ -919,6 +923,7 @@ impl SessionManager {
                     session = next_session;
                     failure_retry_backoff_ms = 250;
                     direct_plan_continue_after_failure = false;
+                    direct_plan_failure_retries = 0;
                     model_requested = false;
                     turn_run_id = Some(marker_run_id);
                     match should_continue_turn(
@@ -1021,6 +1026,16 @@ impl SessionManager {
                     }
 
                     if direct_plan_continue_after_failure {
+                        if direct_plan_failure_retries >= DIRECT_PLAN_FAILURE_RETRY_LIMIT {
+                            tracing::warn!(
+                                target: "agena::session::run_until_stable",
+                                session_id,
+                                retries = direct_plan_failure_retries,
+                                "stopping plan autorun after repeated provider failures"
+                            );
+                            return Err(err);
+                        }
+                        direct_plan_failure_retries += 1;
                         let delay = failure_retry_backoff_ms;
                         failure_retry_backoff_ms = (failure_retry_backoff_ms * 2).min(5_000);
                         tokio::select! {

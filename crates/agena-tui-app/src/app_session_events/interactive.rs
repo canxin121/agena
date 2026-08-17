@@ -10,11 +10,21 @@ impl App {
         self.sync_current_draft_slot();
         self.clear_composer_state();
         self.current_lineage = None;
+        if let Some(previous_session_id) = self.transcript.session_id
+            && previous_session_id != session_id
+        {
+            self.transcript_cache
+                .insert(previous_session_id, self.transcript.cache_snapshot());
+        }
         self.session_controller.current_session_id = Some(session_id);
         self.session_controller.active = false;
         self.session_controller.sequence = None;
         self.focus = Focus::Transcript;
         self.transcript.reset(session_id, title);
+        if let Some(cache) = self.transcript_cache.get(&session_id).cloned() {
+            self.transcript
+                .restore_cache(cache, session_id, self.transcript.session_title.clone());
+        }
         // Re-publish the plan display contribution for the opened session so
         // the composer's bottom-right chip appears immediately even when the
         // in-memory contribution was lost (process restart, runtime reload, or

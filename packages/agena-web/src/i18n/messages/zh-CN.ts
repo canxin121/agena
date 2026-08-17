@@ -2264,6 +2264,8 @@ export default {
       loadingOlder: '正在加载更早的消息...',
       activity: {
         moreCount: '+{count} 条更多...',
+        expandMoreCount: '再展开 {count} 条...',
+        expandAll: '全部展开',
         hide: '隐藏',
         toolInvocation: {
           toolNames: {

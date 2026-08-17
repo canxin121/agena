@@ -126,6 +126,7 @@ pub fn preset_specs(
                     vec![
                         ("i", "context-help-key-insert-mode"),
                         ("Enter", "context-help-key-toggle"),
+                        ("Ctrl+Shift+Enter", "context-help-key-expand-all"),
                         ("v / V / Ctrl+V", "context-help-key-visual-select"),
                         ("o / O", "context-help-key-visual-endpoints"),
                         ("gv", "context-help-key-visual-restore"),

@@ -31,6 +31,10 @@ pub(super) fn only_ctrl(key: KeyEvent) -> bool {
     command_modifiers(key) == KeyModifiers::CONTROL
 }
 
+pub(super) fn only_ctrl_shift(key: KeyEvent) -> bool {
+    command_modifiers(key) == (KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+}
+
 pub(super) fn only_shift(key: KeyEvent) -> bool {
     command_modifiers(key) == KeyModifiers::SHIFT
 }
@@ -188,6 +192,7 @@ pub enum KeyAction {
     TextObjectParagraph,
     YankLine,
     Toggle,
+    ExpandAll,
     Copy,
     CopyVisible,
     CopyAll,

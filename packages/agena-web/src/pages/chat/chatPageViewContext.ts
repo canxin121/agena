@@ -132,6 +132,7 @@ export type ChatPageViewContext = {
   closeTranscriptSearch: (clear?: boolean) => void
 
   handleScroll: (event?: Event) => void
+  handleWheel: (event: WheelEvent) => void
   isAtBottom: MaybeRef<boolean>
   navigableMessageIds: MaybeRef<string[]>
   navBottomOffset: MaybeRef<string>

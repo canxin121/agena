@@ -13,7 +13,7 @@ use agena_api::resource::{
 };
 use agena_domain::{PermissionReplyKind, PermissionScope, UserInputReply};
 
-use super::TuiBackend;
+use super::{SessionStateWithTranscriptPage, TuiBackend};
 
 /// Load usage statistics from the server for the terminal's usage
 /// overview.
@@ -44,6 +44,16 @@ pub(crate) async fn get_session_state(
 ) -> Result<SessionExecutionResource> {
     application
         .get_session_state(session_id)
+        .await
+        .context("failed to load session state")
+}
+
+pub(crate) async fn get_session_state_with_transcript_page(
+    application: &TuiBackend,
+    session_id: i64,
+) -> Result<SessionStateWithTranscriptPage> {
+    application
+        .get_session_state_with_transcript_page(session_id)
         .await
         .context("failed to load session state")
 }

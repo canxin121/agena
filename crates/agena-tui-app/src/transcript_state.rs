@@ -44,6 +44,11 @@ impl TranscriptState {
             state_loading: false,
             refresh_in_flight_since: None,
             state_load_in_flight_since: None,
+            transcript_next_cursor: None,
+            transcript_has_more: false,
+            transcript_older_loading: false,
+            transcript_older_in_flight_since: None,
+            transcript_older_pages_loaded: false,
             viewport: TranscriptViewport::default(),
             interaction: TranscriptInteraction::default(),
             search_query: String::new(),
@@ -54,6 +59,7 @@ impl TranscriptState {
             last_event_seq: None,
             detail_expanded_by_default,
             node_expansions: BTreeMap::new(),
+            activity_summary_visible_counts: BTreeMap::new(),
             expanded_operation_activity_ids: BTreeSet::new(),
             v2_activities: BTreeMap::new(),
             interaction_views: BTreeMap::new(),
@@ -76,6 +82,11 @@ impl TranscriptState {
         self.pending_user_messages.clear();
         self.refreshing = false;
         self.state_loading = false;
+        self.transcript_next_cursor = None;
+        self.transcript_has_more = false;
+        self.transcript_older_loading = false;
+        self.transcript_older_in_flight_since = None;
+        self.transcript_older_pages_loaded = false;
         self.viewport.reduce(TranscriptAction::Reset);
         self.interaction = TranscriptInteraction::default();
         self.execution = None;
@@ -85,15 +96,58 @@ impl TranscriptState {
         self.jump_history.clear();
         self.jump_history_index = 0;
         self.node_expansions.clear();
+        self.activity_summary_visible_counts.clear();
         self.v2_activities.clear();
         self.interaction_views.clear();
+        self.invalidate_render();
+    }
+
+    pub(crate) fn cache_snapshot(&self) -> super::TranscriptCache {
+        super::TranscriptCache {
+            parts: self.parts.clone(),
+            reply_failures: self.reply_failures.clone(),
+            transcript_next_cursor: self.transcript_next_cursor.clone(),
+            transcript_has_more: self.transcript_has_more,
+            transcript_older_pages_loaded: self.transcript_older_pages_loaded,
+            node_expansions: self.node_expansions.clone(),
+            activity_summary_visible_counts: self.activity_summary_visible_counts.clone(),
+        }
+    }
+
+    pub(crate) fn restore_cache(
+        &mut self,
+        cache: super::TranscriptCache,
+        session_id: i64,
+        title: String,
+    ) {
+        self.session_id = Some(session_id);
+        self.session_title = title;
+        self.parts = cache.parts;
+        self.reply_failures = cache.reply_failures;
+        self.transcript_next_cursor = cache.transcript_next_cursor;
+        self.transcript_has_more = cache.transcript_has_more;
+        self.transcript_older_pages_loaded = cache.transcript_older_pages_loaded;
+        self.node_expansions = cache.node_expansions;
+        self.activity_summary_visible_counts = cache.activity_summary_visible_counts;
+        self.transcript_older_loading = false;
+        self.transcript_older_in_flight_since = None;
+        self.execution = None;
+        self.last_event_seq = None;
+        self.viewport.reduce(TranscriptAction::Reset);
+        self.interaction = TranscriptInteraction::default();
         self.invalidate_render();
     }
 
     pub(crate) fn apply_execution(&mut self, execution: SessionExecutionResource) {
         self.session_title = execution.session.title.clone();
         self.last_event_seq = execution.latest_event_seq;
-        self.merge_parts(execution.parts.clone());
+        if self.transcript_older_pages_loaded {
+            self.merge_recent_parts(execution.parts.clone());
+        } else {
+            self.merge_parts(execution.parts.clone());
+        }
+        let mut execution = execution;
+        execution.parts = self.parts.clone();
         self.execution = Some(execution);
         self.invalidate_render();
     }
@@ -120,6 +174,14 @@ impl TranscriptState {
             self.state_load_in_flight_since = None;
             recovered = true;
         }
+        if self
+            .transcript_older_in_flight_since
+            .is_some_and(|since| since.elapsed() >= timeout)
+        {
+            self.transcript_older_loading = false;
+            self.transcript_older_in_flight_since = None;
+            recovered = true;
+        }
         recovered
     }
 
@@ -133,6 +195,57 @@ impl TranscriptState {
     pub(crate) fn merge_parts(&mut self, parts: Vec<agena_api::resource::SessionTranscriptPart>) {
         self.apply_parts_change(|current| *current = parts);
         self.invalidate_render();
+    }
+
+    /// Update the newest snapshot while preserving pages the user has already
+    /// loaded from the beginning of the transcript. Part ids are monotonic, so
+    /// everything before the oldest incoming recent part belongs to the older
+    /// window and can be retained safely.
+    fn merge_recent_parts(&mut self, recent: Vec<agena_api::resource::SessionTranscriptPart>) {
+        let Some(oldest_recent_id) = recent.iter().map(|part| part.part_id).min() else {
+            return;
+        };
+        let mut preserved = self
+            .parts
+            .iter()
+            .filter(|part| part.part_id < oldest_recent_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        preserved.extend(recent);
+        preserved.sort_by_key(|part| part.part_id);
+        self.merge_parts(preserved);
+    }
+
+    pub(crate) fn set_transcript_page(&mut self, next_cursor: Option<String>, has_more: bool) {
+        self.transcript_next_cursor = next_cursor;
+        self.transcript_has_more = has_more;
+    }
+
+    /// Prepend one older cursor page and keep the same logical content under
+    /// the user's viewport. The caller is responsible for updating the page
+    /// cursor after the request completes.
+    pub(crate) fn prepend_transcript_parts(
+        &mut self,
+        older: Vec<agena_api::resource::SessionTranscriptPart>,
+        width: u16,
+        height: u16,
+    ) -> bool {
+        if older.is_empty() {
+            return false;
+        }
+        let previous_top = self.viewport.top;
+        let previous_lines = self.rendered(width).lines.len();
+        let mut combined = older;
+        combined.extend(self.parts.clone());
+        self.merge_parts(combined);
+        self.transcript_older_pages_loaded = true;
+
+        let next_lines = self.rendered(width).lines.len();
+        let added_lines = next_lines.saturating_sub(previous_lines);
+        self.viewport.follow_tail = false;
+        self.viewport.top = previous_top.saturating_add(added_lines);
+        self.clamp_scroll(width, height);
+        true
     }
 
     /// Apply one canonical transcript mutation and reconcile optimistic user
@@ -988,12 +1101,13 @@ impl TranscriptState {
         }
 
         for entry in &entries {
-            let rendered = render_entry_detailed_with_interactions(
+            let rendered = agena_tui_transcript::render_entry_detailed_with_progressive_expansion(
                 entry,
                 width,
                 &self.i18n,
                 &self.detail_expanded_by_default,
                 &self.node_expansions,
+                &self.activity_summary_visible_counts,
                 &self.interaction_views,
             );
             let base_line = lines.len();
@@ -2790,6 +2904,34 @@ impl TranscriptState {
             .as_ref()
             .map(|cursor| cursor.direction)
             .unwrap_or(TranscriptMoveDirection::Down);
+
+        if matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }) {
+            let current = self
+                .activity_summary_visible_counts
+                .get(&node.key)
+                .copied()
+                .unwrap_or(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT);
+            self.activity_summary_visible_counts.insert(
+                node.key.clone(),
+                current.saturating_add(agena_tui_transcript::COLLAPSED_ACTIVITY_VISIBLE_COUNT),
+            );
+            // A summary expansion is progressive. `Enter` on it reveals the
+            // next bounded chunk; Ctrl+Shift+Enter uses the all-expand path.
+            self.node_expansions.remove(&node.key);
+            self.invalidate_render();
+            let total_lines = self.rendered(width).lines.len();
+            let target_line = self.focusable_line_near(
+                width,
+                cursor_line.min(total_lines.saturating_sub(1)),
+                true,
+            );
+            self.viewport.top = self.viewport.top.min(self.max_scroll(width, height));
+            self.install_cursor(width, height, target_line, block_cursor, true);
+            self.refresh_cursor_screen_row(height);
+            self.sync_follow_tail(width, height);
+            return Some((node.kind, true));
+        }
+
         let expanded = !node.expanded;
         self.node_expansions.insert(node.key.clone(), expanded);
         // Track which Operation Activities have their detail expanded. Live
@@ -2828,6 +2970,37 @@ impl TranscriptState {
         self.sync_follow_tail(width, height);
 
         Some((node.kind, expanded))
+    }
+
+    /// Reveal every currently folded activity and every folded run summary in
+    /// the loaded transcript. This is intentionally scoped to the in-memory
+    /// transcript; fetching older pages remains an explicit scroll/pagination
+    /// action rather than an unbounded request.
+    pub(crate) fn expand_all_transcript_parts(&mut self, width: u16, height: u16) {
+        let summary_keys = self
+            .rendered(width)
+            .nodes
+            .iter()
+            .filter(|node| matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
+            .map(|node| node.key.clone())
+            .collect::<Vec<_>>();
+        for key in summary_keys {
+            self.node_expansions.insert(key, true);
+        }
+        self.activity_summary_visible_counts.clear();
+        self.invalidate_render();
+        let all_keys = self
+            .rendered(width)
+            .nodes
+            .iter()
+            .filter(|node| node.toggleable)
+            .map(|node| node.key.clone())
+            .collect::<Vec<_>>();
+        for key in all_keys {
+            self.node_expansions.insert(key, true);
+        }
+        self.invalidate_render();
+        self.ensure_visual_focus(width, height);
     }
 
     pub(crate) fn current_highlighted_node_index(&mut self, width: u16) -> Option<usize> {
@@ -3574,7 +3747,6 @@ use crate::{
     normalize_transcript_text_selection, transcript_node_highlight_range,
     transcript_selection_scroll_position, transcript_text_selection_text, ui_text,
 };
-use agena_tui_transcript::render_entry_detailed_with_interactions;
 use unicode_properties::UnicodeEmoji;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -3590,6 +3762,20 @@ use crate::{
 mod stall_recovery_tests {
     use super::*;
     use std::time::Instant;
+
+    fn text_part(part_id: i64, text: &str) -> agena_api::resource::SessionTranscriptPart {
+        agena_api::resource::SessionTranscriptPart {
+            part_id,
+            kind: "text".to_owned(),
+            role: "assistant".to_owned(),
+            state: "completed".to_owned(),
+            content: serde_json::json!({ "text": text }),
+            summary: None,
+            created_at_ms: part_id * 10,
+            parent_part_id: None,
+            run_id: None,
+        }
+    }
 
     fn state() -> TranscriptState {
         TranscriptState::new(
@@ -3629,6 +3815,34 @@ mod stall_recovery_tests {
         assert!(!state.recover_stalled_requests(Duration::from_secs(3600)));
         assert!(state.refreshing);
         assert!(state.state_loading);
+    }
+
+    #[test]
+    fn prepending_an_older_page_keeps_the_loaded_window_and_cursor_position() {
+        let mut state = state();
+        state.merge_parts(vec![
+            text_part(10, "recent one\nline two\nline three"),
+            text_part(11, "recent two\nline two\nline three"),
+        ]);
+        state.set_transcript_page(Some("older-cursor".to_owned()), true);
+        state.scroll_to_bottom(80, 4);
+        state.move_cursor_by_wheel(80, 4, -2);
+        let reading_top = state.viewport_top();
+
+        assert!(state.prepend_transcript_parts(vec![text_part(1, "older page")], 80, 4,));
+        assert_eq!(
+            state
+                .parts
+                .iter()
+                .map(|part| part.part_id)
+                .collect::<Vec<_>>(),
+            vec![1, 10, 11]
+        );
+        assert!(state.transcript_older_pages_loaded);
+        assert!(
+            state.viewport_top() >= reading_top,
+            "prepending content must not move the reader backwards"
+        );
     }
 
     #[test]

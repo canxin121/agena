@@ -10,13 +10,21 @@ export type TranscriptActivityFold<T> = {
  */
 export function foldTranscriptActivityRun<T>(
   parts: readonly T[],
-  summaryExpanded: boolean,
+  summaryExpandedOrVisibleCount: boolean | number,
   visibleCount = 5,
 ): TranscriptActivityFold<T> {
-  const budget = Number.isFinite(visibleCount) ? Math.max(0, Math.floor(visibleCount)) : 5
+  const budget =
+    typeof summaryExpandedOrVisibleCount === 'number'
+      ? Math.max(0, Math.floor(summaryExpandedOrVisibleCount))
+      : Number.isFinite(visibleCount)
+        ? Math.max(0, Math.floor(visibleCount))
+        : 5
   const hiddenCount = Math.max(0, parts.length - budget)
   return {
     hiddenCount,
-    visibleParts: summaryExpanded ? [...parts] : parts.slice(hiddenCount),
+    visibleParts:
+      typeof summaryExpandedOrVisibleCount === 'boolean' && summaryExpandedOrVisibleCount
+        ? [...parts]
+        : parts.slice(hiddenCount),
   }
 }

@@ -100,6 +100,7 @@ const {
 
   // Scroll/nav.
   handleScroll,
+  handleWheel,
   isAtBottom,
   navigableMessageIds,
   navBottomOffset,
@@ -403,6 +404,7 @@ void sessionActionsMenuRef
             class="min-h-0 chat-scroll flex-1 overflow-y-auto"
             data-scrollbar="chat"
             @scroll="handleScroll"
+            @wheel="handleWheel"
           >
             <div ref="contentEl" class="chat-message-column py-3">
               <MessageList

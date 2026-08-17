@@ -58,8 +58,9 @@ const fallbackError = computed(() => {
   if (hasErrorPart.value || !assistantError.value || assistantError.value.interrupted) return ''
   return assistantError.value.message || ''
 })
-const activityRunExpanded = ref<Record<string, boolean>>({})
+const activityRunVisibleCount = ref<Record<string, number>>({})
 const COLLAPSED_ACTIVITY_VISIBLE_COUNT = 5
+const ACTIVITY_EXPANSION_STEP = 5
 
 type TranscriptRow =
   | { kind: 'part'; key: string; part: TranscriptDisplayPart }
@@ -68,7 +69,7 @@ type TranscriptRow =
 watch(
   () => props.collapseSignal,
   () => {
-    activityRunExpanded.value = {}
+    activityRunVisibleCount.value = {}
   },
 )
 
@@ -93,10 +94,10 @@ const transcriptRows = computed<TranscriptRow[]>(() => {
       index += 1
     }
     const summaryKey = `activity-summary:${messageId.value}:${run[0]?.id || index}`
-    const expanded = Boolean(activityRunExpanded.value[summaryKey])
-    const folded = foldTranscriptActivityRun(run, expanded, COLLAPSED_ACTIVITY_VISIBLE_COUNT)
+    const visibleCount = activityRunVisibleCount.value[summaryKey] ?? COLLAPSED_ACTIVITY_VISIBLE_COUNT
+    const folded = foldTranscriptActivityRun(run, visibleCount)
     if (folded.hiddenCount) {
-      rows.push({ kind: 'summary', key: summaryKey, hiddenCount: folded.hiddenCount, expanded })
+      rows.push({ kind: 'summary', key: summaryKey, hiddenCount: folded.hiddenCount, expanded: false })
     }
     for (const part of folded.visibleParts) {
       rows.push({ kind: 'part', key: part.key, part })
@@ -118,8 +119,10 @@ function togglePart(part: TranscriptDisplayPart) {
   emit('partToggle', part, !props.isPartExpanded(part))
 }
 
-function toggleActivitySummary(key: string) {
-  activityRunExpanded.value = { ...activityRunExpanded.value, [key]: !activityRunExpanded.value[key] }
+function revealActivitySummary(key: string, hiddenCount: number, all = false) {
+  const current = activityRunVisibleCount.value[key] ?? COLLAPSED_ACTIVITY_VISIBLE_COUNT
+  const next = all ? Number.MAX_SAFE_INTEGER : current + Math.max(1, Math.min(ACTIVITY_EXPANSION_STEP, hiddenCount))
+  activityRunVisibleCount.value = { ...activityRunVisibleCount.value, [key]: next }
   emit('nodeSelect', key)
 }
 
@@ -263,21 +266,27 @@ function partNavigationText(part: TranscriptDisplayPart): string {
         @pointerdown="$emit('nodeSelect', row.key)"
         @focus="$emit('nodeSelect', row.key)"
       >
-        <button
-          v-if="row.kind === 'summary'"
-          type="button"
-          class="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left font-mono text-[11px] text-muted-foreground hover:bg-muted/35 hover:text-foreground"
-          data-transcript-toggle="true"
-          :aria-expanded="row.expanded"
-          @click="toggleActivitySummary(row.key)"
-        >
-          <span class="w-3 text-center" aria-hidden="true">{{ row.expanded ? '▾' : '▸' }}</span>
-          <span>{{
-            row.expanded
-              ? t('chat.messages.activity.hide')
-              : t('chat.messages.activity.moreCount', { count: row.hiddenCount })
-          }}</span>
-        </button>
+        <div v-if="row.kind === 'summary'" class="flex items-center gap-2">
+          <button
+            type="button"
+            class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left font-mono text-[11px] text-muted-foreground hover:bg-muted/35 hover:text-foreground"
+            data-transcript-toggle="true"
+            :aria-expanded="false"
+            @click="revealActivitySummary(row.key, row.hiddenCount)"
+          >
+            <span class="w-3 text-center" aria-hidden="true">▸</span>
+            <span>{{ t('chat.messages.activity.expandMoreCount', { count: row.hiddenCount }) }}</span>
+          </button>
+          <button
+            v-if="row.hiddenCount > 0"
+            type="button"
+            class="shrink-0 rounded-md px-1 py-1 font-mono text-[10px] text-muted-foreground hover:bg-muted/35 hover:text-foreground"
+            data-transcript-expand-all="true"
+            @click.stop="revealActivitySummary(row.key, row.hiddenCount, true)"
+          >
+            {{ t('chat.messages.activity.expandAll') }}
+          </button>
+        </div>
         <AgenaTranscriptPart
           v-else
           :part="row.part"

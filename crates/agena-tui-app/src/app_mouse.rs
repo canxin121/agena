@@ -94,6 +94,7 @@ impl App {
             }
             _ => {}
         }
+        self.request_older_transcript_parts_if_needed();
     }
 
     pub(crate) fn cancel_surface_selection(&mut self) {

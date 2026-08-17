@@ -55,6 +55,9 @@ impl App {
             AppMessage::SessionStateLoaded { session_id, result } => {
                 self.handle_session_state_loaded(session_id, result)
             }
+            AppMessage::TranscriptPartsLoaded { session_id, result } => {
+                self.handle_transcript_parts_loaded(session_id, result)
+            }
             AppMessage::SessionRefreshed { session_id, result } => {
                 self.handle_session_refreshed(session_id, result)
             }
@@ -330,7 +333,7 @@ impl App {
     pub(crate) fn handle_session_state_loaded(
         &mut self,
         session_id: i64,
-        result: UiResult<SessionExecutionResource>,
+        result: UiResult<crate::app_backend::SessionStateWithTranscriptPage>,
     ) {
         if self.transcript.session_id != Some(session_id) {
             return;
@@ -339,18 +342,60 @@ impl App {
         self.transcript.state_loading = false;
         self.transcript.state_load_in_flight_since = None;
         match result {
-            Ok(execution) => {
+            Ok(load) => {
+                let page = load.page;
+                let execution = load.execution;
                 let session_id = execution.session.id;
                 let execution_is_terminal = execution.session.state.active_execution().is_none();
                 if self.apply_transcript_execution(execution) {
                     self.sync_pending_interactive_after_execution(session_id);
                     self.sync_session_list_selection_to_current_execution();
                 }
+                if !self.transcript.transcript_older_pages_loaded {
+                    self.transcript
+                        .set_transcript_page(page.next_cursor, page.has_more);
+                }
                 // A session (re)open can deliver the terminal state of a run
                 // that finished while the user was elsewhere. Drain a parked
                 // message so it is not stranded in the pending slot.
                 if execution_is_terminal {
                     self.try_send_pending();
+                }
+            }
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    pub(crate) fn handle_transcript_parts_loaded(
+        &mut self,
+        session_id: i64,
+        result: UiResult<crate::app_backend::SessionTranscriptPage>,
+    ) {
+        if self.transcript.session_id != Some(session_id) {
+            return;
+        }
+
+        self.transcript.transcript_older_loading = false;
+        self.transcript.transcript_older_in_flight_since = None;
+        match result {
+            Ok(page) => {
+                let previous_cursor = self.transcript.transcript_next_cursor.clone();
+                let cursor_progressed = page.next_cursor != previous_cursor;
+                let loaded = self.transcript.prepend_transcript_parts(
+                    page.parts,
+                    self.layout.transcript_body.width,
+                    self.layout.transcript_body.height,
+                );
+                if loaded && cursor_progressed {
+                    self.transcript
+                        .set_transcript_page(page.next_cursor, page.has_more);
+                    if let Some(execution) = self.transcript.execution.as_mut() {
+                        execution.parts = self.transcript.parts.clone();
+                    }
+                } else {
+                    // A repeated cursor or an empty page must not leave the
+                    // top trigger in a retry loop forever.
+                    self.transcript.set_transcript_page(None, false);
                 }
             }
             Err(error) => self.flash_error(error),

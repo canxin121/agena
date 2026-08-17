@@ -175,6 +175,18 @@ export function usePinnedScroll(opts: {
     void loadOlderAndPreserveViewport()
   }
 
+  // A wheel-up gesture is explicit user intent even when the recent page is
+  // shorter than the viewport and the browser cannot emit a meaningful
+  // scrollTop change at the boundary.
+  function handleWheel(event: WheelEvent) {
+    if (event.deltaY >= 0) return
+    autoLoadOlderUnlocked.value = true
+    const el = scrollEl.value
+    if (!el || !opts.canLoadOlder?.()) return
+    if (el.scrollTop > 120 && isScrollableY(el)) return
+    void loadOlderAndPreserveViewport()
+  }
+
   function handleScroll() {
     if (!scrollEl.value) return
     isAtBottom.value = isNearBottomNow()
@@ -237,5 +249,6 @@ export function usePinnedScroll(opts: {
     scrollToBottomOnceAfterLoad,
     loadOlderAndPreserveViewport,
     handleScroll,
+    handleWheel,
   }
 }

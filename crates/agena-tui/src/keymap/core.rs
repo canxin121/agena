@@ -1,8 +1,8 @@
 use crossterm::event::{KeyCode as K, KeyEvent};
 
 use super::{
-    KeyAction as A, KeyContext, only_ctrl, only_shift, tab_navigation_action, unmodified,
-    unmodified_or_shift,
+    KeyAction as A, KeyContext, only_ctrl, only_ctrl_shift, only_shift, tab_navigation_action,
+    unmodified, unmodified_or_shift,
 };
 
 pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
@@ -52,6 +52,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Esc if unmodified(key) => Some(A::CancelSelection),
             K::Char('y') if unmodified(key) => Some(A::Copy),
             K::Char('Y') if unmodified_or_shift(key) => Some(A::YankLine),
+            K::Enter if only_ctrl_shift(key) => Some(A::ExpandAll),
             K::Enter if unmodified(key) => Some(A::Toggle),
             K::Left | K::Char('h') if unmodified(key) => Some(A::MoveLeft),
             K::Right | K::Char('l') if unmodified(key) => Some(A::MoveRight),

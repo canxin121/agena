@@ -274,10 +274,6 @@ pub(crate) struct TranscriptState {
     pub(crate) transcript_has_more: bool,
     pub(crate) transcript_older_loading: bool,
     pub(crate) transcript_older_in_flight_since: Option<Instant>,
-    /// Raw parts consumed by the current folded-history skip chain. This is
-    /// deliberately measured in parts rather than cursor pages: one assistant
-    /// reply can span many pages and must be crossed in one upward gesture.
-    pub(crate) transcript_older_skip_parts: usize,
     /// Once an older page has been prepended, subsequent recent snapshots must
     /// update only their newest window so they do not discard loaded history.
     pub(crate) transcript_older_pages_loaded: bool,

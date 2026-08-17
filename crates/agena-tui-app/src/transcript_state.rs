@@ -48,7 +48,6 @@ impl TranscriptState {
             transcript_has_more: false,
             transcript_older_loading: false,
             transcript_older_in_flight_since: None,
-            transcript_older_skip_parts: 0,
             transcript_older_pages_loaded: false,
             transcript_folds: Vec::new(),
             viewport: TranscriptViewport::default(),
@@ -88,7 +87,6 @@ impl TranscriptState {
         self.transcript_has_more = false;
         self.transcript_older_loading = false;
         self.transcript_older_in_flight_since = None;
-        self.transcript_older_skip_parts = 0;
         self.transcript_older_pages_loaded = false;
         self.transcript_folds.clear();
         self.viewport.reduce(TranscriptAction::Reset);
@@ -139,7 +137,6 @@ impl TranscriptState {
         self.expanded_operation_activity_ids = cache.expanded_operation_activity_ids;
         self.transcript_older_loading = false;
         self.transcript_older_in_flight_since = None;
-        self.transcript_older_skip_parts = 0;
         self.execution = None;
         self.last_event_seq = None;
         self.viewport.reduce(TranscriptAction::Reset);
@@ -330,6 +327,7 @@ impl TranscriptState {
     /// rounds have been folded. Node ids are not suitable here: prepending an
     /// older assistant round legitimately changes the first assistant id even
     /// though the visible block is still the same block.
+    #[cfg(test)]
     pub(crate) fn visible_navigation_boundaries(
         &self,
     ) -> Vec<Option<agena_api::resource::RunRole>> {

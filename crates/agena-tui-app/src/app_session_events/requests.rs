@@ -298,11 +298,6 @@ impl App {
         let Some(cursor) = self.transcript.transcript_next_cursor.clone() else {
             return;
         };
-        if self.transcript.transcript_older_skip_parts
-            >= crate::app_backend::MAX_FOLD_SKIP_RAW_PARTS
-        {
-            self.transcript.transcript_older_skip_parts = 0;
-        }
         self.transcript.transcript_older_loading = true;
         self.transcript.transcript_older_in_flight_since = Some(Instant::now());
 
@@ -312,7 +307,7 @@ impl App {
             let result = application
                 .list_session_transcript_page(
                     session_id,
-                    crate::app_backend::OLDER_SESSION_TRANSCRIPT_PAGE_SIZE,
+                    crate::app_backend::SESSION_TRANSCRIPT_PAGE_SIZE,
                     cursor.as_str(),
                 )
                 .await

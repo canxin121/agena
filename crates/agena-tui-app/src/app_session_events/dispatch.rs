@@ -393,51 +393,27 @@ impl App {
         self.transcript.transcript_older_in_flight_since = None;
         match result {
             Ok(page) => {
-                let loaded_raw_parts = page.parts.len();
                 let previous_cursor = self.transcript.transcript_next_cursor.clone();
                 let cursor_progressed = page.next_cursor != previous_cursor;
-                let visible_before = self.transcript.visible_navigation_boundaries();
                 let loaded = self.transcript.prepend_transcript_parts(
                     page.parts,
                     self.layout.transcript_body.width,
                     self.layout.transcript_body.height,
                 );
                 if loaded && cursor_progressed {
-                    let visible_after = self.transcript.visible_navigation_boundaries();
-                    let visible_progressed = visible_before != visible_after;
                     self.transcript
                         .set_transcript_page(page.next_cursor, page.has_more);
                     self.transcript.merge_transcript_folds(page.folds);
                     if let Some(execution) = self.transcript.execution.as_mut() {
                         execution.parts = self.transcript.parts.clone();
                     }
-                    if visible_progressed || !page.has_more {
-                        self.transcript.transcript_older_skip_parts = 0;
-                    } else {
-                        self.transcript.transcript_older_skip_parts = self
-                            .transcript
-                            .transcript_older_skip_parts
-                            .saturating_add(loaded_raw_parts.max(1));
-                        if self.transcript.transcript_older_skip_parts
-                            < crate::app_backend::MAX_FOLD_SKIP_RAW_PARTS
-                        {
-                            // The page only contained hidden folded activity;
-                            // continue across the whole raw span while the
-                            // user's upward gesture is resolving.
-                            self.request_older_transcript_parts_if_needed();
-                        } else {
-                            self.transcript.transcript_older_skip_parts = 0;
-                        }
-                    }
                 } else {
                     // A repeated cursor or an empty page must not leave the
                     // top trigger in a retry loop forever.
                     self.transcript.set_transcript_page(None, false);
-                    self.transcript.transcript_older_skip_parts = 0;
                 }
             }
             Err(error) => {
-                self.transcript.transcript_older_skip_parts = 0;
                 self.flash_error(error);
             }
         }

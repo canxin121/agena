@@ -37,7 +37,8 @@ pub struct PartResource {
 
 /// Presentation metadata for a folded assistant activity prefix. The prefix
 /// is intentionally absent from `SessionPartsResource.parts`; clients use the
-/// opaque cursor to request the next expansion chunk for this run only.
+/// opaque cursor to request the next expansion chunk for the adjacent logical
+/// assistant reply.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionTranscriptFoldResource {
     pub run_id: i64,

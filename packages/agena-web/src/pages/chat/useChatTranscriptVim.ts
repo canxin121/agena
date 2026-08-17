@@ -180,7 +180,12 @@ export function useChatTranscriptVim(opts: {
 
   function cursorElements(): HTMLElement[] {
     const nodes = nodeElements()
-    const parts = nodes.filter((element) => element.dataset.transcriptNode === 'part')
+    // Fold controls are semantic UI, not transcript text. Keeping them out
+    // of the cursor model prevents a message-level fallback from landing on
+    // the synthetic "expand more" row when an assistant reply is folded.
+    const parts = nodes.filter(
+      (element) => element.dataset.transcriptNode === 'part' && element.dataset.partKind !== 'activity_summary',
+    )
     if (parts.length) return parts
     return nodes.filter((element) => element.dataset.transcriptNode === 'message')
   }

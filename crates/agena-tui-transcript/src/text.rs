@@ -27,6 +27,16 @@ pub fn speed_mode_display_value(value: &str) -> String {
     prefixed_mode_display_value(trimmed, &["speed-"])
 }
 
+pub fn speed_mode_display_value_with_name(value: &str, display_name: Option<&str>) -> String {
+    if let Some(display_name) = display_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return display_name.to_owned();
+    }
+    speed_mode_display_value(value)
+}
+
 fn prefixed_mode_display_value(value: &str, prefixes: &[&str]) -> String {
     prefixes
         .iter()
@@ -49,7 +59,10 @@ pub fn transcript_header_title(
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{I18n, text_artifact_display_label, transcript_header_title};
+    use super::{
+        I18n, speed_mode_display_value_with_name, text_artifact_display_label,
+        transcript_header_title,
+    };
 
     #[test]
     fn session_header_places_id_before_title() {
@@ -80,6 +93,18 @@ mod tests {
         assert_eq!(
             text_artifact_display_label("", Some("paste 0 chars")),
             "paste 0 chars"
+        );
+    }
+
+    #[test]
+    fn speed_mode_display_prefers_catalog_display_name() {
+        assert_eq!(
+            speed_mode_display_value_with_name("fast", Some("Fast")),
+            "Fast"
+        );
+        assert_eq!(
+            speed_mode_display_value_with_name("speed-fast", None),
+            "fast"
         );
     }
 }

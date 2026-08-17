@@ -150,6 +150,7 @@ impl App {
                 &agena_tui::fl_args!("value" => model_label),
             ));
         }
+        let execution_model = execution_model_ref(&execution.execution);
         if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
             && !thinking_mode.trim().is_empty()
         {
@@ -163,7 +164,18 @@ impl App {
         {
             parts.push(self.i18n.text_args(
                 "status-part-speed",
-                &agena_tui::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
+                &agena_tui::fl_args!(
+                    "value" => speed_mode_display_value_for_model(
+                        &self.application,
+                        execution_model.as_ref(),
+                        speed_mode,
+                    )
+                ),
+            ));
+        } else if model_has_speed_modes(&self.application, execution_model.as_ref()) {
+            parts.push(self.i18n.text_args(
+                "status-part-speed",
+                &agena_tui::fl_args!("value" => ui_text::t(&self.i18n, "value-default")),
             ));
         }
         if let Some(verbosity) = execution.execution.model_verbosity.as_deref()
@@ -255,7 +267,14 @@ impl App {
         // Think/speed: prefer the execution context (the modes a run actually
         // used), then run-options overrides, then the resolved model's
         // default modes so the modes are always visible before the first
-        // message is sent.
+        // message is sent. Speed has a meaningful empty value: when the
+        // selected model exposes speed modes but none is explicitly selected,
+        // the provider/model native default is used and shown as `default`.
+        let status_model = self.current_session_model_ref().or_else(|| {
+            self.application
+                .resolved_model_for_run_options(&self.run_options.to_request())
+                .ok()
+        });
         let (default_thinking, default_speed) = self
             .application
             .resolved_model_default_modes(&self.run_options.to_request());
@@ -290,7 +309,18 @@ impl App {
         if let Some(speed_mode) = speed_mode {
             parts.push(self.i18n.text_args(
                 "session-status-speed",
-                &agena_tui::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
+                &agena_tui::fl_args!(
+                    "value" => speed_mode_display_value_for_model(
+                        &self.application,
+                        status_model.as_ref(),
+                        speed_mode,
+                    )
+                ),
+            ));
+        } else if model_has_speed_modes(&self.application, status_model.as_ref()) {
+            parts.push(self.i18n.text_args(
+                "session-status-speed",
+                &agena_tui::fl_args!("value" => ui_text::t(&self.i18n, "value-default")),
             ));
         }
         if let Some(execution) = self.transcript.execution.as_ref() {
@@ -363,6 +393,58 @@ fn status_mode_value<'a>(
         .filter(|value| !value.trim().is_empty())
         .or_else(|| run_options_mode.filter(|value| !value.trim().is_empty()))
         .or_else(|| default_mode.filter(|value| !value.trim().is_empty()))
+}
+
+fn execution_model_ref(
+    execution: &agena_api::resource::SessionExecutionContextResource,
+) -> Option<crate::ModelRef> {
+    let provider_id = execution
+        .model_provider_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let model_id = execution
+        .model_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(
+        execution
+            .model_adapter_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|adapter_id| crate::ModelRef::new_with_adapter(provider_id, adapter_id, model_id))
+            .unwrap_or_else(|| crate::ModelRef::new(provider_id, model_id)),
+    )
+}
+
+fn model_has_speed_modes(application: &crate::TuiBackend, model: Option<&crate::ModelRef>) -> bool {
+    model
+        .and_then(|model| application.configured_model(model))
+        .is_some_and(|model| !model.speed_modes.is_empty())
+}
+
+fn speed_mode_display_value_for_model(
+    application: &crate::TuiBackend,
+    model: Option<&crate::ModelRef>,
+    value: &str,
+) -> String {
+    let display_name = model
+        .and_then(|model| application.configured_model(model))
+        .and_then(|model| {
+            let key = value.trim();
+            model
+                .speed_modes
+                .get(key)
+                .or_else(|| {
+                    key.strip_prefix("speed-")
+                        .and_then(|key| model.speed_modes.get(key))
+                })
+                .and_then(|mode| mode.display_name.as_deref())
+                .map(str::to_owned)
+        });
+    ui_text::speed_mode_display_value_with_name(value, display_name.as_deref())
 }
 use crate::{
     App, SessionActivity, UiResult, current_spinner_millis, execution_model_name_status_label,

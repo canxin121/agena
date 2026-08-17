@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   defaultModeValue,
+  modeOptionDisplayLabel,
   modelIdsFromProviderModels,
   speedModeOptionsForModel,
   thinkingModeOptionsForModel,
@@ -48,4 +49,19 @@ test('thinking and speed modes follow Agena model resource selectors', () => {
     ['normal', 'fast'],
   )
   assert.equal(defaultModeValue(speed), 'fast')
+  assert.equal(modeOptionDisplayLabel(speed, 'fast'), 'Fast')
+  assert.equal(modeOptionDisplayLabel(speed, ''), '')
+})
+
+test('speed modes without an explicit default preserve the provider default', () => {
+  const options = speedModeOptionsForModel({
+    provider_id: 'openai',
+    id: 'gpt-5.6-luna',
+    speed_modes: {
+      fast: { display_name: 'Fast' },
+      pro: { display_name: 'Pro' },
+    },
+  })
+
+  assert.equal(defaultModeValue(options), '')
 })

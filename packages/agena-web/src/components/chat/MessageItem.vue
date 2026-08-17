@@ -132,6 +132,17 @@ function searchMatch(key: string): boolean {
   return props.isNodeSearchMatch?.(key) === true
 }
 
+function selectMessageNode(event: PointerEvent) {
+  const target = event.target
+  // Part rows own their selection. Letting this article-level handler run
+  // after a part handler rewrites the active key to `message:<id>`, whose
+  // first text entry may be the synthetic folded-activity summary. That
+  // causes the custom transcript cursor to jump to "expand more" before the
+  // browser's release position restores the real character.
+  if (target instanceof Element && target.closest('[data-transcript-node="part"]')) return
+  emit('nodeSelect', messageNodeKey.value)
+}
+
 function togglePart(part: TranscriptDisplayPart) {
   emit('nodeSelect', part.key)
   emit('partToggle', part, !props.isPartExpanded(part))
@@ -166,7 +177,7 @@ function partNavigationText(part: TranscriptDisplayPart): string {
     :data-chat-message-anchor="role === 'user' ? 'true' : undefined"
     :data-role="role"
     tabindex="-1"
-    @pointerdown="$emit('nodeSelect', messageNodeKey)"
+    @pointerdown="selectMessageNode"
     @focus="$emit('nodeSelect', messageNodeKey)"
   >
     <header class="flex min-h-6 items-center gap-2 px-1 text-[11px] text-muted-foreground">
@@ -277,6 +288,7 @@ function partNavigationText(part: TranscriptDisplayPart): string {
         :data-message-id="messageId"
         :data-part-id="row.kind === 'part' ? row.part.id : undefined"
         :data-part-kind="row.kind === 'part' ? row.part.kind : 'activity_summary'"
+        :data-transcript-chrome="row.kind === 'summary' ? 'true' : undefined"
         :data-toggleable="row.kind === 'summary' || row.part.toggleable ? 'true' : 'false'"
         :data-copy-text="
           row.kind === 'summary'

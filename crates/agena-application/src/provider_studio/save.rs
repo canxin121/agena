@@ -1273,15 +1273,46 @@ pub(crate) fn default_thinking_mode_selector(
         .and_then(|mode| mode.selector().map(|selector| selector.into_owned()))
 }
 
-/// Picks the effective speed-mode name for the composer status: the mode the
-/// model marks as default, or the first listed mode when no default is marked.
-/// Returns `None` only when the model exposes no speed modes at all.
+/// Picks the effective speed-mode name for the composer status. A speed mode
+/// is only effective by default when the model explicitly marks it as such;
+/// an unmarked speed catalog means that no speed override should be sent and
+/// the provider/model native default should be used.
 pub(crate) fn default_speed_mode_name(
     modes: &std::collections::BTreeMap<String, agena_domain::ModelSpeedMode>,
 ) -> Option<String> {
     modes
         .iter()
         .find(|(_, mode)| mode.is_default)
-        .or_else(|| modes.iter().next())
         .map(|(name, _)| name.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::default_speed_mode_name;
+
+    #[test]
+    fn unmarked_speed_modes_do_not_create_an_override() {
+        let mut modes = BTreeMap::new();
+        modes.insert("fast".to_owned(), agena_domain::ModelSpeedMode::default());
+        modes.insert("pro".to_owned(), agena_domain::ModelSpeedMode::default());
+
+        assert_eq!(default_speed_mode_name(&modes), None);
+    }
+
+    #[test]
+    fn explicitly_marked_speed_mode_is_used_as_the_default_override() {
+        let mut modes = BTreeMap::new();
+        modes.insert("fast".to_owned(), agena_domain::ModelSpeedMode::default());
+        modes.insert(
+            "pro".to_owned(),
+            agena_domain::ModelSpeedMode {
+                is_default: true,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(default_speed_mode_name(&modes).as_deref(), Some("pro"));
+    }
 }

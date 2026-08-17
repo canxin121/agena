@@ -161,3 +161,41 @@ test('useChatModelSelection: watch messages.length triggers derived session appl
   assert.equal(selection.selectedProviderId.value, 'msg-provider-2')
   assert.equal(selection.selectedModelId.value, 'msg-model-2')
 })
+
+test('useChatModelSelection: an unmarked speed catalog uses provider default and display names for overrides', async () => {
+  const { selection } = await createTestHarness({ selectedSessionId: 'session-speed-default' })
+  selection.providers.value = [
+    {
+      id: 'cpa',
+      name: 'CPA',
+      defaultAdapter: 'openai_responses',
+      defaultModel: 'gpt-5.6-luna',
+      models: [
+        {
+          provider_id: 'cpa',
+          adapter_id: 'openai_responses',
+          id: 'gpt-5.6-luna',
+          speed_modes: {
+            fast: { display_name: 'Fast' },
+            pro: { display_name: 'Pro' },
+          },
+        },
+      ],
+    },
+  ]
+  selection.runtimeDefaultSelection.value = {
+    provider: 'cpa',
+    adapter: 'openai_responses',
+    model: 'gpt-5.6-luna',
+    thinkingMode: '',
+    speedMode: '',
+    verbosity: '',
+  }
+  selection.applySessionSelection()
+
+  assert.equal(selection.selectedSpeedMode.value, '')
+  assert.equal(selection.speedModeChipLabel.value, '')
+
+  selection.chooseSpeedMode('fast')
+  assert.equal(selection.speedModeChipLabel.value, 'Fast')
+})

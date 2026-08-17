@@ -163,6 +163,18 @@ export function defaultModeValue(options: ModelModeOption[]): string {
   return options.find((option) => option.isDefault)?.value || ''
 }
 
+/**
+ * Resolve the catalog-facing label for a selected mode without turning an
+ * empty selection into an arbitrary mode. An empty result means that the
+ * provider/model native default should be used, or that the catalog has no
+ * display name for the supplied value.
+ */
+export function modeOptionDisplayLabel(options: ModelModeOption[], value: string): string {
+  const normalized = readString(value)
+  if (!normalized) return ''
+  return options.find((option) => option.value === normalized)?.label || ''
+}
+
 export function useModelSelectionCatalog() {
   const providers = ref<Provider[]>([])
   const runtimeDefaultSelection = ref<RuntimeDefaultSelection>({

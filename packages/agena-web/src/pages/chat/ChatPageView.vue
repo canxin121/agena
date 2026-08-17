@@ -636,7 +636,7 @@ void sessionActionsMenuRef
                         @click.stop="toggleComposerPicker('speed')"
                       >
                         <RiSpeedUpLine class="h-3 w-3" />
-                        <span :class="modeChipTextClass">{{ speedModeChipLabel }}</span>
+                        <span :class="modeChipTextClass">{{ speedModeChipLabel || t('common.default') }}</span>
                       </button>
                     </template>
                     <template v-if="sessionUsage">

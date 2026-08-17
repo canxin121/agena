@@ -2198,7 +2198,6 @@ impl TuiBackend {
                     .speed_modes
                     .iter()
                     .find(|(_, mode)| mode.is_default)
-                    .or_else(|| model.speed_modes.iter().next())
                     .map(|(name, _)| name.clone())
             });
         (thinking, speed)

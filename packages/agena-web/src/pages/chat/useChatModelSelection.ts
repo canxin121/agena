@@ -2,6 +2,7 @@ import { computed, ref, watch, type Ref } from 'vue'
 
 import {
   defaultModeValue,
+  modeOptionDisplayLabel,
   speedModeOptionsForModel,
   thinkingModeOptionsForModel,
   useModelSelectionCatalog,
@@ -245,7 +246,9 @@ export function useChatModelSelection(opts: {
   })
   const speedModeChipLabel = computed(() => {
     const selected = selectedSpeedMode.value
-    return statusSpeedMode(selected) || 'Speed'
+    return (
+      modeOptionDisplayLabel(speedModeOptionsForModel(selectedModelMeta.value), selected) || statusSpeedMode(selected)
+    )
   })
 
   const modelHint = computed(() => {
@@ -263,7 +266,10 @@ export function useChatModelSelection(opts: {
   const speedModeHint = computed(() =>
     speedModeSource.value === 'manual' || !selectedSpeedMode.value
       ? ''
-      : `Using speed mode: ${selectedSpeedMode.value}`,
+      : `Using speed mode: ${
+          modeOptionDisplayLabel(speedModeOptionsForModel(selectedModelMeta.value), selectedSpeedMode.value) ||
+          statusSpeedMode(selectedSpeedMode.value)
+        }`,
   )
 
   const picker = useModelSelectionPickerUi({

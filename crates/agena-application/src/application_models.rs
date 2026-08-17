@@ -36,9 +36,12 @@ impl Application {
     /// by `request`, matching what a fresh session would apply. When the
     /// request does not pin a model, the configured default selection's
     /// thinking/speed modes take precedence (the runtime applies them to new
-    /// sessions); otherwise the resolved model's own default (marked default,
-    /// then first listed mode) is used. Returns `(None, None)` when the model
-    /// cannot be resolved or exposes no modes.
+    /// sessions); otherwise the resolved model's own defaults are used.
+    /// Thinking falls back to the first listed mode for compatibility with
+    /// catalogs that omit a thinking default. Speed only uses an explicitly
+    /// marked default; `None` means the provider/model native speed default
+    /// and therefore no speed override. Returns `(None, None)` when the model
+    /// cannot be resolved or exposes no applicable modes.
     pub fn resolved_model_default_modes(
         &self,
         request: &agena_api::resource::RunOptions,

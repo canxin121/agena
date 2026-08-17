@@ -595,6 +595,10 @@ impl Drop for App {
         if let Some(subscription) = self.active_subscription.take() {
             subscription.abort();
         }
+        // Transcript pages are process-local cache only. Release them
+        // explicitly when the TUI exits rather than relying on field-drop
+        // ordering to retain a large history until the whole App is torn down.
+        self.transcript_cache.clear();
         self.sync_current_draft_slot();
         let _ = self.try_persist_draft_store(true);
         cleanup_temporary_composer_items(self.composer_items.as_slice());

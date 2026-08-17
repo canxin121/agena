@@ -381,24 +381,46 @@ impl App {
             Ok(page) => {
                 let previous_cursor = self.transcript.transcript_next_cursor.clone();
                 let cursor_progressed = page.next_cursor != previous_cursor;
+                let visible_before = self
+                    .transcript
+                    .visible_navigation_keys(self.layout.transcript_body.width);
                 let loaded = self.transcript.prepend_transcript_parts(
                     page.parts,
                     self.layout.transcript_body.width,
                     self.layout.transcript_body.height,
                 );
                 if loaded && cursor_progressed {
+                    let visible_after = self
+                        .transcript
+                        .visible_navigation_keys(self.layout.transcript_body.width);
+                    let visible_progressed = visible_before != visible_after;
                     self.transcript
                         .set_transcript_page(page.next_cursor, page.has_more);
                     if let Some(execution) = self.transcript.execution.as_mut() {
                         execution.parts = self.transcript.parts.clone();
                     }
+                    if visible_progressed || !page.has_more {
+                        self.transcript.transcript_older_skip_budget = 0;
+                    } else if self.transcript.transcript_older_skip_budget > 0 {
+                        self.transcript.transcript_older_skip_budget -= 1;
+                        if self.transcript.transcript_older_skip_budget > 0 {
+                            // The page only contained hidden folded activity;
+                            // skip a bounded number of additional raw pages
+                            // while the user's upward gesture is resolving.
+                            self.request_older_transcript_parts_if_needed();
+                        }
+                    }
                 } else {
                     // A repeated cursor or an empty page must not leave the
                     // top trigger in a retry loop forever.
                     self.transcript.set_transcript_page(None, false);
+                    self.transcript.transcript_older_skip_budget = 0;
                 }
             }
-            Err(error) => self.flash_error(error),
+            Err(error) => {
+                self.transcript.transcript_older_skip_budget = 0;
+                self.flash_error(error);
+            }
         }
     }
 

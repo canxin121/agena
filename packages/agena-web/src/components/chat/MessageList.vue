@@ -40,6 +40,7 @@ const props = defineProps<{
   currentPhase: string
   awaitingAssistant: boolean
   activityCollapseSignal: number
+  activityExpandAllSignal: number
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
   isNodeSelected?: (key: string) => boolean
   isNodeSearchMatch?: (key: string) => boolean
@@ -59,9 +60,19 @@ const emit = defineEmits<{
   (event: 'unrevertFromRevert'): void
   (event: 'copySessionError'): void
   (event: 'clearSessionError'): void
+  (event: 'expandAll'): void
 }>()
 
 const { t } = useI18n()
+
+const hasExpandableTranscript = computed(() =>
+  props.renderBlocks.some(
+    (block) =>
+      block.kind === 'message' &&
+      (block.displayParts.some((part) => part.toggleable) ||
+        block.displayParts.filter((part) => part.kind !== 'text' && part.kind !== 'answer').length > 5),
+  ),
+)
 
 // The pending user turn follows the same canonical part projection as the
 // persisted transcript. It is temporary, but it must not be a second prose
@@ -191,6 +202,16 @@ function forwardPartToggle(part: TranscriptDisplayPart, expanded: boolean) {
   </div>
 
   <template v-else>
+    <div v-if="hasExpandableTranscript" class="mb-1 flex justify-end px-1">
+      <button
+        type="button"
+        class="rounded-md px-2 py-1 font-mono text-[10px] text-muted-foreground hover:bg-muted/35 hover:text-foreground"
+        data-transcript-expand-all="true"
+        @click="emit('expandAll')"
+      >
+        {{ t('chat.messages.activity.expandAll') }}
+      </button>
+    </div>
     <div v-if="loadingOlder" class="mb-2 flex items-center gap-2 px-1 text-[11px] text-muted-foreground">
       <RiLoader4Line class="h-3.5 w-3.5 animate-spin" />
       {{ t('chat.messages.loadingOlder') }}
@@ -215,6 +236,7 @@ function forwardPartToggle(part: TranscriptDisplayPart, expanded: boolean) {
           :revert-busy-message-id="revertBusyMessageId"
           :is-streaming="isStreamingAssistantMessage(block.message)"
           :collapse-signal="activityCollapseSignal"
+          :expand-all-signal="activityExpandAllSignal"
           :is-part-expanded="isPartExpanded"
           :is-node-selected="isNodeSelected"
           :is-node-search-match="isNodeSearchMatch"

@@ -810,7 +810,9 @@ const {
   MAX_VISIBLE_ACTIVITY_COLLAPSED,
   activityExpandedByBlockKey,
   activityCollapseSignal,
+  activityExpandAllSignal,
   collapseAllActivities,
+  expandAllActivities,
   isActivityExpanded,
   setActivityExpanded,
 } = renderBlocksApi
@@ -825,6 +827,19 @@ function transcriptPartExpanded(part: TranscriptDisplayPart): boolean {
 
 function setTranscriptPartExpanded(part: TranscriptDisplayPart, expanded: boolean) {
   setActivityExpanded(part.key, expanded)
+}
+
+function expandAllTranscriptParts() {
+  for (const block of renderBlocks.value) {
+    if (block.kind !== 'message') continue
+    for (const part of block.displayParts) {
+      if (part.toggleable) setActivityExpanded(part.key, true)
+    }
+  }
+  // The run-level fold is separate from each part's detail expansion. This
+  // signal reveals every currently loaded folded activity run without
+  // fetching the entire remote transcript.
+  expandAllActivities()
 }
 
 const sessionActions = useChatSessionActions({
@@ -1594,6 +1609,7 @@ const viewCtx = {
   // Activity rendering.
   activityInitiallyExpandedForPart,
   activityCollapseSignal,
+  activityExpandAllSignal,
   MAX_VISIBLE_ACTIVITY_COLLAPSED,
   isActivityExpanded,
   setActivityExpanded,
@@ -1602,6 +1618,7 @@ const viewCtx = {
   isMetaPart,
   transcriptPartExpanded,
   setTranscriptPartExpanded,
+  expandAllTranscriptParts,
 
   // TUI-parity transcript navigation and search.
   transcriptSearchInputRef,

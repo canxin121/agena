@@ -48,6 +48,7 @@ impl TranscriptState {
             transcript_has_more: false,
             transcript_older_loading: false,
             transcript_older_in_flight_since: None,
+            transcript_older_skip_budget: 0,
             transcript_older_pages_loaded: false,
             viewport: TranscriptViewport::default(),
             interaction: TranscriptInteraction::default(),
@@ -86,6 +87,7 @@ impl TranscriptState {
         self.transcript_has_more = false;
         self.transcript_older_loading = false;
         self.transcript_older_in_flight_since = None;
+        self.transcript_older_skip_budget = 0;
         self.transcript_older_pages_loaded = false;
         self.viewport.reduce(TranscriptAction::Reset);
         self.interaction = TranscriptInteraction::default();
@@ -111,6 +113,7 @@ impl TranscriptState {
             transcript_older_pages_loaded: self.transcript_older_pages_loaded,
             node_expansions: self.node_expansions.clone(),
             activity_summary_visible_counts: self.activity_summary_visible_counts.clone(),
+            expanded_operation_activity_ids: self.expanded_operation_activity_ids.clone(),
         }
     }
 
@@ -129,8 +132,10 @@ impl TranscriptState {
         self.transcript_older_pages_loaded = cache.transcript_older_pages_loaded;
         self.node_expansions = cache.node_expansions;
         self.activity_summary_visible_counts = cache.activity_summary_visible_counts;
+        self.expanded_operation_activity_ids = cache.expanded_operation_activity_ids;
         self.transcript_older_loading = false;
         self.transcript_older_in_flight_since = None;
+        self.transcript_older_skip_budget = 0;
         self.execution = None;
         self.last_event_seq = None;
         self.viewport.reduce(TranscriptAction::Reset);
@@ -219,6 +224,18 @@ impl TranscriptState {
     pub(crate) fn set_transcript_page(&mut self, next_cursor: Option<String>, has_more: bool) {
         self.transcript_next_cursor = next_cursor;
         self.transcript_has_more = has_more;
+    }
+
+    /// Return visible navigation identities while ignoring fold-marker rows.
+    /// Older raw pages that only extend a folded assistant run must not count
+    /// as visible progress for upward pagination.
+    pub(crate) fn visible_navigation_keys(&mut self, width: u16) -> Vec<TranscriptNodeKey> {
+        self.rendered(width)
+            .nodes
+            .iter()
+            .filter(|node| !matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
+            .map(|node| node.key.clone())
+            .collect()
     }
 
     /// Prepend one older cursor page and keep the same logical content under
@@ -3842,6 +3859,22 @@ mod stall_recovery_tests {
         assert!(
             state.viewport_top() >= reading_top,
             "prepending content must not move the reader backwards"
+        );
+    }
+
+    #[test]
+    fn transcript_cache_retains_expanded_activity_details_across_session_switches() {
+        let mut original = state();
+        let activity_id = agena_domain::ActivityId::new();
+        original.expanded_operation_activity_ids.insert(activity_id);
+        let cache = original.cache_snapshot();
+
+        let mut restored = state();
+        restored.restore_cache(cache, 42, "cached".to_owned());
+        assert!(
+            restored
+                .expanded_operation_activity_ids
+                .contains(&activity_id)
         );
     }
 

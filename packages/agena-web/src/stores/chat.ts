@@ -34,6 +34,11 @@ const SESSION_PAGE_SIZE = 30
 // Keep session entry cheap. Older pages are fetched only after the user
 // scrolls to the top of the transcript.
 const MESSAGE_PAGE_SIZE = 50
+// A raw cursor page can contain only older parts from an already-visible,
+// folded assistant run. Skip a small bounded number of such pages in one
+// upward gesture so the user reaches the next visible message without
+// materializing unbounded history.
+const MAX_FOLD_SKIPPED_OLDER_PAGES = 4
 const STORAGE_SELECTED_SESSION = 'agena.chat.selected-session-id.v1'
 
 function isRecord(value: JsonValue): value is JsonObject {
@@ -88,6 +93,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const historyLoadingBySession = ref<Record<string, boolean>>({})
   const historyExhaustedBySession = ref<Record<string, boolean>>({})
   const historyCursorBySession = ref<Record<string, string | null>>({})
+  // Do not infer this from the number of MessageEntry objects: an older raw
+  // page may belong entirely to an already-loaded, folded assistant reply and
+  // therefore add parts without adding another message entry.
+  const historyOlderLoadedBySession = ref<Record<string, boolean>>({})
 
   const composerDraftBySession = ref<Record<string, string>>({})
   const pendingInputText = ref('')
@@ -104,6 +113,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
   let refreshTimer: number | null = null
   const refreshMessagesRetryTimerBySession = new Map<string, number>()
   const refreshMessagesRequestSeqBySession = new Map<string, number>()
+  // Incremented when the ChatPage is actually closed. In-flight page requests
+  // capture this generation so a late response from a closed page cannot
+  // repopulate the transcript cache after it has been cleared.
+  let transcriptCacheGeneration = 0
   const attentionRefreshTimerBySession = new Map<string, number>()
   let createSessionInFlight: Promise<Session | null> | null = null
   const workspaceRequestById = new Map<number, Promise<{ id: number; path: string } | null>>()
@@ -342,6 +355,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return [...list].sort((a, b) => compareChatIds(String(a?.info?.id ?? ''), String(b?.info?.id ?? '')))
   }
 
+  function messagePartCount(list: MessageEntry[]): number {
+    return list.reduce((total, message) => total + (Array.isArray(message.parts) ? message.parts.length : 0), 0)
+  }
+
   function mergeMessageLists(older: MessageEntry[], newer: MessageEntry[]): MessageEntry[] {
     const map = new Map<string, MessageEntry>()
     for (const m of [...older, ...newer]) {
@@ -372,10 +389,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return next
   }
 
-  function isLatestRefreshMessagesRequest(sessionId: string, requestSeq: number): boolean {
+  function isLatestRefreshMessagesRequest(
+    sessionId: string,
+    requestSeq: number,
+    generation = transcriptCacheGeneration,
+  ): boolean {
     const sid = (sessionId || '').trim()
     if (!sid || requestSeq <= 0) return false
-    return refreshMessagesRequestSeqBySession.get(sid) === requestSeq
+    return generation === transcriptCacheGeneration && refreshMessagesRequestSeqBySession.get(sid) === requestSeq
   }
 
   function clearMessageRefreshRetry(sessionId: string) {
@@ -431,6 +452,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!sid) return
 
     const requestSeq = nextRefreshMessagesRequestSeq(sid)
+    const generation = transcriptCacheGeneration
     const isSelected = selectedSessionId.value === sid
     const hasCache = (messagesBySession.value[sid]?.length ?? 0) > 0
     const silent = Boolean(opts?.silent)
@@ -441,10 +463,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
     try {
       const limit = sessionMessageLimit(sid)
       const page = await chatApi.listMessages(sid, limit)
-      if (!isLatestRefreshMessagesRequest(sid, requestSeq)) return
+      if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
       const ordered = normalizeMessageList(page.entries)
-      const loadedWindow = historyLimitBySession.value[sid] || 0
-      const hasLoadedOlder = loadedWindow > MESSAGE_PAGE_SIZE
+      const hasLoadedOlder = historyOlderLoadedBySession.value[sid] === true
       const nextMessages = hasLoadedOlder ? mergeMessageLists(ordered, ensureSessionMessages(sid)) : ordered
       setSessionMessages(sid, nextMessages)
       pruneSessionMessages(sid)
@@ -468,7 +489,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       void refreshExecutionStatus(sid)
       void refreshAttention(sid)
     } catch (err) {
-      if (!isLatestRefreshMessagesRequest(sid, requestSeq)) return
+      if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
       const msg = err instanceof Error ? err.message : String(err)
       const authRequired =
         err instanceof ApiError && err.status === 401 && (err.code || '').trim().toLowerCase() === 'auth_required'
@@ -487,7 +508,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         setSessionMessages(sid, [])
       }
     } finally {
-      if (!silent && isSelected) messagesLoading.value = false
+      if (generation === transcriptCacheGeneration && !silent && isSelected) messagesLoading.value = false
     }
   }
 
@@ -507,10 +528,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (historyLoadingBySession.value[sid]) return false
     if (historyExhaustedBySession.value[sid]) return false
 
-    const current = ensureSessionMessages(sid)
+    let current = ensureSessionMessages(sid)
+    const generation = transcriptCacheGeneration
     const currentLen = current.length
     const maxWindow = 2000
-    const remaining = Math.max(0, maxWindow - currentLen)
+    const currentPartCount = messagePartCount(current)
+    const remaining = Math.max(0, maxWindow - currentPartCount)
     const pageSize = Math.min(MESSAGE_PAGE_SIZE, remaining)
     if (pageSize <= 0) {
       historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: true }
@@ -519,30 +542,53 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
     historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: true }
     try {
-      const page = await chatApi.listMessages(sid, pageSize, historyCursorBySession.value[sid] ?? null)
-      const normalized = normalizeMessageList(page.entries)
-      const merged = mergeMessageLists(normalized, current)
-      setSessionMessages(sid, merged)
-      historyLimitBySession.value = { ...historyLimitBySession.value, [sid]: merged.length }
-      historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
-      historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
-      // The final page is still a successful load even though it reports no
-      // further cursor. Returning only `hasMore` made the viewport-preserving
-      // prepend path treat that page as a no-op.
-      return merged.length > currentLen || normalized.length > 0
+      let cursor = historyCursorBySession.value[sid] ?? null
+      let loadedAny = false
+      for (let pageIndex = 0; pageIndex < MAX_FOLD_SKIPPED_OLDER_PAGES; pageIndex += 1) {
+        const page = await chatApi.listMessages(sid, pageSize, cursor)
+        if (generation !== transcriptCacheGeneration) return false
+        const normalized = normalizeMessageList(page.entries)
+        const beforeMessageCount = current.length
+        const merged = mergeMessageLists(normalized, current)
+        setSessionMessages(sid, merged)
+        current = ensureSessionMessages(sid)
+        loadedAny = loadedAny || normalized.length > 0
+        historyLimitBySession.value = { ...historyLimitBySession.value, [sid]: merged.length }
+        historyOlderLoadedBySession.value = { ...historyOlderLoadedBySession.value, [sid]: true }
+        historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
+        historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
+
+        const cursorProgressed = Boolean(page.nextCursor && page.nextCursor !== cursor)
+        const reachedVisibleMessage = merged.length > beforeMessageCount
+        if (!cursorProgressed || page.hasMore !== true || reachedVisibleMessage) break
+        // This page only extended an existing message, which is commonly a
+        // folded assistant activity run. Keep the raw parts in memory but
+        // continue a bounded distance so scrolling lands on visible content.
+        cursor = page.nextCursor ?? null
+      }
+      return loadedAny || current.length > currentLen
     } finally {
-      historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: false }
+      if (generation === transcriptCacheGeneration) {
+        historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: false }
+      }
     }
   }
 
   /** Drop transcript pages when the chat page is actually unmounted. */
   function clearTranscriptCache() {
+    transcriptCacheGeneration += 1
+    for (const timer of refreshMessagesRetryTimerBySession.values()) window.clearTimeout(timer)
+    for (const timer of attentionRefreshTimerBySession.values()) window.clearTimeout(timer)
+    refreshMessagesRetryTimerBySession.clear()
+    attentionRefreshTimerBySession.clear()
+    refreshMessagesRequestSeqBySession.clear()
     messagesBySession.value = {}
     messagesHydratedBySession.value = {}
     historyLimitBySession.value = {}
     historyLoadingBySession.value = {}
     historyExhaustedBySession.value = {}
     historyCursorBySession.value = {}
+    historyOlderLoadedBySession.value = {}
     messagesLoading.value = false
     messagesError.value = null
   }
@@ -891,6 +937,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const next = { ...historyCursorBySession.value }
       delete next[sid]
       historyCursorBySession.value = next
+    }
+    {
+      const next = { ...historyOlderLoadedBySession.value }
+      delete next[sid]
+      historyOlderLoadedBySession.value = next
     }
 
     sessions.value = sessions.value.filter((s) => s?.id !== sid)

@@ -7,7 +7,7 @@
 
 use crate::TranscriptActivityPresentation;
 use agena_api::{
-    part::{PartExecutionStatusResource, ReasoningPartResource},
+    part::{PartExecutionStatusResource, ReasoningPartResource, TextPartResource},
     resource::{RunRole, RunStatus},
 };
 use agena_domain::{
@@ -441,42 +441,44 @@ pub fn pending_user_entry<'a>(
     confirmed: bool,
     document: &'a ComposerDocument,
 ) -> TranscriptEntry<'a> {
-    let mut parts = document
+    // Keep the optimistic turn in the same shape as the persisted
+    // `user_send` projection: every composer node is one transcript part.
+    // The old single UserDocument wrapper made pending text look like a
+    // separate prose/body channel and gave it a different navigation shape
+    // from the acknowledged user message.
+    let status = if confirmed {
+        PartExecutionStatusResource::Completed
+    } else {
+        PartExecutionStatusResource::InProgress
+    };
+    let parts = document
         .0
         .iter()
-        .filter_map(|node| match node {
-            ComposerNode::Activity { activity } => Some(TranscriptEntryPart {
-                id: TranscriptContentId::Activity(activity.id),
-                status: PartExecutionStatusResource::Completed,
-                content: TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(
-                    &activity.payload,
-                )),
-            }),
-            ComposerNode::Text { .. } => None,
+        .enumerate()
+        .map(|(index, node)| {
+            let id = TranscriptContentId::PendingPart {
+                pending_id,
+                index: index as u32,
+            };
+            match node {
+                ComposerNode::Text { text } => TranscriptEntryPart {
+                    id,
+                    status,
+                    content: TranscriptPartContent::Text(TextPartResource {
+                        text: text.clone(),
+                        synthetic: false,
+                    }),
+                },
+                ComposerNode::Activity { activity } => TranscriptEntryPart {
+                    id,
+                    status: PartExecutionStatusResource::Completed,
+                    content: TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(
+                        &activity.payload,
+                    )),
+                },
+            }
         })
         .collect::<Vec<_>>();
-    let nodes = document
-        .0
-        .iter()
-        .map(|node| match node {
-            ComposerNode::Text { text } => TranscriptUserDocumentNode::Text {
-                id: None,
-                text: text.clone(),
-            },
-            ComposerNode::Activity { activity } => TranscriptUserDocumentNode::Activity {
-                id: activity.id,
-                placeholder: user_activity_placeholder(&activity.payload),
-                style: user_activity_style(&activity.payload),
-            },
-        })
-        .collect::<Vec<_>>();
-    if !nodes.is_empty() {
-        parts.push(TranscriptEntryPart {
-            id: TranscriptContentId::PendingDocument(pending_id),
-            status: PartExecutionStatusResource::Completed,
-            content: TranscriptPartContent::UserDocument(TranscriptUserDocument { nodes }),
-        });
-    }
     TranscriptEntry {
         id: TranscriptEntryId::PendingTurn(pending_id),
         role: Some(RunRole::User),
@@ -787,6 +789,59 @@ mod tests {
         assert_eq!(title_of(None, "hook"), "Hook");
         assert_eq!(title_of(None, "compaction"), "Compaction");
         assert_eq!(title_of(None, "custom_kind"), "Notice");
+    }
+
+    #[test]
+    fn pending_user_entry_projects_each_composer_node_as_a_part() {
+        let activity_id = agena_domain::ActivityId::new();
+        let document = ComposerDocument(vec![
+            ComposerNode::Text {
+                text: "hello".to_owned(),
+            },
+            ComposerNode::Activity {
+                activity: Box::new(agena_domain::ComposerActivity {
+                    id: activity_id,
+                    payload: ActivityPayload::Resource(ResourceActivity {
+                        kind: ResourceKind::File,
+                        reference: ResourceReference::WorkspacePath {
+                            path: "README.md".to_owned(),
+                        },
+                        name: "README.md".to_owned(),
+                        media_type: Some("text/markdown".to_owned()),
+                        size_bytes: None,
+                        width: None,
+                        height: None,
+                        duration_ms: None,
+                        page_count: None,
+                    }),
+                    provenance: ActivityProvenance::default(),
+                }),
+            },
+        ]);
+
+        let entry = pending_user_entry(7, false, &document);
+        assert_eq!(entry.parts.len(), 2);
+        assert!(matches!(
+            entry.parts[0].content,
+            TranscriptPartContent::Text(TextPartResource { ref text, .. }) if text == "hello"
+        ));
+        assert!(matches!(
+            entry.parts[1].content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(_))
+        ));
+        assert!(
+            entry
+                .parts
+                .iter()
+                .all(|part| { !matches!(part.content, TranscriptPartContent::UserDocument(_)) })
+        );
+        assert!(matches!(
+            entry.parts[0].id,
+            TranscriptContentId::PendingPart {
+                pending_id: 7,
+                index: 0
+            }
+        ));
     }
 
     #[test]

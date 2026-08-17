@@ -21,6 +21,7 @@ const props = defineProps<{
   revertBusyMessageId: string
   isStreaming: boolean
   collapseSignal: number
+  expandAllSignal: number
   isPartExpanded: (part: TranscriptDisplayPart) => boolean
   isNodeSelected?: (key: string) => boolean
   isNodeSearchMatch?: (key: string) => boolean
@@ -59,6 +60,7 @@ const fallbackError = computed(() => {
   return assistantError.value.message || ''
 })
 const activityRunVisibleCount = ref<Record<string, number>>({})
+const allActivityRunsExpanded = ref(props.expandAllSignal > props.collapseSignal)
 const COLLAPSED_ACTIVITY_VISIBLE_COUNT = 5
 const ACTIVITY_EXPANSION_STEP = 5
 
@@ -70,6 +72,14 @@ watch(
   () => props.collapseSignal,
   () => {
     activityRunVisibleCount.value = {}
+    allActivityRunsExpanded.value = false
+  },
+)
+
+watch(
+  () => props.expandAllSignal,
+  (signal) => {
+    if (signal > 0) allActivityRunsExpanded.value = true
   },
 )
 
@@ -94,7 +104,9 @@ const transcriptRows = computed<TranscriptRow[]>(() => {
       index += 1
     }
     const summaryKey = `activity-summary:${messageId.value}:${run[0]?.id || index}`
-    const visibleCount = activityRunVisibleCount.value[summaryKey] ?? COLLAPSED_ACTIVITY_VISIBLE_COUNT
+    const visibleCount = allActivityRunsExpanded.value
+      ? Number.MAX_SAFE_INTEGER
+      : (activityRunVisibleCount.value[summaryKey] ?? COLLAPSED_ACTIVITY_VISIBLE_COUNT)
     const folded = foldTranscriptActivityRun(run, visibleCount)
     if (folded.hiddenCount) {
       rows.push({ kind: 'summary', key: summaryKey, hiddenCount: folded.hiddenCount, expanded: false })

@@ -3021,7 +3021,7 @@ mod pending_message_tests {
     };
 
     #[test]
-    fn optimistic_user_document_uses_the_same_activity_and_placeholder_projection() {
+    fn optimistic_user_input_uses_the_same_part_projection_as_persisted_input() {
         let activity_id = ActivityId::new();
         let mut transcript = TranscriptState {
             session_id: Some(7),
@@ -3060,17 +3060,33 @@ mod pending_message_tests {
             .iter()
             .position(|line| line.text.contains("Skill: batch"))
             .expect("full optimistic Skill Activity");
-        let document_line = rendered
-            .lines
-            .iter()
-            .position(|line| line.text.contains("use [Skill: batch] now"))
-            .expect("inline optimistic placeholder");
-        assert!(activity_line < document_line);
+        assert!(
+            rendered.lines.iter().any(|line| line.text.contains("use")),
+            "optimistic text must render as its own text part"
+        );
+        assert!(
+            rendered.lines.iter().any(|line| line.text.contains("now")),
+            "text after an optimistic activity must remain its own text part"
+        );
+        assert!(
+            !rendered.nodes.iter().any(|node| node.key
+                == agena_tui_transcript::TranscriptNodeKey::Content {
+                    entry_id: agena_tui_transcript::TranscriptEntryId::PendingTurn(9),
+                    content_id: Some(agena_tui_transcript::TranscriptContentId::PendingDocument(
+                        9
+                    )),
+                }),
+            "optimistic input must not create a composite body/document part"
+        );
+        assert!(activity_line < rendered.lines.len());
         assert!(rendered.nodes.iter().any(|node| {
             node.key
                 == agena_tui_transcript::TranscriptNodeKey::Activity {
                     entry_id: agena_tui_transcript::TranscriptEntryId::PendingTurn(9),
-                    content_id: agena_tui_transcript::TranscriptContentId::Activity(activity_id),
+                    content_id: agena_tui_transcript::TranscriptContentId::PendingPart {
+                        pending_id: 9,
+                        index: 1,
+                    },
                 }
         }));
     }

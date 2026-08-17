@@ -298,6 +298,9 @@ impl App {
         let Some(cursor) = self.transcript.transcript_next_cursor.clone() else {
             return;
         };
+        if self.transcript.transcript_older_skip_budget == 0 {
+            self.transcript.transcript_older_skip_budget = 4;
+        }
         self.transcript.transcript_older_loading = true;
         self.transcript.transcript_older_in_flight_since = Some(Instant::now());
 

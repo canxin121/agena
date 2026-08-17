@@ -50,6 +50,12 @@ pub enum TranscriptContentId {
     /// nodes retain the canonical segment and Activity identities.
     TurnDocument(TurnId),
     PendingDocument(u64),
+    /// Stable identity for one optimistic composer node while the canonical
+    /// user_send parts are still being committed.
+    PendingPart {
+        pending_id: u64,
+        index: u32,
+    },
     Text(TextSegmentId),
     Activity(ActivityId),
     /// Stable presentation identity for the terminal outcome of a reply.

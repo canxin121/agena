@@ -274,6 +274,9 @@ pub(crate) struct TranscriptState {
     pub(crate) transcript_has_more: bool,
     pub(crate) transcript_older_loading: bool,
     pub(crate) transcript_older_in_flight_since: Option<Instant>,
+    /// Remaining raw pages to skip when the top page contains only folded
+    /// activity from an already-visible assistant reply.
+    pub(crate) transcript_older_skip_budget: u8,
     /// Once an older page has been prepended, subsequent recent snapshots must
     /// update only their newest window so they do not discard loaded history.
     pub(crate) transcript_older_pages_loaded: bool,
@@ -326,6 +329,7 @@ pub(crate) struct TranscriptCache {
     pub(crate) transcript_older_pages_loaded: bool,
     pub(crate) node_expansions: BTreeMap<TranscriptNodeKey, bool>,
     pub(crate) activity_summary_visible_counts: BTreeMap<TranscriptNodeKey, usize>,
+    pub(crate) expanded_operation_activity_ids: BTreeSet<agena_domain::ActivityId>,
 }
 
 /// A live activity-v2 overlay entry. The TUI keeps this separate from the

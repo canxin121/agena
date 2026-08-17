@@ -99,7 +99,8 @@ pub use access::{AccessKind, AccessSelector};
 pub use activity::{
     ActivityActor, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
     ActivityProvenance, ActivityState, AssistantReplySnapshot, AssistantReplyStatus,
-    CancellationResult, ComposerActivity, ComposerDocument, ComposerNode, ContentDocument,
+    CancellationOutcome, CancellationResult, ComposerActivity, ComposerDocument, ComposerNode,
+    ContentDocument,
     ContentNode, ContentPosition, ErrorActivity, ExecutionTarget, InteractionActivity,
     NoticeActivity, OperationActivity, OperationActivityError, OperationAuthorization,
     OperationPermission, ReasoningActivity, ResourceActivity, ResourceKind, ResourceReference,

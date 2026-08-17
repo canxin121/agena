@@ -5,6 +5,7 @@ import { i18n } from '@/i18n'
 import { formatCurrencyUSD, formatTimeHMS } from '@/i18n/intl'
 import { resolveComposerPrimaryActions } from './composerPrimaryActions'
 import type { SessionState } from '@/types/chat'
+import type { CancellationOutcome } from '@/stores/chat/api'
 
 type ToastsStore = { push: (kind: 'success' | 'error', message: string) => void }
 
@@ -90,7 +91,7 @@ type ChatLike = {
   selectedSessionUsage?: CanonicalSessionUsage | null
   messages: MessageLike[]
   selectedAttention?: { kind?: string } | null
-  abortSession: (sid: string) => Promise<boolean>
+  abortSession: (sid: string) => Promise<CancellationOutcome | null>
 }
 
 type ActivityLike = {
@@ -170,6 +171,7 @@ export function useChatRunUi(opts: {
 
   getRevertId: () => string
   onSend: () => Promise<void>
+  onCancellation?: (outcome: CancellationOutcome) => void | Promise<void>
   collapseAllActivities: () => void
   activityAutoCollapseOnIdle: ComputedRef<boolean>
 }) {
@@ -187,6 +189,7 @@ export function useChatRunUi(opts: {
     renderBlocks,
     getRevertId,
     onSend,
+    onCancellation,
     collapseAllActivities,
     activityAutoCollapseOnIdle,
   } = opts
@@ -440,8 +443,9 @@ export function useChatRunUi(opts: {
     if (!sid) return
     aborting.value = true
     try {
-      const ok = await chat.abortSession(sid)
-      if (ok) {
+      const outcome = await chat.abortSession(sid)
+      if (outcome) {
+        await onCancellation?.(outcome)
         toasts.push('success', i18n.global.t('chat.toasts.abortedRun'))
       } else {
         toasts.push('error', i18n.global.t('chat.toasts.failedToAbortRun'))

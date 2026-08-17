@@ -11,7 +11,7 @@ use agena_api::resource::{
     PermissionReply, RunOptions, SessionExecutionResource, SessionOverviewResource,
     SessionResource, UserInputReply, WorkspaceResource,
 };
-use agena_domain::{CancellationResult, ComposerDocument, ExecutionId, PermissionConfig, TurnId};
+use agena_domain::{CancellationOutcome, ComposerDocument, ExecutionId, PermissionConfig, TurnId};
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
 use agena_storage::store::SessionPartView;
 
@@ -458,19 +458,18 @@ impl Application {
         &self,
         session_id: i64,
         execution_id: Option<ExecutionId>,
-    ) -> Result<CancellationResult, ApplicationError> {
+    ) -> Result<CancellationOutcome, ApplicationError> {
         let control = &self.session_execution_services()?.execution_control;
         match execution_id {
             Some(execution_id) => control
-                .cancel_execution(session_id, execution_id)
+                .cancel_execution_with_outcome(session_id, execution_id)
                 .await
                 .map_err(|error| ApplicationError::from_failure(error.failure)),
             None => {
                 control
-                    .cancel_session(session_id)
+                    .cancel_session_with_outcome(session_id)
                     .await
-                    .map_err(|error| ApplicationError::from_failure(error.failure))?;
-                Ok(CancellationResult::CancellationRequested)
+                    .map_err(|error| ApplicationError::from_failure(error.failure))
             }
         }
     }

@@ -20,7 +20,7 @@ import { useUiStore } from '@/stores/ui'
 import { useToastsStore } from '@/stores/toasts'
 
 import { useMessageStreaming } from '@/composables/chat/useMessageStreaming'
-import { useChatAttachments } from './chat/useChatAttachments'
+import { useChatAttachments, type AttachedFile } from './chat/useChatAttachments'
 import { useChatScrollNav } from './chat/useChatScrollNav'
 import { useChatComposerLayout } from './chat/useChatComposerLayout'
 import { useChatModelSelection } from './chat/useChatModelSelection'
@@ -1084,11 +1084,82 @@ const {
   markOptimisticQueued,
   markOptimisticSent,
   clearOnSendFailure,
+  clearOnCancellation,
 } = stream
 
 // vue-tsc's template narrowing can be finicky around `Ref<T | null>` even when
 // the runtime checks are correct. Keep this relaxed for now.
 const optimisticUser = stream.optimisticUser
+
+function restoredComposerText(document: JsonValue): string {
+  if (!Array.isArray(document)) return ''
+  return document
+    .map((node) => {
+      const record = asRecord(node)
+      return record.type === 'text' && typeof record.text === 'string' ? record.text : ''
+    })
+    .join('')
+}
+
+function restoredComposerFiles(document: JsonValue): AttachedFile[] {
+  if (!Array.isArray(document)) return []
+  return document.flatMap((node, index) => {
+    const record = asRecord(node)
+    if (record.type !== 'activity') return []
+    const activity = asRecord(record.activity)
+    const payload = asRecord(activity.payload)
+    if (payload.activity_type !== 'resource') return []
+    const reference = asRecord(payload.reference)
+    const path = typeof reference.path === 'string' ? reference.path.trim() : ''
+    if (!path) return []
+    const filename =
+      typeof payload.name === 'string' && payload.name.trim()
+        ? payload.name.trim()
+        : path.split('/').pop() || 'file'
+    const size =
+      typeof payload.size_bytes === 'number' && Number.isFinite(payload.size_bytes)
+        ? Math.max(0, payload.size_bytes)
+        : 0
+    const id =
+      typeof activity.id === 'string' && activity.id.trim()
+        ? activity.id
+        : `restored-${Date.now()}-${index}`
+    return [
+      {
+        id,
+        filename,
+        size,
+        mime: typeof payload.media_type === 'string' ? payload.media_type : 'application/octet-stream',
+        serverPath: path,
+      },
+    ]
+  })
+}
+
+function restoreCancelledComposer(outcome: chatApi.CancellationOutcome) {
+  const optimistic = optimisticUser.value
+  clearOnCancellation()
+  const document = outcome.restored_user_message
+  if (document == null) return
+
+  // Do not overwrite text or attachments entered while cancellation was in
+  // flight. The server result remains authoritative for the transcript, but
+  // the user's newer local draft takes precedence in the editor.
+  if (String(draft.value || '').length > 0 || attachedFiles.value.length > 0) return
+
+  const text = optimistic?.text ?? restoredComposerText(document)
+  const files =
+    optimistic?.files?.map((file, index) => ({
+      id: file.id || `restored-${Date.now()}-${index}`,
+      filename: file.filename,
+      size: typeof file.size === 'number' ? file.size : 0,
+      mime: file.mime,
+      ...(file.url ? { url: file.url } : {}),
+      ...(file.serverPath ? { serverPath: file.serverPath } : {}),
+    })) ?? restoredComposerFiles(document)
+  draft.value = text
+  attachedFiles.value = files
+}
 
 function closeComposerActionMenu() {
   composerActionMenuOpen.value = false
@@ -1249,6 +1320,7 @@ const runUi = useChatRunUi({
   renderBlocks,
   getRevertId: () => (revertState.value?.messageID ? String(revertState.value.messageID) : ''),
   onSend: send,
+  onCancellation: restoreCancelledComposer,
   collapseAllActivities,
   activityAutoCollapseOnIdle,
 })
@@ -2017,7 +2089,14 @@ async function send() {
   beginOptimisticSend({
     sessionId: sid,
     text,
-    files: filesSnapshot.map((f) => ({ filename: f.filename, mime: f.mime, url: f.url, serverPath: f.serverPath })),
+    files: filesSnapshot.map((f) => ({
+      id: f.id,
+      filename: f.filename,
+      size: f.size,
+      mime: f.mime,
+      url: f.url,
+      serverPath: f.serverPath,
+    })),
   })
 
   // UX: clear the composer immediately on send.

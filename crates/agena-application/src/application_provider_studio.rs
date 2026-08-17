@@ -28,6 +28,7 @@ impl Application {
         adapter_model_lists: &[agena_api::resource::ProviderAdapterModelsResource],
         selected_adapter_ids: &[String],
         selected_model_keys: &std::collections::BTreeSet<String>,
+        model_config_values: &std::collections::BTreeMap<String, serde_json::Value>,
     ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
         save::save_provider_draft(
             self,
@@ -35,6 +36,7 @@ impl Application {
             adapter_model_lists,
             selected_adapter_ids,
             selected_model_keys,
+            model_config_values,
         )
         .await
     }

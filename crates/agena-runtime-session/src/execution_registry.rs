@@ -11,13 +11,14 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex as StdMutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use agena_domain::{
-    CancellationResult, ExecutionId, ExecutionLifecycle, ExecutionOutcome, ExecutionPhase,
+    CancellationResult, ComposerDocument, ExecutionId, ExecutionLifecycle, ExecutionOutcome,
+    ExecutionPhase,
 };
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -46,6 +47,19 @@ pub struct ExecutionControl<T> {
     lifecycle: Mutex<ExecutionLifecycle>,
     interaction_epoch: AtomicU64,
     interaction_notify: Notify,
+    /// The exact document submitted by the user, retained on the execution so
+    /// a cancellation can restore the editor without reconstructing it from a
+    /// normalized provider prompt.
+    restore_document: Option<ComposerDocument>,
+    /// Retained so a cancellation that races an idempotency replay can avoid
+    /// restoring a document that was never inserted by this execution.
+    user_idempotency_key: Option<String>,
+    /// Submission bookkeeping is separate from the run id because `0` is the
+    /// sentinel for a submission that has not returned yet. A replay of an
+    /// idempotency key must never make an older user marker retractable.
+    user_run_id: AtomicI64,
+    user_run_submitted: AtomicBool,
+    user_run_created: AtomicBool,
 }
 
 const STEER_QUEUE_CAPACITY: usize = 64;
@@ -66,7 +80,25 @@ impl<T> ExecutionControl<T> {
             lifecycle: Mutex::new(ExecutionLifecycle::start(execution_id)),
             interaction_epoch: AtomicU64::new(0),
             interaction_notify: Notify::new(),
+            restore_document: None,
+            user_idempotency_key: None,
+            user_run_id: AtomicI64::new(0),
+            user_run_submitted: AtomicBool::new(false),
+            user_run_created: AtomicBool::new(false),
         }
+    }
+
+    fn new_with_restore(
+        turn_id: agena_domain::TurnId,
+        reply_id: agena_domain::AssistantReplyId,
+        steer_tx: mpsc::Sender<Vec<T>>,
+        restore_document: Option<ComposerDocument>,
+        user_idempotency_key: Option<String>,
+    ) -> Self {
+        let mut control = Self::new(turn_id, reply_id, steer_tx);
+        control.restore_document = restore_document;
+        control.user_idempotency_key = user_idempotency_key;
+        control
     }
 
     pub fn execution_id(&self) -> ExecutionId {
@@ -79,6 +111,37 @@ impl<T> ExecutionControl<T> {
 
     pub fn reply_id(&self) -> agena_domain::AssistantReplyId {
         self.reply_id
+    }
+
+    pub fn restore_document(&self) -> Option<&ComposerDocument> {
+        self.restore_document.as_ref()
+    }
+
+    pub fn user_idempotency_key(&self) -> Option<&str> {
+        self.user_idempotency_key.as_deref()
+    }
+
+    /// Record the user marker only after its transaction has committed. An
+    /// idempotency replay is deliberately marked as not-created, so a retry
+    /// cannot withdraw a message created by an earlier execution.
+    pub fn set_user_run(&self, run_id: i64, created: bool) {
+        self.user_run_submitted.store(true, Ordering::Release);
+        self.user_run_created.store(created, Ordering::Release);
+        self.user_run_id
+            .store(if created { run_id } else { 0 }, Ordering::Release);
+    }
+
+    pub fn user_run_submitted(&self) -> bool {
+        self.user_run_submitted.load(Ordering::Acquire)
+    }
+
+    pub fn user_run_created(&self) -> bool {
+        self.user_run_created.load(Ordering::Acquire)
+    }
+
+    pub fn user_run_id(&self) -> Option<i64> {
+        let id = self.user_run_id.load(Ordering::Acquire);
+        (id > 0).then_some(id)
     }
 
     pub async fn transition(&self, phase: ExecutionPhase) -> Result<(), ExecutionControlError> {
@@ -176,6 +239,33 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
         guard.insert(session_id, Arc::clone(&control));
         drop(guard);
 
+        Ok((control, rx))
+    }
+
+    /// Register an execution while retaining the original composer document
+    /// for cancellation recovery.
+    pub async fn register_with_restore(
+        &self,
+        session_id: i64,
+        turn_id: agena_domain::TurnId,
+        reply_id: agena_domain::AssistantReplyId,
+        restore_document: Option<ComposerDocument>,
+        user_idempotency_key: Option<String>,
+    ) -> Result<(Arc<ExecutionControl<T>>, mpsc::Receiver<Vec<T>>), ExecutionControlError> {
+        let (tx, rx) = mpsc::channel(STEER_QUEUE_CAPACITY);
+        let control = Arc::new(ExecutionControl::new_with_restore(
+            turn_id,
+            reply_id,
+            tx,
+            restore_document,
+            user_idempotency_key,
+        ));
+        let mut guard = self.inner.lock().await;
+        if guard.contains_key(&session_id) {
+            return Err(ExecutionControlError::AlreadyActive(session_id));
+        }
+        guard.insert(session_id, Arc::clone(&control));
+        drop(guard);
         Ok((control, rx))
     }
 
@@ -332,6 +422,42 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    /// Wait for one exact execution to leave the registry. A replacement may
+    /// be registered immediately afterwards, so waiting only for a session to
+    /// become idle would be racy.
+    pub async fn wait_until_execution_released(
+        &self,
+        session_id: i64,
+        expected_execution_id: ExecutionId,
+    ) {
+        loop {
+            let still_active = self
+                .inner
+                .lock()
+                .await
+                .get(&session_id)
+                .is_some_and(|control| control.execution_id() == expected_execution_id);
+            if !still_active {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Clone the active execution control, optionally requiring an exact
+    /// execution id. The returned handle stays usable after unregistering.
+    pub async fn execution_control(
+        &self,
+        session_id: i64,
+        expected_execution_id: Option<ExecutionId>,
+    ) -> Option<Arc<ExecutionControl<T>>> {
+        let control = self.inner.lock().await.get(&session_id).cloned()?;
+        if expected_execution_id.is_some_and(|expected| control.execution_id() != expected) {
+            return None;
+        }
+        Some(control)
     }
 
     /// Wake the active execution that owns a canonical assistant reply after

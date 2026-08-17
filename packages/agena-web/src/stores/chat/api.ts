@@ -172,6 +172,18 @@ export type SessionExecutionStatus = {
   usage?: AgenaExecutionState['usage']
 }
 
+export type CancellationResult =
+  | 'cancellation_requested'
+  | 'already_terminal'
+  | 'not_found'
+  | 'execution_mismatch'
+
+export type CancellationOutcome = {
+  result: CancellationResult
+  restored_user_message?: JsonValue | null
+  restored_user_run_id?: number | null
+}
+
 // --- helpers ---------------------------------------------------------------
 
 function isRecord(value: JsonValue): value is JsonObject {
@@ -994,12 +1006,38 @@ export async function compactSession(sessionId: string, options?: RunOptionsPayl
 }
 
 /** POST /api/v1/sessions/{id}/cancel — abort an active execution. */
-export async function cancelSession(sessionId: string, executionId?: string | null): Promise<void> {
-  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/cancel`, {
+export async function cancelSession(
+  sessionId: string,
+  executionId?: string | null,
+): Promise<CancellationOutcome> {
+  const response = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/cancel`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ execution_id: executionId || null }),
   })
+  const body = asRecord(response)
+  const rawResult = str(body.result)
+  const result: CancellationResult =
+    rawResult === 'already_terminal' ||
+    rawResult === 'not_found' ||
+    rawResult === 'execution_mismatch' ||
+    rawResult === 'cancellation_requested'
+      ? rawResult
+      : 'not_found'
+  return {
+    result,
+    ...(Object.prototype.hasOwnProperty.call(body, 'restored_user_message')
+      ? { restored_user_message: body.restored_user_message }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(body, 'restored_user_run_id')
+      ? {
+          restored_user_run_id:
+            typeof body.restored_user_run_id === 'number' && Number.isFinite(body.restored_user_run_id)
+              ? body.restored_user_run_id
+              : null,
+        }
+      : {}),
+  }
 }
 
 /** POST /api/v1/sessions/{id}/rewind — rewind to an earlier turn. */

@@ -1276,34 +1276,47 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return workspace
   }
 
-  async function abortSession(sessionId: string) {
+  function removeMessageForRun(sessionId: string, runId: number) {
     const sid = (sessionId || '').trim()
-    if (!sid) return false
+    if (!sid || !Number.isFinite(runId)) return
+    const list = messagesBySession.value[sid]
+    if (!Array.isArray(list)) return
+    const retained = list.filter((message) => Number(message?.info?.runId) !== runId)
+    if (retained.length !== list.length) setSessionMessages(sid, retained)
+  }
+
+  async function abortSession(sessionId: string): Promise<chatApi.CancellationOutcome | null> {
+    const sid = (sessionId || '').trim()
+    if (!sid) return null
     try {
       const st = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
       const executionId = sessionStateExecution(st?.state)?.execution_id
+      let outcome: chatApi.CancellationOutcome
       if (!executionId) {
         // The stop action also suppresses queued background notification wakes.
         // There may be no execution in this short window even though the next
         // delivery would otherwise start one immediately.
-        await chatApi.cancelSession(sid, null)
+        outcome = await chatApi.cancelSession(sid, null)
         clearAttention(sid)
-        return true
+      } else {
+        outcome = await chatApi.cancelSession(sid, executionId)
+        // If the short-lived execution changed between the snapshot and the
+        // exact cancel request, the stop action still applies to the current
+        // session. The session-scoped fallback also suppresses queued delivery
+        // wakes that could otherwise create the next execution immediately.
+        const after = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
+        const afterExecutionId = sessionStateExecution(after?.state)?.execution_id
+        if (outcome.result === 'execution_mismatch' || (afterExecutionId && afterExecutionId !== executionId)) {
+          outcome = await chatApi.cancelSession(sid, null)
+        }
       }
-      await chatApi.cancelSession(sid, executionId)
-      // If the short-lived execution changed between the snapshot and the
-      // exact cancel request, the stop action still applies to the current
-      // session. The session-scoped fallback also suppresses queued delivery
-      // wakes that could otherwise create the next execution immediately.
-      const after = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
-      const afterExecutionId = sessionStateExecution(after?.state)?.execution_id
-      if (afterExecutionId && afterExecutionId !== executionId) {
-        await chatApi.cancelSession(sid, null)
+      if (typeof outcome.restored_user_run_id === 'number') {
+        removeMessageForRun(sid, outcome.restored_user_run_id)
       }
       clearAttention(sid)
-      return true
+      return outcome
     } catch {
-      return false
+      return null
     }
   }
 

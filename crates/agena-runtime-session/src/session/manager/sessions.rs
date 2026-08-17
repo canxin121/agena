@@ -688,11 +688,36 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
             })
     }
 
+    async fn cancel_execution_with_outcome(
+        &self,
+        session_id: i64,
+        execution_id: agena_domain::ExecutionId,
+    ) -> Result<agena_domain::CancellationOutcome, agena_runtime::SessionExecutionControlError>
+    {
+        SessionManager::cancel_execution_with_outcome(self, session_id, execution_id)
+            .await
+            .map_err(|error| {
+                agena_runtime::SessionExecutionControlError::internal(error.to_string())
+            })
+    }
+
     async fn cancel_session(
         &self,
         session_id: i64,
     ) -> Result<(), agena_runtime::SessionExecutionControlError> {
         SessionManager::cancel_active_execution(self, session_id)
+            .await
+            .map_err(|error| {
+                agena_runtime::SessionExecutionControlError::internal(error.to_string())
+            })
+    }
+
+    async fn cancel_session_with_outcome(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_domain::CancellationOutcome, agena_runtime::SessionExecutionControlError>
+    {
+        SessionManager::cancel_active_execution_with_outcome(self, session_id)
             .await
             .map_err(|error| {
                 agena_runtime::SessionExecutionControlError::internal(error.to_string())

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiAddLine, RiDeleteBinLine, RiRefreshLine, RiSave3Line } from '@remixicon/vue'
 
@@ -71,7 +71,16 @@ type DraftField = {
   allowCustom?: boolean
 }
 
-type ModelField = { key: string; label: string; readOnly?: boolean }
+type ModelFieldKind = 'boolean' | 'text' | 'number' | 'select' | 'csv' | 'readonly' | 'textarea'
+
+type ModelField = {
+  key: string
+  label: string
+  kind: ModelFieldKind
+  options?: Array<{ value: string; label: string; description?: string }>
+  placeholder?: string
+  help?: string
+}
 
 const { t } = useI18n()
 const toasts = useToastsStore()
@@ -87,6 +96,7 @@ const selectedAdapterIds = ref<Set<string>>(new Set())
 const selectedModelKeys = ref<Set<string>>(new Set())
 const listingModels = ref(false)
 const newModelId = ref('')
+const manualModelAdapterId = ref('')
 const authMessage = ref('')
 
 const editingModel = ref<{ adapterId: string; modelId: string } | null>(null)
@@ -95,6 +105,17 @@ const modelJson = ref('')
 const modelLoading = ref(false)
 const modelSaving = ref(false)
 const modelError = ref('')
+const modelConfigValues = ref<Record<string, LooseRecord>>({})
+const configuredAdapterIds = ref<Set<string>>(new Set())
+const configuredModelKeys = ref<Set<string>>(new Set())
+const mutationBusy = ref(false)
+const authPolling = ref(false)
+const authRequestInFlight = ref(false)
+let authPollTimer: ReturnType<typeof setTimeout> | null = null
+let draftRequestGeneration = 0
+let modelListingGeneration = 0
+let authRequestGeneration = 0
+let modelEditorGeneration = 0
 
 const authModeOptions = [
   { value: 'unset', label: 'Unset', description: 'Choose an authentication mode before configuring credentials.' },
@@ -185,23 +206,41 @@ const legacyRedirectUris = new Set(['http://127.0.0.1:1455/callback', 'http://12
 
 const awsProfiles = ref<string[]>(['default'])
 
-const modelFields: ModelField[] = [
-  { key: 'model_id', label: 'Model ID', readOnly: true },
-  { key: 'enabled', label: 'Enabled' },
-  { key: 'native_compaction', label: 'Native compaction' },
-  { key: 'agena_tools.mode', label: 'Agena tool mode' },
-  { key: 'display_name', label: 'Display name' },
-  { key: 'lifecycle', label: 'Lifecycle' },
-  { key: 'context_window_tokens', label: 'Context window tokens' },
-  { key: 'max_input_tokens', label: 'Max input tokens' },
-  { key: 'max_output_tokens', label: 'Max output tokens' },
-  { key: 'capabilities.features', label: 'Features' },
-  { key: 'capabilities.input', label: 'Input modalities' },
-  { key: 'output_modalities', label: 'Output modalities' },
-  { key: 'thinking_modes', label: 'Thinking modes' },
-  { key: 'speed_modes', label: 'Speed modes' },
-  { key: 'description', label: 'Description' },
+const modelToolModeOptions = [
+  { value: 'provider_protocol', label: 'Provider protocol', description: 'Expose Agena tools through the provider protocol.' },
+  { value: 'disabled', label: 'Disabled', description: 'Do not advertise Agena tools for this model.' },
 ]
+
+const modelLifecycleOptions = [
+  { value: '', label: 'Default / unset' },
+  { value: 'active', label: 'Active' },
+  { value: 'preview', label: 'Preview' },
+  { value: 'beta', label: 'Beta' },
+  { value: 'alpha', label: 'Alpha' },
+  { value: 'experimental', label: 'Experimental' },
+  { value: 'deprecated', label: 'Deprecated' },
+]
+
+const modelFields: ModelField[] = [
+  { key: 'model_id', label: 'Model ID', kind: 'readonly', help: 'The provider model identifier is fixed by the route.' },
+  { key: 'enabled', label: 'Enabled', kind: 'boolean' },
+  { key: 'native_compaction', label: 'Native compaction', kind: 'boolean' },
+  { key: 'agena_tools.mode', label: 'Agena tool mode', kind: 'select', options: modelToolModeOptions },
+  { key: 'display_name', label: 'Display name', kind: 'text', placeholder: 'Friendly name shown in model pickers' },
+  { key: 'lifecycle', label: 'Lifecycle', kind: 'select', options: modelLifecycleOptions },
+  { key: 'context_window_tokens', label: 'Context window tokens', kind: 'number', placeholder: 'Optional unsigned integer' },
+  { key: 'max_input_tokens', label: 'Max input tokens', kind: 'number', placeholder: 'Optional unsigned integer' },
+  { key: 'max_output_tokens', label: 'Max output tokens', kind: 'number', placeholder: 'Optional unsigned integer' },
+  { key: 'features', label: 'Features', kind: 'csv', placeholder: 'tool_calling, reasoning, streaming' },
+  { key: 'input', label: 'Input modalities', kind: 'csv', placeholder: 'text, image, file' },
+  { key: 'output_modalities', label: 'Output modalities', kind: 'csv', placeholder: 'text' },
+  { key: 'thinking_modes', label: 'Thinking modes', kind: 'readonly', help: 'Advertised by the provider/catalog and preserved when saving.' },
+  { key: 'speed_modes', label: 'Speed modes', kind: 'readonly', help: 'Advertised by the provider/catalog and preserved when saving.' },
+  { key: 'description', label: 'Description', kind: 'textarea', placeholder: 'Optional model description' },
+]
+
+const modelFeatureTokens = new Set(['tool_calling', 'streaming', 'reasoning', 'structured_output', 'temperature'])
+const modelInputTokens = new Set(['text', 'image', 'document', 'audio', 'video', 'file'])
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
@@ -209,6 +248,44 @@ function clone<T>(value: T): T {
 
 function record(value: unknown): LooseRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as LooseRecord) : {}
+}
+
+function canonicalizeModelConfig(value: JsonValue): LooseRecord {
+  const next = record(clone(value))
+  const legacyCapabilities = record(next.capabilities)
+
+  // ResolvedProviderModelConfig flattens ModelCapabilityPatch. Accept the
+  // old nested shape when a user pastes it into the advanced editor, but
+  // always write the canonical top-level fields back out.
+  for (const key of ['features', 'input']) {
+    if (next[key] === undefined && legacyCapabilities[key] !== undefined) {
+      next[key] = clone(legacyCapabilities[key])
+    }
+    delete legacyCapabilities[key]
+  }
+  if (Object.keys(legacyCapabilities).length === 0) delete next.capabilities
+  else next.capabilities = legacyCapabilities
+  return next
+}
+
+function authMessageText(value: JsonValue): string {
+  const labels: Record<string, string> = {
+    OpenaiBrowserStarted: 'OpenAI browser authorization started.',
+    OpenaiDeviceStarted: 'OpenAI device authorization started.',
+    CopilotDeviceStarted: 'GitHub Copilot device authorization started.',
+    GitlabBrowserStarted: 'GitLab browser authorization started.',
+    OpenaiPending: 'OpenAI authorization is still pending.',
+    OpenaiCredentialCaptured: 'OpenAI credentials captured.',
+    CopilotPending: 'GitHub Copilot authorization is still pending.',
+    CopilotCredentialCaptured: 'GitHub Copilot credentials captured.',
+    GitlabCredentialCaptured: 'GitLab credentials captured.',
+  }
+  if (typeof value === 'string') return labels[value] || value
+  const object = record(value)
+  const [variant] = Object.keys(object)
+  if (!variant) return ''
+  const suffix = record(object[variant]).user_code
+  return suffix ? `${labels[variant] || variant} Code: ${suffix}` : labels[variant] || variant
 }
 
 function authKindMode(value: JsonValue): 'none' | 'api' | 'credential' | 'unset' {
@@ -250,6 +327,18 @@ const adapterRuleMap: Record<string, string[]> = {
   sap_ai_core: ['openai_chat_completions'],
 }
 
+function adapterIdsForAuthKind(value: JsonValue): Set<string> {
+  const mode = authKindMode(value)
+  const subtype = authKindSubtype(value)
+  // ApiPending and Credential(null) are deliberately non-operational draft
+  // states. TUI does not allow a route to be selected until the subtype is
+  // chosen, so the Web surface must not offer listing or saving through them.
+  if (value === 'ApiPending' || mode === 'unset' || (mode === 'credential' && !subtype)) {
+    return new Set()
+  }
+  return new Set(adapterRuleMap[subtype] || adapterRuleMap[mode] || [])
+}
+
 const adapterCandidates = computed(() => {
   const known = (draft.value?.provider_id ? providers.value.find((item) => item.provider_id === draft.value?.source_provider_id || item.provider_id === draft.value?.provider_id)?.adapters || [] : [])
     .map((item) => item.adapter_id)
@@ -257,6 +346,7 @@ const adapterCandidates = computed(() => {
   const ruleAdapters = pendingApiSubtype ? [] : (adapterRuleMap[authSubtype.value] || adapterRuleMap[authMode.value] || [])
   return [...new Set([...ruleAdapters, ...(pendingApiSubtype ? [] : known)])].filter(Boolean)
 })
+const supportedAdapterIds = computed(() => adapterIdsForAuthKind(draft.value?.auth_kind))
 
 const awsProfileOptions = computed(() => {
   const current = fieldValue('auth.profile')
@@ -274,11 +364,23 @@ const selectedDefaultModelKey = computed(() => {
   return adapter && model ? `${adapter}\u001f${model}` : ''
 })
 const defaultModelOptions = computed(() =>
-  allModels.value.map(({ adapter, model }) => ({
+  allModels.value
+    .filter(({ adapter }) => supportedAdapterIds.value.has(adapter.adapter_id))
+    .map(({ adapter, model }) => ({
     value: `${adapter.adapter_id}\u001f${model.id}`,
     label: model.display_name || model.id,
     description: `${adapter.adapter_id} / ${model.id}`,
-  })),
+    })),
+)
+
+const manualModelAdapterOptions = computed(() =>
+  [...selectedAdapterIds.value]
+    .map((adapterId) => ({
+      value: adapterId,
+      label: adapterId,
+      description: adapterModels.value.find((adapter) => adapter.adapter_id === adapterId)?.resolved_base_url || '',
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label)),
 )
 
 function providerLabel(provider: ProviderSummary): string {
@@ -288,6 +390,76 @@ function providerLabel(provider: ProviderSummary): string {
 
 function modelKey(adapterId: string, modelId: string): string {
   return `${adapterId}\u001f${modelId}`
+}
+
+function canPersistExistingProvider(): boolean {
+  const source = String(draft.value?.source_provider_id || '').trim()
+  const providerId = String(draft.value?.provider_id || '').trim()
+  return Boolean(source && providerId && source === providerId)
+}
+
+function providerDraftIdentity(value: ProviderConfigDraft | null): string {
+  if (!value) return ''
+  return `${String(value.source_provider_id || '').trim()}\u001f${String(value.provider_id || '').trim()}`
+}
+
+function providerEditorStateFingerprint(
+  draftValue: ProviderConfigDraft | null = draft.value,
+  adapterList: AdapterModels[] = adapterModels.value,
+  adapterSelection: Set<string> = selectedAdapterIds.value,
+  modelSelection: Set<string> = selectedModelKeys.value,
+  modelConfigs: Record<string, LooseRecord> = modelConfigValues.value,
+): string {
+  return JSON.stringify({
+    draft: draftValue,
+    adapter_list: adapterList,
+    selected_adapter_ids: [...adapterSelection].sort(),
+    selected_model_keys: [...modelSelection].sort(),
+    model_config_values: modelConfigs,
+  })
+}
+
+function resetAuthUiState() {
+  ++authRequestGeneration
+  clearAuthPollTimer()
+  authPolling.value = false
+  authRequestInFlight.value = false
+  authMessage.value = ''
+}
+
+function invalidateModelListing() {
+  ++modelListingGeneration
+  listingModels.value = false
+}
+
+function selectedAdaptersAreSupported(): boolean {
+  return [...selectedAdapterIds.value].every((adapterId) => supportedAdapterIds.value.has(adapterId))
+}
+
+function syncManualModelAdapter() {
+  if (manualModelAdapterId.value && selectedAdapterIds.value.has(manualModelAdapterId.value)) return
+  const preferred = String(draft.value?.default_adapter || '').trim()
+  manualModelAdapterId.value = selectedAdapterIds.value.has(preferred)
+    ? preferred
+    : [...selectedAdapterIds.value].sort((left, right) => left.localeCompare(right))[0] || ''
+}
+
+function clearModelStudioState() {
+  ++modelListingGeneration
+  ++modelEditorGeneration
+  listingModels.value = false
+  adapterModels.value = []
+  selectedModelKeys.value = new Set()
+  modelConfigValues.value = {}
+  manualModelAdapterId.value = ''
+  editingModel.value = null
+  modelLoading.value = false
+  modelSaving.value = false
+  modelValue.value = null
+  modelJson.value = ''
+  modelError.value = ''
+  configuredAdapterIds.value = new Set()
+  configuredModelKeys.value = new Set()
 }
 
 function adapterFailure(adapter: AdapterModels): string {
@@ -362,6 +534,7 @@ function fieldValue(path: string): string {
 function setFieldValue(path: string, value: string | number) {
   if (!draft.value) return
   const next = clone(draft.value)
+  const previousValue = fieldValue(path)
   const parts = path.split('.')
   let target: LooseRecord = next
   for (const part of parts.slice(0, -1)) {
@@ -374,7 +547,19 @@ function setFieldValue(path: string, value: string | number) {
   } else {
     target[parts[parts.length - 1]] = typeof value === 'number' ? value : String(value)
   }
-  draft.value = normalizeDraftShape(next)
+  if (authRequestInFlight.value || authPolling.value) resetAuthUiState()
+  if (path === 'credential_drafts.openai_chatgpt.login_kind' && previousValue !== String(value)) {
+    const openai = record(next.credential_drafts.openai_chatgpt)
+    openai.callback_url = ''
+    openai.browser = null
+    openai.device = null
+    next.credential_drafts.openai_chatgpt = openai
+    resetAuthUiState()
+  }
+  const normalized = normalizeDraftShape(next)
+  const changed = JSON.stringify(normalized) !== JSON.stringify(draft.value)
+  draft.value = normalized
+  if (changed) invalidateModelListing()
 }
 
 function authDetailFields(): DraftField[] {
@@ -403,7 +588,7 @@ function authDetailFields(): DraftField[] {
       apiSecretField,
     ]
     if (subtype === 'gitlab_api') return [
-      { path: 'auth.instance_url', label: 'Instance URL', type: 'select', options: gitlabInstanceOptions, includeEmpty: true, emptyLabel: 'No GitLab instance' },
+      { path: 'auth.instance_url', label: 'Instance URL', type: 'select', options: gitlabInstanceOptions, includeEmpty: true, emptyLabel: 'No GitLab instance', allowCustom: true },
       { path: 'auth.secret_source_kind', label: 'API key source', type: 'select', options: secretSourceOptions, includeEmpty: true, emptyLabel: 'No API key source' },
       apiSecretField,
     ]
@@ -425,7 +610,7 @@ function authDetailFields(): DraftField[] {
     const loginKind = fieldValue(`${base}.login_kind`).trim().toLowerCase()
     if (loginKind === 'browser') {
       fields.push(
-        { path: `${base}.redirect_uri`, label: 'Redirect URI', type: 'select', options: redirectUriOptions, includeEmpty: true, emptyLabel: 'No redirect URI' },
+        { path: `${base}.redirect_uri`, label: 'Redirect URI', type: 'select', options: redirectUriOptions, includeEmpty: true, emptyLabel: 'No redirect URI', allowCustom: true },
         { path: `${base}.callback_url`, label: 'Callback URL' },
       )
     }
@@ -446,8 +631,8 @@ function authDetailFields(): DraftField[] {
   ]
   if (subtype === 'gitlab') return [
     { path: '__auth_login_method', value: 'Browser', label: 'Auth login method', readOnly: true },
-    { path: 'auth.instance_url', label: 'Instance URL', type: 'select', options: gitlabInstanceOptions, includeEmpty: true, emptyLabel: 'No GitLab instance' },
-    { path: `${base}.redirect_uri`, label: 'Redirect URI', type: 'select', options: redirectUriOptions, includeEmpty: true, emptyLabel: 'No redirect URI' },
+    { path: 'auth.instance_url', label: 'Instance URL', type: 'select', options: gitlabInstanceOptions, includeEmpty: true, emptyLabel: 'No GitLab instance', allowCustom: true },
+    { path: `${base}.redirect_uri`, label: 'Redirect URI', type: 'select', options: redirectUriOptions, includeEmpty: true, emptyLabel: 'No redirect URI', allowCustom: true },
     { path: `${base}.callback_url`, label: 'Callback URL' },
     { path: `${base}.tokens.refresh_token`, label: 'Refresh token', secret: true },
     { path: `${base}.tokens.access_token`, label: 'Access token', secret: true },
@@ -456,13 +641,60 @@ function authDetailFields(): DraftField[] {
   if (subtype === 'google_adc') return [{ path: 'auth.base_url', label: 'Base URL' }]
   if (subtype === 'sap_ai_core') return [
     { path: 'auth.base_url', label: 'Base URL' },
-    { path: 'auth.service_key_env', label: 'Service key env', type: 'select', options: [{ value: 'AICORE_SERVICE_KEY', label: 'AICORE_SERVICE_KEY' }], includeEmpty: true, emptyLabel: 'No service key env' },
+    { path: 'auth.service_key_env', label: 'Service key env', type: 'select', options: [{ value: 'AICORE_SERVICE_KEY', label: 'AICORE_SERVICE_KEY' }], includeEmpty: true, emptyLabel: 'No service key env', allowCustom: true },
   ]
   return []
 }
 
 const visibleAuthFields = computed(() => authDetailFields())
 const interactiveAuthAvailable = computed(() => ['openai_chatgpt', 'github_copilot', 'gitlab'].includes(authSubtype.value))
+
+const pendingDeviceAuth = computed(() => {
+  const credentials = record(draft.value?.credential_drafts)
+  const openai = record(credentials.openai_chatgpt)
+  const openaiLoginKind = String(openai.login_kind || '').trim().toLowerCase()
+  const candidates = authSubtype.value === 'openai_chatgpt'
+    ? [openaiLoginKind === 'browser' ? null : openai.device]
+    : authSubtype.value === 'github_copilot'
+      ? [record(credentials.github_copilot).device]
+      : []
+  return candidates.find((value) => String(value?.device_code || '').trim()) || null
+})
+
+const pendingBrowserAuth = computed(() => {
+  const credentials = record(draft.value?.credential_drafts)
+  const openai = record(credentials.openai_chatgpt)
+  const openaiLoginKind = String(openai.login_kind || '').trim().toLowerCase()
+  const candidates = authSubtype.value === 'openai_chatgpt'
+    ? [openaiLoginKind === 'browser' ? openai.browser : null]
+    : authSubtype.value === 'gitlab'
+      ? [record(credentials.gitlab).browser]
+      : []
+  return candidates.find((value) => String(value?.state || '').trim()) || null
+})
+
+const canListDraftModels = computed(() => {
+  if (!draft.value || selectedAdapterIds.value.size === 0) return false
+  if (supportedAdapterIds.value.size === 0) return false
+  return selectedAdaptersAreSupported()
+})
+
+const canListSavedModels = computed(() => {
+  if (!draft.value?.source_provider_id || selectedAdapterIds.value.size === 0) return false
+  return supportedAdapterIds.value.size > 0 && selectedAdaptersAreSupported()
+})
+
+const modelListingKind = computed(() => {
+  if (canListDraftModels.value) return 'live'
+  if (canListSavedModels.value) return 'saved'
+  return 'unavailable'
+})
+
+const modelListingDescription = computed(() => {
+  if (modelListingKind.value === 'live') return 'Fetch current models from the provider using the draft credentials.'
+  if (modelListingKind.value === 'saved') return 'List models using the saved provider configuration; this may contact the provider.'
+  return 'Choose an authentication mode and adapter before listing models.'
+})
 
 async function loadProviders() {
   const response = await apiJson<ProviderSummary[]>('/api/v1/providers')
@@ -484,52 +716,86 @@ async function loadAwsProfiles() {
 }
 
 async function loadDraft(providerId?: string) {
+  const requestGeneration = ++draftRequestGeneration
   loading.value = true
   error.value = ''
-  adapterModels.value = []
-  selectedModelKeys.value = new Set()
+  clearModelStudioState()
+  resetAuthUiState()
   try {
     const query = providerId ? `?provider_id=${encodeURIComponent(providerId)}` : ''
-    draft.value = normalizeDraftShape(await apiJson<ProviderConfigDraft>(`/api/v1/provider-studio/draft${query}`))
+    const nextDraft = normalizeDraftShape(await apiJson<ProviderConfigDraft>(`/api/v1/provider-studio/draft${query}`))
+    if (requestGeneration !== draftRequestGeneration) return
+    draft.value = nextDraft
     selectedProviderId.value = providerId || ''
     const summary = providers.value.find((item) => item.provider_id === providerId)
     const configuredAdapters = providerId
       ? await apiJson<AdapterModels[]>(`/api/v1/providers/${encodeURIComponent(providerId)}/configured-models`)
       : []
+    if (requestGeneration !== draftRequestGeneration) return
     const enabled = new Set(
       (configuredAdapters.length
         ? configuredAdapters.filter((item) => item.enabled).map((item) => item.adapter_id)
         : (summary?.adapters || []).filter((item) => item.enabled).map((item) => item.adapter_id)),
     )
-    selectedAdapterIds.value = enabled.size ? enabled : new Set(adapterCandidates.value)
+    const supported = adapterIdsForAuthKind(nextDraft.auth_kind)
+    // Match the TUI restore semantics: only adapters that are actually
+    // enabled in the saved provider are selected. An empty configured set is
+    // meaningful; silently selecting every candidate would make a later
+    // Save provider create routes the user never chose.
+    selectedAdapterIds.value = new Set([...enabled].filter((adapterId) => supported.has(adapterId)))
     adapterModels.value = configuredAdapters
+    configuredAdapterIds.value = new Set(configuredAdapters.map((adapter) => adapter.adapter_id))
+    configuredModelKeys.value = new Set(
+      configuredAdapters.flatMap((adapter) => adapter.models.map((model) => modelKey(adapter.adapter_id, model.id))),
+    )
     selectedModelKeys.value = new Set(
       configuredAdapters
         .filter((adapter) => adapter.enabled)
         .flatMap((adapter) => adapter.models.map((model) => modelKey(adapter.adapter_id, model.id))),
     )
-    await listDraftModels()
+    syncManualModelAdapter()
   } catch (reason) {
+    if (requestGeneration !== draftRequestGeneration) return
     error.value = reason instanceof Error ? reason.message : String(reason)
     draft.value = null
   } finally {
-    loading.value = false
+    if (requestGeneration === draftRequestGeneration) loading.value = false
   }
 }
 
 async function listDraftModels() {
+  if (listingModels.value || mutationBusy.value) return
   if (!draft.value || selectedAdapterIds.value.size === 0) {
-    adapterModels.value = []
-    selectedModelKeys.value = new Set()
+    error.value = 'Select at least one adapter before listing models.'
     return
   }
+  if (modelListingKind.value === 'unavailable') {
+    error.value = modelListingDescription.value
+    return
+  }
+  if (!selectedAdaptersAreSupported()) {
+    error.value = 'One or more selected adapters are not supported by the current authentication subtype.'
+    return
+  }
+  const requestGeneration = ++modelListingGeneration
   listingModels.value = true
+  mutationBusy.value = true
+  error.value = ''
   try {
-    const response = await apiJson<AdapterModelsResponse>('/api/v1/provider-studio/draft/models', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ draft: draft.value, adapter_ids: [...selectedAdapterIds.value] }),
-    })
+    const adapterIds = [...selectedAdapterIds.value]
+    const draftSnapshot = clone(draft.value)
+    const response = modelListingKind.value === 'live'
+      ? await apiJson<AdapterModelsResponse>('/api/v1/provider-studio/draft/models', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ draft: draftSnapshot, adapter_ids: adapterIds }),
+        })
+      : await apiJson<AdapterModelsResponse>(`/api/v1/providers/${encodeURIComponent(draftSnapshot.source_provider_id || '')}/models`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ adapter_ids: adapterIds }),
+        })
+    if (requestGeneration !== modelListingGeneration) return
     const refreshed = Array.isArray(response?.adapters) ? response.adapters : []
     const byAdapter = new Map(adapterModels.value.map((adapter) => [adapter.adapter_id, adapter]))
     for (const adapter of refreshed) byAdapter.set(adapter.adapter_id, adapter)
@@ -551,21 +817,30 @@ async function listDraftModels() {
     }
     selectedModelKeys.value = nextKeys
   } catch (reason) {
+    if (requestGeneration !== modelListingGeneration) return
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
-    listingModels.value = false
+    if (requestGeneration === modelListingGeneration) listingModels.value = false
+    mutationBusy.value = false
   }
 }
 
 function toggleAdapter(adapterId: string) {
+  if (mutationBusy.value || listingModels.value || saving.value || modelSaving.value || !supportedAdapterIds.value.has(adapterId)) return
   const next = new Set(selectedAdapterIds.value)
   if (next.has(adapterId)) next.delete(adapterId)
   else next.add(adapterId)
   selectedAdapterIds.value = next
-  void listDraftModels()
+  syncManualModelAdapter()
+  // Adapter selection is a local draft edit. Model discovery is an explicit
+  // action, matching the TUI and avoiding a provider request for every click.
+  ++modelListingGeneration
+  listingModels.value = false
+  error.value = ''
 }
 
 function toggleModel(adapterId: string, modelId: string) {
+  if (mutationBusy.value || listingModels.value || saving.value || modelSaving.value) return
   const key = modelKey(adapterId, modelId)
   const next = new Set(selectedModelKeys.value)
   if (next.has(key)) next.delete(key)
@@ -575,19 +850,23 @@ function toggleModel(adapterId: string, modelId: string) {
 
 function setAuthMode(value: string) {
   if (!draft.value) return
+  const previouslySelected = selectedAdapterIds.value
   const next = clone(draft.value)
   if (value === 'unset') next.auth_kind = 'Unset'
   else if (value === 'none') next.auth_kind = 'None'
   else if (value === 'api') next.auth_kind = 'ApiPending'
   else if (value === 'credential') next.auth_kind = { Credential: null }
   draft.value = normalizeDraftShape(next)
-  selectedAdapterIds.value = new Set()
-  adapterModels.value = []
-  selectedModelKeys.value = new Set()
+  resetAuthUiState()
+  clearModelStudioState()
+  const supported = adapterIdsForAuthKind(draft.value.auth_kind)
+  selectedAdapterIds.value = new Set([...previouslySelected].filter((adapterId) => supported.has(adapterId)))
+  syncManualModelAdapter()
 }
 
 function setAuthSubtype(value: string) {
   if (!draft.value) return
+  const previouslySelected = selectedAdapterIds.value
   const next = clone(draft.value)
   if (authMode.value === 'credential') next.auth_kind = { Credential: value }
   else if (value === 'custom') next.auth_kind = 'Api'
@@ -595,10 +874,11 @@ function setAuthSubtype(value: string) {
   else if (value === 'gitlab_api') next.auth_kind = 'Gitlab'
   else if (value === 'bedrock_sigv4') next.auth_kind = 'BedrockSigv4'
   draft.value = normalizeDraftShape(next)
-  selectedAdapterIds.value = new Set(adapterRuleMap[value] || [])
-  adapterModels.value = []
-  selectedModelKeys.value = new Set()
-  void listDraftModels()
+  resetAuthUiState()
+  clearModelStudioState()
+  const supported = adapterIdsForAuthKind(draft.value.auth_kind)
+  selectedAdapterIds.value = new Set([...previouslySelected].filter((adapterId) => supported.has(adapterId)))
+  syncManualModelAdapter()
 }
 
 function setDefaultAdapter(value: string) {
@@ -607,7 +887,9 @@ function setDefaultAdapter(value: string) {
   const adapter = String(value || '').trim()
   if (next.default_adapter !== adapter) next.default_model = ''
   next.default_adapter = adapter
-  draft.value = normalizeDraftShape(next)
+  const normalized = normalizeDraftShape(next)
+  if (JSON.stringify(normalized) !== JSON.stringify(draft.value)) invalidateModelListing()
+  draft.value = normalized
 }
 
 function setDefaultModel(value: string) {
@@ -616,74 +898,182 @@ function setDefaultModel(value: string) {
   const next = clone(draft.value)
   next.default_adapter = adapter || ''
   next.default_model = model || ''
-  draft.value = normalizeDraftShape(next)
+  const normalized = normalizeDraftShape(next)
+  if (JSON.stringify(normalized) !== JSON.stringify(draft.value)) invalidateModelListing()
+  draft.value = normalized
 }
 
 async function saveDraft() {
-  if (!draft.value || saving.value) return
+  if (!draft.value || saving.value || mutationBusy.value || listingModels.value || modelSaving.value) return
+  const draftSnapshot = clone(draft.value)
+  const submittedDraftJson = JSON.stringify(draftSnapshot)
+  const submittedDraftGeneration = draftRequestGeneration
+  const adapterModelListsSnapshot = clone(adapterModels.value)
+  const selectedAdapterIdsSnapshot = [...selectedAdapterIds.value]
+  const selectedModelKeysSnapshot = [...selectedModelKeys.value]
+  const modelConfigValuesSnapshot = clone(modelConfigValues.value)
+  const submittedEditorState = providerEditorStateFingerprint(
+    draftSnapshot,
+    adapterModelListsSnapshot,
+    new Set(selectedAdapterIdsSnapshot),
+    new Set(selectedModelKeysSnapshot),
+    modelConfigValuesSnapshot,
+  )
   saving.value = true
+  mutationBusy.value = true
   error.value = ''
   try {
     const response = await apiJson<JsonValue>('/api/v1/provider-studio/save', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        draft: draft.value,
-        adapter_model_lists: adapterModels.value,
-        selected_adapter_ids: [...selectedAdapterIds.value],
-        selected_model_keys: [...selectedModelKeys.value],
+        draft: draftSnapshot,
+        adapter_model_lists: adapterModelListsSnapshot,
+        selected_adapter_ids: selectedAdapterIdsSnapshot,
+        selected_model_keys: selectedModelKeysSnapshot,
+        model_config_values: modelConfigValuesSnapshot,
       }),
     })
-    const savedId = String(record(record(response).ProviderDraftSaved).provider_id || draft.value.provider_id || '').trim()
+    const responseRecord = record(response)
+    const savedResult = record(responseRecord.ProviderDraftSaved ?? responseRecord.provider_draft_saved)
+    const savedId = String(savedResult.provider_id || draftSnapshot.provider_id || '').trim()
     toasts.push('success', 'Provider configuration saved')
     await loadProviders()
+    // Keep edits made while the request was in flight in the editor. A late
+    // save response must not replace a newer local draft with the old server
+    // snapshot.
+    if (
+      submittedDraftGeneration !== draftRequestGeneration ||
+      providerDraftIdentity(draft.value) !== providerDraftIdentity(draftSnapshot) ||
+      JSON.stringify(draft.value) !== submittedDraftJson ||
+      providerEditorStateFingerprint() !== submittedEditorState
+    ) {
+      return
+    }
     await loadDraft(savedId || selectedProviderId.value || undefined)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
     toasts.push('error', error.value)
   } finally {
     saving.value = false
+    mutationBusy.value = false
   }
 }
 
 async function deleteProvider() {
-  const providerId = String(draft.value?.source_provider_id || draft.value?.provider_id || '').trim()
+  if (!draft.value || mutationBusy.value) return
+  const draftSnapshot = clone(draft.value)
+  const providerId = String(draftSnapshot.source_provider_id || draftSnapshot.provider_id || '').trim()
   if (!providerId || !window.confirm(`Delete provider ${providerId}?`)) return
+  const submittedDraftGeneration = draftRequestGeneration
+  const submittedDraftIdentity = providerDraftIdentity(draftSnapshot)
+  const submittedEditorState = providerEditorStateFingerprint(
+    draftSnapshot,
+    clone(adapterModels.value),
+    new Set(selectedAdapterIds.value),
+    new Set(selectedModelKeys.value),
+    clone(modelConfigValues.value),
+  )
+  mutationBusy.value = true
   try {
     await apiJson('/api/v1/provider-studio/delete-provider', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ provider_id: providerId }),
     })
+    if (submittedDraftGeneration !== draftRequestGeneration) return
     toasts.push('success', 'Provider deleted')
     await loadProviders()
-    await loadDraft()
+    // A provider deletion can race with a local edit or a provider switch.
+    // Refresh the editor only when the exact state submitted for deletion is
+    // still on screen; otherwise the user's newer draft must remain intact.
+    if (
+      submittedDraftGeneration === draftRequestGeneration &&
+      providerDraftIdentity(draft.value) === submittedDraftIdentity &&
+      providerEditorStateFingerprint() === submittedEditorState
+    ) {
+      await loadDraft()
+    }
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    mutationBusy.value = false
   }
 }
 
-async function startAuth(action: 'start' | 'continue') {
-  if (!draft.value) return
+function clearAuthPollTimer() {
+  if (authPollTimer !== null) {
+    clearTimeout(authPollTimer)
+    authPollTimer = null
+  }
+}
+
+function scheduleDeviceAuthPoll() {
+  clearAuthPollTimer()
+  if (!pendingDeviceAuth.value || authPolling.value) return
+  const intervalSeconds = Math.max(1, Number(pendingDeviceAuth.value.interval_seconds) || 2)
+  authPollTimer = setTimeout(() => {
+    authPollTimer = null
+    void startAuth('continue', true)
+  }, intervalSeconds * 1000)
+}
+
+async function startAuth(action: 'start' | 'continue', silent = false) {
+  if (!draft.value || authRequestInFlight.value) return
+  const requestGeneration = ++authRequestGeneration
+  const draftSnapshot = clone(draft.value)
+  authRequestInFlight.value = true
+  if (silent) authPolling.value = true
+  if (action === 'start') {
+    clearAuthPollTimer()
+    authMessage.value = ''
+  }
   try {
     const response = await apiJson<{ draft?: ProviderConfigDraft; message?: JsonValue; clipboard_text?: string | null }>(`/api/v1/provider-studio/auth/${action}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ draft: draft.value }),
+      body: JSON.stringify({ draft: draftSnapshot }),
     })
+    if (requestGeneration !== authRequestGeneration) return
     if (response?.draft) draft.value = normalizeDraftShape(response.draft)
-    authMessage.value = response?.message ? JSON.stringify(response.message) : ''
-    if (response?.clipboard_text && navigator.clipboard) await navigator.clipboard.writeText(response.clipboard_text)
+    authMessage.value = response?.message ? authMessageText(response.message) : ''
+    if (response?.clipboard_text && navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(response.clipboard_text)
+      } catch {
+        // Clipboard permission is optional; a successful auth action must not
+        // be reported as failed just because the browser refused the copy.
+      }
+    }
+    scheduleDeviceAuthPoll()
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : String(reason)
+    if (requestGeneration !== authRequestGeneration) return
+    const message = reason instanceof Error ? reason.message : String(reason)
+    if (!silent) error.value = message
+    else authMessage.value = message
+    if (pendingDeviceAuth.value) scheduleDeviceAuthPoll()
+  } finally {
+    if (requestGeneration === authRequestGeneration) {
+      authRequestInFlight.value = false
+      if (silent) authPolling.value = false
+      if (pendingDeviceAuth.value) scheduleDeviceAuthPoll()
+    }
   }
 }
 
-async function addManualModel() {
-  const adapterId = String(draft.value?.default_adapter || [...selectedAdapterIds.value][0] || '').trim()
+function addManualModel() {
+  if (mutationBusy.value || listingModels.value || saving.value || modelSaving.value) return
+  const adapterId = String(manualModelAdapterId.value || draft.value?.default_adapter || '').trim()
   const modelId = newModelId.value.trim()
-  if (!draft.value || !adapterId || !modelId) return
+  if (!draft.value || !adapterId || !modelId || !selectedAdapterIds.value.has(adapterId)) {
+    error.value = 'Select an adapter before adding a model.'
+    return
+  }
   const adapter = adapterModels.value.find((item) => item.adapter_id === adapterId)
+  if (adapter?.models.some((item) => item.id === modelId)) {
+    error.value = `Model ${adapterId}/${modelId} is already in the draft.`
+    return
+  }
   const model: ProviderModel = {
     provider_id: draft.value.provider_id,
     adapter_id: adapterId,
@@ -702,136 +1092,435 @@ async function addManualModel() {
 }
 
 async function openModelEditor(adapterId: string, model: ProviderModel) {
-  if (!draft.value) return
+  if (!draft.value || mutationBusy.value || listingModels.value) return
+  const requestGeneration = ++modelEditorGeneration
   editingModel.value = { adapterId, modelId: model.id }
   modelLoading.value = true
   modelError.value = ''
+  modelValue.value = null
+  modelJson.value = ''
   try {
     const response = await apiJson<{ value?: JsonValue }>('/api/v1/provider-studio/draft/model', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ draft: draft.value, adapter_id: adapterId, model_id: model.id, provider_model: model }),
     })
-    modelValue.value = record(response?.value)
+    if (requestGeneration !== modelEditorGeneration) return
+    modelValue.value = canonicalizeModelConfig(response?.value ?? {})
     modelJson.value = JSON.stringify(modelValue.value, null, 2)
   } catch (reason) {
+    if (requestGeneration !== modelEditorGeneration) return
     modelError.value = reason instanceof Error ? reason.message : String(reason)
     modelValue.value = null
     modelJson.value = ''
   } finally {
-    modelLoading.value = false
+    if (requestGeneration === modelEditorGeneration) modelLoading.value = false
+  }
+}
+
+function closeModelEditor() {
+  ++modelEditorGeneration
+  editingModel.value = null
+  modelLoading.value = false
+  modelSaving.value = false
+  modelValue.value = null
+  modelJson.value = ''
+  modelError.value = ''
+}
+
+function modelPathValue(key: string): any {
+  if (!modelValue.value) return undefined
+  const parts = key.split('.')
+  let current: any = modelValue.value
+  for (const part of parts) current = current?.[part]
+  return current
+}
+
+function modelCapabilityValue(key: 'features' | 'input'): { supported: string[]; unsupported: string[] } {
+  const direct = modelValue.value?.[key]
+  const legacy = modelValue.value?.capabilities?.[key]
+  const value = direct ?? legacy
+  if (Array.isArray(value)) return { supported: value.map(String), unsupported: [] }
+  const object = record(value)
+  return {
+    supported: Array.isArray(object.supported) ? object.supported.map(String) : [],
+    unsupported: Array.isArray(object.unsupported) ? object.unsupported.map(String) : [],
   }
 }
 
 function modelFieldValue(key: string): string {
   if (key === 'model_id') return editingModel.value?.modelId || ''
-  const parts = key.split('.')
-  let current: any = modelValue.value
-  for (const part of parts) current = current?.[part]
+  if (key === 'agena_tools.mode' && modelPathValue(key) === undefined) return 'disabled'
+  if (key === 'features' || key === 'input') return modelCapabilityValue(key).supported.join(', ')
+  if (key === 'thinking_modes' || key === 'speed_modes') {
+    const value = modelPathValue(key)
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+    const object = record(value)
+    const names = Object.keys(object).filter((name) => name !== 'default')
+    if (names.length > 0) return names.join(', ')
+    return typeof object.default === 'string' ? object.default : ''
+  }
+  const current = modelPathValue(key)
   if (current === undefined || current === null) return ''
+  if (typeof current === 'boolean') return current ? 'true' : 'false'
+  if (Array.isArray(current)) return current.map(String).join(', ')
   return typeof current === 'string' ? current : JSON.stringify(current)
 }
 
-async function saveModel() {
-  if (!draft.value || !editingModel.value || modelSaving.value) return
-  modelSaving.value = true
-  modelError.value = ''
+function modelFieldBooleanValue(key: string): boolean {
+  return modelPathValue(key) !== false
+}
+
+function csvTokens(value: string): string[] {
+  return [...new Set(value.split(',').map((token) => token.trim()).filter(Boolean))]
+}
+
+function deleteModelPath(target: LooseRecord, key: string) {
+  const parts = key.split('.')
+  let cursor: any = target
+  for (const part of parts.slice(0, -1)) {
+    if (!cursor || typeof cursor !== 'object') return
+    cursor = cursor[part]
+  }
+  if (cursor && typeof cursor === 'object') delete cursor[parts[parts.length - 1]]
+}
+
+function setModelPath(target: LooseRecord, key: string, value: unknown) {
+  const parts = key.split('.')
+  let cursor: LooseRecord = target
+  for (const part of parts.slice(0, -1)) {
+    if (!cursor[part] || typeof cursor[part] !== 'object' || Array.isArray(cursor[part])) cursor[part] = {}
+    cursor = cursor[part] as LooseRecord
+  }
+  cursor[parts[parts.length - 1]] = value
+}
+
+function setModelFieldValue(key: string, value: string | number | boolean) {
+  if (!modelValue.value || key === 'model_id' || key === 'thinking_modes' || key === 'speed_modes') return
+  const field = modelFields.find((item) => item.key === key)
+  if (!field) return
+  let base: LooseRecord
   try {
-    const parsed = JSON.parse(modelJson.value) as JsonValue
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Model config must be a JSON object.')
-    await apiJson('/api/v1/provider-studio/save-model', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        draft: draft.value,
-        adapter_id: editingModel.value.adapterId,
-        model_id: editingModel.value.modelId,
-        model_value: parsed,
-      }),
-    })
-    modelValue.value = record(parsed)
-    modelJson.value = JSON.stringify(modelValue.value, null, 2)
-    toasts.push('success', 'Provider model configuration saved')
-    await loadProviders()
+    base = syncModelValueFromJson()
   } catch (reason) {
     modelError.value = reason instanceof Error ? reason.message : String(reason)
+    return
+  }
+  const next = clone(base)
+  if (field.kind === 'boolean') {
+    setModelPath(next, key, Boolean(value))
+  } else if (field.kind === 'number') {
+    const text = String(value).trim()
+    if (!text) deleteModelPath(next, key)
+    else {
+      const parsed = Number(text)
+      if (!Number.isSafeInteger(parsed) || parsed < 0) {
+        modelError.value = `${field.label} must be an unsigned integer.`
+        return
+      }
+      setModelPath(next, key, parsed)
+    }
+  } else if (field.kind === 'csv') {
+    const tokens = csvTokens(String(value))
+    if (key === 'features' || key === 'input') {
+      const allowed = key === 'features' ? modelFeatureTokens : modelInputTokens
+      const invalid = tokens.find((token) => !allowed.has(token))
+      if (invalid) {
+        modelError.value = `Unsupported ${field.label.toLowerCase()} token \`${invalid}\`.`
+        return
+      }
+      const previous = modelCapabilityValue(key)
+      const unsupported = previous.unsupported.filter((token) => !tokens.includes(token))
+      if (tokens.length || unsupported.length) {
+        setModelPath(next, key, unsupported.length ? { supported: tokens, unsupported } : tokens)
+      } else {
+        deleteModelPath(next, key)
+      }
+      // The configured model schema keeps these fields at the top level. A
+      // legacy capabilities wrapper is accepted on read, but never emitted.
+      if (next.capabilities && typeof next.capabilities === 'object') delete next.capabilities[key]
+    } else if (tokens.length) {
+      setModelPath(next, key, tokens)
+    } else {
+      deleteModelPath(next, key)
+    }
+  } else if (field.kind === 'select' || field.kind === 'text' || field.kind === 'textarea') {
+    const text = String(value)
+    if (!text.trim() && field.kind !== 'select') deleteModelPath(next, key)
+    else if (!text.trim() && key === 'lifecycle') deleteModelPath(next, key)
+    else setModelPath(next, key, text)
+  }
+  modelValue.value = next
+  modelJson.value = JSON.stringify(next, null, 2)
+  modelError.value = ''
+}
+
+function syncModelValueFromJson(): LooseRecord {
+  const parsed = JSON.parse(modelJson.value) as JsonValue
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Model config must be a JSON object.')
+  const next = canonicalizeModelConfig(parsed)
+  modelValue.value = next
+  return next
+}
+
+function applyModelJson() {
+  try {
+    const next = syncModelValueFromJson()
+    modelJson.value = JSON.stringify(next, null, 2)
+    modelError.value = ''
+  } catch (reason) {
+    modelError.value = reason instanceof Error ? reason.message : String(reason)
+  }
+}
+
+function updateModelRowFromValue(adapterId: string, modelId: string, value: LooseRecord) {
+  adapterModels.value = adapterModels.value.map((adapter) => {
+    if (adapter.adapter_id !== adapterId) return adapter
+    return {
+      ...adapter,
+      models: adapter.models.map((model) => {
+        if (model.id !== modelId) return model
+        const next = { ...model }
+        if (typeof value.display_name === 'string') next.display_name = value.display_name
+        else if (value.display_name === null) next.display_name = null
+        if (typeof value.native_compaction === 'boolean') next.native_compaction = value.native_compaction
+        return next
+      }),
+    }
+  })
+}
+
+async function saveModel() {
+  if (!draft.value || !editingModel.value || modelSaving.value || mutationBusy.value) return
+  const editorGeneration = modelEditorGeneration
+  const draftSnapshot = clone(draft.value)
+  const draftIdentity = providerDraftIdentity(draftSnapshot)
+  const draftSnapshotJson = JSON.stringify(draftSnapshot)
+  const persist = canPersistExistingProvider()
+  const editing = { ...editingModel.value }
+  const key = modelKey(editing.adapterId, editing.modelId)
+  const previousConfig = modelConfigValues.value[key]
+  modelSaving.value = true
+  mutationBusy.value = true
+  modelError.value = ''
+  try {
+    const parsed = syncModelValueFromJson()
+    const submittedModelJson = modelJson.value
+    if (persist) {
+      await apiJson('/api/v1/provider-studio/save-model', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          draft: draftSnapshot,
+          adapter_id: editing.adapterId,
+          model_id: editing.modelId,
+          model_value: parsed,
+        }),
+      })
+      if (
+        editorGeneration !== modelEditorGeneration ||
+        providerDraftIdentity(draft.value) !== draftIdentity ||
+        JSON.stringify(draft.value) !== draftSnapshotJson ||
+        modelJson.value !== submittedModelJson
+      ) return
+      toasts.push('success', 'Provider model configuration saved')
+      configuredAdapterIds.value = new Set([...configuredAdapterIds.value, editing.adapterId])
+      configuredModelKeys.value = new Set([...configuredModelKeys.value, key])
+    } else if (
+      editorGeneration !== modelEditorGeneration ||
+      providerDraftIdentity(draft.value) !== draftIdentity ||
+      JSON.stringify(draft.value) !== draftSnapshotJson ||
+      modelJson.value !== submittedModelJson
+    ) {
+      return
+    }
+    modelConfigValues.value = {
+      ...modelConfigValues.value,
+      [key]: clone(parsed),
+    }
+    updateModelRowFromValue(editing.adapterId, editing.modelId, parsed)
+    if (!persist) toasts.push('success', 'Model configuration staged; save the Provider to apply it')
+    modelValue.value = record(parsed)
+    modelJson.value = JSON.stringify(modelValue.value, null, 2)
+  } catch (reason) {
+    if (persist && previousConfig !== undefined && editorGeneration === modelEditorGeneration) {
+      modelConfigValues.value = { ...modelConfigValues.value, [key]: previousConfig }
+    }
+    modelError.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
-    modelSaving.value = false
+    if (editorGeneration === modelEditorGeneration) modelSaving.value = false
+    mutationBusy.value = false
   }
 }
 
 async function deleteModel(adapterId: string, modelId: string) {
-  if (!draft.value || !window.confirm(`Delete model ${adapterId}/${modelId}?`)) return
-  const providerId = draft.value.provider_id
+  if (!draft.value || mutationBusy.value || !window.confirm(`Delete model ${adapterId}/${modelId}?`)) return
+  const draftSnapshot = clone(draft.value)
+  const draftIdentity = providerDraftIdentity(draftSnapshot)
+  const submittedEditorState = providerEditorStateFingerprint()
+  const requestGeneration = draftRequestGeneration
+  const providerId = draftSnapshot.provider_id
+  const key = modelKey(adapterId, modelId)
+  const persist = canPersistExistingProvider() && configuredModelKeys.value.has(key)
+  if (editingModel.value?.adapterId === adapterId && editingModel.value?.modelId === modelId) closeModelEditor()
+  mutationBusy.value = true
   try {
-    await apiJson('/api/v1/provider-studio/delete-model', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ draft: draft.value, adapter_id: adapterId, model_id: modelId }),
-    })
+    if (persist) {
+      await apiJson('/api/v1/provider-studio/delete-model', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ draft: draftSnapshot, adapter_id: adapterId, model_id: modelId }),
+      })
+    }
+    if (requestGeneration !== draftRequestGeneration) return
+    const editorWasUnchanged =
+      providerDraftIdentity(draft.value) === draftIdentity && providerEditorStateFingerprint() === submittedEditorState
+    const nextValues = { ...modelConfigValues.value }
+    delete nextValues[key]
+    modelConfigValues.value = nextValues
     adapterModels.value = adapterModels.value.map((adapter) => adapter.adapter_id === adapterId ? { ...adapter, models: adapter.models.filter((model) => model.id !== modelId) } : adapter)
     const next = new Set(selectedModelKeys.value)
-    next.delete(modelKey(adapterId, modelId))
+    next.delete(key)
     selectedModelKeys.value = next
+    configuredModelKeys.value = new Set([...configuredModelKeys.value].filter((configuredKey) => configuredKey !== key))
     if (draft.value.default_adapter === adapterId && draft.value.default_model === modelId) {
       const nextDraft = clone(draft.value)
       nextDraft.default_model = ''
       draft.value = nextDraft
     }
-    if (editingModel.value?.adapterId === adapterId && editingModel.value?.modelId === modelId) editingModel.value = null
-    toasts.push('success', 'Provider model deleted')
-    await loadProviders()
-    await loadDraft(providerId)
+    toasts.push('success', persist ? 'Provider model deleted' : 'Model removed from draft')
+    if (persist) {
+      await loadProviders()
+      if (requestGeneration === draftRequestGeneration && editorWasUnchanged) await loadDraft(providerId)
+    }
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    mutationBusy.value = false
   }
 }
 
 async function deleteAdapter(adapterId: string) {
-  if (!draft.value || !window.confirm(`Delete adapter ${adapterId}?`)) return
-  const providerId = draft.value.provider_id
+  if (!draft.value || mutationBusy.value || !window.confirm(`Delete adapter ${adapterId}?`)) return
+  const draftSnapshot = clone(draft.value)
+  const draftIdentity = providerDraftIdentity(draftSnapshot)
+  const submittedEditorState = providerEditorStateFingerprint()
+  const requestGeneration = draftRequestGeneration
+  const providerId = draftSnapshot.provider_id
+  const persist = canPersistExistingProvider() && configuredAdapterIds.value.has(adapterId)
+  if (editingModel.value?.adapterId === adapterId) closeModelEditor()
+  mutationBusy.value = true
   try {
-    await apiJson('/api/v1/provider-studio/delete-adapter', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ draft: draft.value, adapter_id: adapterId }),
-    })
+    if (persist) {
+      await apiJson('/api/v1/provider-studio/delete-adapter', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ draft: draftSnapshot, adapter_id: adapterId }),
+      })
+    }
+    if (requestGeneration !== draftRequestGeneration) return
+    const editorWasUnchanged =
+      providerDraftIdentity(draft.value) === draftIdentity && providerEditorStateFingerprint() === submittedEditorState
     selectedAdapterIds.value = new Set([...selectedAdapterIds.value].filter((id) => id !== adapterId))
+    if (manualModelAdapterId.value === adapterId) syncManualModelAdapter()
     adapterModels.value = adapterModels.value.filter((adapter) => adapter.adapter_id !== adapterId)
+    const nextValues = { ...modelConfigValues.value }
+    for (const key of Object.keys(nextValues)) if (key.startsWith(`${adapterId}\u001f`)) delete nextValues[key]
+    modelConfigValues.value = nextValues
+    configuredAdapterIds.value = new Set([...configuredAdapterIds.value].filter((id) => id !== adapterId))
+    configuredModelKeys.value = new Set([...configuredModelKeys.value].filter((key) => !key.startsWith(`${adapterId}\u001f`)))
     if (draft.value.default_adapter === adapterId) {
       const nextDraft = clone(draft.value)
       nextDraft.default_adapter = ''
       nextDraft.default_model = ''
       draft.value = nextDraft
     }
-    toasts.push('success', 'Provider adapter deleted')
-    await loadProviders()
-    await loadDraft(providers.value.some((provider) => provider.provider_id === providerId) ? providerId : undefined)
+    toasts.push('success', persist ? 'Provider adapter deleted' : 'Adapter removed from draft')
+    if (persist) {
+      await loadProviders()
+      if (requestGeneration === draftRequestGeneration && editorWasUnchanged) {
+        await loadDraft(providers.value.some((provider) => provider.provider_id === providerId) ? providerId : undefined)
+      }
+    }
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    mutationBusy.value = false
   }
 }
 
 async function saveAdapter(adapter: AdapterModels) {
-  if (!draft.value) return
+  if (!draft.value || mutationBusy.value || saving.value || listingModels.value || modelSaving.value) return
+  if (!supportedAdapterIds.value.has(adapter.adapter_id)) {
+    error.value = `${adapter.adapter_id} is not supported by the current authentication subtype.`
+    return
+  }
+  if (!selectedAdapterIds.value.has(adapter.adapter_id)) {
+    error.value = `Select ${adapter.adapter_id} before saving its adapter matches.`
+    return
+  }
+  if (adapterFailure(adapter)) {
+    error.value = `Cannot save ${adapter.adapter_id} while its model list has failed to load.`
+    return
+  }
+  const draftSnapshot = clone(draft.value)
+  const draftIdentity = providerDraftIdentity(draftSnapshot)
+  const requestGeneration = draftRequestGeneration
+  const providerId = draftSnapshot.provider_id
+  const persist = canPersistExistingProvider()
+  const selectedModelKeysSnapshot = new Set(selectedModelKeys.value)
+  const submittedEditorState = providerEditorStateFingerprint(
+    draftSnapshot,
+    clone(adapterModels.value),
+    new Set(selectedAdapterIds.value),
+    selectedModelKeysSnapshot,
+    clone(modelConfigValues.value),
+  )
+  mutationBusy.value = true
   try {
     const adapterForSave: AdapterModels = {
       ...adapter,
-      models: adapter.models.filter((model) => selectedModelKeys.value.has(modelKey(adapter.adapter_id, model.id))),
+      models: adapter.models.filter((model) => selectedModelKeysSnapshot.has(modelKey(adapter.adapter_id, model.id))),
     }
-    await apiJson('/api/v1/provider-studio/save-adapter', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ draft: draft.value, adapter_models: adapterForSave }),
-    })
-    toasts.push('success', `Saved ${adapter.adapter_id} adapter matches`)
-    await loadProviders()
+    if (persist) {
+      await apiJson('/api/v1/provider-studio/save-adapter', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ draft: draftSnapshot, adapter_models: adapterForSave }),
+      })
+      if (
+        requestGeneration !== draftRequestGeneration ||
+        providerDraftIdentity(draft.value) !== draftIdentity ||
+        providerEditorStateFingerprint() !== submittedEditorState
+      ) return
+      toasts.push('success', `Saved ${adapter.adapter_id} adapter matches`)
+      await loadProviders()
+      if (
+        requestGeneration === draftRequestGeneration &&
+        providerDraftIdentity(draft.value) === draftIdentity &&
+        providerEditorStateFingerprint() === submittedEditorState
+      ) {
+        await loadDraft(providerId)
+      }
+    } else {
+      if (requestGeneration !== draftRequestGeneration || providerDraftIdentity(draft.value) !== draftIdentity) return
+      const index = adapterModels.value.findIndex((item) => item.adapter_id === adapter.adapter_id)
+      if (index >= 0) {
+        const next = [...adapterModels.value]
+        next[index] = { ...next[index], enabled: true }
+        adapterModels.value = next
+      }
+      toasts.push('success', `${adapter.adapter_id} adapter staged; save the Provider to apply it`)
+    }
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    mutationBusy.value = false
   }
 }
 
 async function createProvider() {
+  if (mutationBusy.value || loading.value) return
   await loadDraft()
   if (draft.value) {
     const next = clone(draft.value)
@@ -849,6 +1538,13 @@ onMounted(async () => {
     error.value = reason instanceof Error ? reason.message : String(reason)
   }
 })
+
+onBeforeUnmount(() => {
+  resetAuthUiState()
+  ++draftRequestGeneration
+  ++modelListingGeneration
+  ++modelEditorGeneration
+})
 </script>
 
 <template>
@@ -859,11 +1555,11 @@ onMounted(async () => {
         <p class="mt-1 text-xs text-muted-foreground">Edit the same provider draft, authentication fields, adapters, and model policies exposed by the TUI.</p>
       </div>
       <div class="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" :disabled="loading" @click="loadDraft(selectedProviderId || undefined)">
+        <Button variant="outline" size="sm" :disabled="loading || mutationBusy" @click="loadDraft(selectedProviderId || undefined)">
           <RiRefreshLine class="mr-2 h-4 w-4" :class="loading ? 'animate-spin' : ''" />
           Refresh draft
         </Button>
-        <Button variant="outline" size="sm" @click="createProvider">
+        <Button variant="outline" size="sm" :disabled="loading || mutationBusy" @click="createProvider">
           <RiAddLine class="mr-2 h-4 w-4" />
           New provider
         </Button>
@@ -881,6 +1577,7 @@ onMounted(async () => {
           type="button"
           class="rounded-md border px-3 py-2 text-left text-xs transition-colors"
           :class="selectedProviderId === provider.provider_id ? 'border-primary bg-primary/10 text-foreground' : 'border-border/60 hover:bg-muted/40'"
+          :disabled="loading || mutationBusy"
           @click="loadDraft(provider.provider_id)"
         >
           <span class="block truncate font-mono font-semibold">{{ providerLabel(provider) }}</span>
@@ -894,10 +1591,10 @@ onMounted(async () => {
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Draft</div>
             <div class="flex gap-2">
-              <Button variant="ghost" size="sm" class="text-destructive" :disabled="saving || !draft.source_provider_id" @click="deleteProvider">
+              <Button variant="ghost" size="sm" class="text-destructive" :disabled="loading || mutationBusy || !draft.source_provider_id" @click="deleteProvider">
                 <RiDeleteBinLine class="mr-1.5 h-4 w-4" /> Delete provider
               </Button>
-              <Button size="sm" :disabled="saving || !draft.provider_id" @click="saveDraft">
+              <Button size="sm" :disabled="loading || mutationBusy || !draft.provider_id" @click="saveDraft">
                 <RiSave3Line class="mr-1.5 h-4 w-4" /> {{ saving ? 'Saving…' : 'Save provider' }}
               </Button>
             </div>
@@ -941,11 +1638,40 @@ onMounted(async () => {
               <div class="mt-1 text-xs text-muted-foreground">Secret values are sent only to the provider-studio endpoint and are masked in the form.</div>
             </div>
             <div v-if="interactiveAuthAvailable" class="flex gap-2">
-              <Button variant="outline" size="sm" @click="startAuth('start')">Start auth</Button>
-              <Button variant="outline" size="sm" @click="startAuth('continue')">Continue auth</Button>
+              <Button variant="outline" size="sm" :disabled="mutationBusy || authRequestInFlight || authPolling" @click="startAuth('start')">{{ authRequestInFlight ? 'Working…' : 'Start auth' }}</Button>
+              <Button variant="outline" size="sm" :disabled="mutationBusy || authRequestInFlight || authPolling" @click="startAuth('continue')">{{ authPolling ? 'Waiting…' : 'Continue auth' }}</Button>
             </div>
           </div>
           <div v-if="authMessage" class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs">{{ authMessage }}</div>
+          <div v-if="pendingDeviceAuth" class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+            <div class="font-medium">Device authorization is pending</div>
+            <a
+              v-if="pendingDeviceAuth.verification_url"
+              class="break-all text-primary underline underline-offset-2"
+              :href="pendingDeviceAuth.verification_url"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open verification page
+            </a>
+            <div v-if="pendingDeviceAuth.verification_url" class="break-all font-mono text-[11px] text-muted-foreground">{{ pendingDeviceAuth.verification_url }}</div>
+            <div v-if="pendingDeviceAuth.user_code" class="font-mono text-sm">Code: {{ pendingDeviceAuth.user_code }}</div>
+            <div class="text-muted-foreground">The Web client polls this device flow using the provider interval. You can also press Continue auth.</div>
+          </div>
+          <div v-if="pendingBrowserAuth" class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+            <div class="font-medium text-foreground">Browser authorization is pending</div>
+            <a
+              v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
+              class="break-all text-primary underline underline-offset-2"
+              :href="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open authorization page
+            </a>
+            <div v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url" class="break-all font-mono text-[11px]">{{ pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url }}</div>
+            <div>Finish the browser flow, paste the callback URL into the field above, then press Continue auth.</div>
+          </div>
           <div class="grid gap-3 sm:grid-cols-2">
             <label v-for="field in visibleAuthFields" :key="field.path" class="grid gap-1.5">
               <span class="text-xs text-muted-foreground">{{ field.label }}</span>
@@ -979,16 +1705,17 @@ onMounted(async () => {
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div>
               <div class="text-sm font-medium">Adapter model lists</div>
-              <div class="mt-1 text-xs text-muted-foreground">Select adapters, load their live models, then select the model routes to persist.</div>
+              <div class="mt-1 text-xs text-muted-foreground">{{ modelListingDescription }} Selected routes are persisted when you save the Provider.</div>
             </div>
-            <Button variant="outline" size="sm" :disabled="listingModels" @click="listDraftModels">
-              <RiRefreshLine class="mr-1.5 h-4 w-4" :class="listingModels ? 'animate-spin' : ''" /> List live models
+            <Button variant="outline" size="sm" :disabled="mutationBusy || listingModels || modelListingKind === 'unavailable'" @click="listDraftModels">
+              <RiRefreshLine class="mr-1.5 h-4 w-4" :class="listingModels ? 'animate-spin' : ''" /> {{ modelListingKind === 'saved' ? 'Refresh saved models' : 'List provider models' }}
             </Button>
           </div>
           <div class="grid gap-2 sm:grid-cols-2">
-            <label v-for="adapterId in adapterCandidates" :key="adapterId" class="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs">
-              <input type="checkbox" :checked="selectedAdapterIds.has(adapterId)" @change="toggleAdapter(adapterId)" />
-              <span class="font-mono">{{ adapterId }}</span>
+            <label v-for="adapterId in adapterCandidates" :key="adapterId" class="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs" :class="!supportedAdapterIds.has(adapterId) ? 'opacity-60' : ''">
+              <input type="checkbox" :checked="selectedAdapterIds.has(adapterId)" :disabled="mutationBusy || listingModels || !supportedAdapterIds.has(adapterId)" @change="toggleAdapter(adapterId)" />
+              <span class="font-mono">{{ !supportedAdapterIds.has(adapterId) ? '[-]' : selectedAdapterIds.has(adapterId) ? '[x]' : '[ ]' }} {{ adapterId }}</span>
+              <span v-if="!supportedAdapterIds.has(adapterId)" class="ml-auto text-[10px] text-muted-foreground">unsupported</span>
             </label>
           </div>
           <div v-if="adapterModels.length === 0 && !listingModels" class="text-xs text-muted-foreground">No adapter models loaded. Select an adapter and list live models.</div>
@@ -1000,28 +1727,41 @@ onMounted(async () => {
                 <span v-if="adapterFailure(adapter)" class="text-destructive">{{ adapterFailure(adapter) }}</span>
               </div>
               <div class="flex gap-1">
-                <Button variant="ghost" size="sm" @click="saveAdapter(adapter)">Save adapter</Button>
-                <IconButton variant="ghost" size="sm" tooltip="Delete adapter" aria-label="Delete adapter" @click="deleteAdapter(adapter.adapter_id)"><RiDeleteBinLine class="h-4 w-4 text-destructive" /></IconButton>
+                <Button variant="ghost" size="sm" :disabled="mutationBusy || !selectedAdapterIds.has(adapter.adapter_id) || !supportedAdapterIds.has(adapter.adapter_id)" @click="saveAdapter(adapter)">Save adapter</Button>
+                <IconButton variant="ghost" size="sm" tooltip="Delete adapter" aria-label="Delete adapter" :disabled="mutationBusy" @click="deleteAdapter(adapter.adapter_id)"><RiDeleteBinLine class="h-4 w-4 text-destructive" /></IconButton>
               </div>
             </div>
             <div class="grid gap-1 p-2">
               <label v-for="model in adapter.models" :key="model.id" class="flex min-w-0 items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted/40">
-                <input type="checkbox" :checked="selectedModelKeys.has(modelKey(adapter.adapter_id, model.id))" @change="toggleModel(adapter.adapter_id, model.id)" />
-                <button type="button" class="min-w-0 flex-1 truncate text-left" @click="openModelEditor(adapter.adapter_id, model)">
+                <input type="checkbox" :checked="selectedModelKeys.has(modelKey(adapter.adapter_id, model.id))" :disabled="mutationBusy || listingModels" @change="toggleModel(adapter.adapter_id, model.id)" />
+                <button type="button" class="min-w-0 flex-1 truncate text-left" :disabled="mutationBusy || listingModels" @click="openModelEditor(adapter.adapter_id, model)">
                   <span>{{ model.display_name || model.id }}</span>
                   <code v-if="model.display_name" class="ml-2 font-mono text-[10px] text-muted-foreground">{{ model.id }}</code>
                 </button>
-                <IconButton variant="ghost" size="sm" tooltip="Delete model" aria-label="Delete model" @click.stop="deleteModel(adapter.adapter_id, model.id)"><RiDeleteBinLine class="h-3.5 w-3.5 text-destructive" /></IconButton>
+                <IconButton variant="ghost" size="sm" tooltip="Delete model" aria-label="Delete model" :disabled="mutationBusy" @click.stop="deleteModel(adapter.adapter_id, model.id)"><RiDeleteBinLine class="h-3.5 w-3.5 text-destructive" /></IconButton>
               </label>
               <div v-if="adapter.models.length === 0" class="px-2 py-3 text-xs text-muted-foreground">No models listed.</div>
             </div>
           </div>
           <div class="flex flex-wrap items-end gap-2">
+            <label class="grid min-w-[12rem] gap-1.5">
+              <span class="text-xs text-muted-foreground">Adapter</span>
+              <OptionPicker
+                :model-value="manualModelAdapterId"
+                :options="manualModelAdapterOptions"
+                :include-empty="false"
+                placeholder="Select adapter"
+                title="Adapter for manual model"
+                monospace
+                :disabled="mutationBusy || listingModels || manualModelAdapterOptions.length === 0"
+                @update:model-value="manualModelAdapterId = $event"
+              />
+            </label>
             <label class="grid min-w-[14rem] gap-1.5">
               <span class="text-xs text-muted-foreground">Add model id</span>
               <Input v-model="newModelId" class="font-mono" placeholder="model-name" @keydown.enter="addManualModel" />
             </label>
-            <Button variant="outline" size="sm" :disabled="!newModelId.trim() || selectedAdapterIds.size === 0" @click="addManualModel"><RiAddLine class="mr-1.5 h-4 w-4" /> Add model</Button>
+            <Button variant="outline" size="sm" :disabled="mutationBusy || listingModels || !newModelId.trim() || !manualModelAdapterId" @click="addManualModel"><RiAddLine class="mr-1.5 h-4 w-4" /> Add model</Button>
           </div>
         </section>
 
@@ -1031,15 +1771,58 @@ onMounted(async () => {
               <div class="text-sm font-medium">Model · {{ editingModel.adapterId }}/{{ editingModel.modelId }}</div>
               <div class="mt-1 text-xs text-muted-foreground">The TUI exposes these 15 model configuration fields through its persisted JSON editor.</div>
             </div>
-            <Button variant="ghost" size="sm" @click="editingModel = null">Close</Button>
+            <Button variant="ghost" size="sm" @click="closeModelEditor">Close</Button>
           </div>
           <div v-if="modelLoading" class="text-sm text-muted-foreground">Loading model configuration…</div>
           <div v-else-if="modelError" class="text-sm text-destructive">{{ modelError }}</div>
           <template v-else>
             <div class="grid gap-2 sm:grid-cols-2">
               <div v-for="field in modelFields" :key="field.key" class="rounded border border-border/50 px-3 py-2">
-                <div class="text-[10px] uppercase tracking-wide text-muted-foreground">{{ field.label }}</div>
-                <code class="mt-1 block break-all text-xs">{{ modelFieldValue(field.key) || '—' }}</code>
+                <div class="grid gap-1.5">
+                  <div class="flex items-center justify-between gap-2">
+                    <label :for="`provider-model-${field.key.replaceAll('.', '-')}`" class="text-[10px] uppercase tracking-wide text-muted-foreground">{{ field.label }}</label>
+                    <span v-if="field.kind === 'readonly'" class="text-[10px] text-muted-foreground">read-only</span>
+                  </div>
+                  <div v-if="field.kind === 'readonly'" :id="`provider-model-${field.key.replaceAll('.', '-')}`" class="break-all font-mono text-xs">{{ modelFieldValue(field.key) || '—' }}</div>
+                  <input
+                    v-else-if="field.kind === 'boolean'"
+                    :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                    type="checkbox"
+                    class="h-4 w-4 justify-self-start accent-primary"
+                    :checked="modelFieldBooleanValue(field.key)"
+                    @change="setModelFieldValue(field.key, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <OptionPicker
+                    v-else-if="field.kind === 'select'"
+                    :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                    :model-value="modelFieldValue(field.key)"
+                    :options="field.options || []"
+                    :include-empty="field.key === 'lifecycle'"
+                    :empty-label="field.key === 'lifecycle' ? 'Default / unset' : undefined"
+                    :title="field.label"
+                    @update:model-value="setModelFieldValue(field.key, $event)"
+                  />
+                  <textarea
+                    v-else-if="field.kind === 'textarea'"
+                    :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                    :value="modelFieldValue(field.key)"
+                    :placeholder="field.placeholder"
+                    rows="3"
+                    class="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus:border-ring"
+                    @input="setModelFieldValue(field.key, ($event.target as HTMLTextAreaElement).value)"
+                  />
+                  <Input
+                    v-else
+                    :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                    :value="modelFieldValue(field.key)"
+                    :type="field.kind === 'number' ? 'number' : 'text'"
+                    :placeholder="field.placeholder"
+                    :class="field.kind === 'csv' || field.kind === 'number' ? 'font-mono' : ''"
+                    @input="field.kind === 'csv' ? undefined : setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)"
+                    @change="field.kind === 'csv' ? setModelFieldValue(field.key, ($event.target as HTMLInputElement).value) : undefined"
+                  />
+                  <div v-if="field.help" class="text-[10px] text-muted-foreground">{{ field.help }}</div>
+                </div>
               </div>
             </div>
             <label class="grid gap-1.5">
@@ -1047,7 +1830,10 @@ onMounted(async () => {
               <textarea v-model="modelJson" rows="16" spellcheck="false" class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs outline-none focus:border-ring" />
             </label>
             <div v-if="modelError" class="text-xs text-destructive">{{ modelError }}</div>
-            <Button class="justify-self-start" :disabled="modelSaving" @click="saveModel"><RiSave3Line class="mr-1.5 h-4 w-4" /> {{ modelSaving ? 'Saving…' : 'Save model config' }}</Button>
+            <div class="flex flex-wrap gap-2">
+              <Button variant="outline" :disabled="modelSaving || mutationBusy" @click="applyModelJson">Apply JSON</Button>
+              <Button :disabled="modelSaving || mutationBusy" @click="saveModel"><RiSave3Line class="mr-1.5 h-4 w-4" /> {{ modelSaving ? 'Saving…' : 'Save model config' }}</Button>
+            </div>
           </template>
         </section>
       </div>

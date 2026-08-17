@@ -284,12 +284,18 @@ impl SessionManager {
             .iter()
             .map(|part| new_part_from_content("text", PartRole::User, part, PartState::Completed))
             .collect::<Result<Vec<_>, _>>()?;
-        let outcome = self
+        let submit_outcome = self
             .store
-            .submit_user_run(session.id, user_parts, request.idempotency_key.clone())
+            .submit_user_run_for_execution(
+                session.id,
+                user_parts,
+                request.idempotency_key.clone(),
+                &control.execution_id().to_string(),
+            )
             .await?;
+        control.set_user_run(submit_outcome.run_id, submit_outcome.created);
         let mut projected = session.parts().to_vec();
-        projected.extend(outcome.parts);
+        projected.extend(submit_outcome.parts);
         session.install_projected_parts(projected);
 
         // Record the user.prompt.submit hook runs observed during this
@@ -312,7 +318,7 @@ impl SessionManager {
                 &options,
                 StableRunContext {
                     base_run_source: ExecutionSource::User,
-                    active_model_turn_id: Some(outcome.run_id),
+                    active_model_turn_id: Some(submit_outcome.run_id),
                     state,
                     control,
                     steer_rx,

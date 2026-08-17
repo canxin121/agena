@@ -137,6 +137,8 @@ pub struct ProviderStudioSaveDraftRequest {
     pub selected_adapter_ids: Vec<String>,
     #[serde(default)]
     pub selected_model_keys: std::collections::BTreeSet<String>,
+    #[serde(default)]
+    pub model_config_values: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -219,110 +221,213 @@ pub async fn save_provider_studio_draft(
     State(state): State<AppState>,
     Json(request): Json<ProviderStudioSaveDraftRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
-        state
-            .application()
-            .save_provider_draft(
-                request.draft,
-                &request.adapter_model_lists,
-                &request.selected_adapter_ids,
-                &request.selected_model_keys,
-            )
-            .await,
-    ))
+    let result = state
+        .application()
+        .save_provider_draft(
+            request.draft,
+            &request.adapter_model_lists,
+            &request.selected_adapter_ids,
+            &request.selected_model_keys,
+            &request.model_config_values,
+        )
+        .await
+        .map_err(provider_studio_save_error)?;
+    Ok(Json(result))
 }
 
 pub async fn save_provider_studio_adapter(
     State(state): State<AppState>,
     Json(request): Json<ProviderStudioSaveAdapterRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
-        state
-            .application()
-            .save_provider_adapter_matches(request.draft, request.adapter_models)
-            .await,
-    ))
+    let result = state
+        .application()
+        .save_provider_adapter_matches(request.draft, request.adapter_models)
+        .await
+        .map_err(provider_studio_save_error)?;
+    Ok(Json(result))
 }
 
 pub async fn save_provider_studio_model(
     State(state): State<AppState>,
     Json(request): Json<ProviderStudioSaveModelRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
-        state
-            .application()
-            .save_provider_model_value(
-                request.draft,
-                request.adapter_id.as_str(),
-                request.model_id.as_str(),
-                request.model_value,
-            )
-            .await,
-    ))
+    let result = state
+        .application()
+        .save_provider_model_value(
+            request.draft,
+            request.adapter_id.as_str(),
+            request.model_id.as_str(),
+            request.model_value,
+        )
+        .await
+        .map_err(provider_studio_save_error)?;
+    Ok(Json(result))
 }
 
 pub async fn delete_provider_studio_provider(
     State(state): State<AppState>,
     Json(request): Json<ProviderStudioDeleteProviderRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
-        state
-            .application()
-            .delete_provider(request.provider_id.as_str())
-            .await,
-    ))
+    let result = state
+        .application()
+        .delete_provider(request.provider_id.as_str())
+        .await
+        .map_err(provider_studio_save_error)?;
+    Ok(Json(result))
 }
 
 pub async fn delete_provider_studio_adapter(
     State(state): State<AppState>,
     Json(request): Json<ProviderStudioDeleteAdapterRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
-        state
-            .application()
-            .delete_provider_adapter(request.draft, request.adapter_id.as_str())
-            .await,
-    ))
+    let result = state
+        .application()
+        .delete_provider_adapter(request.draft, request.adapter_id.as_str())
+        .await
+        .map_err(provider_studio_save_error)?;
+    Ok(Json(result))
 }
 
 pub async fn delete_provider_studio_model(
     State(state): State<AppState>,
     Json(request): Json<ProviderStudioDeleteModelRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
-        state
-            .application()
-            .delete_provider_model(
-                request.draft,
-                request.adapter_id.as_str(),
-                request.model_id.as_str(),
-            )
-            .await,
-    ))
+    let result = state
+        .application()
+        .delete_provider_model(
+            request.draft,
+            request.adapter_id.as_str(),
+            request.model_id.as_str(),
+        )
+        .await
+        .map_err(provider_studio_save_error)?;
+    Ok(Json(result))
 }
 
 pub async fn start_provider_studio_auth(
     State(state): State<AppState>,
     Json(request): Json<ProviderStudioAuthRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
-        state
-            .application()
-            .start_provider_draft_auth(request.draft)
-            .await,
-    ))
+    let result = state
+        .application()
+        .start_provider_draft_auth(request.draft)
+        .await
+        .map_err(provider_studio_auth_error)?;
+    Ok(Json(result))
 }
 
 pub async fn continue_provider_studio_auth(
     State(state): State<AppState>,
     Json(request): Json<ProviderStudioAuthRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
-        state
-            .application()
-            .continue_provider_draft_auth(request.draft)
-            .await,
-    ))
+    let result = state
+        .application()
+        .continue_provider_draft_auth(request.draft)
+        .await
+        .map_err(provider_studio_auth_error)?;
+    Ok(Json(result))
+}
+
+fn provider_studio_save_error(
+    error: agena_application::provider_studio::ProviderStudioSaveError,
+) -> ServerError {
+    match error {
+        agena_application::provider_studio::ProviderStudioSaveError::Other(problem) => {
+            ServerError::from_failure(problem.into())
+        }
+        agena_application::provider_studio::ProviderStudioSaveError::Validation(validation) => {
+            ServerError::bad_request(provider_studio_validation_message(&validation))
+        }
+        agena_application::provider_studio::ProviderStudioSaveError::ExistingProviderSettingsMustBeObject => {
+            ServerError::bad_request("The existing provider settings must be a JSON object.")
+        }
+        agena_application::provider_studio::ProviderStudioSaveError::ProviderAdapterMustBeObject { .. } => {
+            ServerError::bad_request("The provider adapter settings must be a JSON object.")
+        }
+        agena_application::provider_studio::ProviderStudioSaveError::ProviderModelConfigMustBeObject => {
+            ServerError::bad_request("The provider model configuration must be a JSON object.")
+        }
+        agena_application::provider_studio::ProviderStudioSaveError::ConfiguredProviderAdapterSettingsMustBeObject => {
+            ServerError::bad_request("The configured provider adapters must be a JSON object.")
+        }
+        agena_application::provider_studio::ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject => {
+            ServerError::bad_request("The configured provider models must be a JSON object.")
+        }
+    }
+}
+
+fn provider_studio_validation_message(
+    error: &agena_application::provider_studio::ProviderStudioSaveValidationError,
+) -> &'static str {
+    use agena_application::provider_studio::{
+        ProviderStudioSaveField, ProviderStudioSaveValidationError,
+    };
+
+    match error {
+        ProviderStudioSaveValidationError::FieldRequired(field) => match field {
+            ProviderStudioSaveField::ProviderId => "Provider ID is required.",
+            ProviderStudioSaveField::DefaultAdapter => "A default adapter is required.",
+            ProviderStudioSaveField::AdapterId => "Adapter ID is required.",
+            ProviderStudioSaveField::ModelId => "Model ID is required.",
+            ProviderStudioSaveField::AuthMode => "Choose an authentication mode.",
+            ProviderStudioSaveField::AuthSubtype => "Choose an authentication subtype.",
+            ProviderStudioSaveField::CredentialIssuer => "Choose a credential issuer.",
+        },
+        ProviderStudioSaveValidationError::UnsupportedDefaultAdapter { .. } => {
+            "The selected default adapter is not supported by this authentication mode."
+        }
+        ProviderStudioSaveValidationError::UnsupportedAdapters { .. } => {
+            "One or more selected adapters are not supported by this authentication mode."
+        }
+        ProviderStudioSaveValidationError::ApiBaseUrlRequired => {
+            "A provider base URL is required for this API adapter."
+        }
+        ProviderStudioSaveValidationError::GitlabApiKeyOrEnvRequired => {
+            "A GitLab API key or API-key environment variable is required."
+        }
+        ProviderStudioSaveValidationError::CredentialBaseUrlRequired { .. } => {
+            "A provider base URL is required for this credential issuer."
+        }
+        ProviderStudioSaveValidationError::CredentialServiceKeyEnvRequired { .. } => {
+            "A service-key environment variable is required for this credential issuer."
+        }
+        ProviderStudioSaveValidationError::BedrockKeyPairRequired => {
+            "An AWS profile or both Bedrock access-key fields are required."
+        }
+    }
+}
+
+fn provider_studio_auth_error(
+    error: agena_application::provider_studio::ProviderDraftAuthError,
+) -> ServerError {
+    match error {
+        agena_application::provider_studio::ProviderDraftAuthError::Other(problem) => {
+            ServerError::from_failure(problem.into())
+        }
+        agena_application::provider_studio::ProviderDraftAuthError::UnsupportedInteractiveLogin => {
+            ServerError::bad_request("This provider does not support interactive authentication.")
+        }
+        agena_application::provider_studio::ProviderDraftAuthError::StartBrowserAuthFirst => {
+            ServerError::bad_request("Start browser authorization before continuing.")
+        }
+        agena_application::provider_studio::ProviderDraftAuthError::StartDeviceAuthFirst => {
+            ServerError::bad_request("Start device authorization before continuing.")
+        }
+        agena_application::provider_studio::ProviderDraftAuthError::RequiredField(field) => {
+            let message = match field {
+                agena_application::provider_studio::ProviderDraftAuthField::RedirectUri => {
+                    "Redirect URI is required."
+                }
+                agena_application::provider_studio::ProviderDraftAuthField::InstanceUrl => {
+                    "Provider instance URL is required."
+                }
+                agena_application::provider_studio::ProviderDraftAuthField::CallbackUrl => {
+                    "OAuth callback URL is required."
+                }
+            };
+            ServerError::bad_request(message)
+        }
+    }
 }
 use super::{
     AppState, AxumQuery, IntoResponse, Json, ListProviderAdapterModelsParams,

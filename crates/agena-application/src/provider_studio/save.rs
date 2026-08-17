@@ -270,6 +270,7 @@ pub(crate) async fn save_provider_draft(
     adapter_model_lists: &[agena_api::resource::ProviderAdapterModelsResource],
     selected_adapter_ids: &[String],
     selected_model_keys: &std::collections::BTreeSet<String>,
+    model_config_values: &std::collections::BTreeMap<String, JsonValue>,
 ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
     let mut draft = draft;
     draft.normalize_shape();
@@ -388,12 +389,22 @@ pub(crate) async fn save_provider_draft(
                     model.id.as_ref(),
                     Some(model),
                 );
+                let configured = model_config_values
+                    .get(&format!("{}\u{1f}{}", adapter_id, model.id))
+                    .cloned()
+                    .unwrap_or(generated);
                 (
                     model.id.to_string(),
-                    preserve_existing_model_execution_policy(
-                        generated,
-                        existing_models.get(model.id.as_str()),
-                    ),
+                    if model_config_values
+                        .contains_key(&format!("{}\u{1f}{}", adapter_id, model.id))
+                    {
+                        configured
+                    } else {
+                        preserve_existing_model_config(
+                            configured,
+                            existing_models.get(model.id.as_str()),
+                        )
+                    },
                 )
             })
             .collect::<JsonMap<_, _>>();
@@ -421,11 +432,17 @@ pub(crate) async fn save_provider_draft(
                     .find(|model| model.id == default_model)
                     .cloned()
             });
-        let default_model_value = provider_model_json_for_model_id(
-            &catalog_entries,
-            default_model,
-            default_provider_model.as_ref(),
-        );
+        let default_model_key = format!("{}\u{1f}{}", default_adapter, default_model);
+        let default_model_value = model_config_values
+            .get(&default_model_key)
+            .cloned()
+            .unwrap_or_else(|| {
+                provider_model_json_for_model_id(
+                    &catalog_entries,
+                    default_model,
+                    default_provider_model.as_ref(),
+                )
+            });
         adapters
             .entry(default_adapter.clone())
             .or_insert_with(|| json!({ "enabled": true }));
@@ -519,10 +536,7 @@ pub(crate) async fn save_provider_adapter_matches(
                 provider_model_json_for_model_id(&catalog_entries, model.id.as_ref(), Some(model));
             (
                 model.id.to_string(),
-                preserve_existing_model_execution_policy(
-                    generated,
-                    existing_models.get(model.id.as_str()),
-                ),
+                preserve_existing_model_config(generated, existing_models.get(model.id.as_str())),
             )
         })
         .collect::<JsonMap<_, _>>();
@@ -712,7 +726,11 @@ fn apply_provider_adapter_selection(
     Ok(())
 }
 
-fn preserve_existing_model_execution_policy(
+/// Keep user-authored model overrides when a provider-level save refreshes the
+/// route list. The catalog is still the baseline for newly discovered models,
+/// but re-saving a provider must not silently reset a model edited earlier in
+/// the Model Studio (display name, limits, capabilities, modes, etc.).
+fn preserve_existing_model_config(
     mut generated: JsonValue,
     existing: Option<&JsonValue>,
 ) -> JsonValue {
@@ -722,10 +740,8 @@ fn preserve_existing_model_execution_policy(
     let Some(generated_model) = generated.as_object_mut() else {
         return generated;
     };
-    for field in ["agena_tools", "native_compaction"] {
-        if let Some(value) = existing_model.get(field).cloned() {
-            generated_model.insert(field.to_owned(), value);
-        }
+    for (field, value) in existing_model {
+        generated_model.insert(field.clone(), value.clone());
     }
     generated
 }
@@ -1288,9 +1304,34 @@ pub(crate) fn default_speed_mode_name(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use std::collections::BTreeMap;
 
-    use super::default_speed_mode_name;
+    use super::{default_speed_mode_name, preserve_existing_model_config};
+
+    #[test]
+    fn provider_save_preserves_existing_model_overrides() {
+        let generated = json!({
+            "display_name": "Catalog name",
+            "context_window_tokens": 128000,
+            "features": ["tool_calling"],
+        });
+        let existing = json!({
+            "display_name": "My name",
+            "context_window_tokens": 64000,
+            "agena_tools": { "mode": "disabled" },
+        });
+
+        assert_eq!(
+            preserve_existing_model_config(generated, Some(&existing)),
+            json!({
+                "display_name": "My name",
+                "context_window_tokens": 64000,
+                "features": ["tool_calling"],
+                "agena_tools": { "mode": "disabled" },
+            })
+        );
+    }
 
     #[test]
     fn unmarked_speed_modes_do_not_create_an_override() {

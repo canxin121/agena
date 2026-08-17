@@ -1695,7 +1695,7 @@ impl AgenaClient {
         &self,
         session_id: i64,
         execution_id: Option<agena_domain::ExecutionId>,
-    ) -> Result<agena_domain::CancellationResult, ClientError> {
+    ) -> Result<agena_domain::CancellationOutcome, ClientError> {
         self.post_json(
             &format!("/api/v1/sessions/{session_id}/cancel"),
             serde_json::json!({ "execution_id": execution_id }),

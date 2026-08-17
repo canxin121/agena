@@ -993,6 +993,31 @@ pub enum CancellationResult {
     ExecutionMismatch,
 }
 
+/// The complete result of a user-facing execution cancellation.
+///
+/// When the cancelled execution belongs to a newly submitted user message and
+/// no real assistant output was committed for that turn, the runtime removes
+/// that user run and returns the original composer document so clients can put
+/// it back in their input editor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CancellationOutcome {
+    pub result: CancellationResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restored_user_message: Option<ComposerDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restored_user_run_id: Option<i64>,
+}
+
+impl From<CancellationResult> for CancellationOutcome {
+    fn from(result: CancellationResult) -> Self {
+        Self {
+            result,
+            restored_user_message: None,
+            restored_user_run_id: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 /// Identifies a running execution for cancellation and control.

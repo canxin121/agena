@@ -226,6 +226,25 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
+    pub(crate) async fn submit_user_run_for_execution(
+        &self,
+        session_id: i64,
+        parts: Vec<NewPart>,
+        idempotency_key: Option<String>,
+        execution_id: &str,
+    ) -> Result<SubmitOutcome, AppError> {
+        self.facade
+            .submit_user_run_for_execution(
+                session_id,
+                &self.owner_id,
+                parts,
+                idempotency_key,
+                execution_id,
+            )
+            .await
+            .map_err(store_error)
+    }
+
     pub(crate) async fn create_background_operation(
         &self,
         operation: NewBackgroundOperation,
@@ -472,6 +491,17 @@ impl StoreAdapter {
             .cancel_run(session_id, &self.owner_id, run_id)
             .await
             .map(|_| ())
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn withdraw_user_run(
+        &self,
+        session_id: i64,
+        run_id: i64,
+    ) -> Result<Vec<agena_storage::store::Part>, AppError> {
+        self.facade
+            .withdraw_user_run(session_id, &self.owner_id, run_id)
+            .await
             .map_err(store_error)
     }
 

@@ -633,8 +633,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
             document,
             idempotency_key,
         } = request;
+        let restore_document = document.clone();
         let parts = part_contents_from_composer_document(document)
             .map_err(session_execution_command_error)?;
+        let user_idempotency_key = idempotency_key.clone();
         // The wire type already normalized the key (trim / non-empty) in
         // `SessionUserRunRequest::with_idempotency_key`; pass it through.
         let request = SessionUserRunRequest {
@@ -643,12 +645,14 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
             idempotency_key,
         };
         let session_id = request.run.session_id;
-        let outcome = SessionManager::start_registered(
+        let outcome = SessionManager::start_registered_with_restore(
             self,
             session_id,
             ExecutionSource::User,
             ExecutionConversationTarget::NewTurn,
             "user execution",
+            Some(restore_document),
+            user_idempotency_key,
             move |manager, control, steer_rx| async move {
                 manager
                     .submit_user_run_inner(request, control, steer_rx, None)
@@ -1140,6 +1144,35 @@ impl SessionManager {
             + 'static,
         Fut: Future<Output = Result<T, AppError>> + Send + 'static,
     {
+        self.start_registered_with_restore(
+            session_id,
+            source,
+            conversation_target,
+            task_name,
+            None,
+            None,
+            operation,
+        )
+        .await
+    }
+
+    async fn start_registered_with_restore<T, F, Fut>(
+        &self,
+        session_id: i64,
+        source: ExecutionSource,
+        conversation_target: ExecutionConversationTarget,
+        task_name: &'static str,
+        restore_document: Option<agena_domain::ComposerDocument>,
+        user_idempotency_key: Option<String>,
+        operation: F,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError>
+    where
+        T: Send + 'static,
+        F: FnOnce(SessionManager, Arc<ExecutionControl>, mpsc::Receiver<Vec<TypedContent>>) -> Fut
+            + Send
+            + 'static,
+        Fut: Future<Output = Result<T, AppError>> + Send + 'static,
+    {
         let identity = self
             .conversation_identity_for_execution(session_id, source, conversation_target)
             .await?;
@@ -1157,7 +1190,13 @@ impl SessionManager {
         }
         let (control, steer_rx) = self
             .execution_registry
-            .register(session_id, identity.turn_id, identity.reply_id)
+            .register_with_restore(
+                session_id,
+                identity.turn_id,
+                identity.reply_id,
+                restore_document,
+                user_idempotency_key,
+            )
             .await
             .map_err(execution_control_to_app_error)?;
         let outcome = crate::SessionExecutionCommandOutcome::accepted(

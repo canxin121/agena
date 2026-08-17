@@ -632,20 +632,45 @@ impl App {
         self.submit_composer();
     }
 
-    pub(crate) fn handle_turn_cancelled(&mut self, session_id: i64, result: UiResult<()>) {
+    pub(crate) fn handle_turn_cancelled(
+        &mut self,
+        session_id: i64,
+        result: UiResult<agena_domain::CancellationOutcome>,
+    ) {
         self.run_activity.clear_session(session_id);
         if self.transcript.session_id == Some(session_id) {
             self.request_refresh(session_id, true);
         }
         match result {
-            Ok(()) => {
+            Ok(outcome) => {
                 self.flash_info(ui_text::t(&self.i18n, "flash-run-cancelled"));
-                // Borrowed from codex's interrupt-and-send flow: cancelling
-                // the active run makes queued messages the next user turn.
-                // The terminal session event may arrive before or after this
-                // handler, so drain from both paths to avoid leaving the
-                // queue parked when the ordering is unfavourable.
-                self.try_send_pending();
+                if let Some(run_id) = outcome.restored_user_run_id {
+                    self.transcript.remove_run_parts(run_id);
+                }
+                if let Some(document) = outcome.restored_user_message {
+                    self.transcript
+                        .remove_pending_user_messages_for_document(&document);
+                    let draft = ComposerDraft { document };
+                    // `restore_composer_draft` is intentionally non-clobbering:
+                    // if the user typed while the stop request was in flight,
+                    // their newer input wins and the recovered draft remains
+                    // available in the session draft slot only when the
+                    // composer was still empty.
+                    let composer_was_empty = self.current_composer_draft().is_empty();
+                    if composer_was_empty {
+                        self.restore_composer_draft(draft.clone());
+                        self.set_draft_for_slot(DraftSlot::Session(session_id), draft);
+                        self.persist_draft_store_with_feedback(true);
+                        self.focus = Focus::Composer;
+                    }
+                    self.session_composer.pending_restore_draft = None;
+                } else {
+                    // Borrowed from codex's interrupt-and-send flow: a
+                    // normal cancellation makes a queued message the next
+                    // user turn. A recovered user message must remain an
+                    // editable draft and must never be auto-submitted.
+                    self.try_send_pending();
+                }
             }
             Err(error) => {
                 // Even on error we already cleared local activity state —

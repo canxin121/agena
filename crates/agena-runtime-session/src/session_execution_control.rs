@@ -9,7 +9,8 @@ use std::path::Path;
 use async_trait::async_trait;
 
 use agena_domain::{
-    CancellationResult, ExecutionId, ExecutionLifecycle, ModelRef, SessionCacheStats,
+    CancellationOutcome, CancellationResult, ExecutionId, ExecutionLifecycle, ModelRef,
+    SessionCacheStats,
 };
 use agena_tool::SnapshotBackend;
 
@@ -88,11 +89,33 @@ pub trait SessionExecutionControl: Send + Sync {
         execution_id: ExecutionId,
     ) -> Result<CancellationResult, SessionExecutionControlError>;
 
+    /// Cancellation result with optional restoration data. The default wraps
+    /// the legacy lifecycle result so non-session test implementations remain
+    /// source-compatible.
+    async fn cancel_execution_with_outcome(
+        &self,
+        session_id: i64,
+        execution_id: ExecutionId,
+    ) -> Result<CancellationOutcome, SessionExecutionControlError> {
+        self.cancel_execution(session_id, execution_id)
+            .await
+            .map(Into::into)
+    }
+
     /// Cancels whichever execution currently owns the session and suppresses
     /// queued background notification wakes. This is the user-facing stop
     /// operation; unlike `cancel_execution`, it intentionally does not depend
     /// on a possibly stale execution id observed by a client.
     async fn cancel_session(&self, session_id: i64) -> Result<(), SessionExecutionControlError>;
+
+    /// Session-scoped cancellation result with optional restoration data.
+    async fn cancel_session_with_outcome(
+        &self,
+        session_id: i64,
+    ) -> Result<CancellationOutcome, SessionExecutionControlError> {
+        self.cancel_session(session_id).await?;
+        Ok(CancellationResult::CancellationRequested.into())
+    }
 
     /// Lists scheduler-owned automation jobs visible to the composed session
     /// service. The job contract is independent of core transcript state.

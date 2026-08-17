@@ -216,11 +216,11 @@ pub struct CancelRunParams {
     pub execution_id: Option<agena_domain::ExecutionId>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Result of the cancel-run method.
 pub struct CancelRunResult {
     pub session_id: i64,
-    pub result: agena_domain::CancellationResult,
+    pub result: agena_domain::CancellationOutcome,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

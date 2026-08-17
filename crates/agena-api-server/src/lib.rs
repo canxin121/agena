@@ -2857,7 +2857,7 @@ mod router_contract_tests {
         release.expect("release natural provider completion");
         let cancel = cancel.expect("cancel request reaches server");
         assert!(matches!(
-            cancel,
+            cancel.result,
             agena_domain::CancellationResult::CancellationRequested
                 | agena_domain::CancellationResult::AlreadyTerminal
         ));

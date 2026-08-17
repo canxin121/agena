@@ -1,4 +1,4 @@
-use super::{ExecutionControlError, execution_control_to_app_error};
+use super::{ExecutionControl, ExecutionControlError, execution_control_to_app_error};
 use crate::{
     AppError,
     session::{
@@ -10,7 +10,10 @@ use crate::{
         },
     },
 };
-use agena_domain::{ExecutionStatus, Role, SessionSummary};
+use agena_domain::{
+    CancellationOutcome, CancellationResult, ComposerDocument, ExecutionStatus, Role,
+    SessionSummary, TurnId,
+};
 use agena_plugin_host::AgentCancelInput;
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
 use agena_runtime_contracts::part_content::{
@@ -61,6 +64,22 @@ impl SessionManager {
     /// deciding to cancel and this call reaching the manager, so the absence
     /// of a control is a successful no-op rather than an error.
     pub async fn cancel_active_execution(&self, session_id: i64) -> Result<(), AppError> {
+        self.cancel_active_execution_with_outcome(session_id)
+            .await
+            .map(|_| ())
+    }
+
+    /// Session-scoped cancellation with optional recovery of the original
+    /// composer document when the new user turn never produced assistant
+    /// output.
+    pub async fn cancel_active_execution_with_outcome(
+        &self,
+        session_id: i64,
+    ) -> Result<CancellationOutcome, AppError> {
+        let root_control = self
+            .execution_registry
+            .execution_control(session_id, None)
+            .await;
         let root_execution_id = self
             .execution_registry
             .execution(session_id)
@@ -108,6 +127,11 @@ impl SessionManager {
             Err(_) => vec![session_id],
         };
 
+        let root_result_kind = match &root_result {
+            Ok(()) => Some(CancellationResult::CancellationRequested),
+            Err(ExecutionControlError::NoActiveExecution(_)) => Some(CancellationResult::NotFound),
+            Err(_) => None,
+        };
         let mut first_error = cancel_active_execution_result(root_result).err();
         if let Err(error) = self
             .store
@@ -153,7 +177,21 @@ impl SessionManager {
                 first_error = Some(error);
             }
         }
-        first_error.map_or(Ok(()), Err)
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        let result = root_result_kind.unwrap_or(CancellationResult::NotFound);
+        let mut outcome = CancellationOutcome::from(result);
+        if matches!(result, CancellationResult::CancellationRequested)
+            && let Some(control) = root_control
+        {
+            let (document, run_id) = self
+                .restore_unanswered_user_run(session_id, control)
+                .await?;
+            outcome.restored_user_message = document;
+            outcome.restored_user_run_id = run_id;
+        }
+        Ok(outcome)
     }
 
     /// Exact external cancellation. Only after the observed root execution is
@@ -163,6 +201,22 @@ impl SessionManager {
         session_id: i64,
         execution_id: agena_domain::ExecutionId,
     ) -> Result<agena_domain::CancellationResult, AppError> {
+        self.cancel_execution_with_outcome(session_id, execution_id)
+            .await
+            .map(|outcome| outcome.result)
+    }
+
+    /// Exact external cancellation with optional recovery of the matching
+    /// user execution. A mismatched request remains a strict no-op.
+    pub async fn cancel_execution_with_outcome(
+        &self,
+        session_id: i64,
+        execution_id: agena_domain::ExecutionId,
+    ) -> Result<CancellationOutcome, AppError> {
+        let control = self
+            .execution_registry
+            .execution_control(session_id, Some(execution_id))
+            .await;
         let result = self
             .execution_registry
             .cancel_exact(session_id, execution_id)
@@ -212,7 +266,17 @@ impl SessionManager {
                     })
                     .await;
             }
-            return Ok(result);
+            let mut outcome = CancellationOutcome::from(result);
+            if result == CancellationResult::AlreadyTerminal
+                && let Some(control) = control
+            {
+                let (document, run_id) = self
+                    .restore_unanswered_user_run(session_id, control)
+                    .await?;
+                outcome.restored_user_message = document;
+                outcome.restored_user_run_id = run_id;
+            }
+            return Ok(outcome);
         }
         // The execution token is already in the cancellation state. Notify
         // plugins after that control decision so a hook can clear
@@ -275,7 +339,92 @@ impl SessionManager {
                 }
             }
         }
-        Ok(result)
+        let mut outcome = CancellationOutcome::from(result);
+        if let Some(control) = control {
+            let (document, run_id) = self
+                .restore_unanswered_user_run(session_id, control)
+                .await?;
+            outcome.restored_user_message = document;
+            outcome.restored_user_run_id = run_id;
+        }
+        Ok(outcome)
+    }
+
+    /// Wait until the cancelled execution has finished its durable cleanup,
+    /// then decide from the authoritative session projection whether an
+    /// assistant turn emitted a real part. If not, withdraw only the user run
+    /// created by this execution and return its original composer document.
+    async fn restore_unanswered_user_run(
+        &self,
+        session_id: i64,
+        control: std::sync::Arc<ExecutionControl>,
+    ) -> Result<(Option<ComposerDocument>, Option<i64>), AppError> {
+        let Some(document) = control.restore_document().cloned() else {
+            return Ok((None, None));
+        };
+
+        let released = tokio::time::timeout(
+            Self::EXECUTION_CANCEL_UNREGISTER_GRACE,
+            self.execution_registry
+                .wait_until_execution_released(session_id, control.execution_id()),
+        )
+        .await
+        .is_ok();
+        if !released {
+            tracing::warn!(
+                target: "agena::session::cancel",
+                session_id,
+                execution_id = %control.execution_id(),
+                "cancelled execution did not release before user-message recovery window"
+            );
+            return Ok((None, None));
+        }
+
+        let session = self.store.load_session(session_id).await?;
+        if assistant_has_output_for_turn(&session, control.turn_id()) {
+            return Ok((None, None));
+        }
+
+        // If cancellation won before submit_user_run returned, the marker id
+        // may not have reached the in-memory control yet. Look it up by the
+        // execution identity persisted in the marker. This closes the
+        // commit/acknowledgement window without ever selecting a later user
+        // message or an idempotency replay owned by another execution.
+        if !control.user_run_submitted() {
+            if let Some(run_id) = user_run_id_for_execution(&session, control.execution_id()) {
+                let removed = self.store.withdraw_user_run(session_id, run_id).await?;
+                return if removed.iter().any(|part| part.part_id == run_id) {
+                    Ok((Some(document), Some(run_id)))
+                } else {
+                    Ok((None, None))
+                };
+            }
+
+            // A keyed request with no matching execution marker can only be
+            // an idempotency replay (or an alternate backend that does not
+            // implement the execution-aware method). Never restore it: doing
+            // so would put a duplicate message back into the editor while the
+            // original message remains durable. Unkeyed requests have no
+            // replay target, so they can still recover the editor if the
+            // cancellation won before the transaction committed.
+            return if control.user_idempotency_key().is_some() {
+                Ok((None, None))
+            } else {
+                Ok((Some(document), None))
+            };
+        }
+        if !control.user_run_created() {
+            return Ok((None, None));
+        }
+        let Some(run_id) = control.user_run_id() else {
+            return Ok((None, None));
+        };
+        let removed = self.store.withdraw_user_run(session_id, run_id).await?;
+        if removed.iter().any(|part| part.part_id == run_id) {
+            Ok((Some(document), Some(run_id)))
+        } else {
+            Ok((None, None))
+        }
     }
 
     /// External entry: inject `parts` as a steer message into the active
@@ -386,6 +535,58 @@ fn last_part_id_for_run_marker(parts: &[Part], marker_part_id: i64) -> Option<i6
         .find(|part| part.run_id == Some(marker_part_id))
         .map(|part| part.part_id)
         .or(Some(marker_part_id))
+}
+
+/// Whether the assistant turn identified by `turn_id` has emitted a real
+/// assistant payload. The run marker itself, hook records, notices, and
+/// system notifications are metadata; text, reasoning, tool activity, and
+/// errors all mean that the model turn has produced observable output and the
+/// user's message must remain in the transcript.
+fn assistant_has_output_for_turn(session: &Session, turn_id: TurnId) -> bool {
+    let Some(marker) = session.parts().iter().rev().find(|part| {
+        part.is_run_marker()
+            && part.role == PartRole::Assistant
+            && part
+                .content
+                .get("turn_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                .map(agena_domain::TurnId)
+                == Some(turn_id)
+    }) else {
+        return false;
+    };
+
+    session.parts().iter().any(|part| {
+        part.run_id == Some(marker.part_id)
+            && !matches!(
+                part.kind.as_str(),
+                "hook" | "notice" | "system_notification"
+            )
+    })
+}
+
+fn user_run_id_for_execution(
+    session: &Session,
+    execution_id: agena_domain::ExecutionId,
+) -> Option<i64> {
+    let execution_id = execution_id.to_string();
+    session.parts().iter().find_map(|part| {
+        (part.is_run_marker()
+            && part.role == PartRole::User
+            && part.origin_session_id == session.id
+            && part
+                .content
+                .get("run_kind")
+                .and_then(serde_json::Value::as_str)
+                == Some("user_send")
+            && part
+                .content
+                .get("execution_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(execution_id.as_str()))
+        .then_some(part.part_id)
+    })
 }
 
 /// Inclusive storage cutoff for a session's final message: the id of the last

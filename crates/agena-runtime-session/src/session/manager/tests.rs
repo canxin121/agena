@@ -7,9 +7,9 @@
 use std::{collections::BTreeMap, collections::HashMap, sync::Arc};
 
 use agena_domain::{
-    AssistantReasoningField, AssistantReplyId, ModelId, ModelRef, ProviderId, Role,
-    StructuredObject, TimeRange, ToolInvocation, TurnId, UserInputOption, UserInputQuestion,
-    UserInputReply, UserInputReplyKind, UserInputSource,
+    AssistantReasoningField, AssistantReplyId, ComposerDocument, ComposerNode, ModelId, ModelRef,
+    ProviderId, Role, StructuredObject, TimeRange, ToolInvocation, TurnId, UserInputOption,
+    UserInputQuestion, UserInputReply, UserInputReplyKind, UserInputSource,
 };
 use agena_plugin_host::{
     ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
@@ -232,6 +232,76 @@ async fn cancellation_suppresses_queued_background_notification_wakes() {
             .expect("read deliveries after cancellation")
             .is_empty(),
         "cancel must not leave a background wake that can relaunch the session"
+    );
+}
+
+#[tokio::test]
+async fn cancelling_an_unanswered_user_turn_withdraws_it_and_restores_the_document() {
+    let manager = test_manager().await;
+    let session = create(&manager, "restore cancelled input").await;
+    let document = ComposerDocument(vec![ComposerNode::Text {
+        text: "fix this typo".to_owned(),
+    }]);
+    let expected_document = document.clone();
+    let session_id = session.id;
+    manager
+        .start_registered_with_restore(
+            session_id,
+            agena_domain::ExecutionSource::User,
+            ExecutionConversationTarget::NewTurn,
+            "unanswered user cancellation fixture",
+            Some(document),
+            Some("restore-cancel-key".to_owned()),
+            move |manager, control, _steer_rx| async move {
+                let part = new_part_from_content(
+                    "text",
+                    PartRole::User,
+                    &TypedContent::Text(text_content("fix this typo")),
+                    PartState::Completed,
+                )?;
+                let execution_id = control.execution_id().to_string();
+                let submitted = manager
+                    .store
+                    .submit_user_run_for_execution(
+                        session_id,
+                        vec![part],
+                        Some("restore-cancel-key".to_owned()),
+                        &execution_id,
+                    )
+                    .await?;
+                control.set_user_run(submitted.run_id, submitted.created);
+                std::future::pending::<Result<(), crate::AppError>>().await
+            },
+        )
+        .await
+        .expect("accept unanswered user execution");
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !manager.execution_registry.is_active(session_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("execution registers");
+
+    let outcome = manager
+        .cancel_active_execution_with_outcome(session_id)
+        .await
+        .expect("cancel unanswered user execution");
+    assert_eq!(
+        outcome.result,
+        agena_domain::CancellationResult::CancellationRequested
+    );
+    assert_eq!(outcome.restored_user_message, Some(expected_document));
+    assert!(outcome.restored_user_run_id.is_some());
+    assert!(
+        manager
+            .store
+            .load_session(session_id)
+            .await
+            .expect("load after cancellation")
+            .parts()
+            .is_empty()
     );
 }
 

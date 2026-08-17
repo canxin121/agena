@@ -1,7 +1,15 @@
 import { computed, nextTick, ref, watch, type Ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { RiCommandLine, RiFlashlightLine } from '@remixicon/vue'
 
 import { apiJson } from '@/lib/api'
+import {
+  BUILT_IN_COMMANDS,
+  findBuiltInCommand,
+  parseSlashInvocation,
+  schemaNeedsPluginInput,
+  type BuiltInCommandSpec,
+} from './chatCommandsCatalog'
 import {
   executePluginSlashCommand,
   type PluginCommandEffect,
@@ -9,38 +17,48 @@ import {
   type PluginUiAction,
 } from '@/lib/pluginUiCommands'
 
-export type Command = {
+export type BuiltInCommand = BuiltInCommandSpec & {
+  description: string
+}
+
+export type PluginCommand = {
+  kind: 'plugin'
   name: string
   description?: string
   scope?: string
-  isBuiltIn?: boolean
-  aliases?: string[]
+  aliases: string[]
   pluginId: string
   commandId: string
   slash: string
   inputSchema?: unknown
   action: PluginUiAction
+  requiresArguments: boolean
+  arguments: string
 }
+
+export type Command = BuiltInCommand | PluginCommand
 
 type ComposerExpose = {
   textareaEl?: HTMLTextAreaElement | { value: HTMLTextAreaElement | null } | null
 }
 
+type PluginCatalogCommand = {
+  plugin_id?: string
+  id?: string
+  title?: string
+  description?: string
+  category?: string
+  slash?: string | null
+  aliases?: string[]
+  input_schema?: unknown
+  handler?: string | null
+  action?: PluginUiAction
+}
+
 type PluginUiCatalog = {
   catalog?: {
     studio?: {
-      commands?: Array<{
-        plugin_id?: string
-        id?: string
-        title?: string
-        description?: string
-        category?: string
-        slash?: string | null
-        aliases?: string[]
-        input_schema?: unknown
-        handler?: string | null
-        action?: PluginUiAction
-      }>
+      commands?: PluginCatalogCommand[]
     }
   }
 }
@@ -55,21 +73,33 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-export function matchPluginSlashCommand(commands: Command[], raw: string): { command: Command; args: string } | null {
-  const input = String(raw || '').trim()
-  if (!input.startsWith('/')) return null
-  const separator = input.search(/\s/)
-  const name = input
-    .slice(1, separator < 0 ? undefined : separator)
-    .trim()
-    .toLowerCase()
-  if (!name) return null
-  const command = commands.find((candidate) => {
-    if (candidate.name.toLowerCase() === name) return true
-    return (candidate.aliases || []).some((alias) => alias.replace(/^\/+/, '').toLowerCase() === name)
-  })
-  if (!command) return null
-  return { command, args: separator < 0 ? '' : input.slice(separator + 1).trim() }
+function commandName(command: Pick<Command, 'name'>): string {
+  return String(command.name || '').replace(/^\/+/, '').trim().toLowerCase()
+}
+
+function commandMatches(command: Command, name: string): boolean {
+  const normalized = String(name || '').replace(/^\/+/, '').trim().toLowerCase()
+  return (
+    commandName(command) === normalized ||
+    command.aliases.some((alias) => alias.replace(/^\/+/, '').trim().toLowerCase() === normalized)
+  )
+}
+
+export function matchSlashCommand(commands: Command[], raw: string): { command: Command; args: string } | null {
+  const parsed = parseSlashInvocation(raw)
+  if (!parsed) return null
+  const command = commands.find((candidate) => commandMatches(candidate, parsed.name))
+  return command ? { command, args: parsed.args } : null
+}
+
+/** Kept as a named helper for callers/tests that only care about plugins. */
+export function matchPluginSlashCommand(commands: Command[], raw: string): { command: PluginCommand; args: string } | null {
+  const matched = matchSlashCommand(commands, raw)
+  return matched?.command.kind === 'plugin' ? matched as { command: PluginCommand; args: string } : null
+}
+
+export function commandNeedsArguments(command: Command): boolean {
+  return command.requiresArguments
 }
 
 export function useChatCommands(opts: {
@@ -77,13 +107,23 @@ export function useChatCommands(opts: {
   composerRef: Ref<ComposerExpose | null>
   composerPickerOpen: Ref<null | 'model' | 'thinking' | 'speed'>
   onSend: () => Promise<void>
+  onCommandSelected: (command: Command) => void | Promise<void>
 }) {
-  const { draft, composerRef, composerPickerOpen, onSend } = opts
+  const { draft, composerRef, composerPickerOpen, onSend, onCommandSelected } = opts
+  const { t } = useI18n()
   const commands = ref<Command[]>([])
   const commandsLoading = ref(false)
   const commandQuery = ref('')
   const commandOpen = ref(false)
   const commandIndex = ref(0)
+  const commandFocusSearch = ref(true)
+
+  const builtInCommands = computed<BuiltInCommand[]>(() =>
+    BUILT_IN_COMMANDS.map((command) => ({
+      ...command,
+      description: String(t(command.descriptionKey)),
+    })),
+  )
 
   function closeCommandPalette() {
     commandOpen.value = false
@@ -91,35 +131,81 @@ export function useChatCommands(opts: {
     commandIndex.value = 0
   }
 
+  function openCommandPalette(query = '', options: { focusSearch?: boolean } = {}) {
+    if (composerPickerOpen.value) composerPickerOpen.value = null
+    commandQuery.value = String(query || '').replace(/^\/+/, '').trim()
+    commandIndex.value = 0
+    commandFocusSearch.value = options.focusSearch !== false
+    commandOpen.value = true
+    if (commands.value.length === 0) void loadCommands()
+  }
+
+  function pluginCommandFromCatalog(command: PluginCatalogCommand): PluginCommand | null {
+    const pluginId = text(command.plugin_id)
+    const commandId = text(command.id)
+    const slash = text(command.slash)
+    const name = slash.replace(/^\/+/, '').toLowerCase()
+    // Match the TUI's slash-name projection: commands without a slash name,
+    // or with whitespace inside that name, are not invocable palette entries.
+    if (!pluginId || !commandId || !name || /\s/.test(name)) return null
+    const declaredAction = command.action || { kind: 'none' }
+    const action =
+      declaredAction.kind === 'none' && text(command.handler)
+        ? ({ kind: 'invoke_command', command: commandId } satisfies PluginUiAction)
+        : declaredAction
+    return {
+      kind: 'plugin',
+      name,
+      description: text(command.description) || text(command.title),
+      aliases: Array.isArray(command.aliases)
+        ? command.aliases.map((alias) => text(alias).replace(/^\/+/, '').toLowerCase()).filter(Boolean)
+        : [],
+      scope: text(command.category) || 'plugin',
+      pluginId,
+      commandId,
+      slash,
+      inputSchema: command.input_schema,
+      action,
+      requiresArguments:
+        action.kind === 'open_plugin_workbench' || action.kind === 'open_url' || action.kind === 'submit_prompt'
+          ? false
+          : schemaNeedsPluginInput(command.input_schema),
+      arguments:
+        action.kind === 'open_plugin_workbench' || action.kind === 'open_url' || action.kind === 'submit_prompt'
+          ? ''
+          : schemaNeedsPluginInput(command.input_schema)
+            ? '<args>'
+            : '',
+    }
+  }
+
   async function loadCommands() {
     commandsLoading.value = true
     try {
-      const pluginCatalog = await apiJson<PluginUiCatalog>('/api/v1/plugins/ui')
-      const next = new Map<string, Command>()
-      for (const command of pluginCatalog?.catalog?.studio?.commands || []) {
-        const pluginId = text(command.plugin_id)
-        const commandId = text(command.id)
-        const slash = text(command.slash)
-        const name = slash.replace(/^\/+/, '')
-        if (!pluginId || !commandId || !name || next.has(name)) continue
-        const declaredAction = command.action || { kind: 'none' }
-        const action =
-          declaredAction.kind === 'none' && text(command.handler)
-            ? ({ kind: 'invoke_command', command: commandId } satisfies PluginUiAction)
-            : declaredAction
-        next.set(name, {
-          name,
-          description: text(command.description) || text(command.title),
-          aliases: Array.isArray(command.aliases) ? command.aliases.map(text).filter(Boolean) : [],
-          scope: text(command.category) || 'plugin',
-          pluginId,
-          commandId,
-          slash,
-          inputSchema: command.input_schema,
-          action,
-        })
+      // Built-ins are local and are always available, even if the plugin
+      // catalog is temporarily unavailable.
+      const builtIns = builtInCommands.value
+      const next = new Map<string, Command>(builtIns.map((command) => [command.name, command]))
+      try {
+        const pluginCatalog = await apiJson<PluginUiCatalog>('/api/v1/plugins/ui')
+        for (const rawCommand of pluginCatalog?.catalog?.studio?.commands || []) {
+          const command = pluginCommandFromCatalog(rawCommand)
+          if (!command) continue
+          // TUI gives a built-in command precedence over a plugin primary
+          // name. Apply the same rule to aliases so the two clients never
+          // show two rows for the same slash invocation.
+          if (findBuiltInCommand(command.name)) continue
+          if (command.aliases.some((alias) => Boolean(findBuiltInCommand(alias)))) {
+            command.aliases = command.aliases.filter((alias) => !findBuiltInCommand(alias))
+          }
+          if (next.has(command.name)) continue
+          next.set(command.name, command)
+        }
+      } catch {
+        // A missing plugin catalog must not make the built-in command palette
+        // disappear.
       }
-      commands.value = [...next.values()].sort((left, right) => left.name.localeCompare(right.name))
+      commands.value = [...next.values()]
     } finally {
       commandsLoading.value = false
     }
@@ -146,7 +232,7 @@ export function useChatCommands(opts: {
     if (!query) return commands.value
     return commands.value
       .map((command) => {
-        const candidate = `${command.name} ${command.description || ''} ${(command.aliases || []).join(' ')}`
+        const candidate = `${command.name} ${command.description || ''} ${(command.aliases || []).join(' ')} ${command.arguments || ''}`
         const score = commandScore(query, candidate)
         return score == null ? null : { command, score }
       })
@@ -156,31 +242,100 @@ export function useChatCommands(opts: {
   })
 
   watch([() => filteredCommands.value.length, commandQuery], () => {
-    commandIndex.value = 0
+    commandIndex.value = Math.max(0, Math.min(commandIndex.value, filteredCommands.value.length - 1))
   })
 
-  function handleDraftInput() {
-    if (!getComposerTextareaEl(composerRef.value)) return
-    if (composerPickerOpen.value) composerPickerOpen.value = null
-    closeCommandPalette()
+  function moveCommandSelection(delta: number) {
+    const count = filteredCommands.value.length
+    if (!count) return
+    commandIndex.value = (commandIndex.value + delta + count) % count
   }
 
-  function handleDraftKeydown(event: KeyboardEvent) {
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-      event.preventDefault()
-      void onSend()
-    }
-  }
-
-  function insertCommand(command: Command) {
-    draft.value = `/${command.name} `
-    closeCommandPalette()
-    void nextTick(() => {
+  async function selectCommand(command: Command | null | undefined) {
+    if (!command) return
+    if (commandNeedsArguments(command)) {
+      // TUI displays the required placeholder in the palette, but inserts
+      // only the command name into the composer. Copying "<message>" into a
+      // real draft would make it very easy to submit the placeholder
+      // literally, especially on touch keyboards.
+      draft.value = `/${command.name} `
+      closeCommandPalette()
+      await nextTick()
       const input = getComposerTextareaEl(composerRef.value)
       if (!input) return
       input.focus()
       input.setSelectionRange(input.value.length, input.value.length)
-    })
+      return
+    }
+    closeCommandPalette()
+    draft.value = ''
+    await onCommandSelected(command)
+  }
+
+  function handleDraftInput() {
+    if (composerPickerOpen.value) composerPickerOpen.value = null
+    const trimmed = draft.value.trim()
+    // TUI opens the palette for a bare slash. Web additionally keeps it open
+    // while the user types the command name, which makes the same workflow
+    // practical on touch keyboards. Keep the textarea focused here: the
+    // command query is the text after the slash, so unknown slash commands
+    // can still fall through to ordinary message sending.
+    if (/^\/[^\s/]*$/.test(trimmed)) {
+      openCommandPalette(trimmed.slice(1), { focusSearch: false })
+      return
+    }
+    if (commandOpen.value) closeCommandPalette()
+  }
+
+  function handleCommandPaletteKeydown(event: KeyboardEvent) {
+    if (!commandOpen.value) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeCommandPalette()
+      return
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveCommandSelection(1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveCommandSelection(-1)
+      return
+    }
+    if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      event.preventDefault()
+      const command = filteredCommands.value[commandIndex.value] || null
+      if (command) {
+        void selectCommand(command)
+        return
+      }
+
+      // TUI treats an unknown slash invocation as ordinary composer text.
+      // This branch is also used when the user searches for a plugin command
+      // that is not present in the current catalog.
+      const typed = draft.value.trim()
+      const fallback = typed.startsWith('/') && !typed.startsWith('//') ? typed : `/${commandQuery.value.trim()}`
+      if (/^\/[^\s/]+(?:\s|$)/.test(fallback)) {
+        closeCommandPalette()
+        draft.value = fallback
+        void onSend()
+      } else {
+        closeCommandPalette()
+      }
+    }
+  }
+
+  function handleDraftKeydown(event: KeyboardEvent) {
+    if (commandOpen.value) {
+      handleCommandPaletteKeydown(event)
+      if (event.defaultPrevented) return
+    }
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault()
+      void onSend()
+    }
   }
 
   async function runPluginSlashCommand(raw: string, sessionId: string): Promise<PluginCommandEffect | null> {
@@ -191,13 +346,15 @@ export function useChatCommands(opts: {
     if (!Number.isSafeInteger(numericSessionId) || numericSessionId <= 0) {
       throw new Error('Open a session before running plugin commands.')
     }
-    const catalog: PluginSlashCommand[] = commands.value.map((command) => ({
-      pluginId: command.pluginId,
-      id: command.commandId,
-      slash: command.slash,
-      inputSchema: command.inputSchema,
-      action: command.action,
-    }))
+    const catalog: PluginSlashCommand[] = commands.value
+      .filter((command): command is PluginCommand => command.kind === 'plugin')
+      .map((command) => ({
+        pluginId: command.pluginId,
+        id: command.commandId,
+        slash: command.slash,
+        inputSchema: command.inputSchema,
+        action: command.action,
+      }))
     return await executePluginSlashCommand({
       command: {
         pluginId: matched.command.pluginId,
@@ -213,7 +370,7 @@ export function useChatCommands(opts: {
   }
 
   function commandIcon(command: Command) {
-    return command.isBuiltIn ? RiFlashlightLine : RiCommandLine
+    return command.kind === 'builtin' ? RiFlashlightLine : RiCommandLine
   }
 
   return {
@@ -222,11 +379,16 @@ export function useChatCommands(opts: {
     commandQuery,
     commandOpen,
     commandIndex,
+    commandFocusSearch,
     filteredCommands,
     loadCommands,
+    openCommandPalette,
+    closeCommandPalette,
     handleDraftInput,
     handleDraftKeydown,
-    insertCommand,
+    handleCommandPaletteKeydown,
+    moveCommandSelection,
+    selectCommand,
     runPluginSlashCommand,
     commandIcon,
   }

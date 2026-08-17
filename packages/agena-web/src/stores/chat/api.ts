@@ -1038,10 +1038,17 @@ export async function forkSession(
 export async function replyPermission(
   sessionId: string,
   requestId: string,
-  reply: 'once' | 'always' | 'reject',
+  reply: 'once' | 'always' | 'reject' | 'reject_always',
   message?: string,
 ): Promise<boolean> {
-  const kind = reply === 'once' ? 'allow_once' : reply === 'always' ? 'allow_always' : 'deny_once'
+  const kind =
+    reply === 'once'
+      ? 'allow_once'
+      : reply === 'always'
+        ? 'allow_always'
+        : reply === 'reject_always'
+          ? 'deny_always'
+          : 'deny_once'
   const replyBody: JsonValue = { request_id: requestId, kind }
   if (typeof message === 'string' && message.trim()) {
     ;(replyBody as JsonObject).reason = message.trim()

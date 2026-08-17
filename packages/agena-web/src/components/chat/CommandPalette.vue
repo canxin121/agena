@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, type Component } from 'vue'
+import { nextTick, ref, watch, type Component } from 'vue'
 import { RiRefreshLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 import ListRowButton from '@/components/ui/ListRowButton.vue'
@@ -9,14 +9,18 @@ import ListRowButton from '@/components/ui/ListRowButton.vue'
 type CommandItem = {
   name: string
   isBuiltIn?: boolean
+  kind?: 'builtin' | 'plugin'
   scope?: string
   description?: string
   aliases?: string[]
+  arguments?: string
 }
 
 const props = defineProps<{
   open: boolean
+  autoFocus: boolean
   loading: boolean
+  query: string
   commands: CommandItem[]
   activeIndex: number
   commandIcon: (cmd: CommandItem) => Component
@@ -24,10 +28,13 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:activeIndex', value: number): void
+  (e: 'update:query', value: string): void
+  (e: 'keydown', event: KeyboardEvent): void
   (e: 'select', cmd: CommandItem): void
 }>()
 
 const rootEl = ref<HTMLDivElement | null>(null)
+const searchInput = ref<HTMLInputElement | null>(null)
 const { t } = useI18n()
 
 function containsTarget(target: Node | null): boolean {
@@ -36,6 +43,14 @@ function containsTarget(target: Node | null): boolean {
 }
 
 defineExpose({ rootEl, containsTarget })
+
+watch(
+  () => [props.open, props.autoFocus] as const,
+  ([open, autoFocus]) => {
+    if (!open || !autoFocus) return
+    void nextTick(() => searchInput.value?.focus())
+  },
+)
 
 function setIndex(i: number) {
   emit('update:activeIndex', i)
@@ -46,8 +61,24 @@ function setIndex(i: number) {
   <div
     v-if="open"
     ref="rootEl"
+    data-command-palette="true"
     class="absolute bottom-full mb-2 left-0 w-full max-w-[520px] rounded-xl border border-border bg-background/95 shadow-lg z-20"
   >
+    <div class="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+      <span class="font-mono text-sm text-primary">/</span>
+      <input
+        ref="searchInput"
+        :value="query"
+        type="text"
+        class="h-7 min-w-0 flex-1 border-0 bg-transparent font-mono text-sm outline-none placeholder:text-muted-foreground"
+        :placeholder="t('chat.commandPalette.search')"
+        autocomplete="off"
+        spellcheck="false"
+        :aria-label="t('chat.commandPalette.search')"
+        @input="$emit('update:query', ($event.target as HTMLInputElement).value)"
+        @keydown="$emit('keydown', $event)"
+      />
+    </div>
     <div class="max-h-64 overflow-auto px-2 py-2">
       <div v-if="loading" class="flex items-center justify-center py-4 text-muted-foreground">
         <RiRefreshLine class="h-4 w-4 animate-spin" />
@@ -68,8 +99,9 @@ function setIndex(i: number) {
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
               <span class="font-mono text-sm">/{{ cmd.name }}</span>
+              <span v-if="cmd.arguments" class="font-mono text-[11px] text-muted-foreground">{{ cmd.arguments }}</span>
               <span
-                v-if="cmd.isBuiltIn"
+                v-if="cmd.isBuiltIn || cmd.kind === 'builtin'"
                 class="text-[10px] uppercase font-bold tracking-tight rounded border border-amber-300/40 bg-amber-200/10 text-amber-600 px-1.5 py-0.5"
               >
                 {{ t('chat.roles.system') }}

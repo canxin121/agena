@@ -102,6 +102,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const sessionErrorBySession = ref<Record<string, SessionErrorEvent>>({})
   const sessionRunConfigBySession = ref<Record<string, SessionRunConfig>>({})
   const sessionUsageBySession = ref<Record<string, SessionUsage>>({})
+  // Keep the server execution projection separate from the compact run
+  // config.  The composer status line needs agent/task/permission/activity
+  // fields that are not part of the model picker configuration.
+  const sessionExecutionBySession = ref<Record<string, NonNullable<chatApi.AgenaExecutionState['execution']>>>({})
   sessionRunConfigBySession.value = loadSessionRunConfigMap(STORAGE_RUN_CONFIG)
   const runConfigPersister = createSessionRunConfigPersister(STORAGE_RUN_CONFIG, () => sessionRunConfigBySession.value)
 
@@ -676,6 +680,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
     const execution = st.execution
     if (execution && typeof execution === 'object') {
+      sessionExecutionBySession.value = {
+        ...sessionExecutionBySession.value,
+        [sid]: { ...execution },
+      }
       const patch: Partial<SessionRunConfig> = {}
       const providerID = readString(execution.model_provider_id as JsonValue)
       const adapterID = readString(execution.model_adapter_id as JsonValue)
@@ -830,6 +838,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return sessionUsageBySession.value[sid] ?? null
   })
 
+  const selectedSessionExecution = computed(() => {
+    const sid = selectedSessionId.value
+    if (!sid) return null
+    return sessionExecutionBySession.value[sid] ?? null
+  })
+
   function getMessagesForSession(sessionId: string | null | undefined): MessageEntry[] {
     const sid = String(sessionId || '').trim()
     if (!sid) return []
@@ -874,6 +888,13 @@ const useChatStoreDefinition = defineStore('chat', () => {
   function getSessionUsage(sessionId: string | null | undefined): SessionUsage | null {
     const sid = String(sessionId || '').trim()
     return sid ? sessionUsageBySession.value[sid] || null : null
+  }
+
+  function getSessionExecution(
+    sessionId: string | null | undefined,
+  ): NonNullable<chatApi.AgenaExecutionState['execution']> | null {
+    const sid = String(sessionId || '').trim()
+    return sid ? sessionExecutionBySession.value[sid] || null : null
   }
 
   function clearSessionError(sessionId: string) {
@@ -967,6 +988,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const next = { ...sessionUsageBySession.value }
       delete next[sid]
       sessionUsageBySession.value = next
+    }
+    {
+      const next = { ...sessionExecutionBySession.value }
+      delete next[sid]
+      sessionExecutionBySession.value = next
     }
     clearMessagesHydrated(sid)
     clearComposerDraft(sid)
@@ -1107,6 +1133,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
     await sendMessage(sessionId, { text })
   }
 
+  async function continueSession(sessionId: string) {
+    const sid = (sessionId || '').trim()
+    if (!sid) return
+    await chatApi.continueSession(sid, buildRunOptions({}))
+    void refreshExecutionStatus(sid)
+    scheduleAttentionRefresh(sid, 200)
+  }
+
   async function uploadWorkspaceAttachment(
     sessionId: string,
     input: { filename: string; dataBase64: string; mime?: string },
@@ -1176,7 +1210,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   async function replyPermission(
     sessionId: string,
     requestId: string,
-    reply: 'once' | 'always' | 'reject',
+    reply: 'once' | 'always' | 'reject' | 'reject_always',
     message?: string,
   ) {
     const ok = await chatApi.replyPermission(sessionId, requestId, reply, message)
@@ -1499,6 +1533,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     selectedSessionError,
     selectedSessionRunConfig,
     selectedSessionUsage,
+    selectedSessionExecution,
+    getSessionExecution,
     sessionErrorBySession,
     sessionRunConfigBySession,
     attentionBySession,
@@ -1517,6 +1553,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     abortSession,
     sendText,
     sendMessage,
+    continueSession,
     uploadWorkspaceAttachment,
     resolveSessionWorkspace,
     compactSession,
@@ -1590,6 +1627,7 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
       if (property === 'selectedSessionError') return target.getSessionError(sid)
       if (property === 'selectedSessionRunConfig') return target.getSessionRunConfig(sid)
       if (property === 'selectedSessionUsage') return target.getSessionUsage(sid)
+      if (property === 'selectedSessionExecution') return target.getSessionExecution(sid)
       if (property === 'selectSession') return selectSession
       if (property === 'createSession') {
         return async (...args: Parameters<ChatStore['createSession']>) => {

@@ -16,6 +16,7 @@ import {
   RiSpeedUpLine,
   RiSearchLine,
   RiCloseLine,
+  RiCommandLine,
 } from '@remixicon/vue'
 
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
@@ -26,6 +27,7 @@ import Composer from '@/components/chat/Composer.vue'
 import RenameSessionDialog from '@/components/chat/RenameSessionDialog.vue'
 import AttachProjectDialog from '@/components/chat/AttachProjectDialog.vue'
 import AttachmentsPanel from '@/components/chat/AttachmentsPanel.vue'
+import CommandPalette from '@/components/chat/CommandPalette.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
@@ -124,6 +126,17 @@ const {
   handlePaste,
   handleDraftInput,
   handleDraftKeydown,
+  handleCommandPaletteKeydown,
+  commandOpen,
+  commandQuery,
+  commandIndex,
+  commandFocusSearch,
+  commands,
+  commandsLoading,
+  commandIcon,
+  openCommandPalette,
+  selectCommand,
+  setCommandQuery,
   handleFileInputChange,
   removeAttachment,
   clearAttachments,
@@ -168,13 +181,16 @@ const {
 
   // Chip labels.
   modelHint,
-  modelChipLabelMobile,
-  modelChipLabel,
+  modelStatusLabel,
   toggleComposerPicker,
   thinkingModeHint,
   thinkingModeChipLabel,
   speedModeHint,
   speedModeChipLabel,
+  composerTopRightStatus,
+  composerBottomLeftStatus,
+  composerBottomRightStatus,
+  composerStatusExtra,
 
   // Usage + primary action.
   sessionUsage,
@@ -554,7 +570,6 @@ void sessionActionsMenuRef
                 ref="composerRef"
                 v-model:draft="draft"
                 :fullscreen="composerFullscreenActive"
-                :mode-label="transcriptVimModeLabel"
                 class="flex-1 shrink-0 sm:shrink min-h-min"
                 @toggleFullscreen="toggleEditorFullscreen"
                 @drop="handleDrop"
@@ -578,7 +593,7 @@ void sessionActionsMenuRef
                     >
                       <RiStackLine class="h-3 w-3" />
                       <span :class="modelChipTextClass">{{
-                        ui.isMobilePointer ? modelChipLabelMobile : modelChipLabel
+                        modelStatusLabel
                       }}</span>
                     </button>
                     <template v-if="hasThinkingModesForSelection">
@@ -621,7 +636,41 @@ void sessionActionsMenuRef
                         sessionUsage.percentUsed !== null ? `${sessionUsage.percentUsed}%` : sessionUsage.tokensLabel
                       }}</span>
                     </template>
+                    <template v-if="composerStatusExtra">
+                      <span class="text-muted-foreground/50">|</span>
+                      <span class="text-muted-foreground">{{ composerStatusExtra }}</span>
+                    </template>
                   </span>
+                </template>
+                <template #topRight>
+                  <span class="flex items-center gap-1 text-muted-foreground">
+                    <span v-if="composerTopRightStatus">{{ composerTopRightStatus }}</span>
+                  </span>
+                </template>
+                <template #bottomLeft>
+                  <span v-if="composerBottomLeftStatus" class="text-muted-foreground">
+                    {{ composerBottomLeftStatus }}
+                  </span>
+                </template>
+                <template #bottomRight>
+                  <span v-if="composerBottomRightStatus" class="text-muted-foreground">
+                    {{ composerBottomRightStatus }}
+                  </span>
+                </template>
+                <template #overlay>
+                  <CommandPalette
+                    :open="commandOpen"
+                    :auto-focus="commandFocusSearch"
+                    :loading="commandsLoading"
+                    :query="commandQuery"
+                    :commands="commands"
+                    :active-index="commandIndex"
+                    :command-icon="commandIcon"
+                    @update:query="setCommandQuery"
+                    @update:active-index="(value) => (commandIndex = value)"
+                    @keydown="handleCommandPaletteKeydown"
+                    @select="selectCommand"
+                  />
                 </template>
                 <template #controls>
                   <div ref="composerControlsRef" class="relative">
@@ -665,6 +714,19 @@ void sessionActionsMenuRef
                         class="flex-1 flex flex-nowrap items-center gap-1 sm:gap-1.5 min-w-0 overflow-x-auto oc-scrollbar-hidden [&>*]:shrink-0"
                         data-oc-keyboard-tap="blur"
                       >
+                        <IconButton
+                          class="text-muted-foreground hover:text-foreground hover:bg-secondary/40"
+                          :class="[commandOpen ? 'bg-secondary/60 text-foreground' : '']"
+                          :tooltip="t('chat.commandPalette.title')"
+                          :is-touch-pointer="ui.isTouchPointer"
+                          :title="t('chat.commandPalette.title')"
+                          :aria-label="t('chat.commandPalette.title')"
+                          @mousedown.prevent
+                          @click.stop="openCommandPalette()"
+                        >
+                          <RiCommandLine class="h-4 w-4" />
+                        </IconButton>
+
                         <ToolbarChipButton
                           ref="attachmentsTriggerRef"
                           :active="attachmentsPanelOpen"

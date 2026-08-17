@@ -49,18 +49,34 @@ defineExpose({ shellEl, textareaEl, openFilePicker })
     @drop.prevent="$emit('drop', $event)"
   >
     <div
-      v-if="modeLabel || $slots.status"
+      v-if="$slots.status"
       class="pointer-events-none absolute left-2 top-0 z-10 flex max-w-[calc(100%-3.5rem)] -translate-y-1/2 items-center gap-1.5 bg-background px-1 font-mono text-[10px]"
-      aria-hidden="true"
     >
-      <span
-        v-if="modeLabel"
-        class="font-semibold"
-        :class="modeLabel === 'INSERT' ? 'text-primary' : 'text-emerald-700 dark:text-emerald-300'"
-        >{{ modeLabel }}</span
-      >
       <slot name="status" />
     </div>
+
+    <div
+      v-if="$slots.topRight"
+      class="pointer-events-none absolute right-2 top-0 z-10 flex max-w-[calc(100%-3.5rem)] -translate-y-1/2 items-center gap-1.5 bg-background px-1 font-mono text-[10px]"
+    >
+      <slot name="topRight" />
+    </div>
+
+    <div
+      v-if="$slots.bottomLeft"
+      class="pointer-events-none absolute bottom-0 left-2 z-10 flex max-w-[calc(100%-3.5rem)] translate-y-1/2 items-center gap-1.5 bg-background px-1 font-mono text-[10px]"
+    >
+      <slot name="bottomLeft" />
+    </div>
+
+    <div
+      v-if="$slots.bottomRight"
+      class="pointer-events-none absolute bottom-0 right-2 z-10 flex max-w-[calc(100%-3.5rem)] translate-y-1/2 items-center gap-1.5 bg-background px-1 font-mono text-[10px]"
+    >
+      <slot name="bottomRight" />
+    </div>
+
+    <slot name="overlay" />
 
     <div class="absolute top-1 right-1 z-10 flex items-center gap-1">
       <button

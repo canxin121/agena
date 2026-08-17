@@ -52,6 +52,16 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function statusThinkingMode(value: string): string {
+  return text(value)
+}
+
+function statusSpeedMode(value: string): string {
+  const normalized = text(value)
+  if (normalized.toLowerCase() === 'no-speed') return 'off'
+  return normalized.startsWith('speed-') ? normalized.slice('speed-'.length) : normalized
+}
+
 function sameModel(
   left: { provider?: string; adapter?: string; model?: string },
   right: { provider?: string; adapter?: string; model?: string },
@@ -220,14 +230,22 @@ export function useChatModelSelection(opts: {
     if (!provider || !model) return 'Model'
     return adapter ? `${provider}/${adapter}/${model}` : `${provider}/${model}`
   })
+  // The TUI's composer status uses the provider catalog display name and
+  // hides routing details. Keep the full slug above for the Web picker and
+  // model hint, but expose the same compact status projection separately.
+  const modelStatusLabel = computed(() => {
+    const displayName = text(selectedModelMeta.value?.display_name)
+    if (displayName) return displayName
+    return selectedModelId.value || effectiveDefaults.value.model || 'Model'
+  })
   const modelChipLabelMobile = computed(() => selectedModelId.value || effectiveDefaults.value.model || 'Model')
   const thinkingModeChipLabel = computed(() => {
     const selected = selectedThinkingMode.value
-    return thinkingModeOptions.value.find((option) => option.value === selected)?.label || selected || 'Thinking'
+    return statusThinkingMode(selected) || 'Thinking'
   })
   const speedModeChipLabel = computed(() => {
     const selected = selectedSpeedMode.value
-    return speedModeOptions.value.find((option) => option.value === selected)?.label || selected || 'Speed'
+    return statusSpeedMode(selected) || 'Speed'
   })
 
   const modelHint = computed(() => {
@@ -490,6 +508,7 @@ export function useChatModelSelection(opts: {
     hasThinkingModesForSelection,
     hasSpeedModesForSelection,
     modelChipLabel,
+    modelStatusLabel,
     modelChipLabelMobile,
     thinkingModeChipLabel,
     speedModeChipLabel,

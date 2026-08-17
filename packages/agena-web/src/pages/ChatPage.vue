@@ -8,8 +8,10 @@ import ChatPageView from './chat/ChatPageView.vue'
 import type { ChatPageViewContext } from './chat/chatPageViewContext'
 
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { apiJson } from '@/lib/api'
 import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
 import { useChatStore } from '@/stores/chat'
+import * as chatApi from '@/stores/chat/api'
 import { useDirectoryStore } from '@/stores/directory'
 import { useDirectorySessionStore } from '@/stores/directorySessionStore'
 import { useSessionActivityStore } from '@/stores/sessionActivity'
@@ -22,7 +24,8 @@ import { useChatAttachments } from './chat/useChatAttachments'
 import { useChatScrollNav } from './chat/useChatScrollNav'
 import { useChatComposerLayout } from './chat/useChatComposerLayout'
 import { useChatModelSelection } from './chat/useChatModelSelection'
-import { useChatCommands } from './chat/useChatCommands'
+import { useChatCommands, matchSlashCommand } from './chat/useChatCommands'
+import type { BuiltInCommand, Command, PluginCommand } from './chat/useChatCommands'
 import { useChatSessionActions } from './chat/useChatSessionActions'
 import { useChatRunUi } from './chat/useChatRunUi'
 import { useChatTranscriptVim } from './chat/useChatTranscriptVim'
@@ -253,17 +256,28 @@ const chatCommands = useChatCommands({
   composerRef,
   composerPickerOpen,
   onSend: send,
+  onCommandSelected: handleCommandSelected,
 })
 
 const {
+  commands,
+  filteredCommands,
   commandOpen,
   commandQuery,
   commandIndex,
+  commandFocusSearch,
   loadCommands,
-  insertCommand,
+  openCommandPalette,
+  closeCommandPalette,
+  selectCommand,
+  handleCommandPaletteKeydown,
   handleDraftInput: handleDraftInputBase,
   handleDraftKeydown: handleDraftKeydownInner,
 } = chatCommands
+
+function setCommandQuery(value: string) {
+  commandQuery.value = String(value || '')
+}
 
 function handleDraftInput() {
   handleDraftInputBase()
@@ -289,6 +303,7 @@ modelSelection = useChatModelSelection({
     })
   },
   commandOpen,
+  commandFocusSearch,
   commandQuery,
   commandIndex,
 })
@@ -1125,6 +1140,111 @@ const {
   closeSearch: closeTranscriptSearch,
 } = transcriptVim
 
+// The TUI receives these four values from its server-backed execution and
+// plugin display projections.  Keep the Web values as computed projections as
+// well; do not infer them from the paged transcript.
+const planProgress = ref('')
+let planRefreshTimer: number | null = null
+let planPollTimer: number | null = null
+
+function formatBackgroundActivitySummary(kinds: string[]): string {
+  const normalized = Array.isArray(kinds) ? kinds.map((kind) => String(kind || '').trim().toLowerCase()) : []
+  return ['monitor', 'cron', 'shell', 'task', 'runtime', 'browser']
+    .map((kind) => {
+      const count = normalized.filter((candidate) => candidate === kind).length
+      return count > 0 ? `${kind} ${count}` : ''
+    })
+    .filter(Boolean)
+    .join(' · ')
+}
+
+async function refreshPlanProgress() {
+  const sid = commandSessionId()
+  if (!sid) {
+    planProgress.value = ''
+    return
+  }
+  try {
+    const response = await apiJson<JsonValue>('/api/v1/plugins/ui/invoke-tool', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        plugin_id: 'agena.plan',
+        tool: 'get',
+        input: { view: 'summary' },
+        session_id: Number(sid),
+      }),
+    })
+    if (chat.selectedSessionId !== sid) return
+    const payload = asRecord(asRecord(response).payload as JsonValue)
+    const plan = asRecord(payload.plan as JsonValue)
+    const steps = Array.isArray(plan.steps) ? plan.steps : []
+    if (!steps.length && !String(plan.title || plan.slug || '').trim()) {
+      planProgress.value = ''
+      return
+    }
+    const completed = steps.filter((step) => {
+      const status = String(asRecord(step).status || '').trim().toLowerCase()
+      return status === 'completed' || status === 'skipped'
+    }).length
+    const phase = String(plan.phase || '').trim().toLowerCase()
+    const symbol = phase === 'completed' ? '✓' : phase === 'blocked' ? '⚠' : phase === 'cancelled' ? '✕' : phase === 'planning' ? '⏳' : '▶'
+    planProgress.value = [symbol, steps.length ? `${completed}/${steps.length}` : '', plan.autorun === true ? '↻' : '']
+      .filter(Boolean)
+      .join(' ')
+  } catch {
+    // Plan status is cosmetic; a plugin restart must not affect chat input.
+    planProgress.value = ''
+  }
+}
+
+function schedulePlanProgressRefresh() {
+  if (planRefreshTimer !== null) window.clearTimeout(planRefreshTimer)
+  planRefreshTimer = window.setTimeout(() => {
+    planRefreshTimer = null
+    void refreshPlanProgress()
+  }, 180)
+}
+
+const composerStatusExtra = computed(() => {
+  const parts: string[] = []
+  if (chat.messagesLoading) parts.push(String(t('chat.composer.status.loading')))
+  if (commandOpen.value) parts.push(`${String(t('chat.composer.status.slash'))} /${commandQuery.value}`)
+  const state = chat.selectedSessionState
+  const requestCount =
+    (state.kind === 'running' || state.kind === 'awaiting_interaction') && Array.isArray(state.data.requests)
+      ? state.data.requests.length
+      : 0
+  if (requestCount > 0 && chat.selectedAttention?.kind === 'question') {
+    parts.push(String(t('chat.composer.status.pendingInput', { count: requestCount })))
+  }
+  return parts.join('  |  ')
+})
+
+const composerTopRightStatus = computed(() => {
+  if (chat.selectedAttention?.kind !== 'permission') return ''
+  const state = chat.selectedSessionState
+  const count =
+    (state.kind === 'running' || state.kind === 'awaiting_interaction') && Array.isArray(state.data.requests)
+      ? Math.max(1, state.data.requests.length)
+      : 1
+  return String(t('chat.composer.status.pendingApproval', { count }))
+})
+
+const composerBottomLeftStatus = computed(() => {
+  const sid = commandSessionId()
+  if (!sid) return ''
+  return formatBackgroundActivitySummary(activity.snapshot[sid]?.kinds || [])
+})
+
+const composerBottomRightStatus = computed(() => planProgress.value)
+
+watch(
+  () => [chat.selectedSessionId, chat.messages.length, currentPhase.value] as const,
+  schedulePlanProgressRefresh,
+  { immediate: true },
+)
+
 function handleSessionActionRequest(actionId: string) {
   switch (actionId) {
     case 'rename':
@@ -1275,16 +1395,376 @@ function resourceComposerNode(input: {
   }
 }
 
+function commandSessionId(): string | null {
+  const sid = String(chat.selectedSessionId || '').trim()
+  return sid || null
+}
+
+function commandRequestId(): string {
+  const attention = chat.selectedAttention
+  const payload = asRecord(attention?.payload as JsonValue)
+  const properties = getRecord(payload, 'properties')
+  return typeof properties.id === 'string' ? properties.id.trim() : ''
+}
+
+function commandUsage(command: BuiltInCommand): string {
+  return `/${command.name}${command.arguments ? ` ${command.arguments}` : ''}`
+}
+
+function commandHasUnexpectedArguments(command: BuiltInCommand, args: string): boolean {
+  return command.opensInteractiveSurface && Boolean(args.trim())
+}
+
+function parsePullRequestArguments(raw: string): {
+  title: string
+  body?: string
+  base?: string
+  head?: string
+} | null {
+  const input = String(raw || '').trim()
+  if (!input) return null
+  const optionPattern = /\s+--(body|base|head)\s+/g
+  const first = input.search(optionPattern)
+  const title = (first < 0 ? input : input.slice(0, first)).trim()
+  if (!title) return null
+
+  const output: { title: string; body?: string; base?: string; head?: string } = { title }
+  const options = first < 0 ? '' : input.slice(first).trim()
+  const matcher = /--(body|base|head)\s+(.+?)(?=\s+--(?:body|base|head)\s+|$)/g
+  let match: RegExpExecArray | null
+  while ((match = matcher.exec(options))) {
+    const key = match[1] as 'body' | 'base' | 'head'
+    const value = String(match[2] || '').trim()
+    if (!value) return null
+    output[key] = value
+  }
+  // Reject unknown flags and malformed options instead of creating a PR with
+  // silently discarded input.
+  const rest = options.replace(matcher, '').trim()
+  if (rest) return null
+  return output
+}
+
+async function downloadWorkspaceFile(pathInput: string) {
+  const sid = commandSessionId()
+  if (!sid) throw new Error('Open a session before downloading a workspace file.')
+  const workspace = await chat.resolveSessionWorkspace(sid)
+  const path = workspaceRelativePath(pathInput, workspace.path)
+  const response = await fetch(
+    `/api/v1/workspaces/${encodeURIComponent(String(workspace.id))}/download?path=${encodeURIComponent(path)}`,
+  )
+  if (!response.ok) throw new Error(`Download failed (${response.status})`)
+  const blob = await response.blob()
+  const filename = path.split('/').filter(Boolean).pop() || 'workspace-file'
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+async function submitPromptFromCommand(prompt: string) {
+  const value = String(prompt || '').trim()
+  if (!value) return
+  draft.value = value
+  await send()
+}
+
+async function runReviewCommand(sid: string, focus: string) {
+  const response = await apiJson<JsonValue>('/api/v1/plugins/ui/invoke-tool', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      plugin_id: 'agena.skills',
+      tool: 'get',
+      input: { name: 'review' },
+      session_id: Number(sid),
+    }),
+  })
+  const record = asRecord(response)
+  const prompt = typeof record.payload === 'object' && record.payload !== null
+    ? String((record.payload as JsonObject).body || '').trim()
+    : ''
+  if (!prompt) throw new Error('The review skill did not return instructions.')
+  await submitPromptFromCommand(focus ? `${prompt}\n\nReview focus:\n${focus}` : prompt)
+}
+
+async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Promise<void> {
+  const args = String(rawArgs || '').trim()
+  if (commandHasUnexpectedArguments(command, args)) {
+    toasts.push('error', `Usage: ${commandUsage(command)}`)
+    return
+  }
+
+  const sid = commandSessionId()
+  switch (command.id) {
+    case 'help':
+      ui.toggleHelpDialog()
+      return
+    case 'commands':
+      openCommandPalette('')
+      return
+    case 'new':
+      await chat.createSession()
+      return
+    case 'sessions':
+      ui.setSessionSwitcherOpen(true)
+      return
+    case 'hub':
+      await router.push('/')
+      return
+    case 'lineage':
+      await router.push('/')
+      toasts.push('info', 'Open the session hub to browse this session lineage.')
+      return
+    case 'rewind': {
+      if (!sid) {
+        toasts.push('error', 'A session is required for /rewind.')
+        return
+      }
+      const requested = args || window.prompt('Rewind to message ID')?.trim() || ''
+      if (!requested) return
+      await chat.revertToMessage(sid, requested)
+      return
+    }
+    case 'rename':
+      openRenameDialog()
+      return
+    case 'timeline':
+      await router.push('/settings/activities')
+      return
+    case 'settings':
+      await router.push('/settings/general')
+      return
+    case 'model':
+      await modelSelection.toggleComposerPicker('model')
+      return
+    case 'review':
+      if (!sid) {
+        toasts.push('error', 'A session is required for /review.')
+        return
+      }
+      await runReviewCommand(sid, args)
+      return
+    case 'commit': {
+      if (!args) {
+        toasts.push('error', `Usage: ${commandUsage(command)}`)
+        return
+      }
+      if (!sid) {
+        toasts.push('error', 'A session is required for /commit.')
+        return
+      }
+      const workspace = await chat.resolveSessionWorkspace(sid)
+      const result = await apiJson<JsonValue>('/api/v1/git/commits', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspace_id: workspace.id, message: args }),
+      })
+      const record = asRecord(result)
+      const commit = typeof record.commit === 'string' ? record.commit.slice(0, 12) : ''
+      toasts.push('success', commit ? `Created commit ${commit}.` : 'Commit created.')
+      return
+    }
+    case 'pr': {
+      const parsed = parsePullRequestArguments(args)
+      if (!parsed) {
+        toasts.push('error', `Usage: ${commandUsage(command)}`)
+        return
+      }
+      if (!sid) {
+        toasts.push('error', 'A session is required for /pr.')
+        return
+      }
+      const workspace = await chat.resolveSessionWorkspace(sid)
+      const result = await apiJson<JsonValue>('/api/v1/git/pull-requests', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspace_id: workspace.id, ...parsed }),
+      })
+      const url = String(asRecord(result).url || '').trim()
+      if (url) window.open(url, '_blank', 'noopener,noreferrer')
+      toasts.push('success', url ? `Pull request created: ${url}` : 'Pull request created.')
+      return
+    }
+    case 'export':
+      await exportTranscript()
+      return
+    case 'pager':
+      toasts.push('info', 'The web transcript already supports paging through the scroll view.')
+      return
+    case 'continue':
+      if (!sid) {
+        toasts.push('error', 'A session is required for /continue.')
+        return
+      }
+      await chat.continueSession(sid)
+      toasts.push('success', 'Session continuation started.')
+      return
+    case 'compact':
+      await handleCompactSession()
+      return
+    case 'user-input':
+      if (chat.selectedAttention?.kind === 'question') scrollToBottom('smooth')
+      else toasts.push('info', 'There is no pending user-input request.')
+      return
+    case 'allow':
+    case 'allow-always':
+    case 'deny':
+    case 'deny-always': {
+      if (!sid || chat.selectedAttention?.kind !== 'permission') {
+        toasts.push('info', 'There is no pending permission request.')
+        return
+      }
+      const requestId = commandRequestId()
+      if (!requestId) throw new Error('The pending permission request has no id.')
+      const reply = command.id === 'allow' ? 'once' : command.id === 'allow-always' ? 'always' : command.id === 'deny-always' ? 'reject_always' : 'reject'
+      await chat.replyPermission(sid, requestId, reply)
+      return
+    }
+    case 'attach':
+    case 'image':
+      openFilePicker()
+      return
+    case 'skill':
+      await router.push('/settings/plugins')
+      return
+    case 'skill-manager':
+      await router.push('/settings/plugins')
+      return
+    case 'download':
+      if (!args) {
+        toasts.push('error', `Usage: ${commandUsage(command)}`)
+        return
+      }
+      await downloadWorkspaceFile(args)
+      return
+    case 'editor':
+      toggleEditorFullscreen()
+      return
+    case 'copy':
+      await copyTranscript()
+      return
+    case 'copy-message': {
+      const lastAssistant = [...chat.messages].reverse().find((message) => message.info?.role === 'assistant')
+      if (lastAssistant) handleCopyMessage(lastAssistant)
+      else toasts.push('info', 'No assistant message is loaded.')
+      return
+    }
+    case 'copy-visible': {
+      const visible = String(contentEl.value?.innerText || '').trim()
+      if (!visible) toasts.push('info', 'No transcript content is visible.')
+      else await copyToClipboard(visible)
+      return
+    }
+    case 'fork':
+    case 'side':
+      await handleForkSession()
+      return
+    case 'children': {
+      if (!sid) {
+        toasts.push('error', 'A session is required for /children.')
+        return
+      }
+      const parentId = Number(sid)
+      const page = await chatApi.listSessions({ parentId, limit: 100, excludeSubagents: true })
+      if (page.sessions.length === 1) await chat.selectSession(page.sessions[0]!.id)
+      else if (page.sessions.length > 1) {
+        ui.setSessionSwitcherOpen(true)
+        toasts.push('info', `${page.sessions.length} child sessions are available in the session switcher.`)
+      } else toasts.push('info', 'This session has no child sessions.')
+      return
+    }
+    case 'parent': {
+      if (!sid) {
+        toasts.push('error', 'A session is required for /parent.')
+        return
+      }
+      const parent = Number(asRecord(chat.selectedSession).parent_id)
+      if (!Number.isSafeInteger(parent) || parent <= 0) {
+        toasts.push('info', 'This session has no parent session.')
+        return
+      }
+      await chat.selectSession(String(parent))
+      return
+    }
+    case 'diagnostics':
+      toasts.push('info', `Session ${sid || 'none'} state: ${chat.selectedSessionState.kind}.`)
+      return
+    case 'status': {
+      const usage = sessionUsage.value
+      const tokens = usage ? ` · ${usage.percentUsed !== null ? `${usage.percentUsed}%` : usage.tokensLabel}` : ''
+      toasts.push('info', `Session ${sid || 'none'} · ${chat.selectedSessionState.kind}${tokens}`)
+      return
+    }
+    case 'usage':
+      await router.push('/settings/usage')
+      return
+    case 'activities':
+    case 'background':
+      await router.push('/settings/activities')
+      return
+    case 'plan':
+      if (!sid) toasts.push('info', String(t('chat.planViewer.requiresSession')))
+      else planViewerOpen.value = true
+      return
+  }
+}
+
+async function handleCommandSelected(command: Command) {
+  try {
+    if (command.kind === 'builtin') {
+      await executeBuiltInCommand(command)
+      return
+    }
+    const sid = commandSessionId()
+    if (!sid) throw new Error('Open a session before running plugin commands.')
+    const effect = await chatCommands.runPluginSlashCommand(`/${command.name}`, sid)
+    if (!effect || effect.kind === 'none') return
+    if (effect.kind === 'submit_prompt') {
+      await submitPromptFromCommand(effect.prompt)
+      return
+    }
+    if (effect.kind === 'message') {
+      if (effect.text.trim()) toasts.push('info', effect.text.trim())
+      return
+    }
+    if (effect.kind === 'open_plugin_workbench') {
+      await router.push({ path: '/settings/plugins', query: { ...route.query, plugin: effect.pluginId, ...(effect.tab ? { pluginTab: effect.tab } : {}) } })
+      return
+    }
+    if (effect.kind === 'open_url') {
+      const url = new URL(effect.url, window.location.href)
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Plugin URLs must use HTTP or HTTPS.')
+      window.open(url.toString(), '_blank', 'noopener,noreferrer')
+    }
+  } catch (err) {
+    toasts.push('error', err instanceof Error ? err.message : String(err))
+  }
+}
+
 async function send() {
   const sid = chat.selectedSessionId
   let text = draft.value.trim()
   const filesSnapshot = attachedFiles.value.slice()
   const draftSnapshot = draft.value
-  if (!sid || (!text && filesSnapshot.length === 0)) return
+  if ((!sid && filesSnapshot.length > 0) || (!text && filesSnapshot.length === 0)) return
 
   if (text && filesSnapshot.length === 0) {
     sending.value = true
     try {
+      if (commands.value.length === 0) await loadCommands()
+      const matchedCommand = matchSlashCommand(commands.value, text)
+      if (matchedCommand?.command.kind === 'builtin') {
+        draft.value = ''
+        closeCommandPalette()
+        await executeBuiltInCommand(matchedCommand.command, matchedCommand.args)
+        return
+      }
+      if (!sid) return
       const effect = await chatCommands.runPluginSlashCommand(text, sid)
       if (effect) {
         if (effect.kind === 'submit_prompt') {
@@ -1295,8 +1775,7 @@ async function send() {
           }
         } else {
           draft.value = ''
-          commandOpen.value = false
-          commandQuery.value = ''
+          closeCommandPalette()
           if (effect.kind === 'message' && effect.text.trim()) {
             toasts.push('info', effect.text.trim())
           } else if (effect.kind === 'open_plugin_workbench') {
@@ -1325,6 +1804,8 @@ async function send() {
       sending.value = false
     }
   }
+
+  if (!sid) return
 
   // UX: if the editor is expanded, collapse it on send.
   if (editorFullscreen.value && !editorClosing.value) {
@@ -1461,6 +1942,9 @@ onMounted(async () => {
   await modelSelection.loadProvidersAndModels()
   modelSelection.applySessionSelection()
   await loadCommands()
+  planPollTimer = window.setInterval(() => {
+    void refreshPlanProgress()
+  }, 5000)
   navIndex.value = Math.max(0, navigableMessageIds.value.length - 1)
 
   commandPointerHandler = (event: MouseEvent | TouchEvent) => {
@@ -1476,6 +1960,7 @@ onMounted(async () => {
     // Keep menus open when interacting within them.
     if (composerPickerRef.value?.containsTarget?.(target)) return
     if (composerControlsRef.value && composerControlsRef.value.contains(target)) return
+    if (target instanceof Element && target.closest('[data-command-palette="true"]')) return
 
     // Clicking anywhere else closes picker panels.
     closeComposerPickerMenu()
@@ -1484,7 +1969,7 @@ onMounted(async () => {
     // with the textarea.
     const textarea = getComposerTextareaEl(composerRef.value)
     if (textarea && textarea.contains(target)) return
-    commandOpen.value = false
+    closeCommandPalette()
   }
   document.addEventListener('pointerdown', commandPointerHandler, true)
 
@@ -1575,6 +2060,17 @@ const viewCtx = {
   handlePaste,
   handleDraftInput,
   handleDraftKeydown,
+  handleCommandPaletteKeydown,
+  commandOpen,
+  commandQuery,
+  commandIndex,
+  commandFocusSearch,
+  commands: filteredCommands,
+  commandsLoading: chatCommands.commandsLoading,
+  commandIcon: chatCommands.commandIcon,
+  openCommandPalette,
+  selectCommand,
+  setCommandQuery,
   handleFileInputChange,
   removeAttachment,
   clearAttachments,
@@ -1684,6 +2180,10 @@ const viewCtx = {
   setComposerPickerOpen,
   handleComposerPickerSelect,
   ...modelSelection,
+  composerStatusExtra,
+  composerTopRightStatus,
+  composerBottomLeftStatus,
+  composerBottomRightStatus,
 
   // Send/stop.
   sessionUsage,
@@ -1709,6 +2209,14 @@ const viewCtx = {
 
 onBeforeUnmount(() => {
   chat.clearTranscriptCache()
+  if (planRefreshTimer !== null) {
+    window.clearTimeout(planRefreshTimer)
+    planRefreshTimer = null
+  }
+  if (planPollTimer !== null) {
+    window.clearInterval(planPollTimer)
+    planPollTimer = null
+  }
   if (commandPointerHandler) {
     document.removeEventListener('pointerdown', commandPointerHandler, true)
     commandPointerHandler = null

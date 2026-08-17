@@ -2,7 +2,7 @@ import { computed, onBeforeUnmount, ref, watch, type ComputedRef, type Ref } fro
 import type { AttachedFile } from './useChatAttachments'
 import type { RenderBlock } from './useChatRenderBlocks'
 import { i18n } from '@/i18n'
-import { formatCurrencyUSD, formatNumber, formatTimeHMS } from '@/i18n/intl'
+import { formatCurrencyUSD, formatTimeHMS } from '@/i18n/intl'
 import { resolveComposerPrimaryActions } from './composerPrimaryActions'
 import type { SessionState } from '@/types/chat'
 
@@ -22,6 +22,7 @@ type ModelSelectionForUsage = {
 
 type ActivitySnapshotEntry = {
   type?: string
+  kinds?: string[]
 }
 
 type DirectorySessionsRuntimeLike = {
@@ -37,6 +38,13 @@ type SessionUsage = {
   percentUsed: number | null
   costLabel: string
   modelLabel?: string
+}
+
+type CanonicalSessionUsage = {
+  current_tokens?: number
+  projected_tokens?: number | null
+  limit_tokens?: number | null
+  model_context_window_tokens?: number | null
 }
 
 type RetryStatus = { type: 'retry'; attempt: number; message: string; next: number }
@@ -79,6 +87,7 @@ type MessageLike = {
 type ChatLike = {
   selectedSessionId: string | null
   selectedSessionState?: SessionState | null
+  selectedSessionUsage?: CanonicalSessionUsage | null
   messages: MessageLike[]
   selectedAttention?: { kind?: string } | null
   abortSession: (sid: string) => Promise<boolean>
@@ -96,6 +105,26 @@ function formatCountdown(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return '0s'
   if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`
   return `${Math.ceil(ms / 1000)}s`
+}
+
+// Keep the compact usage chip byte-for-byte compatible with the TUI's
+// session_status projection. In particular, percentages reserve the 12k
+// baseline and 5% safety margin; using a plain tokens/context ratio makes the
+// Web chip disagree with the TUI near the beginning and end of a context.
+function formatTokensK(tokens: number): string {
+  if (tokens <= 0) return '0k'
+  const value = tokens / 1_000
+  return value < 10 ? `${value.toFixed(1)}k` : `${value.toFixed(0)}k`
+}
+
+function contextUsagePercent(tokens: number, contextWindow: number): number {
+  if (contextWindow <= 0) return 0
+  const effectiveWindow = Math.floor((contextWindow * 95) / 100)
+  const baseline = 12_000
+  if (effectiveWindow <= baseline) return 100
+  const usableWindow = effectiveWindow - baseline
+  const used = Math.max(0, tokens - baseline)
+  return Math.max(0, Math.min(100, Math.round((used / usableWindow) * 100)))
 }
 
 function numberOrZero(v: number | null | undefined): number {
@@ -246,6 +275,32 @@ export function useChatRunUi(opts: {
     const sid = chat.selectedSessionId
     if (!sid) return null
 
+    // The server's usage projection is authoritative.  Reconstructing usage
+    // from the currently paged transcript makes the chip shrink when older
+    // parts are not loaded, which is precisely what the TUI does not do.
+    const canonical = chat.selectedSessionUsage
+    if (canonical) {
+      const tokens =
+        typeof canonical.projected_tokens === 'number' && Number.isFinite(canonical.projected_tokens)
+          ? canonical.projected_tokens
+          : typeof canonical.current_tokens === 'number' && Number.isFinite(canonical.current_tokens)
+            ? canonical.current_tokens
+            : null
+      const contextWindow =
+        typeof canonical.model_context_window_tokens === 'number' && Number.isFinite(canonical.model_context_window_tokens)
+          ? canonical.model_context_window_tokens
+          : typeof canonical.limit_tokens === 'number' && Number.isFinite(canonical.limit_tokens)
+            ? canonical.limit_tokens
+            : null
+      return {
+        tokensValue: tokens,
+        tokensLabel: tokens != null ? `${formatTokensK(tokens)} used` : '--',
+        percentUsed:
+          tokens != null && contextWindow != null ? contextUsagePercent(tokens, contextWindow) : null,
+        costLabel: formatCurrencyUSD(0),
+      }
+    }
+
     const revertId = getRevertId()
     const list = Array.isArray(chat.messages) ? chat.messages : []
 
@@ -296,13 +351,13 @@ export function useChatRunUi(opts: {
       const contextLimit = meta?.limit?.context
       const limit = typeof contextLimit === 'number' && Number.isFinite(contextLimit) ? contextLimit : 0
       if (limit > 0) {
-        percentUsed = Math.round((tokenTotal / limit) * 100)
+        percentUsed = contextUsagePercent(tokenTotal, limit)
       }
     }
 
     return {
       tokensValue: tokenTotal,
-      tokensLabel: tokenTotal != null ? formatNumber(tokenTotal) : '--',
+      tokensLabel: tokenTotal != null ? `${formatTokensK(tokenTotal)} used` : '--',
       percentUsed,
       costLabel,
       modelLabel: providerID && modelID ? `${providerID}/${modelID}` : undefined,

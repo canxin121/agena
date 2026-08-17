@@ -1,10 +1,11 @@
-import type { CSSProperties, ComputedRef, Ref } from 'vue'
+import type { CSSProperties, ComputedRef, Ref, Component } from 'vue'
 
 import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { OptimisticUserMessage } from '@/composables/chat/useMessageStreaming'
 import type { AttachedFile } from '@/pages/chat/useChatAttachments'
 import type { MessageEntry, MessageFold } from '@/types/chat'
+import type { Command } from './useChatCommands'
 import type { JsonObject } from '@/types/json'
 
 type DynamicRecord = JsonObject
@@ -159,6 +160,17 @@ export type ChatPageViewContext = {
   handlePaste: (event: ClipboardEvent) => void | Promise<void>
   handleDraftInput: () => void
   handleDraftKeydown: (event: KeyboardEvent) => void
+  handleCommandPaletteKeydown: (event: KeyboardEvent) => void
+  commandOpen: MaybeRef<boolean>
+  commandQuery: MaybeRef<string>
+  commandIndex: MaybeRef<number>
+  commandFocusSearch: MaybeRef<boolean>
+  commands: MaybeRef<Command[]>
+  commandsLoading: MaybeRef<boolean>
+  commandIcon: (command: Command) => Component
+  openCommandPalette: (query?: string, options?: { focusSearch?: boolean }) => void
+  selectCommand: (command: Command) => void | Promise<void>
+  setCommandQuery: (query: string) => void
   handleFileInputChange: (event: Event | FileList) => void | Promise<void>
   removeAttachment: (id: string) => void
   clearAttachments: () => void
@@ -201,11 +213,16 @@ export type ChatPageViewContext = {
   modelHint: MaybeRef<string>
   modelChipLabelMobile: MaybeRef<string>
   modelChipLabel: MaybeRef<string>
+  modelStatusLabel: MaybeRef<string>
   toggleComposerPicker: (kind: 'model' | 'thinking' | 'speed') => void | Promise<void>
   thinkingModeHint: MaybeRef<string>
   thinkingModeChipLabel: MaybeRef<string>
   speedModeHint: MaybeRef<string>
   speedModeChipLabel: MaybeRef<string>
+  composerTopRightStatus: MaybeRef<string>
+  composerBottomLeftStatus: MaybeRef<string>
+  composerBottomRightStatus: MaybeRef<string>
+  composerStatusExtra: MaybeRef<string>
 
   sessionUsage: MaybeRef<SessionUsageLike | null>
   showComposerStopAction: MaybeRef<boolean>

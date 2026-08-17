@@ -3,7 +3,13 @@ import { computed, ref } from 'vue'
 
 import * as chatApi from './chat/api'
 import { messageErrorFromAgenaPart, normalizeAgenaPart } from './chat/api'
-import { binarySearchById, compareChatIds, upsertMessageEntryIn, upsertPart } from './chat/messageIndex'
+import {
+  binarySearchById,
+  compareChatIds,
+  foldedMessageCount,
+  upsertMessageEntryIn,
+  upsertPart,
+} from './chat/messageIndex'
 import { createSessionRunConfigPersister, loadSessionRunConfigMap } from './chat/runConfig'
 import { STORAGE_RUN_CONFIG } from './chat/storeKeys'
 import { ApiError } from '../lib/api'
@@ -34,11 +40,13 @@ const SESSION_PAGE_SIZE = 30
 // Keep session entry cheap. Older pages are fetched only after the user
 // scrolls to the top of the transcript.
 const MESSAGE_PAGE_SIZE = 50
-// A raw cursor page can contain only older parts from an already-visible,
-// folded assistant run. Skip a small bounded number of such pages in one
-// upward gesture so the user reaches the next visible message without
-// materializing unbounded history.
-const MAX_FOLD_SKIPPED_OLDER_PAGES = 4
+// Older history is still fetched lazily, but a folded assistant reply may span
+// thousands of raw parts. Use the largest server page for the drain and bound
+// one upward gesture by raw parts, not by the number of cursor pages. This
+// keeps a large folded reply from turning into dozens of manual scrolls while
+// retaining a hard client-side safety limit for malformed/huge transcripts.
+const OLDER_MESSAGE_PAGE_SIZE = 200
+const MAX_FOLD_SKIPPED_OLDER_PARTS = 8_192
 const STORAGE_SELECTED_SESSION = 'agena.chat.selected-session-id.v1'
 
 function isRecord(value: JsonValue): value is JsonObject {
@@ -531,39 +539,34 @@ const useChatStoreDefinition = defineStore('chat', () => {
     let current = ensureSessionMessages(sid)
     const generation = transcriptCacheGeneration
     const currentLen = current.length
-    const maxWindow = 2000
-    const currentPartCount = messagePartCount(current)
-    const remaining = Math.max(0, maxWindow - currentPartCount)
-    const pageSize = Math.min(MESSAGE_PAGE_SIZE, remaining)
-    if (pageSize <= 0) {
-      historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: true }
-      return false
-    }
 
     historyLoadingBySession.value = { ...historyLoadingBySession.value, [sid]: true }
     try {
       let cursor = historyCursorBySession.value[sid] ?? null
       let loadedAny = false
-      for (let pageIndex = 0; pageIndex < MAX_FOLD_SKIPPED_OLDER_PAGES; pageIndex += 1) {
-        const page = await chatApi.listMessages(sid, pageSize, cursor)
+      let skippedRawParts = 0
+      while (skippedRawParts < MAX_FOLD_SKIPPED_OLDER_PARTS) {
+        const page = await chatApi.listMessages(sid, OLDER_MESSAGE_PAGE_SIZE, cursor)
         if (generation !== transcriptCacheGeneration) return false
         const normalized = normalizeMessageList(page.entries)
-        const beforeMessageCount = current.length
+        const beforeVisibleMessageCount = foldedMessageCount(current)
         const merged = mergeMessageLists(normalized, current)
         setSessionMessages(sid, merged)
         current = ensureSessionMessages(sid)
         loadedAny = loadedAny || normalized.length > 0
+        const pagePartCount = messagePartCount(normalized)
+        skippedRawParts += Math.max(1, pagePartCount)
         historyLimitBySession.value = { ...historyLimitBySession.value, [sid]: merged.length }
         historyOlderLoadedBySession.value = { ...historyOlderLoadedBySession.value, [sid]: true }
         historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: page.nextCursor ?? null }
         historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: page.hasMore !== true }
 
         const cursorProgressed = Boolean(page.nextCursor && page.nextCursor !== cursor)
-        const reachedVisibleMessage = merged.length > beforeMessageCount
+        const reachedVisibleMessage = foldedMessageCount(current) > beforeVisibleMessageCount
         if (!cursorProgressed || page.hasMore !== true || reachedVisibleMessage) break
-        // This page only extended an existing message, which is commonly a
-        // folded assistant activity run. Keep the raw parts in memory but
-        // continue a bounded distance so scrolling lands on visible content.
+        // This page only extended the currently visible folded assistant
+        // block. Keep all raw parts in memory and continue until a real
+        // top-level boundary appears or the raw-part safety cap is reached.
         cursor = page.nextCursor ?? null
       }
       return loadedAny || current.length > currentLen

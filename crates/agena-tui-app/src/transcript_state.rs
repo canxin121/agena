@@ -48,7 +48,7 @@ impl TranscriptState {
             transcript_has_more: false,
             transcript_older_loading: false,
             transcript_older_in_flight_since: None,
-            transcript_older_skip_budget: 0,
+            transcript_older_skip_parts: 0,
             transcript_older_pages_loaded: false,
             viewport: TranscriptViewport::default(),
             interaction: TranscriptInteraction::default(),
@@ -87,7 +87,7 @@ impl TranscriptState {
         self.transcript_has_more = false;
         self.transcript_older_loading = false;
         self.transcript_older_in_flight_since = None;
-        self.transcript_older_skip_budget = 0;
+        self.transcript_older_skip_parts = 0;
         self.transcript_older_pages_loaded = false;
         self.viewport.reduce(TranscriptAction::Reset);
         self.interaction = TranscriptInteraction::default();
@@ -135,7 +135,7 @@ impl TranscriptState {
         self.expanded_operation_activity_ids = cache.expanded_operation_activity_ids;
         self.transcript_older_loading = false;
         self.transcript_older_in_flight_since = None;
-        self.transcript_older_skip_budget = 0;
+        self.transcript_older_skip_parts = 0;
         self.execution = None;
         self.last_event_seq = None;
         self.viewport.reduce(TranscriptAction::Reset);
@@ -226,15 +226,16 @@ impl TranscriptState {
         self.transcript_has_more = has_more;
     }
 
-    /// Return visible navigation identities while ignoring fold-marker rows.
-    /// Older raw pages that only extend a folded assistant run must not count
-    /// as visible progress for upward pagination.
-    pub(crate) fn visible_navigation_keys(&mut self, width: u16) -> Vec<TranscriptNodeKey> {
-        self.rendered(width)
-            .nodes
-            .iter()
-            .filter(|node| !matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
-            .map(|node| node.key.clone())
+    /// Return the semantic top-level transcript boundaries after assistant
+    /// rounds have been folded. Node ids are not suitable here: prepending an
+    /// older assistant round legitimately changes the first assistant id even
+    /// though the visible block is still the same block.
+    pub(crate) fn visible_navigation_boundaries(
+        &self,
+    ) -> Vec<Option<agena_api::resource::RunRole>> {
+        agena_tui_transcript::parts_entries(&self.parts)
+            .into_iter()
+            .map(|entry| entry.role)
             .collect()
     }
 
@@ -3794,6 +3795,34 @@ mod stall_recovery_tests {
         }
     }
 
+    fn run_part(part_id: i64, role: &str) -> agena_api::resource::SessionTranscriptPart {
+        agena_api::resource::SessionTranscriptPart {
+            part_id,
+            kind: "run".to_owned(),
+            role: role.to_owned(),
+            state: "completed".to_owned(),
+            content: serde_json::json!({}),
+            summary: None,
+            created_at_ms: part_id * 10,
+            parent_part_id: None,
+            run_id: None,
+        }
+    }
+
+    fn assistant_activity(part_id: i64, run_id: i64) -> agena_api::resource::SessionTranscriptPart {
+        agena_api::resource::SessionTranscriptPart {
+            part_id,
+            kind: "think".to_owned(),
+            role: "assistant".to_owned(),
+            state: "completed".to_owned(),
+            content: serde_json::json!({ "summary": [format!("activity {part_id}")] }),
+            summary: None,
+            created_at_ms: part_id * 10,
+            parent_part_id: None,
+            run_id: Some(run_id),
+        }
+    }
+
     fn state() -> TranscriptState {
         TranscriptState::new(
             I18n::english(),
@@ -3860,6 +3889,31 @@ mod stall_recovery_tests {
             state.viewport_top() >= reading_top,
             "prepending content must not move the reader backwards"
         );
+    }
+
+    #[test]
+    fn adjacent_assistant_rounds_do_not_count_as_a_new_navigation_boundary() {
+        let mut state = state();
+        state.merge_parts(vec![run_part(10, "assistant"), assistant_activity(11, 10)]);
+        let before = state.visible_navigation_boundaries();
+
+        state.merge_parts(vec![
+            run_part(5, "assistant"),
+            assistant_activity(6, 5),
+            run_part(10, "assistant"),
+            assistant_activity(11, 10),
+        ]);
+        assert_eq!(before, state.visible_navigation_boundaries());
+
+        state.merge_parts(vec![
+            run_part(1, "user"),
+            text_part(2, "previous user message"),
+            run_part(5, "assistant"),
+            assistant_activity(6, 5),
+            run_part(10, "assistant"),
+            assistant_activity(11, 10),
+        ]);
+        assert_ne!(before, state.visible_navigation_boundaries());
     }
 
     #[test]

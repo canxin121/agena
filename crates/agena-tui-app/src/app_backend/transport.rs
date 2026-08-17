@@ -30,6 +30,11 @@ use tokio::sync::mpsc;
 use super::{LiveEvent, SessionRefresh};
 
 pub(crate) const SESSION_TRANSCRIPT_PAGE_SIZE: u64 = 50;
+/// Older pages use the largest supported API page. The initial page remains
+/// small so opening a session stays cheap.
+pub(crate) const OLDER_SESSION_TRANSCRIPT_PAGE_SIZE: u64 = 200;
+/// Bound one folded-history drain by raw parts, not by cursor-page count.
+pub(crate) const MAX_FOLD_SKIP_RAW_PARTS: usize = 8_192;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionTranscriptPage {

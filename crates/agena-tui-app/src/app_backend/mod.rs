@@ -29,7 +29,8 @@ mod transport;
 
 pub use self::transport::{BackendMode, TuiBackend};
 pub(crate) use self::transport::{
-    SESSION_TRANSCRIPT_PAGE_SIZE, SessionStateWithTranscriptPage, SessionTranscriptPage,
+    MAX_FOLD_SKIP_RAW_PARTS, OLDER_SESSION_TRANSCRIPT_PAGE_SIZE, SessionStateWithTranscriptPage,
+    SessionTranscriptPage,
 };
 
 pub(crate) use self::inspector::InspectorRow;

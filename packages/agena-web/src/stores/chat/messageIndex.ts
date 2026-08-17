@@ -11,6 +11,29 @@ export function compareChatIds(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0
 }
 
+/**
+ * Count top-level transcript messages after the presentation fold is applied.
+ *
+ * Consecutive assistant runs are one visible assistant block in both Web and
+ * TUI. A cursor page that only prepends another assistant run must therefore
+ * not stop the older-history drain, even though it adds another raw message
+ * entry to the wire projection.
+ */
+export function foldedMessageCount(list: readonly MessageEntry[]): number {
+  let count = 0
+  let previousRole = ''
+  for (const message of list) {
+    const role = String(message?.info?.role || '')
+      .trim()
+      .toLowerCase()
+    if (!role) continue
+    if (role === 'assistant' && previousRole === 'assistant') continue
+    count += 1
+    previousRole = role
+  }
+  return count
+}
+
 export function binarySearchById<T>(
   arr: T[],
   id: string,

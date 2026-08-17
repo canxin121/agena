@@ -62,6 +62,22 @@ export type BuiltInCommandSpec = {
   opensInteractiveSurface: boolean
 }
 
+export function normalizeCommandPaletteQuery(value: unknown): string {
+  return String(value || '')
+    .replace(/^\/+/, '')
+    .trim()
+}
+
+/**
+ * A composer keyup can reopen the palette while it is already open (the
+ * palette is intentionally not auto-focused when the user types `/`). That
+ * re-entry must preserve the keyboard selection when the query did not
+ * change; otherwise ArrowDown is immediately followed by a reset to row 0.
+ */
+export function shouldResetCommandPaletteSelection(open: boolean, currentQuery: string, nextQuery: string): boolean {
+  return !open || currentQuery !== nextQuery
+}
+
 type CommandSeed = [BuiltInCommandId, string[], string, boolean?]
 
 // Keep the order identical to the TUI catalog.  The palette can sort the
@@ -112,34 +128,32 @@ const COMMAND_SEEDS: CommandSeed[] = [
   ['side', ['btw', 'aside'], ''],
 ]
 
-export const BUILT_IN_COMMANDS: BuiltInCommandSpec[] = COMMAND_SEEDS.map(
-  ([name, aliases, argumentsLabel]) => ({
-    kind: 'builtin',
-    id: name,
-    name,
-    aliases,
-    arguments: argumentsLabel,
-    requiresArguments: argumentsLabel.trimStart().startsWith('<'),
-    descriptionKey: `chat.commandPalette.builtIns.${name}`,
-    opensInteractiveSurface: [
-      'sessions',
-      'hub',
-      'background',
-      'rename',
-      'timeline',
-      'settings',
-      'attach',
-      'skill',
-      'skill-manager',
-      'image',
-      'usage',
-      'activities',
-      'plan',
-      'fork',
-      'side',
-    ].includes(name),
-  }),
-)
+export const BUILT_IN_COMMANDS: BuiltInCommandSpec[] = COMMAND_SEEDS.map(([name, aliases, argumentsLabel]) => ({
+  kind: 'builtin',
+  id: name,
+  name,
+  aliases,
+  arguments: argumentsLabel,
+  requiresArguments: argumentsLabel.trimStart().startsWith('<'),
+  descriptionKey: `chat.commandPalette.builtIns.${name}`,
+  opensInteractiveSurface: [
+    'sessions',
+    'hub',
+    'background',
+    'rename',
+    'timeline',
+    'settings',
+    'attach',
+    'skill',
+    'skill-manager',
+    'image',
+    'usage',
+    'activities',
+    'plan',
+    'fork',
+    'side',
+  ].includes(name),
+}))
 
 const BUILT_IN_BY_NAME = new Map<string, BuiltInCommandSpec>()
 for (const command of BUILT_IN_COMMANDS) {
@@ -148,10 +162,19 @@ for (const command of BUILT_IN_COMMANDS) {
 }
 
 export function findBuiltInCommand(name: string): BuiltInCommandSpec | null {
-  return BUILT_IN_BY_NAME.get(String(name || '').replace(/^\/+/, '').trim().toLowerCase()) || null
+  return (
+    BUILT_IN_BY_NAME.get(
+      String(name || '')
+        .replace(/^\/+/, '')
+        .trim()
+        .toLowerCase(),
+    ) || null
+  )
 }
 
-export function paletteInvocation(command: Pick<BuiltInCommandSpec, 'arguments' | 'requiresArguments'> & { name: string }): string {
+export function paletteInvocation(
+  command: Pick<BuiltInCommandSpec, 'arguments' | 'requiresArguments'> & { name: string },
+): string {
   if (!command.requiresArguments) return `/${command.name}`
   const required = command.arguments.split(' [', 1)[0] || command.arguments
   return `/${command.name} ${required}`

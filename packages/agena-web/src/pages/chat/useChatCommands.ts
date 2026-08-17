@@ -6,8 +6,10 @@ import { apiJson } from '@/lib/api'
 import {
   BUILT_IN_COMMANDS,
   findBuiltInCommand,
+  normalizeCommandPaletteQuery,
   parseSlashInvocation,
   schemaNeedsPluginInput,
+  shouldResetCommandPaletteSelection,
   type BuiltInCommandSpec,
 } from './chatCommandsCatalog'
 import {
@@ -74,11 +76,17 @@ function text(value: unknown): string {
 }
 
 function commandName(command: Pick<Command, 'name'>): string {
-  return String(command.name || '').replace(/^\/+/, '').trim().toLowerCase()
+  return String(command.name || '')
+    .replace(/^\/+/, '')
+    .trim()
+    .toLowerCase()
 }
 
 function commandMatches(command: Command, name: string): boolean {
-  const normalized = String(name || '').replace(/^\/+/, '').trim().toLowerCase()
+  const normalized = String(name || '')
+    .replace(/^\/+/, '')
+    .trim()
+    .toLowerCase()
   return (
     commandName(command) === normalized ||
     command.aliases.some((alias) => alias.replace(/^\/+/, '').trim().toLowerCase() === normalized)
@@ -93,9 +101,12 @@ export function matchSlashCommand(commands: Command[], raw: string): { command: 
 }
 
 /** Kept as a named helper for callers/tests that only care about plugins. */
-export function matchPluginSlashCommand(commands: Command[], raw: string): { command: PluginCommand; args: string } | null {
+export function matchPluginSlashCommand(
+  commands: Command[],
+  raw: string,
+): { command: PluginCommand; args: string } | null {
   const matched = matchSlashCommand(commands, raw)
-  return matched?.command.kind === 'plugin' ? matched as { command: PluginCommand; args: string } : null
+  return matched?.command.kind === 'plugin' ? (matched as { command: PluginCommand; args: string }) : null
 }
 
 export function commandNeedsArguments(command: Command): boolean {
@@ -117,6 +128,7 @@ export function useChatCommands(opts: {
   const commandOpen = ref(false)
   const commandIndex = ref(0)
   const commandFocusSearch = ref(true)
+  let commandsLoadInFlight: Promise<void> | null = null
 
   const builtInCommands = computed<BuiltInCommand[]>(() =>
     BUILT_IN_COMMANDS.map((command) => ({
@@ -133,8 +145,11 @@ export function useChatCommands(opts: {
 
   function openCommandPalette(query = '', options: { focusSearch?: boolean } = {}) {
     if (composerPickerOpen.value) composerPickerOpen.value = null
-    commandQuery.value = String(query || '').replace(/^\/+/, '').trim()
-    commandIndex.value = 0
+    const nextQuery = normalizeCommandPaletteQuery(query)
+    if (shouldResetCommandPaletteSelection(commandOpen.value, commandQuery.value, nextQuery)) {
+      commandIndex.value = 0
+    }
+    commandQuery.value = nextQuery
     commandFocusSearch.value = options.focusSearch !== false
     commandOpen.value = true
     if (commands.value.length === 0) void loadCommands()
@@ -179,7 +194,7 @@ export function useChatCommands(opts: {
     }
   }
 
-  async function loadCommands() {
+  async function loadCommandsInternal() {
     commandsLoading.value = true
     try {
       // Built-ins are local and are always available, even if the plugin
@@ -208,6 +223,17 @@ export function useChatCommands(opts: {
       commands.value = [...next.values()]
     } finally {
       commandsLoading.value = false
+    }
+  }
+
+  async function loadCommands() {
+    if (commandsLoadInFlight) return commandsLoadInFlight
+    const request = loadCommandsInternal()
+    commandsLoadInFlight = request
+    try {
+      await request
+    } finally {
+      if (commandsLoadInFlight === request) commandsLoadInFlight = null
     }
   }
 
@@ -244,6 +270,13 @@ export function useChatCommands(opts: {
   watch([() => filteredCommands.value.length, commandQuery], () => {
     commandIndex.value = Math.max(0, Math.min(commandIndex.value, filteredCommands.value.length - 1))
   })
+
+  function setCommandQuery(value: string) {
+    const nextQuery = normalizeCommandPaletteQuery(value)
+    if (commandQuery.value === nextQuery) return
+    commandQuery.value = nextQuery
+    commandIndex.value = 0
+  }
 
   function moveCommandSelection(delta: number) {
     const count = filteredCommands.value.length
@@ -379,6 +412,7 @@ export function useChatCommands(opts: {
     commandQuery,
     commandOpen,
     commandIndex,
+    setCommandQuery,
     commandFocusSearch,
     filteredCommands,
     loadCommands,

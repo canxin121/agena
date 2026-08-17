@@ -3,10 +3,12 @@ import { describe, expect, test } from 'bun:test'
 import {
   BUILT_IN_COMMANDS,
   findBuiltInCommand,
+  normalizeCommandPaletteQuery,
   paletteInvocation,
   parseSlashInvocation,
   schemaNeedsPluginInput,
   schemaRequiresArguments,
+  shouldResetCommandPaletteSelection,
 } from '../src/pages/chat/chatCommandsCatalog'
 
 describe('web command catalog', () => {
@@ -71,6 +73,14 @@ describe('web command catalog', () => {
     expect(parseSlashInvocation(' /DL artifacts/out.zip ')).toEqual({ name: 'dl', args: 'artifacts/out.zip' })
     expect(parseSlashInvocation('// literal')).toBeNull()
     expect(parseSlashInvocation('ordinary text')).toBeNull()
+  })
+
+  test('command palette selection survives composer re-entry when the query is unchanged', () => {
+    expect(normalizeCommandPaletteQuery('/// continue ')).toBe('continue')
+    expect(shouldResetCommandPaletteSelection(true, '', '')).toBe(false)
+    expect(shouldResetCommandPaletteSelection(true, 'co', 'co')).toBe(false)
+    expect(shouldResetCommandPaletteSelection(false, '', '')).toBe(true)
+    expect(shouldResetCommandPaletteSelection(true, 'co', 'com')).toBe(true)
   })
 
   test('plugin schemas only require palette input when required fields exist', () => {

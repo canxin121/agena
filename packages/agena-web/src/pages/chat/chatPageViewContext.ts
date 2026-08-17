@@ -161,6 +161,9 @@ export type ChatPageViewContext = {
   handleDraftInput: () => void
   handleDraftKeydown: (event: KeyboardEvent) => void
   handleCommandPaletteKeydown: (event: KeyboardEvent) => void
+  handlePromptHistoryKeydown: (event: KeyboardEvent) => void
+  selectPromptHistoryEntry: (text?: string) => void
+  updatePromptHistoryQuery: (query: string) => void
   commandOpen: MaybeRef<boolean>
   commandQuery: MaybeRef<string>
   commandIndex: MaybeRef<number>
@@ -171,6 +174,11 @@ export type ChatPageViewContext = {
   openCommandPalette: (query?: string, options?: { focusSearch?: boolean }) => void
   selectCommand: (command: Command) => void | Promise<void>
   setCommandQuery: (query: string) => void
+  promptHistoryOpen: MaybeRef<boolean>
+  promptHistoryQuery: MaybeRef<string>
+  promptHistoryEntries: MaybeRef<string[]>
+  promptHistoryIndex: MaybeRef<number>
+  promptHistoryAutoFocus: MaybeRef<boolean>
   handleFileInputChange: (event: Event | FileList) => void | Promise<void>
   removeAttachment: (id: string) => void
   clearAttachments: () => void

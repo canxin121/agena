@@ -2154,6 +2154,14 @@ export default {
       input: {
         placeholder: '输入消息…',
       },
+      promptHistory: {
+        label: '历史>',
+        search: '搜索输入历史',
+        empty: '输入历史为空',
+        noMatches: '没有匹配的输入历史',
+        hint: '下键进入历史 | 上下选择 | 回车使用 | Esc 关闭',
+        itemsHint: '召回输入历史前请先清空附件',
+      },
       status: {
         loading: '加载中',
         slash: '命令',

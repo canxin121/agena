@@ -30,11 +30,16 @@ import { useChatSessionActions } from './chat/useChatSessionActions'
 import { useChatRunUi } from './chat/useChatRunUi'
 import { useChatTranscriptVim } from './chat/useChatTranscriptVim'
 import {
+  composerLineEnd,
+  composerLineStart,
   composerWordRangeAfter,
   composerWordRangeBefore,
+  nextComposerGraphemeBoundary,
   nextComposerWordBoundary,
+  previousComposerGraphemeBoundary,
   previousComposerWordBoundary,
 } from './chat/composerWordNavigation'
+import { useComposerPromptHistory } from './chat/composerPromptHistory'
 import PlanViewerDialog from '@/components/chat/PlanViewerDialog.vue'
 import { openComposerInputMenu } from './chat/composerInputMenus'
 import { formatTimeHM } from '@/i18n/intl'
@@ -267,13 +272,36 @@ const {
   commandIndex,
   commandFocusSearch,
   loadCommands,
-  openCommandPalette,
+  openCommandPalette: openCommandPaletteBase,
   closeCommandPalette,
   selectCommand,
   handleCommandPaletteKeydown,
   handleDraftInput: handleDraftInputBase,
   handleDraftKeydown: handleDraftKeydownInner,
 } = chatCommands
+
+const promptHistory = useComposerPromptHistory()
+const {
+  filteredEntries: filteredPromptHistoryEntries,
+  open: promptHistoryOpen,
+  query: promptHistoryQuery,
+  activeIndex: promptHistoryIndex,
+  focus: promptHistoryFocus,
+  openHistory: openPromptHistory,
+  closeHistory: closePromptHistory,
+  updateQuery: updatePromptHistoryQuery,
+  focusInput: focusPromptHistoryInput,
+  focusResults: focusPromptHistoryResults,
+  moveOlder: movePromptHistoryOlder,
+  moveNewer: movePromptHistoryNewer,
+  accept: acceptPromptHistory,
+  record: recordPromptHistory,
+} = promptHistory
+
+function openCommandPalette(query = '', options: { focusSearch?: boolean } = {}) {
+  closePromptHistory()
+  openCommandPaletteBase(query, options)
+}
 
 function setCommandQuery(value: string) {
   commandQuery.value = String(value || '')
@@ -296,6 +324,7 @@ modelSelection = useChatModelSelection({
   speedTriggerRef,
   modelPickerQuery,
   onOpenComposerPicker: () => {
+    closePromptHistory()
     openComposerInputMenu('picker', {
       closeAttachments: closeAttachmentsPanel,
       closeActions: closeComposerActionMenu,
@@ -510,11 +539,103 @@ function closeAttachmentsPanel() {
   attachmentsPanelOpen.value = false
 }
 
+function applyPromptHistoryText(text: string | null) {
+  if (!text) return
+  // TUI restores a history entry as a fresh plain-text composer document and
+  // places the cursor at its end. Do not run slash-command input handling here:
+  // recalling a prompt must not unexpectedly open another palette.
+  draft.value = text
+  ui.setGlobalSelection('chat-input', chat.selectedSessionId || 'composer', {
+    meta: { source: 'chat-prompt-history-recall' },
+  })
+  setComposerCaret(text.length)
+}
+
+function selectPromptHistoryEntry(entry?: string) {
+  if (entry !== undefined) {
+    const index = filteredPromptHistoryEntries.value.indexOf(entry)
+    if (index >= 0) promptHistoryIndex.value = index
+  }
+  applyPromptHistoryText(acceptPromptHistory())
+}
+
+function tryOpenPromptHistory(): boolean {
+  if (attachedFiles.value.length > 0) {
+    toasts.push('info', String(t('chat.composer.promptHistory.itemsHint')))
+    return true
+  }
+  if (!openPromptHistory()) {
+    toasts.push('info', String(t('chat.composer.promptHistory.empty')))
+    return true
+  }
+  closeCommandPalette()
+  closeComposerPickerMenu()
+  closeComposerActionMenu()
+  closeAttachmentsPanel()
+  return true
+}
+
+function handlePromptHistoryKeydown(event: KeyboardEvent): boolean {
+  if (!promptHistoryOpen.value) return false
+
+  const plain = !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey
+  if (event.key === 'Escape' && plain) {
+    event.preventDefault()
+    closePromptHistory()
+    return true
+  }
+  if (event.key.toLowerCase() === 'c' && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+    event.preventDefault()
+    closePromptHistory()
+    return true
+  }
+  if (event.key === 'Enter') {
+    if (plain) {
+      event.preventDefault()
+      selectPromptHistoryEntry()
+    } else {
+      // The history search owns Enter while it is open; it must never submit
+      // the underlying composer through Ctrl/Cmd+Enter.
+      event.preventDefault()
+    }
+    return true
+  }
+  if (event.key === 'ArrowDown' && plain) {
+    event.preventDefault()
+    if (promptHistoryFocus.value === 'input') focusPromptHistoryResults()
+    else movePromptHistoryOlder()
+    return true
+  }
+  if (event.key === 'ArrowUp' && plain) {
+    event.preventDefault()
+    if (promptHistoryFocus.value === 'results') movePromptHistoryNewer()
+    else focusPromptHistoryInput()
+    return true
+  }
+  if (event.key.toLowerCase() === 'r' && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+    event.preventDefault()
+    movePromptHistoryOlder()
+    return true
+  }
+  if (event.key.toLowerCase() === 's' && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+    event.preventDefault()
+    movePromptHistoryNewer(true)
+    return true
+  }
+
+  // SearchPicker returns to its editor as soon as a non-navigation key is
+  // pressed while the result list has focus. The Web search input stays the
+  // DOM focus target, so only the logical focus state needs changing here.
+  if (promptHistoryFocus.value === 'results') focusPromptHistoryInput()
+  return true
+}
+
 async function setAttachmentsPanelOpen(next: boolean) {
   if (!next) {
     closeAttachmentsPanel()
     return
   }
+  closePromptHistory()
   openComposerInputMenu('attachments', {
     closeAttachments: closeAttachmentsPanel,
     closeActions: closeComposerActionMenu,
@@ -636,6 +757,34 @@ function applyComposerEdit(start: number, end: number, replacement: string, curs
   setComposerCaret(cursor)
 }
 
+function handleComposerCursorKeydown(event: KeyboardEvent): boolean {
+  const textarea = composerTextarea()
+  if (!textarea || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return false
+
+  const cursor = textarea.selectionStart ?? 0
+  const selectionEnd = textarea.selectionEnd ?? cursor
+  let target: number | null = null
+
+  if (event.key === 'ArrowLeft') {
+    target =
+      cursor === selectionEnd
+        ? previousComposerGraphemeBoundary(textarea.value, cursor)
+        : Math.min(cursor, selectionEnd)
+  } else if (event.key === 'ArrowRight') {
+    target =
+      cursor === selectionEnd ? nextComposerGraphemeBoundary(textarea.value, cursor) : Math.max(cursor, selectionEnd)
+  } else if (event.key === 'Home') {
+    target = composerLineStart(textarea.value, cursor)
+  } else if (event.key === 'End') {
+    target = composerLineEnd(textarea.value, cursor)
+  }
+
+  if (target === null) return false
+  event.preventDefault()
+  setComposerCaret(target)
+  return true
+}
+
 function handleComposerWordKeydown(event: KeyboardEvent): boolean {
   const textarea = composerTextarea()
   if (!textarea) return false
@@ -675,12 +824,34 @@ function handleComposerWordKeydown(event: KeyboardEvent): boolean {
 }
 
 function handleDraftKeydown(e: KeyboardEvent) {
+  if (promptHistoryOpen.value) {
+    handlePromptHistoryKeydown(e)
+    return
+  }
   if (composerFullscreenActive.value && e.key === 'Escape' && !commandOpen.value) {
     e.preventDefault()
     closeEditorFullscreen()
     return
   }
+  const textarea = composerTextarea()
+  if (
+    !commandOpen.value &&
+    e.key === 'ArrowUp' &&
+    !e.ctrlKey &&
+    !e.altKey &&
+    !e.metaKey &&
+    !e.shiftKey &&
+    !e.isComposing &&
+    textarea &&
+    textarea.selectionStart === 0 &&
+    textarea.selectionEnd === 0
+  ) {
+    tryOpenPromptHistory()
+    e.preventDefault()
+    return
+  }
   if (handleComposerWordKeydown(e)) return
+  if (handleComposerCursorKeydown(e)) return
   handleDraftKeydownInner(e)
 }
 
@@ -929,6 +1100,7 @@ async function toggleComposerActionMenu(event?: MouseEvent | PointerEvent) {
     closeComposerActionMenu()
     return
   }
+  closePromptHistory()
   openComposerInputMenu('actions', {
     closeAttachments: closeAttachmentsPanel,
     closeActions: closeComposerActionMenu,
@@ -1862,6 +2034,11 @@ async function send() {
 
     const sendResult = await chat.sendMessage(sid, { ...runCfg, parts })
 
+    // Match the TUI: only a successfully submitted plain-text draft enters
+    // global prompt history. Messages containing resources/attachments are
+    // intentionally excluded because recalling them would silently lose data.
+    if (filesSnapshot.length === 0) recordPromptHistory(text)
+
     // Mark the optimistic message as sent (generation may still be running).
     if (sendResult?.queued) {
       markOptimisticQueued(sid)
@@ -1961,6 +2138,7 @@ onMounted(async () => {
     if (composerPickerRef.value?.containsTarget?.(target)) return
     if (composerControlsRef.value && composerControlsRef.value.contains(target)) return
     if (target instanceof Element && target.closest('[data-command-palette="true"]')) return
+    if (target instanceof Element && target.closest('[data-prompt-history-palette="true"]')) return
 
     // Clicking anywhere else closes picker panels.
     closeComposerPickerMenu()
@@ -1969,6 +2147,7 @@ onMounted(async () => {
     // with the textarea.
     const textarea = getComposerTextareaEl(composerRef.value)
     if (textarea && textarea.contains(target)) return
+    closePromptHistory()
     closeCommandPalette()
   }
   document.addEventListener('pointerdown', commandPointerHandler, true)
@@ -2060,6 +2239,9 @@ const viewCtx = {
   handlePaste,
   handleDraftInput,
   handleDraftKeydown,
+  handlePromptHistoryKeydown,
+  selectPromptHistoryEntry,
+  updatePromptHistoryQuery,
   handleCommandPaletteKeydown,
   commandOpen,
   commandQuery,
@@ -2071,6 +2253,11 @@ const viewCtx = {
   openCommandPalette,
   selectCommand,
   setCommandQuery,
+  promptHistoryOpen,
+  promptHistoryQuery,
+  promptHistoryEntries: filteredPromptHistoryEntries,
+  promptHistoryIndex,
+  promptHistoryAutoFocus: promptHistoryOpen,
   handleFileInputChange,
   removeAttachment,
   clearAttachments,

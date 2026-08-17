@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  composerLineEnd,
+  composerLineStart,
   composerWordRangeAfter,
   composerWordRangeBefore,
+  nextComposerGraphemeBoundary,
   nextComposerWordBoundary,
+  previousComposerGraphemeBoundary,
   previousComposerWordBoundary,
 } from '../src/pages/chat/composerWordNavigation'
 
@@ -36,5 +40,26 @@ describe('composer word navigation', () => {
     expect(nextComposerWordBoundary(text, 0)).toBe(2)
     expect(composerWordRangeBefore(text, text.length)).toEqual({ start: 3, end: 5 })
     expect(composerWordRangeAfter(text, 0)).toEqual({ start: 0, end: 2 })
+  })
+
+  test('plain left and right movement never split a grapheme cluster', () => {
+    const text = 'a👩‍💻éb'
+    const emojiStart = 1
+    const emojiEnd = 'a👩‍💻'.length
+    const combiningStart = emojiEnd
+    const combiningEnd = 'a👩‍💻é'.length
+
+    expect(nextComposerGraphemeBoundary(text, emojiStart)).toBe(emojiEnd)
+    expect(previousComposerGraphemeBoundary(text, emojiEnd)).toBe(emojiStart)
+    expect(nextComposerGraphemeBoundary(text, combiningStart)).toBe(combiningEnd)
+    expect(previousComposerGraphemeBoundary(text, combiningEnd)).toBe(combiningStart)
+    expect(nextComposerGraphemeBoundary(text, text.length)).toBe(text.length)
+  })
+
+  test('home and end stop at the current logical line', () => {
+    const text = 'first line\nsecond line\nthird'
+    const cursor = text.indexOf('second') + 4
+    expect(composerLineStart(text, cursor)).toBe(text.indexOf('second'))
+    expect(composerLineEnd(text, cursor)).toBe(text.indexOf('\n', cursor))
   })
 })

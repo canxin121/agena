@@ -28,6 +28,7 @@ import RenameSessionDialog from '@/components/chat/RenameSessionDialog.vue'
 import AttachProjectDialog from '@/components/chat/AttachProjectDialog.vue'
 import AttachmentsPanel from '@/components/chat/AttachmentsPanel.vue'
 import CommandPalette from '@/components/chat/CommandPalette.vue'
+import PromptHistoryPalette from '@/components/chat/PromptHistoryPalette.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
@@ -126,6 +127,9 @@ const {
   handlePaste,
   handleDraftInput,
   handleDraftKeydown,
+  handlePromptHistoryKeydown,
+  selectPromptHistoryEntry,
+  updatePromptHistoryQuery,
   handleCommandPaletteKeydown,
   commandOpen,
   commandQuery,
@@ -137,6 +141,11 @@ const {
   openCommandPalette,
   selectCommand,
   setCommandQuery,
+  promptHistoryOpen,
+  promptHistoryQuery,
+  promptHistoryEntries,
+  promptHistoryIndex,
+  promptHistoryAutoFocus,
   handleFileInputChange,
   removeAttachment,
   clearAttachments,
@@ -658,6 +667,17 @@ void sessionActionsMenuRef
                   </span>
                 </template>
                 <template #overlay>
+                  <PromptHistoryPalette
+                    :open="promptHistoryOpen"
+                    :auto-focus="promptHistoryAutoFocus"
+                    :query="promptHistoryQuery"
+                    :entries="promptHistoryEntries"
+                    :active-index="promptHistoryIndex"
+                    @update:query="updatePromptHistoryQuery"
+                    @update:active-index="(value) => (promptHistoryIndex = value)"
+                    @keydown="handlePromptHistoryKeydown"
+                    @select="selectPromptHistoryEntry"
+                  />
                   <CommandPalette
                     :open="commandOpen"
                     :auto-focus="commandFocusSearch"

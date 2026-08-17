@@ -14,6 +14,41 @@ function clampComposerOffset(text: string, offset: number): number {
   return 0
 }
 
+/** Move over one complete grapheme, matching the TUI editor's atomic cursor. */
+export function previousComposerGraphemeBoundary(text: string, cursor: number): number {
+  const target = Math.max(0, Math.min(text.length, cursor))
+  if (target === 0) return 0
+  const graphemes = transcriptGraphemes(text)
+  for (let index = graphemes.length - 1; index >= 0; index -= 1) {
+    const item = graphemes[index]
+    if (item && item.end <= target) return item.start
+    if (item && item.start < target && target < item.end) return item.start
+  }
+  return 0
+}
+
+/** Move over one complete grapheme, matching the TUI editor's atomic cursor. */
+export function nextComposerGraphemeBoundary(text: string, cursor: number): number {
+  const target = Math.max(0, Math.min(text.length, cursor))
+  if (target >= text.length) return text.length
+  const graphemes = transcriptGraphemes(text)
+  const item = graphemes.find(
+    (candidate) => candidate.start >= target || (candidate.start < target && target < candidate.end),
+  )
+  return item?.end ?? text.length
+}
+
+export function composerLineStart(text: string, cursor: number): number {
+  const target = Math.max(0, Math.min(text.length, cursor))
+  return text.lastIndexOf('\n', Math.max(0, target - 1)) + 1
+}
+
+export function composerLineEnd(text: string, cursor: number): number {
+  const target = Math.max(0, Math.min(text.length, cursor))
+  const newline = text.indexOf('\n', target)
+  return newline < 0 ? text.length : newline
+}
+
 function isComposerWordGrapheme(grapheme: string): boolean {
   return Array.from(grapheme).some((character) => COMPOSER_WORD_CHARACTER.test(character))
 }

@@ -2157,6 +2157,14 @@ export default {
       input: {
         placeholder: 'Type a message…',
       },
+      promptHistory: {
+        label: 'history>',
+        search: 'Search prompt history',
+        empty: 'Prompt history is empty',
+        noMatches: 'No prompt history matches',
+        hint: 'Down enters history | Up/Down navigate | Enter use | Esc close',
+        itemsHint: 'Clear attachments before recalling prompt history',
+      },
       status: {
         loading: 'loading',
         slash: 'slash',

@@ -83,7 +83,6 @@ import {
   replaceFileContent,
   listDirectory,
   makeDirectory,
-  readFileChunk,
   renamePath,
   searchFileContent,
   searchFiles,
@@ -91,6 +90,7 @@ import {
   writeFile,
 } from '@/features/files/api/filesApi'
 import type { FsContentSearchFileResult, FsContentSearchMatch } from '@/features/files/api/filesApi'
+import { invalidateFileReadCache, readFileChunkCached } from '@/features/files/fileReadCache'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
@@ -2609,6 +2609,7 @@ async function replaceContentSearchMatch(file: FsContentSearchFileResult, match:
 
     const replaced = Number(resp.replacementCount || 0)
     if (replaced > 0) {
+      invalidateFileReadCache({ directory: rootPath })
       toasts.push('success', t('files.toasts.matchReplaced'))
     }
 
@@ -2650,6 +2651,7 @@ async function replaceAllContentSearchMatches() {
     const replacements = Number(resp.replacementCount || 0)
     const skipped = Number(resp.skipped || 0)
     if (replacements > 0) {
+      invalidateFileReadCache({ directory: rootPath })
       const suffix =
         skipped > 0
           ? skipped === 1
@@ -2729,7 +2731,7 @@ function isRefreshRequestStale(seq: number, rootPath: string, path: string): boo
 }
 
 async function readRefreshPayload(rootPath: string, path: string): Promise<FileRefreshPayload> {
-  const meta = await readFileChunk({ directory: rootPath, path, offset: 0, limit: 0 })
+  const meta = await readFileChunkCached({ directory: rootPath, path, offset: 0, limit: 0 }, { force: true })
   const totalBytes = Math.max(0, Math.floor(meta.totalBytes || 0))
 
   if (totalBytes > LARGE_FILE_WARNING_BYTES) {
@@ -2740,7 +2742,7 @@ async function readRefreshPayload(rootPath: string, path: string): Promise<FileR
   }
 
   const limit = Math.max(FILE_CHUNK_BYTES, totalBytes || 0)
-  const chunk = await readFileChunk({ directory: rootPath, path, offset: 0, limit })
+  const chunk = await readFileChunkCached({ directory: rootPath, path, offset: 0, limit }, { force: true })
   const loadedBytes = Math.max(0, Math.floor(chunk.loadedBytes || 0))
   const nextOffset = Math.max(loadedBytes, Math.floor(chunk.nextOffset ?? chunk.loadedBytes ?? 0))
 
@@ -2976,7 +2978,7 @@ async function openFile(node: FileNode) {
     markdownViewMode.value = isMermaidPath(node.path) ? 'preview' : 'source'
   }
   try {
-    const meta = await readFileChunk({ directory: rootPath, path: node.path, offset: 0, limit: 0 })
+    const meta = await readFileChunkCached({ directory: rootPath, path: node.path, offset: 0, limit: 0 })
     if (isStaleFileOpen(seq, rootPath, node.path)) return
 
     fileChunkTotalBytes.value = Math.max(0, Math.floor(meta.totalBytes || 0))
@@ -2987,7 +2989,12 @@ async function openFile(node: FileNode) {
       return
     }
 
-    const chunk = await readFileChunk({ directory: rootPath, path: node.path, offset: 0, limit: FILE_CHUNK_BYTES })
+    const chunk = await readFileChunkCached({
+      directory: rootPath,
+      path: node.path,
+      offset: 0,
+      limit: FILE_CHUNK_BYTES,
+    })
     if (isStaleFileOpen(seq, rootPath, node.path)) return
     pendingLargeFilePrompt.value = null
     fileContent.value = chunk.content
@@ -3027,7 +3034,12 @@ async function confirmLargeFileLoad() {
   pendingLargeFilePrompt.value = null
 
   try {
-    const chunk = await readFileChunk({ directory: rootPath, path: selected.path, offset: 0, limit: FILE_CHUNK_BYTES })
+    const chunk = await readFileChunkCached({
+      directory: rootPath,
+      path: selected.path,
+      offset: 0,
+      limit: FILE_CHUNK_BYTES,
+    })
     if (isStaleFileOpen(seq, rootPath, selected.path)) return
     fileContent.value = chunk.content
     draftContent.value = chunk.content
@@ -3059,7 +3071,12 @@ async function loadMoreFileContent() {
   fileError.value = null
 
   try {
-    const chunk = await readFileChunk({ directory: rootPath, path: selected.path, offset, limit: FILE_CHUNK_BYTES })
+    const chunk = await readFileChunkCached({
+      directory: rootPath,
+      path: selected.path,
+      offset,
+      limit: FILE_CHUNK_BYTES,
+    })
     if (isStaleFileOpen(seq, rootPath, selected.path)) return
     fileContent.value += chunk.content
     draftContent.value = fileContent.value
@@ -3254,6 +3271,7 @@ async function moveNodeByDrag(sourcePath: string, targetDir: string): Promise<bo
 
   try {
     await renamePath({ directory: rootPath, oldPath: source, newPath: nextPath })
+    invalidateFileReadCache({ directory: rootPath })
 
     const selectedDir = normalizePath(String(selectedDirectoryPath.value || '').trim())
     const selectedFilePath = normalizePath(String(selectedFile.value?.path || '').trim())
@@ -3337,6 +3355,7 @@ async function moveSelectedNodes(paths: string[], destinationInput: string) {
   }
 
   if (successCount > 0) {
+    invalidateFileReadCache({ directory: rootPath })
     if (affectedCurrentSelection) {
       resetViewerSelectionState()
       selectedDirectoryPath.value = ''
@@ -3383,6 +3402,7 @@ async function save(opts?: { silent?: boolean }): Promise<boolean> {
   fileError.value = null
   try {
     await writeFile({ directory: rootPath, path, content: draftContent.value })
+    invalidateFileReadCache({ directory: rootPath, paths: [path] })
     fileContent.value = draftContent.value
     if (blameEnabled.value) {
       invalidateCurrentBlameCache()
@@ -3427,12 +3447,14 @@ async function uploadFilesToDirectory(files: readonly File[] | FileList, targetD
   let uploadedCount = 0
   let failedCount = 0
   let firstError = ''
+  const uploadedPaths: string[] = []
   try {
     for (const file of list) {
       try {
         const target = joinPath(destination, file.name)
         await uploadFile({ directory: rootPath, path: target, file })
         uploadedCount += 1
+        uploadedPaths.push(target)
       } catch (err) {
         failedCount += 1
         if (!firstError) {
@@ -3460,6 +3482,7 @@ async function uploadFilesToDirectory(files: readonly File[] | FileList, targetD
     }
 
     if (uploadedCount > 0) {
+      invalidateFileReadCache({ directory: rootPath, paths: uploadedPaths })
       await refreshRoot()
     }
   } finally {
@@ -3544,6 +3567,7 @@ async function createNode(kind: CreateKind, basePath: string, name: string) {
 
   if (kind === 'createFile') {
     await writeFile({ directory: rootPath, path: target, content: '' })
+    invalidateFileReadCache({ directory: rootPath, paths: [target] })
     toasts.push('success', t('files.toasts.fileCreated'))
   } else {
     await makeDirectory({ directory: rootPath, path: target })
@@ -3579,6 +3603,7 @@ async function renameNodePath(oldPath: string, nextName: string) {
   if (newPath === sourcePath) return
 
   await renamePath({ directory: rootPath, oldPath: sourcePath, newPath })
+  invalidateFileReadCache({ directory: rootPath })
   applyExplorerRenameState(sourcePath, newPath)
 
   const selectedDir = normalizePath(String(selectedDirectoryPath.value || '').trim())
@@ -3722,6 +3747,7 @@ async function deletePaths(targets: string[], opts?: { batch?: boolean }) {
       try {
         await deletePathApi({ directory: rootPath, path: target })
         successCount += 1
+        invalidateFileReadCache({ directory: rootPath })
         applyExplorerDeletionState(target)
         applyDeletionState(target)
       } catch (err) {
@@ -3903,6 +3929,44 @@ watch(
     if (!pageMounted) return
     handledFileNavigationKey.value = ''
     void restoreForRoot(next)
+  },
+)
+
+// The filesystem stream is global, so a files pane must keep its own view
+// current even while focus is on the chat pane.  Invalidate only the affected
+// cached chunks, then refresh the selected file/tree without using pane focus
+// as a gate.  This keeps both sides live while still avoiding route-driven
+// re-downloads when the user merely switches focus.
+watch(
+  () => [directoryStore.fsEventSeq, directoryStore.lastFsChangeEvent] as const,
+  ([, event]) => {
+    if (!pageMounted || !event) return
+    const rootPath = root.value
+    const changedDirectory = normalizeTreePath(String(event.directory || '').trim())
+    if (!rootPath || changedDirectory !== rootPath) return
+
+    const changedPaths = (Array.isArray(event.paths) ? event.paths : [])
+      .map((path) => normalizeTreePath(String(path || '').trim()))
+      .filter(Boolean)
+    const affectedPaths = event.truncated || changedPaths.length === 0 ? undefined : changedPaths
+    invalidateFileReadCache({ directory: rootPath, paths: affectedPaths })
+
+    const selectedPath = normalizeTreePath(String(selectedFile.value?.path || '').trim())
+    const selectedFileAffected =
+      event.truncated ||
+      !selectedPath ||
+      changedPaths.some(
+        (path) => isSameOrDescendantPath(selectedPath, path) || isSameOrDescendantPath(path, selectedPath),
+      )
+
+    if (selectedFileAffected && selectedPath) {
+      void refreshCurrentFile({ source: 'manual', silent: true })
+    }
+
+    // A filesystem event can add/remove/rename a visible node.  Refresh the
+    // tree in every pane, not only the focused one; loadDirectory keeps its
+    // own in-flight guard and the sessionStorage snapshot remains warm.
+    void refreshRoot()
   },
 )
 

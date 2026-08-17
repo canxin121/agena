@@ -2,6 +2,8 @@ import { mainTabPath, type MainTabId } from '@/app/navigation/mainTabs'
 import { router } from '@/router'
 import { useUiStore, type WorkspaceWindowTab } from '@/stores/ui'
 
+const navigationInFlightByPath = new Map<string, Promise<unknown>>()
+
 type OpenWorkspaceLocationOptions = {
   path?: string
   query?: unknown
@@ -31,11 +33,27 @@ export function useWorkspaceNavigation() {
     if (!target) return
     ui.selectWorkspaceWindow(target.id)
     const location = routeForWindow(target)
-    if (replace) {
-      await router.replace(location).catch(() => {})
+    const resolved = router.resolve(location)
+    if (router.currentRoute.value.fullPath === resolved.fullPath) return
+
+    // A tab click and MainLayout's active-window watcher can both request the
+    // same navigation in the same tick.  Share that request instead of
+    // issuing two router transitions (which also causes every scoped pane to
+    // reevaluate its route).
+    const key = resolved.fullPath
+    const existing = navigationInFlightByPath.get(key)
+    if (existing) {
+      await existing
       return
     }
-    await router.push(location).catch(() => {})
+
+    const request = (replace ? router.replace(location) : router.push(location)).catch(() => {})
+    navigationInFlightByPath.set(key, request)
+    try {
+      await request
+    } finally {
+      if (navigationInFlightByPath.get(key) === request) navigationInFlightByPath.delete(key)
+    }
   }
 
   async function openWorkspaceLocation(tab: MainTabId, opts?: OpenWorkspaceLocationOptions): Promise<string> {

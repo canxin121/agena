@@ -111,13 +111,19 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   // ─── timers / inflight guards ─────────────────────────────────────────────
   let refreshTimer: number | null = null
+  let refreshSessionsInFlight: Promise<void> | null = null
+  const getSessionInFlightById = new Map<string, Promise<Session>>()
   const refreshMessagesRetryTimerBySession = new Map<string, number>()
   const refreshMessagesRequestSeqBySession = new Map<string, number>()
-  // Incremented when the ChatPage is actually closed. In-flight page requests
-  // capture this generation so a late response from a closed page cannot
-  // repopulate the transcript cache after it has been cleared.
+  const refreshMessagesInFlightBySession = new Map<string, Promise<void>>()
+  const refreshExecutionInFlightBySession = new Map<string, Promise<void>>()
+  const refreshAttentionInFlightBySession = new Map<string, Promise<void>>()
+  const presentedInteractiveRequestBySession = new Map<string, string>()
+  // Incremented when an explicit transcript cache reset happens. In-flight
+  // requests capture this generation so a late response cannot repopulate a
+  // cache that has already been reset.
   let transcriptCacheGeneration = 0
-  const attentionRefreshTimerBySession = new Map<string, number>()
+  const statusRefreshTimerBySession = new Map<string, number>()
   let createSessionInFlight: Promise<Session | null> | null = null
   const workspaceRequestById = new Map<number, Promise<{ id: number; path: string } | null>>()
   const lastSessionErrorToastByKey = new Map<string, { at: number; message: string }>()
@@ -192,7 +198,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return sessionsById.value[sid] ?? sessions.value.find((s) => s.id === sid) ?? null
   }
 
-  async function refreshSessions() {
+  async function refreshSessionsInternal() {
     sessionsLoading.value = true
     sessionsError.value = null
     try {
@@ -210,6 +216,17 @@ const useChatStoreDefinition = defineStore('chat', () => {
       }
     } finally {
       sessionsLoading.value = false
+    }
+  }
+
+  async function refreshSessions() {
+    if (refreshSessionsInFlight) return refreshSessionsInFlight
+    const request = refreshSessionsInternal()
+    refreshSessionsInFlight = request
+    try {
+      await request
+    } finally {
+      if (refreshSessionsInFlight === request) refreshSessionsInFlight = null
     }
   }
 
@@ -266,7 +283,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
     let session = getSessionById(sid)
     if (!session) {
-      session = await chatApi.getSession(sid)
+      let request = getSessionInFlightById.get(sid)
+      if (!request) {
+        request = chatApi.getSession(sid).finally(() => {
+          if (getSessionInFlightById.get(sid) === request) getSessionInFlightById.delete(sid)
+        })
+        getSessionInFlightById.set(sid, request)
+      }
+      session = await request
       upsertSessionCache(session)
     }
     void hydrateSessionDirectory(session, opts?.windowId)
@@ -277,9 +301,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
     if (!messagesHydratedBySession.value[sid]) {
       await refreshMessages(sid)
-    } else {
-      void refreshAttention(sid)
-      void refreshExecutionStatus(sid)
     }
   }
 
@@ -462,7 +483,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return out
   }
 
-  async function refreshMessages(sessionId: string, opts?: { silent?: boolean }) {
+  async function refreshMessagesInternal(sessionId: string, opts?: { silent?: boolean }): Promise<void> {
     const sid = (sessionId || '').trim()
     if (!sid) return
 
@@ -527,6 +548,27 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
   }
 
+  async function refreshMessages(sessionId: string, opts?: { silent?: boolean }) {
+    const sid = (sessionId || '').trim()
+    if (!sid) return
+
+    const existing = refreshMessagesInFlightBySession.get(sid)
+    if (existing) {
+      await existing
+      return
+    }
+
+    const request = refreshMessagesInternal(sid, opts)
+    refreshMessagesInFlightBySession.set(sid, request)
+    try {
+      await request
+    } finally {
+      if (refreshMessagesInFlightBySession.get(sid) === request) {
+        refreshMessagesInFlightBySession.delete(sid)
+      }
+    }
+  }
+
   const selectedHistory = computed(() => {
     const sid = selectedSessionId.value
     if (!sid) return { loading: false, exhausted: false, limit: 0 }
@@ -540,6 +582,13 @@ const useChatStoreDefinition = defineStore('chat', () => {
   async function loadOlderMessages(sessionId: string) {
     const sid = (sessionId || '').trim()
     if (!sid) return false
+
+    // A scroll event can arrive while the initial recent-page request is
+    // still pending.  Let that request establish the cursor first; otherwise
+    // both calls would fetch the same first page with a null cursor.
+    const initialRequest = refreshMessagesInFlightBySession.get(sid)
+    if (initialRequest) await initialRequest
+
     if (historyLoadingBySession.value[sid]) return false
     if (historyExhaustedBySession.value[sid]) return false
 
@@ -639,10 +688,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
   function clearTranscriptCache() {
     transcriptCacheGeneration += 1
     for (const timer of refreshMessagesRetryTimerBySession.values()) window.clearTimeout(timer)
-    for (const timer of attentionRefreshTimerBySession.values()) window.clearTimeout(timer)
+    for (const timer of statusRefreshTimerBySession.values()) window.clearTimeout(timer)
     refreshMessagesRetryTimerBySession.clear()
-    attentionRefreshTimerBySession.clear()
+    statusRefreshTimerBySession.clear()
     refreshMessagesRequestSeqBySession.clear()
+    refreshMessagesInFlightBySession.clear()
+    refreshExecutionInFlightBySession.clear()
+    refreshAttentionInFlightBySession.clear()
+    presentedInteractiveRequestBySession.clear()
     messagesBySession.value = {}
     messagesHydratedBySession.value = {}
     historyLimitBySession.value = {}
@@ -656,22 +709,22 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   // ─── execution status + attention ─────────────────────────────────────────
 
-  function scheduleAttentionRefresh(sessionId: string, delayMs = 150) {
+  function scheduleSessionStatusRefresh(sessionId: string, delayMs = 150) {
     const sid = (sessionId || '').trim()
     if (!sid) return
-    if (attentionRefreshTimerBySession.has(sid)) return
+    if (statusRefreshTimerBySession.has(sid)) return
     const timer = window.setTimeout(
       () => {
-        attentionRefreshTimerBySession.delete(sid)
+        statusRefreshTimerBySession.delete(sid)
         void refreshAttention(sid)
         void refreshExecutionStatus(sid)
       },
       Math.max(60, Math.min(1200, Math.floor(delayMs))),
     )
-    attentionRefreshTimerBySession.set(sid, timer)
+    statusRefreshTimerBySession.set(sid, timer)
   }
 
-  async function refreshExecutionStatus(sessionId: string) {
+  async function refreshExecutionStatusInternal(sessionId: string): Promise<void> {
     const sid = (sessionId || '').trim()
     if (!sid) return
     const st = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
@@ -707,6 +760,27 @@ const useChatStoreDefinition = defineStore('chat', () => {
       sessionUsageBySession.value = {
         ...sessionUsageBySession.value,
         [sid]: { ...st.usage },
+      }
+    }
+  }
+
+  async function refreshExecutionStatus(sessionId: string) {
+    const sid = (sessionId || '').trim()
+    if (!sid) return
+
+    const existing = refreshExecutionInFlightBySession.get(sid)
+    if (existing) {
+      await existing
+      return
+    }
+
+    const request = refreshExecutionStatusInternal(sid)
+    refreshExecutionInFlightBySession.set(sid, request)
+    try {
+      await request
+    } finally {
+      if (refreshExecutionInFlightBySession.get(sid) === request) {
+        refreshExecutionInFlightBySession.delete(sid)
       }
     }
   }
@@ -788,7 +862,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return null
   }
 
-  async function refreshAttention(sessionId: string) {
+  async function refreshAttentionInternal(sessionId: string): Promise<void> {
     const sid = (sessionId || '').trim()
     if (!sid) return
     const state = await chatApi.getSessionExecution(sid).catch(() => null)
@@ -797,21 +871,50 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (next) {
       attentionBySession.value = { ...attentionBySession.value, [sid]: next }
       const requestId = readString(asRecord(next.payload.properties).id as JsonValue)
-      if (requestId) void chatApi.presentInteractiveRequest(sid, requestId)
-    } else if (attentionBySession.value[sid]) {
-      const nextMap = { ...attentionBySession.value }
-      delete nextMap[sid]
-      attentionBySession.value = nextMap
+      if (requestId && presentedInteractiveRequestBySession.get(sid) !== requestId) {
+        presentedInteractiveRequestBySession.set(sid, requestId)
+        void chatApi.presentInteractiveRequest(sid, requestId)
+      }
+    } else {
+      if (attentionBySession.value[sid]) {
+        const nextMap = { ...attentionBySession.value }
+        delete nextMap[sid]
+        attentionBySession.value = nextMap
+      }
+      presentedInteractiveRequestBySession.delete(sid)
+    }
+  }
+
+  async function refreshAttention(sessionId: string) {
+    const sid = (sessionId || '').trim()
+    if (!sid) return
+
+    const existing = refreshAttentionInFlightBySession.get(sid)
+    if (existing) {
+      await existing
+      return
+    }
+
+    const request = refreshAttentionInternal(sid)
+    refreshAttentionInFlightBySession.set(sid, request)
+    try {
+      await request
+    } finally {
+      if (refreshAttentionInFlightBySession.get(sid) === request) {
+        refreshAttentionInFlightBySession.delete(sid)
+      }
     }
   }
 
   function clearAttention(sessionId: string) {
     const sid = (sessionId || '').trim()
     if (!sid) return
-    if (!attentionBySession.value[sid]) return
-    const next = { ...attentionBySession.value }
-    delete next[sid]
-    attentionBySession.value = next
+    if (attentionBySession.value[sid]) {
+      const next = { ...attentionBySession.value }
+      delete next[sid]
+      attentionBySession.value = next
+    }
+    presentedInteractiveRequestBySession.delete(sid)
   }
 
   const selectedAttention = computed(() => {
@@ -1123,9 +1226,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (document.length === 0) return { queued: false }
     clearSessionError(sid)
     await chatApi.sendMessage(sid, { document, ...buildRunOptions(opts) })
-    // Let SSE stream parts in; also nudge status to busy.
-    void refreshExecutionStatus(sid)
-    scheduleAttentionRefresh(sid, 200)
+    // Let SSE stream parts in; one coalesced status refresh is enough after
+    // the POST.  The timer also absorbs a burst of runtime signals.
+    scheduleSessionStatusRefresh(sid, 200)
     return { queued: true }
   }
 
@@ -1137,8 +1240,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return
     await chatApi.continueSession(sid, buildRunOptions({}))
-    void refreshExecutionStatus(sid)
-    scheduleAttentionRefresh(sid, 200)
+    scheduleSessionStatusRefresh(sid, 200)
   }
 
   async function uploadWorkspaceAttachment(
@@ -1257,7 +1359,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return null
     await chatApi.compactSession(sid, buildRunOptions({}))
-    scheduleAttentionRefresh(sid, 200)
+    scheduleSessionStatusRefresh(sid, 200)
     scheduleSessionsRefresh(1200)
   }
 
@@ -1435,7 +1537,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
               }
             }
             // Any part change can affect status/attention.
-            scheduleAttentionRefresh(sid)
+            scheduleSessionStatusRefresh(sid)
           }
         }
       } else if (sid && changeKind === 'part_removed') {
@@ -1481,8 +1583,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (t === 'runtime_signal') {
       const signalSession = sid || (props.session_id != null ? String(props.session_id) : '')
       if (signalSession) {
-        scheduleAttentionRefresh(signalSession)
-        void refreshExecutionStatus(signalSession)
+        scheduleSessionStatusRefresh(signalSession)
       }
       const signalKind = readString(props.kind as JsonValue)
       if (signalKind === 'activity' || signalKind === 'plugin') {

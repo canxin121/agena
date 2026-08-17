@@ -273,6 +273,7 @@ const {
   commandFocusSearch,
   loadCommands,
   openCommandPalette: openCommandPaletteBase,
+  setCommandQuery: setCommandQueryBase,
   closeCommandPalette,
   selectCommand,
   handleCommandPaletteKeydown,
@@ -304,7 +305,7 @@ function openCommandPalette(query = '', options: { focusSearch?: boolean } = {})
 }
 
 function setCommandQuery(value: string) {
-  commandQuery.value = String(value || '')
+  setCommandQueryBase(value)
 }
 
 function handleDraftInput() {
@@ -1320,7 +1321,13 @@ let planRefreshTimer: number | null = null
 let planPollTimer: number | null = null
 
 function formatBackgroundActivitySummary(kinds: string[]): string {
-  const normalized = Array.isArray(kinds) ? kinds.map((kind) => String(kind || '').trim().toLowerCase()) : []
+  const normalized = Array.isArray(kinds)
+    ? kinds.map((kind) =>
+        String(kind || '')
+          .trim()
+          .toLowerCase(),
+      )
+    : []
   return ['monitor', 'cron', 'shell', 'task', 'runtime', 'browser']
     .map((kind) => {
       const count = normalized.filter((candidate) => candidate === kind).length
@@ -1356,11 +1363,24 @@ async function refreshPlanProgress() {
       return
     }
     const completed = steps.filter((step) => {
-      const status = String(asRecord(step).status || '').trim().toLowerCase()
+      const status = String(asRecord(step).status || '')
+        .trim()
+        .toLowerCase()
       return status === 'completed' || status === 'skipped'
     }).length
-    const phase = String(plan.phase || '').trim().toLowerCase()
-    const symbol = phase === 'completed' ? '✓' : phase === 'blocked' ? '⚠' : phase === 'cancelled' ? '✕' : phase === 'planning' ? '⏳' : '▶'
+    const phase = String(plan.phase || '')
+      .trim()
+      .toLowerCase()
+    const symbol =
+      phase === 'completed'
+        ? '✓'
+        : phase === 'blocked'
+          ? '⚠'
+          : phase === 'cancelled'
+            ? '✕'
+            : phase === 'planning'
+              ? '⏳'
+              : '▶'
     planProgress.value = [symbol, steps.length ? `${completed}/${steps.length}` : '', plan.autorun === true ? '↻' : '']
       .filter(Boolean)
       .join(' ')
@@ -1411,11 +1431,9 @@ const composerBottomLeftStatus = computed(() => {
 
 const composerBottomRightStatus = computed(() => planProgress.value)
 
-watch(
-  () => [chat.selectedSessionId, chat.messages.length, currentPhase.value] as const,
-  schedulePlanProgressRefresh,
-  { immediate: true },
-)
+watch(() => [chat.selectedSessionId, chat.messages.length, currentPhase.value] as const, schedulePlanProgressRefresh, {
+  immediate: true,
+})
 
 function handleSessionActionRequest(actionId: string) {
   switch (actionId) {
@@ -1657,9 +1675,10 @@ async function runReviewCommand(sid: string, focus: string) {
     }),
   })
   const record = asRecord(response)
-  const prompt = typeof record.payload === 'object' && record.payload !== null
-    ? String((record.payload as JsonObject).body || '').trim()
-    : ''
+  const prompt =
+    typeof record.payload === 'object' && record.payload !== null
+      ? String((record.payload as JsonObject).body || '').trim()
+      : ''
   if (!prompt) throw new Error('The review skill did not return instructions.')
   await submitPromptFromCommand(focus ? `${prompt}\n\nReview focus:\n${focus}` : prompt)
 }
@@ -1793,7 +1812,14 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       }
       const requestId = commandRequestId()
       if (!requestId) throw new Error('The pending permission request has no id.')
-      const reply = command.id === 'allow' ? 'once' : command.id === 'allow-always' ? 'always' : command.id === 'deny-always' ? 'reject_always' : 'reject'
+      const reply =
+        command.id === 'allow'
+          ? 'once'
+          : command.id === 'allow-always'
+            ? 'always'
+            : command.id === 'deny-always'
+              ? 'reject_always'
+              : 'reject'
       await chat.replyPermission(sid, requestId, reply)
       return
     }
@@ -1905,7 +1931,10 @@ async function handleCommandSelected(command: Command) {
       return
     }
     if (effect.kind === 'open_plugin_workbench') {
-      await router.push({ path: '/settings/plugins', query: { ...route.query, plugin: effect.pluginId, ...(effect.tab ? { pluginTab: effect.tab } : {}) } })
+      await router.push({
+        path: '/settings/plugins',
+        query: { ...route.query, plugin: effect.pluginId, ...(effect.tab ? { pluginTab: effect.tab } : {}) },
+      })
       return
     }
     if (effect.kind === 'open_url') {
@@ -2395,7 +2424,12 @@ const viewCtx = {
 } satisfies ChatPageViewContext
 
 onBeforeUnmount(() => {
-  chat.clearTranscriptCache()
+  // Transcript data is owned by the application-level chat store, not by a
+  // single pane.  A workspace split can unmount/recreate one ChatPage while
+  // the other pane is still alive; clearing the shared cache here would make
+  // the next focus change fetch the same transcript again and discard data
+  // the user already loaded.  The store is intentionally kept until the app
+  // lifecycle ends (or an explicit cache reset is requested).
   if (planRefreshTimer !== null) {
     window.clearTimeout(planRefreshTimer)
     planRefreshTimer = null

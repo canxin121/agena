@@ -11,7 +11,9 @@ test('files page loads text files in chunks with large-file prompt', () => {
   assert.ok(source.includes('const LARGE_FILE_WARNING_BYTES = 1024 * 1024'))
   assert.ok(source.includes('const pendingLargeFilePrompt = ref<{ path: string; totalBytes: number } | null>(null)'))
   assert.ok(
-    source.includes('const meta = await readFileChunk({ directory: rootPath, path: node.path, offset: 0, limit: 0 })'),
+    source.includes(
+      'const meta = await readFileChunkCached({ directory: rootPath, path: node.path, offset: 0, limit: 0 })',
+    ),
   )
   assert.ok(source.includes('if (fileChunkTotalBytes.value > LARGE_FILE_WARNING_BYTES) {'))
   assert.ok(source.includes('async function confirmLargeFileLoad() {'))

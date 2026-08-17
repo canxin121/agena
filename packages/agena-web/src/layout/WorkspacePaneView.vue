@@ -22,6 +22,7 @@ const props = defineProps<{
 
 const ui = useUiStore()
 const globalRouter = useRouter()
+const paneNavigationInFlightByPath = new Map<string, Promise<unknown>>()
 
 const windowId = computed(() => String(props.windowId || '').trim())
 const windowTab = computed(() => ui.getWorkspaceWindowById(windowId.value))
@@ -57,22 +58,45 @@ const resolvedRoute = computed(() => {
 const scopedRoute = shallowReactive({ ...resolvedRoute.value }) as RouteLocationNormalizedLoaded
 const routeReady = ref(false)
 let routeLoadSequence = 0
+let loadedRouteFullPath = ''
+let pendingRouteFullPath = ''
 
 watch(
   resolvedRoute,
   async (next) => {
+    // router.resolve() is reactive to the shell route.  When focus moves to
+    // another split pane it can produce a fresh route object for this pane
+    // even though this pane's own URL did not change.  Do not reload the
+    // route (and therefore do not retrigger page data loaders) for that case.
+    if (loadedRouteFullPath === next.fullPath) {
+      // If focus changes again while a different route is still loading,
+      // invalidate that older request before returning to the already-loaded
+      // route.  Otherwise the older promise could finish later and overwrite
+      // this pane with the route that is no longer selected.
+      if (pendingRouteFullPath && pendingRouteFullPath !== next.fullPath) {
+        routeLoadSequence += 1
+        pendingRouteFullPath = ''
+      }
+      if (routeReady.value) return
+    }
+    if (pendingRouteFullPath === next.fullPath) return
     const sequence = ++routeLoadSequence
+    pendingRouteFullPath = next.fullPath
 
     try {
       const loaded = await loadRouteLocation(next)
       if (sequence !== routeLoadSequence) return
 
       Object.assign(scopedRoute, loaded)
+      loadedRouteFullPath = loaded.fullPath
+      pendingRouteFullPath = ''
       routeReady.value = true
     } catch (error) {
       if (sequence !== routeLoadSequence) return
 
       routeReady.value = false
+      loadedRouteFullPath = ''
+      pendingRouteFullPath = ''
       console.error('[workspace] failed to load pane route', {
         path: next.fullPath,
         error,
@@ -107,7 +131,21 @@ async function navigate(to: RouteLocationRaw, replace = false): Promise<unknown>
     },
     hash: resolved.hash,
   }
-  return replace ? globalRouter.replace(shellLocation) : globalRouter.push(shellLocation)
+  const shellRoute = globalRouter.resolve(shellLocation)
+  if (globalRouter.currentRoute.value.fullPath === shellRoute.fullPath) return undefined
+
+  const existing = paneNavigationInFlightByPath.get(shellRoute.fullPath)
+  if (existing) return await existing
+
+  const request = replace ? globalRouter.replace(shellLocation) : globalRouter.push(shellLocation)
+  paneNavigationInFlightByPath.set(shellRoute.fullPath, request)
+  try {
+    return await request
+  } finally {
+    if (paneNavigationInFlightByPath.get(shellRoute.fullPath) === request) {
+      paneNavigationInFlightByPath.delete(shellRoute.fullPath)
+    }
+  }
 }
 
 const scopedRouter = new Proxy(globalRouter, {

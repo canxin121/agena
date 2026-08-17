@@ -321,6 +321,16 @@ export function useAppRuntime() {
       return
     }
 
+    // In the desktop workspace, the shell route follows whichever pane has
+    // focus.  A files/terminal/etc. pane has no session id, but that must not
+    // clear the session selected by a still-live chat pane.  The scoped chat
+    // store reads its own pane route; the global runtime only syncs a route
+    // that actually represents chat.
+    const isChatRoute = String(route.path || '')
+      .toLowerCase()
+      .startsWith('/chat')
+    if (!isChatRoute) return
+
     ui.disableSessionQuery()
 
     const selected = chat.selectedSessionId

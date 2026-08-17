@@ -212,7 +212,8 @@ pub struct ReadPartsResult {
 /// Params of the cancel-run method.
 pub struct CancelRunParams {
     pub session_id: i64,
-    pub execution_id: agena_domain::ExecutionId,
+    #[serde(default)]
+    pub execution_id: Option<agena_domain::ExecutionId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

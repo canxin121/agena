@@ -550,10 +550,20 @@ async fn background_delivery_claim_is_exclusive_expirable_and_retryable() {
             "recovery",
             json!({"message": "wake failed"}),
             1_000_110,
+            1_000_110,
         )
         .await
         .expect("release failed claim");
     assert_eq!(pending.phase, BackgroundDeliveryPhase::Pending);
+    assert_eq!(pending.next_attempt_at_ms, 1_000_110);
+    assert!(
+        engine
+            .pending_background_deliveries(16, 1_000_109)
+            .await
+            .expect("query before retry deadline")
+            .is_empty(),
+        "durable backoff keeps a pending delivery out of the recovery scan"
+    );
     let final_claim = engine
         .claim_background_delivery(&delivery_id, "final", 1_000_400, 1_000_120)
         .await

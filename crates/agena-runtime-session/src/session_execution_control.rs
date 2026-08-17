@@ -88,6 +88,12 @@ pub trait SessionExecutionControl: Send + Sync {
         execution_id: ExecutionId,
     ) -> Result<CancellationResult, SessionExecutionControlError>;
 
+    /// Cancels whichever execution currently owns the session and suppresses
+    /// queued background notification wakes. This is the user-facing stop
+    /// operation; unlike `cancel_execution`, it intentionally does not depend
+    /// on a possibly stale execution id observed by a client.
+    async fn cancel_session(&self, session_id: i64) -> Result<(), SessionExecutionControlError>;
+
     /// Lists scheduler-owned automation jobs visible to the composed session
     /// service. The job contract is independent of core transcript state.
     async fn list_scheduled_jobs(&self) -> Vec<agena_scheduler::ScheduledJob>;
@@ -142,6 +148,17 @@ mod tests {
                 .expect("lock cancelled")
                 .push(session_id);
             Ok(CancellationResult::CancellationRequested)
+        }
+
+        async fn cancel_session(
+            &self,
+            session_id: i64,
+        ) -> Result<(), SessionExecutionControlError> {
+            self.cancelled
+                .lock()
+                .expect("lock cancelled")
+                .push(session_id);
+            Ok(())
         }
 
         async fn list_scheduled_jobs(&self) -> Vec<agena_scheduler::ScheduledJob> {

@@ -388,7 +388,8 @@ pub async fn cancel_run(
 #[derive(Debug, Clone, Deserialize)]
 /// Body of a cancel-run request.
 pub struct CancelRunRequestBody {
-    pub execution_id: agena_domain::ExecutionId,
+    #[serde(default)]
+    pub execution_id: Option<agena_domain::ExecutionId>,
 }
 
 pub async fn reply_permission(

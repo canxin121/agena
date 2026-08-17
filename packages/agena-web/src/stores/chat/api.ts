@@ -900,11 +900,11 @@ export async function compactSession(sessionId: string, options?: RunOptionsPayl
 }
 
 /** POST /api/v1/sessions/{id}/cancel — abort an active execution. */
-export async function cancelSession(sessionId: string, executionId: string): Promise<void> {
+export async function cancelSession(sessionId: string, executionId?: string | null): Promise<void> {
   await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/cancel`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ execution_id: executionId }),
+    body: JSON.stringify({ execution_id: executionId || null }),
   })
 }
 

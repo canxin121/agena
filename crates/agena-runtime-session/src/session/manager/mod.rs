@@ -87,6 +87,42 @@ fn completion_request(
 
 pub(super) use agena_runtime::merge_system_prompts;
 
+/// A background notification is an at-least-once wake, but it must not become
+/// an at-least-forever wake when the selected provider is unavailable. The
+/// attempt count is durable on `agena_background_deliveries`, so this bound
+/// survives runtime restarts and multiple dispatcher processes.
+pub(crate) const MAX_BACKGROUND_DELIVERY_ATTEMPTS: u32 = 8;
+const BACKGROUND_DELIVERY_RETRY_BASE_MS: i64 = 1_000;
+const BACKGROUND_DELIVERY_RETRY_MAX_MS: i64 = 60_000;
+
+fn background_delivery_retry_delay_ms(attempts: u32) -> i64 {
+    let exponent = attempts.saturating_sub(1).min(6);
+    BACKGROUND_DELIVERY_RETRY_BASE_MS
+        .saturating_mul(1_i64 << exponent)
+        .min(BACKGROUND_DELIVERY_RETRY_MAX_MS)
+}
+
+fn background_delivery_error(error: &AppError) -> serde_json::Value {
+    serde_json::json!({
+        "message": error.to_string(),
+        "retryable": error.retryable(),
+        "public_message": error.public_message(),
+    })
+}
+
+fn background_delivery_should_retry(error: &AppError) -> bool {
+    if error.retryable() {
+        return true;
+    }
+    // The provider registry deliberately emits an unclassified Provider error
+    // when its circuit is open. Treat that specific fail-fast signal as a
+    // transient condition, still bounded by the durable delivery attempt cap.
+    matches!(
+        error,
+        AppError::Provider(message) if message.contains("circuit breaker is open")
+    )
+}
+
 #[derive(Debug, Clone)]
 struct SessionUserRunRequest {
     run: SessionExecutionRequest,
@@ -2149,9 +2185,10 @@ impl SessionManager {
         Ok(settled.created)
     }
 
-    /// Claim and deliver one persisted notification. A failure releases the
-    /// claim back to Pending, so restart recovery can retry it; success marks
-    /// it Consumed only after the wake execution returns.
+    /// Claim and deliver one persisted notification. Retryable failures release
+    /// the claim back to Pending with durable exponential backoff; permanent or
+    /// exhausted failures enter the Failed terminal state. Success marks it
+    /// Consumed only after the wake execution returns.
     ///
     /// A completed provider round whose marker records this notification in
     /// `input_notification_part_ids` is durable proof that an earlier
@@ -2173,17 +2210,58 @@ impl SessionManager {
             // Another live dispatcher owns it, or it is already consumed.
             return Ok(());
         };
-        if self
+        if claimed.attempts > MAX_BACKGROUND_DELIVERY_ATTEMPTS {
+            self.store
+                .fail_background_delivery(
+                    &claimed.delivery_id,
+                    serde_json::json!({
+                        "category": "delivery_retry_exhausted",
+                        "message": "background notification delivery exceeded its retry budget",
+                        "attempts": claimed.attempts,
+                    }),
+                )
+                .await?;
+            tracing::warn!(
+                target: "agena_background",
+                delivery_id = %claimed.delivery_id,
+                attempts = claimed.attempts,
+                "background notification delivery exhausted its retry budget before wake"
+            );
+            return Ok(());
+        }
+        match self
             .notification_has_completed_assistant_response(
                 claimed.session_id,
                 claimed.notification_part_id,
             )
-            .await?
+            .await
         {
-            self.store
-                .consume_background_delivery(&claimed.delivery_id)
-                .await?;
-            return Ok(());
+            Ok(true) => {
+                self.store
+                    .consume_background_delivery(&claimed.delivery_id)
+                    .await?;
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(error) => {
+                self.store
+                    .fail_background_delivery(
+                        &claimed.delivery_id,
+                        serde_json::json!({
+                            "category": "invalid_delivery",
+                            "message": error.to_string(),
+                            "public_message": "The background notification could not be delivered.",
+                        }),
+                    )
+                    .await?;
+                tracing::warn!(
+                    target: "agena_background",
+                    delivery_id = %claimed.delivery_id,
+                    error = %error,
+                    "background notification delivery was invalid and was terminalized"
+                );
+                return Ok(());
+            }
         }
         let delivered = self
             .wake_after_notification(
@@ -2200,14 +2278,48 @@ impl SessionManager {
                 Ok(())
             }
             Err(error) => {
-                let _ = self
-                    .store
-                    .retry_background_delivery(
-                        &claimed.delivery_id,
-                        serde_json::json!({ "message": error.to_string() }),
-                    )
-                    .await;
-                Err(error)
+                let diagnostic = background_delivery_error(&error);
+                let retryable = background_delivery_should_retry(&error)
+                    && claimed.attempts < MAX_BACKGROUND_DELIVERY_ATTEMPTS;
+                if retryable {
+                    let now_ms = Utc::now().timestamp_millis();
+                    let next_attempt_at_ms =
+                        now_ms.saturating_add(background_delivery_retry_delay_ms(claimed.attempts));
+                    if let Err(storage_error) = self
+                        .store
+                        .retry_background_delivery(
+                            &claimed.delivery_id,
+                            diagnostic,
+                            next_attempt_at_ms,
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            target: "agena_background",
+                            delivery_id = %claimed.delivery_id,
+                            error = %storage_error,
+                            "failed to persist background delivery retry state"
+                        );
+                    }
+                    Err(error)
+                } else {
+                    self.store
+                        .fail_background_delivery(&claimed.delivery_id, diagnostic)
+                        .await?;
+                    tracing::warn!(
+                        target: "agena_background",
+                        delivery_id = %claimed.delivery_id,
+                        attempts = claimed.attempts,
+                        retryable = background_delivery_should_retry(&error),
+                        "background notification delivery reached a terminal failure"
+                    );
+                    // The delivery itself has been handled durably. Do not
+                    // return the provider error to the operation reconciler,
+                    // otherwise a non-retryable provider failure would be
+                    // mistaken for a delivery transaction failure and retried
+                    // by another outer layer.
+                    Ok(())
+                }
             }
         }
     }

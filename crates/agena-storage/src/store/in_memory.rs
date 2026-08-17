@@ -1520,6 +1520,7 @@ impl PersistenceEngine for InMemoryEngine {
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
             consumed_at_ms: None,
+            next_attempt_at_ms: 0,
         };
         self.background_operations
             .write()
@@ -1555,7 +1556,8 @@ impl PersistenceEngine for InMemoryEngine {
         let Some(delivery) = deliveries.get_mut(delivery_id) else {
             return Ok(None);
         };
-        let claimable = delivery.phase == BackgroundDeliveryPhase::Pending
+        let claimable = (delivery.phase == BackgroundDeliveryPhase::Pending
+            && delivery.next_attempt_at_ms <= now_ms)
             || (delivery.phase == BackgroundDeliveryPhase::Claimed
                 && delivery.claim_until_ms.is_some_and(|until| until <= now_ms));
         if !claimable {
@@ -1586,7 +1588,10 @@ impl PersistenceEngine for InMemoryEngine {
         let delivery = deliveries
             .get_mut(delivery_id)
             .ok_or_else(|| StoreError::not_found(format!("delivery {delivery_id}")))?;
-        if delivery.phase == BackgroundDeliveryPhase::Consumed {
+        if matches!(
+            delivery.phase,
+            BackgroundDeliveryPhase::Consumed | BackgroundDeliveryPhase::Failed
+        ) {
             return Ok(delivery.clone());
         }
         if delivery.phase != BackgroundDeliveryPhase::Claimed
@@ -1601,6 +1606,7 @@ impl PersistenceEngine for InMemoryEngine {
         delivery.claim_until_ms = None;
         delivery.updated_at_ms = now_ms;
         delivery.consumed_at_ms = Some(now_ms);
+        delivery.next_attempt_at_ms = now_ms;
         Ok(delivery.clone())
     }
 
@@ -1609,6 +1615,7 @@ impl PersistenceEngine for InMemoryEngine {
         delivery_id: &str,
         owner_id: &str,
         error: Value,
+        next_attempt_at_ms: i64,
         now_ms: i64,
     ) -> Result<BackgroundDelivery, StoreError> {
         let _write = self
@@ -1634,7 +1641,81 @@ impl PersistenceEngine for InMemoryEngine {
         delivery.claim_until_ms = None;
         delivery.last_error = Some(error);
         delivery.updated_at_ms = now_ms;
+        delivery.next_attempt_at_ms = next_attempt_at_ms;
         Ok(delivery.clone())
+    }
+
+    async fn fail_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        error: Value,
+        now_ms: i64,
+    ) -> Result<BackgroundDelivery, StoreError> {
+        let _write = self
+            .background_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut deliveries = self
+            .background_deliveries
+            .write()
+            .expect("background deliveries lock");
+        let delivery = deliveries
+            .get_mut(delivery_id)
+            .ok_or_else(|| StoreError::not_found(format!("delivery {delivery_id}")))?;
+        if matches!(
+            delivery.phase,
+            BackgroundDeliveryPhase::Consumed | BackgroundDeliveryPhase::Failed
+        ) {
+            return Ok(delivery.clone());
+        }
+        if delivery.phase != BackgroundDeliveryPhase::Claimed
+            || delivery.claim_owner.as_deref() != Some(owner_id)
+        {
+            return Err(StoreError::InvalidState(format!(
+                "background delivery {delivery_id} is not claimed by {owner_id}"
+            )));
+        }
+        delivery.phase = BackgroundDeliveryPhase::Failed;
+        delivery.claim_owner = None;
+        delivery.claim_until_ms = None;
+        delivery.last_error = Some(error);
+        delivery.updated_at_ms = now_ms;
+        delivery.next_attempt_at_ms = now_ms;
+        Ok(delivery.clone())
+    }
+
+    async fn fail_pending_background_deliveries(
+        &self,
+        session_id: i64,
+        error: Value,
+        now_ms: i64,
+    ) -> Result<usize, StoreError> {
+        let _write = self
+            .background_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut deliveries = self
+            .background_deliveries
+            .write()
+            .expect("background deliveries lock");
+        let mut changed = 0;
+        for delivery in deliveries.values_mut().filter(|delivery| {
+            delivery.session_id == session_id
+                && matches!(
+                    delivery.phase,
+                    BackgroundDeliveryPhase::Pending | BackgroundDeliveryPhase::Claimed
+                )
+        }) {
+            delivery.phase = BackgroundDeliveryPhase::Failed;
+            delivery.claim_owner = None;
+            delivery.claim_until_ms = None;
+            delivery.last_error = Some(error.clone());
+            delivery.updated_at_ms = now_ms;
+            delivery.next_attempt_at_ms = now_ms;
+            changed += 1;
+        }
+        Ok(changed)
     }
 
     async fn pending_background_deliveries(
@@ -1648,7 +1729,8 @@ impl PersistenceEngine for InMemoryEngine {
             .expect("background deliveries lock")
             .values()
             .filter(|delivery| {
-                delivery.phase == BackgroundDeliveryPhase::Pending
+                (delivery.phase == BackgroundDeliveryPhase::Pending
+                    && delivery.next_attempt_at_ms <= now_ms)
                     || (delivery.phase == BackgroundDeliveryPhase::Claimed
                         && delivery.claim_until_ms.is_some_and(|until| until <= now_ms))
             })

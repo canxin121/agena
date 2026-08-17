@@ -68,7 +68,7 @@ const BACKGROUND_DELIVERY_COLS: &str = "\
     delivery_id, operation_id, session_id, event_key, \
     CAST(payload_json AS TEXT) AS payload_json, phase, claim_owner, claim_until_ms, attempts, \
     notification_part_id, CAST(last_error_json AS TEXT) AS last_error_json, \
-    created_at_ms, updated_at_ms, consumed_at_ms";
+    created_at_ms, updated_at_ms, consumed_at_ms, next_attempt_at_ms";
 
 /// The production [`PersistenceEngine`]: raw SQL over the v2 schema.
 #[derive(Clone)]
@@ -577,6 +577,7 @@ fn background_delivery_from_row(row: sea_orm::QueryResult) -> Result<BackgroundD
         created_at_ms: row.try_get("", "created_at_ms")?,
         updated_at_ms: row.try_get("", "updated_at_ms")?,
         consumed_at_ms: row.try_get("", "consumed_at_ms")?,
+        next_attempt_at_ms: row.try_get("", "next_attempt_at_ms")?,
     })
 }
 
@@ -1979,13 +1980,14 @@ impl PersistenceEngine for SqliteEngine {
                         "UPDATE agena_background_deliveries \
                          SET phase = 'claimed', claim_owner = ?, claim_until_ms = ?, \
                              attempts = attempts + 1, updated_at_ms = ? \
-                         WHERE delivery_id = ? AND (phase = 'pending' OR \
+                         WHERE delivery_id = ? AND ((phase = 'pending' AND next_attempt_at_ms <= ?) OR \
                                (phase = 'claimed' AND claim_until_ms <= ?))",
                         [
                             owner_id.as_str().into(),
                             claim_until_ms.into(),
                             now_ms.into(),
                             delivery_id.as_str().into(),
+                            now_ms.into(),
                             now_ms.into(),
                         ],
                     ))
@@ -2012,7 +2014,10 @@ impl PersistenceEngine for SqliteEngine {
         run_write(db, move |txn| {
             Box::pin(async move {
                 if let Some(existing) = load_background_delivery(txn, &delivery_id).await?
-                    && existing.phase == BackgroundDeliveryPhase::Consumed
+                    && matches!(
+                        existing.phase,
+                        BackgroundDeliveryPhase::Consumed | BackgroundDeliveryPhase::Failed
+                    )
                 {
                     return Ok(existing);
                 }
@@ -2021,9 +2026,10 @@ impl PersistenceEngine for SqliteEngine {
                         DatabaseBackend::Sqlite,
                         "UPDATE agena_background_deliveries \
                          SET phase = 'consumed', claim_owner = NULL, claim_until_ms = NULL, \
-                             updated_at_ms = ?, consumed_at_ms = ? \
+                             updated_at_ms = ?, consumed_at_ms = ?, next_attempt_at_ms = ? \
                          WHERE delivery_id = ? AND phase = 'claimed' AND claim_owner = ?",
                         [
+                            now_ms.into(),
                             now_ms.into(),
                             now_ms.into(),
                             delivery_id.as_str().into(),
@@ -2052,6 +2058,7 @@ impl PersistenceEngine for SqliteEngine {
         delivery_id: &str,
         owner_id: &str,
         error: serde_json::Value,
+        next_attempt_at_ms: i64,
         now_ms: i64,
     ) -> Result<BackgroundDelivery, StoreError> {
         let db = self.db();
@@ -2069,10 +2076,68 @@ impl PersistenceEngine for SqliteEngine {
                         DatabaseBackend::Sqlite,
                         "UPDATE agena_background_deliveries \
                          SET phase = 'pending', claim_owner = NULL, claim_until_ms = NULL, \
-                             last_error_json = ?, updated_at_ms = ? \
+                             last_error_json = ?, updated_at_ms = ?, next_attempt_at_ms = ? \
                          WHERE delivery_id = ? AND phase = 'claimed' AND claim_owner = ?",
                         [
                             error.into(),
+                            now_ms.into(),
+                            next_attempt_at_ms.into(),
+                            delivery_id.as_str().into(),
+                            owner_id.as_str().into(),
+                        ],
+                    ))
+                    .await
+                    .map_err(map_db_err)?;
+                if result.rows_affected() != 1 {
+                    return Err(StoreError::InvalidState(format!(
+                        "background delivery {delivery_id} is not claimed by {owner_id}"
+                    )));
+                }
+                load_background_delivery(txn, &delivery_id)
+                    .await?
+                    .ok_or_else(|| {
+                        StoreError::not_found(format!("background delivery {delivery_id}"))
+                    })
+            })
+        })
+        .await
+    }
+
+    async fn fail_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        error: serde_json::Value,
+        now_ms: i64,
+    ) -> Result<BackgroundDelivery, StoreError> {
+        let db = self.db();
+        let delivery_id = delivery_id.to_owned();
+        let owner_id = owner_id.to_owned();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                if let Some(existing) = load_background_delivery(txn, &delivery_id).await?
+                    && matches!(
+                        existing.phase,
+                        BackgroundDeliveryPhase::Consumed | BackgroundDeliveryPhase::Failed
+                    )
+                {
+                    return Ok(existing);
+                }
+                let error = serde_json::to_string(&error).map_err(|encode_error| {
+                    StoreError::Serialization(format!(
+                        "encode background delivery error: {encode_error}"
+                    ))
+                })?;
+                let result = txn
+                    .execute(Statement::from_sql_and_values(
+                        DatabaseBackend::Sqlite,
+                        "UPDATE agena_background_deliveries \
+                         SET phase = 'failed', claim_owner = NULL, claim_until_ms = NULL, \
+                             last_error_json = ?, updated_at_ms = ?, next_attempt_at_ms = ? \
+                         WHERE delivery_id = ? AND phase = 'claimed' AND claim_owner = ?",
+                        [
+                            error.into(),
+                            now_ms.into(),
                             now_ms.into(),
                             delivery_id.as_str().into(),
                             owner_id.as_str().into(),
@@ -2095,6 +2160,37 @@ impl PersistenceEngine for SqliteEngine {
         .await
     }
 
+    async fn fail_pending_background_deliveries(
+        &self,
+        session_id: i64,
+        error: serde_json::Value,
+        now_ms: i64,
+    ) -> Result<usize, StoreError> {
+        let error = serde_json::to_string(&error).map_err(|encode_error| {
+            StoreError::Serialization(format!(
+                "encode background delivery cancellation: {encode_error}"
+            ))
+        })?;
+        let result = self
+            .db()
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE agena_background_deliveries \
+                 SET phase = 'failed', claim_owner = NULL, claim_until_ms = NULL, \
+                     last_error_json = ?, updated_at_ms = ?, next_attempt_at_ms = ? \
+                 WHERE session_id = ? AND phase IN ('pending', 'claimed')",
+                [
+                    error.into(),
+                    now_ms.into(),
+                    now_ms.into(),
+                    session_id.into(),
+                ],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        Ok(result.rows_affected() as usize)
+    }
+
     async fn pending_background_deliveries(
         &self,
         limit: usize,
@@ -2106,10 +2202,11 @@ impl PersistenceEngine for SqliteEngine {
                 DatabaseBackend::Sqlite,
                 format!(
                     "SELECT {BACKGROUND_DELIVERY_COLS} FROM agena_background_deliveries \
-                     WHERE phase = 'pending' OR (phase = 'claimed' AND claim_until_ms <= ?) \
+                     WHERE (phase = 'pending' AND next_attempt_at_ms <= ?) OR \
+                           (phase = 'claimed' AND claim_until_ms <= ?) \
                      ORDER BY created_at_ms, delivery_id LIMIT ?"
                 ),
-                [now_ms.into(), limit.into()],
+                [now_ms.into(), now_ms.into(), limit.into()],
             ))
             .await
             .map_err(map_db_err)?

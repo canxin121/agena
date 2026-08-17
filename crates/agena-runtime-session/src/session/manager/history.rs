@@ -76,15 +76,26 @@ impl SessionManager {
         // contention; descendant discovery continues after the active model
         // stream or tool has already received cancellation.
         let root_result = self.execution_registry.cancel_current(session_id).await;
-        if root_result.is_ok()
-            && let Some(execution_id) = root_execution_id
-        {
+        if let Some(execution_id) = root_execution_id {
             self.execution_state()
                 .tool_executor
                 .plugin_manager()
                 .dispatch_agent_cancel(AgentCancelInput {
                     session_id,
                     execution_id,
+                })
+                .await;
+        } else {
+            // A queued delivery can be the only remaining work after a short
+            // execution has already terminalized. Still fire the cancellation
+            // hook so execution-local automation such as plan autorun is
+            // disabled by an explicit user stop.
+            self.execution_state()
+                .tool_executor
+                .plugin_manager()
+                .dispatch_agent_cancel(AgentCancelInput {
+                    session_id,
+                    execution_id: "session-cancel".to_owned(),
                 })
                 .await;
         }
@@ -98,11 +109,39 @@ impl SessionManager {
         };
 
         let mut first_error = cancel_active_execution_result(root_result).err();
+        if let Err(error) = self
+            .store
+            .fail_pending_background_deliveries(
+                session_id,
+                serde_json::json!({
+                    "category": "cancelled",
+                    "message": "background notification delivery cancelled with the session execution",
+                }),
+            )
+            .await
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
         for target_id in cancellation_order
             .into_iter()
             .filter(|target_id| *target_id != session_id)
         {
             let result = self.execution_registry.cancel_current(target_id).await;
+            if let Err(error) = self
+                .store
+                .fail_pending_background_deliveries(
+                    target_id,
+                    serde_json::json!({
+                        "category": "cancelled",
+                        "message": "background notification delivery cancelled with the session execution",
+                    }),
+                )
+                .await
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
             // A plugin-hosted tool can be suspended in a host permission or
             // user-input callback. A cancellation token is only observed
             // between run-loop iterations, so release those one-shot waiters
@@ -130,6 +169,49 @@ impl SessionManager {
             .await
             .map_err(execution_control_to_app_error)?;
         if result != agena_domain::CancellationResult::CancellationRequested {
+            // A stop request can arrive in the tiny gap after a short
+            // notification execution has already terminalized. There is no
+            // execution token left to cancel, but queued background wakes must
+            // still be suppressed; otherwise the next delivery immediately
+            // starts another execution. An execution mismatch remains a
+            // strict no-op so a delayed request cannot cancel a newer user
+            // turn.
+            if matches!(
+                result,
+                agena_domain::CancellationResult::AlreadyTerminal
+                    | agena_domain::CancellationResult::NotFound
+            ) && let Err(error) = self
+                .store
+                .fail_pending_background_deliveries(
+                    session_id,
+                    serde_json::json!({
+                        "category": "cancelled",
+                        "message": "queued background notification delivery cancelled after the execution ended",
+                    }),
+                )
+                .await
+            {
+                tracing::warn!(
+                    target: "agena_background",
+                    session_id,
+                    %error,
+                    "failed to suppress queued background deliveries after terminal cancellation"
+                );
+            }
+            if matches!(
+                result,
+                agena_domain::CancellationResult::AlreadyTerminal
+                    | agena_domain::CancellationResult::NotFound
+            ) {
+                self.execution_state()
+                    .tool_executor
+                    .plugin_manager()
+                    .dispatch_agent_cancel(AgentCancelInput {
+                        session_id,
+                        execution_id: execution_id.to_string(),
+                    })
+                    .await;
+            }
             return Ok(result);
         }
         // The execution token is already in the cancellation state. Notify
@@ -145,6 +227,24 @@ impl SessionManager {
             })
             .await;
         self.cancel_host_interactive_waiters(session_id).await;
+        if let Err(error) = self
+            .store
+            .fail_pending_background_deliveries(
+                session_id,
+                serde_json::json!({
+                    "category": "cancelled",
+                    "message": "background notification delivery cancelled with the session execution",
+                }),
+            )
+            .await
+        {
+            tracing::warn!(
+                target: "agena_background",
+                session_id,
+                %error,
+                "failed to suppress queued background deliveries during cancellation"
+            );
+        }
 
         if let Ok(session) = self.store.load_session(session_id).await {
             let tree = self.store.list_session_tree(session.root_id).await?;
@@ -155,6 +255,24 @@ impl SessionManager {
             {
                 let _ = self.execution_registry.cancel_current(target_id).await;
                 self.cancel_host_interactive_waiters(target_id).await;
+                if let Err(error) = self
+                    .store
+                    .fail_pending_background_deliveries(
+                        target_id,
+                        serde_json::json!({
+                            "category": "cancelled",
+                            "message": "background notification delivery cancelled with the session execution",
+                        }),
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        target: "agena_background",
+                        session_id = target_id,
+                        %error,
+                        "failed to suppress descendant background deliveries during cancellation"
+                    );
+                }
             }
         }
         Ok(result)

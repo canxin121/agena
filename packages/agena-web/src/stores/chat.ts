@@ -1039,11 +1039,23 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const st = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
       const executionId = sessionStateExecution(st?.state)?.execution_id
       if (!executionId) {
-        // Nothing active; the canonical state is already terminal or waiting.
+        // The stop action also suppresses queued background notification wakes.
+        // There may be no execution in this short window even though the next
+        // delivery would otherwise start one immediately.
+        await chatApi.cancelSession(sid, null)
         clearAttention(sid)
         return true
       }
       await chatApi.cancelSession(sid, executionId)
+      // If the short-lived execution changed between the snapshot and the
+      // exact cancel request, the stop action still applies to the current
+      // session. The session-scoped fallback also suppresses queued delivery
+      // wakes that could otherwise create the next execution immediately.
+      const after = await chatApi.getSessionExecutionStatus(sid).catch(() => null)
+      const afterExecutionId = sessionStateExecution(after?.state)?.execution_id
+      if (afterExecutionId && afterExecutionId !== executionId) {
+        await chatApi.cancelSession(sid, null)
+      }
       clearAttention(sid)
       return true
     } catch {

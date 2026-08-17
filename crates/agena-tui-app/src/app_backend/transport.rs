@@ -1860,7 +1860,7 @@ impl TuiBackend {
     pub async fn cancel_run(
         &self,
         session_id: i64,
-        execution_id: agena_domain::ExecutionId,
+        execution_id: Option<agena_domain::ExecutionId>,
     ) -> Result<agena_domain::CancellationResult> {
         Ok(self.client().cancel_run(session_id, execution_id).await?)
     }

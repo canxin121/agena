@@ -688,6 +688,17 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
             })
     }
 
+    async fn cancel_session(
+        &self,
+        session_id: i64,
+    ) -> Result<(), agena_runtime::SessionExecutionControlError> {
+        SessionManager::cancel_active_execution(self, session_id)
+            .await
+            .map_err(|error| {
+                agena_runtime::SessionExecutionControlError::internal(error.to_string())
+            })
+    }
+
     async fn list_scheduled_jobs(&self) -> Vec<agena_scheduler::ScheduledJob> {
         let Some(scheduler) = self.tool_executor().scheduler().cloned() else {
             return Vec::new();

@@ -2839,7 +2839,7 @@ mod router_contract_tests {
 
         let client_b = AgenaClient::new(server.url.as_str()).expect("build cancelling client");
         let (cancel, release) = tokio::join!(
-            client_b.cancel_run(session_id, agena_domain::ExecutionId(execution_id)),
+            client_b.cancel_run(session_id, Some(agena_domain::ExecutionId(execution_id))),
             async { release_tx.send(()) }
         );
         release.expect("release natural provider completion");

@@ -7,7 +7,9 @@
 
 /// Current SQLite schema version written to `PRAGMA user_version`.
 ///
-/// Version 11 persists user favorite/pinned session metadata. Version 10 lets
+/// Version 12 gives background deliveries an explicit failed terminal state
+/// and durable retry deadlines. Version 11 persists user favorite/pinned
+/// session metadata. Version 10 lets
 /// scheduled deliveries retain optional assistant launch provenance. Version 9
 /// added the durable background-operation aggregate and delivery
 /// inbox. Version 8 added a stored generated `is_subagent` column to
@@ -20,7 +22,7 @@
 /// entity; runs are `kind='run'` marker parts; session state is derived from
 /// parts + leases. Background-operation control state is deliberately
 /// normalized rather than encoded only in transcript JSON. v1 databases are
-/// NOT migrated, but compatible v8/v9/v10 migrations are supported.
+/// NOT migrated, but compatible v8/v9/v10/v11 migrations are supported.
 ///
 /// Version history:
 /// - 5: the v2 "everything is a part" schema.
@@ -41,7 +43,10 @@
 ///   remain valid Runtime ingress.
 /// - 11: `agena_sessions` gains durable `favorite` and `pinned` flags shared
 ///   by every client.
-pub const CURRENT_SCHEMA_VERSION: i64 = 11;
+/// - 12: background deliveries gain a `failed` terminal phase and durable
+///   `next_attempt_at_ms` backoff deadline, preventing restart recovery from
+///   retrying a permanently unavailable provider forever.
+pub const CURRENT_SCHEMA_VERSION: i64 = 12;
 
 #[cfg(test)]
 mod tests {

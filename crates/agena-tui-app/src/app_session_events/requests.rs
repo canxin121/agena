@@ -490,16 +490,12 @@ impl App {
     /// clear the stale local execution marker immediately so the composer and
     /// activity indicator respond in the same frame as Ctrl+C.
     pub(crate) fn request_cancel_run(&mut self, session_id: i64) {
-        let Some(execution_id) = self
+        let execution_id = self
             .transcript
             .execution
             .as_ref()
             .and_then(|execution| execution.session.state.active_execution())
-            .map(|execution| agena_domain::ExecutionId(execution.execution_id))
-        else {
-            self.flash_info(ui_text::t(&self.i18n, "flash-run-cancelled"));
-            return;
-        };
+            .map(|execution| agena_domain::ExecutionId(execution.execution_id));
         self.run_activity.clear_session(session_id);
         if self.transcript.session_id == Some(session_id) {
             // The cached resource may still advertise an active execution (or
@@ -513,16 +509,27 @@ impl App {
         tokio::spawn(async move {
             let result =
                 crate::app_backend::operations::cancel_run(&application, session_id, execution_id)
-                    .await
-                    .and_then(|result| match result {
-                        agena_domain::CancellationResult::CancellationRequested
-                        | agena_domain::CancellationResult::AlreadyTerminal
-                        | agena_domain::CancellationResult::NotFound => Ok(()),
-                        agena_domain::CancellationResult::ExecutionMismatch => Err(
-                            anyhow::anyhow!("the active execution changed before cancellation"),
-                        ),
-                    })
-                    .map_err(crate::UiFailure::from_backend);
+                    .await;
+            let result = match result {
+                Ok(agena_domain::CancellationResult::ExecutionMismatch) => {
+                    // The stop action is user intent for the current session,
+                    // not a delayed command that should preserve a newer
+                    // execution. Retry through the session-scoped endpoint so
+                    // a short notification wake cannot slip through the exact
+                    // execution-id race.
+                    crate::app_backend::operations::cancel_run(&application, session_id, None).await
+                }
+                other => other,
+            }
+            .and_then(|result| match result {
+                agena_domain::CancellationResult::CancellationRequested
+                | agena_domain::CancellationResult::AlreadyTerminal
+                | agena_domain::CancellationResult::NotFound => Ok(()),
+                agena_domain::CancellationResult::ExecutionMismatch => Err(anyhow::anyhow!(
+                    "the active execution changed before cancellation"
+                )),
+            })
+            .map_err(crate::UiFailure::from_backend);
             let _ = tx
                 .send(AppMessage::RunCancelled { session_id, result })
                 .await;

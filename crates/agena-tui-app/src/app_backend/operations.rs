@@ -111,7 +111,7 @@ pub(crate) async fn compact_session_with_options(
 pub(crate) async fn cancel_run(
     application: &TuiBackend,
     session_id: i64,
-    execution_id: agena_domain::ExecutionId,
+    execution_id: Option<agena_domain::ExecutionId>,
 ) -> Result<agena_domain::CancellationResult> {
     application
         .cancel_run(session_id, execution_id)

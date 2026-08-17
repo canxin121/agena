@@ -153,6 +153,88 @@ async fn cancellation_force_aborts_unresponsive_operation_and_releases_registry(
     assert!(!manager.execution_registry.is_active(session_id).await);
 }
 
+#[tokio::test]
+async fn cancellation_suppresses_queued_background_notification_wakes() {
+    let manager = test_manager().await;
+    let session = create(&manager, "cancel queued delivery").await;
+    let run_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            run_marker_content("continue", None, None, None, None),
+        )
+        .await
+        .expect("start launch run");
+    install_test_background_operation(
+        &manager,
+        session.id,
+        run_id,
+        agena_storage::store::BackgroundOperationKind::Shell,
+        "proc_cancel_queued_delivery",
+    )
+    .await;
+    let operation = manager
+        .store
+        .background_operation_by_external_id(
+            agena_storage::store::BackgroundOperationKind::Shell,
+            "proc_cancel_queued_delivery",
+        )
+        .await
+        .expect("load background operation")
+        .expect("background operation exists");
+    let notification = SystemNotificationContent {
+        operation_id: "proc_cancel_queued_delivery".to_owned(),
+        operation_kind: "shell".to_owned(),
+        status: "completed".to_owned(),
+        summary: "exit 0".to_owned(),
+        body: "exit 0".to_owned(),
+        ..Default::default()
+    };
+    manager
+        .store
+        .record_background_event(agena_storage::store::BackgroundEventRequest {
+            operation_id: operation.operation_id,
+            event_key: "terminal".to_owned(),
+            event_seq: None,
+            next_phase: Some(agena_storage::store::BackgroundOperationPhase::Completed),
+            outcome: Some(serde_json::json!({"text": "exit 0"})),
+            failure: None,
+            notification: new_part_from_content(
+                "system_notification",
+                PartRole::Assistant,
+                &TypedContent::SystemNotification(notification),
+                PartState::Completed,
+            )
+            .expect("build notification"),
+        })
+        .await
+        .expect("enqueue notification delivery");
+    assert_eq!(
+        manager
+            .store
+            .pending_background_deliveries(16)
+            .await
+            .expect("read pending delivery")
+            .len(),
+        1
+    );
+
+    manager
+        .cancel_active_execution(session.id)
+        .await
+        .expect("cancel session and queued wakes");
+    assert!(
+        manager
+            .store
+            .pending_background_deliveries(16)
+            .await
+            .expect("read deliveries after cancellation")
+            .is_empty(),
+        "cancel must not leave a background wake that can relaunch the session"
+    );
+}
+
 async fn append_message(
     manager: &SessionManager,
     mut session: Session,
@@ -4710,6 +4792,97 @@ async fn committed_notification_is_woken_and_consumed_after_dispatcher_restart_r
             .expect("pending after recovery")
             .is_empty(),
         "wake success consumes the durable delivery"
+    );
+}
+
+#[tokio::test]
+async fn non_retryable_background_wake_is_terminalized_instead_of_requeued_forever() {
+    let manager = manager_with_provider(Arc::new(StartupFailureProvider {
+        model: ModelId::new("failure-model"),
+    }))
+    .await;
+    let session = create(&manager, "non-retryable delivery").await;
+    let run_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            run_marker_content(
+                "continue",
+                Some("startup-failure"),
+                Some("failure-model"),
+                None,
+                None,
+            ),
+        )
+        .await
+        .expect("start launch run");
+    install_test_background_operation(
+        &manager,
+        session.id,
+        run_id,
+        agena_storage::store::BackgroundOperationKind::Shell,
+        "proc_non_retryable_delivery",
+    )
+    .await;
+
+    let notification = SystemNotificationContent {
+        operation_id: "proc_non_retryable_delivery".to_owned(),
+        operation_kind: "shell".to_owned(),
+        status: "completed".to_owned(),
+        summary: "exit 0".to_owned(),
+        body: "exit 0".to_owned(),
+        ..Default::default()
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        manager.settle_background_operation(
+            session.id,
+            "shell",
+            "proc_non_retryable_delivery",
+            PartState::Completed,
+            Ok("exit 0".to_owned()),
+            notification,
+        ),
+    )
+    .await
+    .expect("non-retryable wake must finish promptly")
+    .expect("delivery settlement succeeds after terminalizing its failed wake");
+
+    assert!(
+        manager
+            .store
+            .pending_background_deliveries(16)
+            .await
+            .expect("read pending deliveries")
+            .is_empty(),
+        "a non-retryable wake must not be returned to pending"
+    );
+    let part_count = manager
+        .store
+        .load_session(session.id)
+        .await
+        .expect("load failed delivery transcript")
+        .parts()
+        .len();
+    assert_eq!(
+        manager
+            .recover_background_deliveries(16)
+            .await
+            .expect("repeat recovery"),
+        0,
+        "failed delivery is not selected by recovery"
+    );
+    assert_eq!(
+        manager
+            .store
+            .load_session(session.id)
+            .await
+            .expect("reload failed delivery transcript")
+            .parts()
+            .len(),
+        part_count,
+        "repeat recovery must not create another model execution"
     );
 }
 

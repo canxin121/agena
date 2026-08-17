@@ -223,7 +223,21 @@ pub trait SessionStore: Send + Sync {
         delivery_id: &str,
         owner_id: &str,
         error: Value,
+        next_attempt_at_ms: i64,
     ) -> Result<BackgroundDelivery, StoreError>;
+
+    async fn fail_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        error: Value,
+    ) -> Result<BackgroundDelivery, StoreError>;
+
+    async fn fail_pending_background_deliveries(
+        &self,
+        session_id: i64,
+        error: Value,
+    ) -> Result<usize, StoreError>;
 
     async fn pending_background_deliveries(
         &self,
@@ -1364,9 +1378,37 @@ where
         delivery_id: &str,
         owner_id: &str,
         error: Value,
+        next_attempt_at_ms: i64,
     ) -> Result<BackgroundDelivery, StoreError> {
         self.engine
-            .retry_background_delivery(delivery_id, &self.owner(owner_id), error, self.now())
+            .retry_background_delivery(
+                delivery_id,
+                &self.owner(owner_id),
+                error,
+                next_attempt_at_ms,
+                self.now(),
+            )
+            .await
+    }
+
+    async fn fail_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        error: Value,
+    ) -> Result<BackgroundDelivery, StoreError> {
+        self.engine
+            .fail_background_delivery(delivery_id, &self.owner(owner_id), error, self.now())
+            .await
+    }
+
+    async fn fail_pending_background_deliveries(
+        &self,
+        session_id: i64,
+        error: Value,
+    ) -> Result<usize, StoreError> {
+        self.engine
+            .fail_pending_background_deliveries(session_id, error, self.now())
             .await
     }
 
@@ -3752,10 +3794,34 @@ mod tests {
             delivery_id: &str,
             owner_id: &str,
             error: Value,
+            next_attempt_at_ms: i64,
             now_ms: i64,
         ) -> Result<BackgroundDelivery, StoreError> {
             self.inner
-                .retry_background_delivery(delivery_id, owner_id, error, now_ms)
+                .retry_background_delivery(delivery_id, owner_id, error, next_attempt_at_ms, now_ms)
+                .await
+        }
+
+        async fn fail_background_delivery(
+            &self,
+            delivery_id: &str,
+            owner_id: &str,
+            error: Value,
+            now_ms: i64,
+        ) -> Result<BackgroundDelivery, StoreError> {
+            self.inner
+                .fail_background_delivery(delivery_id, owner_id, error, now_ms)
+                .await
+        }
+
+        async fn fail_pending_background_deliveries(
+            &self,
+            session_id: i64,
+            error: Value,
+            now_ms: i64,
+        ) -> Result<usize, StoreError> {
+            self.inner
+                .fail_pending_background_deliveries(session_id, error, now_ms)
                 .await
         }
 

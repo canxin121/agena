@@ -220,6 +220,7 @@ pub enum BackgroundDeliveryPhase {
     Pending,
     Claimed,
     Consumed,
+    Failed,
 }
 
 impl BackgroundDeliveryPhase {
@@ -228,6 +229,7 @@ impl BackgroundDeliveryPhase {
             Self::Pending => "pending",
             Self::Claimed => "claimed",
             Self::Consumed => "consumed",
+            Self::Failed => "failed",
         }
     }
 
@@ -236,6 +238,7 @@ impl BackgroundDeliveryPhase {
             "pending" => Some(Self::Pending),
             "claimed" => Some(Self::Claimed),
             "consumed" => Some(Self::Consumed),
+            "failed" => Some(Self::Failed),
             _ => None,
         }
     }
@@ -326,6 +329,10 @@ pub struct BackgroundDelivery {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub consumed_at_ms: Option<i64>,
+    /// Earliest time at which a pending delivery may be claimed again. Zero
+    /// keeps rows created before durable backoff immediately eligible.
+    #[serde(default)]
+    pub next_attempt_at_ms: i64,
 }
 
 /// Result of atomically settling an operation and recording its unique

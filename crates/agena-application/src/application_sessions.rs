@@ -457,13 +457,22 @@ impl Application {
     pub async fn cancel_run(
         &self,
         session_id: i64,
-        execution_id: ExecutionId,
+        execution_id: Option<ExecutionId>,
     ) -> Result<CancellationResult, ApplicationError> {
-        self.session_execution_services()?
-            .execution_control
-            .cancel_execution(session_id, execution_id)
-            .await
-            .map_err(|error| ApplicationError::from_failure(error.failure))
+        let control = &self.session_execution_services()?.execution_control;
+        match execution_id {
+            Some(execution_id) => control
+                .cancel_execution(session_id, execution_id)
+                .await
+                .map_err(|error| ApplicationError::from_failure(error.failure)),
+            None => {
+                control
+                    .cancel_session(session_id)
+                    .await
+                    .map_err(|error| ApplicationError::from_failure(error.failure))?;
+                Ok(CancellationResult::CancellationRequested)
+            }
+        }
     }
 
     /// Durable, idempotent acknowledgement that an interactive user-input

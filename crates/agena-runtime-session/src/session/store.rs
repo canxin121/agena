@@ -313,9 +313,32 @@ impl StoreAdapter {
         &self,
         delivery_id: &str,
         error: Value,
+        next_attempt_at_ms: i64,
     ) -> Result<BackgroundDelivery, AppError> {
         self.facade
-            .retry_background_delivery(delivery_id, &self.owner_id, error)
+            .retry_background_delivery(delivery_id, &self.owner_id, error, next_attempt_at_ms)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn fail_background_delivery(
+        &self,
+        delivery_id: &str,
+        error: Value,
+    ) -> Result<BackgroundDelivery, AppError> {
+        self.facade
+            .fail_background_delivery(delivery_id, &self.owner_id, error)
+            .await
+            .map_err(store_error)
+    }
+
+    pub(crate) async fn fail_pending_background_deliveries(
+        &self,
+        session_id: i64,
+        error: Value,
+    ) -> Result<usize, AppError> {
+        self.facade
+            .fail_pending_background_deliveries(session_id, error)
             .await
             .map_err(store_error)
     }

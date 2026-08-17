@@ -179,7 +179,11 @@ pub struct CompactSessionParams {
 /// Parameters for cancelling an active execution.
 pub struct CancelRunParams {
     pub session_id: i64,
-    pub execution_id: ExecutionId,
+    /// Optional for the user-facing stop action. When absent, the server
+    /// cancels whichever execution is current and suppresses queued wakes;
+    /// when present, cancellation remains exact and race-safe.
+    #[serde(default)]
+    pub execution_id: Option<ExecutionId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -290,15 +290,39 @@ pub trait PersistenceEngine: Send + Sync {
         now_ms: i64,
     ) -> Result<BackgroundDelivery, StoreError>;
 
-    /// Release a failed claim back to pending with a durable diagnostic so a
-    /// restart or later dispatcher pass can retry it.
+    /// Release a failed claim back to pending with a durable diagnostic and a
+    /// durable next-attempt deadline so a restart or later dispatcher pass can
+    /// retry it without a hot loop.
     async fn retry_background_delivery(
+        &self,
+        delivery_id: &str,
+        owner_id: &str,
+        error: serde_json::Value,
+        next_attempt_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<BackgroundDelivery, StoreError>;
+
+    /// Terminalize one claimed delivery after a non-retryable or exhausted
+    /// wake failure. This is idempotent after another cancellation/recovery
+    /// path has already terminalized the same row.
+    async fn fail_background_delivery(
         &self,
         delivery_id: &str,
         owner_id: &str,
         error: serde_json::Value,
         now_ms: i64,
     ) -> Result<BackgroundDelivery, StoreError>;
+
+    /// Suppress queued notification wakes for a session when the user cancels
+    /// its current execution. Pending and claimed rows are terminalized
+    /// together so a delivery racing with cancellation cannot relaunch the
+    /// session after the execution is gone.
+    async fn fail_pending_background_deliveries(
+        &self,
+        session_id: i64,
+        error: serde_json::Value,
+        now_ms: i64,
+    ) -> Result<usize, StoreError>;
 
     /// Pending or expired deliveries, oldest first, for restart recovery.
     async fn pending_background_deliveries(

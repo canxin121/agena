@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import type { TranscriptDisplayPart } from '../src/components/chat/messageList.types'
 import {
+  lastTranscriptMessagePart,
   resolveTranscriptPageTarget,
   transcriptPartNavigationText,
   transcriptScrollBoundary,
@@ -32,6 +33,22 @@ test('collapsed parts expose one visible navigation line instead of hidden body 
     'fs.read operation · README.md 42 lines',
   )
   assert.equal(transcriptPartNavigationText(part(), true), 'line 1\nline 2\nline 3')
+})
+
+test('message jumps choose the newest real part instead of a fold marker', () => {
+  const parts = [
+    { key: 'summary', kind: 'activity_summary' },
+    { key: 'operation', kind: 'operation' },
+    { key: 'answer', kind: 'answer' },
+  ]
+  assert.deepEqual(
+    lastTranscriptMessagePart(parts, (candidate) => candidate.kind === 'activity_summary'),
+    parts[2],
+  )
+  assert.equal(
+    lastTranscriptMessagePart(parts.slice(0, 1), (candidate) => candidate.kind === 'activity_summary'),
+    null,
+  )
 })
 
 test('page movement clamps to the transcript boundary', () => {

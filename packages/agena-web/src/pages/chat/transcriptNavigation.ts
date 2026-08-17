@@ -26,6 +26,19 @@ export function transcriptPartNavigationText(part: TranscriptDisplayPart, expand
   return full.split(/\r?\n/u, 1)[0]?.trim() || ''
 }
 
+/**
+ * Resolve the destination part for a message-level jump. Fold markers are
+ * presentation controls rather than message content, so Ctrl+J/K should land
+ * on the newest real part that is currently visible.
+ */
+export function lastTranscriptMessagePart<T>(parts: readonly T[], isFoldMarker: (part: T) => boolean): T | null {
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index]
+    if (part !== undefined && !isFoldMarker(part)) return part
+  }
+  return null
+}
+
 export function resolveTranscriptPageTarget(input: {
   scrollTop: number
   clientHeight: number

@@ -1142,10 +1142,28 @@ impl TranscriptState {
                 target_index = next;
             }
             (target_index != current_index).then(|| {
-                let node = message_nodes[target_index];
-                (node.start_line..node.end_line)
-                    .find(|line| transcript_rendered_line_is_focusable(rendered, *line))
-                    .unwrap_or(node.start_line)
+                let message = message_nodes[target_index];
+                // A folded assistant reply begins with a synthetic activity
+                // summary ("N older activity blocks collapsed"). Message
+                // jumps should land on the newest visible real part instead
+                // of making Ctrl+J/K stop on that expansion affordance.
+                let target_part = rendered.nodes.iter().rev().find(|node| {
+                    !node.key.is_entry_container()
+                        && node.key.entry_id() == message.key.entry_id()
+                        && !matches!(
+                            node.key,
+                            TranscriptNodeKey::ActivitySummary { .. }
+                                | TranscriptNodeKey::ActivitySection { .. }
+                        )
+                });
+                target_part
+                    .and_then(|node| {
+                        (node.start_line..node.end_line)
+                            .find(|line| transcript_rendered_line_is_focusable(rendered, *line))
+                    })
+                    // If every real part is hidden, use the message header;
+                    // never use the folded summary as a Ctrl+J/K destination.
+                    .unwrap_or(message.start_line)
             })
         };
 

@@ -2511,7 +2511,7 @@ mod transcript_character_cursor_tests {
     }
 
     #[test]
-    fn ctrl_message_motion_skips_to_the_adjacent_message_without_block_highlighting() {
+    fn ctrl_message_motion_lands_on_the_adjacent_message_without_block_highlighting() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             messages: vec![message(1, "first message"), message(2, "second message")],
@@ -2539,9 +2539,81 @@ mod transcript_character_cursor_tests {
         assert!(
             transcript.rendered(80).lines[line]
                 .text
-                .contains("assistant")
+                .contains("second message")
         );
         assert_eq!(transcript.highlighted_block_key(), None);
+    }
+
+    #[test]
+    fn ctrl_message_motion_lands_on_the_last_visible_part_not_the_fold_summary() {
+        let now = Utc::now();
+        let mut assistant_parts = (51..59)
+            .map(|part_id| {
+                TranscriptFixture::reasoning_part(
+                    part_id,
+                    2,
+                    now,
+                    ExecutionStatus::Completed,
+                    agena_domain::ReasoningPart {
+                        summary: vec![format!("hidden reasoning {part_id}")],
+                        raw_content: Vec::new(),
+                        encrypted_content: None,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        assistant_parts.push(TranscriptFixture::text_part(
+            60,
+            2,
+            now,
+            ExecutionStatus::Completed,
+            "final visible answer",
+        ));
+
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![
+                message_with_role(1, RunRole::User, "user request"),
+                RunResource {
+                    id: 2,
+                    session_id: 7,
+                    role: RunRole::Assistant,
+                    state: RunStatus::Completed,
+                    created_at: now,
+                    updated_at: now,
+                    metadata: Default::default(),
+                    usage: None,
+                    part_count: assistant_parts.len() as u64,
+                    parts: Some(assistant_parts),
+                },
+            ],
+            ..TranscriptState::default()
+        };
+        let user_line = transcript
+            .rendered(120)
+            .lines
+            .iter()
+            .enumerate()
+            .find_map(|(line, rendered)| rendered.text.contains("user request").then_some(line))
+            .expect("user message line");
+        transcript.select_pointer_line(
+            120,
+            20,
+            TranscriptTextPosition {
+                line: user_line,
+                column: 0,
+            },
+        );
+
+        transcript.move_cursor_by_messages(120, 20, TranscriptMoveDirection::Down, 1);
+
+        let (line, _) = transcript.cursor_cell_range(120).expect("character cursor");
+        let text = &transcript.rendered(120).lines[line].text;
+        assert!(text.contains("final visible answer"), "target line: {text}");
+        assert!(
+            !text.contains("older activity blocks collapsed"),
+            "Ctrl+J/K must skip the fold summary: {text}"
+        );
     }
 
     #[test]

@@ -2,7 +2,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type Comput
 
 import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import { copyTextToClipboard } from '@/lib/clipboard'
-import { resolveTranscriptPageTarget, transcriptScrollBoundary } from './transcriptNavigation'
+import {
+  lastTranscriptMessagePart,
+  resolveTranscriptPageTarget,
+  transcriptScrollBoundary,
+} from './transcriptNavigation'
 import { resolveTranscriptVimAction, type TranscriptVimAction, type TranscriptVimMode } from './transcriptVim'
 import {
   collectTranscriptSearchMatches,
@@ -126,6 +130,8 @@ export function useChatTranscriptVim(opts: {
   let cursorScreenAnchor: { x: number; y: number } | null = null
   let mouseSelecting = false
   let mouseSelection: { anchor: CursorPoint; head: CursorPoint } | null = null
+  let mouseSelectionPointerStart: { x: number; y: number } | null = null
+  let mouseSelectionMoved = false
   let suppressMouseClickUntil = 0
   let mountedRoot: HTMLElement | null = null
   let mountedScroll: HTMLElement | null = null
@@ -480,12 +486,21 @@ export function useChatTranscriptVim(opts: {
     pushJumpMark()
     const message = messages[next]
     const messageId = message?.dataset.messageId || ''
+    // Message jumps are conversation-level navigation, not activity-fold
+    // navigation. The first visible row of an assistant reply may be the
+    // synthetic "expand N more" marker, which is useful for normal movement
+    // but is not the content the user is trying to read. Always land on the
+    // newest visible real part of the destination message; this keeps Ctrl+J
+    // and Ctrl+K useful when a reply has a folded activity prefix.
     const candidates = textEntries().entries.filter((entry) => entry.element.dataset.messageId === messageId)
-    const target = delta > 0 ? candidates[0] : candidates.at(-1)
+    const target = lastTranscriptMessagePart(
+      candidates,
+      (entry) => entry.element.dataset.partKind === 'activity_summary',
+    )
     if (target)
       setCursorPoint({
         key: target.key,
-        offset: delta > 0 ? 0 : transcriptLineRange(target.text, target.text.length).start,
+        offset: transcriptLineRange(target.text, target.text.length).start,
       })
     else selectElement(message)
   }
@@ -1053,6 +1068,8 @@ export function useChatTranscriptVim(opts: {
 
   function clearMouseSelection() {
     mouseSelecting = false
+    mouseSelectionPointerStart = null
+    mouseSelectionMoved = false
     if (mouseSelection) {
       mouseSelection = null
       if (ownsNativeSelection) {
@@ -1065,6 +1082,12 @@ export function useChatTranscriptVim(opts: {
   function onTranscriptPointerMove(event: PointerEvent) {
     if (!mouseSelecting || !mouseSelection) return
     event.preventDefault()
+    if (
+      mouseSelectionPointerStart &&
+      (event.clientX !== mouseSelectionPointerStart.x || event.clientY !== mouseSelectionPointerStart.y)
+    ) {
+      mouseSelectionMoved = true
+    }
     const scroll = opts.scrollEl.value
     if (!scroll) return
     const bounds = scroll.getBoundingClientRect()
@@ -1089,7 +1112,31 @@ export function useChatTranscriptVim(opts: {
     window.removeEventListener('pointercancel', onTranscriptPointerCancel, true)
     event.preventDefault()
     if (!mouseSelection) return
-    if (samePoint(mouseSelection.anchor, mouseSelection.head)) {
+
+    // Pointer moves can be coalesced by the browser, especially when the drag
+    // spans exactly one grapheme. Resolve the release position once more so
+    // the logical cursor cannot remain at the pre-drag location, and remember
+    // the physical movement separately from the normalized character point.
+    if (
+      mouseSelectionPointerStart &&
+      (event.clientX !== mouseSelectionPointerStart.x || event.clientY !== mouseSelectionPointerStart.y)
+    ) {
+      mouseSelectionMoved = true
+    }
+    const model = textEntries()
+    const boundary = transcriptCaretBoundaryAtPoint(event.clientX, event.clientY)
+    const point =
+      (boundary ? pointForDomBoundary(boundary, model) : null) || pointAtViewportPosition(event.clientX, event.clientY)
+    if (point) {
+      mouseSelection = { anchor: mouseSelection.anchor, head: point }
+      installCursorWithoutReveal(point, { updatePreferredX: false, preserveScreenAnchor: true })
+    }
+
+    // A genuine click has no physical movement. A one-grapheme drag can have
+    // the same normalized anchor/head because both DOM endpoints map to that
+    // grapheme, so it must remain a selection instead of being treated as a
+    // click.
+    if (samePoint(mouseSelection.anchor, mouseSelection.head) && !mouseSelectionMoved) {
       clearMouseSelection()
       scheduleCursorPlacement()
       return
@@ -1134,6 +1181,8 @@ export function useChatTranscriptVim(opts: {
     clearMouseSelection()
     mouseSelection = { anchor: point, head: point }
     mouseSelecting = true
+    mouseSelectionPointerStart = { x: event.clientX, y: event.clientY }
+    mouseSelectionMoved = false
     // Own the selection: suppress the browser's native selection/drag so the
     // transcript selection model stays consistent.
     event.preventDefault()

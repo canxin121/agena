@@ -15,8 +15,12 @@ runs:
         fi
 
         wrapper="$(cd "$(dirname "$SCCACHE_PATH")" && pwd -P)/$(basename "$SCCACHE_PATH")"
-        printf 'RUSTC_WRAPPER=%s\n' "$wrapper" >> "$GITHUB_ENV"
-        printf 'Configured RUSTC_WRAPPER=%s\n' "$wrapper"
+        export SCCACHE_IDLE_TIMEOUT=0
+        {
+          printf 'RUSTC_WRAPPER=%s\n' "$wrapper"
+          printf 'SCCACHE_IDLE_TIMEOUT=0\n'
+        } >> "$GITHUB_ENV"
+        printf 'Configured RUSTC_WRAPPER=%s with SCCACHE_IDLE_TIMEOUT=0\n' "$wrapper"
         "$wrapper" --version
         "$wrapper" --zero-stats
 
@@ -33,8 +37,10 @@ runs:
         }
 
         $wrapper = (Resolve-Path -LiteralPath $wrapper).Path
-        "RUSTC_WRAPPER=$wrapper" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        Write-Host "Configured RUSTC_WRAPPER=$wrapper"
+        $env:SCCACHE_IDLE_TIMEOUT = "0"
+        @("RUSTC_WRAPPER=$wrapper", "SCCACHE_IDLE_TIMEOUT=0") |
+          Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        Write-Host "Configured RUSTC_WRAPPER=$wrapper with SCCACHE_IDLE_TIMEOUT=0"
         & $wrapper --version
         if ($LASTEXITCODE -ne 0) {
           throw "failed to execute sccache at $wrapper"

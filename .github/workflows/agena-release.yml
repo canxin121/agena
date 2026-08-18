@@ -145,6 +145,12 @@ jobs:
         shell: pwsh
         run: ./scripts/agena/package-backend.ps1 -TargetTriple ${{ matrix.target }}
 
+      - name: Verify sccache compiler activity
+        uses: ./.github/actions/verify-sccache
+        with:
+          label: release-${{ matrix.target }}
+          minimum-requests: "1"
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: agena-backend-${{ matrix.artifact_suffix }}

@@ -59,6 +59,11 @@ jobs:
           cache-bin: false
           cache-on-failure: true
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Verify sccache compiler activity
+        uses: ./.github/actions/verify-sccache
+        with:
+          label: clippy
+          minimum-requests: "1"
 
   test:
     name: regression tests (${{ matrix.os }})
@@ -106,6 +111,11 @@ jobs:
         run: |
           cargo build --manifest-path examples/echo_plugin/Cargo.toml --locked
           cargo build --manifest-path examples/echo_plugin_stdio/Cargo.toml --locked
+      - name: Verify sccache compiler activity
+        uses: ./.github/actions/verify-sccache
+        with:
+          label: regression-tests-${{ matrix.os }}
+          minimum-requests: "1"
 
   deny:
     name: cargo-deny
@@ -212,3 +222,8 @@ jobs:
       - run: cargo check -p agena-runtime --all-features --locked
       - run: cargo check -p agena-api-server --all-features --locked
       - run: cargo check -p agena-cli --all-features --locked
+      - name: Verify sccache compiler activity
+        uses: ./.github/actions/verify-sccache
+        with:
+          label: feature-checks
+          minimum-requests: "1"

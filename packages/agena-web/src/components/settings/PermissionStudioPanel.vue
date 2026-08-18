@@ -57,13 +57,20 @@ const error = ref('')
 const selectedSource = ref<PermissionSource>('global')
 const selectedSection = ref<PermissionSection>('path')
 const config = ref<PermissionConfig>({})
+const globalConfig = ref<PermissionConfig>({})
+const workspaceConfig = ref<PermissionConfig>({})
+const sessionConfigSnapshot = ref<PermissionConfig>({})
 const effectiveConfig = ref<PermissionConfig>({})
 const rawJson = ref('{}')
 const rawJsonError = ref('')
 const toolCatalog = ref<Array<{ name: string; summary: string }>>([])
 const newPath = ref('')
+const newPathReadMode = ref<PermissionMode>('auto')
+const newPathWriteMode = ref<PermissionMode>('auto')
 const newNetworkRule = ref('')
+const newNetworkRuleMode = ref<PermissionMode>('auto')
 const newToolName = ref('')
+const newToolNameMode = ref<PermissionMode>('ask')
 const newCommandTool = ref('shell')
 const newCommandPattern = ref('')
 const newCommandMode = ref<PermissionMode>('ask')
@@ -75,11 +82,57 @@ const activeSessionId = computed(() => {
 const canEdit = computed(
   () => selectedSource.value !== 'effective' && (selectedSource.value !== 'session' || Boolean(activeSessionId.value)),
 )
+function permissionSummary(value: PermissionConfig): string {
+  const pathDefaults = ['workspace', 'external'].reduce((total, scope) => {
+    const modes = value.path?.[scope as 'workspace' | 'external']
+    return total + Number(Boolean(modes?.read)) + Number(Boolean(modes?.write))
+  }, 0)
+  const pathRules = Object.keys(value.path?.rules || {}).length
+  const networkDefaults = ['internet', 'private', 'loopback'].filter((zone) =>
+    Boolean(value.network?.[zone as 'internet' | 'private' | 'loopback']),
+  ).length
+  const networkRules = Object.keys(value.network?.rules || {}).length
+  const names = Object.keys(value.tools?.names || {}).length
+  const commands = Object.values(value.tools?.rules || {}).reduce((total, rules) => {
+    if (isMode(rules)) return total + 1
+    return total + (rules && typeof rules === 'object' && !Array.isArray(rules) ? Object.keys(rules).length : 0)
+  }, 0)
+  const parts = [
+    pathDefaults || pathRules ? `filesystem ${pathDefaults} defaults / ${pathRules} rules` : '',
+    networkDefaults || networkRules ? `network ${networkDefaults} defaults / ${networkRules} rules` : '',
+    value.tools?.default || names || commands
+      ? `tools ${value.tools?.default ? 'default + ' : ''}${names} names / ${commands} commands`
+      : '',
+    value.approval_model ? 'approval model' : '',
+  ].filter(Boolean)
+  return parts.join(' · ') || 'No overrides'
+}
+
 const sourceOptions = computed(() => [
-  { value: 'global', label: 'Global Permission', description: 'Baseline for all sessions.' },
-  { value: 'workspace', label: 'Workspace Permission', description: 'Overrides for this workspace.' },
-  { value: 'session', label: 'Current Session Permission', description: 'Applies only to the selected session.' },
-  { value: 'effective', label: 'Effective Permission', description: 'Read-only merged policy.' },
+  {
+    value: 'global',
+    label: 'Global Permission',
+    description: 'Baseline for all sessions.',
+    summary: permissionSummary(globalConfig.value),
+  },
+  {
+    value: 'workspace',
+    label: 'Workspace Permission',
+    description: 'Overrides for this workspace.',
+    summary: permissionSummary(workspaceConfig.value),
+  },
+  {
+    value: 'session',
+    label: 'Current Session Permission',
+    description: 'Applies only to the selected session.',
+    summary: activeSessionId.value ? permissionSummary(sessionConfigSnapshot.value) : 'No active session',
+  },
+  {
+    value: 'effective',
+    label: 'Effective Permission',
+    description: 'Read-only merged policy.',
+    summary: permissionSummary(effectiveConfig.value),
+  },
 ])
 const sectionOptions = [
   { value: 'path', label: 'Filesystem', description: 'Path defaults and path rules.' },
@@ -198,6 +251,29 @@ function removePathRule(path: string) {
   })
 }
 
+function renamePathRule(path: string, event: Event) {
+  const input = event.target as HTMLInputElement
+  const nextPath = input.value.trim()
+  if (!nextPath || nextPath === path) {
+    input.value = path
+    return
+  }
+  if (Object.prototype.hasOwnProperty.call(config.value.path?.rules || {}, nextPath)) {
+    error.value = `Path rule already exists: ${nextPath}`
+    input.value = path
+    return
+  }
+  mutate((next) => {
+    const rules = next.path?.rules
+    if (!rules || !Object.prototype.hasOwnProperty.call(rules, path)) return
+    const value = rules[path]
+    delete rules[path]
+    rules[nextPath] = value
+  })
+  error.value = ''
+  input.value = nextPath
+}
+
 function networkMode(zone: 'internet' | 'private' | 'loopback'): PermissionMode | '' {
   return config.value.network?.[zone] || ''
 }
@@ -224,6 +300,29 @@ function removeNetworkRule(target: string) {
   })
 }
 
+function renameNetworkRule(target: string, event: Event) {
+  const input = event.target as HTMLInputElement
+  const nextTarget = input.value.trim()
+  if (!nextTarget || nextTarget === target) {
+    input.value = target
+    return
+  }
+  if (Object.prototype.hasOwnProperty.call(config.value.network?.rules || {}, nextTarget)) {
+    error.value = `Network rule already exists: ${nextTarget}`
+    input.value = target
+    return
+  }
+  mutate((next) => {
+    const rules = next.network?.rules
+    if (!rules || !Object.prototype.hasOwnProperty.call(rules, target)) return
+    const value = rules[target]
+    delete rules[target]
+    rules[nextTarget] = value
+  })
+  error.value = ''
+  input.value = nextTarget
+}
+
 function setToolDefault(value: string) {
   mutate((next) => {
     next.tools ||= {}
@@ -245,6 +344,29 @@ function removeToolName(name: string) {
   mutate((next) => {
     if (next.tools?.names) delete next.tools.names[name]
   })
+}
+
+function renameToolName(name: string, event: Event) {
+  const input = event.target as HTMLInputElement
+  const nextName = input.value.trim()
+  if (!nextName || nextName === name) {
+    input.value = name
+    return
+  }
+  if (Object.prototype.hasOwnProperty.call(config.value.tools?.names || {}, nextName)) {
+    error.value = `Tool name rule already exists: ${nextName}`
+    input.value = name
+    return
+  }
+  mutate((next) => {
+    const names = next.tools?.names
+    if (!names || !Object.prototype.hasOwnProperty.call(names, name)) return
+    const value = names[name]
+    delete names[name]
+    names[nextName] = value
+  })
+  error.value = ''
+  input.value = nextName
 }
 
 function setCommandMode(tool: string, command: string, value: string) {
@@ -279,36 +401,82 @@ function removeCommandRule(tool: string, command: string) {
   })
 }
 
+function renameCommandRule(tool: string, command: string, event: Event) {
+  const input = event.target as HTMLInputElement
+  const nextCommand = input.value.trim()
+  if (!nextCommand || nextCommand === command) {
+    input.value = command
+    return
+  }
+  const existing = config.value.tools?.rules?.[tool]
+  const rules = isMode(existing) ? { '*': existing } : existing
+  if (rules && typeof rules === 'object' && Object.prototype.hasOwnProperty.call(rules, nextCommand)) {
+    error.value = `Command rule already exists for ${tool}: ${nextCommand}`
+    input.value = command
+    return
+  }
+  mutate((next) => {
+    const raw = next.tools?.rules?.[tool]
+    const nextRules: Record<string, PermissionMode> = isMode(raw)
+      ? { '*': raw }
+      : raw && typeof raw === 'object' && !Array.isArray(raw)
+        ? ({ ...raw } as Record<string, PermissionMode>)
+        : {}
+    const value = nextRules[command]
+    if (!value) return
+    delete nextRules[command]
+    nextRules[nextCommand] = value
+    next.tools!.rules![tool] = nextRules
+  })
+  error.value = ''
+  input.value = nextCommand
+}
+
 function addPathRule() {
   const path = newPath.value.trim()
   if (!path) return
+  if (Object.prototype.hasOwnProperty.call(config.value.path?.rules || {}, path)) {
+    error.value = `Path rule already exists: ${path}`
+    return
+  }
   mutate((next) => {
     next.path ||= {}
     next.path.rules ||= {}
-    next.path.rules[path] = { read: 'ask', write: 'ask' }
+    next.path.rules[path] = { read: newPathReadMode.value, write: newPathWriteMode.value }
   })
+  error.value = ''
   newPath.value = ''
 }
 
 function addNetworkRule() {
   const target = newNetworkRule.value.trim()
   if (!target) return
+  if (Object.prototype.hasOwnProperty.call(config.value.network?.rules || {}, target)) {
+    error.value = `Network rule already exists: ${target}`
+    return
+  }
   mutate((next) => {
     next.network ||= {}
     next.network.rules ||= {}
-    next.network.rules[target] = 'ask'
+    next.network.rules[target] = newNetworkRuleMode.value
   })
+  error.value = ''
   newNetworkRule.value = ''
 }
 
 function addToolName() {
   const name = newToolName.value.trim()
   if (!name) return
+  if (Object.prototype.hasOwnProperty.call(config.value.tools?.names || {}, name)) {
+    error.value = `Tool name rule already exists: ${name}`
+    return
+  }
   mutate((next) => {
     next.tools ||= {}
     next.tools.names ||= {}
-    next.tools.names[name] = 'ask'
+    next.tools.names[name] = newToolNameMode.value
   })
+  error.value = ''
   newToolName.value = ''
 }
 
@@ -342,6 +510,8 @@ async function load() {
       apiJson<SettingsResponse>('/api/v1/settings/layers/workspace?path=permission'),
       apiJson<ToolCatalogResponse>('/api/v1/plugins/ui'),
     ])
+    globalConfig.value = asConfig(global?.value)
+    workspaceConfig.value = asConfig(workspace?.value)
     effectiveConfig.value = asConfig(effective?.value)
     toolCatalog.value = (Array.isArray(toolResponse?.permission_tools) ? toolResponse.permission_tools : [])
       .map((item) => ({ name: String(item?.name || '').trim(), summary: String(item?.summary || '').trim() }))
@@ -364,6 +534,8 @@ async function load() {
           session.execution?.context?.effective_permission,
       )
     }
+    sessionConfigSnapshot.value = sessionConfig
+    if (Object.keys(sessionEffective).length) effectiveConfig.value = sessionEffective
     const sourceValue =
       selectedSource.value === 'global'
         ? global?.value
@@ -476,6 +648,7 @@ onMounted(() => void load())
         >
           <span class="block font-medium">{{ option.label }}</span>
           <span class="mt-1 block text-[10px] text-muted-foreground">{{ option.description }}</span>
+          <span class="mt-1.5 block text-[10px] leading-4 text-foreground/70">{{ option.summary }}</span>
         </button>
         <div
           v-if="selectedSource === 'session' && !activeSessionId"
@@ -507,251 +680,303 @@ onMounted(() => void load())
           </div>
         </div>
 
-        <div v-if="selectedSection === 'path'" class="grid gap-4">
-          <div>
-            <h3 class="text-sm font-medium">Path Defaults</h3>
-            <p class="mt-1 text-xs text-muted-foreground">
-              Set separate read and write decisions for workspace and external paths.
-            </p>
-          </div>
-          <div class="grid gap-3 sm:grid-cols-2">
-            <div
-              v-for="scope in ['workspace', 'external'] as const"
-              :key="scope"
-              class="rounded-md border border-border/60 p-3"
-            >
-              <div class="mb-2 text-xs font-medium capitalize">{{ scope }}</div>
-              <div class="grid gap-2">
-                <label class="grid gap-1"
-                  ><span class="text-[11px] text-muted-foreground">Read</span
-                  ><OptionPicker
-                    :model-value="modeAt(scope, 'read')"
-                    :options="modeOptions"
-                    :include-empty="true"
-                    empty-label="Default"
-                    title="Path read mode"
-                    @update:model-value="setPathDefault(scope, 'read', $event)"
-                /></label>
-                <label class="grid gap-1"
-                  ><span class="text-[11px] text-muted-foreground">Write</span
-                  ><OptionPicker
-                    :model-value="modeAt(scope, 'write')"
-                    :options="modeOptions"
-                    :include-empty="true"
-                    empty-label="Default"
-                    title="Path write mode"
-                    @update:model-value="setPathDefault(scope, 'write', $event)"
-                /></label>
+        <fieldset :disabled="!canEdit" class="contents">
+          <div v-if="selectedSection === 'path'" class="grid gap-4">
+            <div>
+              <h3 class="text-sm font-medium">Path Defaults</h3>
+              <p class="mt-1 text-xs text-muted-foreground">
+                Set separate read and write decisions for workspace and external paths.
+              </p>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div
+                v-for="scope in ['workspace', 'external'] as const"
+                :key="scope"
+                class="rounded-md border border-border/60 p-3"
+              >
+                <div class="mb-2 text-xs font-medium capitalize">{{ scope }}</div>
+                <div class="grid gap-2">
+                  <label class="grid gap-1"
+                    ><span class="text-[11px] text-muted-foreground">Read</span
+                    ><OptionPicker
+                      :model-value="modeAt(scope, 'read')"
+                      :options="modeOptions"
+                      :include-empty="true"
+                      empty-label="Default"
+                      title="Path read mode"
+                      @update:model-value="setPathDefault(scope, 'read', $event)"
+                  /></label>
+                  <label class="grid gap-1"
+                    ><span class="text-[11px] text-muted-foreground">Write</span
+                    ><OptionPicker
+                      :model-value="modeAt(scope, 'write')"
+                      :options="modeOptions"
+                      :include-empty="true"
+                      empty-label="Default"
+                      title="Path write mode"
+                      @update:model-value="setPathDefault(scope, 'write', $event)"
+                  /></label>
+                </div>
+              </div>
+            </div>
+            <div class="grid gap-2">
+              <div class="text-sm font-medium">Path Rules</div>
+              <div
+                v-for="[path, rule] in pathRules"
+                :key="path"
+                class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[minmax(0,1.5fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_auto] sm:items-end"
+              >
+                <input
+                  :value="path"
+                  type="text"
+                  class="h-9 min-w-0 rounded-md border border-input bg-transparent px-2.5 font-mono text-xs outline-none focus:border-ring"
+                  :title="`Rename path rule ${path}`"
+                  @change="renamePathRule(path, $event)"
+                />
+                <OptionPicker
+                  :model-value="pathRuleMode(rule, 'read')"
+                  :options="modeOptions"
+                  :include-empty="true"
+                  empty-label="Read default"
+                  title="Path rule read mode"
+                  @update:model-value="setPathRuleMode(path, 'read', $event)"
+                />
+                <OptionPicker
+                  :model-value="pathRuleMode(rule, 'write')"
+                  :options="modeOptions"
+                  :include-empty="true"
+                  empty-label="Write default"
+                  title="Path rule write mode"
+                  @update:model-value="setPathRuleMode(path, 'write', $event)"
+                />
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  tooltip="Remove path rule"
+                  aria-label="Remove path rule"
+                  @click="removePathRule(path)"
+                  ><RiDeleteBinLine class="h-4 w-4 text-destructive"
+                /></IconButton>
+              </div>
+              <div
+                class="grid gap-2 sm:grid-cols-[minmax(0,1.5fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_auto] sm:items-end"
+              >
+                <Input
+                  v-model="newPath"
+                  class="font-mono"
+                  placeholder="/path or relative/path"
+                  @keydown.enter="addPathRule"
+                />
+                <OptionPicker
+                  v-model="newPathReadMode"
+                  :options="modeOptions"
+                  :include-empty="false"
+                  title="New path read mode"
+                />
+                <OptionPicker
+                  v-model="newPathWriteMode"
+                  :options="modeOptions"
+                  :include-empty="false"
+                  title="New path write mode"
+                />
+                <Button variant="outline" size="sm" :disabled="!newPath.trim()" @click="addPathRule">
+                  <RiAddLine class="mr-1.5 h-4 w-4" /> Add path rule
+                </Button>
               </div>
             </div>
           </div>
-          <div class="grid gap-2">
-            <div class="text-sm font-medium">Path Rules</div>
-            <div
-              v-for="[path, rule] in pathRules"
-              :key="path"
-              class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[minmax(0,1.5fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_auto] sm:items-end"
-            >
-              <code class="break-all text-xs">{{ path }}</code>
-              <OptionPicker
-                :model-value="pathRuleMode(rule, 'read')"
-                :options="modeOptions"
-                :include-empty="true"
-                empty-label="Read default"
-                title="Path rule read mode"
-                @update:model-value="setPathRuleMode(path, 'read', $event)"
-              />
-              <OptionPicker
-                :model-value="pathRuleMode(rule, 'write')"
-                :options="modeOptions"
-                :include-empty="true"
-                empty-label="Write default"
-                title="Path rule write mode"
-                @update:model-value="setPathRuleMode(path, 'write', $event)"
-              />
-              <IconButton
-                variant="ghost"
-                size="sm"
-                tooltip="Remove path rule"
-                aria-label="Remove path rule"
-                @click="removePathRule(path)"
-                ><RiDeleteBinLine class="h-4 w-4 text-destructive"
-              /></IconButton>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <Input
-                v-model="newPath"
-                class="min-w-[14rem] font-mono"
-                placeholder="/path or relative/path"
-                @keydown.enter="addPathRule"
-              /><Button variant="outline" size="sm" :disabled="!newPath.trim()" @click="addPathRule"
-                ><RiAddLine class="mr-1.5 h-4 w-4" /> Add path rule</Button
-              >
-            </div>
-          </div>
-        </div>
 
-        <div v-else-if="selectedSection === 'network'" class="grid gap-4">
-          <div>
-            <h3 class="text-sm font-medium">Network Zones</h3>
-            <p class="mt-1 text-xs text-muted-foreground">
-              Control internet, private-network, and loopback access, then add domain/host rules.
-            </p>
+          <div v-else-if="selectedSection === 'network'" class="grid gap-4">
+            <div>
+              <h3 class="text-sm font-medium">Network Zones</h3>
+              <p class="mt-1 text-xs text-muted-foreground">
+                Control internet, private-network, and loopback access, then add domain/host rules.
+              </p>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-3">
+              <label v-for="zone in ['internet', 'private', 'loopback'] as const" :key="zone" class="grid gap-1.5"
+                ><span class="text-xs capitalize text-muted-foreground">{{ zone }}</span
+                ><OptionPicker
+                  :model-value="networkMode(zone)"
+                  :options="modeOptions"
+                  :include-empty="true"
+                  empty-label="Default"
+                  title="Network zone mode"
+                  @update:model-value="setNetworkMode(zone, $event)"
+              /></label>
+            </div>
+            <div class="grid gap-2">
+              <div class="text-sm font-medium">Domain Rules</div>
+              <div
+                v-for="[target, mode] in networkRules"
+                :key="target"
+                class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
+              >
+                <input
+                  :value="target"
+                  type="text"
+                  class="h-9 min-w-0 rounded-md border border-input bg-transparent px-2.5 font-mono text-xs outline-none focus:border-ring"
+                  :title="`Rename network rule ${target}`"
+                  @change="renameNetworkRule(target, $event)"
+                /><OptionPicker
+                  :model-value="mode"
+                  :options="modeOptions"
+                  :include-empty="false"
+                  title="Network rule mode"
+                  @update:model-value="setNetworkRule(target, $event)"
+                /><IconButton
+                  variant="ghost"
+                  size="sm"
+                  tooltip="Remove network rule"
+                  aria-label="Remove network rule"
+                  @click="removeNetworkRule(target)"
+                  ><RiDeleteBinLine class="h-4 w-4 text-destructive"
+                /></IconButton>
+              </div>
+              <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.5fr)_auto] sm:items-end">
+                <Input
+                  v-model="newNetworkRule"
+                  class="font-mono"
+                  placeholder="example.com or 127.0.0.1:8080"
+                  @keydown.enter="addNetworkRule"
+                />
+                <OptionPicker
+                  v-model="newNetworkRuleMode"
+                  :options="modeOptions"
+                  :include-empty="false"
+                  title="New network rule mode"
+                />
+                <Button variant="outline" size="sm" :disabled="!newNetworkRule.trim()" @click="addNetworkRule">
+                  <RiAddLine class="mr-1.5 h-4 w-4" /> Add domain rule
+                </Button>
+              </div>
+            </div>
           </div>
-          <div class="grid gap-3 sm:grid-cols-3">
-            <label v-for="zone in ['internet', 'private', 'loopback'] as const" :key="zone" class="grid gap-1.5"
-              ><span class="text-xs capitalize text-muted-foreground">{{ zone }}</span
+
+          <div v-else class="grid gap-4">
+            <div>
+              <h3 class="text-sm font-medium">Tool Access</h3>
+              <p class="mt-1 text-xs text-muted-foreground">
+                Manage the default tool policy, individual tool names, and command patterns.
+              </p>
+            </div>
+            <label class="grid max-w-sm gap-1.5"
+              ><span class="text-xs text-muted-foreground">Default tool mode</span
               ><OptionPicker
-                :model-value="networkMode(zone)"
+                :model-value="config.tools?.default || ''"
                 :options="modeOptions"
                 :include-empty="true"
                 empty-label="Default"
-                title="Network zone mode"
-                @update:model-value="setNetworkMode(zone, $event)"
+                title="Default tool mode"
+                @update:model-value="setToolDefault"
             /></label>
-          </div>
-          <div class="grid gap-2">
-            <div class="text-sm font-medium">Domain Rules</div>
-            <div
-              v-for="[target, mode] in networkRules"
-              :key="target"
-              class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
-            >
-              <code class="break-all text-xs">{{ target }}</code
-              ><OptionPicker
-                :model-value="mode"
-                :options="modeOptions"
-                :include-empty="false"
-                title="Network rule mode"
-                @update:model-value="setNetworkRule(target, $event)"
-              /><IconButton
-                variant="ghost"
-                size="sm"
-                tooltip="Remove network rule"
-                aria-label="Remove network rule"
-                @click="removeNetworkRule(target)"
-                ><RiDeleteBinLine class="h-4 w-4 text-destructive"
-              /></IconButton>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <Input
-                v-model="newNetworkRule"
-                class="min-w-[14rem] font-mono"
-                placeholder="example.com or 127.0.0.1:8080"
-                @keydown.enter="addNetworkRule"
-              /><Button variant="outline" size="sm" :disabled="!newNetworkRule.trim()" @click="addNetworkRule"
-                ><RiAddLine class="mr-1.5 h-4 w-4" /> Add domain rule</Button
+            <div class="grid gap-2">
+              <div class="text-sm font-medium">Name Rules</div>
+              <div
+                v-for="[name, mode] in toolNameRules"
+                :key="name"
+                class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
               >
+                <input
+                  :value="name"
+                  type="text"
+                  class="h-9 min-w-0 rounded-md border border-input bg-transparent px-2.5 font-mono text-xs outline-none focus:border-ring"
+                  :title="`Rename tool rule ${name}`"
+                  @change="renameToolName(name, $event)"
+                /><OptionPicker
+                  :model-value="mode"
+                  :options="modeOptions"
+                  :include-empty="false"
+                  title="Tool name mode"
+                  @update:model-value="setToolNameMode(name, $event)"
+                /><IconButton
+                  variant="ghost"
+                  size="sm"
+                  tooltip="Remove tool rule"
+                  aria-label="Remove tool rule"
+                  @click="removeToolName(name)"
+                  ><RiDeleteBinLine class="h-4 w-4 text-destructive"
+                /></IconButton>
+              </div>
+              <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.5fr)_auto] sm:items-end">
+                <Input
+                  v-model="newToolName"
+                  class="font-mono"
+                  placeholder="shell or agena.web.fetch"
+                  @keydown.enter="addToolName"
+                />
+                <OptionPicker
+                  v-model="newToolNameMode"
+                  :options="modeOptions"
+                  :include-empty="false"
+                  title="New tool rule mode"
+                />
+                <Button variant="outline" size="sm" :disabled="!newToolName.trim()" @click="addToolName">
+                  <RiAddLine class="mr-1.5 h-4 w-4" /> Add tool name
+                </Button>
+              </div>
+              <div v-if="toolCatalog.length" class="flex flex-wrap gap-1.5">
+                <Button
+                  v-for="tool in toolCatalog"
+                  :key="tool.name"
+                  variant="ghost"
+                  size="sm"
+                  class="font-mono text-[11px]"
+                  @click="newToolName = tool.name"
+                  >{{ tool.name }}</Button
+                >
+              </div>
             </div>
-          </div>
-        </div>
-
-        <div v-else class="grid gap-4">
-          <div>
-            <h3 class="text-sm font-medium">Tool Access</h3>
-            <p class="mt-1 text-xs text-muted-foreground">
-              Manage the default tool policy, individual tool names, and command patterns.
-            </p>
-          </div>
-          <label class="grid max-w-sm gap-1.5"
-            ><span class="text-xs text-muted-foreground">Default tool mode</span
-            ><OptionPicker
-              :model-value="config.tools?.default || ''"
-              :options="modeOptions"
-              :include-empty="true"
-              empty-label="Default"
-              title="Default tool mode"
-              @update:model-value="setToolDefault"
-          /></label>
-          <div class="grid gap-2">
-            <div class="text-sm font-medium">Name Rules</div>
-            <div
-              v-for="[name, mode] in toolNameRules"
-              :key="name"
-              class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
-            >
-              <code class="break-all text-xs">{{ name }}</code
-              ><OptionPicker
-                :model-value="mode"
-                :options="modeOptions"
-                :include-empty="false"
-                title="Tool name mode"
-                @update:model-value="setToolNameMode(name, $event)"
-              /><IconButton
-                variant="ghost"
-                size="sm"
-                tooltip="Remove tool rule"
-                aria-label="Remove tool rule"
-                @click="removeToolName(name)"
-                ><RiDeleteBinLine class="h-4 w-4 text-destructive"
-              /></IconButton>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <Input
-                v-model="newToolName"
-                class="min-w-[14rem] font-mono"
-                placeholder="shell or agena.web.fetch"
-                @keydown.enter="addToolName"
-              /><Button variant="outline" size="sm" :disabled="!newToolName.trim()" @click="addToolName"
-                ><RiAddLine class="mr-1.5 h-4 w-4" /> Add tool name</Button
+            <div class="grid gap-2">
+              <div class="text-sm font-medium">Command Rules</div>
+              <div
+                v-for="row in commandRules"
+                :key="`${row.tool}:${row.command}`"
+                class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[minmax(8rem,0.6fr)_minmax(0,1.4fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
               >
-            </div>
-            <div v-if="toolCatalog.length" class="flex flex-wrap gap-1.5">
-              <Button
-                v-for="tool in toolCatalog"
-                :key="tool.name"
-                variant="ghost"
-                size="sm"
-                class="font-mono text-[11px]"
-                @click="newToolName = tool.name"
-                >{{ tool.name }}</Button
+                <code class="break-all text-xs">{{ row.tool }}</code>
+                <input
+                  :value="row.command"
+                  type="text"
+                  class="h-9 min-w-0 rounded-md border border-input bg-transparent px-2.5 font-mono text-xs outline-none focus:border-ring"
+                  :title="`Rename command rule ${row.command}`"
+                  @change="renameCommandRule(row.tool, row.command, $event)"
+                /><OptionPicker
+                  :model-value="row.mode"
+                  :options="modeOptions"
+                  :include-empty="false"
+                  title="Command rule mode"
+                  @update:model-value="setCommandMode(row.tool, row.command, $event)"
+                /><IconButton
+                  variant="ghost"
+                  size="sm"
+                  tooltip="Remove command rule"
+                  aria-label="Remove command rule"
+                  @click="removeCommandRule(row.tool, row.command)"
+                  ><RiDeleteBinLine class="h-4 w-4 text-destructive"
+                /></IconButton>
+              </div>
+              <div
+                class="grid gap-2 sm:grid-cols-[minmax(8rem,0.6fr)_minmax(0,1.4fr)_minmax(8rem,0.5fr)_auto] sm:items-end"
               >
+                <OptionPicker
+                  v-model="newCommandTool"
+                  :options="shellToolOptions"
+                  :include-empty="false"
+                  title="Shell-capable tool"
+                  monospace
+                /><Input v-model="newCommandPattern" class="font-mono" placeholder="git push *" /><OptionPicker
+                  v-model="newCommandMode"
+                  :options="modeOptions"
+                  :include-empty="false"
+                  title="New command mode"
+                /><Button variant="outline" size="sm" :disabled="!newCommandPattern.trim()" @click="addCommandRule"
+                  ><RiAddLine class="mr-1.5 h-4 w-4" /> Add command rule</Button
+                >
+              </div>
             </div>
           </div>
-          <div class="grid gap-2">
-            <div class="text-sm font-medium">Command Rules</div>
-            <div
-              v-for="row in commandRules"
-              :key="`${row.tool}:${row.command}`"
-              class="grid gap-2 rounded-md border border-border/60 p-3 sm:grid-cols-[minmax(8rem,0.6fr)_minmax(0,1.4fr)_minmax(8rem,0.5fr)_auto] sm:items-center"
-            >
-              <code class="break-all text-xs">{{ row.tool }}</code
-              ><code class="break-all text-xs">{{ row.command }}</code
-              ><OptionPicker
-                :model-value="row.mode"
-                :options="modeOptions"
-                :include-empty="false"
-                title="Command rule mode"
-                @update:model-value="setCommandMode(row.tool, row.command, $event)"
-              /><IconButton
-                variant="ghost"
-                size="sm"
-                tooltip="Remove command rule"
-                aria-label="Remove command rule"
-                @click="removeCommandRule(row.tool, row.command)"
-                ><RiDeleteBinLine class="h-4 w-4 text-destructive"
-              /></IconButton>
-            </div>
-            <div
-              class="grid gap-2 sm:grid-cols-[minmax(8rem,0.6fr)_minmax(0,1.4fr)_minmax(8rem,0.5fr)_auto] sm:items-end"
-            >
-              <OptionPicker
-                v-model="newCommandTool"
-                :options="shellToolOptions"
-                :include-empty="false"
-                title="Shell-capable tool"
-                monospace
-              /><Input v-model="newCommandPattern" class="font-mono" placeholder="git push *" /><OptionPicker
-                v-model="newCommandMode"
-                :options="modeOptions"
-                :include-empty="false"
-                title="New command mode"
-              /><Button variant="outline" size="sm" :disabled="!newCommandPattern.trim()" @click="addCommandRule"
-                ><RiAddLine class="mr-1.5 h-4 w-4" /> Add command rule</Button
-              >
-            </div>
-          </div>
-        </div>
+        </fieldset>
 
         <section class="grid gap-2 border-t border-border/60 pt-4">
           <div class="flex flex-wrap items-center justify-between gap-2">

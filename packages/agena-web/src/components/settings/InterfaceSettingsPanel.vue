@@ -4,12 +4,12 @@ import { useI18n } from 'vue-i18n'
 import { RiRefreshLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
+import SearchInput from '@/components/ui/SearchInput.vue'
 import ServerSettingField from '@/components/settings/ServerSettingField.vue'
 import { apiJson } from '@/lib/api'
 import { jsonPathForKey } from '@/lib/runtimeSettings'
 import { normalizeChatActivityKindCatalog, type ChatActivityKindCatalogItem } from '@/lib/chatActivity'
-import { setAppLocale } from '@/i18n'
-import { normalizeAppLocale, SUPPORTED_LOCALES, type AppLocale } from '@/i18n/locale'
+import { SUPPORTED_LOCALES } from '@/i18n/locale'
 
 type ToolCatalogResponse = {
   catalog?: {
@@ -38,6 +38,8 @@ const catalogError = ref('')
 const activityKinds = ref<ChatActivityKindCatalogItem[]>([])
 const toolNames = ref<string[]>([])
 const themeOptions = ref<Array<{ value: string; label: string; description?: string }>>([])
+const activityQuery = ref('')
+const toolQuery = ref('')
 
 const localeOptions = computed(() =>
   SUPPORTED_LOCALES.map((value) => ({
@@ -58,6 +60,24 @@ const graphicsOptions = [
   { value: 'native', label: 'Native', description: 'Prefer native terminal graphics.' },
   { value: 'unicode', label: 'Unicode', description: 'Use portable Unicode rendering.' },
 ]
+
+const filteredActivityKinds = computed(() => {
+  const query = activityQuery.value.trim().toLowerCase()
+  if (!query) return activityKinds.value
+  return activityKinds.value.filter((item) =>
+    `${item.id}
+${item.label}
+${item.category}`
+      .toLowerCase()
+      .includes(query),
+  )
+})
+
+const filteredToolNames = computed(() => {
+  const query = toolQuery.value.trim().toLowerCase()
+  if (!query) return toolNames.value
+  return toolNames.value.filter((name) => name.toLowerCase().includes(query))
+})
 
 async function loadCatalog() {
   if (loadingCatalog.value) return
@@ -88,12 +108,6 @@ async function loadCatalog() {
   } finally {
     loadingCatalog.value = false
   }
-}
-
-function settingSaved(path: string, value: unknown) {
-  if (path !== 'ui.locale') return
-  const locale = normalizeAppLocale(value) as AppLocale | null
-  if (locale) setAppLocale(locale)
 }
 
 function activityLabel(item: ChatActivityKindCatalogItem): string {
@@ -129,6 +143,10 @@ onMounted(() => void loadCatalog())
 
     <section class="grid gap-3">
       <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">TUI</div>
+      <div class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs leading-5 text-muted-foreground">
+        This locale is consumed by server-backed TUI clients. The Web interface language is configured separately on the
+        Web appearance page.
+      </div>
       <ServerSettingField
         path="ui.locale"
         :label="t('settings.tui.fields.locale')"
@@ -138,7 +156,6 @@ onMounted(() => void loadCatalog())
         default-value=""
         :include-empty="true"
         empty-label="Use runtime/default locale"
-        @saved="(value) => settingSaved('ui.locale', value)"
       />
       <ServerSettingField
         path="ui.tui.color_scheme"
@@ -176,9 +193,19 @@ onMounted(() => void loadCatalog())
     </section>
 
     <section class="grid gap-3 border-t border-border/60 pt-5">
-      <div>
-        <h2 class="text-sm font-medium">{{ t('settings.tui.activityKindsTitle') }}</h2>
-        <p class="mt-1 text-xs text-muted-foreground">{{ t('settings.tui.activityKindsDescription') }}</p>
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-medium">{{ t('settings.tui.activityKindsTitle') }}</h2>
+          <p class="mt-1 text-xs text-muted-foreground">{{ t('settings.tui.activityKindsDescription') }}</p>
+        </div>
+        <div class="w-64 max-w-full">
+          <SearchInput
+            v-model="activityQuery"
+            placeholder="Filter activity kinds"
+            :show-search-button="false"
+            input-aria-label="Filter TUI activity kinds"
+          />
+        </div>
       </div>
       <div v-if="loadingCatalog && activityKinds.length === 0" class="text-sm text-muted-foreground">
         Loading activity catalog…
@@ -191,7 +218,7 @@ onMounted(() => void loadCatalog())
       </div>
       <div v-else class="grid gap-2">
         <ServerSettingField
-          v-for="item in activityKinds"
+          v-for="item in filteredActivityKinds"
           :key="activityPath(item.id)"
           :path="activityPath(item.id)"
           :label="activityLabel(item)"
@@ -206,14 +233,33 @@ onMounted(() => void loadCatalog())
     </section>
 
     <section class="grid gap-3 border-t border-border/60 pt-5">
-      <div>
-        <h2 class="text-sm font-medium">{{ t('settings.tui.toolOverridesTitle') }}</h2>
-        <p class="mt-1 text-xs text-muted-foreground">{{ t('settings.tui.toolOverridesDescription') }}</p>
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-medium">{{ t('settings.tui.toolOverridesTitle') }}</h2>
+          <p class="mt-1 text-xs text-muted-foreground">{{ t('settings.tui.toolOverridesDescription') }}</p>
+          <p class="mt-1 text-[11px] text-muted-foreground">
+            {{ filteredToolNames.length }} of {{ toolNames.length }} tools shown
+          </p>
+        </div>
+        <div class="w-72 max-w-full">
+          <SearchInput
+            v-model="toolQuery"
+            placeholder="Filter exact tools"
+            :show-search-button="false"
+            input-aria-label="Filter TUI tool expansion overrides"
+          />
+        </div>
       </div>
       <div v-if="toolNames.length === 0" class="text-sm text-muted-foreground">{{ t('settings.tui.noTools') }}</div>
+      <div
+        v-else-if="filteredToolNames.length === 0"
+        class="rounded-md border border-dashed border-border/60 px-4 py-8 text-center text-sm text-muted-foreground"
+      >
+        No matching tools.
+      </div>
       <div v-else class="grid gap-2">
         <ServerSettingField
-          v-for="name in toolNames"
+          v-for="name in filteredToolNames"
           :key="toolPath(name)"
           :path="toolPath(name)"
           :label="name"

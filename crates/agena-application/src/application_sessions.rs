@@ -465,12 +465,10 @@ impl Application {
                 .cancel_execution_with_outcome(session_id, execution_id)
                 .await
                 .map_err(|error| ApplicationError::from_failure(error.failure)),
-            None => {
-                control
-                    .cancel_session_with_outcome(session_id)
-                    .await
-                    .map_err(|error| ApplicationError::from_failure(error.failure))
-            }
+            None => control
+                .cancel_session_with_outcome(session_id)
+                .await
+                .map_err(|error| ApplicationError::from_failure(error.failure)),
         }
     }
 

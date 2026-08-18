@@ -193,7 +193,7 @@ impl App {
                 entry.parts.iter().find_map(|part| {
                     (agena_tui_transcript::interaction_request_id_for_part(part)
                         == Some(request_id))
-                    .then(|| TranscriptNodeKey::Activity {
+                    .then_some(TranscriptNodeKey::Activity {
                         entry_id: entry.id,
                         content_id: part.id,
                     })

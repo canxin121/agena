@@ -176,7 +176,7 @@ async fn async_main() -> anyhow::Result<()> {
         .context("load completed probe session")?;
     if matches!(
         presentation.workflow_state,
-        agena_domain::WorkflowState::Blocked
+        agena_domain::WorkflowState::AwaitingInteraction
     ) {
         bail!("session remained blocked after AllowOnce");
     }

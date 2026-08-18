@@ -756,9 +756,7 @@ pub(super) fn operation_permission_approved_actions(
         .filter(|part| part.run_id == Some(assistant_message_id) && part.kind == "tool_call")
         .find_map(|part| {
             let operation = operation_from_part(part)?;
-            if operation.authorization.find(request_id).is_none() {
-                return None;
-            }
+            operation.authorization.find(request_id)?;
             let mut approved = Vec::new();
             for permission in &operation.authorization.permissions {
                 let Some(reply) = permission.reply.as_ref() else {

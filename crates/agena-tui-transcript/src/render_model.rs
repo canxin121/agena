@@ -113,7 +113,9 @@ pub enum TranscriptActivityContent<'a> {
     AssistantReplyLifecycle(TranscriptAssistantReplyLifecycle),
     /// Presentation-only marker for activity omitted by the server-side
     /// folded transcript page.
-    Fold { hidden_count: usize },
+    Fold {
+        hidden_count: usize,
+    },
     Request(Box<RequestPartResource>),
 }
 

@@ -47,10 +47,8 @@ impl App {
         else {
             return;
         };
-        if expanded {
-            if let Some(fold) = server_fold {
-                self.request_transcript_fold_parts(fold, false);
-            }
+        if expanded && let Some(fold) = server_fold {
+            self.request_transcript_fold_parts(fold, false);
         }
         self.flash_info(self.i18n.text_args(
             if expanded {

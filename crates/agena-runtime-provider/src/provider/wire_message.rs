@@ -1730,7 +1730,7 @@ mod tests {
                 "message": "<plan_context>continue with the next plan step</plan_context>",
             }),
         );
-        let wire_parts = project_persisted(&[hook_with_message.clone()]);
+        let wire_parts = project_persisted(std::slice::from_ref(&hook_with_message));
         assert_eq!(wire_parts.len(), 1);
         assert!(matches!(
             &wire_parts[0],

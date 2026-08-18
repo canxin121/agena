@@ -118,7 +118,7 @@ pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I
                 .collect::<Vec<_>>();
             let mut table = format!(
                 "| {} |\n| {} |\n",
-                headings.iter().copied().collect::<Vec<_>>().join(" | "),
+                headings.join(" | "),
                 headings
                     .iter()
                     .map(|_| "---")

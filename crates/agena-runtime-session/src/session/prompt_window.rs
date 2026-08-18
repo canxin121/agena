@@ -160,7 +160,7 @@ fn prompt_window_items(
     }) {
         items.push(WindowItem {
             id: Some(notification.part_id),
-            run: project_completion_input(&[notification.clone()]),
+            run: project_completion_input(std::slice::from_ref(notification)),
         });
     }
     items

@@ -229,15 +229,14 @@ pub(super) fn background_operation_from_execution(
         process_id,
         ..
     }) = crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name.as_str(), details)
+        && action == "run"
+        && background
+        && let Some(process_id) = process_id
     {
-        if action == "run" && background {
-            if let Some(process_id) = process_id {
-                return Some(crate::part::BackgroundOperation {
-                    kind: "shell".to_string(),
-                    id: process_id,
-                });
-            }
-        }
+        return Some(crate::part::BackgroundOperation {
+            kind: "shell".to_string(),
+            id: process_id,
+        });
     }
     // Monitor tool: `monitor.start` returns immediately while the monitor
     // keeps streaming; its `monitor_id` stamps the background marker so the
@@ -245,15 +244,13 @@ pub(super) fn background_operation_from_execution(
     if let Some(crate::tool::ToolPayloadOutput::Monitor {
         action, monitor_id, ..
     }) = crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name.as_str(), details)
+        && action == "start"
+        && let Some(monitor_id) = monitor_id
     {
-        if action == "start" {
-            if let Some(monitor_id) = monitor_id {
-                return Some(crate::part::BackgroundOperation {
-                    kind: "monitor".to_string(),
-                    id: monitor_id,
-                });
-            }
-        }
+        return Some(crate::part::BackgroundOperation {
+            kind: "monitor".to_string(),
+            id: monitor_id,
+        });
     }
     None
 }

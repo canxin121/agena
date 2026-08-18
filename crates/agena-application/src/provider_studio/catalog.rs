@@ -931,10 +931,12 @@ mod tests {
     }
 
     fn live_model_with_modes_and_capabilities() -> ProviderModelResource {
-        let mut capabilities = ProviderModelCapabilitiesResource::default();
-        capabilities.image_input = CapabilitySupportResource::Supported;
-        capabilities.audio_input = CapabilitySupportResource::Unsupported;
-        capabilities.reasoning = CapabilitySupportResource::Supported;
+        let capabilities = ProviderModelCapabilitiesResource {
+            image_input: CapabilitySupportResource::Supported,
+            audio_input: CapabilitySupportResource::Unsupported,
+            reasoning: CapabilitySupportResource::Supported,
+            ..Default::default()
+        };
         let mut speed_modes = BTreeMap::new();
         speed_modes.insert(
             "turbo".to_owned(),
@@ -986,8 +988,8 @@ mod tests {
         let selectors = overlay
             .definition
             .thinking_modes
-            .iter()
-            .map(|(name, _)| name.clone())
+            .keys()
+            .cloned()
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(
             selectors,

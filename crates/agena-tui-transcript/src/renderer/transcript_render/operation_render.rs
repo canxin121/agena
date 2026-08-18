@@ -751,10 +751,7 @@ pub(crate) fn render_operation_blocks(
                     .map(|column| column.label.as_deref().unwrap_or(column.key.as_str()))
                     .collect::<Vec<_>>();
                 let mut table = String::new();
-                table.push_str(&format!(
-                    "| {} |\n",
-                    headings.iter().copied().collect::<Vec<_>>().join(" | ")
-                ));
+                table.push_str(&format!("| {} |\n", headings.join(" | ")));
                 table.push_str(&format!(
                     "| {} |\n",
                     headings

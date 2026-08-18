@@ -1040,14 +1040,14 @@ mod interaction_part_routing_tests {
     }
 
     /// The live wizard dialog, for presentation-state assertions.
-    fn dialog<'a>(app: &'a App) -> &'a crate::app_types::UserInputOverlay {
+    fn dialog(app: &App) -> &crate::app_types::UserInputOverlay {
         app.user_input_interactions
             .get(REQUEST_ID)
             .expect("the ask-user dialog is pending")
     }
 
     /// The projected interaction view, for wizard-page assertions.
-    fn wizard_view<'a>(app: &'a App) -> &'a agena_tui_transcript::PendingInteractionView {
+    fn wizard_view(app: &App) -> &agena_tui_transcript::PendingInteractionView {
         app.transcript
             .interaction_views
             .get(REQUEST_ID)

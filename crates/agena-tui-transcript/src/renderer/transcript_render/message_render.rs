@@ -1992,7 +1992,7 @@ fn render_answered_review_rows(
     let Some(question) = request.questions.first() else {
         return;
     };
-    for (_index, option) in question.options.iter().enumerate() {
+    for option in &question.options {
         let answered = values.iter().any(|value| value == &option.label);
         let marker = if answered { "(x)" } else { "( )" };
         out.push(RenderedLine::rich(Line::from(vec![
@@ -2062,7 +2062,7 @@ fn render_answered_question_block(
         Span::styled(header, Style::default().add_modifier(Modifier::BOLD)),
     ])));
     push_interaction_detail_row(out, question.question.as_str(), width);
-    for (_option_index, option) in question.options.iter().enumerate() {
+    for option in &question.options {
         let picked = values.iter().any(|value| value == &option.label);
         let marker = if question.multiple {
             if picked { "[x]" } else { "[ ]" }

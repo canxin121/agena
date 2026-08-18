@@ -1881,7 +1881,7 @@ mod tool_api_function_validation_tests {
         }
 
         fn agena_tool_mode(&self, _model: &ModelId) -> AgenaToolMode {
-            self.mode.clone()
+            self.mode
         }
 
         async fn list_models(&self) -> Result<Vec<Model>, crate::ProviderError> {

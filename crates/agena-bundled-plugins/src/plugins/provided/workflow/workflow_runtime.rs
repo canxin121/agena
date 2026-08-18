@@ -1208,10 +1208,10 @@ use super::{
     compact_tool_summary, search_tools, snapshot_enter_permission_paths, tags_summary,
 };
 
-fn validated_search_queries<'a>(
-    batch: &'a super::ToolApiStringBatch,
+fn validated_search_queries(
+    batch: &super::ToolApiStringBatch,
     max_query_length: usize,
-) -> SdkResult<Vec<&'a str>> {
+) -> SdkResult<Vec<&str>> {
     let queries = batch.as_slice();
     if queries.is_empty() {
         return Err(PluginError::invalid_params(

@@ -4,9 +4,7 @@
 //! through the server's query/command surface.
 
 use agena_api::{
-    commands::{
-        Command, CommandResult, DismissActivityParams, StopActivityParams,
-    },
+    commands::{Command, CommandResult, DismissActivityParams, StopActivityParams},
     queries::{ActivityLogsParams, ListActivitiesParams, Query, QueryResult},
     resource::{BackgroundActivityLogResource, BackgroundActivityResource},
 };

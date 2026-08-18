@@ -13,6 +13,7 @@
 //! `TranscriptSnapshot`), this projection owns every value: parts arrive as
 //! JSON and are decoded into the render model here, so entries are `'static`.
 
+use agena_api::live::SessionTranscriptFoldResource;
 use agena_api::{
     part::{
         AttachmentPartResource, ErrorPartResource, HookPartResource, OperationPartResource,
@@ -22,12 +23,10 @@ use agena_api::{
     },
     resource::{
         PartAttachment, PartAttachmentKind, PartAttachmentSource, PartSkillReference, RunRole,
-        RunStatus, SessionTranscriptPart, UserInputOption,
-        UserInputQuestion, UserInputReply,
+        RunStatus, SessionTranscriptPart, UserInputOption, UserInputQuestion, UserInputReply,
         UserInputReplyKind, UserInputRequest,
     },
 };
-use agena_api::live::SessionTranscriptFoldResource;
 use agena_domain::TextSegmentActivity;
 use agena_runtime_contracts::part_content::InteractionContent;
 use serde_json::Value;
@@ -592,11 +591,11 @@ fn operation_resource_from_content(content: &Value) -> Option<OperationPartResou
     // never fails atomically on a single rich block (which would otherwise
     // degrade the whole operation to a bare name + input).
     let mut operation_value = content.get("operation")?.clone();
-    if let Some(result) = operation_value.get_mut("result") {
-        if let Some(blocks) = result.get_mut("content").and_then(Value::as_array_mut) {
-            for block in blocks {
-                normalize_stored_operation_block(block);
-            }
+    if let Some(result) = operation_value.get_mut("result")
+        && let Some(blocks) = result.get_mut("content").and_then(Value::as_array_mut)
+    {
+        for block in blocks {
+            normalize_stored_operation_block(block);
         }
     }
     let mut operation = serde_json::from_value::<OperationPartResource>(operation_value).ok()?;

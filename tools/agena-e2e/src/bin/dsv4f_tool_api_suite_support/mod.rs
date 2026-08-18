@@ -512,7 +512,7 @@ pub(super) fn can_retry_missing_tool_api_call(
     tool_name: &str,
     input: &Value,
 ) -> bool {
-    if session.workflow_state == WorkflowState::Blocked {
+    if session.workflow_state == WorkflowState::AwaitingInteraction {
         return false;
     }
     let expected = json!({"tool": tool_name, "input": input});
@@ -533,7 +533,7 @@ pub(super) fn can_retry_missing_native_invocation(
     canonical_function: &str,
     input: &Value,
 ) -> bool {
-    if session.workflow_state == WorkflowState::Blocked {
+    if session.workflow_state == WorkflowState::AwaitingInteraction {
         return false;
     }
     let calls = operations_since(session, start_message_count)
@@ -559,7 +559,7 @@ pub(super) fn extract_tool_api_outcome(
     expect_success: bool,
 ) -> anyhow::Result<ToolApiOutcome> {
     ensure!(
-        session.workflow_state != WorkflowState::Blocked,
+        session.workflow_state != WorkflowState::AwaitingInteraction,
         "session remained blocked"
     );
     let operations = operations_since(session, start_message_count);
@@ -655,7 +655,7 @@ pub(super) fn extract_native_outcome(
     tool_marker: Option<&str>,
 ) -> anyhow::Result<ToolApiOutcome> {
     ensure!(
-        session.workflow_state != WorkflowState::Blocked,
+        session.workflow_state != WorkflowState::AwaitingInteraction,
         "session remained blocked"
     );
     let matching = operations_since(session, start_message_count)

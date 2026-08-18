@@ -450,6 +450,7 @@ impl SessionManagerState {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_with_permission_stores(
         provider_registry: Arc<ProviderRegistry>,
         context_governor: ContextGovernor,

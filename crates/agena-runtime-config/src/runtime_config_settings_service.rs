@@ -486,7 +486,8 @@ fn finish_runtime_settings_edit(
     created: bool,
     deleted: bool,
     validator: Option<&RuntimeSettingsDocumentValidator>,
-) -> Result<ConfigSettingsEditResponse, RuntimeConfigSettingsError> {    let text = serde_json::to_string_pretty(&document)
+) -> Result<ConfigSettingsEditResponse, RuntimeConfigSettingsError> {
+    let text = serde_json::to_string_pretty(&document)
         .map_err(|error| RuntimeConfigSettingsError::internal(error.to_string()))?;
     if options.validate {
         let validator = validator.ok_or_else(|| {

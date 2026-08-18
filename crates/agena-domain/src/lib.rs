@@ -100,12 +100,11 @@ pub use activity::{
     ActivityActor, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
     ActivityProvenance, ActivityState, AssistantReplySnapshot, AssistantReplyStatus,
     CancellationOutcome, CancellationResult, ComposerActivity, ComposerDocument, ComposerNode,
-    ContentDocument,
-    ContentNode, ContentPosition, ErrorActivity, ExecutionTarget, InteractionActivity,
-    NoticeActivity, OperationActivity, OperationActivityError, OperationAuthorization,
-    OperationPermission, ReasoningActivity, ResourceActivity, ResourceKind, ResourceReference,
-    SkillReferenceActivity, TextArtifactActivity, TextSegment, TextSegmentActivity,
-    TranscriptPatch, TranscriptSnapshot, TurnSnapshot,
+    ContentDocument, ContentNode, ContentPosition, ErrorActivity, ExecutionTarget,
+    InteractionActivity, NoticeActivity, OperationActivity, OperationActivityError,
+    OperationAuthorization, OperationPermission, ReasoningActivity, ResourceActivity, ResourceKind,
+    ResourceReference, SkillReferenceActivity, TextArtifactActivity, TextSegment,
+    TextSegmentActivity, TranscriptPatch, TranscriptSnapshot, TurnSnapshot,
 };
 pub use activity_kind::{
     ACTIVITY_KIND_ERROR, ACTIVITY_KIND_HOOK, ACTIVITY_KIND_INTERACTION, ACTIVITY_KIND_NOTICE,

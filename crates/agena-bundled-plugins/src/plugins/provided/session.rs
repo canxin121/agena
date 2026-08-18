@@ -198,7 +198,6 @@ impl SessionPlugin {
                 session_id: Some(context.session_id),
             })
             .await
-            .map_err(Into::into)
     }
 
     #[tool(

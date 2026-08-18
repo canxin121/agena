@@ -84,17 +84,18 @@ impl ActivityRuntimeState {
 /// because the bridge needs the session manager.
 pub(crate) struct MonitorActivityBridge {
     pub(crate) registry: ActivityRegistry,
-    pub(crate) on_finished:
-        Arc<std::sync::Mutex<Option<Arc<dyn Fn(&ProcessSummary) + Send + Sync + 'static>>>>,
+    pub(crate) on_finished: SharedFinishedCallback,
     /// Projected per-event (everything-is-a-part Monitor: every event is a
     /// `system_notification` part). Populated after the runtime is assembled,
     /// like `on_finished`.
-    pub(crate) on_event: Arc<
-        std::sync::Mutex<
-            Option<Arc<dyn Fn(&ProcessEvent, &ProcessSummary) + Send + Sync + 'static>>,
-        >,
-    >,
+    pub(crate) on_event: SharedEventCallback,
 }
+
+type SharedFinishedCallback =
+    Arc<std::sync::Mutex<Option<Arc<dyn Fn(&ProcessSummary) + Send + Sync + 'static>>>>;
+type SharedEventCallback = Arc<
+    std::sync::Mutex<Option<Arc<dyn Fn(&ProcessEvent, &ProcessSummary) + Send + Sync + 'static>>>,
+>;
 
 impl std::fmt::Debug for MonitorActivityBridge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

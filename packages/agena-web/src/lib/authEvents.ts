@@ -9,6 +9,8 @@ export type AuthRequiredDetail = {
   status?: number
   code?: string
   url?: string
+  /** Version of the UI token used by the request that received 401. */
+  authTokenVersion?: number
 }
 
 export type StoredAuthRequired = {

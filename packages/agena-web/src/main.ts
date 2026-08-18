@@ -24,6 +24,7 @@ import {
   clearAuthRequiredFromStorage,
   type AuthRequiredDetail,
 } from './lib/authEvents.ts'
+import { readUiAuthTokenVersion } from './lib/uiAuthToken'
 
 // Capture initial page-load context so components that mount lazily (e.g. mobile sidebar)
 // can still tell whether a session query came from a fresh load vs in-app navigation.
@@ -65,6 +66,14 @@ function ensureAuthRefreshSoon() {
 }
 
 function handleAuthRequired(detail?: AuthRequiredDetail) {
+  // Requests started before login can finish with 401 after the new token has
+  // been written. Their event is stale and must not bounce the app back to the
+  // login page. The version is intentionally metadata only; the bearer token
+  // itself is never placed in the event or sessionStorage.
+  if (typeof detail?.authTokenVersion === 'number' && detail.authTokenVersion !== readUiAuthTokenVersion()) {
+    return
+  }
+
   const msg =
     String(detail?.message || i18n.global.t('auth.uiAuthRequired')).trim() ||
     String(i18n.global.t('auth.uiAuthRequired'))

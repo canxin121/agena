@@ -6,6 +6,12 @@ type TokenMap = Record<string, string>
 
 const STORAGE_KEY = localStorageKeys.auth.uiTokenByBaseUrl
 
+// A monotonically increasing version lets callers tell whether a response was
+// produced with the same token that is currently active. This matters during
+// login: requests started by the locked page can finish after a new token has
+// been issued and must not invalidate that new session.
+let uiAuthTokenVersion = 0
+
 function normalizeKey(baseUrl: string): string {
   const trimmed = String(baseUrl || '').trim()
   return trimmed.replace(/\/+$/g, '')
@@ -18,6 +24,10 @@ function readMap(): TokenMap {
 
 function writeMap(next: TokenMap) {
   setLocalJson(STORAGE_KEY, next)
+}
+
+export function readUiAuthTokenVersion(): number {
+  return uiAuthTokenVersion
 }
 
 export function readUiAuthTokenForBaseUrl(baseUrl: string): string {
@@ -37,7 +47,9 @@ export function writeUiAuthTokenForBaseUrl(baseUrl: string, token: string) {
     return
   }
   const map = readMap()
+  if (map[key] === value) return
   writeMap({ ...map, [key]: value })
+  uiAuthTokenVersion += 1
 }
 
 export function clearUiAuthTokenForBaseUrl(baseUrl: string) {
@@ -50,9 +62,11 @@ export function clearUiAuthTokenForBaseUrl(baseUrl: string) {
   // Keep storage tidy.
   if (Object.keys(next).length === 0) {
     removeLocalKey(STORAGE_KEY)
+    uiAuthTokenVersion += 1
     return
   }
   writeMap(next)
+  uiAuthTokenVersion += 1
 }
 
 export function readActiveUiAuthToken(): string {

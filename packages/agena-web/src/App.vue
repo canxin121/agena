@@ -17,7 +17,10 @@ const settings = useSettingsStore()
 
 const backendReady = computed(() => health.data !== null)
 const showLogin = computed(() => !showLoading.value && (auth.needsLogin || !backendReady.value))
-const showLoading = computed(() => health.data === null)
+// Do not mount the previous page while /auth/session is still being checked.
+// Its initial protected requests would otherwise emit 401s and race the login
+// page into existence before the auth state has settled.
+const showLoading = computed(() => health.data === null || !auth.checked)
 
 let probeTimer: ReturnType<typeof setInterval> | null = null
 let probeBusy = false

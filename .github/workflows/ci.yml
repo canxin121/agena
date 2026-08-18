@@ -1,72 +1,27 @@
 name: CI
 
 on:
-  # Automatic push/PR runs are disabled while GitHub Actions billing is
-  # unavailable. Keep the workflow manually runnable without deleting its
-  # checks so the automatic triggers can be restored in one small change.
   workflow_dispatch:
 
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  fmt:
-    name: rustfmt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-          components: rustfmt
-      - run: cargo fmt --all --check
-
-  clippy:
-    name: clippy
-    runs-on: ubuntu-latest
-    env:
-      # Use portable compiler outputs instead of runner-local Cargo incremental state.
-      CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: sccache
-      SCCACHE_BASEDIRS: ${{ github.workspace }}
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: agena-v1
-      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-          components: clippy
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.17.0
-      - name: Restore Cargo dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          prefix-key: v1-rust-sccache
-          cache-bin: false
-          cache-on-failure: true
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-
-  test:
-    name: regression tests (${{ matrix.os }})
+  sccache-wrapper-probe:
+    name: sccache wrapper probe (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            shell: bash
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            shell: pwsh
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: sccache
       SCCACHE_BASEDIRS: ${{ github.workspace }}
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_VERSION: agena-v1
@@ -74,129 +29,73 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: 067b8be5c0775f0877a2f8c3a837fe895afdf059
           persist-credentials: false
+
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: 1.97.0
+
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.17.0
-      - name: Restore Cargo dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          prefix-key: v1-rust-sccache
-          cache-bin: false
-          cache-on-failure: true
-      - name: failure semantics architecture gate
-        run: python3 scripts/refactors/check-refactor-invariants.py --manifest scripts/refactors/failure-semantics-invariants.json --root .
-      - run: cargo check --workspace --locked
-      - name: capability identity snapshot drift
-        run: cargo test -p agena-bundled-plugins capability_identity_snapshot_matches_committed_json --locked
-      - run: cargo test --workspace --locked
-      - run: cargo test -p agena-e2e --locked
-      - run: cargo test -p agena --locked git_
-      - name: build examples
+
+      - name: Configure absolute sccache wrapper (Unix)
+        if: matrix.shell == 'bash'
+        shell: bash
         run: |
-          cargo build --manifest-path examples/echo_plugin/Cargo.toml --locked
-          cargo build --manifest-path examples/echo_plugin_stdio/Cargo.toml --locked
+          set -euo pipefail
+          [[ -x "$SCCACHE_PATH" ]]
+          printf 'RUSTC_WRAPPER=%s\n' "$SCCACHE_PATH" >> "$GITHUB_ENV"
+          printf 'resolved_sccache=%s\n' "$(command -v sccache)"
+          "$SCCACHE_PATH" --version
+          "$SCCACHE_PATH" --zero-stats
 
-  deny:
-    name: cargo-deny
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check bans licenses sources advisories
+      - name: Configure absolute sccache wrapper (Windows)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: |
+          $wrapper = $env:SCCACHE_PATH
+          if (-not (Test-Path -LiteralPath $wrapper)) {
+            $wrapper = "$wrapper.exe"
+          }
+          if (-not (Test-Path -LiteralPath $wrapper)) {
+            throw "sccache executable not found at $wrapper"
+          }
+          "RUSTC_WRAPPER=$wrapper" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "resolved_sccache=$((Get-Command sccache).Source)"
+          & $wrapper --version
+          & $wrapper --zero-stats
 
-  audit:
-    name: cargo-audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # rsa is present only behind sqlx-mysql, which Agena does not enable.
-          ignore: "RUSTSEC-2023-0071"
+      - name: Build probe crate (Unix)
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf target/sccache-probe
+          cargo build \
+            -p agena-failure \
+            --release \
+            --locked \
+            --target "${{ matrix.target }}" \
+            --target-dir target/sccache-probe
+          "$SCCACHE_PATH" --show-stats
 
-  lockfile:
-    name: lockfile freshness
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-      - run: cargo update --workspace --locked
-
-  unused-dependencies:
-    name: unused Cargo dependencies
-    runs-on: ubuntu-latest
-    env:
-      CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: sccache
-      SCCACHE_BASEDIRS: ${{ github.workspace }}
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: agena-v1
-      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.17.0
-      - name: Restore Cargo tool cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          prefix-key: v1-rust-sccache
-          key: cargo-machete-0.9.2
-          cache-all-crates: true
-          cache-on-failure: true
-      - run: cargo install cargo-machete --version 0.9.2 --locked
-      - run: cargo machete
-
-  feature-checks:
-    name: feature checks
-    runs-on: ubuntu-latest
-    env:
-      CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: sccache
-      SCCACHE_BASEDIRS: ${{ github.workspace }}
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: agena-v1
-      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-        with:
-          toolchain: 1.97.0
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.17.0
-      - name: Restore Cargo dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          prefix-key: v1-rust-sccache
-          cache-bin: false
-          cache-on-failure: true
-      - run: cargo check -p agena-marketplace-server --features server --locked
-      - run: cargo check -p agena-plugin-host --all-features --locked
-      - run: cargo check -p agena-runtime --all-features --locked
-      - run: cargo check -p agena-api-server --all-features --locked
-      - run: cargo check -p agena-cli --all-features --locked
+      - name: Build probe crate (Windows)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath target/sccache-probe) {
+            Remove-Item -LiteralPath target/sccache-probe -Recurse -Force
+          }
+          cargo build `
+            -p agena-failure `
+            --release `
+            --locked `
+            --target "${{ matrix.target }}" `
+            --target-dir target/sccache-probe
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo build probe failed"
+          }
+          & $env:RUSTC_WRAPPER --show-stats

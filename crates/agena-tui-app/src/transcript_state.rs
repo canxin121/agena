@@ -282,10 +282,7 @@ impl TranscriptState {
         if parts.is_empty() {
             return false;
         }
-        let fetched_non_text = parts
-            .iter()
-            .filter(|part| part.kind != "run")
-            .count();
+        let fetched_non_text = parts.iter().filter(|part| part.kind != "run").count();
         let mut by_id = self
             .parts
             .iter()
@@ -296,7 +293,8 @@ impl TranscriptState {
             by_id.insert(part.part_id, part.clone());
         }
         self.parts = by_id.into_values().collect();
-        self.parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
+        self.parts
+            .sort_by_key(|part| (part.created_at_ms, part.part_id));
 
         let next_anchor = parts
             .iter()
@@ -304,9 +302,11 @@ impl TranscriptState {
             .map(|part| part.part_id)
             .unwrap_or(anchor_part_id);
         let mut remove_fold = false;
-        if let Some(fold) = self.transcript_folds.iter_mut().find(|fold| {
-            fold.run_id == run_id && fold.anchor_part_id == anchor_part_id
-        }) {
+        if let Some(fold) = self
+            .transcript_folds
+            .iter_mut()
+            .find(|fold| fold.run_id == run_id && fold.anchor_part_id == anchor_part_id)
+        {
             fold.hidden_count = fold.hidden_count.saturating_sub(fetched_non_text as u64);
             fold.anchor_part_id = next_anchor;
             fold.next_cursor = next_cursor;
@@ -396,6 +396,29 @@ impl TranscriptState {
     pub(crate) fn remove_pending_user_message(&mut self, id: u64) {
         self.pending_user_messages
             .retain(|message| message.id != id);
+        self.invalidate_render();
+    }
+
+    /// Remove a withdrawn run from the local transcript immediately. The live
+    /// `part_removed` notifications remain the authoritative cross-check, but
+    /// cancellation should not briefly render the message again while a
+    /// refresh races those notifications.
+    pub(crate) fn remove_run_parts(&mut self, run_id: i64) {
+        self.parts
+            .retain(|part| part.part_id != run_id && part.run_id != Some(run_id));
+        self.reply_failures.remove(&run_id);
+        self.transcript_folds
+            .retain(|fold| fold.run_id != run_id && !fold.run_ids.contains(&run_id));
+        self.record_reply_failures();
+        self.invalidate_render();
+    }
+
+    pub(crate) fn remove_pending_user_messages_for_document(
+        &mut self,
+        document: &agena_domain::ComposerDocument,
+    ) {
+        self.pending_user_messages
+            .retain(|message| &message.document != document);
         self.invalidate_render();
     }
 
@@ -1212,10 +1235,8 @@ impl TranscriptState {
         let mut lines = Vec::new();
         let mut nodes = Vec::new();
         let mut line_nodes = Vec::new();
-        let mut entries = agena_tui_transcript::parts_entries_with_folds(
-            &self.parts,
-            &self.transcript_folds,
-        );
+        let mut entries =
+            agena_tui_transcript::parts_entries_with_folds(&self.parts, &self.transcript_folds);
         inject_remembered_failures(&mut entries, &self.reply_failures);
         #[cfg(test)]
         let entries = if self.parts.is_empty() {

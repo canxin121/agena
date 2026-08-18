@@ -1,3 +1,5 @@
+use super::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Public descriptor for a Runtime tool owned by the server.
 pub struct OperatorToolResource {
@@ -9,6 +11,15 @@ pub struct OperatorToolResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_help: Option<String>,
     pub input_schema: serde_json::Value,
+    /// Whether this tool is marked as interactive by its permission contract
+    /// or discovery metadata. Consumers that cannot service interaction
+    /// should hide it.
+    #[serde(default)]
+    pub interactive: bool,
+    /// Stable full plugin id (for example, `agena.fs`). Optional for
+    /// backwards compatibility with older server responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -45,5 +56,3 @@ mod tests {
         assert_eq!(request.workspace_id, 42);
     }
 }
-
-use super::{Deserialize, Serialize};

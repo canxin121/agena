@@ -12,6 +12,8 @@ impl Application {
                 before_help: tool.before_help,
                 after_help: tool.after_help,
                 input_schema: tool.input_schema,
+                interactive: tool.interactive,
+                plugin_id: tool.plugin_id,
             })
             .collect()
     }

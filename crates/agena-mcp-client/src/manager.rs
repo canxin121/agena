@@ -1357,7 +1357,7 @@ async fn connect_http(
             .map_err(|error| McpError::Auth(error.to_string()))?
         {
             return Err(McpError::Auth(format!(
-                "OAuth authorization is required for MCP server '{server_name}'; run `agena mcp login {server_name} --browser --url {url}`"
+                "OAuth authorization is required for MCP server '{server_name}'; configure its OAuth credential in the configured MCP client credential store before starting Agena"
             )));
         }
         let http_client = reqwest::Client::builder()

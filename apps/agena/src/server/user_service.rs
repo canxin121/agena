@@ -113,6 +113,10 @@ fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
     arguments.push(args.host.as_str().into());
     arguments.push("--port".into());
     arguments.push(args.port.to_string().into());
+    if let Some(mcp_public_url) = &args.mcp_public_url {
+        arguments.push("--mcp-public-url".into());
+        arguments.push(mcp_public_url.into());
+    }
 
     let workspace = args
         .workspace_root
@@ -141,10 +145,10 @@ fn home_dir() -> Result<PathBuf> {
 fn service_file_path() -> Result<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        return Ok(home_dir()?
+        Ok(home_dir()?
             .join("Library")
             .join("LaunchAgents")
-            .join(format!("{SERVICE_LABEL}.plist")));
+            .join(format!("{SERVICE_LABEL}.plist")))
     }
     #[cfg(target_os = "linux")]
     {
@@ -484,6 +488,7 @@ mod tests {
             host: "127.0.0.1".to_owned(),
             port: 3210,
             ui_password: None,
+            mcp_public_url: None,
             workspace_root: Some(PathBuf::from("/tmp/agena-workspace")),
             ui_dir: Some(PathBuf::from("/opt/agena/web-dist")),
         };

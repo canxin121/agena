@@ -16,6 +16,12 @@ pub struct RuntimeToolDescriptor {
     pub before_help: Option<String>,
     pub after_help: Option<String>,
     pub input_schema: serde_json::Value,
+    /// Whether this tool is marked as interactive by either its permission
+    /// contract or its discovery metadata. Non-interactive hosts, such as MCP
+    /// clients, must not expose it.
+    pub interactive: bool,
+    /// Stable full plugin id (for example, `agena.fs`).
+    pub plugin_id: Option<String>,
 }
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]

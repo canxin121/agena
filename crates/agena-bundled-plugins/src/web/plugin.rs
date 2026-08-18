@@ -1840,7 +1840,7 @@ impl WebPlugin {
     }
 
     #[tool(
-        tags(network, query, discovery),
+        tags(network, interactive, query, discovery),
         name = "browser_list",
         summary = "List open page targets in the managed interactive browser.",
         read_only,
@@ -1910,7 +1910,7 @@ impl WebPlugin {
     }
 
     #[tool(
-        tags(network, mutate),
+        tags(network, interactive, mutate),
         name = "browser_close",
         summary = "Close one page target in the managed interactive browser.",
         mutating
@@ -1941,7 +1941,7 @@ impl WebPlugin {
         ))
     }
     #[tool(
-        tags(network, mutate),
+        tags(network, interactive, mutate),
         name = "browser_shutdown",
         summary = "Shut down the managed browser process and all its sessions.",
         help = "Closes the underlying Chrome/Chromium process used for rendered fetches and interactive browsing, and removes its temporary profile. All browser sessions are discarded; the next browser_open starts a fresh browser. Use this to release memory without exiting Agena.",
@@ -1993,7 +1993,7 @@ impl WebPlugin {
     }
 
     #[tool(
-        tags(network, query),
+        tags(network, interactive, query),
         name = "browser_snapshot",
         summary = "Inspect visible text and interactive elements in a browser session.",
         read_only,
@@ -2068,7 +2068,7 @@ impl WebPlugin {
     }
 
     #[tool(
-        tags(network, query),
+        tags(network, interactive, query),
         name = "browser_wait",
         summary = "Wait for page readiness, a CSS selector, or visible text.",
         read_only,
@@ -2098,7 +2098,7 @@ impl WebPlugin {
     }
 
     #[tool(
-        tags(network, mutate, filesystem),
+        tags(network, interactive, mutate, filesystem),
         name = "browser_screenshot",
         summary = "Capture a browser screenshot and return it as an image attachment.",
         mutating
@@ -2173,7 +2173,7 @@ impl WebPlugin {
     }
 
     #[tool(
-        tags(network, mutate, filesystem),
+        tags(network, interactive, mutate, filesystem),
         name = "browser_download",
         summary = "Download one HTTP(S) URL through a managed browser session and return a local artifact.",
         mutating
@@ -3558,7 +3558,7 @@ mod tests {
     };
 
     use agena_domain::{BackgroundActivityKind, BackgroundActivityStatus};
-    use agena_plugin_host::sdk::Plugin;
+    use agena_plugin_host::sdk::{Plugin, ToolTag};
 
     use super::{
         BrowserSessionLog, CdpClient, WebPlugin, browser_activity, browser_element_expression,
@@ -3684,6 +3684,15 @@ mod tests {
             "browser_download",
         ] {
             assert!(names.contains(&name), "missing {name}");
+            let tool = manifest
+                .tools
+                .iter()
+                .find(|tool| tool.name == name)
+                .expect("tool name checked above");
+            assert!(
+                tool.has_tag(ToolTag::Interactive),
+                "browser tool {name} must be marked interactive"
+            );
         }
     }
 

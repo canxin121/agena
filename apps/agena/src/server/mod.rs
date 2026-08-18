@@ -1,13 +1,14 @@
 mod app;
 mod auth;
-pub(crate) mod server_record;
 mod diagnostics;
 mod error;
 mod fs;
+pub(crate) mod server_record;
 mod git {
     pub(crate) use agena_git_http::*;
 }
 mod lifecycle;
+pub(crate) mod mcp;
 mod path_utils;
 mod persistence;
 mod preview;

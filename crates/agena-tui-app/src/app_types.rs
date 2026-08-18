@@ -786,7 +786,7 @@ pub(super) enum AppMessage {
     /// already signalled cancel intent.
     RunCancelled {
         session_id: i64,
-        result: UiResult<()>,
+        result: UiResult<agena_domain::CancellationOutcome>,
     },
     StatusLineUpdated {
         output: Option<String>,

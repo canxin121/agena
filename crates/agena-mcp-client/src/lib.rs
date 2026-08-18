@@ -8,7 +8,6 @@
 
 pub mod error;
 pub mod manager;
-pub mod oauth;
 pub mod protocol;
 pub mod token_store;
 
@@ -18,7 +17,6 @@ pub use manager::{
     McpServerAuthMode, McpServerStatus, McpToolPolicy, McpToolRisk, ReconnectPolicy, ServerSpec,
     TokenStore,
 };
-pub use oauth::McpOAuthLoginSession;
 pub use protocol::{
     CallToolParams, CallToolResult, ContentBlock, GetPromptParams, GetPromptResult,
     ListPromptsResult, ListResourcesResult, ListToolsResult, PromptArgument, PromptDescriptor,

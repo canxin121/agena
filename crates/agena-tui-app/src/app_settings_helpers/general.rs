@@ -27,6 +27,181 @@ pub(crate) fn settings_studio_plugin_items(
     items
 }
 
+pub(crate) fn settings_studio_mcp_items(
+    i18n: &I18n,
+    application: &crate::TuiBackend,
+) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
+    let control = application.cached_mcp_server_control();
+    let enabled = control
+        .as_ref()
+        .and_then(|value| value.get("enabled"))
+        .and_then(serde_json::Value::as_bool);
+    let auth_enabled = control
+        .as_ref()
+        .and_then(|value| value.get("authEnabled"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let ready = control
+        .as_ref()
+        .and_then(|value| value.get("ready"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let warnings = control
+        .as_ref()
+        .and_then(|value| value.get("warnings"))
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+        .unwrap_or_default();
+    let configured_url = control
+        .as_ref()
+        .and_then(|value| value.get("publicUrl"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty());
+    let resource_url = control
+        .as_ref()
+        .and_then(|value| value.get("resourceUrl"))
+        .and_then(serde_json::Value::as_str);
+    let password_status = control
+        .as_ref()
+        .and_then(|value| value.get("oauth"))
+        .and_then(|value| value.get("passwordConfigured"))
+        .and_then(serde_json::Value::as_bool)
+        .map(|configured| {
+            if configured {
+                ui_text::t(i18n, "settings-mcp-oauth-password-configured")
+            } else if control
+                .as_ref()
+                .and_then(|value| value.get("oauth"))
+                .and_then(|value| value.get("fallbackToUiPassword"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                ui_text::t(i18n, "settings-mcp-oauth-password-ui-fallback")
+            } else {
+                ui_text::t(i18n, "settings-mcp-oauth-password-not-configured")
+            }
+        })
+        .unwrap_or_else(|| ui_text::t(i18n, "settings-mcp-status-unavailable"));
+    let readiness_status = if ready {
+        ui_text::t(i18n, "settings-mcp-ready")
+    } else if control.is_some() {
+        let label = ui_text::t(i18n, "settings-mcp-needs-attention");
+        if warnings.is_empty() {
+            label
+        } else {
+            format!("{label}: {warnings}")
+        }
+    } else {
+        ui_text::t(i18n, "settings-mcp-status-unavailable")
+    };
+
+    let mut items = vec![
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-mcp-server-label"),
+            enabled
+                .map(|enabled| {
+                    if enabled {
+                        format!(
+                            "{} · {readiness_status}",
+                            ui_text::t(i18n, "settings-mcp-server-enabled")
+                        )
+                    } else {
+                        format!(
+                            "{} · {readiness_status}",
+                            ui_text::t(i18n, "settings-mcp-server-disabled")
+                        )
+                    }
+                })
+                .unwrap_or_else(|| ui_text::t(i18n, "settings-mcp-status-unavailable")),
+            format!(
+                "{} {readiness_status}",
+                ui_text::t(i18n, "settings-mcp-server-detail")
+            ),
+            SettingsPickerAction::ToggleMcpServer,
+        ),
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-mcp-auth-label"),
+            if auth_enabled {
+                ui_text::t(i18n, "settings-mcp-auth-enabled")
+            } else {
+                ui_text::t(i18n, "settings-mcp-auth-disabled")
+            },
+            if auth_enabled {
+                let oauth = control.as_ref().and_then(|value| value.get("oauth"));
+                let registrations = oauth
+                    .and_then(|value| value.get("registrationMethods"))
+                    .and_then(serde_json::Value::as_array)
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(" / ")
+                    })
+                    .unwrap_or_else(|| "—".to_owned());
+                let pkce = oauth
+                    .and_then(|value| value.get("pkceMethods"))
+                    .and_then(serde_json::Value::as_array)
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(" / ")
+                    })
+                    .unwrap_or_else(|| "—".to_owned());
+                format!(
+                    "{} {}: {registrations}; {}: {pkce}",
+                    ui_text::t(i18n, "settings-mcp-auth-detail"),
+                    ui_text::t(i18n, "settings-mcp-registration-label"),
+                    ui_text::t(i18n, "settings-mcp-pkce-label"),
+                )
+            } else {
+                ui_text::t(i18n, "settings-mcp-auth-detail")
+            },
+            SettingsPickerAction::ToggleMcpAuth,
+        ),
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-mcp-public-url-label"),
+            configured_url
+                .map(str::to_owned)
+                .unwrap_or_else(|| ui_text::t(i18n, "settings-mcp-public-url-auto")),
+            resource_url
+                .map(|value| {
+                    format!(
+                        "{} ({value})",
+                        ui_text::t(i18n, "settings-mcp-public-url-detail")
+                    )
+                })
+                .unwrap_or_else(|| ui_text::t(i18n, "settings-mcp-public-url-detail")),
+            SettingsPickerAction::EditMcpPublicUrl,
+        ),
+    ];
+    if auth_enabled {
+        items.extend([
+            SettingsStudioItem::new(
+                ui_text::t(i18n, "settings-mcp-oauth-password-label"),
+                password_status,
+                ui_text::t(i18n, "settings-mcp-oauth-password-detail"),
+                SettingsPickerAction::EditMcpOAuthPassword,
+            ),
+            SettingsStudioItem::new(
+                ui_text::t(i18n, "settings-mcp-oauth-password-clear-label"),
+                ui_text::t(i18n, "value-clear"),
+                ui_text::t(i18n, "settings-mcp-oauth-password-clear-detail"),
+                SettingsPickerAction::ClearMcpOAuthPassword,
+            ),
+        ]);
+    }
+    items
+}
+
 pub(crate) fn permission_layer_source_rows(
     i18n: &I18n,
     global_permission: &PermissionConfig,

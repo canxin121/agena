@@ -396,6 +396,14 @@ impl InMemoryEngine {
     }
 }
 
+fn user_send_marker_content(execution_id: Option<&str>) -> Value {
+    let mut content = json!({ "run_kind": "user_send", "abort_reason": null });
+    if let Some(execution_id) = execution_id {
+        content["execution_id"] = Value::String(execution_id.to_owned());
+    }
+    content
+}
+
 #[async_trait]
 impl PersistenceEngine for InMemoryEngine {
     async fn create_session(&self, new_session: NewSession) -> Result<SessionMeta, StoreError> {
@@ -1798,7 +1806,33 @@ impl PersistenceEngine for InMemoryEngine {
             session_id,
             PartRole::User,
             marker_state,
-            json!({ "run_kind": "user_send", "abort_reason": null }),
+            user_send_marker_content(None),
+            parts,
+            idempotency_key,
+            now_ms,
+        )
+    }
+
+    async fn submit_user_run_for_execution(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        parts: Vec<NewPart>,
+        idempotency_key: Option<String>,
+        execution_id: &str,
+        now_ms: i64,
+    ) -> Result<SubmitOutcome, StoreError> {
+        self.ensure_lease(session_id, owner_id, now_ms)?;
+        let marker_state = if parts.iter().all(|part| part.state.is_terminal()) {
+            PartState::Completed
+        } else {
+            PartState::Pending
+        };
+        self.create_batch(
+            session_id,
+            PartRole::User,
+            marker_state,
+            user_send_marker_content(Some(execution_id)),
             parts,
             idempotency_key,
             now_ms,
@@ -2154,6 +2188,70 @@ impl PersistenceEngine for InMemoryEngine {
         Ok(self
             .abort_runs(session_id, &[run_id], "user_cancelled", now_ms)?
             .updated_parts)
+    }
+
+    async fn withdraw_user_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_id: i64,
+        now_ms: i64,
+    ) -> Result<Vec<Part>, StoreError> {
+        self.ensure_lease(session_id, owner_id, now_ms)?;
+
+        let member_ids = self
+            .membership
+            .read()
+            .expect("membership lock")
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_default();
+        if !member_ids.contains(&run_id) {
+            // A repeated withdrawal, or a run that was already removed from
+            // this projection, is intentionally idempotent.
+            return Ok(Vec::new());
+        }
+
+        let parts = self.parts.read().expect("parts lock");
+        let marker = parts
+            .get(&run_id)
+            .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
+        if !marker.is_run_marker()
+            || marker.role != PartRole::User
+            || marker.origin_session_id != session_id
+            || marker.content.get("run_kind").and_then(Value::as_str) != Some("user_send")
+        {
+            return Err(StoreError::InvalidState(format!(
+                "part {run_id} is not a user_send run owned by session {session_id}"
+            )));
+        }
+        let removed = member_ids
+            .iter()
+            .filter_map(|part_id| parts.get(part_id))
+            .filter(|part| part.part_id == run_id || part.run_id == Some(run_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        drop(parts);
+
+        if removed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let removed_ids = removed
+            .iter()
+            .map(|part| part.part_id)
+            .collect::<BTreeSet<_>>();
+        self.membership
+            .write()
+            .expect("membership lock")
+            .entry(session_id)
+            .or_default()
+            .retain(|part_id| !removed_ids.contains(part_id));
+        self.idempotency
+            .write()
+            .expect("idempotency lock")
+            .retain(|(sid, _), mapped_run_id| *sid != session_id || *mapped_run_id != run_id);
+        self.bump_session_version(session_id, now_ms)?;
+        Ok(removed)
     }
 
     async fn answer_interaction(
@@ -2727,6 +2825,71 @@ mod tests {
         assert!(first.created);
         assert!(!second.created);
         assert_eq!(first.run_id, second.run_id);
+    }
+
+    #[tokio::test]
+    async fn execution_aware_user_send_is_withdrawable_and_replay_keeps_original_owner() {
+        let (engine, session_id) = setup().await;
+        let first = engine
+            .submit_user_run_for_execution(
+                session_id,
+                "owner-a",
+                vec![text_part("first")],
+                Some("key-execution".to_owned()),
+                "execution-a",
+                engine.now_ms(),
+            )
+            .await
+            .expect("first submit");
+        assert!(first.created);
+        assert_eq!(
+            first.parts[0].content["execution_id"],
+            serde_json::json!("execution-a")
+        );
+
+        let replay = engine
+            .submit_user_run_for_execution(
+                session_id,
+                "owner-a",
+                vec![text_part("replay")],
+                Some("key-execution".to_owned()),
+                "execution-b",
+                engine.now_ms(),
+            )
+            .await
+            .expect("idempotency replay");
+        assert!(!replay.created);
+        assert_eq!(replay.run_id, first.run_id);
+        assert_eq!(
+            engine
+                .load_session(session_id)
+                .await
+                .expect("load replay")
+                .parts[0]
+                .content["execution_id"],
+            serde_json::json!("execution-a")
+        );
+
+        let removed = engine
+            .withdraw_user_run(session_id, "owner-a", first.run_id, engine.now_ms())
+            .await
+            .expect("withdraw");
+        assert_eq!(removed.len(), 2);
+        assert!(
+            engine
+                .load_session(session_id)
+                .await
+                .expect("load after withdraw")
+                .parts
+                .is_empty()
+        );
+        assert!(
+            engine
+                .withdraw_user_run(session_id, "owner-a", first.run_id, engine.now_ms())
+                .await
+                .expect("repeat withdraw")
+                .is_empty()
+        );
     }
 
     #[tokio::test]

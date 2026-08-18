@@ -16,7 +16,7 @@ use std::{
 
 use agena_api::{
     commands::{Command, CommandResult, ResolveWorkspaceParams, SubmitRunParams},
-    resource::{ServerEndpointRecord, RunOptions, SessionExecutionResource, SessionState},
+    resource::{RunOptions, ServerEndpointRecord, SessionExecutionResource, SessionState},
 };
 use agena_client::AgenaClient;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -681,17 +681,19 @@ async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
         .expect("fake provider receives hanging request")
         .expect("hanging provider request exists");
     let running = wait_for_execution(&client_a, session.id, |execution| {
-        execution.session.state == SessionState::Running && execution.active_execution.is_some()
+        execution.session.state.is_running() && execution.session.state.active_execution().is_some()
     })
     .await;
     assert_eq!(
         running
-            .active_execution
-            .as_ref()
+            .session
+            .state
+            .active_execution()
             .map(|active| active.execution_id),
         submitted
-            .active_execution
-            .as_ref()
+            .session
+            .state
+            .active_execution()
             .map(|active| active.execution_id)
     );
 
@@ -737,7 +739,7 @@ async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
         overview
             .attention
             .iter()
-            .any(|item| item.id == session.id && item.state == SessionState::Interrupted),
+            .any(|item| item.id == session.id && item.state.needs_recovery()),
         "the restarted server must publish the stale run as interrupted before opening it"
     );
 
@@ -745,8 +747,11 @@ async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
         .get_session_state(session.id)
         .await
         .expect("open and reconcile interrupted session");
-    assert_eq!(reconciled.session.state, SessionState::Ready);
-    assert!(reconciled.active_execution.is_none());
+    assert!(matches!(
+        reconciled.session.state,
+        SessionState::Ready { .. }
+    ));
+    assert!(reconciled.session.state.active_execution().is_none());
     assert!(reconciled.parts.iter().any(|part| {
         part.kind == "run"
             && part.role == "assistant"
@@ -767,12 +772,18 @@ async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
         .expect("fake provider receives explicit recovery request")
         .expect("recovery provider request exists");
     let completed = wait_for_execution(&client_b, session.id, |execution| {
-        execution.session.state == SessionState::Ready
-            && execution.active_execution.is_none()
+        matches!(execution.session.state, SessionState::Ready { .. })
+            && execution.session.state.active_execution().is_none()
             && execution_text(execution).contains("recovered after server restart")
     })
     .await;
-    assert!(completed.pending_interactive_requests.is_empty());
+    assert!(
+        completed
+            .session
+            .state
+            .pending_interactive_requests()
+            .is_empty()
+    );
     assert_eq!(
         completed
             .parts
@@ -865,17 +876,19 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
         .expect("fake provider receives ownership-test request")
         .expect("ownership-test provider request exists");
     let running = wait_for_execution(&web_client, session.id, |execution| {
-        execution.session.state == SessionState::Running && execution.active_execution.is_some()
+        execution.session.state.is_running() && execution.session.state.active_execution().is_some()
     })
     .await;
     assert_eq!(
         running
-            .active_execution
-            .as_ref()
+            .session
+            .state
+            .active_execution()
             .map(|active| active.execution_id),
         submitted
-            .active_execution
-            .as_ref()
+            .session
+            .state
+            .active_execution()
             .map(|active| active.execution_id)
     );
 
@@ -887,7 +900,7 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
         .connect_session(session.id)
         .await
         .expect("attach Web-style session snapshot plus SSE");
-    assert_eq!(web_connection.snapshot.session.state, SessionState::Running);
+    assert!(web_connection.snapshot.session.state.is_running());
 
     let server_url = record_path
         .exists()
@@ -1041,15 +1054,17 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
         .get_session_state(session.id)
         .await
         .expect("observe execution after every client disconnected");
-    assert_eq!(after_disconnect.session.state, SessionState::Running);
+    assert!(after_disconnect.session.state.is_running());
     assert_eq!(
         after_disconnect
-            .active_execution
-            .as_ref()
+            .session
+            .state
+            .active_execution()
             .map(|active| active.execution_id),
         submitted
-            .active_execution
-            .as_ref()
+            .session
+            .state
+            .active_execution()
             .map(|active| active.execution_id)
     );
     assert_eq!(runtime_ownership_records(&audit_path).len(), 1);

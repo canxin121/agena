@@ -112,7 +112,7 @@ pub(crate) async fn cancel_run(
     application: &TuiBackend,
     session_id: i64,
     execution_id: Option<agena_domain::ExecutionId>,
-) -> Result<agena_domain::CancellationResult> {
+) -> Result<agena_domain::CancellationOutcome> {
     application
         .cancel_run(session_id, execution_id)
         .await

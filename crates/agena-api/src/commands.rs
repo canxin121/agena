@@ -71,7 +71,7 @@ pub enum CommandResult {
     SessionTree(Vec<SessionResource>),
     SessionExport { jsonl: String },
     Execution(SessionExecutionResource),
-    Cancellation(agena_domain::CancellationResult),
+    Cancellation(agena_domain::CancellationOutcome),
     PermissionRule(crate::resource::PermissionRuleResource),
     PermissionRuleDeleted { id: i64 },
     Activity(BackgroundActivityResource),

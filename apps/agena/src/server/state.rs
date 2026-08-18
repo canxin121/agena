@@ -5,6 +5,7 @@ use agena_application::Application;
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) ui_auth: crate::server::auth::UiAuth,
+    pub(crate) mcp_server: Arc<crate::server::mcp::McpServerState>,
     pub(crate) terminal: Arc<crate::server::terminal::manager::TerminalManager>,
     pub(crate) workspace_preview_registry:
         Arc<crate::server::preview::registry::WorkspacePreviewRegistry>,
@@ -31,7 +32,10 @@ fn parse_git_bool(value: Option<String>, default_value: bool) -> bool {
     }
 }
 
-fn git_env_bool(env_key: &'static str, default_value: bool) -> Pin<Box<dyn Future<Output = bool> + Send + 'static>> {
+fn git_env_bool(
+    env_key: &'static str,
+    default_value: bool,
+) -> Pin<Box<dyn Future<Output = bool> + Send + 'static>> {
     let value = std::env::var(env_key).ok();
     Box::pin(async move { parse_git_bool(value, default_value) })
 }

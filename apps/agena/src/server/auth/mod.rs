@@ -28,6 +28,13 @@ pub(crate) enum UiAuth {
     Enabled(Arc<UiAuthInner>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OAuthPasswordError {
+    NotConfigured,
+    Invalid,
+    Locked(i64),
+}
+
 pub(crate) struct UiAuthInner {
     password_phc: String,
     sessions: DashMap<String, SessionRecord>,
@@ -312,19 +319,71 @@ pub(crate) fn init_ui_auth(ui_password: Option<String>) -> UiAuth {
         return UiAuth::Disabled;
     }
 
-    let mut salt_bytes = [0u8; 16];
-    getrandom::fill(&mut salt_bytes).expect("init_ui_auth: getrandom failed");
-    let salt = SaltString::encode_b64(&salt_bytes).expect("init_ui_auth: encode salt");
-    let password_phc = Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .expect("hash password")
-        .to_string();
+    let password_phc = hash_password(password.as_str()).expect("init_ui_auth: hash password");
+    init_ui_auth_from_phc(password_phc).expect("init_ui_auth: invalid password hash")
+}
 
-    UiAuth::Enabled(Arc::new(UiAuthInner {
+/// Hash a password for a server-owned credential which is persisted as an
+/// Argon2 PHC string. The plaintext never needs to leave the caller's stack.
+pub(crate) fn hash_password(candidate: &str) -> Result<String, String> {
+    let password = normalize_password(Some(candidate));
+    if password.is_empty() {
+        return Err("password must not be empty".to_owned());
+    }
+
+    let mut salt_bytes = [0u8; 16];
+    getrandom::fill(&mut salt_bytes).map_err(|error| error.to_string())?;
+    let salt = SaltString::encode_b64(&salt_bytes).map_err(|error| error.to_string())?;
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(|error| error.to_string())
+}
+
+/// Rehydrate a password verifier from a PHC value read from server state.
+/// Keeping the login-attempt map on the verifier preserves the same OAuth
+/// lockout behavior as the UI password without ever returning the PHC value.
+pub(crate) fn init_ui_auth_from_phc(password_phc: String) -> Result<UiAuth, String> {
+    PasswordHash::new(password_phc.as_str()).map_err(|error| error.to_string())?;
+    Ok(UiAuth::Enabled(Arc::new(UiAuthInner {
         password_phc,
         sessions: DashMap::new(),
         login_attempts: DashMap::new(),
-    }))
+    })))
+}
+
+/// Verify the server UI password for the MCP OAuth authorization page.
+///
+/// MCP authorization is deliberately a separate browser flow from the UI
+/// bearer session: a successful password check issues an OAuth authorization
+/// code, never a UI session token. The same failure counters and lockout
+/// policy are shared so the public OAuth endpoint does not become a weaker
+/// password oracle.
+pub(crate) fn verify_password_for_oauth(
+    ui_auth: &UiAuth,
+    candidate: &str,
+    headers: &HeaderMap,
+) -> Result<(), OAuthPasswordError> {
+    let UiAuth::Enabled(inner) = ui_auth else {
+        return Err(OAuthPasswordError::NotConfigured);
+    };
+
+    let attempt_key = login_attempt_key(headers);
+    let now = OffsetDateTime::now_utc();
+    if let Some(retry_after_seconds) = login_lockout_remaining_seconds(inner, &attempt_key, now) {
+        return Err(OAuthPasswordError::Locked(retry_after_seconds));
+    }
+
+    let candidate = normalize_password(Some(candidate));
+    if !verify_password(&inner.password_phc, &candidate) {
+        if let Some(retry_after_seconds) = record_failed_login_attempt(inner, &attempt_key, now) {
+            return Err(OAuthPasswordError::Locked(retry_after_seconds));
+        }
+        return Err(OAuthPasswordError::Invalid);
+    }
+
+    clear_failed_login_attempts(inner, &attempt_key);
+    Ok(())
 }
 
 pub(crate) async fn auth_session_status(

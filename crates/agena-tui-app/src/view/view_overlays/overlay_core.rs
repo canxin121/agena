@@ -2,6 +2,7 @@ use super::super::{
     App, ConfirmOverlay, Frame, Overlay, Rect, Route, SurfaceMode, render_confirm_dialog,
     render_overlay_line_input_dialog, sanitize_display_text,
 };
+use crate::MCP_OAUTH_PASSWORD_SETTINGS_PATH;
 use crate::ui_text;
 
 impl App {
@@ -23,15 +24,31 @@ impl App {
                 );
             }
             Overlay::SettingsValueEdit(dialog) => {
-                render_overlay_line_input_dialog(
-                    frame,
-                    area,
-                    SurfaceMode::Overlay,
-                    sanitize_display_text(dialog.title.as_str()).into(),
-                    sanitize_display_text(dialog.prompt.as_str()).into(),
-                    sanitize_display_text(ui_text::t(&self.i18n, "overlay-line-footer")).into(),
-                    &dialog.input,
-                );
+                let title = sanitize_display_text(dialog.title.as_str()).into();
+                let prompt = sanitize_display_text(dialog.prompt.as_str()).into();
+                let footer =
+                    sanitize_display_text(ui_text::t(&self.i18n, "overlay-line-footer")).into();
+                if dialog.action.path == MCP_OAUTH_PASSWORD_SETTINGS_PATH {
+                    agena_tui_components::render_overlay_masked_line_input_dialog(
+                        frame,
+                        area,
+                        SurfaceMode::Overlay,
+                        title,
+                        prompt,
+                        footer,
+                        &dialog.input,
+                    );
+                } else {
+                    render_overlay_line_input_dialog(
+                        frame,
+                        area,
+                        SurfaceMode::Overlay,
+                        title,
+                        prompt,
+                        footer,
+                        &dialog.input,
+                    );
+                }
             }
             Overlay::Choice(dialog) => {
                 agena_tui::choice::render_overlay(frame, area, &dialog.presentation, &self.i18n);

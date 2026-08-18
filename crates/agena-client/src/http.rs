@@ -529,6 +529,72 @@ impl AgenaClient {
         self.get_json("/api/v1/health").await
     }
 
+    /// Read the live control-plane projection for Agena's own HTTP MCP
+    /// server. The response is deliberately kept as JSON until the public API
+    /// crate grows a shared MCP-control resource; this endpoint is server
+    /// specific and never contains password hashes or OAuth tokens.
+    pub async fn mcp_server_control(&self) -> Result<serde_json::Value, ClientError> {
+        self.get_json("/api/v1/server/mcp").await
+    }
+
+    /// Update the live MCP surface. `public_url == None` leaves the current
+    /// URL unchanged; `Some(None)` clears it; `Some(Some(url))` sets it.
+    pub async fn update_mcp_server_control(
+        &self,
+        enabled: bool,
+        public_url: Option<Option<String>>,
+    ) -> Result<serde_json::Value, ClientError> {
+        let mut body = serde_json::Map::new();
+        body.insert("enabled".to_owned(), serde_json::Value::Bool(enabled));
+        if let Some(public_url) = public_url {
+            body.insert("publicUrl".to_owned(), serde_json::to_value(public_url)?);
+        }
+        self.put_json("/api/v1/server/mcp", serde_json::Value::Object(body))
+            .await
+    }
+
+    /// Enable or disable the MCP OAuth surface. When disabled, `/mcp` is
+    /// anonymous and the OAuth discovery, token, and authorization endpoints
+    /// are unavailable.
+    pub async fn set_mcp_server_auth_enabled(
+        &self,
+        auth_enabled: bool,
+    ) -> Result<serde_json::Value, ClientError> {
+        let current = self.mcp_server_control().await?;
+        let enabled = current
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        self.put_json(
+            "/api/v1/server/mcp",
+            serde_json::json!({
+                "enabled": enabled,
+                "authEnabled": auth_enabled,
+            }),
+        )
+        .await
+    }
+
+    /// Replace the server-owned MCP OAuth authorization password. Only the
+    /// plaintext request value is accepted; the server persists an Argon2 PHC
+    /// hash and returns a redacted control projection.
+    pub async fn set_mcp_server_oauth_password(
+        &self,
+        password: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.put_json(
+            "/api/v1/server/mcp/oauth/password",
+            serde_json::json!({"password": password}),
+        )
+        .await
+    }
+
+    /// Remove the MCP-specific OAuth password. The running server then falls
+    /// back to its startup UI password, if one exists.
+    pub async fn clear_mcp_server_oauth_password(&self) -> Result<serde_json::Value, ClientError> {
+        self.delete_json("/api/v1/server/mcp/oauth/password").await
+    }
+
     /// Validate that the endpoint is a current Agena server and
     /// return its process-lifetime identity. Legacy servers without identity
     /// metadata are reachable but cannot participate in safe discovery.
@@ -1086,102 +1152,6 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
-    pub async fn set_mcp_bearer_credential(
-        &self,
-        server: &str,
-        token: String,
-        store: &str,
-    ) -> Result<serde_json::Value, ClientError> {
-        let mut url = self.endpoint("/api/v1/mcp/credentials");
-        url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
-            .push(server)
-            .push("bearer");
-        let body = serde_json::json!({"token": token, "store": store});
-        let response = self
-            .send_request(reqwest::Method::PUT, url, Some(&body), None)
-            .await?;
-        self.parse_json(response).await
-    }
-
-    pub async fn delete_mcp_bearer_credential(
-        &self,
-        server: &str,
-        store: &str,
-    ) -> Result<serde_json::Value, ClientError> {
-        let mut url = self.endpoint("/api/v1/mcp/credentials");
-        url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
-            .push(server)
-            .push("bearer");
-        url.query_pairs_mut().append_pair("store", store);
-        let response = self
-            .send_request(reqwest::Method::DELETE, url, None, None)
-            .await?;
-        self.parse_json(response).await
-    }
-
-    pub async fn start_mcp_oauth(
-        &self,
-        server: &str,
-        url: &str,
-        scopes: &[String],
-        redirect_uri: &str,
-    ) -> Result<serde_json::Value, ClientError> {
-        self.post_json(
-            "/api/v1/mcp/oauth/start",
-            serde_json::json!({
-                "server": server,
-                "url": url,
-                "scopes": scopes,
-                "redirect_uri": redirect_uri,
-            }),
-        )
-        .await
-    }
-
-    pub async fn finish_mcp_oauth(
-        &self,
-        flow_id: uuid::Uuid,
-        code: String,
-        state: String,
-        issuer: Option<String>,
-    ) -> Result<serde_json::Value, ClientError> {
-        self.post_json(
-            "/api/v1/mcp/oauth/finish",
-            serde_json::json!({
-                "flow_id": flow_id,
-                "code": code,
-                "state": state,
-                "issuer": issuer,
-            }),
-        )
-        .await
-    }
-
-    pub async fn delete_mcp_oauth_credential(
-        &self,
-        server: &str,
-        revoke: bool,
-        endpoint: Option<&str>,
-    ) -> Result<serde_json::Value, ClientError> {
-        let mut url = self.endpoint("/api/v1/mcp/oauth");
-        url.path_segments_mut()
-            .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
-            .push(server);
-        {
-            let mut query = url.query_pairs_mut();
-            query.append_pair("revoke", if revoke { "true" } else { "false" });
-            if let Some(endpoint) = endpoint {
-                query.append_pair("url", endpoint);
-            }
-        }
-        let response = self
-            .send_request(reqwest::Method::DELETE, url, None, None)
-            .await?;
-        self.parse_json(response).await
-    }
-
     pub async fn git_status(&self) -> Result<serde_json::Value, ClientError> {
         self.get_json("/api/v1/git/status").await
     }
@@ -1661,9 +1631,7 @@ impl AgenaClient {
         limit: u64,
         cursor: &str,
     ) -> Result<agena_api::live::SessionPartsResource, ClientError> {
-        let mut url = self.endpoint(&format!(
-            "/api/v1/sessions/{session_id}/transcript/folds"
-        ));
+        let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/transcript/folds"));
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("limit", &limit.to_string());

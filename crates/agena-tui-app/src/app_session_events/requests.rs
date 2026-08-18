@@ -541,7 +541,9 @@ impl App {
                 crate::app_backend::operations::cancel_run(&application, session_id, execution_id)
                     .await;
             let result = match result {
-                Ok(agena_domain::CancellationResult::ExecutionMismatch) => {
+                Ok(outcome)
+                    if outcome.result == agena_domain::CancellationResult::ExecutionMismatch =>
+                {
                     // The stop action is user intent for the current session,
                     // not a delayed command that should preserve a newer
                     // execution. Retry through the session-scoped endpoint so
@@ -551,10 +553,10 @@ impl App {
                 }
                 other => other,
             }
-            .and_then(|result| match result {
+            .and_then(|outcome| match outcome.result {
                 agena_domain::CancellationResult::CancellationRequested
                 | agena_domain::CancellationResult::AlreadyTerminal
-                | agena_domain::CancellationResult::NotFound => Ok(()),
+                | agena_domain::CancellationResult::NotFound => Ok(outcome),
                 agena_domain::CancellationResult::ExecutionMismatch => Err(anyhow::anyhow!(
                     "the active execution changed before cancellation"
                 )),

@@ -6,7 +6,7 @@ export type OptimisticUserMessage = {
   createdAt: number
   status: 'sending' | 'queued' | 'sent'
   text: string
-  files: Array<{ filename: string; mime: string; url?: string; serverPath?: string }>
+  files: Array<{ id?: string; filename: string; size?: number; mime: string; url?: string; serverPath?: string }>
   // Last user message id visible in the timeline when the send started.
   // Used to avoid falsely acknowledging against an older (updated) message.
   baselineUserMessageId: string
@@ -171,7 +171,14 @@ export function useMessageStreaming(opts: {
   function beginOptimisticSend(args: {
     sessionId: string
     text: string
-    files: Array<{ filename: string; mime: string; url?: string; serverPath?: string }>
+    files: Array<{
+      id?: string
+      filename: string
+      size?: number
+      mime: string
+      url?: string
+      serverPath?: string
+    }>
   }) {
     const sid = (args.sessionId || '').trim()
     if (!sid) return
@@ -213,6 +220,12 @@ export function useMessageStreaming(opts: {
   }
 
   function clearOnSendFailure() {
+    optimisticUser.value = null
+    awaitingAssistant.value = false
+    pendingSendAt.value = null
+  }
+
+  function clearOnCancellation() {
     optimisticUser.value = null
     awaitingAssistant.value = false
     pendingSendAt.value = null
@@ -264,5 +277,6 @@ export function useMessageStreaming(opts: {
     markOptimisticQueued,
     markOptimisticSent,
     clearOnSendFailure,
+    clearOnCancellation,
   }
 }

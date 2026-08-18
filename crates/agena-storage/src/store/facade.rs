@@ -268,6 +268,24 @@ pub trait SessionStore: Send + Sync {
         idempotency_key: Option<String>,
     ) -> Result<SubmitOutcome, StoreError>;
 
+    /// User-send variant that records the execution identity on a newly
+    /// created marker. The default preserves compatibility for alternate
+    /// facade implementations; the production facade forwards it to the
+    /// engine so cancellation can recover a transaction committed just before
+    /// the execution task was interrupted.
+    async fn submit_user_run_for_execution(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        parts: Vec<NewPart>,
+        idempotency_key: Option<String>,
+        execution_id: &str,
+    ) -> Result<SubmitOutcome, StoreError> {
+        let _ = execution_id;
+        self.submit_user_run(session_id, owner_id, parts, idempotency_key)
+            .await
+    }
+
     /// Atomically mutate a background operation against the run that launched
     /// it. At launch this durably checkpoints the InProgress tool part and its
     /// correlation marker together with the guard result. The run is
@@ -392,6 +410,15 @@ pub trait SessionStore: Send + Sync {
     /// Cancel a run marker and its non-terminal children (17.5 user cancel).
     /// Returns every changed row (marker and cancelled children).
     async fn cancel_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_id: i64,
+    ) -> Result<Vec<Part>, StoreError>;
+
+    /// Withdraw a newly submitted user run from this session projection while
+    /// preserving the underlying part rows for orphan GC and shared forks.
+    async fn withdraw_user_run(
         &self,
         session_id: i64,
         owner_id: &str,
@@ -1485,6 +1512,43 @@ where
         Ok(outcome)
     }
 
+    async fn submit_user_run_for_execution(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        parts: Vec<NewPart>,
+        idempotency_key: Option<String>,
+        execution_id: &str,
+    ) -> Result<SubmitOutcome, StoreError> {
+        let owner = self.owner(owner_id);
+        self.ensure_lease(session_id, &owner).await?;
+        let outcome: SubmitOutcome = self
+            .engine
+            .submit_user_run_for_execution(
+                session_id,
+                &owner,
+                parts,
+                idempotency_key,
+                execution_id,
+                self.now(),
+            )
+            .await?;
+        if outcome.created {
+            let meta = self.engine.session_meta(session_id).await?;
+            self.memory
+                .apply_committed(session_id, &outcome.parts, Some(meta.version));
+            for part in &outcome.parts {
+                self.bus.emit(SessionChange::PartAdded {
+                    session_id,
+                    part: part.clone(),
+                });
+            }
+            self.bus
+                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        }
+        Ok(outcome)
+    }
+
     async fn settle_background_run(
         &self,
         session_id: i64,
@@ -1878,6 +1942,36 @@ where
                 .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         }
         Ok(updated_parts)
+    }
+
+    async fn withdraw_user_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_id: i64,
+    ) -> Result<Vec<Part>, StoreError> {
+        let owner = self.owner(owner_id);
+        self.ensure_lease(session_id, &owner).await?;
+        self.flush_streaming_run(session_id, &owner, run_id).await?;
+        let removed_parts = self
+            .engine
+            .withdraw_user_run(session_id, &owner, run_id, self.now())
+            .await?;
+        if removed_parts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let meta = self.engine.session_meta(session_id).await?;
+        self.memory.clear_streaming_session(session_id);
+        self.memory.invalidate(session_id);
+        for part in &removed_parts {
+            self.bus.emit(SessionChange::PartRemoved {
+                session_id,
+                part_id: part.part_id,
+            });
+        }
+        self.bus
+            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        Ok(removed_parts)
     }
 
     async fn reconcile(&self, session_id: i64) -> Result<(), StoreError> {
@@ -3978,6 +4072,18 @@ mod tests {
         ) -> Result<Vec<Part>, StoreError> {
             self.inner
                 .cancel_run(session_id, owner_id, run_id, now_ms)
+                .await
+        }
+
+        async fn withdraw_user_run(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+            run_id: i64,
+            now_ms: i64,
+        ) -> Result<Vec<Part>, StoreError> {
+            self.inner
+                .withdraw_user_run(session_id, owner_id, run_id, now_ms)
                 .await
         }
 

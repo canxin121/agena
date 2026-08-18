@@ -429,7 +429,7 @@ impl AgenaCli {
             }
             McpSubcommand::Get(args) => self.run_mcp_get(args).await,
             McpSubcommand::Add(args) => {
-                println!("{}", self.render_server_mcp_add(args).await?);
+                println!("{}", self.render_server_mcp_add(*args).await?);
                 Ok(())
             }
             McpSubcommand::Remove(args) => {
@@ -448,8 +448,6 @@ impl AgenaCli {
                 println!("{}", self.render_server_mcp_reconnect(args).await?);
                 Ok(())
             }
-            McpSubcommand::Login(args) => self.run_server_mcp_login(args).await,
-            McpSubcommand::Logout(args) => self.run_server_mcp_logout(args).await,
         }
     }
 

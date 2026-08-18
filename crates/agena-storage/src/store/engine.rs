@@ -359,6 +359,28 @@ pub trait PersistenceEngine: Send + Sync {
         now_ms: i64,
     ) -> Result<SubmitOutcome, StoreError>;
 
+    /// User send variant that records the owning execution identity on a
+    /// newly-created marker. The identity is deliberately not applied to an
+    /// idempotency replay: a replay must remain owned by the execution that
+    /// originally created the marker.
+    ///
+    /// The default forwards to the historical method so lightweight test
+    /// engines retain the old behavior until they opt into the stronger
+    /// cancellation-recovery contract.
+    async fn submit_user_run_for_execution(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        parts: Vec<NewPart>,
+        idempotency_key: Option<String>,
+        execution_id: &str,
+        now_ms: i64,
+    ) -> Result<SubmitOutcome, StoreError> {
+        let _ = execution_id;
+        self.submit_user_run(session_id, owner_id, parts, idempotency_key, now_ms)
+            .await
+    }
+
     /// Atomically settle a background operation against the run that launched
     /// it (the agena analog of Claude Code's `<task-notification>` arriving on
     /// the launching turn). In one transaction the method:
@@ -435,6 +457,18 @@ pub trait PersistenceEngine: Send + Sync {
     /// Cancel a run marker and its non-terminal child parts (17.5 user cancel),
     /// returning every committed row that changed.
     async fn cancel_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_id: i64,
+        now_ms: i64,
+    ) -> Result<Vec<Part>, StoreError>;
+
+    /// Withdraw a newly submitted user run from one session projection. The
+    /// underlying part rows remain available for orphan GC and shared fork
+    /// memberships; only this session's membership and idempotency claim are
+    /// removed.
+    async fn withdraw_user_run(
         &self,
         session_id: i64,
         owner_id: &str,

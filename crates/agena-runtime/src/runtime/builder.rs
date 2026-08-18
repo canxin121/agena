@@ -1230,6 +1230,9 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
                 before_help: tool.before_help_text().map(ToOwned::to_owned),
                 after_help: tool.after_help_text().map(ToOwned::to_owned),
                 input_schema: tool.input_schema(),
+                interactive: tool.definition.permissions.interactive
+                    || tool.has_tag(agena_plugin_host::sdk::ToolTag::Interactive),
+                plugin_id: Some(tool.plugin_full_name()),
             })
             .collect()
     }

@@ -22,7 +22,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use agena_mcp_client::protocol::{
+pub use agena_mcp_client::protocol::{
     CallToolParams, CallToolResult, ContentBlock, GetPromptParams, GetPromptResult,
     PromptDescriptor, PromptMessage, ReadResourceParams, ReadResourceResult, ResourceContents,
     ResourceDescriptor, ToolDescriptor,
@@ -101,7 +101,7 @@ pub trait McpServerBackend: Send + Sync + 'static {
     }
 }
 
-struct BackendHandler<B> {
+pub struct BackendHandler<B> {
     backend: Arc<B>,
     info: ServerInfo,
     resources_enabled: bool,
@@ -110,8 +110,12 @@ struct BackendHandler<B> {
 
 impl<B> BackendHandler<B> {
     fn new(backend: B) -> Self {
+        Self::from_arc(Arc::new(backend))
+    }
+
+    fn from_arc(backend: Arc<B>) -> Self {
         Self {
-            backend: Arc::new(backend),
+            backend,
             info: ServerInfo::default(),
             resources_enabled: true,
             prompts_enabled: true,
@@ -119,8 +123,12 @@ impl<B> BackendHandler<B> {
     }
 
     fn new_tools_only(backend: B) -> Self {
+        Self::new_tools_only_from_arc(Arc::new(backend))
+    }
+
+    fn new_tools_only_from_arc(backend: Arc<B>) -> Self {
         Self {
-            backend: Arc::new(backend),
+            backend,
             info: ServerInfo {
                 instructions: Some(
                     "Agena exposes its local runtime tools over MCP. Resources and prompts are intentionally unavailable on this endpoint."
@@ -132,6 +140,38 @@ impl<B> BackendHandler<B> {
             prompts_enabled: false,
         }
     }
+}
+
+/// Build an Axum-compatible Streamable HTTP MCP service.
+///
+/// The service creates one [`BackendHandler`] per request while sharing the
+/// supplied backend. The HTTP integration is intentionally stateless: the
+/// tunnel can forward each JSON-RPC request independently, and no
+/// `Mcp-Session-Id` is required. Authentication is intentionally left to the
+/// host application so it can attach an OAuth/resource-server middleware
+/// before mounting this service.
+pub fn streamable_http_service<B>(
+    backend: B,
+    config: rmcp::transport::StreamableHttpServerConfig,
+) -> rmcp::transport::StreamableHttpService<
+    BackendHandler<B>,
+    rmcp::transport::streamable_http_server::session::never::NeverSessionManager,
+>
+where
+    B: McpServerBackend,
+{
+    let backend = Arc::new(backend);
+    rmcp::transport::StreamableHttpService::new(
+        move || {
+            Ok(BackendHandler::new_tools_only_from_arc(Arc::clone(
+                &backend,
+            )))
+        },
+        Arc::new(
+            rmcp::transport::streamable_http_server::session::never::NeverSessionManager::default(),
+        ),
+        config,
+    )
 }
 
 impl<B> ServerHandler for BackendHandler<B>
@@ -395,6 +435,27 @@ fn convert_tool_descriptor(tool: ToolDescriptor) -> Result<RmcpTool, McpServerEr
     output.icons = deserialize_values(tool.icons)?;
     output.meta = deserialize_optional(tool.meta)?;
     Ok(output)
+}
+
+/// Serialize one tool descriptor using the same standard MCP `Tool` shape as
+/// the rmcp-backed transports.
+///
+/// The HTTP adapter uses this for a narrow stateless compatibility path that
+/// may answer a connector request before rmcp creates a normal service
+/// instance. Keeping the conversion here prevents the two HTTP paths from
+/// drifting in field names or optional metadata handling.
+pub fn serialize_tool_descriptor(
+    tool: ToolDescriptor,
+) -> Result<serde_json::Value, McpServerError> {
+    serde_json::to_value(convert_tool_descriptor(tool)?).map_err(McpServerError::Json)
+}
+
+/// Serialize one tool result using the same standard MCP `CallToolResult`
+/// shape as the rmcp-backed transports.
+pub fn serialize_call_tool_result(
+    result: CallToolResult,
+) -> Result<serde_json::Value, McpServerError> {
+    serde_json::to_value(convert_call_tool_result(result)?).map_err(McpServerError::Json)
 }
 
 fn convert_call_tool_result(

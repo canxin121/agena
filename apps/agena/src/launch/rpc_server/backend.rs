@@ -28,8 +28,7 @@ pub(crate) async fn run(request: RpcServerRequest) -> Result<(), AgenaProcessErr
     }
     if !request.config_override_expressions.is_empty() {
         return Err(AgenaProcessError::Configuration(
-            "--set overrides belong to the server and cannot be used by rpc-server"
-                .to_owned(),
+            "--set overrides belong to the server and cannot be used by rpc-server".to_owned(),
         ));
     }
 
@@ -71,10 +70,7 @@ impl AgenaAppServerBackend {
         let client = AgenaClient::connect_server(server_url, server_token, server_password)
             .await
             .map_err(|error| {
-                process_client_error(
-                    "server readiness/authentication handshake failed",
-                    &error,
-                )
+                process_client_error("server readiness/authentication handshake failed", &error)
             })?;
         let workspace = client
             .command(Command::ResolveWorkspace(ResolveWorkspaceParams {
@@ -90,15 +86,11 @@ impl AgenaAppServerBackend {
             })?;
         let CommandResult::Workspace(workspace) = workspace else {
             return Err(AgenaProcessError::Internal(
-                "server returned the wrong result while resolving the IDE workspace"
-                    .to_owned(),
+                "server returned the wrong result while resolving the IDE workspace".to_owned(),
             ));
         };
         let providers = client.query(Query::ListProviders).await.map_err(|error| {
-            process_client_error(
-                "failed to read the server's provider catalog",
-                &error,
-            )
+            process_client_error("failed to read the server's provider catalog", &error)
         })?;
         let QueryResult::Providers(providers) = providers else {
             return Err(AgenaProcessError::Internal(
@@ -212,8 +204,7 @@ impl AgenaAppServerBackend {
             cursor = page.page.next_cursor;
             if cursor.is_none() {
                 return Err(AppServerError::Backend(
-                    "server returned a truncated session page without a cursor"
-                        .to_owned(),
+                    "server returned a truncated session page without a cursor".to_owned(),
                 ));
             }
         }
@@ -494,10 +485,6 @@ mod tests {
         })
         .await
         .expect_err("database ownership must stay at the server");
-        assert!(
-            error
-                .to_string()
-                .contains("belong to the server")
-        );
+        assert!(error.to_string().contains("belong to the server"));
     }
 }

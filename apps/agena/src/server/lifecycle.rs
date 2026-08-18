@@ -19,6 +19,7 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
             || args.database_path.is_some()
             || args.workspace_root.is_some()
             || args.ui_password.is_some()
+            || args.mcp_public_url.is_some()
             || args.ui_dir.is_some()
         {
             bail!(
@@ -103,6 +104,9 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     if let Some(ui_dir) = &args.ui_dir {
         command.arg("--ui-dir").arg(ui_dir);
     }
+    if let Some(mcp_public_url) = &args.mcp_public_url {
+        command.arg("--mcp-public-url").arg(mcp_public_url);
+    }
     if let Some(password) = &args.ui_password {
         command.env("AGENA_SERVER_UI_PASSWORD", password);
     }
@@ -116,9 +120,7 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
         use std::os::unix::process::CommandExt as _;
         command.process_group(0);
     }
-    let child = command
-        .spawn()
-        .context("failed to spawn the server")?;
+    let child = command.spawn().context("failed to spawn the server")?;
     let child_pid = child.id();
     drop(child);
 
@@ -224,10 +226,7 @@ pub(crate) async fn stop() -> Result<()> {
             return Ok(());
         }
         if Instant::now() >= deadline {
-            bail!(
-                "server pid {} did not stop after SIGINT",
-                identity.pid
-            );
+            bail!("server pid {} did not stop after SIGINT", identity.pid);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

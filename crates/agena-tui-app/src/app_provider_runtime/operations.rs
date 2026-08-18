@@ -41,6 +41,7 @@ impl App {
         let application = self.application.clone();
         let tx = self.tx.clone();
         let adapter_ids = provider_studio_request_adapter_ids(&dialog);
+        let model_config_values = std::collections::BTreeMap::new();
         tokio::spawn(async move {
             let result = application
                 .save_provider_draft(
@@ -48,6 +49,7 @@ impl App {
                     dialog.adapter_models.as_slice(),
                     &adapter_ids,
                     &dialog.selected_model_keys,
+                    &model_config_values,
                 )
                 .await;
             let _ = tx

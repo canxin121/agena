@@ -8,7 +8,6 @@ use agena_storage::MemoryType;
 mod access;
 mod auth;
 mod marketplace;
-mod mcp;
 mod memory;
 mod model_catalog;
 mod operator;
@@ -25,7 +24,6 @@ pub use agena_api::resource::{
 };
 pub use auth::*;
 pub use marketplace::*;
-pub use mcp::*;
 pub use memory::*;
 pub use model_catalog::*;
 pub use operator::*;

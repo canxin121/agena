@@ -6254,7 +6254,7 @@ Plan orchestration and plan-autorun tools.
 
 `agena.plan.phase` · **Summary**: Transition the current plan's phase.
 
-**Tags**: `mutate` `planning`
+**Tags**: `mutate` `interactive` `planning`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -6332,7 +6332,7 @@ Plan orchestration and plan-autorun tools.
 
 `agena.plan.review` · **Summary**: Request user approval of the current plan before it becomes active.
 
-**Tags**: `mutate` `planning`
+**Tags**: `mutate` `interactive` `planning`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -9184,7 +9184,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.browser_close` · **Summary**: Close one page target in the managed interactive browser.
 
-**Tags**: `network` `mutate`
+**Tags**: `network` `interactive` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -9215,7 +9215,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.browser_download` · **Summary**: Download one HTTP(S) URL through a managed browser session and return a local artifact.
 
-**Tags**: `network` `mutate` `filesystem`
+**Tags**: `network` `interactive` `mutate` `filesystem`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -9264,7 +9264,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.browser_list` · **Summary**: List open page targets in the managed interactive browser.
 
-**Tags**: `network` `query` `discovery`
+**Tags**: `network` `interactive` `query` `discovery`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -9321,7 +9321,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.browser_screenshot` · **Summary**: Capture a browser screenshot and return it as an image attachment.
 
-**Tags**: `network` `mutate` `filesystem`
+**Tags**: `network` `interactive` `mutate` `filesystem`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -9366,7 +9366,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.browser_shutdown` · **Summary**: Shut down the managed browser process and all its sessions.
 
-**Tags**: `network` `mutate`
+**Tags**: `network` `interactive` `mutate`
 
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
@@ -9386,7 +9386,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.browser_snapshot` · **Summary**: Inspect visible text and interactive elements in a browser session.
 
-**Tags**: `network` `query`
+**Tags**: `network` `interactive` `query`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
@@ -9483,7 +9483,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 `agena.web.browser_wait` · **Summary**: Wait for page readiness, a CSS selector, or visible text.
 
-**Tags**: `network` `query`
+**Tags**: `network` `interactive` `query`
 
 **Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 

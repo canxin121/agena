@@ -110,6 +110,72 @@ async fn user_send_creates_marker_and_parts_with_membership() {
 }
 
 #[tokio::test]
+async fn execution_aware_user_send_is_withdrawable_and_replay_keeps_original_owner() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    let first = engine
+        .submit_user_run_for_execution(
+            session_id,
+            "owner-a",
+            vec![text_part("first")],
+            Some("key-execution".to_owned()),
+            "execution-a",
+            1_000_000,
+        )
+        .await
+        .expect("first submit");
+    assert!(first.created);
+    assert_eq!(
+        first.parts[0].content["execution_id"],
+        serde_json::json!("execution-a")
+    );
+
+    let replay = engine
+        .submit_user_run_for_execution(
+            session_id,
+            "owner-a",
+            vec![text_part("replay")],
+            Some("key-execution".to_owned()),
+            "execution-b",
+            1_000_000,
+        )
+        .await
+        .expect("idempotency replay");
+    assert!(!replay.created);
+    assert_eq!(replay.run_id, first.run_id);
+    assert_eq!(
+        engine
+            .load_session(session_id)
+            .await
+            .expect("load replay")
+            .parts[0]
+            .content["execution_id"],
+        serde_json::json!("execution-a")
+    );
+
+    let removed = engine
+        .withdraw_user_run(session_id, "owner-a", first.run_id, 1_000_000)
+        .await
+        .expect("withdraw");
+    assert_eq!(removed.len(), 2);
+    assert!(
+        engine
+            .load_session(session_id)
+            .await
+            .expect("load after withdraw")
+            .parts
+            .is_empty()
+    );
+    assert!(
+        engine
+            .withdraw_user_run(session_id, "owner-a", first.run_id, 1_000_000)
+            .await
+            .expect("repeat withdraw")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn session_metadata_patch_persists_flags_and_bumps_version_once() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
@@ -2333,7 +2399,7 @@ async fn list_exclude_subagents_filters_task_children_only() {
         .map(|summary| summary.title.as_str())
         .collect();
     assert!(
-        !titles.iter().any(|title| *title == "sub task"),
+        !titles.contains(&"sub task"),
         "task child must be hidden: {titles:?}"
     );
     assert_eq!(

@@ -1181,24 +1181,26 @@
         {
           "canonical_name": "agena.plan.phase",
           "conditional": null,
-          "definition_identity": "03bd581d0715ee362164fe94579869517e19a8ee4af1fce4374bbb4ce8b4514a",
+          "definition_identity": "5d24acda31059ef56d34ceb659b694e41f8e7085ce81ca084c1397bd2951b20f",
           "gateway": false,
           "input_schema_sha256": "78c4d0de27ca03ea506ba5e15af69ae6664fd3287debc7fb2920ed8b0a598724",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
+            "interactive",
             "planning"
           ]
         },
         {
           "canonical_name": "agena.plan.review",
           "conditional": null,
-          "definition_identity": "7b64b221aeb37234ac1374fd38248896a432f4d59bc38f2adba359679fa53c34",
+          "definition_identity": "517be0ecb4b48d76da994268f60c7f94a602c653dc11df0168b100e56c797314",
           "gateway": false,
           "input_schema_sha256": "0ba25f43e5bbeb87c528931652239a7730a11bccb455d03c89dddaeb07b447e1",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
+            "interactive",
             "planning"
           ]
         },
@@ -1871,24 +1873,26 @@
         {
           "canonical_name": "agena.web.browser_close",
           "conditional": null,
-          "definition_identity": "5c4f1fb7bcc56e37a08a7640110a6789ababbb52f8b058bde1a0666ce7e35483",
+          "definition_identity": "a3723789e9c03ae238076f57bb993c144c46c179eee9edbbdfdf425620a60823",
           "gateway": false,
           "input_schema_sha256": "7ef5208cec320ec5e221d0a0d9504588157925f5f9fe1206453c8f14322fd981",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
+            "interactive",
             "mutate"
           ]
         },
         {
           "canonical_name": "agena.web.browser_download",
           "conditional": null,
-          "definition_identity": "dfb1d7380c39e34929338982ef462570fede25ff81b822f278a530b49ce092d0",
+          "definition_identity": "278f48b893f8f8794878f06b20bdcd6e32af3bf86b0afaf7a256a6a39b746ef1",
           "gateway": false,
           "input_schema_sha256": "e2117910872a860d315083b105c2f083562105212e2d412b837d63f5bc70f48c",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
+            "interactive",
             "mutate",
             "filesystem"
           ]
@@ -1896,12 +1900,13 @@
         {
           "canonical_name": "agena.web.browser_list",
           "conditional": null,
-          "definition_identity": "635311616496c7bef7777fb313dfbc489273412434323cafbca488a7619fc06c",
+          "definition_identity": "285f043a8ba1ac561a5770d3a24cf6c146d15b8a4431580a15a7ee51ce8d050a",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
+            "interactive",
             "query",
             "discovery"
           ]
@@ -1922,12 +1927,13 @@
         {
           "canonical_name": "agena.web.browser_screenshot",
           "conditional": null,
-          "definition_identity": "c0aeba3102972c0c84fd20f0a415a710dbb1cb373b40c24a6defcb6fd0da61c4",
+          "definition_identity": "b82043157a7565fc4f9e0066194674490481e909af4b2126bed5e37dfe7198e7",
           "gateway": false,
           "input_schema_sha256": "cacabdb8755c596b517d757444f9703468a40910b6aab47b87a366c632c40067",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
+            "interactive",
             "mutate",
             "filesystem"
           ]
@@ -1935,24 +1941,26 @@
         {
           "canonical_name": "agena.web.browser_shutdown",
           "conditional": null,
-          "definition_identity": "48299e5a3b4cbb2629cd8d4aac79b91337da292b2ac5aa133abb6591f55bd59d",
+          "definition_identity": "a9b442286afae2afa1c3838e1bf3f58146feedc0a9bd73e991596ae9d456d1d0",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
+            "interactive",
             "mutate"
           ]
         },
         {
           "canonical_name": "agena.web.browser_snapshot",
           "conditional": null,
-          "definition_identity": "80c560ec34ebb9a74d3237bb76691df3d3551bda3a0e40580623149923f5d62d",
+          "definition_identity": "948f8a6a5911e7bbe0d5cff3068afab36097c4da1b573020dee0a13b9f27d33c",
           "gateway": false,
           "input_schema_sha256": "7ef5208cec320ec5e221d0a0d9504588157925f5f9fe1206453c8f14322fd981",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
+            "interactive",
             "query"
           ]
         },
@@ -1972,12 +1980,13 @@
         {
           "canonical_name": "agena.web.browser_wait",
           "conditional": null,
-          "definition_identity": "dcaf7a3833bb9ef8595a730a34d2f980e660f05c3c16a1c79825b495e3d6a0bd",
+          "definition_identity": "95ce330a93cd02fc4d969e1893826bb51ad73deb866cebd4d669e1817a48157a",
           "gateway": false,
           "input_schema_sha256": "c67b4acf17953cf1e724c19c89fd5e5ac9126d86e96a537e94746df44710c66e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
+            "interactive",
             "query"
           ]
         },

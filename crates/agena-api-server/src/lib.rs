@@ -55,7 +55,7 @@ use axum::routing::get;
 use axum::{
     extract::DefaultBodyLimit,
     middleware::{self, Next},
-    routing::{delete, post, put},
+    routing::post,
 };
 
 /// Increment the per-process HTTP request counter and record the
@@ -131,16 +131,6 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/project/git/init", post(rest::init_git_repository))
             .route("/api/v1/vcs/diff/raw", get(rest::get_vcs_diff_raw))
             .route("/api/v1/memories", get(rest::list_memories))
-            .route(
-                "/api/v1/mcp/credentials/{server}/bearer",
-                put(rest::set_mcp_bearer_credential).delete(rest::delete_mcp_bearer_credential),
-            )
-            .route("/api/v1/mcp/oauth/start", post(rest::start_mcp_oauth))
-            .route("/api/v1/mcp/oauth/finish", post(rest::finish_mcp_oauth))
-            .route(
-                "/api/v1/mcp/oauth/{server}",
-                delete(rest::delete_mcp_oauth_credential),
-            )
             .route("/api/v1/operator/tools", get(rest::list_operator_tools))
             .route(
                 "/api/v1/operator/tools/invoke",
@@ -586,7 +576,6 @@ mod router_contract_tests {
         let command_app = runtime_app.clone();
         let config_app = command_app.clone();
         let settings_app = command_app.clone();
-        let mcp_auth_app = command_app.clone();
         let memory_app = command_app.clone();
         let operator_app = command_app.clone();
         let overview_app = command_app.clone();
@@ -681,28 +670,6 @@ mod router_contract_tests {
             settings.get("reload_requested"),
             Some(&serde_json::Value::Bool(false))
         );
-
-        let response = mcp_auth_app
-            .oneshot(
-                Request::put("/api/v1/mcp/credentials/%20/bearer")
-                    .header(http::header::CONTENT_TYPE, "application/json")
-                    .body(axum::body::Body::from(
-                        serde_json::json!({
-                            "token": "server-secret-must-not-echo",
-                            "store": "keyring"
-                        })
-                        .to_string(),
-                    ))
-                    .expect("build rejected MCP credential request"),
-            )
-            .await
-            .expect("serve rejected MCP credential request");
-        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read rejected MCP credential response");
-        let public_error = String::from_utf8(body.to_vec()).expect("UTF-8 API error");
-        assert!(!public_error.contains("server-secret-must-not-echo"));
 
         let response = memory_app
             .oneshot(

@@ -138,6 +138,8 @@ struct RemoteBackend {
     /// Authoritative runtime projection, including the fully resolved default
     /// provider/model selection after provider-level defaults are applied.
     runtime_status: tokio::sync::RwLock<Option<agena_api::resource::RuntimeStatusResponse>>,
+    /// Cached control projection for Agena's own HTTP MCP surface.
+    mcp_server_control: tokio::sync::RwLock<Option<serde_json::Value>>,
     /// Cached plugin UI catalog (display contributions, theme palettes, slash
     /// commands) fetched from the server. Plugin reads are synchronous in the
     /// TUI event loop.
@@ -390,6 +392,7 @@ impl TuiBackend {
                 provider_drafts: Default::default(),
                 config_sources: Default::default(),
                 runtime_status: tokio::sync::RwLock::new(Some(runtime_status)),
+                mcp_server_control: Default::default(),
                 plugin_catalog: Default::default(),
                 plugin_statuses: Default::default(),
                 plugin_inspects: Default::default(),
@@ -420,6 +423,7 @@ impl TuiBackend {
             .refresh_workspace_directory(backend.workspace_root())
             .await;
         let _ = backend.refresh_aws_profiles().await;
+        let _ = backend.refresh_mcp_server_control().await;
         Ok(backend)
     }
 
@@ -446,6 +450,103 @@ impl TuiBackend {
     /// Access to the HTTP client for operations ported to REST.
     pub(crate) fn client(&self) -> &AgenaClient {
         &self.inner.client
+    }
+
+    /// Read Agena's live MCP server control projection through the remote
+    /// HTTP server. The TUI does not own an MCP runtime; this call always
+    /// reaches the server process connected during startup.
+    pub(crate) async fn mcp_server_control(&self) -> Result<serde_json::Value> {
+        self.refresh_mcp_server_control().await
+    }
+
+    pub(crate) fn cached_mcp_server_control(&self) -> Option<serde_json::Value> {
+        self.inner
+            .mcp_server_control
+            .try_read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    pub(crate) async fn refresh_mcp_server_control(&self) -> Result<serde_json::Value> {
+        let value = self
+            .inner
+            .client
+            .mcp_server_control()
+            .await
+            .context("failed to read the Agena MCP server control state")?;
+        *self.inner.mcp_server_control.write().await = Some(value.clone());
+        Ok(value)
+    }
+
+    pub(crate) async fn toggle_mcp_server(&self) -> Result<serde_json::Value> {
+        let current = self.mcp_server_control().await?;
+        let enabled = current
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let value = self
+            .inner
+            .client
+            .update_mcp_server_control(!enabled, None)
+            .await
+            .context("failed to toggle the Agena MCP server")?;
+        *self.inner.mcp_server_control.write().await = Some(value.clone());
+        Ok(value)
+    }
+
+    pub(crate) async fn set_mcp_auth_enabled(
+        &self,
+        auth_enabled: bool,
+    ) -> Result<serde_json::Value> {
+        let value = self
+            .inner
+            .client
+            .set_mcp_server_auth_enabled(auth_enabled)
+            .await
+            .context("failed to update Agena MCP authentication")?;
+        *self.inner.mcp_server_control.write().await = Some(value.clone());
+        Ok(value)
+    }
+
+    pub(crate) async fn set_mcp_public_url(
+        &self,
+        public_url: Option<String>,
+    ) -> Result<serde_json::Value> {
+        let current = self.mcp_server_control().await?;
+        let enabled = current
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let value = self
+            .inner
+            .client
+            .update_mcp_server_control(enabled, Some(public_url))
+            .await
+            .context("failed to update the Agena MCP public URL")?;
+        *self.inner.mcp_server_control.write().await = Some(value.clone());
+        Ok(value)
+    }
+
+    pub(crate) async fn set_mcp_oauth_password(&self, password: &str) -> Result<serde_json::Value> {
+        let value = self
+            .inner
+            .client
+            .set_mcp_server_oauth_password(password)
+            .await
+            .context("failed to set the Agena MCP OAuth password")?;
+        *self.inner.mcp_server_control.write().await = Some(value.clone());
+        Ok(value)
+    }
+
+    pub(crate) async fn clear_mcp_oauth_password(&self) -> Result<serde_json::Value> {
+        let value = self
+            .inner
+            .client
+            .clear_mcp_server_oauth_password()
+            .await
+            .context("failed to clear the Agena MCP OAuth password")?;
+        *self.inner.mcp_server_control.write().await = Some(value.clone());
+        Ok(value)
     }
 
     /// The cached configuration-source read model, if it has been loaded from
@@ -1105,12 +1206,21 @@ impl TuiBackend {
             .provider_studio_operation(operation, serde_json::json!({ "draft": draft }))
             .await
             .map_err(agena_application::provider_studio::ProviderDraftAuthError::other)?;
-        let result: std::result::Result<
-            agena_application::provider_studio::ProviderDraftAuthActionResult,
-            agena_application::provider_studio::ProviderDraftAuthError,
-        > = serde_json::from_value(value)
-            .map_err(agena_application::provider_studio::ProviderDraftAuthError::other)?;
-        result
+        match serde_json::from_value::<
+            std::result::Result<
+                agena_application::provider_studio::ProviderDraftAuthActionResult,
+                agena_application::provider_studio::ProviderDraftAuthError,
+            >,
+        >(value.clone())
+        {
+            Ok(result) => result,
+            Err(_) => match serde_json::from_value(value) {
+                Ok(action) => Ok(action),
+                Err(error) => {
+                    Err(agena_application::provider_studio::ProviderDraftAuthError::other(error))
+                }
+            },
+        }
     }
 
     pub async fn list_saved_provider_adapter_models(
@@ -1180,6 +1290,7 @@ impl TuiBackend {
         adapter_model_lists: &[agena_api::resource::ProviderAdapterModelsResource],
         selected_adapter_ids: &[String],
         selected_model_keys: &std::collections::BTreeSet<String>,
+        model_config_values: &std::collections::BTreeMap<String, serde_json::Value>,
     ) -> std::result::Result<
         agena_application::provider_studio::ProviderStudioSaveResult,
         agena_application::provider_studio::ProviderStudioSaveError,
@@ -1191,6 +1302,7 @@ impl TuiBackend {
                 "adapter_model_lists": adapter_model_lists,
                 "selected_adapter_ids": selected_adapter_ids,
                 "selected_model_keys": selected_model_keys,
+                "model_config_values": model_config_values,
             }),
         )
         .await
@@ -1301,13 +1413,19 @@ impl TuiBackend {
             .provider_studio_operation(operation, body)
             .await
             .map_err(provider_studio_transport_error)?;
-        let result = serde_json::from_value::<
+        let result = match serde_json::from_value::<
             std::result::Result<
                 agena_application::provider_studio::ProviderStudioSaveResult,
                 agena_application::provider_studio::ProviderStudioSaveError,
             >,
-        >(value)
-        .map_err(provider_studio_transport_error)?;
+        >(value.clone())
+        {
+            Ok(result) => result,
+            Err(_) => match serde_json::from_value(value) {
+                Ok(result) => Ok(result),
+                Err(error) => Err(provider_studio_transport_error(error)),
+            },
+        };
         if result.is_ok() {
             self.refresh_config_sources()
                 .await
@@ -1889,7 +2007,7 @@ impl TuiBackend {
         &self,
         session_id: i64,
         execution_id: Option<agena_domain::ExecutionId>,
-    ) -> Result<agena_domain::CancellationResult> {
+    ) -> Result<agena_domain::CancellationOutcome> {
         Ok(self.client().cancel_run(session_id, execution_id).await?)
     }
 
@@ -2364,6 +2482,7 @@ impl TuiBackend {
                 provider_drafts: Default::default(),
                 config_sources: Default::default(),
                 runtime_status: Default::default(),
+                mcp_server_control: Default::default(),
                 plugin_catalog: Default::default(),
                 plugin_statuses: Default::default(),
                 plugin_inspects: Default::default(),
@@ -2378,7 +2497,7 @@ impl TuiBackend {
                 aws_profiles: Default::default(),
                 model_catalog: Default::default(),
             }),
-            workspace_root: Arc::new(PathBuf::from(std::env::temp_dir())),
+            workspace_root: Arc::new(std::env::temp_dir()),
             media_workspace: Arc::new(tempfile::tempdir().expect("mock media workspace")),
         }
     }
@@ -2576,6 +2695,7 @@ mod tests {
                 provider_drafts: Default::default(),
                 config_sources: Default::default(),
                 runtime_status: Default::default(),
+                mcp_server_control: Default::default(),
                 plugin_catalog: Default::default(),
                 plugin_statuses: Default::default(),
                 plugin_inspects: Default::default(),

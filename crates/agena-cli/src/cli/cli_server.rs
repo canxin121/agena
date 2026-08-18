@@ -6,6 +6,32 @@
 
 use std::{collections::BTreeMap, fs, io::Read as _, path::Path, time::Duration};
 
+use super::{
+    ActiveSnapshotOutput, AgenaCli, AppError, ApplyArgs, ApplyOutput, AuthCommand, AuthListArgs,
+    AuthListOutput, AuthSubcommand, AuthSummary, CallToolParams, CallToolResult, CommitArgs,
+    CommitOutput, ConfigCommand, ConfigResolveArgs, ConfigSubcommand, ContinueArgs, CostArgs,
+    CostOutput, DebugCommand, DebugRunOutput, DebugSessionArgs, DebugSessionOutput,
+    DebugSubcommand, DiagnosticsArgs, DiagnosticsConfigOutput, DiagnosticsEnvironmentOutput,
+    DiagnosticsOutput, ExecArgs, ExecOutput, ForkArgs, GitArgs, GitOutput, LoginArgs, LogoutArgs,
+    ManagedSnapshotOutput, McpAddArgs, McpConfigLayerArg, McpHttpAuthArg, McpPluginToggleArgs,
+    McpReconnectArgs, McpRemoveArgs, McpServerArgs, McpServerBackend, McpServerError,
+    McpStatusArgs, MemoryCommand, MemoryListArgs, MemoryListOutput, MemorySubcommand,
+    MemorySummaryOutput, OutputFormat, PermissionModeArg, PermissionReplyKindArg,
+    PermissionScopeArg, PermissionsArgs, PermissionsListArgs, PermissionsOutput,
+    PermissionsSubcommand, PermissionsWriteArgs, PluginInspectArgs, PluginInspectOutput,
+    PluginLogOutputFormat, PluginLogsArgs, PluginLogsOutput, PluginStatusArgs, PluginStatusOutput,
+    PrArgs, PrOutput, ProviderCapabilitiesOutput, ProviderCommand, ProviderDefaultsSummary,
+    ProviderListArgs, ProviderListOutput, ProviderModelsOutput, ProviderSubcommand,
+    ProviderSummary, ResumeArgs, ReviewArgs, SessionDetail, SessionForkOutput, SessionImportOutput,
+    SessionListArgs, SessionListOutput, SessionListView, SessionOutput, SessionSummary,
+    SessionsCommand, SessionsSubcommand, SnapshotArgs, SnapshotBackendSupportOutput,
+    SnapshotCapabilitiesOutput, SnapshotOutput, ToolDescriptor, UsageArgs, WorkflowState,
+    async_trait, browser_login_redirect_uri, filter_session_summaries_by_view, format_apply_output,
+    format_debug_session_output, format_plugin_logs_output, memory_type_label,
+    normalize_login_provider, paginate_session_summaries, permission_rule_output,
+    prompt_browser_login, prompt_device_login, render_serialized, review_prompt, title_from_prompt,
+    usage_stats_query_from_args,
+};
 use agena_api::{
     commands::{
         Command, CommandResult, ForkSessionParams, ImportSessionParams, ListSessionTreeParams,
@@ -23,37 +49,9 @@ use agena_api::{
 use agena_application::dto::{
     AuthBrowserStartResource, AuthDeviceStartResource, AuthLoginKindResource,
     AuthLoginResultResource, AuthProviderResource, GitCommitResource, GitPullRequestResource,
-    GitStatusResource, McpCredentialMutationResource, McpOAuthStartResource, MemoryResource,
-    OperatorToolResource, SnapshotStatusResource,
+    GitStatusResource, MemoryResource, OperatorToolResource, SnapshotStatusResource,
 };
 use agena_client::{AgenaClient, ClientError};
-
-use super::{
-    ActiveSnapshotOutput, AgenaCli, AppError, ApplyArgs, ApplyOutput, AuthCommand, AuthListArgs,
-    AuthListOutput, AuthSubcommand, AuthSummary, CallToolParams, CallToolResult, CommitArgs,
-    CommitOutput, ConfigCommand, ConfigResolveArgs, ConfigSubcommand, ContinueArgs, CostArgs,
-    CostOutput, DebugCommand, DebugRunOutput, DebugSessionArgs, DebugSessionOutput,
-    DebugSubcommand, DiagnosticsArgs, DiagnosticsConfigOutput, DiagnosticsEnvironmentOutput,
-    DiagnosticsOutput, ExecArgs, ExecOutput, ForkArgs, GitArgs, GitOutput, LoginArgs, LogoutArgs,
-    ManagedSnapshotOutput, McpAddArgs, McpConfigLayerArg, McpCredentialStoreArg, McpHttpAuthArg,
-    McpLoginArgs, McpLogoutArgs, McpPluginToggleArgs, McpReconnectArgs, McpRemoveArgs,
-    McpServerArgs, McpServerBackend, McpServerError, McpStatusArgs, MemoryCommand, MemoryListArgs,
-    MemoryListOutput, MemorySubcommand, MemorySummaryOutput, OutputFormat, PermissionModeArg,
-    PermissionReplyKindArg, PermissionScopeArg, PermissionsArgs, PermissionsListArgs,
-    PermissionsOutput, PermissionsSubcommand, PermissionsWriteArgs, PluginInspectArgs,
-    PluginInspectOutput, PluginLogOutputFormat, PluginLogsArgs, PluginLogsOutput, PluginStatusArgs,
-    PluginStatusOutput, PrArgs, PrOutput, ProviderCapabilitiesOutput, ProviderCommand,
-    ProviderDefaultsSummary, ProviderListArgs, ProviderListOutput, ProviderModelsOutput,
-    ProviderSubcommand, ProviderSummary, ResumeArgs, ReviewArgs, SessionDetail, SessionForkOutput,
-    SessionImportOutput, SessionListArgs, SessionListOutput, SessionListView, SessionOutput,
-    SessionSummary, SessionsCommand, SessionsSubcommand, SnapshotArgs,
-    SnapshotBackendSupportOutput, SnapshotCapabilitiesOutput, SnapshotOutput, ToolDescriptor,
-    UsageArgs, WorkflowState, async_trait, browser_login_redirect_uri,
-    filter_session_summaries_by_view, format_apply_output, format_debug_session_output,
-    format_plugin_logs_output, memory_type_label, normalize_login_provider,
-    paginate_session_summaries, permission_rule_output, prompt_browser_login, prompt_device_login,
-    render_serialized, review_prompt, title_from_prompt, usage_stats_query_from_args,
-};
 
 struct ServerSessionClient {
     client: AgenaClient,
@@ -79,6 +77,40 @@ pub(super) struct ServerMcpBackend {
     workspace_id: i64,
 }
 
+const HIDDEN_MCP_PLUGIN_IDS: &[&str] = &["agena.chatgpt", "agena.gemini", "agena.claude"];
+
+fn name_belongs_to_plugin(name: &str, plugin_id: &str) -> bool {
+    name == plugin_id
+        || name
+            .strip_prefix(plugin_id)
+            .is_some_and(|suffix| suffix.starts_with('.'))
+}
+
+fn mcp_tool_uses_hidden_provider(tool: &OperatorToolResource) -> bool {
+    if let Some(plugin_id) = tool.plugin_id.as_deref() {
+        return HIDDEN_MCP_PLUGIN_IDS.contains(&plugin_id);
+    }
+
+    // Older Agena servers do not send plugin_id yet. Their compact tool names
+    // still carry the provider name, so retain a conservative compatibility
+    // fallback until those servers are upgraded.
+    HIDDEN_MCP_PLUGIN_IDS.iter().any(|plugin_id| {
+        let compact_plugin_id = plugin_id.strip_prefix("agena.").unwrap_or(plugin_id);
+        name_belongs_to_plugin(tool.name.as_str(), compact_plugin_id)
+            || name_belongs_to_plugin(tool.name.as_str(), plugin_id)
+    })
+}
+
+fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
+    !tool.interactive && !mcp_tool_uses_hidden_provider(tool)
+}
+
+fn mcp_tool_is_callable(tools: &[OperatorToolResource], name: &str) -> bool {
+    tools
+        .iter()
+        .any(|tool| tool.name == name && mcp_tool_is_exposed(tool))
+}
+
 #[async_trait]
 impl McpServerBackend for ServerMcpBackend {
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, McpServerError> {
@@ -90,6 +122,7 @@ impl McpServerBackend for ServerMcpBackend {
         let tools: Vec<OperatorToolResource> = serde_json::from_value(value)?;
         Ok(tools
             .into_iter()
+            .filter(mcp_tool_is_exposed)
             .map(|tool| ToolDescriptor {
                 name: tool.name,
                 title: None,
@@ -108,6 +141,22 @@ impl McpServerBackend for ServerMcpBackend {
     }
 
     async fn call_tool(&self, params: CallToolParams) -> Result<CallToolResult, McpServerError> {
+        // Re-read the live catalog for every call. Besides handling runtime
+        // reloads, this closes the gap where a client skips tools/list and
+        // guesses the name of an interactive or provider-owned tool.
+        let value = self
+            .client
+            .operator_tools()
+            .await
+            .map_err(|error| McpServerError::Backend(error.to_string()))?;
+        let tools: Vec<OperatorToolResource> = serde_json::from_value(value)?;
+        if !mcp_tool_is_callable(&tools, params.name.as_str()) {
+            return Err(McpServerError::NotFound(format!(
+                "tool '{}' is not exposed by the Agena MCP server",
+                params.name
+            )));
+        }
+
         let result = self
             .client
             .invoke_operator_tool(self.workspace_id, params.name.as_str(), params.arguments)
@@ -604,141 +653,6 @@ impl AgenaCli {
             .await
             .map_err(|error| client_error("failed to update server MCP settings", error))?;
         render_serialized(format, &response)
-    }
-
-    pub(super) async fn run_server_mcp_login(&self, args: McpLoginArgs) -> Result<(), AppError> {
-        let server = normalized_mcp_server_name(args.server.as_str())?;
-        if args.browser {
-            return self.run_server_mcp_oauth_login(args, server).await;
-        }
-        let token = read_mcp_login_token(&args)?;
-        let store = mcp_credential_store_name(args.store);
-        let client = connect_server_client(self).await?;
-        let value = client
-            .set_mcp_bearer_credential(server.as_str(), token, store)
-            .await
-            .map_err(|error| client_error("failed to store MCP credential in server", error))?;
-        let _: McpCredentialMutationResource =
-            decode_server_resource(value, "mcp-credential-result")?;
-        println!("MCP credential stored for {server} ({store})");
-        Ok(())
-    }
-
-    async fn run_server_mcp_oauth_login(
-        &self,
-        args: McpLoginArgs,
-        server: String,
-    ) -> Result<(), AppError> {
-        if args.token.is_some() || args.token_stdin {
-            return Err(AppError::Config(
-                "--browser is mutually exclusive with --token and --token-stdin".to_owned(),
-            ));
-        }
-        if !matches!(args.store, McpCredentialStoreArg::Keyring) {
-            return Err(AppError::Config(
-                "MCP OAuth credentials are stored only in the system keyring".to_owned(),
-            ));
-        }
-        let endpoint = args
-            .url
-            .as_deref()
-            .map(str::trim)
-            .filter(|url| !url.is_empty())
-            .ok_or_else(|| AppError::Config("--browser requires --url MCP_ENDPOINT".to_owned()))?;
-        validate_mcp_oauth_endpoint(endpoint)?;
-        let redirect_uri = format!("http://127.0.0.1:{}/callback", args.port);
-        let client = connect_server_client(self).await?;
-        let start: McpOAuthStartResource = decode_server_resource(
-            client
-                .start_mcp_oauth(
-                    server.as_str(),
-                    endpoint,
-                    args.scopes.as_slice(),
-                    redirect_uri.as_str(),
-                )
-                .await
-                .map_err(|error| client_error("failed to start MCP OAuth through server", error))?,
-            "mcp-oauth-start",
-        )?;
-        let expected_state = oauth_state(start.authorization_url.as_str())?;
-
-        println!(
-            "Open this MCP OAuth authorization URL in a browser:\n{}",
-            start.authorization_url
-        );
-        println!("Waiting for the loopback callback at {redirect_uri} …");
-        let callback = agena_runtime::wait_for_oauth_callback_async(
-            args.port,
-            expected_state.as_str(),
-            Duration::from_secs(300),
-        )
-        .await
-        .map_err(|error| AppError::Config(error.to_string()))?;
-        let value = client
-            .finish_mcp_oauth(
-                start.flow_id,
-                callback.code,
-                callback.state,
-                callback.issuer,
-            )
-            .await
-            .map_err(|error| client_error("failed to finish MCP OAuth through server", error))?;
-        let _: McpCredentialMutationResource =
-            decode_server_resource(value, "mcp-credential-result")?;
-        println!("MCP OAuth credential stored for {server} (keyring)");
-        Ok(())
-    }
-
-    pub(super) async fn run_server_mcp_logout(&self, args: McpLogoutArgs) -> Result<(), AppError> {
-        let server = normalized_mcp_server_name(args.server.as_str())?;
-        if args.revoke && !args.oauth {
-            return Err(AppError::Config(
-                "--revoke requires --oauth; bearer credentials cannot be revoked through the MCP OAuth flow"
-                    .to_owned(),
-            ));
-        }
-        if args.url.is_some() && !args.revoke {
-            return Err(AppError::Config(
-                "--url is only valid together with --revoke".to_owned(),
-            ));
-        }
-        let client = connect_server_client(self).await?;
-        if args.oauth {
-            if !matches!(args.store, McpCredentialStoreArg::Keyring) {
-                return Err(AppError::Config(
-                    "MCP OAuth credentials are stored only in the system keyring".to_owned(),
-                ));
-            }
-            if let Some(endpoint) = args.url.as_deref() {
-                validate_mcp_oauth_endpoint(endpoint)?;
-            }
-            let value = client
-                .delete_mcp_oauth_credential(server.as_str(), args.revoke, args.url.as_deref())
-                .await
-                .map_err(|error| {
-                    client_error("failed to remove MCP OAuth credential from server", error)
-                })?;
-            let _: McpCredentialMutationResource =
-                decode_server_resource(value, "mcp-credential-result")?;
-            if args.revoke {
-                println!(
-                    "MCP OAuth credential revoked remotely and removed for {server} (keyring)"
-                );
-            } else {
-                println!("MCP OAuth credential removed for {server} (keyring)");
-            }
-            return Ok(());
-        }
-
-        let store = mcp_credential_store_name(args.store);
-        let value = client
-            .delete_mcp_bearer_credential(server.as_str(), store)
-            .await
-            .map_err(|error| client_error("failed to remove MCP credential from server", error))?;
-        let _: McpCredentialMutationResource =
-            decode_server_resource(value, "mcp-credential-result")?;
-        println!("MCP credential removed for {server} ({store})");
-        Ok(())
     }
 
     pub(super) async fn render_server_memory_command(
@@ -2183,65 +2097,6 @@ fn normalized_mcp_server_name(server: &str) -> Result<String, AppError> {
     Ok(server.to_owned())
 }
 
-fn read_mcp_login_token(args: &McpLoginArgs) -> Result<String, AppError> {
-    if args.url.is_some() || !args.scopes.is_empty() {
-        return Err(AppError::Config(
-            "--url and --scope require --browser".to_owned(),
-        ));
-    }
-    if args.token.is_some() == args.token_stdin {
-        return Err(AppError::Config(
-            "mcp login requires exactly one of --token or --token-stdin".to_owned(),
-        ));
-    }
-    let token = match args.token.as_ref() {
-        Some(token) => token.clone(),
-        None => {
-            let mut token = String::new();
-            std::io::stdin().read_to_string(&mut token)?;
-            token
-        }
-    };
-    if token.trim().is_empty() {
-        return Err(AppError::Config(
-            "MCP bearer token must not be empty".to_owned(),
-        ));
-    }
-    Ok(token)
-}
-
-fn validate_mcp_oauth_endpoint(endpoint: &str) -> Result<(), AppError> {
-    let endpoint = url::Url::parse(endpoint.trim())
-        .map_err(|_| AppError::Config("invalid MCP OAuth endpoint".to_owned()))?;
-    if !matches!(endpoint.scheme(), "http" | "https")
-        || endpoint.host_str().is_none()
-        || !endpoint.username().is_empty()
-        || endpoint.password().is_some()
-    {
-        return Err(AppError::Config(
-            "MCP OAuth endpoint must be an http(s) URL without embedded credentials".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn oauth_state(authorization_url: &str) -> Result<String, AppError> {
-    url::Url::parse(authorization_url)
-        .map_err(|_| AppError::Config("server returned an invalid OAuth URL".to_owned()))?
-        .query_pairs()
-        .find(|(key, _)| key == "state")
-        .map(|(_, value)| value.into_owned())
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| AppError::Config("generated OAuth URL has no CSRF state".to_owned()))
-}
-
-const fn mcp_credential_store_name(store: McpCredentialStoreArg) -> &'static str {
-    match store {
-        McpCredentialStoreArg::Keyring => "keyring",
-        McpCredentialStoreArg::File => "file",
-    }
-}
-
 fn mcp_server_config_value(args: &McpAddArgs) -> Result<serde_json::Value, AppError> {
     match (args.url.as_deref(), args.command.as_deref()) {
         (Some(url), None) => {
@@ -2259,7 +2114,7 @@ fn mcp_server_config_value(args: &McpAddArgs) -> Result<serde_json::Value, AppEr
             }
             if !url.username().is_empty() || url.password().is_some() {
                 return Err(AppError::Config(
-                    "MCP HTTP URL must not embed credentials; use mcp login or --auth-env"
+                    "MCP HTTP URL must not embed credentials; use --auth bearer-from-env or a configured MCP client credential store"
                         .to_owned(),
                 ));
             }
@@ -2269,7 +2124,7 @@ fn mcp_server_config_value(args: &McpAddArgs) -> Result<serde_json::Value, AppEr
                 .any(|name| name.eq_ignore_ascii_case("authorization"))
             {
                 return Err(AppError::Config(
-                    "Authorization headers are not accepted by mcp add; use --auth bearer-from-store, mcp login, or --auth bearer-from-env"
+                    "Authorization headers are not accepted by mcp add; use --auth bearer-from-store or --auth bearer-from-env"
                         .to_owned(),
                 ));
             }
@@ -2642,6 +2497,78 @@ mod tests {
         let error = ensure_server_workspace_matches(canonical.to_string_lossy().as_ref(), parent)
             .expect_err("different workspace must fail");
         assert!(error.to_string().contains("refusing to operate"));
+    }
+
+    fn operator_tool(
+        name: &str,
+        interactive: bool,
+        plugin_id: Option<&str>,
+    ) -> OperatorToolResource {
+        OperatorToolResource {
+            name: name.to_owned(),
+            summary: None,
+            before_help: None,
+            after_help: None,
+            input_schema: serde_json::json!({"type": "object"}),
+            interactive,
+            plugin_id: plugin_id.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn mcp_catalog_hides_interactive_tools_and_provider_plugins() {
+        assert!(mcp_tool_is_exposed(&operator_tool(
+            "fs.stat",
+            false,
+            Some("agena.fs")
+        )));
+        assert!(!mcp_tool_is_exposed(&operator_tool(
+            "interaction.ask",
+            true,
+            Some("agena.interaction")
+        )));
+
+        for plugin_id in HIDDEN_MCP_PLUGIN_IDS {
+            assert!(!mcp_tool_is_exposed(&operator_tool(
+                &format!("{plugin_id}.tool"),
+                false,
+                Some(plugin_id),
+            )));
+        }
+    }
+
+    #[test]
+    fn mcp_call_gate_rejects_hidden_tools_even_when_the_name_is_guessed() {
+        let tools = vec![
+            operator_tool("fs.stat", false, Some("agena.fs")),
+            operator_tool("interaction.ask", true, Some("agena.interaction")),
+            operator_tool("chatgpt.web_search", false, Some("agena.chatgpt")),
+        ];
+
+        assert!(mcp_tool_is_callable(&tools, "fs.stat"));
+        assert!(!mcp_tool_is_callable(&tools, "interaction.ask"));
+        assert!(!mcp_tool_is_callable(&tools, "chatgpt.web_search"));
+        assert!(!mcp_tool_is_callable(&tools, "agena.chatgpt.web_search"));
+        assert!(!mcp_tool_is_callable(&tools, "unknown.tool"));
+    }
+
+    #[test]
+    fn mcp_catalog_uses_compact_name_fallback_for_older_servers() {
+        assert!(!mcp_tool_is_exposed(&operator_tool(
+            "chatgpt.web_search",
+            false,
+            None,
+        )));
+        assert!(!mcp_tool_is_exposed(&operator_tool(
+            "agena.gemini.google_search",
+            false,
+            None,
+        )));
+        assert!(mcp_tool_is_exposed(&operator_tool(
+            "custom.chatgpt_helper",
+            false,
+            None,
+        )));
     }
 
     #[test]

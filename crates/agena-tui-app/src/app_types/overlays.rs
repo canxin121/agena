@@ -175,6 +175,12 @@ pub(crate) struct SettingsFieldSpec {
     pub(crate) description_override: Option<String>,
 }
 
+/// Synthetic settings paths used only to route the existing single-line
+/// editor to the server-owned MCP control API. They are never written to
+/// `agena.json`.
+pub(crate) const MCP_PUBLIC_URL_SETTINGS_PATH: &str = "__agena.mcp_server.public_url";
+pub(crate) const MCP_OAUTH_PASSWORD_SETTINGS_PATH: &str = "__agena.mcp_server.oauth_password";
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum SettingsFieldKind {
     String,
@@ -185,6 +191,11 @@ pub(crate) enum SettingsFieldKind {
 #[derive(Debug, Clone)]
 pub(crate) enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
+    ToggleMcpServer,
+    ToggleMcpAuth,
+    EditMcpPublicUrl,
+    EditMcpOAuthPassword,
+    ClearMcpOAuthPassword,
     OpenProviderDefaultModelChooser,
     OpenPermissionApprovalModelChooser,
     OpenProviderList,

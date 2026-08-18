@@ -769,8 +769,12 @@ fn content_part(id: i64, session_id: i64, run_id: i64, new_part: NewPart, now_ms
 }
 
 /// The user-send run marker content.
-fn user_send_marker_content() -> serde_json::Value {
-    serde_json::json!({ "run_kind": "user_send", "abort_reason": null })
+fn user_send_marker_content(execution_id: Option<&str>) -> serde_json::Value {
+    let mut content = serde_json::json!({ "run_kind": "user_send", "abort_reason": null });
+    if let Some(execution_id) = execution_id {
+        content["execution_id"] = serde_json::Value::String(execution_id.to_owned());
+    }
+    content
 }
 
 #[async_trait]
@@ -1521,8 +1525,8 @@ impl PersistenceEngine for SqliteEngine {
                         session_meta_tx(txn, new.session_id).await?;
                     }
                     (Some(run_id), Some(tool_part_id)) => {
-                        if new.kind != BackgroundOperationKind::ScheduledDelivery {
-                            if let Some(row) = txn
+                        if new.kind != BackgroundOperationKind::ScheduledDelivery
+                            && let Some(row) = txn
                                 .query_one(Statement::from_sql_and_values(
                                     DatabaseBackend::Sqlite,
                                     format!(
@@ -1534,19 +1538,18 @@ impl PersistenceEngine for SqliteEngine {
                                 ))
                                 .await
                                 .map_err(map_db_err)?
+                        {
+                            let existing =
+                                background_operation_from_row(row).map_err(map_db_err)?;
+                            if existing.operation_id == new.operation_id
+                                && existing.kind == new.kind
                             {
-                                let existing =
-                                    background_operation_from_row(row).map_err(map_db_err)?;
-                                if existing.operation_id == new.operation_id
-                                    && existing.kind == new.kind
-                                {
-                                    return Ok(existing);
-                                }
-                                return Err(StoreError::InvalidState(format!(
-                                    "tool part {tool_part_id} already owns background operation {}",
-                                    existing.operation_id
-                                )));
+                                return Ok(existing);
                             }
+                            return Err(StoreError::InvalidState(format!(
+                                "tool part {tool_part_id} already owns background operation {}",
+                                existing.operation_id
+                            )));
                         }
                         let run = load_part_by_id(txn, run_id).await?.ok_or_else(|| {
                             StoreError::not_found(format!("run marker {run_id}"))
@@ -2285,7 +2288,43 @@ impl PersistenceEngine for SqliteEngine {
                     session_id,
                     PartRole::User,
                     marker_state,
-                    user_send_marker_content(),
+                    user_send_marker_content(None),
+                    parts,
+                    idempotency_key,
+                    now_ms,
+                )
+                .await
+            })
+        })
+        .await
+    }
+
+    async fn submit_user_run_for_execution(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        parts: Vec<NewPart>,
+        idempotency_key: Option<String>,
+        execution_id: &str,
+        now_ms: i64,
+    ) -> Result<SubmitOutcome, StoreError> {
+        let db = self.db();
+        let owner_id = owner_id.to_owned();
+        let execution_id = execution_id.to_owned();
+        let marker_state = if parts.iter().all(|part| part.state.is_terminal()) {
+            PartState::Completed
+        } else {
+            PartState::Pending
+        };
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
+                submit_batch_tx(
+                    txn,
+                    session_id,
+                    PartRole::User,
+                    marker_state,
+                    user_send_marker_content(Some(&execution_id)),
                     parts,
                     idempotency_key,
                     now_ms,
@@ -2722,6 +2761,85 @@ impl PersistenceEngine for SqliteEngine {
                         .await?
                         .updated_parts,
                 )
+            })
+        })
+        .await
+    }
+
+    async fn withdraw_user_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_id: i64,
+        now_ms: i64,
+    ) -> Result<Vec<Part>, StoreError> {
+        let db = self.db();
+        let owner_id = owner_id.to_owned();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
+
+                let Some(marker) = load_part_by_id(txn, run_id).await? else {
+                    return Ok(Vec::new());
+                };
+                if !marker.is_run_marker()
+                    || marker.role != PartRole::User
+                    || marker.origin_session_id != session_id
+                    || marker
+                        .content
+                        .get("run_kind")
+                        .and_then(serde_json::Value::as_str)
+                        != Some("user_send")
+                {
+                    return Err(StoreError::InvalidState(format!(
+                        "part {run_id} is not a user_send run owned by session {session_id}"
+                    )));
+                }
+
+                let rows = txn
+                    .query_all(Statement::from_sql_and_values(
+                        DatabaseBackend::Sqlite,
+                        format!(
+                            "SELECT {PART_COLS} FROM agena_parts p \
+                             JOIN agena_session_parts sp ON sp.part_id = p.part_id \
+                             WHERE sp.session_id = ? AND (p.part_id = ? OR p.run_id = ?) \
+                             ORDER BY p.created_at_ms, p.part_id"
+                        ),
+                        [session_id.into(), run_id.into(), run_id.into()],
+                    ))
+                    .await
+                    .map_err(map_db_err)?;
+                if rows.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let removed = rows
+                    .into_iter()
+                    .map(part_from_row)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(map_db_err)?;
+                let part_ids = removed
+                    .iter()
+                    .map(|part| part.part_id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                txn.execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Sqlite,
+                    format!(
+                        "DELETE FROM agena_session_parts WHERE session_id = ? AND part_id IN ({part_ids})"
+                    ),
+                    [session_id.into()],
+                ))
+                .await
+                .map_err(map_db_err)?;
+                txn.execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Sqlite,
+                    "DELETE FROM agena_idempotency WHERE session_id = ? AND run_id = ?",
+                    [session_id.into(), run_id.into()],
+                ))
+                .await
+                .map_err(map_db_err)?;
+                bump_session_version_tx(txn, session_id, now_ms).await?;
+                Ok(removed)
             })
         })
         .await

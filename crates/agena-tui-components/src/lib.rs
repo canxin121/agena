@@ -62,7 +62,7 @@ pub use detail_text::{
 pub use editor::{Editor, EditorView, sanitize_editor_text};
 pub use editor_dialog::{
     EditorDialogSpec, render_editor_dialog, render_overlay_line_input_dialog,
-    render_workbench_editor_dialog,
+    render_overlay_masked_line_input_dialog, render_workbench_editor_dialog,
 };
 pub use editor_panel::{
     EditorPanelRenderResult, EditorPanelSpec, render_editor_panel, render_wrapped_editor_panel,

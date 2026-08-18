@@ -96,3 +96,20 @@ pub fn render_overlay_line_input_dialog(
         input,
     );
 }
+
+/// Render a single-line input without exposing its contents on the terminal.
+/// The editor state itself remains untouched so submission still receives the
+/// original value; this renderer only substitutes one mask glyph per input
+/// character for the short-lived visual projection.
+pub fn render_overlay_masked_line_input_dialog(
+    frame: &mut Frame,
+    area: Rect,
+    surface: SurfaceMode,
+    title: Cow<'_, str>,
+    prompt: Cow<'_, str>,
+    footer: Cow<'_, str>,
+    input: &Editor,
+) {
+    let masked = Editor::from_text("•".repeat(input.text().chars().count()));
+    render_overlay_line_input_dialog(frame, area, surface, title, prompt, footer, &masked);
+}

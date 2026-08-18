@@ -1,9 +1,9 @@
 use super::super::{
     permission_config_from_json_value, permission_override_summary,
     settings_studio_activity_kind_items, settings_studio_activity_tool_items,
-    settings_studio_field_items, settings_studio_harness_items, settings_studio_permission_items,
-    settings_studio_plugin_items, settings_studio_provider_approval_model_item,
-    settings_studio_provider_items,
+    settings_studio_field_items, settings_studio_harness_items, settings_studio_mcp_items,
+    settings_studio_permission_items, settings_studio_plugin_items,
+    settings_studio_provider_approval_model_item, settings_studio_provider_items,
 };
 
 impl App {
@@ -121,18 +121,20 @@ impl App {
         let session_id = self.current_or_selected_session_id();
         self.dispatch_backend_operation(
             move |application| async move {
-                let (config, catalog, plugins, providers, aws_profiles) = tokio::join!(
+                let (config, catalog, plugins, providers, aws_profiles, mcp) = tokio::join!(
                     application.refresh_config_sources(),
                     application.refresh_model_catalog_cache("", 0, 1),
                     application.refresh_plugin_presentation_snapshot(),
                     application.refresh_provider_runtime_snapshot(),
                     application.refresh_aws_profiles(),
+                    application.refresh_mcp_server_control(),
                 );
                 config?;
                 catalog?;
                 plugins?;
                 providers?;
                 aws_profiles?;
+                let _ = mcp;
                 let permission = match session_id {
                     Some(session_id) => Some(
                         crate::app_backend::permission_studio::get_session_permission_studio_state(
@@ -194,6 +196,7 @@ impl App {
         .map_err(crate::UiFailure::internal)?;
 
         let mut plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
+        plugin_items.extend(settings_studio_mcp_items(&self.i18n, &self.application));
         plugin_items.extend(settings_studio_harness_items(&self.i18n, &sources));
         let mut provider_items =
             settings_studio_provider_items(&self.i18n, &sources, &configured_providers);

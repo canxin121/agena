@@ -83,7 +83,7 @@ impl PlanPlugin {
     }
 
     #[tool(
-        tags(mutate, planning),
+        tags(mutate, interactive, planning),
         summary = "Transition the current plan's phase.",
         help = "Plan-level phase transitions between `planning`, `active`, `blocked`, `completed`, and `cancelled`, with optional `autorun` and (for `completed`) `summary`. Transitions into `active`, `blocked`, or `completed` require user approval by default: pass `request_approval: true` (or omit it) to route them through the same review dialog as `plan.review`, or `request_approval: false` (only when the user has already declared the change needs no approval) to apply them directly. To complete a plan with steps, mark the required steps/checks `completed` via `plan.edit` first, then call this tool separately with `phase: completed`.",
         planning,
@@ -94,7 +94,7 @@ impl PlanPlugin {
     }
 
     #[tool(
-        tags(mutate, planning),
+        tags(mutate, interactive, planning),
         summary = "Request user approval of the current plan before it becomes active.",
         help = "This is the only plan tool that requests user approval and may pause for the user. It reviews the current saved plan and, when the user approves, moves it from `planning` to `active`. Call it after creating or refining the plan with `plan.set` / `plan.edit`. If the user leaves feedback or rejects, the plan stays in `planning` so you can revise it and propose again.",
         planning,

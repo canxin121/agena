@@ -155,6 +155,7 @@ base64 = "0.22.1"
 bytes = "1.12.1"
 dashmap = "6.2.1"
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["pkcs8", "pem", "rand_core"] }
+jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto"] }
 hex = "0.4.3"
 parking_lot = "0.12.5"
 os_info = "=3.12.0"

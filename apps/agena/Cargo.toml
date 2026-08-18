@@ -20,6 +20,8 @@ agena-cli = { workspace = true }
 agena-client = { workspace = true }
 agena-domain = { workspace = true }
 agena-git-http = { workspace = true }
+agena-keyring-store = { workspace = true }
+agena-mcp-server = { workspace = true }
 agena-provider = { workspace = true }
 agena-runtime = { workspace = true }
 agena-tui = { workspace = true }
@@ -34,13 +36,16 @@ bytes = "1.12.1"
 chrono = { workspace = true }
 clap = { workspace = true }
 dashmap = { workspace = true }
+ed25519-dalek = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { workspace = true }
 ignore = { workspace = true }
+jsonwebtoken = { workspace = true }
 libc = "0.2.186"
 portable-pty = { workspace = true }
 regex = { workspace = true }
 reqwest = { version = "0.13.4", default-features = true, features = ["json", "stream", "gzip", "brotli", "deflate"] }
+rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

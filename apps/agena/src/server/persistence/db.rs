@@ -13,6 +13,9 @@ const DB_POOL_IDLE_TIMEOUT_SECS: u64 = 120;
 
 pub(crate) const KV_KEY_TERMINAL_SESSION_REGISTRY: &str = "terminal.sessionRegistry";
 pub(crate) const KV_KEY_WORKSPACE_PREVIEW_SERVER_STATE: &str = "workspacePreview.state.server";
+pub(crate) const KV_KEY_MCP_SERVER_CONTROL: &str = "mcp.server.control";
+pub(crate) const KV_KEY_MCP_OAUTH_RUNTIME: &str = "mcp.oauth.runtime";
+pub(crate) const KV_KEY_MCP_OAUTH_SIGNING_KEY: &str = "mcp.oauth.signing_key";
 
 #[derive(Debug, Clone)]
 pub(crate) struct ServerStateDb {

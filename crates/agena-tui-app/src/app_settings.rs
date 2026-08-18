@@ -7,6 +7,37 @@ impl App {
         match drive_input_dialog_key(dialog, key) {
             InputDialogKeyResult::Close => true,
             InputDialogKeyResult::Submit(action, input) => {
+                if action.path == MCP_PUBLIC_URL_SETTINGS_PATH {
+                    let public_url = (!input.trim().is_empty()).then(|| input.trim().to_owned());
+                    self.dispatch_backend_operation(
+                        move |application| async move {
+                            application.set_mcp_public_url(public_url).await
+                        },
+                        |app, result| match result {
+                            Ok(_) => {
+                                app.flash_success("Agena MCP public URL updated".to_owned());
+                                app.refresh_current_route_after_local_edit();
+                            }
+                            Err(error) => app.flash_error(error),
+                        },
+                    );
+                    return true;
+                }
+                if action.path == MCP_OAUTH_PASSWORD_SETTINGS_PATH {
+                    self.dispatch_backend_operation(
+                        move |application| async move {
+                            application.set_mcp_oauth_password(input.as_str()).await
+                        },
+                        |app, result| match result {
+                            Ok(_) => {
+                                app.flash_success("Agena MCP OAuth password updated".to_owned());
+                                app.refresh_current_route_after_local_edit();
+                            }
+                            Err(error) => app.flash_error(error),
+                        },
+                    );
+                    return true;
+                }
                 match parse_settings_field_input(&self.i18n, &action, input.as_str()) {
                     Ok(Some(value)) => {
                         let path = action.path.clone();
@@ -57,6 +88,7 @@ impl App {
     }
 }
 use crate::{
-    App, InputDialogKeyResult, KeyEvent, SettingsValueEditOverlay, drive_input_dialog_key,
+    App, InputDialogKeyResult, KeyEvent, MCP_OAUTH_PASSWORD_SETTINGS_PATH,
+    MCP_PUBLIC_URL_SETTINGS_PATH, SettingsValueEditOverlay, drive_input_dialog_key,
     parse_settings_field_input, settings_path_cleared_message, settings_path_updated_message,
 };

@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, sync::Arc};
+use std::{env, net::SocketAddr, path::Path, sync::Arc};
 
 use agena_api_server::AppState as ApiV2State;
 use agena_application::Application;
@@ -6,9 +6,10 @@ use agena_runtime::bootstrap_application_services;
 use anyhow::{Context, Result, anyhow};
 use axum::{
     Router, middleware,
-    routing::{any, get, post},
+    routing::{any, get, post, put},
 };
 use tower_http::trace::TraceLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::server::{diagnostics::health, state::AppState};
 
@@ -40,6 +41,16 @@ fn fs_router() -> Router<Arc<AppState>> {
 /// `require_ui_auth` as the canonical `/api/v1` router.
 fn server_api_router() -> Router<Arc<AppState>> {
     fs_router()
+        .route(
+            "/api/v1/server/mcp",
+            get(crate::server::mcp::get_mcp_server_control)
+                .put(crate::server::mcp::update_mcp_server_control),
+        )
+        .route(
+            "/api/v1/server/mcp/oauth/password",
+            put(crate::server::mcp::set_mcp_oauth_password)
+                .delete(crate::server::mcp::clear_mcp_oauth_password),
+        )
         .route("/api/fs/upload", post(crate::server::fs::fs_upload))
         .route(
             "/api/workspace/preview",
@@ -82,15 +93,21 @@ fn server_api_router() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/workspace/preview/s/{id}",
-            axum::routing::any(crate::server::preview::routes::workspace_preview_session_proxy_root),
+            axum::routing::any(
+                crate::server::preview::routes::workspace_preview_session_proxy_root,
+            ),
         )
         .route(
             "/api/workspace/preview/s/{id}/",
-            axum::routing::any(crate::server::preview::routes::workspace_preview_session_proxy_root),
+            axum::routing::any(
+                crate::server::preview::routes::workspace_preview_session_proxy_root,
+            ),
         )
         .route(
             "/api/workspace/preview/s/{id}/{*path}",
-            axum::routing::any(crate::server::preview::routes::workspace_preview_session_proxy_path),
+            axum::routing::any(
+                crate::server::preview::routes::workspace_preview_session_proxy_path,
+            ),
         )
         .route("/api/git/status", get(crate::server::git::git_status))
         .route("/api/git/watch", get(crate::server::git::git_watch))
@@ -396,11 +413,46 @@ fn server_api_router() -> Router<Arc<AppState>> {
         )
 }
 
+/// Install the server's stderr tracing subscriber before HTTP bootstrap.
+///
+/// The TUI and one-shot command entry points install their own subscribers,
+/// but the long-running `agena server` entry point historically did not. That
+/// made tunnel failures opaque: Secure MCP Tunnel can report only an upstream
+/// status, while the server had no visible request breadcrumb to correlate it
+/// with. Keep this process-level setup here so `2>&1 | tee ...` captures MCP
+/// diagnostics as soon as the listener starts.
+fn init_server_tracing(args: &crate::server::ServerArgs, workspace_root: &Path) {
+    let tracing = agena_runtime::resolve_runtime_bootstrap_preflight(
+        &agena_runtime::RuntimeBootstrapRequest {
+            workspace_root: Some(workspace_root.to_owned()),
+            config_override_expressions: args.overrides.clone(),
+            ..Default::default()
+        },
+    )
+    .map(|preflight| preflight.tracing)
+    .unwrap_or_default();
+    let filter = agena_runtime::runtime_env_filter(&tracing).unwrap_or_else(|_| {
+        agena_runtime::runtime_env_filter(&agena_runtime::RuntimeTracingConfiguration::default())
+            .expect("default tracing filter should parse")
+    });
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .with_ansi(false)
+                .compact()
+                .with_writer(std::io::stderr),
+        )
+        .try_init();
+}
+
 pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     let workspace_root = args
         .workspace_root
         .clone()
         .unwrap_or(env::current_dir().context("failed to resolve current working directory")?);
+    init_server_tracing(&args, workspace_root.as_path());
     let ui_dir = crate::server::web_ui::resolve_ui_dir(args.ui_dir.as_deref(), &workspace_root)?;
     let runtime = bootstrap_application_services(agena_runtime::RuntimeBootstrapRequest {
         workspace_root: Some(workspace_root),
@@ -437,54 +489,16 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     let application =
         Application::from_composed_runtime_services(runtime.application_services())
             .map_err(|error| anyhow!("failed to compose application services: {error}"))?;
-    let shared_state = Arc::new(AppState {
-        ui_auth: ui_auth.clone(),
-        terminal,
-        workspace_preview_registry,
-        workspace_preview_runtime,
-        server_state_db,
-        application: application.clone(),
-    });
-    crate::server::auth::spawn_cleanup_sessions_task_if_enabled(&shared_state.ui_auth);
-
-    tracing::info!(
-        target: "agena.runtime",
-        "Agena server is serving the native /api/v1 runtime API"
-    );
-
-    let public_router = Router::new()
-        .route("/health", get(health))
-        .route(
-            "/auth/session",
-            get(crate::server::auth::auth_session_status)
-                .post(crate::server::auth::auth_session_create),
-        )
-        .with_state(shared_state.clone());
-
-    let api_state = ApiV2State::from_application(application);
-    let server_identity = api_state.server().clone();
-    let agena_api = agena_api_server::router(api_state).layer(middleware::from_fn_with_state(
-        shared_state.clone(),
-        crate::server::auth::require_ui_auth,
-    ));
-
-    let server_api_routes = server_api_router()
-        .with_state(shared_state.clone())
-        .layer(middleware::from_fn_with_state(
-            shared_state.clone(),
-            crate::server::auth::require_ui_auth,
-        ));
-
-    let app = public_router
-        .merge(agena_api)
-        .merge(server_api_routes)
-        .route("/api", any(crate::server::web_ui::api_not_found))
-        .route("/api/{*path}", any(crate::server::web_ui::api_not_found))
-        .route("/auth", any(crate::server::web_ui::api_not_found))
-        .route("/auth/{*path}", any(crate::server::web_ui::api_not_found))
-        .layer(TraceLayer::new_for_http());
-    let app = crate::server::web_ui::attach(app, ui_dir);
-
+    let mcp_workspace = application
+        .service()
+        .resolve_workspace(agena_application::dto::WorkspaceResolveRequest {
+            workspace: agena_application::dto::WorkspacePathRequest {
+                path: application.workspace_root().to_string_lossy().into_owned(),
+            },
+            create_if_missing: true,
+        })
+        .await
+        .map_err(|error| anyhow!("failed to resolve the MCP workspace: {error}"))?;
     let addr: SocketAddr = format!("{}:{}", args.host, args.port)
         .parse()
         .map_err(|error| anyhow!("invalid bind address {}:{}: {error}", args.host, args.port))?;
@@ -507,6 +521,69 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         "http://{}",
         SocketAddr::new(advertised_ip, bound_addr.port())
     );
+    let mcp_state = Arc::new(
+        crate::server::mcp::McpServerState::load(
+            application.clone(),
+            mcp_workspace.id,
+            ui_auth.clone(),
+            server_state_db.clone(),
+            args.mcp_public_url.as_deref(),
+            endpoint_url.as_str(),
+        )
+        .await
+        .map_err(|error| anyhow!("invalid MCP public URL: {error}"))?,
+    );
+
+    let shared_state = Arc::new(AppState {
+        ui_auth: ui_auth.clone(),
+        mcp_server: mcp_state.clone(),
+        terminal,
+        workspace_preview_registry,
+        workspace_preview_runtime,
+        server_state_db,
+        application: application.clone(),
+    });
+    crate::server::auth::spawn_cleanup_sessions_task_if_enabled(&shared_state.ui_auth);
+
+    tracing::info!(
+        target: "agena.runtime",
+        "Agena server is serving the native /api/v1 runtime API"
+    );
+
+    let public_router = Router::new()
+        .route("/health", get(health))
+        .route(
+            "/auth/session",
+            get(crate::server::auth::auth_session_status)
+                .post(crate::server::auth::auth_session_create),
+        )
+        .with_state(shared_state.clone());
+
+    let api_state = ApiV2State::from_application(application.clone());
+    let server_identity = api_state.server().clone();
+    let agena_api = agena_api_server::router(api_state).layer(middleware::from_fn_with_state(
+        shared_state.clone(),
+        crate::server::auth::require_ui_auth,
+    ));
+
+    let server_api_routes =
+        server_api_router()
+            .with_state(shared_state.clone())
+            .layer(middleware::from_fn_with_state(
+                shared_state.clone(),
+                crate::server::auth::require_ui_auth,
+            ));
+
+    let app = public_router
+        .merge(agena_api)
+        .merge(server_api_routes)
+        .route("/api", any(crate::server::web_ui::api_not_found))
+        .route("/api/{*path}", any(crate::server::web_ui::api_not_found))
+        .route("/auth", any(crate::server::web_ui::api_not_found))
+        .route("/auth/{*path}", any(crate::server::web_ui::api_not_found))
+        .merge(crate::server::mcp::router(mcp_state));
+    let app = app.layer(TraceLayer::new_for_http());
+    let app = crate::server::web_ui::attach(app, ui_dir);
     let server_record =
         crate::server::server_record::publish_record(endpoint_url.clone(), &server_identity)?;
 

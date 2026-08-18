@@ -70,7 +70,6 @@ The four values above are sufficient and remain authoritative across restarts, e
 
 ```bash
 AGENA_MCP_ANONYMOUS_ACCESS=none
-AGENA_MCP_TOOL_EXPOSURE=read-only
 AGENA_MCP_CLIENT_REGISTRATION=cimd-only
 ```
 
@@ -255,19 +254,17 @@ Client Registration. ChatGPT opens the Agena authorization page, the user enters
 the configured password, and Agena issues resource-bound access and rotating
 refresh tokens.
 
-## 7. Exposure policy
+## 7. Tool surface
 
-The production default is `read-only`. Agena also removes interactive and
-autonomous task tools from the remote connector surface.
+Agena exposes every tool that can run without an interactive approval/session
+UI, including shell, filesystem-write, mutation, and outbound-network tools.
+There is no read-only exposure mode and no MCP setting that filters tools by
+their permission contract.
 
-Only enable this after reviewing every exposed plugin permission contract:
-
-```bash
-AGENA_MCP_TOOL_EXPOSURE=all-non-interactive
-```
-
-That mode can expose tools with filesystem writes, shell execution, mutation,
-or outbound network access. OAuth proves who is authorized; it does not make a
+Interactive tools, autonomous task tools, the `agena.session` plugin, browser
+interaction tools, planning-review entry points, and the ChatGPT/Gemini/Claude
+provider plugins remain hidden because they cannot operate correctly on this
+stateless connector surface. OAuth proves who is authorized; it does not make a
 high-impact tool invocation intrinsically safe.
 
 ## Troubleshooting

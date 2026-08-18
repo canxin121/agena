@@ -8,7 +8,6 @@ import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
 
-type McpToolExposure = 'read_only' | 'all_non_interactive'
 type McpAuthMode = 'none' | 'oauth' | 'mixed'
 type McpAnonymousAccess = 'none' | 'read_only'
 type McpClientRegistration = 'cimd_only' | 'cimd_and_dcr'
@@ -39,10 +38,6 @@ async function saveOAuthIssuerUrl() {
   await updateControl({ oauthIssuerUrl: value || null })
 }
 
-async function saveToolExposure() {
-  await updateControl({ toolExposure: toolExposure.value })
-}
-
 type McpServerControl = {
   enabled: boolean
   authEnabled: boolean
@@ -50,7 +45,6 @@ type McpServerControl = {
   anonymousAccess: McpAnonymousAccess
   publicUrl: string | null
   oauthIssuerUrl: string | null
-  toolExposure: McpToolExposure
   clientRegistration: McpClientRegistration
   resourceUrl: string
   ready: boolean
@@ -66,7 +60,6 @@ const publicUrl = ref('')
 const oauthIssuerUrl = ref('')
 const authMode = ref<McpAuthMode>('none')
 const anonymousAccess = ref<McpAnonymousAccess>('none')
-const toolExposure = ref<McpToolExposure>('read_only')
 const clientRegistration = ref<McpClientRegistration>('cimd_only')
 const oauthPassword = ref('')
 const copiedEndpoint = ref('')
@@ -117,20 +110,6 @@ const clientRegistrationOptions = [
   },
 ]
 
-const toolExposureOptions = [
-  {
-    value: 'read_only',
-    label: 'Read-only tools (recommended)',
-    description:
-      'Expose only non-interactive tools whose permission contract has no writes, shell, mutation, network, or task authority.',
-  },
-  {
-    value: 'all_non_interactive',
-    label: 'All non-interactive tools',
-    description: 'Also expose tools that can write files, run shell commands, mutate state, or access the network.',
-  },
-]
-
 function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value)
 }
@@ -141,7 +120,6 @@ function applyControl(value: McpServerControl) {
   oauthIssuerUrl.value = value.oauthIssuerUrl || ''
   authMode.value = value.authMode || (value.authEnabled ? 'oauth' : 'none')
   anonymousAccess.value = value.anonymousAccess || 'none'
-  toolExposure.value = value.toolExposure || 'read_only'
   clientRegistration.value = value.clientRegistration || 'cimd_only'
 }
 
@@ -176,7 +154,6 @@ async function updateControl(body: {
   anonymousAccess?: McpAnonymousAccess
   publicUrl?: string | null
   oauthIssuerUrl?: string | null
-  toolExposure?: McpToolExposure
   clientRegistration?: McpClientRegistration
 }) {
   if (!control.value || saving.value) return
@@ -194,7 +171,6 @@ async function updateControl(body: {
         ...(Object.prototype.hasOwnProperty.call(body, 'oauthIssuerUrl')
           ? { oauthIssuerUrl: body.oauthIssuerUrl }
           : {}),
-        ...(body.toolExposure ? { toolExposure: body.toolExposure } : {}),
         ...(body.clientRegistration ? { clientRegistration: body.clientRegistration } : {}),
       }),
     })
@@ -379,31 +355,6 @@ onMounted(() => {
           supported only when the reverse proxy preserves that prefix and routes the matching path-aware RFC 8414
           well-known URL. Leave it empty when OAuth and MCP use the same domain; Agena derives the resource origin.
           Request headers are never trusted.
-        </div>
-      </div>
-
-      <div class="grid gap-2">
-        <div class="text-sm font-medium">Tool exposure</div>
-        <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <OptionPicker
-            v-model="toolExposure"
-            class="min-w-0 flex-1"
-            :options="toolExposureOptions"
-            :include-empty="false"
-            title="MCP tool exposure"
-            :disabled="saving"
-          />
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveToolExposure">Save exposure</Button>
-        </div>
-        <div
-          v-if="toolExposure === 'all_non_interactive'"
-          class="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
-        >
-          High-risk mode: ChatGPT may invoke non-interactive tools that write files, execute shell commands, mutate
-          state, or access external networks. Interactive and autonomous task tools remain hidden.
-        </div>
-        <div v-else class="text-xs text-muted-foreground">
-          Recommended for public connectors: only tools proven read-only by Agena's permission contract are exposed.
         </div>
       </div>
 

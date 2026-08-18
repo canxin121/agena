@@ -460,27 +460,6 @@ impl App {
                 );
                 false
             }
-            SettingsPickerAction::ToggleMcpToolExposure => {
-                self.dispatch_backend_operation(
-                    |application| async move { application.toggle_mcp_tool_exposure().await },
-                    |app, result| match result {
-                        Ok(value) => {
-                            let exposure = value
-                                .get("toolExposure")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("read_only");
-                            app.flash_success(if exposure == "all_non_interactive" {
-                                "Agena MCP now exposes all non-interactive tools".to_owned()
-                            } else {
-                                "Agena MCP now exposes read-only tools only".to_owned()
-                            });
-                            app.refresh_current_route_after_local_edit();
-                        }
-                        Err(error) => app.flash_error(error),
-                    },
-                );
-                false
-            }
             SettingsPickerAction::EditMcpPublicUrl => {
                 self.open_settings_field_editor(
                     SettingsFieldSpec {

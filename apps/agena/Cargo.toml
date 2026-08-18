@@ -20,7 +20,6 @@ agena-cli = { workspace = true }
 agena-client = { workspace = true }
 agena-domain = { workspace = true }
 agena-git-http = { workspace = true }
-agena-keyring-store = { workspace = true }
 agena-mcp-server = { workspace = true }
 agena-provider = { workspace = true }
 agena-runtime = { workspace = true }

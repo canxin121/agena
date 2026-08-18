@@ -120,7 +120,6 @@ async fn spawn_server(
         "AGENA_MCP_OAUTH_ISSUER_URL",
         "AGENA_MCP_AUTH_MODE",
         "AGENA_MCP_ANONYMOUS_ACCESS",
-        "AGENA_MCP_TOOL_EXPOSURE",
         "AGENA_MCP_CLIENT_REGISTRATION",
     ] {
         command.env_remove(name);
@@ -330,6 +329,16 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
             .expect("pre-initialize tools/list returns an array")
             .is_empty()
     );
+    assert!(
+        pre_initialize_tools["result"]["tools"]
+            .as_array()
+            .expect("pre-initialize tools/list returns an array")
+            .iter()
+            .all(|tool| !tool["name"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("session."))
+    );
 
     let (status, discover) = post_mcp_with_headers(
         &client,
@@ -394,17 +403,20 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
     assert_eq!(modern_tools["result"]["resultType"], "complete");
     assert_eq!(modern_tools["result"]["cacheScope"], "private");
     assert_eq!(modern_tools["result"]["ttlMs"], 30_000);
+    let modern_tool_list = modern_tools["result"]["tools"]
+        .as_array()
+        .expect("modern tools/list returns an array");
     assert!(
-        modern_tools["result"]["tools"]
-            .as_array()
-            .expect("modern tools/list returns an array")
+        modern_tool_list
             .iter()
-            .all(|tool| {
-                tool["annotations"]["readOnlyHint"] == true
-                    && tool["annotations"]["destructiveHint"] == false
-                    && tool["annotations"]["openWorldHint"] == false
-            })
+            .any(|tool| tool["name"] == "shell.run")
     );
+    assert!(modern_tool_list.iter().all(|tool| {
+        !tool["name"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("session.")
+    }));
 
     let (status, initialize) = post_mcp(&client, &mcp_url, initialize_request(1)).await;
     assert_eq!(status, StatusCode::OK);
@@ -433,6 +445,7 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
             && !name.contains("chatgpt")
             && !name.contains("gemini")
             && !name.contains("claude")
+            && !name.starts_with("session.")
             && name != "plan.phase"
             && name != "plan.review"
     }));
@@ -489,6 +502,20 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
     assert_eq!(status, StatusCode::OK);
     assert!(hidden_call["error"].is_object());
 
+    let (status, hidden_session_call) = post_mcp(
+        &client,
+        &mcp_url,
+        json!({
+            "jsonrpc":"2.0",
+            "id":4,
+            "method":"tools/call",
+            "params":{"name":"session.model","arguments":{}}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(hidden_session_call["error"].is_object());
+
     let (status, _, _) = response_json(
         client
             .put(format!("{}/api/v1/server/mcp", server.base_url))
@@ -533,8 +560,7 @@ async fn oauth_discovery_and_authorization_code_flow_are_chatgpt_compatible() {
             .json(&json!({
                 "enabled": true,
                 "authMode": "oauth",
-                "publicUrl": "https://tunnel.example/v1/mcp/tunnel_123",
-                "toolExposure": "read_only"
+                "publicUrl": "https://tunnel.example/v1/mcp/tunnel_123"
             }))
             .send()
             .await
@@ -557,7 +583,6 @@ async fn oauth_discovery_and_authorization_code_flow_are_chatgpt_compatible() {
                 "authMode": "none",
                 "publicUrl": resource,
                 "oauthIssuerUrl": issuer,
-                "toolExposure": "read_only",
                 "clientRegistration": "cimd_only"
             }))
             .send()
@@ -590,7 +615,6 @@ async fn oauth_discovery_and_authorization_code_flow_are_chatgpt_compatible() {
     let (status, _, control) = response_json(oauth_enable_response).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(control["ready"], true);
-    assert_eq!(control["toolExposure"], "read_only");
     assert_eq!(control["authMode"], "oauth");
     assert_eq!(control["clientRegistration"], "cimd_only");
     assert_eq!(control["oauthIssuerUrl"], issuer);
@@ -921,7 +945,6 @@ async fn oauth_discovery_and_authorization_code_flow_are_chatgpt_compatible() {
                 "anonymousAccess": "none",
                 "publicUrl": resource,
                 "oauthIssuerUrl": issuer,
-                "toolExposure": "read_only",
                 "clientRegistration": "cimd_and_dcr"
             }))
             .send()
@@ -1077,7 +1100,6 @@ async fn mixed_auth_defaults_closed_and_can_explicitly_allow_read_only_tools() {
                 "authMode": "none",
                 "publicUrl": resource,
                 "oauthIssuerUrl": issuer,
-                "toolExposure": "all_non_interactive",
                 "clientRegistration": "cimd_only"
             }))
             .send()
@@ -1257,7 +1279,6 @@ async fn explicit_public_oauth_environment_overrides_persisted_control_on_restar
                 "publicUrl": "https://old.example.test/mcp",
                 "oauthIssuerUrl": "https://old-auth.example.test",
                 "anonymousAccess": "read_only",
-                "toolExposure": "all_non_interactive",
                 "clientRegistration": "cimd_and_dcr"
             }))
             .send()
@@ -1276,7 +1297,6 @@ async fn explicit_public_oauth_environment_overrides_persisted_control_on_restar
         ("AGENA_MCP_PUBLIC_URL", "https://new.example.test/mcp"),
         ("AGENA_MCP_AUTH_MODE", "oauth"),
         ("AGENA_MCP_ANONYMOUS_ACCESS", "none"),
-        ("AGENA_MCP_TOOL_EXPOSURE", "read-only"),
         ("AGENA_MCP_CLIENT_REGISTRATION", "cimd-only"),
     ];
     let (mut second_child, second_base_url) = spawn_server(
@@ -1306,7 +1326,6 @@ async fn explicit_public_oauth_environment_overrides_persisted_control_on_restar
     assert_eq!(control["oauth"]["issuer"], "https://new.example.test");
     assert_eq!(control["authMode"], "oauth");
     assert_eq!(control["anonymousAccess"], "none");
-    assert_eq!(control["toolExposure"], "read_only");
     assert_eq!(control["clientRegistration"], "cimd_only");
     assert_eq!(control["ready"], true);
 

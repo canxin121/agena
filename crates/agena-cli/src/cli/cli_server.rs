@@ -77,7 +77,12 @@ pub(super) struct ServerMcpBackend {
     workspace_id: i64,
 }
 
-const HIDDEN_MCP_PLUGIN_IDS: &[&str] = &["agena.chatgpt", "agena.gemini", "agena.claude"];
+const HIDDEN_MCP_PLUGIN_IDS: &[&str] = &[
+    "agena.chatgpt",
+    "agena.gemini",
+    "agena.claude",
+    "agena.schema_lab",
+];
 
 fn name_belongs_to_plugin(name: &str, plugin_id: &str) -> bool {
     name == plugin_id

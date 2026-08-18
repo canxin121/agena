@@ -15,7 +15,6 @@ use std::{
 };
 
 use agena_application::{Application, dto::OperatorToolResource};
-use agena_keyring_store::{KeyringSecretStore, SecretStore};
 use agena_mcp_server::{
     CallToolParams, CallToolResult, McpServerBackend, McpServerError, ToolDescriptor,
     serialize_call_tool_result, serialize_tool_descriptor,
@@ -68,10 +67,17 @@ const MAX_OAUTH_SCOPE_BYTES: usize = 512;
 const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const OAUTH_SIGNING_KEY_VERSION: u32 = 1;
 const OAUTH_RUNTIME_VERSION: u32 = 2;
-const OAUTH_KEYRING_SERVICE: &str = "agena";
-const OAUTH_KEYRING_READ_TIMEOUT: Duration = Duration::from_millis(750);
 
-const HIDDEN_MCP_PLUGIN_IDS: &[&str] = &["agena.chatgpt", "agena.gemini", "agena.claude"];
+const HIDDEN_MCP_PLUGIN_IDS: &[&str] = &[
+    "agena.chatgpt",
+    "agena.gemini",
+    "agena.claude",
+    "agena.schema_lab",
+];
+// MCP requests are handled statelessly and do not belong to an Agena
+// conversation/session. The bundled session plugin therefore has no valid
+// execution context on this transport and must not be advertised or invoked.
+const HIDDEN_MCP_SESSION_PLUGIN_IDS: &[&str] = &["agena.session"];
 const KNOWN_INTERACTIVE_MCP_TOOL_NAMES: &[&str] = &["interaction.ask", "interaction.notify"];
 const KNOWN_INTERACTIVE_MCP_TOOL_PREFIXES: &[&str] = &["web.browser_", "agena.web.browser_"];
 
@@ -86,14 +92,10 @@ pub(crate) struct McpServerState {
     fallback_resource: String,
 }
 
-fn mcp_tool_is_exposed_for_mode(tool: &OperatorToolResource, exposure: McpToolExposure) -> bool {
-    if !mcp_tool_is_base_eligible(tool) || tool.task {
-        return false;
-    }
-    match exposure {
-        McpToolExposure::ReadOnly => tool.read_only,
-        McpToolExposure::AllNonInteractive => true,
-    }
+fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
+    // MCP is stateless: expose every tool that can run without an interactive
+    // approval/session UI, while keeping the explicit denylist below in force.
+    mcp_tool_is_base_eligible(tool) && !tool.task
 }
 
 fn request_has_modern_mcp_headers(headers: &HeaderMap) -> bool {
@@ -177,20 +179,6 @@ async fn validate_mcp_host_origin(
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum McpToolExposure {
-    /// Expose only tools whose authority-bearing permission contract qualifies
-    /// for Agena's read-only fast path. This is the secure default for a
-    /// remotely reachable ChatGPT connector.
-    #[default]
-    ReadOnly,
-    /// Expose every non-interactive, non-task tool after the provider/plugin
-    /// denylist. This can include shell, filesystem writes, and network tools
-    /// and therefore requires an explicit operator opt-in.
-    AllNonInteractive,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub(crate) enum McpAuthMode {
     /// No OAuth discovery or bearer enforcement. Every exposed tool declares
     /// the Apps SDK `noauth` security scheme.
@@ -267,22 +255,12 @@ impl From<agena_cli::McpClientRegistrationArg> for McpClientRegistration {
     }
 }
 
-impl From<agena_cli::McpToolExposureArg> for McpToolExposure {
-    fn from(value: agena_cli::McpToolExposureArg) -> Self {
-        match value {
-            agena_cli::McpToolExposureArg::ReadOnly => Self::ReadOnly,
-            agena_cli::McpToolExposureArg::AllNonInteractive => Self::AllNonInteractive,
-        }
-    }
-}
-
 struct McpControlState {
     enabled: std::sync::atomic::AtomicBool,
     auth_mode: RwLock<McpAuthMode>,
     anonymous_access: RwLock<McpAnonymousAccess>,
     configured_resource: RwLock<Option<String>>,
     configured_issuer: RwLock<Option<String>>,
-    tool_exposure: RwLock<McpToolExposure>,
     client_registration: RwLock<McpClientRegistration>,
     oauth_password: RwLock<Option<McpOAuthPassword>>,
     database: Option<Arc<ServerStateDb>>,
@@ -318,8 +296,6 @@ struct PersistedMcpServerControl {
     oauth_password_phc: Option<String>,
     #[serde(default)]
     oauth_issuer_url: Option<String>,
-    #[serde(default)]
-    tool_exposure: McpToolExposure,
     #[serde(default)]
     client_registration: McpClientRegistration,
 }
@@ -398,10 +374,11 @@ impl OAuthSigningKey {
 async fn load_or_create_oauth_signing_key(
     database: &Arc<ServerStateDb>,
 ) -> Result<OAuthSigningKey, String> {
-    // The server database is the normal durable source. macOS Keychain calls
-    // are synchronous and can wait indefinitely for an access decision; a
-    // blocked keychain lookup must never hold up the HTTP listener (or make a
-    // tunnel report the server as unhealthy).
+    // Keep the signing key in Agena's private server-state database and never
+    // probe the legacy `agena` Keychain service during startup. Development
+    // builds are ad-hoc signed, so their code identity changes after rebuilds;
+    // reading that legacy item can therefore raise a macOS authorization
+    // dialog on every restart even though the server no longer needs it.
     if let Some(persisted) = database
         .get_json::<PersistedSigningKey>(KV_KEY_MCP_OAUTH_SIGNING_KEY)
         .await?
@@ -411,42 +388,6 @@ async fn load_or_create_oauth_signing_key(
         }
         let key = decode_persisted_signing_key(persisted.secret_key.as_str())?;
         return Ok(key);
-    }
-
-    // Migrate an existing keyring value once, but bound the legacy lookup.
-    // The blocking task is intentionally isolated from Tokio's worker pool;
-    // if the platform keychain remains blocked, the server still falls back
-    // to its database copy below and continues starting normally.
-    let keyring = KeyringSecretStore::new(OAUTH_KEYRING_SERVICE);
-    let keyring_result = tokio::time::timeout(
-        OAUTH_KEYRING_READ_TIMEOUT,
-        tokio::task::spawn_blocking(move || keyring.get_secret(KV_KEY_MCP_OAUTH_SIGNING_KEY)),
-    )
-    .await;
-    match keyring_result {
-        Ok(Ok(Ok(Some(value)))) => {
-            let key = decode_persisted_signing_key(value.as_str())?;
-            database
-                .set_json(
-                    KV_KEY_MCP_OAUTH_SIGNING_KEY,
-                    &PersistedSigningKey {
-                        version: OAUTH_SIGNING_KEY_VERSION,
-                        secret_key: key.secret_key_b64(),
-                    },
-                )
-                .await?;
-            return Ok(key);
-        }
-        Ok(Ok(Ok(None))) => {}
-        Ok(Ok(Err(error))) => {
-            tracing::debug!(error = %error, "MCP OAuth keyring migration unavailable; using server database");
-        }
-        Ok(Err(error)) => {
-            tracing::debug!(error = %error, "MCP OAuth keyring migration task failed; using server database");
-        }
-        Err(_) => {
-            tracing::debug!("MCP OAuth keyring migration timed out; using server database");
-        }
     }
 
     let key = OAuthSigningKey::generate()?;
@@ -483,7 +424,6 @@ pub(crate) struct McpServerStartupConfig<'a> {
     pub(crate) oauth_issuer_url: Option<&'a str>,
     pub(crate) auth_mode: Option<McpAuthMode>,
     pub(crate) anonymous_access: Option<McpAnonymousAccess>,
-    pub(crate) tool_exposure: Option<McpToolExposure>,
     pub(crate) client_registration: Option<McpClientRegistration>,
     pub(crate) fallback_public_url: &'a str,
 }
@@ -513,7 +453,6 @@ impl McpServerState {
             true,
             McpAuthMode::None,
             McpAnonymousAccess::None,
-            McpToolExposure::ReadOnly,
             McpClientRegistration::CimdOnly,
             None,
             None,
@@ -540,7 +479,6 @@ impl McpServerState {
             mut anonymous_access,
             configured_public_url,
             configured_issuer_url,
-            mut tool_exposure,
             mut client_registration,
             oauth_password,
         ) = match persisted.as_ref() {
@@ -563,7 +501,6 @@ impl McpServerState {
                     persisted.anonymous_access,
                     persisted.public_url.clone(),
                     persisted.oauth_issuer_url.clone(),
-                    persisted.tool_exposure,
                     persisted.client_registration,
                     oauth_password,
                 )
@@ -574,7 +511,6 @@ impl McpServerState {
                 McpAnonymousAccess::None,
                 None,
                 None,
-                McpToolExposure::ReadOnly,
                 McpClientRegistration::CimdOnly,
                 None,
             ),
@@ -591,7 +527,6 @@ impl McpServerState {
             anonymous_access,
             configured_resource.clone(),
             configured_issuer.clone(),
-            tool_exposure,
             client_registration,
         );
 
@@ -621,9 +556,6 @@ impl McpServerState {
         if let Some(value) = startup.anonymous_access {
             anonymous_access = value;
         }
-        if let Some(value) = startup.tool_exposure {
-            tool_exposure = value;
-        }
         if let Some(value) = startup.client_registration {
             client_registration = value;
         }
@@ -641,7 +573,6 @@ impl McpServerState {
             anonymous_access,
             configured_resource.clone(),
             configured_issuer.clone(),
-            tool_exposure,
             client_registration,
         );
         let control_changed = !had_persisted_control || persisted_effective != effective_control;
@@ -683,7 +614,6 @@ impl McpServerState {
             enabled,
             auth_mode,
             anonymous_access,
-            tool_exposure,
             client_registration,
             oauth_password,
             Some(Arc::clone(&database)),
@@ -708,7 +638,6 @@ impl McpServerState {
                     anonymous_access,
                     configured_resource,
                     configured_issuer,
-                    tool_exposure,
                     client_registration,
                 )
                 .await?;
@@ -716,7 +645,6 @@ impl McpServerState {
         Ok(state)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn with_control(
         application: Application,
         workspace_id: i64,
@@ -729,7 +657,6 @@ impl McpServerState {
         enabled: bool,
         auth_mode: McpAuthMode,
         anonymous_access: McpAnonymousAccess,
-        tool_exposure: McpToolExposure,
         client_registration: McpClientRegistration,
         oauth_password: Option<McpOAuthPassword>,
         database: Option<Arc<ServerStateDb>>,
@@ -746,7 +673,6 @@ impl McpServerState {
                 anonymous_access: RwLock::new(anonymous_access),
                 configured_resource: RwLock::new(configured_resource),
                 configured_issuer: RwLock::new(configured_issuer),
-                tool_exposure: RwLock::new(tool_exposure),
                 client_registration: RwLock::new(client_registration),
                 oauth_password: RwLock::new(oauth_password),
                 database,
@@ -796,14 +722,6 @@ impl McpServerState {
             .clone()
     }
 
-    fn tool_exposure(&self) -> McpToolExposure {
-        *self
-            .control
-            .tool_exposure
-            .read()
-            .expect("MCP tool exposure lock poisoned")
-    }
-
     fn client_registration(&self) -> McpClientRegistration {
         *self
             .control
@@ -813,7 +731,7 @@ impl McpServerState {
     }
 
     fn tool_is_exposed(&self, tool: &OperatorToolResource) -> bool {
-        mcp_tool_is_exposed_for_mode(tool, self.tool_exposure())
+        mcp_tool_is_exposed(tool)
     }
 
     fn tool_requires_auth(&self, tool: &OperatorToolResource) -> bool {
@@ -970,7 +888,6 @@ impl McpServerState {
             enabled = self.is_enabled(),
             auth_mode = ?self.auth_mode(),
             anonymous_access = ?self.anonymous_access(),
-            tool_exposure = ?self.tool_exposure(),
             client_registration = ?self.client_registration(),
             resource = %resource,
             issuer = %issuer,
@@ -1031,7 +948,6 @@ impl McpServerState {
             anonymous_access: self.anonymous_access(),
             public_url: self.configured_public_url(),
             oauth_issuer_url: self.configured_oauth_issuer_url(),
-            tool_exposure: self.tool_exposure(),
             client_registration,
             resource_url: resource_url.clone(),
             ready: readiness.ready,
@@ -1080,7 +996,6 @@ impl McpServerState {
         anonymous_access: McpAnonymousAccess,
         public_url: Option<String>,
         oauth_issuer_url: Option<String>,
-        tool_exposure: McpToolExposure,
         client_registration: McpClientRegistration,
     ) -> Result<(), String> {
         let database = self
@@ -1098,7 +1013,6 @@ impl McpServerState {
                     anonymous_access,
                     public_url,
                     oauth_issuer_url,
-                    tool_exposure,
                     client_registration,
                     oauth_password_phc: self.oauth_password_phc(),
                 },
@@ -1113,7 +1027,6 @@ impl McpServerState {
         anonymous_access: McpAnonymousAccess,
         configured_resource: Option<String>,
         configured_issuer: Option<String>,
-        tool_exposure: McpToolExposure,
         client_registration: McpClientRegistration,
     ) -> Result<(), String> {
         let _guard = self.control.update_lock.lock().await;
@@ -1122,14 +1035,12 @@ impl McpServerState {
         let previous_anonymous_access = self.anonymous_access();
         let previous_resource = self.configured_public_url();
         let previous_issuer = self.configured_oauth_issuer_url();
-        let previous_tool_exposure = self.tool_exposure();
         let previous_client_registration = self.client_registration();
         let control_changed = previous_enabled != enabled
             || previous_auth_mode != auth_mode
             || previous_anonymous_access != anonymous_access
             || previous_resource != configured_resource
             || previous_issuer != configured_issuer
-            || previous_tool_exposure != tool_exposure
             || previous_client_registration != client_registration;
         if control_changed {
             // Invalidate the old token/client state before committing a new
@@ -1143,7 +1054,6 @@ impl McpServerState {
             anonymous_access,
             configured_resource.clone(),
             configured_issuer.clone(),
-            tool_exposure,
             client_registration,
         )
         .await?;
@@ -1170,11 +1080,6 @@ impl McpServerState {
             .expect("MCP OAuth issuer lock poisoned") = configured_issuer;
         *self
             .control
-            .tool_exposure
-            .write()
-            .expect("MCP tool exposure lock poisoned") = tool_exposure;
-        *self
-            .control
             .client_registration
             .write()
             .expect("MCP client registration lock poisoned") = client_registration;
@@ -1199,7 +1104,6 @@ impl McpServerState {
         let oauth_issuer_url = self.configured_oauth_issuer_url();
         let auth_mode = self.auth_mode();
         let anonymous_access = self.anonymous_access();
-        let tool_exposure = self.tool_exposure();
         let client_registration = self.client_registration();
         let database = self
             .control
@@ -1217,7 +1121,6 @@ impl McpServerState {
                     anonymous_access,
                     public_url,
                     oauth_issuer_url,
-                    tool_exposure,
                     client_registration,
                     oauth_password_phc: Some(phc.clone()),
                 },
@@ -1238,7 +1141,6 @@ impl McpServerState {
         let oauth_issuer_url = self.configured_oauth_issuer_url();
         let auth_mode = self.auth_mode();
         let anonymous_access = self.anonymous_access();
-        let tool_exposure = self.tool_exposure();
         let client_registration = self.client_registration();
         let database = self
             .control
@@ -1259,7 +1161,6 @@ impl McpServerState {
                     anonymous_access,
                     public_url,
                     oauth_issuer_url,
-                    tool_exposure,
                     client_registration,
                     oauth_password_phc: None,
                 },
@@ -1283,7 +1184,6 @@ pub(crate) struct McpServerControlResponse {
     anonymous_access: McpAnonymousAccess,
     public_url: Option<String>,
     oauth_issuer_url: Option<String>,
-    tool_exposure: McpToolExposure,
     client_registration: McpClientRegistration,
     resource_url: String,
     ready: bool,
@@ -1339,8 +1239,6 @@ pub(crate) struct UpdateMcpServerControlRequest {
     #[serde(default)]
     oauth_issuer_url: Option<Option<String>>,
     #[serde(default)]
-    tool_exposure: Option<McpToolExposure>,
-    #[serde(default)]
     client_registration: Option<McpClientRegistration>,
 }
 
@@ -1387,9 +1285,6 @@ pub(crate) async fn update_mcp_server_control(
             Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
         },
     };
-    let tool_exposure = request
-        .tool_exposure
-        .unwrap_or_else(|| state.mcp_server.tool_exposure());
     let client_registration = request
         .client_registration
         .unwrap_or_else(|| state.mcp_server.client_registration());
@@ -1426,7 +1321,6 @@ pub(crate) async fn update_mcp_server_control(
             anonymous_access,
             configured_resource,
             configured_issuer,
-            tool_exposure,
             client_registration,
         )
         .await
@@ -2247,9 +2141,24 @@ fn mcp_tool_uses_hidden_provider(tool: &OperatorToolResource) -> bool {
     })
 }
 
+fn mcp_tool_uses_hidden_session_plugin(tool: &OperatorToolResource) -> bool {
+    if let Some(plugin_id) = tool.plugin_id.as_deref()
+        && HIDDEN_MCP_SESSION_PLUGIN_IDS.contains(&plugin_id)
+    {
+        return true;
+    }
+
+    HIDDEN_MCP_SESSION_PLUGIN_IDS.iter().any(|plugin_id| {
+        let compact_plugin_id = plugin_id.strip_prefix("agena.").unwrap_or(plugin_id);
+        name_belongs_to_plugin(tool.name.as_str(), compact_plugin_id)
+            || name_belongs_to_plugin(tool.name.as_str(), plugin_id)
+    })
+}
+
 fn mcp_tool_is_base_eligible(tool: &OperatorToolResource) -> bool {
     !tool.interactive
         && !mcp_tool_uses_hidden_provider(tool)
+        && !mcp_tool_uses_hidden_session_plugin(tool)
         && !mcp_tool_has_known_interactive_name(tool.name.as_str())
 }
 
@@ -4380,6 +4289,32 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn oauth_signing_key_is_persisted_and_reused_without_keychain_access() {
+        let fixture = tempfile::tempdir().expect("create OAuth signing-key fixture");
+        let database = Arc::new(
+            ServerStateDb::open_at_path(fixture.path().join("agena.db"))
+                .await
+                .expect("open server-state database"),
+        );
+
+        let first = load_or_create_oauth_signing_key(&database)
+            .await
+            .expect("create OAuth signing key");
+        let second = load_or_create_oauth_signing_key(&database)
+            .await
+            .expect("reload OAuth signing key");
+        let persisted = database
+            .get_json::<PersistedSigningKey>(KV_KEY_MCP_OAUTH_SIGNING_KEY)
+            .await
+            .expect("read persisted OAuth signing key")
+            .expect("persisted OAuth signing key");
+
+        assert_eq!(first.kid, second.kid);
+        assert_eq!(persisted.version, OAUTH_SIGNING_KEY_VERSION);
+        assert_eq!(persisted.secret_key, first.secret_key_b64());
+    }
+
     #[test]
     fn public_mcp_url_is_normalized() {
         assert_eq!(
@@ -4488,68 +4423,47 @@ mod tests {
     }
 
     #[test]
-    fn mcp_catalog_is_read_only_by_default_and_hides_interactive_provider_tools() {
+    fn mcp_catalog_exposes_all_noninteractive_tools_and_hides_stateless_ineligible_tools() {
         let read = tool("fs.read", false, Some("agena.fs"));
-        assert!(mcp_tool_is_exposed_for_mode(
-            &read,
-            McpToolExposure::ReadOnly
-        ));
+        assert!(mcp_tool_is_exposed(&read));
 
         let mut write = tool("fs.write", false, Some("agena.fs"));
         write.read_only = false;
         write.destructive = true;
-        assert!(!mcp_tool_is_exposed_for_mode(
-            &write,
-            McpToolExposure::ReadOnly
-        ));
-        assert!(mcp_tool_is_exposed_for_mode(
-            &write,
-            McpToolExposure::AllNonInteractive
-        ));
+        assert!(mcp_tool_is_exposed(&write));
 
-        assert!(!mcp_tool_is_exposed_for_mode(
-            &tool("prompt.ask", true, Some("agena.prompt")),
-            McpToolExposure::AllNonInteractive
-        ));
-        assert!(!mcp_tool_is_exposed_for_mode(
-            &tool("chatgpt.search", false, Some("agena.chatgpt")),
-            McpToolExposure::AllNonInteractive
-        ));
-        assert!(!mcp_tool_is_exposed_for_mode(
-            &tool("gemini.search", false, None),
-            McpToolExposure::AllNonInteractive
-        ));
-        assert!(!mcp_tool_is_exposed_for_mode(
-            &tool("claude.ask", false, None),
-            McpToolExposure::AllNonInteractive
-        ));
-        assert!(!mcp_tool_is_exposed_for_mode(
-            &tool("web.browser_list", false, None),
-            McpToolExposure::AllNonInteractive
-        ));
-        assert!(!mcp_tool_is_exposed_for_mode(
-            &tool("agena.web.browser_wait", false, None),
-            McpToolExposure::AllNonInteractive
-        ));
-        assert!(!mcp_tool_is_exposed_for_mode(
-            &tool("interaction.notify", false, None),
-            McpToolExposure::AllNonInteractive
-        ));
-        assert!(!mcp_tool_is_exposed_for_mode(
-            &tool("plan.phase", false, None),
-            McpToolExposure::AllNonInteractive
-        ));
-        assert!(!mcp_tool_is_exposed_for_mode(
-            &tool("plan.review", false, None),
-            McpToolExposure::AllNonInteractive
-        ));
+        for hidden in [
+            tool("prompt.ask", true, Some("agena.prompt")),
+            tool("chatgpt.search", false, Some("agena.chatgpt")),
+            tool("gemini.search", false, None),
+            tool("claude.ask", false, None),
+            tool("schema_lab.inspect", false, Some("agena.schema_lab")),
+            tool("agena.schema_lab.echo", false, None),
+            tool("session.model", false, Some("agena.session")),
+            tool("session.rename", false, None),
+            tool("agena.session.tokens", false, None),
+            tool("unrelated", false, Some("agena.session")),
+            tool("web.browser_list", false, None),
+            tool("agena.web.browser_wait", false, None),
+            tool("interaction.notify", false, None),
+            tool("plan.phase", false, None),
+            tool("plan.review", false, None),
+        ] {
+            assert!(
+                !mcp_tool_is_exposed(&hidden),
+                "{} must remain hidden",
+                hidden.name
+            );
+        }
+        assert!(mcp_tool_is_exposed(&tool(
+            "sessionary.lookup",
+            false,
+            Some("agena.utility")
+        )));
 
         let mut task = tool("job.start", false, Some("agena.jobs"));
         task.task = true;
-        assert!(!mcp_tool_is_exposed_for_mode(
-            &task,
-            McpToolExposure::AllNonInteractive
-        ));
+        assert!(!mcp_tool_is_exposed(&task));
     }
 
     #[test]

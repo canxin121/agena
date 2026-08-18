@@ -85,11 +85,6 @@ pub(crate) fn settings_studio_mcp_items(
         .and_then(|value| value.get("oauthIssuerUrl"))
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.trim().is_empty());
-    let tool_exposure = control
-        .as_ref()
-        .and_then(|value| value.get("toolExposure"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("read_only");
     let client_registration = control
         .as_ref()
         .and_then(|value| value.get("clientRegistration"))
@@ -247,20 +242,6 @@ pub(crate) fn settings_studio_mcp_items(
                 .unwrap_or_else(|| ui_text::t(i18n, "settings-mcp-oauth-issuer-derived")),
             ui_text::t(i18n, "settings-mcp-oauth-issuer-detail"),
             SettingsPickerAction::EditMcpOAuthIssuerUrl,
-        ),
-        SettingsStudioItem::new(
-            ui_text::t(i18n, "settings-mcp-tool-exposure-label"),
-            if tool_exposure == "all_non_interactive" {
-                ui_text::t(i18n, "settings-mcp-tool-exposure-all")
-            } else {
-                ui_text::t(i18n, "settings-mcp-tool-exposure-read-only")
-            },
-            if tool_exposure == "all_non_interactive" {
-                ui_text::t(i18n, "settings-mcp-tool-exposure-all-detail")
-            } else {
-                ui_text::t(i18n, "settings-mcp-tool-exposure-read-only-detail")
-            },
-            SettingsPickerAction::ToggleMcpToolExposure,
         ),
     ];
     if auth_enabled {

@@ -103,7 +103,6 @@ dependencies = [
  "agena-client",
  "agena-domain",
  "agena-git-http",
- "agena-keyring-store",
  "agena-mcp-server",
  "agena-provider",
  "agena-runtime",

@@ -196,7 +196,6 @@ pub(crate) enum SettingsPickerAction {
     ToggleMcpAuth,
     ToggleMcpAnonymousAccess,
     ToggleMcpClientRegistration,
-    ToggleMcpToolExposure,
     EditMcpPublicUrl,
     EditMcpOAuthIssuerUrl,
     EditMcpOAuthPassword,

@@ -766,9 +766,6 @@ pub struct ServerArgs {
     /// `read-only` can expose private workspace data even without writes.
     #[arg(long, env = "AGENA_MCP_ANONYMOUS_ACCESS", value_enum)]
     pub mcp_anonymous_access: Option<McpAnonymousAccessArg>,
-    /// Public tool exposure policy. The secure default is `read-only`.
-    #[arg(long, env = "AGENA_MCP_TOOL_EXPOSURE", value_enum)]
-    pub mcp_tool_exposure: Option<McpToolExposureArg>,
     /// OAuth client-registration policy. CIMD-only is the secure default; DCR
     /// is retained as an explicit compatibility option.
     #[arg(long, env = "AGENA_MCP_CLIENT_REGISTRATION", value_enum)]
@@ -816,22 +813,6 @@ impl McpAnonymousAccessArg {
         match self {
             Self::None => "none",
             Self::ReadOnly => "read-only",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab_case")]
-pub enum McpToolExposureArg {
-    ReadOnly,
-    AllNonInteractive,
-}
-
-impl McpToolExposureArg {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ReadOnly => "read-only",
-            Self::AllNonInteractive => "all-non-interactive",
         }
     }
 }
@@ -1744,8 +1725,6 @@ mod parser_contract_tests {
             "mixed",
             "--mcp-anonymous-access",
             "read-only",
-            "--mcp-tool-exposure",
-            "all-non-interactive",
             "--mcp-client-registration",
             "cimd-only",
         ])
@@ -1761,8 +1740,6 @@ mod parser_contract_tests {
                     && request.args.mcp_auth_mode == Some(super::McpAuthModeArg::Mixed)
                     && request.args.mcp_anonymous_access
                         == Some(super::McpAnonymousAccessArg::ReadOnly)
-                    && request.args.mcp_tool_exposure
-                        == Some(super::McpToolExposureArg::AllNonInteractive)
                     && request.args.mcp_client_registration
                         == Some(super::McpClientRegistrationArg::CimdOnly)
         ));

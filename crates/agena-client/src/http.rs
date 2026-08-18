@@ -616,19 +616,6 @@ impl AgenaClient {
         .await
     }
 
-    /// Select the server-side MCP tool exposure policy. The server validates
-    /// the enum and defaults to the read-only policy for new installations.
-    pub async fn set_mcp_server_tool_exposure(
-        &self,
-        tool_exposure: &str,
-    ) -> Result<serde_json::Value, ClientError> {
-        self.put_json(
-            "/api/v1/server/mcp",
-            serde_json::json!({"toolExposure": tool_exposure}),
-        )
-        .await
-    }
-
     /// Replace the server-owned MCP OAuth authorization password. Only the
     /// plaintext request value is accepted; the server persists an Argon2 PHC
     /// hash and returns a redacted control projection.

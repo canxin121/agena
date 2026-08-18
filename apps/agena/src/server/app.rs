@@ -533,7 +533,6 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
                 oauth_issuer_url: args.mcp_oauth_issuer_url.as_deref(),
                 auth_mode: args.mcp_auth_mode.map(Into::into),
                 anonymous_access: args.mcp_anonymous_access.map(Into::into),
-                tool_exposure: args.mcp_tool_exposure.map(Into::into),
                 client_registration: args.mcp_client_registration.map(Into::into),
                 fallback_public_url: endpoint_url.as_str(),
             },

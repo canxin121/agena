@@ -582,25 +582,6 @@ impl TuiBackend {
         Ok(value)
     }
 
-    pub(crate) async fn toggle_mcp_tool_exposure(&self) -> Result<serde_json::Value> {
-        let current = self.mcp_server_control().await?;
-        let next = match current
-            .get("toolExposure")
-            .and_then(serde_json::Value::as_str)
-        {
-            Some("all_non_interactive") => "read_only",
-            _ => "all_non_interactive",
-        };
-        let value = self
-            .inner
-            .client
-            .set_mcp_server_tool_exposure(next)
-            .await
-            .context("failed to update the Agena MCP tool exposure policy")?;
-        *self.inner.mcp_server_control.write().await = Some(value.clone());
-        Ok(value)
-    }
-
     pub(crate) async fn set_mcp_oauth_password(&self, password: &str) -> Result<serde_json::Value> {
         let value = self
             .inner

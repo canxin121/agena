@@ -133,10 +133,6 @@ fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
         arguments.push("--mcp-anonymous-access".into());
         arguments.push(access.as_str().into());
     }
-    if let Some(exposure) = args.mcp_tool_exposure {
-        arguments.push("--mcp-tool-exposure".into());
-        arguments.push(exposure.as_str().into());
-    }
     if let Some(registration) = args.mcp_client_registration {
         arguments.push("--mcp-client-registration".into());
         arguments.push(registration.as_str().into());
@@ -517,7 +513,6 @@ mod tests {
             mcp_oauth_issuer_url: Some("https://auth.example.test".to_owned()),
             mcp_auth_mode: Some(agena_cli::McpAuthModeArg::Mixed),
             mcp_anonymous_access: Some(agena_cli::McpAnonymousAccessArg::ReadOnly),
-            mcp_tool_exposure: Some(agena_cli::McpToolExposureArg::AllNonInteractive),
             mcp_client_registration: Some(agena_cli::McpClientRegistrationArg::CimdOnly),
             workspace_root: Some(PathBuf::from("/tmp/agena-workspace")),
             ui_dir: Some(PathBuf::from("/opt/agena/web-dist")),
@@ -538,7 +533,6 @@ mod tests {
             ["--mcp-oauth-issuer-url", "https://auth.example.test"],
             ["--mcp-auth-mode", "mixed"],
             ["--mcp-anonymous-access", "read-only"],
-            ["--mcp-tool-exposure", "all-non-interactive"],
             ["--mcp-client-registration", "cimd-only"],
         ] {
             assert!(

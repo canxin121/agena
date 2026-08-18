@@ -281,13 +281,9 @@ mod tests {
     }
 
     #[test]
-    fn simplified_and_traditional_chinese_cover_the_full_settings_catalog() {
+    fn every_supported_locale_covers_the_full_settings_catalog() {
         let english = settings_keys(RESOURCES[0].1);
-        for locale in ["zh-CN", "zh-TW"] {
-            let (_, resource) = RESOURCES
-                .iter()
-                .find(|(candidate, _)| *candidate == locale)
-                .expect("Chinese locale resource should exist");
+        for (locale, resource) in RESOURCES.iter().skip(1) {
             let localized = settings_keys(resource);
             let missing = english.difference(&localized).copied().collect::<Vec<_>>();
             assert!(

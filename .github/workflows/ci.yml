@@ -161,3 +161,4 @@ jobs:
           label: verify-${{ matrix.target }}
           minimum-requests: "1"
           minimum-hits: "1"
+          minimum-hit-rate: "50"

@@ -2263,7 +2263,7 @@ pub struct ProviderAdapterModelsResource {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_base_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub models: Vec<ProviderModelResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<agena_failure::UserProblem>,

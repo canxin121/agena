@@ -11,6 +11,10 @@ import { apiJson } from '@/lib/api'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
+import {
+  normalizeProviderAdapterModels,
+  type ProviderAdapterModelsRecord,
+} from '@/components/settings/providerStudioModelLists'
 
 type LooseRecord = Record<string, any>
 
@@ -33,13 +37,7 @@ type ProviderModel = {
   [key: string]: any
 }
 
-type AdapterModels = {
-  adapter_id: string
-  enabled: boolean
-  resolved_base_url?: string | null
-  models: ProviderModel[]
-  failure?: LooseRecord | null
-}
+type AdapterModels = ProviderAdapterModelsRecord<ProviderModel>
 
 type AdapterModelsResponse = {
   provider_id?: string
@@ -905,9 +903,18 @@ async function loadDraft(providerId?: string) {
     draft.value = nextDraft
     selectedProviderId.value = providerId || ''
     const summary = providers.value.find((item) => item.provider_id === providerId)
-    const configuredAdapters = providerId
-      ? await apiJson<AdapterModels[]>(`/api/v1/providers/${encodeURIComponent(providerId)}/configured-models`)
-      : []
+    let configuredAdapters: AdapterModels[] = []
+    let configuredModelsError = ''
+    if (providerId) {
+      try {
+        const configuredResponse = await apiJson<unknown>(
+          `/api/v1/providers/${encodeURIComponent(providerId)}/configured-models`,
+        )
+        configuredAdapters = normalizeProviderAdapterModels<ProviderModel>(configuredResponse)
+      } catch (reason) {
+        configuredModelsError = reason instanceof Error ? reason.message : String(reason)
+      }
+    }
     if (requestGeneration !== draftRequestGeneration) return
     const enabled = new Set(
       configuredAdapters.length
@@ -931,6 +938,7 @@ async function loadDraft(providerId?: string) {
         .flatMap((adapter) => adapter.models.map((model) => modelKey(adapter.adapter_id, model.id))),
     )
     syncManualModelAdapter()
+    if (configuredModelsError) error.value = configuredModelsError
   } catch (reason) {
     if (requestGeneration !== draftRequestGeneration) return
     error.value = reason instanceof Error ? reason.message : String(reason)
@@ -977,7 +985,7 @@ async function listDraftModels() {
             },
           )
     if (requestGeneration !== modelListingGeneration) return
-    const refreshed = Array.isArray(response?.adapters) ? response.adapters : []
+    const refreshed = normalizeProviderAdapterModels<ProviderModel>(response)
     const byAdapter = new Map(adapterModels.value.map((adapter) => [adapter.adapter_id, adapter]))
     for (const adapter of refreshed) byAdapter.set(adapter.adapter_id, adapter)
     adapterModels.value = [...byAdapter.values()]

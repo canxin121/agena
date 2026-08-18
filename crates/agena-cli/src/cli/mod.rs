@@ -744,6 +744,10 @@ pub struct ServerArgs {
         value_name = "PASSWORD"
     )]
     pub ui_password: Option<String>,
+    /// Whether the HTTP MCP surface is enabled. An explicit CLI/environment
+    /// value overrides a persisted Web/TUI selection on every process start.
+    #[arg(long, env = "AGENA_MCP_ENABLED", value_name = "BOOL")]
+    pub mcp_enabled: Option<bool>,
     /// Public MCP resource URL. A bare origin is normalized to `/mcp`. When
     /// omitted, the listener-local URL is used; request forwarding headers are
     /// never trusted to define OAuth identity.
@@ -1730,6 +1734,8 @@ mod parser_contract_tests {
         let cli = AgenaCli::try_parse_from([
             "agena",
             "server",
+            "--mcp-enabled",
+            "true",
             "--mcp-public-url",
             "https://mcp.example.test/mcp",
             "--mcp-oauth-issuer-url",
@@ -1747,7 +1753,8 @@ mod parser_contract_tests {
         assert!(matches!(
             cli.into_launch_mode(),
             LaunchMode::Server(request)
-                if request.args.mcp_public_url.as_deref()
+                if request.args.mcp_enabled == Some(true)
+                    && request.args.mcp_public_url.as_deref()
                     == Some("https://mcp.example.test/mcp")
                     && request.args.mcp_oauth_issuer_url.as_deref()
                         == Some("https://auth.example.test")

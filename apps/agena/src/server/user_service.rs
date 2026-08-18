@@ -113,6 +113,10 @@ fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
     arguments.push(args.host.as_str().into());
     arguments.push("--port".into());
     arguments.push(args.port.to_string().into());
+    if let Some(enabled) = args.mcp_enabled {
+        arguments.push("--mcp-enabled".into());
+        arguments.push(enabled.to_string().into());
+    }
     if let Some(mcp_public_url) = &args.mcp_public_url {
         arguments.push("--mcp-public-url".into());
         arguments.push(mcp_public_url.into());
@@ -508,6 +512,7 @@ mod tests {
             host: "127.0.0.1".to_owned(),
             port: 3210,
             ui_password: None,
+            mcp_enabled: Some(true),
             mcp_public_url: Some("https://mcp.example.test/mcp".to_owned()),
             mcp_oauth_issuer_url: Some("https://auth.example.test".to_owned()),
             mcp_auth_mode: Some(agena_cli::McpAuthModeArg::Mixed),
@@ -528,6 +533,7 @@ mod tests {
                 .any(|pair| pair == ["--ui-dir", "/opt/agena/web-dist"])
         );
         for expected in [
+            ["--mcp-enabled", "true"],
             ["--mcp-public-url", "https://mcp.example.test/mcp"],
             ["--mcp-oauth-issuer-url", "https://auth.example.test"],
             ["--mcp-auth-mode", "mixed"],

@@ -19,6 +19,7 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
             || args.database_path.is_some()
             || args.workspace_root.is_some()
             || args.ui_password.is_some()
+            || args.mcp_enabled.is_some()
             || args.mcp_public_url.is_some()
             || args.mcp_oauth_issuer_url.is_some()
             || args.mcp_auth_mode.is_some()
@@ -108,6 +109,9 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     }
     if let Some(ui_dir) = &args.ui_dir {
         command.arg("--ui-dir").arg(ui_dir);
+    }
+    if let Some(enabled) = args.mcp_enabled {
+        command.arg("--mcp-enabled").arg(enabled.to_string());
     }
     if let Some(mcp_public_url) = &args.mcp_public_url {
         command.arg("--mcp-public-url").arg(mcp_public_url);

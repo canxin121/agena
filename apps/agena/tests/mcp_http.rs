@@ -115,6 +115,7 @@ async fn spawn_server(
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr));
     for name in [
+        "AGENA_MCP_ENABLED",
         "AGENA_MCP_PUBLIC_URL",
         "AGENA_MCP_OAUTH_ISSUER_URL",
         "AGENA_MCP_AUTH_MODE",
@@ -542,9 +543,9 @@ async fn oauth_discovery_and_authorization_code_flow_are_chatgpt_compatible() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
-        error["error"]
-            .as_str()
-            .is_some_and(|message| message.contains("explicit public OAuth issuer URL"))
+        error["error"].as_str().is_some_and(
+            |message| message.contains("explicit browser-reachable OAuth issuer origin")
+        )
     );
 
     let (status, _, _) = response_json(
@@ -908,6 +909,36 @@ async fn oauth_discovery_and_authorization_code_flow_are_chatgpt_compatible() {
                 == json!([{"type":"oauth2","scopes":["agena:tools"]}]))
     );
 
+    // Re-saving the already-effective control projection is not an identity
+    // or policy change and must not revoke an established ChatGPT connection.
+    let (status, _, _) = response_json(
+        client
+            .put(format!("{}/api/v1/server/mcp", server.base_url))
+            .bearer_auth(&management_token)
+            .json(&json!({
+                "enabled": true,
+                "authMode": "oauth",
+                "anonymousAccess": "none",
+                "publicUrl": resource,
+                "oauthIssuerUrl": issuer,
+                "toolExposure": "read_only",
+                "clientRegistration": "cimd_and_dcr"
+            }))
+            .send()
+            .await
+            .expect("re-save unchanged MCP control state"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post_mcp_with_bearer(
+        &client,
+        &mcp_url,
+        json!({"jsonrpc":"2.0","id":101,"method":"tools/list","params":{}}),
+        access_token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
     let invalid = client
         .post(&mcp_url)
         .header("content-type", "application/json")
@@ -1221,7 +1252,7 @@ async fn explicit_public_oauth_environment_overrides_persisted_control_on_restar
             .put(format!("{first_base_url}/api/v1/server/mcp"))
             .bearer_auth(&first_token)
             .json(&json!({
-                "enabled": true,
+                "enabled": false,
                 "authMode": "none",
                 "publicUrl": "https://old.example.test/mcp",
                 "oauthIssuerUrl": "https://old-auth.example.test",
@@ -1235,16 +1266,14 @@ async fn explicit_public_oauth_environment_overrides_persisted_control_on_restar
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(persisted["enabled"], false);
     assert_eq!(persisted["publicUrl"], "https://old.example.test/mcp");
     first_child.kill().expect("stop first MCP server");
     first_child.wait().expect("reap first MCP server");
 
     let environment = [
+        ("AGENA_MCP_ENABLED", "true"),
         ("AGENA_MCP_PUBLIC_URL", "https://new.example.test/mcp"),
-        (
-            "AGENA_MCP_OAUTH_ISSUER_URL",
-            "https://auth.new.example.test",
-        ),
         ("AGENA_MCP_AUTH_MODE", "oauth"),
         ("AGENA_MCP_ANONYMOUS_ACCESS", "none"),
         ("AGENA_MCP_TOOL_EXPOSURE", "read-only"),
@@ -1270,9 +1299,11 @@ async fn explicit_public_oauth_environment_overrides_persisted_control_on_restar
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(control["enabled"], true);
     assert_eq!(control["publicUrl"], "https://new.example.test/mcp");
     assert_eq!(control["resourceUrl"], "https://new.example.test/mcp");
-    assert_eq!(control["oauthIssuerUrl"], "https://auth.new.example.test");
+    assert!(control["oauthIssuerUrl"].is_null());
+    assert_eq!(control["oauth"]["issuer"], "https://new.example.test");
     assert_eq!(control["authMode"], "oauth");
     assert_eq!(control["anonymousAccess"], "none");
     assert_eq!(control["toolExposure"], "read_only");

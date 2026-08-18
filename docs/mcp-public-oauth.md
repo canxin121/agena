@@ -55,6 +55,7 @@ Create a root-readable environment file, for example `/etc/agena/agena.env`:
 
 ```bash
 AGENA_SERVER_UI_PASSWORD=replace-with-a-long-random-password
+AGENA_MCP_ENABLED=true
 AGENA_MCP_PUBLIC_URL=https://agena.example.com/mcp
 AGENA_MCP_AUTH_MODE=oauth
 ```
@@ -65,7 +66,7 @@ Generate the password rather than inventing a short one:
 openssl rand -base64 32
 ```
 
-The three values above are sufficient. These secure defaults are already used:
+The four values above are sufficient and remain authoritative across restarts, even with an existing database. These secure defaults are already used:
 
 ```bash
 AGENA_MCP_ANONYMOUS_ACCESS=none
@@ -161,6 +162,8 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header Authorization $http_authorization;
         proxy_buffering off;
         proxy_read_timeout 3600s;
@@ -172,6 +175,10 @@ Keep the original `Host` header. Agena does not trust forwarded headers to
 construct its OAuth identity; it compares the request host with the explicitly
 configured resource and issuer. Do not expose port 3210 through the firewall.
 Only ports 80/443 should be public.
+
+The login rate limiter reads the right-most proxy-appended client address and
+also enforces a global circuit breaker, so rotating spoofed forwarding headers
+cannot create unlimited password-guessing buckets.
 
 The proxy must pass these request headers without filtering them:
 

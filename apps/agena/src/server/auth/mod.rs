@@ -21,6 +21,10 @@ const UI_SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(10 * 60);
 const LOGIN_FAILURE_WINDOW: Duration = Duration::from_secs(10 * 60);
 const LOGIN_FAILURE_LIMIT: u32 = 8;
 const LOGIN_LOCKOUT_DURATION: Duration = Duration::from_secs(15 * 60);
+const GLOBAL_LOGIN_FAILURE_LIMIT: u32 = 64;
+const GLOBAL_LOGIN_LOCKOUT_DURATION: Duration = Duration::from_secs(5 * 60);
+const GLOBAL_LOGIN_ATTEMPT_KEY: &str = "__global__";
+const MAX_LOGIN_PASSWORD_BYTES: usize = 4096;
 
 #[derive(Clone)]
 pub(crate) enum UiAuth {
@@ -108,12 +112,18 @@ fn normalize_client_key_value(raw: &str) -> Option<String> {
 }
 
 fn parse_forwarded_for(raw: &str) -> Option<String> {
-    for entry in raw.split(',') {
+    // A trusted reverse proxy appends its directly observed client address to
+    // the right side. Reading the right-most element prevents a caller from
+    // selecting the rate-limit bucket by prepending a spoofed value.
+    for entry in raw.split(',').rev() {
         for kv in entry.split(';') {
             let part = kv.trim();
-            let Some(value) = part.strip_prefix("for=") else {
+            let Some((name, value)) = part.split_once('=') else {
                 continue;
             };
+            if !name.trim().eq_ignore_ascii_case("for") {
+                continue;
+            }
             let mut value = value.trim().trim_matches('"');
             if value.starts_with('[')
                 && let Some(end) = value.find(']')
@@ -132,7 +142,7 @@ fn login_attempt_key(headers: &HeaderMap) -> String {
     if let Some(v) = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
+        .and_then(|v| v.rsplit(',').next())
         .and_then(normalize_client_key_value)
     {
         return format!("xff:{v}");
@@ -166,6 +176,9 @@ fn login_attempt_key(headers: &HeaderMap) -> String {
 }
 
 fn verify_password(phc: &str, candidate: &str) -> bool {
+    if candidate.len() > MAX_LOGIN_PASSWORD_BYTES {
+        return false;
+    }
     let Ok(hash) = PasswordHash::new(phc) else {
         return false;
     };
@@ -213,8 +226,8 @@ fn login_failure_window_duration() -> time::Duration {
     time::Duration::seconds(LOGIN_FAILURE_WINDOW.as_secs() as i64)
 }
 
-fn login_lockout_duration() -> time::Duration {
-    time::Duration::seconds(LOGIN_LOCKOUT_DURATION.as_secs() as i64)
+fn login_lockout_duration(duration: Duration) -> time::Duration {
+    time::Duration::seconds(duration.as_secs() as i64)
 }
 
 fn login_lockout_remaining_seconds(
@@ -248,6 +261,8 @@ fn record_failed_login_attempt(
     inner: &UiAuthInner,
     attempt_key: &str,
     now: OffsetDateTime,
+    failure_limit: u32,
+    lockout_duration: Duration,
 ) -> Option<i64> {
     let mut entry = inner
         .login_attempts
@@ -265,17 +280,60 @@ fn record_failed_login_attempt(
     }
 
     entry.failures = entry.failures.saturating_add(1);
-    if entry.failures < LOGIN_FAILURE_LIMIT {
+    if entry.failures < failure_limit {
         return None;
     }
 
-    let locked_until = now + login_lockout_duration();
+    let locked_until = now + login_lockout_duration(lockout_duration);
     entry.locked_until = Some(locked_until);
     Some((locked_until - now).whole_seconds().max(1))
 }
 
+fn login_lockout_remaining_for_request(
+    inner: &UiAuthInner,
+    attempt_key: &str,
+    now: OffsetDateTime,
+) -> Option<i64> {
+    [
+        login_lockout_remaining_seconds(inner, attempt_key, now),
+        login_lockout_remaining_seconds(inner, GLOBAL_LOGIN_ATTEMPT_KEY, now),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+fn record_failed_login_attempts(
+    inner: &UiAuthInner,
+    attempt_key: &str,
+    now: OffsetDateTime,
+) -> Option<i64> {
+    [
+        record_failed_login_attempt(
+            inner,
+            attempt_key,
+            now,
+            LOGIN_FAILURE_LIMIT,
+            LOGIN_LOCKOUT_DURATION,
+        ),
+        record_failed_login_attempt(
+            inner,
+            GLOBAL_LOGIN_ATTEMPT_KEY,
+            now,
+            GLOBAL_LOGIN_FAILURE_LIMIT,
+            GLOBAL_LOGIN_LOCKOUT_DURATION,
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
 fn clear_failed_login_attempts(inner: &UiAuthInner, attempt_key: &str) {
     inner.login_attempts.remove(attempt_key);
+    // A successful authentication proves possession of the credential and
+    // safely releases the coarse global circuit breaker as well.
+    inner.login_attempts.remove(GLOBAL_LOGIN_ATTEMPT_KEY);
 }
 
 async fn cleanup_sessions_task(inner: std::sync::Weak<UiAuthInner>) {
@@ -370,13 +428,14 @@ pub(crate) fn verify_password_for_oauth(
 
     let attempt_key = login_attempt_key(headers);
     let now = OffsetDateTime::now_utc();
-    if let Some(retry_after_seconds) = login_lockout_remaining_seconds(inner, &attempt_key, now) {
+    if let Some(retry_after_seconds) = login_lockout_remaining_for_request(inner, &attempt_key, now)
+    {
         return Err(OAuthPasswordError::Locked(retry_after_seconds));
     }
 
     let candidate = normalize_password(Some(candidate));
     if !verify_password(&inner.password_phc, &candidate) {
-        if let Some(retry_after_seconds) = record_failed_login_attempt(inner, &attempt_key, now) {
+        if let Some(retry_after_seconds) = record_failed_login_attempts(inner, &attempt_key, now) {
             return Err(OAuthPasswordError::Locked(retry_after_seconds));
         }
         return Err(OAuthPasswordError::Invalid);
@@ -441,7 +500,7 @@ pub(crate) async fn auth_session_create(
             let now = OffsetDateTime::now_utc();
 
             if let Some(retry_after_seconds) =
-                login_lockout_remaining_seconds(inner, &attempt_key, now)
+                login_lockout_remaining_for_request(inner, &attempt_key, now)
             {
                 return (
                     StatusCode::TOO_MANY_REQUESTS,
@@ -460,7 +519,7 @@ pub(crate) async fn auth_session_create(
 
             if !verify_password(&inner.password_phc, &candidate) {
                 if let Some(retry_after_seconds) =
-                    record_failed_login_attempt(inner, &attempt_key, now)
+                    record_failed_login_attempts(inner, &attempt_key, now)
                 {
                     return (
                         StatusCode::TOO_MANY_REQUESTS,
@@ -547,5 +606,46 @@ pub(crate) async fn require_ui_auth(
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_appended_address_wins_over_spoofed_forwarded_prefixes() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "198.51.100.10, 203.0.113.42".parse().expect("valid header"),
+        );
+        assert_eq!(login_attempt_key(&headers), "xff:203.0.113.42");
+
+        headers.remove("x-forwarded-for");
+        headers.insert(
+            "forwarded",
+            "for=198.51.100.10;proto=https, for=203.0.113.42;proto=https"
+                .parse()
+                .expect("valid header"),
+        );
+        assert_eq!(login_attempt_key(&headers), "fwd:203.0.113.42");
+    }
+
+    #[test]
+    fn rotating_spoofed_client_keys_still_trip_the_global_login_circuit_breaker() {
+        let UiAuth::Enabled(inner) =
+            init_ui_auth_from_phc(hash_password("correct horse battery staple").unwrap()).unwrap()
+        else {
+            panic!("password auth should be enabled");
+        };
+        let now = OffsetDateTime::now_utc();
+        let mut retry_after = None;
+        for index in 0..GLOBAL_LOGIN_FAILURE_LIMIT {
+            retry_after =
+                record_failed_login_attempts(&inner, format!("spoofed:{index}").as_str(), now);
+        }
+        assert!(retry_after.is_some());
+        assert!(login_lockout_remaining_for_request(&inner, "brand-new-spoof", now).is_some());
     }
 }

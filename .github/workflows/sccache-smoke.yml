@@ -1,0 +1,163 @@
+name: sccache cache smoke test
+
+on:
+  schedule:
+    - cron: "30 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sccache-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  SCCACHE_BASEDIRS: ${{ github.workspace }}
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_VERSION: agena-v1
+
+jobs:
+  prime:
+    name: prime sccache (${{ matrix.os }})
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            shell: bash
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            shell: bash
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            shell: pwsh
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
+
+      - name: Configure Cargo sccache wrapper
+        uses: ./.github/actions/configure-sccache-wrapper
+
+      - name: Build cache probe (Unix)
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf target/sccache-smoke-prime
+          cargo build \
+            -p agena-failure \
+            --release \
+            --locked \
+            --target "${{ matrix.target }}" \
+            --target-dir target/sccache-smoke-prime
+
+      - name: Build cache probe (Windows)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath target/sccache-smoke-prime) {
+            Remove-Item -LiteralPath target/sccache-smoke-prime -Recurse -Force
+          }
+          cargo build `
+            -p agena-failure `
+            --release `
+            --locked `
+            --target "${{ matrix.target }}" `
+            --target-dir target/sccache-smoke-prime
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo build cache probe failed"
+          }
+
+      - name: Verify compiler wrapper activity
+        uses: ./.github/actions/verify-sccache
+        with:
+          label: prime-${{ matrix.target }}
+          minimum-requests: "1"
+
+  verify:
+    name: verify cross-job hit (${{ matrix.os }})
+    needs: prime
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            shell: bash
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            shell: bash
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            shell: pwsh
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
+
+      - name: Configure Cargo sccache wrapper
+        uses: ./.github/actions/configure-sccache-wrapper
+
+      - name: Build cache probe from a clean target directory (Unix)
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf target/sccache-smoke-verify
+          cargo build \
+            -p agena-failure \
+            --release \
+            --locked \
+            --target "${{ matrix.target }}" \
+            --target-dir target/sccache-smoke-verify
+
+      - name: Build cache probe from a clean target directory (Windows)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath target/sccache-smoke-verify) {
+            Remove-Item -LiteralPath target/sccache-smoke-verify -Recurse -Force
+          }
+          cargo build `
+            -p agena-failure `
+            --release `
+            --locked `
+            --target "${{ matrix.target }}" `
+            --target-dir target/sccache-smoke-verify
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo build cache verification failed"
+          }
+
+      - name: Require a cross-job compiler cache hit
+        uses: ./.github/actions/verify-sccache
+        with:
+          label: verify-${{ matrix.target }}
+          minimum-requests: "1"
+          minimum-hits: "1"

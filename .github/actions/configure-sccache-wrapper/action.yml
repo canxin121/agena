@@ -13,8 +13,12 @@ runs:
           echo "sccache executable not found at SCCACHE_PATH=${SCCACHE_PATH:-<unset>}" >&2
           exit 1
         fi
-        printf 'RUSTC_WRAPPER=%s\n' "$SCCACHE_PATH" >> "$GITHUB_ENV"
-        "$SCCACHE_PATH" --version
+
+        wrapper="$(cd "$(dirname "$SCCACHE_PATH")" && pwd -P)/$(basename "$SCCACHE_PATH")"
+        printf 'RUSTC_WRAPPER=%s\n' "$wrapper" >> "$GITHUB_ENV"
+        printf 'Configured RUSTC_WRAPPER=%s\n' "$wrapper"
+        "$wrapper" --version
+        "$wrapper" --zero-stats
 
     - name: Configure sccache wrapper (Windows)
       if: runner.os == 'Windows'
@@ -27,5 +31,15 @@ runs:
         if (-not (Test-Path -LiteralPath $wrapper)) {
           throw "sccache executable not found at SCCACHE_PATH=$env:SCCACHE_PATH"
         }
+
+        $wrapper = (Resolve-Path -LiteralPath $wrapper).Path
         "RUSTC_WRAPPER=$wrapper" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        Write-Host "Configured RUSTC_WRAPPER=$wrapper"
         & $wrapper --version
+        if ($LASTEXITCODE -ne 0) {
+          throw "failed to execute sccache at $wrapper"
+        }
+        & $wrapper --zero-stats
+        if ($LASTEXITCODE -ne 0) {
+          throw "failed to reset sccache statistics"
+        }

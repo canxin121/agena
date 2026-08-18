@@ -14,6 +14,10 @@ inputs:
     description: Minimum number of remote cache hits required
     required: false
     default: "0"
+  minimum-hit-rate:
+    description: Minimum cache hit percentage across hits, misses, and cache errors
+    required: false
+    default: "0"
 
 runs:
   using: composite
@@ -25,6 +29,7 @@ runs:
         CACHE_LABEL: ${{ inputs.label }}
         MINIMUM_REQUESTS: ${{ inputs.minimum-requests }}
         MINIMUM_HITS: ${{ inputs.minimum-hits }}
+        MINIMUM_HIT_RATE: ${{ inputs.minimum-hit-rate }}
       run: |
         set -euo pipefail
         if [[ -z "${RUSTC_WRAPPER:-}" || ! -x "$RUSTC_WRAPPER" ]]; then
@@ -46,9 +51,9 @@ runs:
 
         def counter_total(name: str) -> int:
             counter = stats.get(name, {}) or {}
-            return sum(int(value) for value in (counter.get("counts", {}) or {}).values()) + sum(
-                int(value) for value in (counter.get("adv_counts", {}) or {}).values()
-            )
+            # adv_counts breaks the same requests down by an additional dimension;
+            # adding it to counts would double-count cache activity.
+            return sum(int(value) for value in (counter.get("counts", {}) or {}).values())
 
         requests = int(stats.get("compile_requests", 0) or 0)
         executed = int(stats.get("requests_executed", 0) or 0)
@@ -62,6 +67,7 @@ runs:
 
         minimum_requests = int(os.environ["MINIMUM_REQUESTS"])
         minimum_hits = int(os.environ["MINIMUM_HITS"])
+        minimum_hit_rate = float(os.environ["MINIMUM_HIT_RATE"])
         label = os.environ["CACHE_LABEL"]
 
         summary = (
@@ -87,6 +93,10 @@ runs:
             failures.append(f"observed {requests} compile requests; expected at least {minimum_requests}")
         if hits < minimum_hits:
             failures.append(f"observed {hits} cache hits; expected at least {minimum_hits}")
+        if hit_rate < minimum_hit_rate:
+            failures.append(
+                f"observed {hit_rate:.2f}% cache hit rate; expected at least {minimum_hit_rate:.2f}%"
+            )
         if failures:
             raise SystemExit("sccache verification failed: " + "; ".join(failures))
         PY
@@ -98,6 +108,7 @@ runs:
         CACHE_LABEL: ${{ inputs.label }}
         MINIMUM_REQUESTS: ${{ inputs.minimum-requests }}
         MINIMUM_HITS: ${{ inputs.minimum-hits }}
+        MINIMUM_HIT_RATE: ${{ inputs.minimum-hit-rate }}
       run: |
         if (-not $env:RUSTC_WRAPPER -or -not (Test-Path -LiteralPath $env:RUSTC_WRAPPER)) {
           throw "RUSTC_WRAPPER does not point to an executable: $env:RUSTC_WRAPPER"
@@ -117,11 +128,8 @@ runs:
               $sum += [int64]$property.Value
             }
           }
-          if ($null -ne $counter.adv_counts) {
-            foreach ($property in $counter.adv_counts.PSObject.Properties) {
-              $sum += [int64]$property.Value
-            }
-          }
+          # adv_counts is an alternate breakdown of the same requests and is
+          # deliberately not added to the primary counts.
           return $sum
         }
 
@@ -154,9 +162,13 @@ runs:
 
         [int64]$minimumRequests = $env:MINIMUM_REQUESTS
         [int64]$minimumHits = $env:MINIMUM_HITS
+        [double]$minimumHitRate = $env:MINIMUM_HIT_RATE
         if ($requests -lt $minimumRequests) {
           throw "sccache verification failed: observed $requests compile requests; expected at least $minimumRequests"
         }
         if ($hits -lt $minimumHits) {
           throw "sccache verification failed: observed $hits cache hits; expected at least $minimumHits"
+        }
+        if ($hitRate -lt $minimumHitRate) {
+          throw "sccache verification failed: observed $($hitRate.ToString('F2'))% cache hit rate; expected at least $($minimumHitRate.ToString('F2'))%"
         }

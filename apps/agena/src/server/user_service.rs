@@ -24,6 +24,7 @@ pub(crate) fn is_installed() -> bool {
     service_file_path().is_ok_and(|path| path.is_file())
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
     let path = service_file_path()?;
     let executable = std::env::current_exe().context("failed to resolve Agena executable")?;
@@ -66,6 +67,12 @@ pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
     Ok(path)
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(crate) fn install(_args: &ServerArgs) -> Result<PathBuf> {
+    bail!("OS-native Agena user services are supported only on macOS and Linux")
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn start() -> Result<()> {
     let path = service_file_path()?;
     if !path.is_file() {
@@ -77,11 +84,23 @@ pub(crate) fn start() -> Result<()> {
     start_service(path.as_path())
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(crate) fn start() -> Result<()> {
+    bail!("OS-native Agena user services are supported only on macOS and Linux")
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn stop() -> Result<()> {
     let path = service_file_path()?;
     stop_service(path.as_path())
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(crate) fn stop() -> Result<()> {
+    bail!("OS-native Agena user services are supported only on macOS and Linux")
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn uninstall() -> Result<PathBuf> {
     let path = service_file_path()?;
     stop_service(path.as_path())?;
@@ -92,6 +111,11 @@ pub(crate) fn uninstall() -> Result<PathBuf> {
     }
     reload_after_uninstall()?;
     Ok(path)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub(crate) fn uninstall() -> Result<PathBuf> {
+    bail!("OS-native Agena user services are supported only on macOS and Linux")
 }
 
 fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {

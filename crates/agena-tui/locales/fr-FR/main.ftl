@@ -1727,3 +1727,13 @@ plugin-workbench-kind-object = objet
 plugin-workbench-kind-one-of = oneOf
 plugin-workbench-kind-string = chaîne
 plugin-workbench-kind-value = valeur
+
+overlay-provider-list-create-detail = Créez un brouillon de fournisseur, puis configurez l’authentification, les adaptateurs et les modèles.
+
+overlay-provider-delete-body = Supprimer le fournisseur {$provider} ainsi que tous les adaptateurs/modèles configurés ?
+
+overlay-provider-delete-adapter-body = Supprimer l’adaptateur configuré {$provider}/{$adapter} ?
+
+overlay-provider-delete-adapter-last-body = Il s’agit du dernier adaptateur configuré. La confirmation supprimera le fournisseur.
+
+overlay-provider-delete-model-body = Supprimer le modèle configuré {$provider}/{$adapter}/{$model} ?

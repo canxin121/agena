@@ -1727,3 +1727,13 @@ plugin-workbench-kind-object = オブジェクト
 plugin-workbench-kind-one-of = oneOf
 plugin-workbench-kind-string = 文字列
 plugin-workbench-kind-value = 値
+
+overlay-provider-list-create-detail = プロバイダーの下書きを作成し、認証、アダプター、モデルを設定します。
+
+overlay-provider-delete-body = プロバイダー {$provider} と設定済みのすべてのアダプター/モデルを削除しますか？
+
+overlay-provider-delete-adapter-body = 設定済みアダプター {$provider}/{$adapter} を削除しますか？
+
+overlay-provider-delete-adapter-last-body = これは最後の設定済みアダプターです。確定するとプロバイダーも削除されます。
+
+overlay-provider-delete-model-body = 設定済みモデル {$provider}/{$adapter}/{$model} を削除しますか？

@@ -1727,3 +1727,13 @@ plugin-workbench-kind-object = Objekt
 plugin-workbench-kind-one-of = oneOf
 plugin-workbench-kind-string = Zeichenfolge
 plugin-workbench-kind-value = Wert
+
+overlay-provider-list-create-detail = Erstellen Sie einen Anbieterentwurf und konfigurieren Sie anschließend Authentifizierung, Adapter und Modelle.
+
+overlay-provider-delete-body = Anbieter {$provider} und alle konfigurierten Adapter/Modelle löschen?
+
+overlay-provider-delete-adapter-body = Konfigurierten Adapter {$provider}/{$adapter} löschen?
+
+overlay-provider-delete-adapter-last-body = Dies ist der letzte konfigurierte Adapter. Bei Bestätigung wird der Anbieter gelöscht.
+
+overlay-provider-delete-model-body = Konfiguriertes Modell {$provider}/{$adapter}/{$model} löschen?

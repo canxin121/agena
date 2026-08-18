@@ -913,7 +913,7 @@ overlay-provider-list-footer = 選擇“新建 Provider”或已有 Provider，�
 
 overlay-provider-list-create-label = + 新建 Provider
 
-overlay-provider-list-create-detail = 建立 provider 草稿，然後配置認證、adapter 與模型。
+overlay-provider-list-create-detail = 建立服務商草稿，然後設定認證、適配器與模型。
 
 overlay-provider-list-row-detail-no-model = {$adapter} · 已配置 {$count} 個 adapters
 
@@ -981,17 +981,17 @@ overlay-provider-studio-model-footer = 方向鍵選擇 · Enter 編輯 · Ctrl+S
 
 overlay-provider-delete-title = 刪除 Provider
 
-overlay-provider-delete-body = 刪除 provider {$provider} 以及其所有已配置的 adapter 和模型？
+overlay-provider-delete-body = 刪除服務商 {$provider} 以及其所有已設定的適配器和模型？
 
 overlay-provider-delete-adapter-title = 刪除 Adapter
 
-overlay-provider-delete-adapter-body = 刪除已配置 adapter {$provider}/{$adapter}？
+overlay-provider-delete-adapter-body = 刪除已設定的適配器 {$provider}/{$adapter}？
 
-overlay-provider-delete-adapter-last-body = 這是最後一個已配置 adapter。確認後會一併刪除整個 provider。
+overlay-provider-delete-adapter-last-body = 這是最後一個已設定的適配器。確認後會一併刪除整個服務商。
 
 overlay-provider-delete-model-title = 刪除模型
 
-overlay-provider-delete-model-body = 刪除已配置模型 {$provider}/{$adapter}/{$model}？
+overlay-provider-delete-model-body = 刪除已設定的模型 {$provider}/{$adapter}/{$model}？
 
 overlay-provider-studio-model-edit-title = 編輯模型字段
 

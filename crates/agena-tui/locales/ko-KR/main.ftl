@@ -1728,3 +1728,13 @@ plugin-workbench-kind-object = 객체
 plugin-workbench-kind-one-of = oneOf
 plugin-workbench-kind-string = 문자열
 plugin-workbench-kind-value = 값
+
+overlay-provider-list-create-detail = 공급자 초안을 만든 다음 인증, 어댑터 및 모델을 구성합니다.
+
+overlay-provider-delete-body = 공급자 {$provider}와 구성된 모든 어댑터/모델을 삭제하시겠습니까?
+
+overlay-provider-delete-adapter-body = 구성된 어댑터 {$provider}/{$adapter}를 삭제하시겠습니까?
+
+overlay-provider-delete-adapter-last-body = 이것은 마지막으로 구성된 어댑터입니다. 확인하면 공급자도 삭제됩니다.
+
+overlay-provider-delete-model-body = 구성된 모델 {$provider}/{$adapter}/{$model}을 삭제하시겠습니까?

@@ -23,6 +23,7 @@ import {
 import { encodeModelSelectionKey, parseModelSlug } from '@/pages/chat/modelSelectionDefaults'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
+import { settingsText as st } from '@/i18n/settingsText'
 
 const toasts = useToastsStore()
 const modelSelectionCatalog = useModelSelectionCatalog()
@@ -62,7 +63,7 @@ const selectedModel = computed(() => {
 function withSelectedMode(options: ModelModeOption[], selected: string): ModelModeOption[] {
   const value = String(selected || '').trim()
   if (!value || options.some((option) => option.value === value)) return options
-  return [...options, { value, label: value, description: 'Configured value', isDefault: false }]
+  return [...options, { value, label: value, description: st('Configured value'), isDefault: false }]
 }
 
 const thinkingOptions = computed(() =>
@@ -145,9 +146,12 @@ async function save() {
       (hasSelection && verbosity.value.trim() !== desiredVerbosity) ||
       (typeof desiredParallel === 'boolean' && parallelToolCalls.value !== desiredParallel)
     ) {
-      throw new Error('The server accepted the update but did not apply the automatic approval model.')
+      throw new Error(st('The server accepted the update but did not apply the automatic approval model.'))
     }
-    toasts.push('success', hasSelection ? 'Automatic approval model updated' : 'Automatic approval model cleared')
+    toasts.push(
+      'success',
+      hasSelection ? st('Automatic approval model updated') : st('Automatic approval model cleared'),
+    )
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : String(reason)
     error.value = message
@@ -164,18 +168,21 @@ onMounted(() => void refresh())
   <section class="grid gap-4 rounded-lg border border-border/60 p-4">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h3 class="text-sm font-semibold">Automatic approval model</h3>
+        <h3 class="text-sm font-semibold">{{ $st('Automatic approval model') }}</h3>
         <p class="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
-          Used to classify permission requests in Auto mode. Clearing it makes the runtime fail closed to its normal
-          approval fallback path.
+          {{
+            $st(
+              'Used to classify permission requests in Auto mode. Clearing it makes the runtime fail closed to its normal approval fallback path.',
+            )
+          }}
         </p>
       </div>
       <IconButton
         variant="ghost"
         size="sm"
         :disabled="loading || saving"
-        tooltip="Reload approval model"
-        aria-label="Reload approval model"
+        :tooltip="$st('Reload approval model')"
+        :aria-label="$st('Reload approval model')"
         @click="refresh"
       >
         <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
@@ -184,66 +191,68 @@ onMounted(() => void refresh())
 
     <div class="grid gap-3 xl:grid-cols-2">
       <label class="grid min-w-0 gap-1.5 xl:col-span-2">
-        <span class="text-xs text-muted-foreground">Model route</span>
+        <span class="text-xs text-muted-foreground">{{ $st('Model route') }}</span>
         <OptionPicker
           :model-value="modelKey"
           :options="modelOptions"
-          title="Automatic approval model"
-          empty-label="No dedicated approval model"
-          placeholder="Select a configured model"
-          search-placeholder="Search configured models..."
+          :title="$st('Automatic approval model')"
+          :empty-label="$st('No dedicated approval model')"
+          :placeholder="$st('Select a configured model')"
+          :search-placeholder="$st('Search configured models...')"
           :disabled="loading || saving"
           monospace
           @update:model-value="chooseModel"
         />
       </label>
       <label class="grid min-w-0 gap-1.5">
-        <span class="text-xs text-muted-foreground">Thinking</span>
+        <span class="text-xs text-muted-foreground">{{ $st('Thinking') }}</span>
         <OptionPicker
           v-model="thinkingMode"
           :options="thinkingOptions"
-          title="Approval thinking mode"
-          empty-label="Model default"
+          :title="$st('Approval thinking mode')"
+          :empty-label="$st('Model default')"
           :disabled="loading || saving || !modelKey"
         />
       </label>
       <label class="grid min-w-0 gap-1.5">
-        <span class="text-xs text-muted-foreground">Speed</span>
+        <span class="text-xs text-muted-foreground">{{ $st('Speed') }}</span>
         <OptionPicker
           v-model="speedMode"
           :options="speedOptions"
-          title="Approval speed mode"
-          empty-label="Model default"
+          :title="$st('Approval speed mode')"
+          :empty-label="$st('Model default')"
           :disabled="loading || saving || !modelKey"
         />
       </label>
       <label class="grid min-w-0 gap-1.5">
-        <span class="text-xs text-muted-foreground">Verbosity</span>
+        <span class="text-xs text-muted-foreground">{{ $st('Verbosity') }}</span>
         <OptionPicker
           v-model="verbosity"
           :options="verbosityOptions"
-          title="Approval verbosity"
-          empty-label="Model default"
+          :title="$st('Approval verbosity')"
+          :empty-label="$st('Model default')"
           :disabled="loading || saving || !modelKey || verbosityOptions.length === 0"
         />
       </label>
       <label class="flex min-h-9 items-center gap-2 rounded-md border border-border/60 px-3 text-sm">
         <input v-model="parallelToolCalls" type="checkbox" :disabled="loading || saving || !supportsParallelTools" />
         <span>
-          Parallel tool calls
-          <span v-if="!supportsParallelTools" class="ml-1 text-xs text-muted-foreground">not supported</span>
+          {{ $st('Parallel tool calls') }}
+          <span v-if="!supportsParallelTools" class="ml-1 text-xs text-muted-foreground">{{
+            $st('not supported')
+          }}</span>
         </span>
       </label>
     </div>
 
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div v-if="error" class="break-words text-xs text-destructive">{{ error }}</div>
-      <span v-else class="text-xs text-muted-foreground"
-        >All empty mode fields inherit the selected model defaults.</span
-      >
+      <span v-else class="text-xs text-muted-foreground">{{
+        $st('All empty mode fields inherit the selected model defaults.')
+      }}</span>
       <Button :disabled="loading || saving" @click="save">
         <RiSave3Line class="mr-2 h-4 w-4" />
-        {{ saving ? 'Saving…' : modelKey ? 'Save approval model' : 'Clear approval model' }}
+        {{ saving ? $st('Saving…') : modelKey ? $st('Save approval model') : $st('Clear approval model') }}
       </Button>
     </div>
   </section>

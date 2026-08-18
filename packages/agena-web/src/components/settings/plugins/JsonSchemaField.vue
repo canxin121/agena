@@ -21,6 +21,7 @@ import {
   schemaType,
   stableJson,
 } from './pluginConfigSchema'
+import { settingsText as st } from '@/i18n/settingsText'
 
 const props = withDefaults(
   defineProps<{
@@ -59,7 +60,13 @@ const enumOptions = computed(() => schemaEnumOptions(normalizedSchema.value, roo
 const branchOptions = computed(() =>
   branches.value.map((branch, index) => ({
     value: String(index),
-    label: schemaTitle(branch, `${schemaType(branch, root.value) || 'Variant'} ${index + 1}`),
+    label: schemaTitle(
+      branch,
+      st('{type} {index}', {
+        type: schemaType(branch, root.value) || st('Variant'),
+        index: index + 1,
+      }),
+    ),
     description: schemaDescription(branch) || undefined,
   })),
 )
@@ -108,7 +115,9 @@ function clearChild(key: string) {
 }
 
 function clearChildLabel(key: string): string {
-  return Object.prototype.hasOwnProperty.call(defaultObjectValue.value, key) ? 'Reset / inherit' : 'Inherit / remove'
+  return Object.prototype.hasOwnProperty.call(defaultObjectValue.value, key)
+    ? st('Reset / inherit')
+    : st('Inherit / remove')
 }
 
 function updateArray(index: number, value: JsonValue) {
@@ -187,7 +196,7 @@ const showMultiline = computed(() => {
     <div v-if="title || help" class="min-w-0">
       <div v-if="title" class="flex min-w-0 items-center gap-2 text-sm font-medium">
         <span class="break-words">{{ title }}</span>
-        <span v-if="required" class="text-destructive" title="Required">*</span>
+        <span v-if="required" class="text-destructive" :title="$st('Required')">*</span>
         <code v-if="path" class="ml-auto hidden truncate font-mono text-[10px] text-muted-foreground sm:block">{{
           path
         }}</code>
@@ -199,7 +208,7 @@ const showMultiline = computed(() => {
       <OptionPicker
         :model-value="String(selectedBranch)"
         :options="branchOptions"
-        :title="`${title} variant`"
+        :title="$st('{title} variant', { title })"
         :include-empty="false"
         :disabled="disabled"
         @update:model-value="chooseBranch"
@@ -233,7 +242,7 @@ const showMultiline = computed(() => {
         :disabled="disabled"
         @change="emit('update:modelValue', ($event.target as HTMLInputElement).checked)"
       />
-      {{ modelValue === true ? 'Enabled' : 'Disabled' }}
+      {{ modelValue === true ? $st('Enabled') : $st('Disabled') }}
     </label>
 
     <textarea
@@ -284,7 +293,7 @@ const showMultiline = computed(() => {
             :disabled="disabled"
             @click="updateChild(key, defaultValueForSchema(childSchema, root))"
           >
-            <RiAddLine class="mr-1.5 h-4 w-4" /> Configure {{ schemaTitle(childSchema, key) }}
+            <RiAddLine class="mr-1.5 h-4 w-4" /> {{ $st('Configure') }} {{ schemaTitle(childSchema, key) }}
           </Button>
         </div>
         <JsonSchemaField
@@ -310,7 +319,7 @@ const showMultiline = computed(() => {
         class="grid gap-2 rounded-md border border-border/50 bg-muted/10 p-3"
       >
         <div class="flex items-center justify-between gap-2">
-          <span class="text-xs font-medium text-muted-foreground">Item {{ index + 1 }}</span>
+          <span class="text-xs font-medium text-muted-foreground">{{ $st('Item') }} {{ index + 1 }}</span>
           <div class="flex flex-wrap gap-1">
             <Button variant="ghost" size="sm" :disabled="disabled || index === 0" @click="moveArrayItem(index, -1)">
               <RiArrowUpLine class="h-4 w-4" />
@@ -333,7 +342,7 @@ const showMultiline = computed(() => {
               class="text-destructive"
               @click="removeArrayItem(index)"
             >
-              <RiDeleteBinLine class="mr-1.5 h-4 w-4" /> Remove
+              <RiDeleteBinLine class="mr-1.5 h-4 w-4" /> {{ $st('Remove') }}
             </Button>
           </div>
         </div>
@@ -348,15 +357,18 @@ const showMultiline = computed(() => {
         />
       </div>
       <Button variant="outline" size="sm" :disabled="disabled" class="justify-self-start" @click="addArrayItem">
-        <RiAddLine class="mr-1.5 h-4 w-4" /> Add item
+        <RiAddLine class="mr-1.5 h-4 w-4" /> {{ $st('Add item') }}
       </Button>
     </div>
 
-    <div v-else-if="kind === 'null'" class="text-xs text-muted-foreground">This value is explicitly null.</div>
+    <div v-else-if="kind === 'null'" class="text-xs text-muted-foreground">
+      {{ $st('This value is explicitly null.') }}
+    </div>
 
     <div v-else class="grid gap-2">
       <div class="text-xs text-muted-foreground">
-        Structured controls are unavailable for this {{ scalarType }} value. Edit its JSON directly.
+        {{ $st('Structured controls are unavailable for this') }} {{ scalarType }}
+        {{ $st('value. Edit its JSON directly.') }}
       </div>
       <textarea
         v-model="rawText"
@@ -368,7 +380,7 @@ const showMultiline = computed(() => {
       <div class="flex flex-wrap items-center justify-between gap-2">
         <span v-if="rawError" class="text-xs text-destructive">{{ rawError }}</span>
         <span v-else></span>
-        <Button variant="outline" size="sm" :disabled="disabled" @click="applyRaw">Apply JSON</Button>
+        <Button variant="outline" size="sm" :disabled="disabled" @click="applyRaw">{{ $st('Apply JSON') }}</Button>
       </div>
     </div>
   </div>

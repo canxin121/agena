@@ -47,6 +47,7 @@ import {
   type ChatToolExpansionOverrides,
   type ChatToolActivityType,
 } from '@/lib/chatActivity'
+import { settingsText as st } from '@/i18n/settingsText'
 
 const settings = useSettingsStore()
 const ui = useUiStore()
@@ -60,27 +61,28 @@ const SETTINGS_LAST_SECTION_KEY = localStorageKeys.settings.lastRoute
 
 const DEFAULT_SECTION: SettingsTab = 'interface'
 
-const interfacePages: SettingsSubpageDefinition[] = [
+const interfacePages = computed<SettingsSubpageDefinition[]>(() => [
   {
     id: 'tui',
-    label: 'TUI preferences',
-    description:
+    label: st('TUI preferences'),
+    description: st(
       'Server-backed language, color, graphics, plugin theme, and transcript expansion defaults shared with the TUI.',
+    ),
     keywords: ['tui', 'locale', 'color', 'graphics', 'theme', 'transcript'],
   },
   {
     id: 'web-appearance',
-    label: 'Web appearance',
-    description: 'Browser-only theme, fonts, density, spacing, and geometry preferences.',
+    label: st('Web appearance'),
+    description: st('Browser-only theme, fonts, density, spacing, and geometry preferences.'),
     keywords: ['web', 'appearance', 'font', 'padding', 'radius', 'language'],
   },
   {
     id: 'conversation',
-    label: 'Conversation display',
-    description: 'Web transcript timestamps, reasoning visibility, activity expansion, and exact tool overrides.',
+    label: st('Conversation display'),
+    description: st('Web transcript timestamps, reasoning visibility, activity expansion, and exact tool overrides.'),
     keywords: ['chat', 'conversation', 'reasoning', 'timestamps', 'activity', 'tools'],
   },
-]
+])
 
 function readInitialSection(): SettingsTab {
   const routeSection = settingsTabFromRouteValue(route.params.section)
@@ -96,6 +98,16 @@ function readInitialSection(): SettingsTab {
 
 const activeSection = ref<SettingsTab>(readInitialSection())
 const settingsRefreshNonce = ref(0)
+
+watch(
+  () => i18n.global.locale.value,
+  () => {
+    // Most dense Settings panels build option catalogs during setup. Remount
+    // the active workbench so every script-side label changes immediately
+    // when the browser locale changes.
+    settingsRefreshNonce.value += 1
+  },
+)
 
 function goToSection(id: SettingsTab) {
   const path = settingsPathForTab(id)
@@ -314,16 +326,16 @@ type ToolExpansionOption = {
   description: string
 }
 
-const TOOL_API_FUNCTIONS: ToolExpansionOption[] = [
-  { id: 'tools_list', label: 'tools_list', description: 'Enumerate execution tools.' },
-  { id: 'tools_search', label: 'tools_search', description: 'Search execution tools.' },
-  { id: 'tools_help', label: 'tools_help', description: 'Inspect execution-tool contracts.' },
-  { id: 'tools_tags', label: 'tools_tags', description: 'List execution-tool tags.' },
-  { id: 'tools_call', label: 'tools_call', description: 'Invoke an execution tool.' },
-  { id: 'plugins_list', label: 'plugins_list', description: 'Enumerate tool plugins.' },
-  { id: 'plugins_search', label: 'plugins_search', description: 'Search tool plugins.' },
-  { id: 'plugins_tags', label: 'plugins_tags', description: 'List tool-plugin tags.' },
-]
+const toolApiFunctions = computed<ToolExpansionOption[]>(() => [
+  { id: 'tools_list', label: 'tools_list', description: st('Enumerate execution tools.') },
+  { id: 'tools_search', label: 'tools_search', description: st('Search execution tools.') },
+  { id: 'tools_help', label: 'tools_help', description: st('Inspect execution-tool contracts.') },
+  { id: 'tools_tags', label: 'tools_tags', description: st('List execution-tool tags.') },
+  { id: 'tools_call', label: 'tools_call', description: st('Invoke an execution tool.') },
+  { id: 'plugins_list', label: 'plugins_list', description: st('Enumerate tool plugins.') },
+  { id: 'plugins_search', label: 'plugins_search', description: st('Search tool plugins.') },
+  { id: 'plugins_tags', label: 'plugins_tags', description: st('List tool-plugin tags.') },
+])
 
 const toolCatalogItems = ref<ToolCatalogItem[]>([])
 const activityKindCatalogItems = ref<ChatActivityKindCatalogItem[]>(BUILTIN_CHAT_ACTIVITY_KINDS.slice())
@@ -363,7 +375,7 @@ function activityKindDescription(item: ChatActivityKindCatalogItem): string {
 
 const toolActivityOptions = computed<ToolExpansionOption[]>(() => {
   const byId = new Map<string, ToolExpansionOption>()
-  for (const option of TOOL_API_FUNCTIONS) byId.set(option.id, option)
+  for (const option of toolApiFunctions.value) byId.set(option.id, option)
   for (const item of toolCatalogItems.value) {
     const label = String(item.name || '').trim()
     const id = normalizeChatToolPreferenceId(label)
@@ -476,7 +488,11 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
             :key="`interface-${settingsRefreshNonce}`"
             section="interface"
             :title="String(t('settings.tabs.interface'))"
-            description="Configure server-backed TUI behavior and browser-only Web appearance without mixing unrelated settings into one page."
+            :description="
+              $st(
+                'Configure server-backed TUI behavior and browser-only Web appearance without mixing unrelated settings into one page.',
+              )
+            "
             :pages="interfacePages"
             default-page="tui"
             v-slot="{ activePage }"
@@ -701,11 +717,11 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                               <th class="px-3 py-2 text-center font-medium">
                                 {{ t('settings.appearance.chat.toolDetailsTable.expand') }}
                               </th>
-                              <th class="w-10 px-2 py-2" aria-label="Reset"></th>
+                              <th class="w-10 px-2 py-2" :aria-label="$st('Reset')"></th>
                             </tr>
                           </thead>
                           <tbody>
-                            <tr v-if="toolCatalogLoading && toolActivityOptions.length === TOOL_API_FUNCTIONS.length">
+                            <tr v-if="toolCatalogLoading && toolActivityOptions.length === toolApiFunctions.length">
                               <td
                                 colspan="3"
                                 class="border-t border-border/50 px-3 py-6 text-center text-xs text-muted-foreground"
@@ -713,9 +729,7 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
                                 {{ t('settings.appearance.chat.loadingTools') }}
                               </td>
                             </tr>
-                            <tr
-                              v-else-if="toolCatalogError && toolActivityOptions.length === TOOL_API_FUNCTIONS.length"
-                            >
+                            <tr v-else-if="toolCatalogError && toolActivityOptions.length === toolApiFunctions.length">
                               <td
                                 colspan="3"
                                 class="border-t border-border/50 px-3 py-4 text-xs text-rose-700 dark:text-rose-300"

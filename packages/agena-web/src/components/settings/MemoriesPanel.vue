@@ -9,6 +9,7 @@ import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '../../lib/api'
 import { useToastsStore } from '../../stores/toasts'
+import { settingsText as st } from '@/i18n/settingsText'
 
 type MemoryItem = {
   name?: string
@@ -42,11 +43,11 @@ const editBusy = ref(false)
 const editError = ref('')
 
 const memoryTypeOptions = [
-  { value: 'user', label: 'User', description: 'Stable user preferences and personal context.' },
-  { value: 'feedback', label: 'Feedback', description: 'Corrections and feedback from prior work.' },
-  { value: 'project', label: 'Project', description: 'Project-specific facts and conventions.' },
-  { value: 'reference', label: 'Reference', description: 'Reusable reference information.' },
-  { value: 'other', label: 'Other', description: 'Memory that does not fit another category.' },
+  { value: 'user', label: st('User'), description: st('Stable user preferences and personal context.') },
+  { value: 'feedback', label: st('Feedback'), description: st('Corrections and feedback from prior work.') },
+  { value: 'project', label: st('Project'), description: st('Project-specific facts and conventions.') },
+  { value: 'reference', label: st('Reference'), description: st('Reusable reference information.') },
+  { value: 'other', label: st('Other'), description: st('Memory that does not fit another category.') },
 ]
 
 const sortedItems = computed(() =>
@@ -100,7 +101,7 @@ async function saveSelected() {
         body: editBody.value,
       }),
     })
-    toasts.push('success', 'Memory updated')
+    toasts.push('success', st('Memory updated'))
     selectedName.value = null
     await refresh()
   } catch (err) {
@@ -119,7 +120,7 @@ async function deleteSelected() {
   editError.value = ''
   try {
     await apiJson(`/api/v1/memories/${encodeURIComponent(name)}`, { method: 'DELETE' })
-    toasts.push('success', 'Memory deleted')
+    toasts.push('success', st('Memory deleted'))
     selectedName.value = null
     await refresh()
   } catch (err) {
@@ -139,22 +140,26 @@ onMounted(() => {
 <template>
   <div class="space-y-6">
     <div>
-      <div class="text-lg font-medium">Memories</div>
-      <div class="mt-1 text-sm text-muted-foreground">Persistent memory entries the server keeps across sessions.</div>
+      <div class="text-lg font-medium">{{ $st('Memories') }}</div>
+      <div class="mt-1 text-sm text-muted-foreground">
+        {{ $st('Persistent memory entries the server keeps across sessions.') }}
+      </div>
       <div v-if="workspaceRoot || directory" class="mt-1 text-[11px] font-mono text-muted-foreground break-all">
         {{ [workspaceRoot, directory].filter(Boolean).join(' / ') }}
       </div>
     </div>
 
     <div class="grid gap-3">
-      <div v-if="loading" class="text-sm text-muted-foreground">Loading memories...</div>
+      <div v-if="loading" class="text-sm text-muted-foreground">{{ $st('Loading memories...') }}</div>
       <div
         v-else-if="error"
         class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
       >
         {{ error }}
       </div>
-      <div v-else-if="sortedItems.length === 0" class="text-sm text-muted-foreground">No memories stored.</div>
+      <div v-else-if="sortedItems.length === 0" class="text-sm text-muted-foreground">
+        {{ $st('No memories stored.') }}
+      </div>
 
       <div v-else class="space-y-2">
         <button
@@ -180,28 +185,28 @@ onMounted(() => {
     </div>
 
     <div v-if="selectedName" class="grid gap-3 rounded-lg border border-border bg-muted/10 p-4">
-      <div class="text-sm font-medium">Edit memory</div>
+      <div class="text-sm font-medium">{{ $st('Edit memory') }}</div>
       <div class="grid gap-2">
-        <label class="text-xs font-medium text-muted-foreground">Name</label>
+        <label class="text-xs font-medium text-muted-foreground">{{ $st('Name') }}</label>
         <Input :model-value="editName" disabled class="h-10 font-mono" />
       </div>
       <div class="grid gap-2">
-        <label class="text-xs font-medium text-muted-foreground">Description</label>
-        <Input v-model="editDescription" :disabled="editBusy" class="h-10" placeholder="Optional description" />
+        <label class="text-xs font-medium text-muted-foreground">{{ $st('Description') }}</label>
+        <Input v-model="editDescription" :disabled="editBusy" class="h-10" :placeholder="$st('Optional description')" />
       </div>
       <div class="grid gap-2">
-        <label class="text-xs font-medium text-muted-foreground">Type</label>
+        <label class="text-xs font-medium text-muted-foreground">{{ $st('Type') }}</label>
         <OptionPicker
           v-model="editMemoryType"
           :options="memoryTypeOptions"
-          title="Memory type"
-          empty-label="Unclassified"
+          :title="$st('Memory type')"
+          :empty-label="$st('Unclassified')"
           :include-empty="true"
           :disabled="editBusy"
         />
       </div>
       <div class="grid gap-2">
-        <label class="text-xs font-medium text-muted-foreground">Body</label>
+        <label class="text-xs font-medium text-muted-foreground">{{ $st('Body') }}</label>
         <textarea
           v-model="editBody"
           rows="6"
@@ -212,7 +217,7 @@ onMounted(() => {
       <div v-if="editError" class="text-xs text-destructive break-words">{{ editError }}</div>
       <div class="flex items-center justify-end gap-2">
         <ConfirmPopover
-          :title="'Delete memory?'"
+          :title="$st('Delete memory?')"
           :description="selectedName"
           :confirm-text="'Delete'"
           :cancel-text="'Cancel'"
@@ -225,12 +230,14 @@ onMounted(() => {
             class="text-destructive border-destructive/30 hover:bg-destructive/10"
             :disabled="editBusy"
           >
-            Delete
+            {{ $st('Delete') }}
           </Button>
         </ConfirmPopover>
-        <Button variant="secondary" size="sm" :disabled="editBusy" @click="selectedName = null">Cancel</Button>
+        <Button variant="secondary" size="sm" :disabled="editBusy" @click="selectedName = null">{{
+          $st('Cancel')
+        }}</Button>
         <Button size="sm" :disabled="editBusy" @click="saveSelected">
-          {{ editBusy ? 'Saving...' : 'Save' }}
+          {{ editBusy ? 'Saving...' : $st('Save') }}
         </Button>
       </div>
     </div>
@@ -239,15 +246,15 @@ onMounted(() => {
       <IconButton
         variant="outline"
         size="md"
-        :tooltip="loading ? 'Refreshing...' : 'Refresh'"
-        :aria-label="loading ? 'Refreshing...' : 'Refresh'"
+        :tooltip="loading ? 'Refreshing...' : $st('Refresh')"
+        :aria-label="loading ? 'Refreshing...' : $st('Refresh')"
         :disabled="loading"
         @click="refresh"
       >
         <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
       </IconButton>
       <Button variant="outline" size="sm" :disabled="loading" @click="refresh">
-        {{ loading ? 'Refreshing...' : 'Refresh' }}
+        {{ loading ? 'Refreshing...' : $st('Refresh') }}
       </Button>
     </div>
   </div>

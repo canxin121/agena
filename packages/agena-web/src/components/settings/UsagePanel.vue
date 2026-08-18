@@ -4,6 +4,7 @@ import { RiRefreshLine } from '@remixicon/vue'
 
 import IconButton from '@/components/ui/IconButton.vue'
 import { apiJson } from '@/lib/api'
+import { settingsText as st } from '@/i18n/settingsText'
 
 type UsageTotals = {
   runs: number
@@ -61,16 +62,16 @@ const sections = computed<UsageSection[]>(() => {
   const value = stats.value
   if (!value) return []
   return [
-    { key: 'by_day', label: 'By day', rows: Array.isArray(value.by_day) ? value.by_day : [] },
+    { key: 'by_day', label: st('By day'), rows: Array.isArray(value.by_day) ? value.by_day : [] },
     {
       key: 'by_provider',
-      label: 'By provider',
+      label: st('By provider'),
       rows: Array.isArray(value.by_provider) ? value.by_provider : [],
     },
-    { key: 'by_model', label: 'By model', rows: Array.isArray(value.by_model) ? value.by_model : [] },
+    { key: 'by_model', label: st('By model'), rows: Array.isArray(value.by_model) ? value.by_model : [] },
     {
       key: 'by_session',
-      label: 'By session',
+      label: st('By session'),
       rows: Array.isArray(value.by_session) ? value.by_session : [],
     },
   ].filter((section) => section.rows.length > 0) as UsageSection[]
@@ -127,17 +128,17 @@ onMounted(() => {
   <div class="space-y-6">
     <div class="flex items-start justify-between gap-3">
       <div>
-        <div class="text-lg font-medium">Usage</div>
-        <div class="mt-1 text-sm text-muted-foreground">Provider usage recorded by the Agena server.</div>
+        <div class="text-lg font-medium">{{ $st('Usage') }}</div>
+        <div class="mt-1 text-sm text-muted-foreground">{{ $st('Provider usage recorded by the Agena server.') }}</div>
         <div v-if="stats?.period_label" class="mt-1 text-[11px] text-muted-foreground">
-          {{ stats.period_label }} · {{ stats.active_days }} active days
+          {{ stats.period_label }} · {{ stats.active_days }} {{ $st('active days') }}
         </div>
       </div>
       <IconButton
         variant="outline"
         size="md"
-        :tooltip="loading ? 'Refreshing usage' : 'Refresh usage'"
-        :aria-label="loading ? 'Refreshing usage' : 'Refresh usage'"
+        :tooltip="loading ? $st('Refreshing usage') : $st('Refresh usage')"
+        :aria-label="loading ? $st('Refreshing usage') : $st('Refresh usage')"
         :disabled="loading"
         @click="refresh"
       >
@@ -145,33 +146,33 @@ onMounted(() => {
       </IconButton>
     </div>
 
-    <div v-if="loading" class="text-sm text-muted-foreground">Loading usage...</div>
+    <div v-if="loading" class="text-sm text-muted-foreground">{{ $st('Loading usage...') }}</div>
     <div
       v-else-if="error"
       class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
     >
       {{ error }}
     </div>
-    <div v-else-if="!stats" class="text-sm text-muted-foreground">No usage data available.</div>
+    <div v-else-if="!stats" class="text-sm text-muted-foreground">{{ $st('No usage data available.') }}</div>
 
     <template v-else>
       <dl class="grid grid-cols-2 gap-x-6 gap-y-4 border-y border-border/60 py-4 sm:grid-cols-4">
         <div>
-          <dt class="text-xs text-muted-foreground">Requests</dt>
+          <dt class="text-xs text-muted-foreground">{{ $st('Requests') }}</dt>
           <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">{{ formatInteger(stats.totals.runs) }}</dd>
         </div>
         <div>
-          <dt class="text-xs text-muted-foreground">Sessions</dt>
+          <dt class="text-xs text-muted-foreground">{{ $st('Sessions') }}</dt>
           <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">{{ formatInteger(stats.totals.sessions) }}</dd>
         </div>
         <div>
-          <dt class="text-xs text-muted-foreground">Tokens</dt>
+          <dt class="text-xs text-muted-foreground">{{ $st('Tokens') }}</dt>
           <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">
             {{ formatInteger(stats.totals.total_tokens) }}
           </dd>
         </div>
         <div>
-          <dt class="text-xs text-muted-foreground">Cost</dt>
+          <dt class="text-xs text-muted-foreground">{{ $st('Cost') }}</dt>
           <dd class="mt-1 font-mono text-lg font-semibold tabular-nums">
             {{ formatUsd(stats.totals.total_cost_usd) }}
           </dd>
@@ -180,26 +181,28 @@ onMounted(() => {
 
       <div class="grid gap-4 sm:grid-cols-3">
         <div>
-          <div class="text-xs text-muted-foreground">Input / output tokens</div>
+          <div class="text-xs text-muted-foreground">{{ $st('Input / output tokens') }}</div>
           <div class="mt-1 font-mono text-sm">
             {{ formatInteger(stats.totals.input_tokens) }} / {{ formatInteger(stats.totals.output_tokens) }}
           </div>
         </div>
         <div>
-          <div class="text-xs text-muted-foreground">Reasoning / cache read</div>
+          <div class="text-xs text-muted-foreground">{{ $st('Reasoning / cache read') }}</div>
           <div class="mt-1 font-mono text-sm">
             {{ formatInteger(stats.totals.reasoning_tokens) }} / {{ formatInteger(stats.totals.cache_read_tokens) }}
           </div>
         </div>
         <div>
-          <div class="text-xs text-muted-foreground">Average per request</div>
+          <div class="text-xs text-muted-foreground">{{ $st('Average per request') }}</div>
           <div class="mt-1 font-mono text-sm">
             {{ formatInteger(stats.average_tokens_per_run) }} · {{ formatUsd(stats.average_cost_per_run_usd) }}
           </div>
         </div>
       </div>
 
-      <div v-if="sections.length === 0" class="text-sm text-muted-foreground">No usage breakdown is available.</div>
+      <div v-if="sections.length === 0" class="text-sm text-muted-foreground">
+        {{ $st('No usage breakdown is available.') }}
+      </div>
       <div v-else class="space-y-4">
         <section
           v-for="section in sections"
@@ -213,10 +216,10 @@ onMounted(() => {
             <table class="min-w-full text-xs">
               <thead class="bg-muted/20 text-muted-foreground">
                 <tr>
-                  <th class="px-3 py-2 text-left font-medium">Name</th>
-                  <th class="px-3 py-2 text-right font-medium">Requests</th>
-                  <th class="px-3 py-2 text-right font-medium">Tokens</th>
-                  <th class="px-3 py-2 text-right font-medium">Cost</th>
+                  <th class="px-3 py-2 text-left font-medium">{{ $st('Name') }}</th>
+                  <th class="px-3 py-2 text-right font-medium">{{ $st('Requests') }}</th>
+                  <th class="px-3 py-2 text-right font-medium">{{ $st('Tokens') }}</th>
+                  <th class="px-3 py-2 text-right font-medium">{{ $st('Cost') }}</th>
                 </tr>
               </thead>
               <tbody>

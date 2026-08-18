@@ -15,53 +15,58 @@ import {
 } from '@/lib/runtimeSettings'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
+import { settingsText as st } from '@/i18n/settingsText'
 
 const COMMON_PATHS = [
   {
     value: 'providers',
     label: 'providers',
-    description: 'Provider inventory, default selection, adapters, authentication, and model routes.',
+    description: st('Provider inventory, default selection, adapters, authentication, and model routes.'),
   },
   {
     value: 'permission',
     label: 'permission',
-    description: 'Global or workspace permission policy, including the automatic approval model.',
+    description: st('Global or workspace permission policy, including the automatic approval model.'),
   },
   {
     value: 'plugins',
     label: 'plugins',
-    description: 'Plugin host policy and configured plugin records.',
+    description: st('Plugin host policy and configured plugin records.'),
   },
   {
     value: 'runtime.providers.client_versions',
     label: 'runtime.providers.client_versions',
-    description: 'Provider identity compatibility versions.',
+    description: st('Provider identity compatibility versions.'),
   },
   {
     value: 'session.compaction',
     label: 'session.compaction',
-    description: 'Session compaction defaults.',
+    description: st('Session compaction defaults.'),
   },
   {
     value: 'ui',
     label: 'ui',
-    description: 'Server-backed UI and TUI preferences.',
+    description: st('Server-backed UI and TUI preferences.'),
   },
   {
     value: 'tracing',
     label: 'tracing',
-    description: 'Tracing filters and diagnostic output policy.',
+    description: st('Tracing filters and diagnostic output policy.'),
   },
   {
     value: 'harnesses',
     label: 'harnesses',
-    description: 'Browser, shell, and editor harness catalogs.',
+    description: st('Browser, shell, and editor harness catalogs.'),
   },
 ]
 
 const layerOptions = [
-  { value: 'global', label: 'Global layer', description: 'Writes the server-wide Agena configuration file.' },
-  { value: 'workspace', label: 'Workspace layer', description: 'Writes the current workspace configuration file.' },
+  { value: 'global', label: st('Global layer'), description: st('Writes the server-wide Agena configuration file.') },
+  {
+    value: 'workspace',
+    label: st('Workspace layer'),
+    description: st('Writes the current workspace configuration file.'),
+  },
 ]
 
 const toasts = useToastsStore()
@@ -85,7 +90,11 @@ const selectedLayerResponse = computed<RuntimeSettingReadResponse | null>(() => 
   return targetLayer.value === 'workspace' ? bundle.workspace : bundle.global
 })
 const loadedForCurrentPath = computed(() => Boolean(loadedPath.value && loadedPath.value === normalizedPath.value))
-const selectedLayerLabel = computed(() => (targetLayer.value === 'workspace' ? 'Workspace' : 'Global'))
+const selectedLayerLabel = computed(() => (targetLayer.value === 'workspace' ? st('Workspace') : st('Global')))
+const selectedLayerFilePath = computed(() => selectedLayerResponse.value?.config_path || st('not reported'))
+const selectedLayerFileStatus = computed(() =>
+  selectedLayerResponse.value?.config_found ? st('file exists') : st('created on first write'),
+)
 
 function jsonText(value: JsonValue): string {
   if (value === undefined) return 'null'
@@ -150,7 +159,7 @@ async function validate() {
       { dry_run: true, validate: true, reload: false },
       targetLayer.value,
     )
-    toasts.push('success', `${selectedLayerLabel.value} setting is valid: ${path}`)
+    toasts.push('success', st('{layer} setting is valid: {path}', { layer: selectedLayerLabel.value, path }))
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -168,7 +177,7 @@ async function save() {
     const value = parseDraft()
     lastAction.value = await setRuntimeSetting(path, value, { validate: true, reload: true }, targetLayer.value)
     await load()
-    toasts.push('success', `${selectedLayerLabel.value} setting saved: ${path}`)
+    toasts.push('success', st('{layer} setting saved: {path}', { layer: selectedLayerLabel.value, path }))
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -179,14 +188,14 @@ async function save() {
 async function clearOverride() {
   const path = normalizedPath.value
   if (!path || actionBusy.value) return
-  if (!window.confirm(`Delete ${selectedLayerLabel.value.toLowerCase()} override ${path}?`)) return
+  if (!window.confirm(st('Delete {layer} override {path}?', { layer: selectedLayerLabel.value, path }))) return
   activeAction.value = 'clear'
   error.value = ''
   lastAction.value = null
   try {
     lastAction.value = await deleteRuntimeSetting(path, { validate: true, reload: true }, targetLayer.value)
     await load()
-    toasts.push('success', `${selectedLayerLabel.value} override cleared: ${path}`)
+    toasts.push('success', st('{layer} override cleared: {path}', { layer: selectedLayerLabel.value, path }))
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -213,18 +222,21 @@ onMounted(() => {
   <div class="grid min-w-0 gap-5">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h2 class="text-base font-semibold">Advanced configuration path editor</h2>
+        <h2 class="text-base font-semibold">{{ $st('Advanced configuration path editor') }}</h2>
         <p class="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
-          Edit any server configuration path that does not yet have a dedicated form. Writes always target an explicit
-          Global or Workspace layer, run full composed-config validation, and request a runtime reload.
+          {{
+            $st(
+              'Edit any server configuration path that does not yet have a dedicated form. Writes always target an explicit Global or Workspace layer, run full composed-config validation, and request a runtime reload.',
+            )
+          }}
         </p>
       </div>
       <IconButton
         variant="outline"
         size="md"
         :disabled="busy || !normalizedPath"
-        :tooltip="loading ? 'Loading setting sources' : 'Reload setting sources'"
-        aria-label="Reload advanced setting sources"
+        :tooltip="loading ? $st('Loading setting sources') : $st('Reload setting sources')"
+        :aria-label="$st('Reload advanced setting sources')"
         @click="load()"
       >
         <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
@@ -234,30 +246,33 @@ onMounted(() => {
     <div
       class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-800 dark:text-amber-200"
     >
-      This editor can expose and change credentials or security policy. Prefer the dedicated Provider, Permission,
-      Plugin, MCP, and Harness pages when one exists.
+      {{
+        $st(
+          'This editor can expose and change credentials or security policy. Prefer the dedicated Provider, Permission, Plugin, MCP, and Harness pages when one exists.',
+        )
+      }}
     </div>
 
     <section class="grid gap-3 rounded-lg border border-border/60 bg-muted/10 p-4">
       <div class="grid gap-3 lg:grid-cols-[13rem_minmax(0,1fr)_auto] lg:items-end">
         <label class="grid gap-1.5">
-          <span class="text-xs text-muted-foreground">Write target</span>
+          <span class="text-xs text-muted-foreground">{{ $st('Write target') }}</span>
           <OptionPicker
             v-model="targetLayer"
             :options="layerOptions"
             :include-empty="false"
-            title="Configuration layer"
+            :title="$st('Configuration layer')"
             :disabled="busy"
           />
         </label>
         <label class="grid min-w-0 gap-1.5">
-          <span class="text-xs text-muted-foreground">JSON path</span>
+          <span class="text-xs text-muted-foreground">{{ $st('JSON path') }}</span>
           <OptionPicker
             :model-value="settingPath"
             :options="COMMON_PATHS"
-            title="Configuration path"
-            placeholder="Choose or type a JSON path"
-            search-placeholder="Search common paths or type a custom path"
+            :title="$st('Configuration path')"
+            :placeholder="$st('Choose or type a JSON path')"
+            :search-placeholder="$st('Search common paths or type a custom path')"
             :include-empty="false"
             :allow-custom="true"
             monospace
@@ -265,10 +280,10 @@ onMounted(() => {
             @update:model-value="choosePath"
           />
         </label>
-        <Button variant="outline" :disabled="busy || !normalizedPath" @click="load()">Load path</Button>
+        <Button variant="outline" :disabled="busy || !normalizedPath" @click="load()">{{ $st('Load path') }}</Button>
       </div>
       <code class="break-all font-mono text-[11px] text-muted-foreground">
-        {{ normalizedPath || 'No path selected' }}
+        {{ normalizedPath || $st('No path selected') }}
       </code>
     </section>
 
@@ -282,19 +297,19 @@ onMounted(() => {
     <section v-if="sources" class="grid min-w-0 gap-4">
       <div class="grid gap-3 lg:grid-cols-3">
         <details class="min-w-0 rounded-lg border border-border/60" open>
-          <summary class="cursor-pointer px-3 py-2 text-sm font-medium">Effective value</summary>
+          <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{{ $st('Effective value') }}</summary>
           <pre class="max-h-60 overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
             jsonText(sources.effective.value)
           }}</pre>
         </details>
         <details class="min-w-0 rounded-lg border border-border/60">
-          <summary class="cursor-pointer px-3 py-2 text-sm font-medium">Global layer</summary>
+          <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{{ $st('Global layer') }}</summary>
           <pre class="max-h-60 overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
             jsonText(sources.global.value)
           }}</pre>
         </details>
         <details class="min-w-0 rounded-lg border border-border/60">
-          <summary class="cursor-pointer px-3 py-2 text-sm font-medium">Workspace layer</summary>
+          <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{{ $st('Workspace layer') }}</summary>
           <pre class="max-h-60 overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
             jsonText(sources.workspace.value)
           }}</pre>
@@ -304,18 +319,17 @@ onMounted(() => {
       <section class="grid gap-3 rounded-lg border border-border/60 p-4">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h3 class="text-sm font-semibold">{{ selectedLayerLabel }} draft</h3>
+            <h3 class="text-sm font-semibold">{{ $st('{layer} draft', { layer: selectedLayerLabel }) }}</h3>
             <p class="mt-1 text-xs text-muted-foreground">
-              File: {{ selectedLayerResponse?.config_path || 'not reported' }} ·
-              {{ selectedLayerResponse?.config_found ? 'file exists' : 'created on first write' }}
+              {{ $st('File: {path} · {status}', { path: selectedLayerFilePath, status: selectedLayerFileStatus }) }}
             </p>
           </div>
           <div class="flex flex-wrap gap-2">
             <Button variant="ghost" size="sm" :disabled="busy" @click="loadSelectedLayerIntoDraft">
-              <RiRefreshLine class="mr-1.5 h-4 w-4" /> Revert draft
+              <RiRefreshLine class="mr-1.5 h-4 w-4" /> {{ $st('Revert draft') }}
             </Button>
             <Button variant="ghost" size="sm" :disabled="busy" @click="copyEffectiveIntoDraft">
-              <RiFileCopyLine class="mr-1.5 h-4 w-4" /> Copy effective
+              <RiFileCopyLine class="mr-1.5 h-4 w-4" /> {{ $st('Copy effective') }}
             </Button>
           </div>
         </div>
@@ -329,22 +343,24 @@ onMounted(() => {
         <div v-if="parseError" class="text-xs text-destructive">{{ parseError }}</div>
         <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-3">
           <Button variant="ghost" size="sm" class="text-destructive" :disabled="busy" @click="clearOverride">
-            <RiDeleteBinLine class="mr-1.5 h-4 w-4" /> Clear {{ selectedLayerLabel }} override
+            <RiDeleteBinLine class="mr-1.5 h-4 w-4" />
+            {{ $st('Clear {layer} override', { layer: selectedLayerLabel }) }}
           </Button>
           <div class="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" :disabled="busy" @click="validate">
               <RiShieldCheckLine class="mr-1.5 h-4 w-4" />
-              {{ activeAction === 'validate' ? 'Checking…' : 'Dry-run validate' }}
+              {{ activeAction === 'validate' ? $st('Checking…') : $st('Dry-run validate') }}
             </Button>
             <Button size="sm" :disabled="busy" @click="save">
-              <RiSave3Line class="mr-1.5 h-4 w-4" /> {{ activeAction === 'save' ? 'Saving…' : 'Save & reload' }}
+              <RiSave3Line class="mr-1.5 h-4 w-4" />
+              {{ activeAction === 'save' ? $st('Saving…') : $st('Save & reload') }}
             </Button>
           </div>
         </div>
       </section>
 
       <details v-if="lastAction" class="rounded-lg border border-border/60">
-        <summary class="cursor-pointer px-4 py-3 text-sm font-medium">Last edit response</summary>
+        <summary class="cursor-pointer px-4 py-3 text-sm font-medium">{{ $st('Last edit response') }}</summary>
         <pre class="max-h-80 overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
           jsonText(lastAction)
         }}</pre>

@@ -15,6 +15,7 @@ import App from './App.vue'
 import { router } from './router'
 import { i18n, ensureDefaultLocale, setAppLocale } from './i18n'
 import { DEFAULT_LOCALE, normalizeAppLocale } from './i18n/locale'
+import { settingsText } from './i18n/settingsText'
 import { useToastsStore } from './stores/toasts'
 import { useAuthStore } from './stores/auth'
 import { sessionStorageKeys } from './lib/persistence/storageKeys'
@@ -43,6 +44,7 @@ const pinia = createPinia()
 app.use(pinia)
 app.use(i18n)
 app.use(router)
+app.config.globalProperties.$st = settingsText
 
 // Keep <html lang> in sync with i18n locale.
 ensureDefaultLocale()

@@ -7,6 +7,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson } from '@/lib/api'
+import { settingsText as st } from '@/i18n/settingsText'
 
 type McpAuthMode = 'none' | 'oauth' | 'mixed'
 type McpAnonymousAccess = 'none' | 'read_only'
@@ -65,48 +66,70 @@ const oauthPassword = ref('')
 const copiedEndpoint = ref('')
 
 const oauth = computed(() => control.value?.oauth || null)
+const mcpSurfaceSummary = computed(() => {
+  const value = control.value
+  if (!value) return ''
+  if (!value.enabled) {
+    return st('The /mcp endpoint is disabled. The management API remains available so it can be enabled again.')
+  }
+  if (value.authMode === 'oauth') {
+    return st('The /mcp endpoint is available. Full OAuth protects the complete MCP transport.')
+  }
+  if (value.authMode === 'mixed' && value.anonymousAccess === 'read_only') {
+    return st('The /mcp endpoint is available. Mixed auth keeps discovery and opted-in read-only tools public.')
+  }
+  if (value.authMode === 'mixed') {
+    return st('The /mcp endpoint is available. Mixed auth keeps discovery public and protects every tool call.')
+  }
+  return st('The /mcp endpoint is available. MCP calls are anonymous.')
+})
 const authModeOptions = [
   {
     value: 'none',
-    label: 'No authentication',
-    description: 'Anonymous MCP. OAuth discovery endpoints are hidden and every exposed tool declares noauth.',
+    label: st('No authentication'),
+    description: st('Anonymous MCP. OAuth discovery endpoints are hidden and every exposed tool declares noauth.'),
   },
   {
     value: 'oauth',
-    label: 'Full OAuth',
-    description: 'Require a valid OAuth bearer token for initialize, discovery, tool listing, and every tool call.',
+    label: st('Full OAuth'),
+    description: st('Require a valid OAuth bearer token for initialize, discovery, tool listing, and every tool call.'),
   },
   {
     value: 'mixed',
-    label: 'Mixed auth (recommended for ChatGPT)',
-    description:
+    label: st('Mixed auth (recommended for ChatGPT)'),
+    description: st(
       'Keep initialize and tool discovery public; tool calls remain OAuth-protected unless explicitly opted into anonymous access.',
+    ),
   },
 ]
 const anonymousAccessOptions = [
   {
     value: 'none',
-    label: 'No anonymous tool calls (recommended)',
-    description: 'ChatGPT can initialize and discover tools before signing in, but every tool call requires OAuth.',
+    label: st('No anonymous tool calls (recommended)'),
+    description: st('ChatGPT can initialize and discover tools before signing in, but every tool call requires OAuth.'),
   },
   {
     value: 'read_only',
-    label: 'Anonymous read-only tools',
-    description:
+    label: st('Anonymous read-only tools'),
+    description: st(
       'High risk: permission-contract read-only tools can run without OAuth and may expose private workspace, filesystem, configuration, or diagnostic data.',
+    ),
   },
 ]
 const clientRegistrationOptions = [
   {
     value: 'cimd_only',
-    label: 'CIMD only (recommended)',
-    description:
+    label: st('CIMD only (recommended)'),
+    description: st(
       'Accept OpenAI ChatGPT Client ID Metadata Documents and keep public Dynamic Client Registration disabled.',
+    ),
   },
   {
     value: 'cimd_and_dcr',
-    label: 'CIMD + Dynamic Client Registration',
-    description: 'Compatibility mode for older OAuth clients. This exposes an unauthenticated registration endpoint.',
+    label: st('CIMD + Dynamic Client Registration'),
+    description: st(
+      'Compatibility mode for older OAuth clients. This exposes an unauthenticated registration endpoint.',
+    ),
   },
 ]
 
@@ -248,17 +271,20 @@ onMounted(() => {
   <section class="grid gap-4 rounded-lg border border-border/60 bg-background/30 p-4 lg:p-5">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <div class="text-base font-medium">Agena MCP Server</div>
+        <div class="text-base font-medium">{{ $st('Agena MCP Server') }}</div>
         <div class="mt-1 max-w-3xl text-sm text-muted-foreground">
-          Manage the live MCP surface served by the connected Agena server process. Web and TUI are control clients;
-          they do not run a second MCP server.
+          {{
+            $st(
+              'Manage the live MCP surface served by the connected Agena server process. Web and TUI are control clients; they do not run a second MCP server.',
+            )
+          }}
         </div>
       </div>
       <IconButton
         variant="outline"
         size="md"
-        :tooltip="loading ? 'Refreshing MCP server status' : 'Refresh MCP server status'"
-        :aria-label="loading ? 'Refreshing MCP server status' : 'Refresh MCP server status'"
+        :tooltip="loading ? $st('Refreshing MCP server status') : $st('Refresh MCP server status')"
+        :aria-label="loading ? $st('Refreshing MCP server status') : $st('Refresh MCP server status')"
         :disabled="loading || saving"
         @click="refresh"
       >
@@ -273,33 +299,23 @@ onMounted(() => {
       {{ error }}
     </div>
 
-    <div v-if="loading && !control" class="text-sm text-muted-foreground">Loading MCP server status...</div>
-    <div v-else-if="!control" class="text-sm text-muted-foreground">MCP server status is unavailable.</div>
+    <div v-if="loading && !control" class="text-sm text-muted-foreground">
+      {{ $st('Loading MCP server status...') }}
+    </div>
+    <div v-else-if="!control" class="text-sm text-muted-foreground">{{ $st('MCP server status is unavailable.') }}</div>
 
     <template v-else>
       <div
         class="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border/60 bg-background/50 px-3 py-3"
       >
         <div>
-          <div class="text-sm font-medium">MCP surface</div>
+          <div class="text-sm font-medium">{{ $st('MCP surface') }}</div>
           <div class="mt-1 text-xs text-muted-foreground">
-            {{ control.enabled ? 'The /mcp endpoint is available.' : 'The /mcp endpoint is disabled.' }}
-            {{
-              control.enabled
-                ? control.authMode === 'oauth'
-                  ? ' Full OAuth protects the complete MCP transport.'
-                  : control.authMode === 'mixed'
-                    ? control.anonymousAccess === 'read_only'
-                      ? ' Mixed auth keeps discovery and opted-in read-only tools public.'
-                      : ' Mixed auth keeps discovery public and protects every tool call.'
-                    : ' MCP calls are anonymous.'
-                : ''
-            }}
-            The management API remains available so it can be enabled again.
+            {{ mcpSurfaceSummary }}
           </div>
         </div>
         <Button :variant="control.enabled ? 'outline' : 'default'" :disabled="saving" @click="toggleEnabled">
-          {{ control.enabled ? 'Disable MCP' : 'Enable MCP' }}
+          {{ control.enabled ? $st('Disable MCP') : $st('Enable MCP') }}
         </Button>
       </div>
 
@@ -308,19 +324,21 @@ onMounted(() => {
         :class="control.ready ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'"
       >
         <div class="flex flex-wrap items-center justify-between gap-2">
-          <div class="font-medium">{{ control.ready ? 'MCP connection ready' : 'MCP connection needs attention' }}</div>
+          <div class="font-medium">
+            {{ control.ready ? $st('MCP connection ready') : $st('MCP connection needs attention') }}
+          </div>
           <code>{{ control.resourceUrl }}</code>
         </div>
         <ul v-if="control.warnings.length" class="mt-2 list-disc space-y-1 pl-4 text-muted-foreground">
           <li v-for="warning in control.warnings" :key="warning">{{ warning }}</li>
         </ul>
         <div v-else class="mt-1 text-muted-foreground">
-          The live Agena server is ready to serve the selected MCP mode.
+          {{ $st('The live Agena server is ready to serve the selected MCP mode.') }}
         </div>
       </div>
 
       <div class="grid gap-2">
-        <div class="text-sm font-medium">Public MCP resource URL</div>
+        <div class="text-sm font-medium">{{ $st('Public MCP resource URL') }}</div>
         <div class="flex flex-col gap-2 sm:flex-row">
           <Input
             v-model="publicUrl"
@@ -328,18 +346,24 @@ onMounted(() => {
             placeholder="https://your-domain.example/mcp or https://tunnel-service.../v1/mcp/tunnel_id"
             :disabled="saving"
           />
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="savePublicUrl">Save URL</Button>
+          <Button class="shrink-0" variant="outline" :disabled="saving" @click="savePublicUrl">{{
+            $st('Save URL')
+          }}</Button>
         </div>
         <div class="text-xs text-muted-foreground">
-          Enter the canonical HTTPS MCP resource. Secure MCP Tunnel URLs may include the full
-          <code>/v1/mcp/tunnel_id</code> path and must be kept intact. Leaving this empty keeps the listener-local URL;
-          request Host and forwarded headers are never trusted to define OAuth identity. Current effective resource:
+          {{ $st('Enter the canonical HTTPS MCP resource. Secure MCP Tunnel URLs may include the full') }}
+          <code>/v1/mcp/tunnel_id</code>
+          {{
+            $st(
+              'path and must be kept intact. Leaving this empty keeps the listener-local URL; request Host and forwarded headers are never trusted to define OAuth identity. Current effective resource:',
+            )
+          }}
           <code class="break-all">{{ control.resourceUrl }}</code>
         </div>
       </div>
 
       <div class="grid gap-2">
-        <div class="text-sm font-medium">OAuth issuer URL</div>
+        <div class="text-sm font-medium">{{ $st('OAuth issuer URL') }}</div>
         <div class="flex flex-col gap-2 sm:flex-row">
           <Input
             v-model="oauthIssuerUrl"
@@ -347,131 +371,152 @@ onMounted(() => {
             placeholder="https://auth.your-domain.example"
             :disabled="saving"
           />
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveOAuthIssuerUrl">Save issuer</Button>
+          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveOAuthIssuerUrl">{{
+            $st('Save issuer')
+          }}</Button>
         </div>
         <div class="text-xs text-muted-foreground">
-          This is the stable authorization-server identity placed in OAuth discovery, signed access-token
-          <code>iss</code> claims, and the RFC 9207 authorization callback. Use a canonical public HTTPS URL. A path is
-          supported only when the reverse proxy preserves that prefix and routes the matching path-aware RFC 8414
-          well-known URL. Leave it empty when OAuth and MCP use the same domain; Agena derives the resource origin.
-          Request headers are never trusted.
+          {{ $st('This is the stable authorization-server identity placed in OAuth discovery, signed access-token') }}
+          <code>iss</code>
+          {{
+            $st(
+              'claims, and the RFC 9207 authorization callback. Use a canonical public HTTPS URL. A path is supported only when the reverse proxy preserves that prefix and routes the matching path-aware RFC 8414 well-known URL. Leave it empty when OAuth and MCP use the same domain; Agena derives the resource origin. Request headers are never trusted.',
+            )
+          }}
         </div>
       </div>
 
       <div class="grid gap-2">
-        <div class="text-sm font-medium">MCP authentication mode</div>
+        <div class="text-sm font-medium">{{ $st('MCP authentication mode') }}</div>
         <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
           <OptionPicker
             v-model="authMode"
             class="min-w-0 flex-1"
             :options="authModeOptions"
             :include-empty="false"
-            title="MCP authentication mode"
+            :title="$st('MCP authentication mode')"
             :disabled="saving"
           />
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveAuthMode">Save auth mode</Button>
+          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveAuthMode">{{
+            $st('Save auth mode')
+          }}</Button>
         </div>
         <div
           v-if="authMode === 'none'"
           class="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
         >
-          High-risk mode: every exposed tool is anonymous. Anyone who can reach the public MCP URL can invoke the
-          exposed catalog without an Agena login.
+          {{
+            $st(
+              'High-risk mode: every exposed tool is anonymous. Anyone who can reach the public MCP URL can invoke the exposed catalog without an Agena login.',
+            )
+          }}
         </div>
         <div v-else-if="authMode === 'mixed'" class="text-xs text-muted-foreground">
-          ChatGPT can initialize and discover tools without signing in. Tool calls remain OAuth-protected unless the
-          anonymous-access policy below explicitly opts in a class of tools.
+          {{
+            $st(
+              'ChatGPT can initialize and discover tools without signing in. Tool calls remain OAuth-protected unless the anonymous-access policy below explicitly opts in a class of tools.',
+            )
+          }}
         </div>
       </div>
 
       <div v-if="authMode === 'mixed'" class="grid gap-2">
-        <div class="text-sm font-medium">Anonymous tool access in mixed mode</div>
+        <div class="text-sm font-medium">{{ $st('Anonymous tool access in mixed mode') }}</div>
         <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
           <OptionPicker
             v-model="anonymousAccess"
             class="min-w-0 flex-1"
             :options="anonymousAccessOptions"
             :include-empty="false"
-            title="Mixed-auth anonymous tool access"
+            :title="$st('Mixed-auth anonymous tool access')"
             :disabled="saving"
           />
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveAnonymousAccess"
-            >Save anonymous access</Button
-          >
+          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveAnonymousAccess">{{
+            $st('Save anonymous access')
+          }}</Button>
         </div>
         <div
           v-if="anonymousAccess === 'read_only'"
           class="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
         >
-          High-risk opt-in: read-only does not mean public. Anonymous tools can still reveal private workspace files,
-          configuration, diagnostics, or other sensitive data. Keep this set to “none” for ordinary Agena workspaces.
+          {{
+            $st(
+              'High-risk opt-in: read-only does not mean public. Anonymous tools can still reveal private workspace files, configuration, diagnostics, or other sensitive data. Keep this set to “none” for ordinary Agena workspaces.',
+            )
+          }}
         </div>
         <div v-else class="text-xs text-muted-foreground">
-          Safe default: initialize and tool discovery are public, but every tool call requires OAuth.
+          {{ $st('Safe default: initialize and tool discovery are public, but every tool call requires OAuth.') }}
         </div>
       </div>
 
       <div class="grid gap-2">
-        <div class="text-sm font-medium">OAuth client registration</div>
+        <div class="text-sm font-medium">{{ $st('OAuth client registration') }}</div>
         <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
           <OptionPicker
             v-model="clientRegistration"
             class="min-w-0 flex-1"
             :options="clientRegistrationOptions"
             :include-empty="false"
-            title="OAuth client registration"
+            :title="$st('OAuth client registration')"
             :disabled="saving"
           />
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveClientRegistration"
-            >Save registration</Button
-          >
+          <Button class="shrink-0" variant="outline" :disabled="saving" @click="saveClientRegistration">{{
+            $st('Save registration')
+          }}</Button>
         </div>
         <div
           v-if="clientRegistration === 'cimd_and_dcr'"
           class="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
         >
-          Compatibility mode exposes an unauthenticated Dynamic Client Registration endpoint. ChatGPT supports CIMD, so
-          leave DCR disabled unless another client requires it.
+          {{
+            $st(
+              'Compatibility mode exposes an unauthenticated Dynamic Client Registration endpoint. ChatGPT supports CIMD, so leave DCR disabled unless another client requires it.',
+            )
+          }}
         </div>
       </div>
 
       <div v-if="control.authMode !== 'none'" class="grid gap-3 border-t border-border/60 pt-4">
         <div>
-          <div class="text-sm font-medium">OAuth authorization</div>
+          <div class="text-sm font-medium">{{ $st('OAuth authorization') }}</div>
           <div class="mt-1 text-xs text-muted-foreground">
-            ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. CIMD is
-            supported by default; Dynamic Client Registration is available only when explicitly enabled above.
+            {{
+              $st(
+                'ChatGPT discovers these endpoints from the MCP server. Do not paste ChatGPT client secrets here. CIMD is supported by default; Dynamic Client Registration is available only when explicitly enabled above.',
+              )
+            }}
           </div>
         </div>
         <div class="grid gap-2 sm:grid-cols-2">
           <div class="rounded-md border border-border/60 p-3 text-xs">
-            <div class="text-muted-foreground">Password status</div>
+            <div class="text-muted-foreground">{{ $st('Password status') }}</div>
             <div class="mt-1 font-medium">
               {{
                 oauth?.passwordConfigured
-                  ? 'MCP-specific password configured'
+                  ? $st('MCP-specific password configured')
                   : oauth?.fallbackToUiPassword
-                    ? 'Using server UI password'
-                    : 'Not configured'
+                    ? $st('Using server UI password')
+                    : $st('Not configured')
               }}
             </div>
           </div>
           <div class="rounded-md border border-border/60 p-3 text-xs">
-            <div class="text-muted-foreground">Scope</div>
+            <div class="text-muted-foreground">{{ $st('Scope') }}</div>
             <code class="mt-1 block">{{ oauth?.scope || 'agena:tools' }}</code>
           </div>
           <div class="rounded-md border border-border/60 p-3 text-xs">
-            <div class="text-muted-foreground">OAuth readiness</div>
+            <div class="text-muted-foreground">{{ $st('OAuth readiness') }}</div>
             <div class="mt-1 font-medium">
-              {{ oauth?.ready ? 'ready' : 'not ready' }} · {{ oauth?.authorizationServerKind || '—' }}
+              {{ oauth?.ready ? $st('ready') : $st('not ready') }} · {{ oauth?.authorizationServerKind || '—' }}
             </div>
           </div>
           <div class="rounded-md border border-border/60 p-3 text-xs">
-            <div class="text-muted-foreground">Client registration</div>
+            <div class="text-muted-foreground">{{ $st('Client registration') }}</div>
             <div class="mt-1 font-medium">{{ oauth?.registrationMethods.join(' / ') || '—' }}</div>
           </div>
           <div class="rounded-md border border-border/60 p-3 text-xs">
-            <div class="text-muted-foreground">Token client auth / PKCE</div>
+            <div class="text-muted-foreground">{{ $st('Token client auth / PKCE') }}</div>
             <div class="mt-1 font-medium">
               {{ oauth?.tokenEndpointAuthMethods.join(' / ') || '—' }} ·
               {{ oauth?.pkceMethods.join(' / ') || '—' }}
@@ -479,7 +524,7 @@ onMounted(() => {
           </div>
           <div class="rounded-md border border-border/60 p-3 text-xs">
             <div class="text-muted-foreground">OIDC</div>
-            <div class="mt-1 font-medium">{{ oauth?.oidcSupported ? 'supported' : 'not advertised' }}</div>
+            <div class="mt-1 font-medium">{{ oauth?.oidcSupported ? $st('supported') : $st('not advertised') }}</div>
           </div>
         </div>
         <ul v-if="oauth?.warnings.length" class="list-disc space-y-1 pl-4 text-xs text-amber-700 dark:text-amber-300">
@@ -491,18 +536,20 @@ onMounted(() => {
             type="password"
             autocomplete="new-password"
             class="font-mono text-xs"
-            placeholder="New MCP OAuth password"
+            :placeholder="$st('New MCP OAuth password')"
             :disabled="saving"
           />
-          <Button class="shrink-0" :disabled="saving || !oauthPassword.trim()" @click="setPassword"
-            >Set password</Button
-          >
-          <Button class="shrink-0" variant="outline" :disabled="saving" @click="clearPassword">Clear</Button>
+          <Button class="shrink-0" :disabled="saving || !oauthPassword.trim()" @click="setPassword">{{
+            $st('Set password')
+          }}</Button>
+          <Button class="shrink-0" variant="outline" :disabled="saving" @click="clearPassword">{{
+            $st('Clear')
+          }}</Button>
         </div>
       </div>
 
       <details v-if="control.authMode !== 'none' && oauth" class="border-t border-border/60 pt-4">
-        <summary class="cursor-pointer text-sm font-medium">OAuth discovery endpoints</summary>
+        <summary class="cursor-pointer text-sm font-medium">{{ $st('OAuth discovery endpoints') }}</summary>
         <dl class="mt-3 grid gap-2 text-xs">
           <div
             v-for="entry in [
@@ -526,7 +573,7 @@ onMounted(() => {
                 variant="ghost"
                 @click="copyEndpoint(entry[0], entry[1])"
               >
-                {{ copiedEndpoint === entry[0] ? 'Copied' : 'Copy' }}
+                {{ copiedEndpoint === entry[0] ? $st('Copied') : $st('Copy') }}
               </Button>
             </dd>
           </div>

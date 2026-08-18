@@ -14,6 +14,7 @@ import {
   type RuntimeSettingsReadBundle,
 } from '@/lib/runtimeSettings'
 import type { JsonObject, JsonValue } from '@/types/json'
+import { settingsText as st } from '@/i18n/settingsText'
 
 type BrowserHarness = {
   driver: string
@@ -46,17 +47,25 @@ const jsonError = ref('')
 const rawHarnessJson = ref('{}')
 
 const kindOptions = [
-  { value: 'browser', label: 'Browser Harness', description: 'Browser driver, domains, viewport, and launch options.' },
+  {
+    value: 'browser',
+    label: st('Browser Harness'),
+    description: st('Browser driver, domains, viewport, and launch options.'),
+  },
   {
     value: 'shell',
-    label: 'Shell Harness',
-    description: 'Workspace boundary, command allow/deny lists, and environment.',
+    label: st('Shell Harness'),
+    description: st('Workspace boundary, command allow/deny lists, and environment.'),
   },
-  { value: 'editor', label: 'Editor Harness', description: 'Workspace boundary, file size, and extension allowlist.' },
+  {
+    value: 'editor',
+    label: st('Editor Harness'),
+    description: st('Workspace boundary, file size, and extension allowlist.'),
+  },
 ]
 const layerOptions = [
-  { value: 'global', label: 'Global layer', description: 'Available to all workspaces.' },
-  { value: 'workspace', label: 'Workspace layer', description: 'Overrides only the current workspace.' },
+  { value: 'global', label: st('Global layer'), description: st('Available to all workspaces.') },
+  { value: 'workspace', label: st('Workspace layer'), description: st('Overrides only the current workspace.') },
 ]
 
 const names = computed(() => Object.keys(maps.value[selectedKind.value] || {}).sort((a, b) => a.localeCompare(b)))
@@ -71,6 +80,18 @@ const selectedLayerResponse = computed(() =>
   targetLayer.value === 'workspace' ? selectedSource.value?.workspace : selectedSource.value?.global,
 )
 const settingPath = computed(() => `harnesses.${selectedKind.value}`)
+const targetLayerLabel = computed(() => (targetLayer.value === 'workspace' ? st('Workspace') : st('Global')))
+const selectedLayerHarnessCount = computed(() =>
+  selectedLayerResponse.value?.value ? Object.keys(asRecord(selectedLayerResponse.value.value)).length : null,
+)
+const selectedLayerSummary = computed(() =>
+  selectedLayerHarnessCount.value === null
+    ? st('Editing {layer} layer · unset', { layer: targetLayerLabel.value })
+    : st('Editing {layer} layer · {count} harnesses', {
+        layer: targetLayerLabel.value,
+        count: selectedLayerHarnessCount.value,
+      }),
+)
 const busy = computed(() => loading.value || saving.value)
 
 function clone<T>(value: T): T {
@@ -114,9 +135,9 @@ function parseEnv(value: string): Record<string, string> {
     const line = rawLine.trim()
     if (!line || line.startsWith('#')) continue
     const separator = line.indexOf('=')
-    if (separator <= 0) throw new Error(`Environment line ${index + 1} must use KEY=VALUE.`)
+    if (separator <= 0) throw new Error(st('Environment line {index} must use KEY=VALUE.', { index: index + 1 }))
     const key = line.slice(0, separator).trim()
-    if (!key) throw new Error(`Environment line ${index + 1} has an empty key.`)
+    if (!key) throw new Error(st('Environment line {index} has an empty key.', { index: index + 1 }))
     output[key] = line.slice(separator + 1)
   }
   return output
@@ -140,7 +161,10 @@ function addHarness() {
   const name = newName.value.trim()
   if (!name) return
   if (Object.prototype.hasOwnProperty.call(maps.value[selectedKind.value], name)) {
-    error.value = `Harness already exists in the ${targetLayer.value} layer: ${name}`
+    error.value = st('Harness already exists in the {targetLayer} layer: {name}', {
+      targetLayer: targetLayer.value,
+      name: name,
+    })
     return
   }
   const defaults: Record<HarnessKind, HarnessConfig> = {
@@ -170,7 +194,10 @@ function renameHarness(event: Event) {
     return
   }
   if (Object.prototype.hasOwnProperty.call(maps.value[selectedKind.value], nextName)) {
-    error.value = `Harness already exists in the ${targetLayer.value} layer: ${nextName}`
+    error.value = st('Harness already exists in the {targetLayer} layer: {nextName}', {
+      targetLayer: targetLayer.value,
+      nextName: nextName,
+    })
     input.value = currentName
     return
   }
@@ -250,7 +277,7 @@ function applyJson(value = rawHarnessJson.value) {
   try {
     const parsed = JSON.parse(value) as JsonValue
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('Harness config must be a JSON object.')
+      throw new Error(st('Harness config must be a JSON object.'))
     }
     if (!selectedName.value) return
     maps.value[selectedKind.value] = {
@@ -311,7 +338,16 @@ async function save() {
 }
 
 async function removeHarness() {
-  if (!selectedName.value || !window.confirm(`Delete ${selectedKind.value} harness ${selectedName.value}?`)) return
+  if (
+    !selectedName.value ||
+    !window.confirm(
+      st('Delete {selectedKind} harness {selectedName}?', {
+        selectedKind: selectedKind.value,
+        selectedName: selectedName.value,
+      }),
+    )
+  )
+    return
   const next = { ...maps.value[selectedKind.value] }
   delete next[selectedName.value]
   maps.value[selectedKind.value] = next
@@ -320,7 +356,12 @@ async function removeHarness() {
 }
 
 async function clearKind() {
-  if (!window.confirm(`Clear ${targetLayer.value} ${settingPath.value}?`)) return
+  if (
+    !window.confirm(
+      st('Clear {targetLayer} {settingPath}?', { targetLayer: targetLayer.value, settingPath: settingPath.value }),
+    )
+  )
+    return
   try {
     await deleteRuntimeSetting(settingPath.value, { reload: true }, targetLayer.value)
     await load()
@@ -342,10 +383,13 @@ watch(selectedName, () => syncRawHarnessJson())
   <section class="grid gap-4">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h2 class="text-base font-semibold">Browser / Shell / Editor Harnesses</h2>
+        <h2 class="text-base font-semibold">{{ $st('Browser / Shell / Editor Harnesses') }}</h2>
         <p class="mt-1 max-w-3xl text-sm text-muted-foreground">
-          Edit the selected configuration layer explicitly. Effective values remain visible for comparison and can be
-          copied into the current layer without silently promoting Workspace overrides to Global.
+          {{
+            $st(
+              'Edit the selected configuration layer explicitly. Effective values remain visible for comparison and can be copied into the current layer without silently promoting Workspace overrides to Global.',
+            )
+          }}
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
@@ -354,12 +398,12 @@ watch(selectedName, () => syncRawHarnessJson())
             v-model="targetLayer"
             :options="layerOptions"
             :include-empty="false"
-            title="Harness settings layer"
+            :title="$st('Harness settings layer')"
             :disabled="busy"
           />
         </div>
         <Button variant="outline" size="sm" :disabled="busy" @click="load">
-          <RiRefreshLine class="mr-2 h-4 w-4" :class="loading ? 'animate-spin' : ''" /> Refresh
+          <RiRefreshLine class="mr-2 h-4 w-4" :class="loading ? 'animate-spin' : ''" /> {{ $st('Refresh') }}
         </Button>
       </div>
     </div>
@@ -377,7 +421,7 @@ watch(selectedName, () => syncRawHarnessJson())
           v-model="selectedKind"
           :options="kindOptions"
           :include-empty="false"
-          title="Harness kind"
+          :title="$st('Harness kind')"
           :disabled="busy"
         />
         <button
@@ -395,21 +439,21 @@ watch(selectedName, () => syncRawHarnessJson())
           v-if="names.length === 0"
           class="rounded-md border border-dashed border-border/60 px-3 py-4 text-center text-xs text-muted-foreground"
         >
-          No harnesses configured in the {{ targetLayer }} layer.
+          {{ $st('No harnesses configured in the {layer} layer.', { layer: targetLayerLabel }) }}
         </div>
         <div class="flex gap-2">
           <Input
             v-model="newName"
             class="min-w-0 font-mono"
-            placeholder="default"
+            :placeholder="$st('default')"
             :disabled="busy"
             @keydown.enter="addHarness"
           />
           <IconButton
             variant="outline"
             size="sm"
-            tooltip="Add harness"
-            aria-label="Add harness"
+            :tooltip="$st('Add harness')"
+            :aria-label="$st('Add harness')"
             :disabled="busy || !newName.trim()"
             @click="addHarness"
           >
@@ -422,7 +466,7 @@ watch(selectedName, () => syncRawHarnessJson())
           :disabled="busy || !selectedSource?.effective?.value"
           @click="copyEffectiveToLayer"
         >
-          <RiFileCopyLine class="mr-1.5 h-4 w-4" /> Copy effective catalog
+          <RiFileCopyLine class="mr-1.5 h-4 w-4" /> {{ $st('Copy effective catalog') }}
         </Button>
       </div>
 
@@ -434,24 +478,24 @@ watch(selectedName, () => syncRawHarnessJson())
               type="text"
               class="h-9 min-w-[14rem] rounded-md border border-input bg-transparent px-3 font-mono text-sm font-semibold outline-none focus:border-ring"
               :disabled="busy"
-              title="Rename harness"
+              :title="$st('Rename harness')"
               @change="renameHarness"
             />
             <code class="text-[10px] text-muted-foreground">{{ targetLayer }} · {{ settingPath }}</code>
           </div>
           <div class="flex gap-1">
             <Button variant="ghost" size="sm" class="text-destructive" :disabled="busy" @click="removeHarness">
-              <RiDeleteBinLine class="mr-1.5 h-4 w-4" /> Delete
+              <RiDeleteBinLine class="mr-1.5 h-4 w-4" /> {{ $st('Delete') }}
             </Button>
             <Button size="sm" :disabled="busy" @click="save">
-              <RiSave3Line class="mr-1.5 h-4 w-4" /> {{ saving ? 'Saving…' : 'Save layer' }}
+              <RiSave3Line class="mr-1.5 h-4 w-4" /> {{ saving ? $st('Saving…') : $st('Save layer') }}
             </Button>
           </div>
         </div>
 
         <div v-if="selectedKind === 'browser'" class="grid gap-3 sm:grid-cols-2">
           <label class="grid gap-1.5">
-            <span class="text-xs text-muted-foreground">Driver</span>
+            <span class="text-xs text-muted-foreground">{{ $st('Driver') }}</span>
             <Input
               :value="browserConfig?.driver || ''"
               :disabled="busy"
@@ -465,10 +509,10 @@ watch(selectedName, () => syncRawHarnessJson())
               :disabled="busy"
               @change="setBrowserField('headless', ($event.target as HTMLInputElement).checked)"
             />
-            Headless
+            {{ $st('Headless') }}
           </label>
           <label class="grid gap-1.5">
-            <span class="text-xs text-muted-foreground">Viewport width</span>
+            <span class="text-xs text-muted-foreground">{{ $st('Viewport width') }}</span>
             <Input
               type="number"
               :value="browserConfig?.viewport?.width || 0"
@@ -477,7 +521,7 @@ watch(selectedName, () => syncRawHarnessJson())
             />
           </label>
           <label class="grid gap-1.5">
-            <span class="text-xs text-muted-foreground">Viewport height</span>
+            <span class="text-xs text-muted-foreground">{{ $st('Viewport height') }}</span>
             <Input
               type="number"
               :value="browserConfig?.viewport?.height || 0"
@@ -486,7 +530,7 @@ watch(selectedName, () => syncRawHarnessJson())
             />
           </label>
           <label class="grid gap-1.5 sm:col-span-2">
-            <span class="text-xs text-muted-foreground">Allowed domains (comma-separated)</span>
+            <span class="text-xs text-muted-foreground">{{ $st('Allowed domains (comma-separated)') }}</span>
             <Input
               :value="arrayText(browserConfig?.allowed_domains)"
               class="font-mono"
@@ -495,7 +539,7 @@ watch(selectedName, () => syncRawHarnessJson())
             />
           </label>
           <label class="grid gap-1.5 sm:col-span-2">
-            <span class="text-xs text-muted-foreground">Launch options JSON</span>
+            <span class="text-xs text-muted-foreground">{{ $st('Launch options JSON') }}</span>
             <textarea
               :value="jsonText(browserConfig?.launch_options)"
               rows="6"
@@ -515,11 +559,11 @@ watch(selectedName, () => syncRawHarnessJson())
               :disabled="busy"
               @change="setShellField('workspace_only', ($event.target as HTMLInputElement).checked)"
             />
-            Workspace only
+            {{ $st('Workspace only') }}
           </label>
           <div></div>
           <label class="grid gap-1.5">
-            <span class="text-xs text-muted-foreground">Allowed commands (comma-separated)</span>
+            <span class="text-xs text-muted-foreground">{{ $st('Allowed commands (comma-separated)') }}</span>
             <Input
               :value="arrayText(shellConfig?.allow_commands)"
               class="font-mono"
@@ -528,7 +572,7 @@ watch(selectedName, () => syncRawHarnessJson())
             />
           </label>
           <label class="grid gap-1.5">
-            <span class="text-xs text-muted-foreground">Denied commands (comma-separated)</span>
+            <span class="text-xs text-muted-foreground">{{ $st('Denied commands (comma-separated)') }}</span>
             <Input
               :value="arrayText(shellConfig?.deny_commands)"
               class="font-mono"
@@ -537,7 +581,7 @@ watch(selectedName, () => syncRawHarnessJson())
             />
           </label>
           <label class="grid gap-1.5 sm:col-span-2">
-            <span class="text-xs text-muted-foreground">Environment (one KEY=VALUE per line)</span>
+            <span class="text-xs text-muted-foreground">{{ $st('Environment (one KEY=VALUE per line)') }}</span>
             <textarea
               :value="envText(shellConfig?.env)"
               rows="7"
@@ -557,10 +601,10 @@ watch(selectedName, () => syncRawHarnessJson())
               :disabled="busy"
               @change="setEditorField('workspace_only', ($event.target as HTMLInputElement).checked)"
             />
-            Workspace only
+            {{ $st('Workspace only') }}
           </label>
           <label class="grid gap-1.5">
-            <span class="text-xs text-muted-foreground">Max file bytes</span>
+            <span class="text-xs text-muted-foreground">{{ $st('Max file bytes') }}</span>
             <Input
               type="number"
               :value="editorConfig?.max_file_bytes || ''"
@@ -569,7 +613,7 @@ watch(selectedName, () => syncRawHarnessJson())
             />
           </label>
           <label class="grid gap-1.5 sm:col-span-2">
-            <span class="text-xs text-muted-foreground">Allowed extensions (comma-separated)</span>
+            <span class="text-xs text-muted-foreground">{{ $st('Allowed extensions (comma-separated)') }}</span>
             <Input
               :value="arrayText(editorConfig?.allowed_extensions)"
               class="font-mono"
@@ -582,10 +626,12 @@ watch(selectedName, () => syncRawHarnessJson())
         <div class="grid gap-2 border-t border-border/60 pt-3">
           <div class="flex items-center justify-between gap-2">
             <div>
-              <div class="text-sm font-medium">Raw harness JSON</div>
-              <div class="mt-1 text-xs text-muted-foreground">Edit the complete selected harness object.</div>
+              <div class="text-sm font-medium">{{ $st('Raw harness JSON') }}</div>
+              <div class="mt-1 text-xs text-muted-foreground">
+                {{ $st('Edit the complete selected harness object.') }}
+              </div>
             </div>
-            <Button variant="outline" size="sm" :disabled="busy" @click="applyJson()">Apply JSON</Button>
+            <Button variant="outline" size="sm" :disabled="busy" @click="applyJson()">{{ $st('Apply JSON') }}</Button>
           </div>
           <textarea
             v-model="rawHarnessJson"
@@ -600,20 +646,15 @@ watch(selectedName, () => syncRawHarnessJson())
         <div class="grid gap-2 border-t border-border/60 pt-3 text-[11px] text-muted-foreground">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <span>
-              Editing {{ targetLayer }} layer ·
-              {{
-                selectedLayerResponse?.value
-                  ? `${Object.keys(asRecord(selectedLayerResponse.value)).length} harnesses`
-                  : 'unset'
-              }}
+              {{ selectedLayerSummary }}
             </span>
             <Button variant="ghost" size="sm" :disabled="busy || !selectedLayerResponse?.value" @click="clearKind">
-              Clear {{ targetLayer }} {{ settingPath }}
+              {{ $st('Clear {layer} {path}', { layer: targetLayerLabel, path: settingPath }) }}
             </Button>
           </div>
           <details class="rounded-md border border-border/60">
             <summary class="cursor-pointer px-3 py-2 text-xs font-medium">
-              Compare Global, Workspace, and Effective catalogs
+              {{ $st('Compare Global, Workspace, and Effective catalogs') }}
             </summary>
             <pre class="max-h-72 overflow-auto border-t border-border/60 p-3 font-mono text-[10px] leading-5">{{
               JSON.stringify(
@@ -631,7 +672,11 @@ watch(selectedName, () => syncRawHarnessJson())
       </div>
 
       <div v-else class="rounded-md border border-dashed border-border/60 px-4 py-8 text-sm text-muted-foreground">
-        Add a harness to the {{ targetLayer }} layer, or copy the current effective catalog before editing.
+        {{
+          $st('Add a harness to the {layer} layer, or copy the current effective catalog before editing.', {
+            layer: targetLayerLabel,
+          })
+        }}
       </div>
     </div>
   </section>

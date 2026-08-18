@@ -123,11 +123,11 @@ onMounted(() => {
           v-model="query"
           class="mb-2"
           input-class="h-8 text-xs"
-          placeholder="Search this section"
+          :placeholder="$st('Search this section')"
           :show-search-button="false"
-          input-aria-label="Search this settings section"
+          :input-aria-label="$st('Search this settings section')"
         />
-        <nav class="grid gap-1" :aria-label="`${title} pages`">
+        <nav class="grid gap-1" :aria-label="$st('{title} pages', { title })">
           <button
             v-for="page in visiblePages"
             :key="page.id"
@@ -153,7 +153,7 @@ onMounted(() => {
           </button>
         </nav>
         <div v-if="visiblePages.length === 0" class="px-3 py-8 text-center text-xs text-muted-foreground">
-          No matching settings pages.
+          {{ $st('No matching settings pages.') }}
         </div>
       </aside>
 
@@ -164,7 +164,7 @@ onMounted(() => {
             :options="pickerOptions"
             :title="title"
             :include-empty="false"
-            search-placeholder="Search pages..."
+            :search-placeholder="$st('Search pages...')"
             @update:model-value="selectPage"
           />
           <p v-if="activeDefinition" class="text-xs leading-5 text-muted-foreground">

@@ -9,6 +9,7 @@ import SearchInput from '@/components/ui/SearchInput.vue'
 import { apiJson } from '@/lib/api'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
+import { settingsText as st } from '@/i18n/settingsText'
 
 type UserProblem = {
   message?: string
@@ -130,8 +131,8 @@ function compactNumber(value: unknown): string {
 }
 
 function yesNo(value: unknown): string {
-  if (value === true) return 'Yes'
-  if (value === false) return 'No'
+  if (value === true) return st('Yes')
+  if (value === false) return st('No')
   return '—'
 }
 
@@ -157,8 +158,12 @@ function modelSubtitle(model: CatalogModel): string {
   return [
     model.origin || '',
     model.lifecycle || '',
-    model.context_window_tokens ? `${compactNumber(model.context_window_tokens)} context` : '',
-    model.max_output_tokens ? `${compactNumber(model.max_output_tokens)} output` : '',
+    model.context_window_tokens
+      ? st('{context_window_tokens} context', { context_window_tokens: compactNumber(model.context_window_tokens) })
+      : '',
+    model.max_output_tokens
+      ? st('{max_output_tokens} output', { max_output_tokens: compactNumber(model.max_output_tokens) })
+      : '',
   ]
     .filter(Boolean)
     .join(' · ')
@@ -220,7 +225,7 @@ async function refreshCatalog() {
   error.value = ''
   try {
     await apiJson('/api/v1/model-catalog/refresh', { method: 'POST' })
-    toasts.push('success', 'Model Catalog refresh started')
+    toasts.push('success', st('Model Catalog refresh started'))
     await load({ reset: true })
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : String(reason)
@@ -239,22 +244,22 @@ onMounted(() => void load())
   <div class="grid min-w-0 gap-5">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h2 class="text-base font-semibold">Resolved Model Catalog</h2>
+        <h2 class="text-base font-semibold">{{ $st('Resolved Model Catalog') }}</h2>
         <p class="mt-1 max-w-3xl text-sm text-muted-foreground">
-          Search the runtime’s merged catalog rather than guessing model capabilities from provider names.
+          {{ $st('Search the runtime’s merged catalog rather than guessing model capabilities from provider names.') }}
         </p>
       </div>
       <div class="flex items-center gap-2">
         <Button variant="outline" size="sm" :disabled="refreshing || loading" @click="refreshCatalog">
           <RiRestartLine class="mr-2 h-4 w-4" :class="refreshing ? 'animate-spin' : ''" />
-          Refresh source
+          {{ $st('Refresh source') }}
         </Button>
         <IconButton
           variant="outline"
           size="md"
           :disabled="loading"
-          :tooltip="loading ? 'Loading catalog' : 'Reload current page'"
-          aria-label="Reload Model Catalog page"
+          :tooltip="loading ? $st('Loading catalog') : $st('Reload current page')"
+          :aria-label="$st('Reload Model Catalog page')"
           @click="load()"
         >
           <RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
@@ -272,32 +277,39 @@ onMounted(() => void load())
       v-if="failureText"
       class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200"
     >
-      Last refresh issue: {{ failureText }}
+      {{ $st('Last refresh issue:') }} {{ failureText }}
     </div>
 
     <section class="grid gap-3 rounded-lg border border-border/60 bg-muted/10 p-4">
       <div class="grid gap-3 md:grid-cols-[minmax(0,1fr)_16rem]">
         <SearchInput
           v-model="query"
-          placeholder="Search model id, display name, origin, lifecycle, or description"
-          input-aria-label="Search Model Catalog"
+          :placeholder="$st('Search model id, display name, origin, lifecycle, or description')"
+          :input-aria-label="$st('Search Model Catalog')"
           @search="search"
           @clear="clearSearch"
         />
         <OptionPicker
           v-model="origin"
           :options="originOptions"
-          title="Catalog origin"
-          empty-label="All origins"
-          search-placeholder="Search origins..."
+          :title="$st('Catalog origin')"
+          :empty-label="$st('All origins')"
+          :search-placeholder="$st('Search origins...')"
         />
       </div>
       <div class="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
         <span>
-          {{ total }} matching models · {{ summary?.model_count ?? total }} total catalog entries ·
-          {{ summary?.last_successful_source || 'source not reported' }}
+          {{
+            $st('{matching} matching models · {total} total catalog entries · {source}', {
+              matching: total,
+              total: summary?.model_count ?? total,
+              source: summary?.last_successful_source || $st('source not reported'),
+            })
+          }}
         </span>
-        <span v-if="summary?.last_refresh_at">Last refreshed {{ summary.last_refresh_at }}</span>
+        <span v-if="summary?.last_refresh_at">{{
+          $st('Last refreshed {time}', { time: summary.last_refresh_at })
+        }}</span>
       </div>
     </section>
 
@@ -308,8 +320,8 @@ onMounted(() => void load())
         <div
           class="flex items-center justify-between border-b border-border/60 px-3 py-2 text-xs text-muted-foreground"
         >
-          <span>Page {{ pageNumber }} of {{ pageCount }}</span>
-          <span>{{ visibleItems.length }} shown</span>
+          <span>{{ $st('Page {page} of {pages}', { page: pageNumber, pages: pageCount }) }}</span>
+          <span>{{ $st('{count} shown', { count: visibleItems.length }) }}</span>
         </div>
         <div class="max-h-[43rem] overflow-y-auto p-2">
           <button
@@ -325,25 +337,25 @@ onMounted(() => void load())
             <span class="truncate text-sm font-medium">{{ model.display_name || model.model_id }}</span>
             <code class="truncate font-mono text-[11px] text-muted-foreground">{{ model.model_id }}</code>
             <span class="line-clamp-2 text-[11px] text-muted-foreground">{{
-              modelSubtitle(model) || 'No summary'
+              modelSubtitle(model) || $st('No summary')
             }}</span>
           </button>
           <div
             v-if="!loading && visibleItems.length === 0"
             class="px-4 py-12 text-center text-sm text-muted-foreground"
           >
-            No catalog models match this page and filter.
+            {{ $st('No catalog models match this page and filter.') }}
           </div>
           <div v-if="loading && items.length === 0" class="px-4 py-12 text-center text-sm text-muted-foreground">
-            Loading Model Catalog…
+            {{ $st('Loading Model Catalog…') }}
           </div>
         </div>
         <div class="flex items-center justify-between border-t border-border/60 p-2">
           <Button variant="ghost" size="sm" :disabled="!canPrevious" @click="previousPage">
-            <RiArrowLeftSLine class="mr-1 h-4 w-4" /> Previous
+            <RiArrowLeftSLine class="mr-1 h-4 w-4" /> {{ $st('Previous') }}
           </Button>
           <Button variant="ghost" size="sm" :disabled="!canNext" @click="nextPage">
-            Next <RiArrowRightSLine class="ml-1 h-4 w-4" />
+            {{ $st('Next') }} <RiArrowRightSLine class="ml-1 h-4 w-4" />
           </Button>
         </div>
       </div>
@@ -359,57 +371,58 @@ onMounted(() => void load())
 
         <dl class="grid gap-x-6 gap-y-4 py-5 sm:grid-cols-2 xl:grid-cols-3">
           <div>
-            <dt class="text-xs text-muted-foreground">Origin</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Origin') }}</dt>
             <dd class="mt-1 text-sm">{{ text(selectedModel.origin) }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Lifecycle</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Lifecycle') }}</dt>
             <dd class="mt-1 text-sm">{{ text(selectedModel.lifecycle) }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Source</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Source') }}</dt>
             <dd class="mt-1 text-sm">{{ selectedModel.source_label || selectedModel.source }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Context window</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Context window') }}</dt>
             <dd class="mt-1 font-mono text-sm">{{ compactNumber(selectedModel.context_window_tokens) }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Max input</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Max input') }}</dt>
             <dd class="mt-1 font-mono text-sm">{{ compactNumber(selectedModel.max_input_tokens) }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Max output</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Max output') }}</dt>
             <dd class="mt-1 font-mono text-sm">{{ compactNumber(selectedModel.max_output_tokens) }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Knowledge cutoff</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Knowledge cutoff') }}</dt>
             <dd class="mt-1 text-sm">{{ text(selectedModel.knowledge_cutoff) }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Release date</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Release date') }}</dt>
             <dd class="mt-1 text-sm">{{ text(selectedModel.release_date) }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Last updated</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Last updated') }}</dt>
             <dd class="mt-1 text-sm">{{ text(selectedModel.last_updated) }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Open weights</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Open weights') }}</dt>
             <dd class="mt-1 text-sm">{{ yesNo(selectedModel.open_weights) }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Parallel tools</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Parallel tools') }}</dt>
             <dd class="mt-1 text-sm">{{ yesNo(selectedModel.supports_parallel_tool_calls) }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Verbosity</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Verbosity') }}</dt>
             <dd class="mt-1 text-sm">
-              {{ yesNo(selectedModel.supports_verbosity) }} · default {{ text(selectedModel.default_verbosity) }}
+              {{ yesNo(selectedModel.supports_verbosity) }} {{ $st('· default') }}
+              {{ text(selectedModel.default_verbosity) }}
             </dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Temperature</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Temperature') }}</dt>
             <dd class="mt-1 font-mono text-sm">{{ text(selectedModel.default_temperature) }}</dd>
           </div>
           <div>
@@ -421,46 +434,46 @@ onMounted(() => void load())
             <dd class="mt-1 font-mono text-sm">{{ selectedModel.default_top_k ?? '—' }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Reasoning interleaved</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Reasoning interleaved') }}</dt>
             <dd class="mt-1 text-sm">{{ yesNo(selectedModel.assistant_reasoning_interleaved) }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Reasoning field</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Reasoning field') }}</dt>
             <dd class="mt-1 font-mono text-sm">{{ text(selectedModel.assistant_reasoning_field) }}</dd>
           </div>
           <div>
-            <dt class="text-xs text-muted-foreground">Output modalities</dt>
+            <dt class="text-xs text-muted-foreground">{{ $st('Output modalities') }}</dt>
             <dd class="mt-1 text-sm">{{ selectedModel.output_modalities?.join(', ') || '—' }}</dd>
           </div>
         </dl>
 
         <div class="grid gap-3">
           <details class="rounded-md border border-border/60" open>
-            <summary class="cursor-pointer px-3 py-2 text-sm font-medium">Capabilities</summary>
+            <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{{ $st('Capabilities') }}</summary>
             <pre class="max-h-72 overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
               pretty(capabilityValue(selectedModel))
             }}</pre>
           </details>
           <details class="rounded-md border border-border/60">
-            <summary class="cursor-pointer px-3 py-2 text-sm font-medium">Thinking modes</summary>
+            <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{{ $st('Thinking modes') }}</summary>
             <pre class="max-h-72 overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
               pretty(selectedModel.thinking_modes)
             }}</pre>
           </details>
           <details class="rounded-md border border-border/60">
-            <summary class="cursor-pointer px-3 py-2 text-sm font-medium">Speed modes</summary>
+            <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{{ $st('Speed modes') }}</summary>
             <pre class="max-h-72 overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
               pretty(selectedModel.speed_modes)
             }}</pre>
           </details>
           <details class="rounded-md border border-border/60">
-            <summary class="cursor-pointer px-3 py-2 text-sm font-medium">Pricing</summary>
+            <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{{ $st('Pricing') }}</summary>
             <pre class="max-h-72 overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
               pretty(selectedModel.pricing)
             }}</pre>
           </details>
           <details class="rounded-md border border-border/60">
-            <summary class="cursor-pointer px-3 py-2 text-sm font-medium">Raw catalog entry</summary>
+            <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{{ $st('Raw catalog entry') }}</summary>
             <pre class="max-h-[32rem] overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
               pretty(selectedModel)
             }}</pre>
@@ -468,7 +481,7 @@ onMounted(() => void load())
         </div>
       </article>
       <div v-else class="flex min-h-[28rem] items-center justify-center p-8 text-sm text-muted-foreground">
-        Select a catalog model to inspect it.
+        {{ $st('Select a catalog model to inspect it.') }}
       </div>
     </div>
   </div>

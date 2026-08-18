@@ -3,18 +3,19 @@ import PermissionStudioPanel from '@/components/settings/PermissionStudioPanel.v
 import PermissionsPanel from '@/components/settings/PermissionsPanel.vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import type { SettingsSubpageDefinition } from '@/components/settings/workbench/settingsSectionNavigation'
+import { settingsText as st } from '@/i18n/settingsText'
 
 const pages: SettingsSubpageDefinition[] = [
   {
     id: 'policy-studio',
-    label: 'Permission Studio',
-    description: 'Edit global, workspace, current-session, and effective permission policy layers.',
+    label: st('Permission Studio'),
+    description: st('Edit global, workspace, current-session, and effective permission policy layers.'),
     keywords: ['filesystem', 'network', 'tools', 'allow', 'auto', 'ask', 'deny'],
   },
   {
     id: 'persistent-rules',
-    label: 'Persistent rules',
-    description: 'Inspect and revoke durable approval rules captured from interactive permission decisions.',
+    label: st('Persistent rules'),
+    description: st('Inspect and revoke durable approval rules captured from interactive permission decisions.'),
     keywords: ['rules', 'approval', 'revoke', 'history'],
   },
 ]
@@ -23,8 +24,12 @@ const pages: SettingsSubpageDefinition[] = [
 <template>
   <SettingsSectionWorkbench
     section="permissions"
-    title="Permissions"
-    description="Control filesystem, network, and tool access at every configuration layer, then audit durable approval rules."
+    :title="$st('Permissions')"
+    :description="
+      $st(
+        'Control filesystem, network, and tool access at every configuration layer, then audit durable approval rules.',
+      )
+    "
     :pages="pages"
     default-page="policy-studio"
     v-slot="{ activePage }"

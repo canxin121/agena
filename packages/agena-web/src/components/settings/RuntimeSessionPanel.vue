@@ -8,6 +8,7 @@ import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSe
 import type { SettingsSubpageDefinition } from '@/components/settings/workbench/settingsSectionNavigation'
 import Button from '@/components/ui/Button.vue'
 import { apiJson } from '@/lib/api'
+import { settingsText as st } from '@/i18n/settingsText'
 
 const { t } = useI18n()
 const refreshBusy = ref(false)
@@ -17,14 +18,16 @@ const clientVersionNonce = ref(0)
 const pages: SettingsSubpageDefinition[] = [
   {
     id: 'client-versions',
-    label: 'Provider client versions',
-    description: 'Pin or refresh the compatibility client versions presented by Codex, Claude, and Gemini adapters.',
+    label: st('Provider client versions'),
+    description: st(
+      'Pin or refresh the compatibility client versions presented by Codex, Claude, and Gemini adapters.',
+    ),
     keywords: ['client', 'version', 'codex', 'claude', 'gemini', 'npm'],
   },
   {
     id: 'compaction',
-    label: 'Session compaction',
-    description: 'Control automatic compaction and the token reserve used when deciding when to compact.',
+    label: st('Session compaction'),
+    description: st('Control automatic compaction and the token reserve used when deciding when to compact.'),
     keywords: ['session', 'compaction', 'context', 'tokens', 'reserve'],
   },
 ]

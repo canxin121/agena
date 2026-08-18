@@ -15,6 +15,7 @@ import { defaultValueForSchema, isJsonRecord } from '@/components/settings/plugi
 import { useChatStore } from '@/stores/chat'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
+import { settingsText as st } from '@/i18n/settingsText'
 
 type PluginStatus = {
   plugin_id: string
@@ -196,15 +197,15 @@ const stateFilter = ref('')
 const lastResult = ref<JsonValue>(null)
 
 const panelTabs: Array<{ id: PanelTab; label: string }> = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'config', label: 'Config' },
-  { id: 'tools', label: 'Tools' },
-  { id: 'commands', label: 'Commands' },
-  { id: 'views', label: 'Views' },
-  { id: 'controls', label: 'Controls' },
-  { id: 'capabilities', label: 'Capabilities' },
-  { id: 'logs', label: 'Logs' },
-  { id: 'diagnostics', label: 'Diagnostics' },
+  { id: 'overview', label: st('Overview') },
+  { id: 'config', label: st('Config') },
+  { id: 'tools', label: st('Tools') },
+  { id: 'commands', label: st('Commands') },
+  { id: 'views', label: st('Views') },
+  { id: 'controls', label: st('Controls') },
+  { id: 'capabilities', label: st('Capabilities') },
+  { id: 'logs', label: st('Logs') },
+  { id: 'diagnostics', label: st('Diagnostics') },
 ]
 
 function panelTabFromRequest(value: unknown): PanelTab | null {
@@ -359,11 +360,11 @@ function hasCommandInput(command: PluginCommand): boolean {
 function parseJsonObject(raw: string, label: string): JsonValue {
   if (!raw.trim()) return {}
   const parsed = JSON.parse(raw) as JsonValue
-  if (!isJsonRecord(parsed)) throw new Error(`${label} must be a JSON object.`)
+  if (!isJsonRecord(parsed)) throw new Error(st('{label} must be a JSON object.', { label: label }))
   return parsed
 }
 function parseCommandInput(command: PluginCommand): JsonValue {
-  return parseJsonObject(String(commandInputs.value[commandKey(command)] || ''), 'Command input')
+  return parseJsonObject(String(commandInputs.value[commandKey(command)] || ''), st('Command input'))
 }
 function toolName(tool: PluginTool | null | undefined): string {
   return String(tool?.name || '').trim()
@@ -400,12 +401,12 @@ function asRecord(value: JsonValue): Record<string, JsonValue> | null {
 }
 function openExternalUrl(raw: string) {
   const url = new URL(raw, window.location.href)
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Plugin URLs must use HTTP or HTTPS.')
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(st('Plugin URLs must use HTTP or HTTPS.'))
   window.open(url.toString(), '_blank', 'noopener,noreferrer')
 }
 async function submitPrompt(prompt: string) {
   const sessionId = String(chat.selectedSessionId || '').trim()
-  if (!sessionId) throw new Error('Open a session before submitting a plugin prompt.')
+  if (!sessionId) throw new Error(st('Open a session before submitting a plugin prompt.'))
   const previous = chat.getComposerDraft(sessionId).trim()
   chat.setComposerDraft(sessionId, previous ? `${previous}\n${prompt}` : prompt)
   await router.push('/chat')
@@ -429,7 +430,7 @@ async function handleClientAction(action: PluginUiAction | null | undefined): Pr
 }
 
 async function invokePluginTool(pluginId: string, tool: string, input: JsonValue): Promise<JsonValue> {
-  if (!activeSessionId.value) throw new Error('Open a session before running plugin tools.')
+  if (!activeSessionId.value) throw new Error(st('Open a session before running plugin tools.'))
   return await apiJson<JsonValue>('/api/v1/plugins/ui/invoke-tool', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -458,11 +459,11 @@ async function runManifestTool(tool: PluginTool) {
   busyActionKey.value = key
   lastResult.value = null
   try {
-    const input = parseJsonObject(toolInput(tool), 'Tool input')
+    const input = parseJsonObject(toolInput(tool), st('Tool input'))
     const response = await invokePluginTool(selectedPluginId.value, name, input)
     lastResult.value = response
     await handlePluginToolResult(response)
-    toasts.push('success', `${name} completed`)
+    toasts.push('success', st('{name} completed', { name: name }))
   } catch (reason) {
     toasts.push('error', reason instanceof Error ? reason.message : String(reason))
   } finally {
@@ -471,7 +472,7 @@ async function runManifestTool(tool: PluginTool) {
 }
 
 async function handleCommandOutput(pluginId: string, value: JsonValue, depth = 0) {
-  if (depth > 5) throw new Error('Plugin command output recursion limit reached.')
+  if (depth > 5) throw new Error(st('Plugin command output recursion limit reached.'))
   const output = asRecord(value)
   if (!output) return
   const kind = String(output.kind || '')
@@ -482,7 +483,7 @@ async function handleCommandOutput(pluginId: string, value: JsonValue, depth = 0
   if (await handleClientAction(output as PluginUiAction)) return
   if (kind === 'invoke_tool') {
     const tool = String(output.tool || '').trim()
-    if (!tool) throw new Error('Plugin command did not provide a tool name.')
+    if (!tool) throw new Error(st('Plugin command did not provide a tool name.'))
     const response = await invokePluginTool(pluginId, tool, output.input ?? {})
     lastResult.value = response
     await handlePluginToolResult(response, output.submit_output_as_prompt === true)
@@ -490,7 +491,7 @@ async function handleCommandOutput(pluginId: string, value: JsonValue, depth = 0
   }
   if (kind === 'invoke_command') {
     const command = String(output.command || '').trim()
-    if (!command) throw new Error('Plugin command did not provide a command id.')
+    if (!command) throw new Error(st('Plugin command did not provide a command id.'))
     const response = await postPluginAction(
       `/api/v1/plugins/${encodeURIComponent(pluginId)}/commands/${encodeURIComponent(command)}`,
       output.input ?? {},
@@ -511,7 +512,7 @@ async function handleActionResponse(pluginId: string, response: JsonValue, fallb
   }
 }
 async function postPluginAction(path: string, input: JsonValue): Promise<JsonValue> {
-  if (!activeSessionId.value) throw new Error('Open a session before running plugin actions.')
+  if (!activeSessionId.value) throw new Error(st('Open a session before running plugin actions.'))
   return await apiJson<JsonValue>(path, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -531,7 +532,7 @@ async function runControl(control: PluginControl, input: JsonValue = controlValu
     )
     lastResult.value = response
     await handleActionResponse(control.plugin_id, response, control.action)
-    toasts.push('success', `${control.title} completed`)
+    toasts.push('success', st('{title} completed', { title: control.title }))
   } catch (reason) {
     toasts.push('error', reason instanceof Error ? reason.message : String(reason))
   } finally {
@@ -566,7 +567,7 @@ async function runCommand(command: PluginCommand) {
     } else {
       await handleActionResponse(command.plugin_id, response, command.action)
     }
-    toasts.push('success', `${command.title} completed`)
+    toasts.push('success', st('{title} completed', { title: command.title }))
   } catch (reason) {
     toasts.push('error', reason instanceof Error ? reason.message : String(reason))
   } finally {
@@ -674,16 +675,20 @@ onMounted(() => void refresh())
   <div class="grid min-w-0 gap-5">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h2 class="text-base font-semibold">Plugin Workbench</h2>
+        <h2 class="text-base font-semibold">{{ $st('Plugin Workbench') }}</h2>
         <p class="mt-1 max-w-3xl text-sm text-muted-foreground">
-          Configure loaded plugins, run their tools and commands, and inspect every host-declared UI and runtime signal.
+          {{
+            $st(
+              'Configure loaded plugins, run their tools and commands, and inspect every host-declared UI and runtime signal.',
+            )
+          }}
         </p>
       </div>
       <IconButton
         variant="outline"
         size="md"
-        :tooltip="loading ? 'Refreshing plugins' : 'Refresh plugins'"
-        :aria-label="loading ? 'Refreshing plugins' : 'Refresh plugins'"
+        :tooltip="loading ? $st('Refreshing plugins') : $st('Refresh plugins')"
+        :aria-label="loading ? $st('Refreshing plugins') : $st('Refresh plugins')"
         :disabled="loading"
         @click="refresh"
       >
@@ -703,21 +708,30 @@ onMounted(() => void refresh())
     >
       <SearchInput
         v-model="pluginQuery"
-        placeholder="Search plugins"
+        :placeholder="$st('Search plugins')"
         :show-search-button="false"
-        input-aria-label="Search plugins"
+        :input-aria-label="$st('Search plugins')"
       />
       <OptionPicker
         v-model="transportFilter"
         :options="transportOptions"
-        title="Transport filter"
-        empty-label="All transports"
+        :title="$st('Transport filter')"
+        :empty-label="$st('All transports')"
       />
-      <OptionPicker v-model="stateFilter" :options="stateOptions" title="State filter" empty-label="All states" />
+      <OptionPicker
+        v-model="stateFilter"
+        :options="stateOptions"
+        :title="$st('State filter')"
+        :empty-label="$st('All states')"
+      />
     </section>
 
-    <div v-if="loading && statuses.length === 0" class="text-sm text-muted-foreground">Loading plugins…</div>
-    <div v-else-if="statuses.length === 0" class="text-sm text-muted-foreground">No plugins are loaded.</div>
+    <div v-if="loading && statuses.length === 0" class="text-sm text-muted-foreground">
+      {{ $st('Loading plugins…') }}
+    </div>
+    <div v-else-if="statuses.length === 0" class="text-sm text-muted-foreground">
+      {{ $st('No plugins are loaded.') }}
+    </div>
 
     <div
       v-else
@@ -725,7 +739,7 @@ onMounted(() => void refresh())
     >
       <nav
         class="min-w-0 border-b border-border/60 bg-muted/10 p-2 lg:border-b-0 lg:border-r"
-        aria-label="Loaded plugins"
+        :aria-label="$st('Loaded plugins')"
       >
         <button
           v-for="status in filteredStatuses"
@@ -744,12 +758,12 @@ onMounted(() => void refresh())
           <span class="mt-1 h-2 w-2 shrink-0 rounded-full bg-current" :class="statusTone(status.state)" />
         </button>
         <div v-if="filteredStatuses.length === 0" class="px-3 py-8 text-center text-xs text-muted-foreground">
-          No matching plugins.
+          {{ $st('No matching plugins.') }}
         </div>
       </nav>
 
       <div class="min-w-0 p-4 lg:p-5">
-        <div v-if="detailLoading" class="text-sm text-muted-foreground">Loading plugin details…</div>
+        <div v-if="detailLoading" class="text-sm text-muted-foreground">{{ $st('Loading plugin details…') }}</div>
         <div v-else-if="detailError" class="break-words text-sm text-destructive">{{ detailError }}</div>
         <template v-else-if="selectedStatus">
           <header class="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 pb-4">
@@ -760,12 +774,12 @@ onMounted(() => void refresh())
               </p>
               <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                 <span :class="statusTone(selectedStatus.state)">{{ selectedStatus.state }}</span>
-                <span>transport: {{ selectedStatus.kind }}</span>
-                <span v-if="selectedManifest?.version">version: {{ selectedManifest.version }}</span>
-                <span>{{ selectedTools.length }} tools</span>
-                <span>{{ contributionCount }} Studio contributions</span>
+                <span>{{ $st('transport:') }} {{ selectedStatus.kind }}</span>
+                <span v-if="selectedManifest?.version">{{ $st('version:') }} {{ selectedManifest.version }}</span>
+                <span>{{ selectedTools.length }} {{ $st('tools') }}</span>
+                <span>{{ contributionCount }} {{ $st('Studio contributions') }}</span>
                 <span v-if="catalog?.tool_registry_generation !== undefined"
-                  >registry: {{ catalog.tool_registry_generation }}</span
+                  >{{ $st('registry:') }} {{ catalog.tool_registry_generation }}</span
                 >
               </div>
               <div v-if="statusFailure(selectedStatus)" class="mt-2 text-xs text-destructive">
@@ -796,35 +810,35 @@ onMounted(() => void refresh())
               <MarkdownRenderer v-if="selectedManifest?.help" :content="selectedManifest.help" source-path="" />
               <dl class="grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-3">
                 <div>
-                  <dt class="text-xs text-muted-foreground">Trust level</dt>
-                  <dd class="mt-1 font-mono text-sm">{{ selectedAuthority?.trust_level || 'Not reported' }}</dd>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Trust level') }}</dt>
+                  <dd class="mt-1 font-mono text-sm">{{ selectedAuthority?.trust_level || $st('Not reported') }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Authors</dt>
-                  <dd class="mt-1 text-sm">{{ selectedManifest?.authors?.join(', ') || 'Not reported' }}</dd>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Authors') }}</dt>
+                  <dd class="mt-1 text-sm">{{ selectedManifest?.authors?.join(', ') || $st('Not reported') }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Tools</dt>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Tools') }}</dt>
                   <dd class="mt-1 font-mono text-sm">{{ selectedTools.length }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Commands</dt>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Commands') }}</dt>
                   <dd class="mt-1 font-mono text-sm">{{ selectedCommands.length }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Skills</dt>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Skills') }}</dt>
                   <dd class="mt-1 font-mono text-sm">{{ selectedManifest?.skills?.length || 0 }}</dd>
                 </div>
                 <div>
-                  <dt class="text-xs text-muted-foreground">Configured</dt>
-                  <dd class="mt-1 text-sm">{{ selectedConfiguredPlugin ? 'Yes' : 'No explicit record' }}</dd>
+                  <dt class="text-xs text-muted-foreground">{{ $st('Configured') }}</dt>
+                  <dd class="mt-1 text-sm">{{ selectedConfiguredPlugin ? $st('Yes') : $st('No explicit record') }}</dd>
                 </div>
               </dl>
               <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                <Button variant="outline" @click="activeTab = 'config'">Configure plugin</Button>
-                <Button variant="outline" @click="activeTab = 'tools'">Run tools</Button>
-                <Button variant="outline" @click="activeTab = 'capabilities'">Inspect capabilities</Button>
-                <Button variant="outline" @click="activeTab = 'diagnostics'">Open diagnostics</Button>
+                <Button variant="outline" @click="activeTab = 'config'">{{ $st('Configure plugin') }}</Button>
+                <Button variant="outline" @click="activeTab = 'tools'">{{ $st('Run tools') }}</Button>
+                <Button variant="outline" @click="activeTab = 'capabilities'">{{ $st('Inspect capabilities') }}</Button>
+                <Button variant="outline" @click="activeTab = 'diagnostics'">{{ $st('Open diagnostics') }}</Button>
               </div>
             </div>
 
@@ -851,18 +865,18 @@ onMounted(() => void refresh())
                 >
                   <span class="truncate font-mono text-xs font-semibold">{{ toolName(tool) }}</span>
                   <span class="line-clamp-2 text-[11px] text-muted-foreground">{{
-                    tool.summary || tool.description || 'No summary'
+                    tool.summary || tool.description || $st('No summary')
                   }}</span>
                 </button>
                 <div v-if="selectedTools.length === 0" class="px-3 py-8 text-center text-xs text-muted-foreground">
-                  This plugin does not expose tools.
+                  {{ $st('This plugin does not expose tools.') }}
                 </div>
               </nav>
               <section v-if="selectedTool" class="grid min-w-0 gap-4">
                 <div>
                   <h4 class="font-mono text-sm font-semibold">{{ toolName(selectedTool) }}</h4>
                   <p class="mt-1 text-sm text-muted-foreground">
-                    {{ selectedTool.summary || selectedTool.description || 'No summary.' }}
+                    {{ selectedTool.summary || selectedTool.description || $st('No summary.') }}
                   </p>
                   <div v-if="selectedTool.tags?.length" class="mt-2 flex flex-wrap gap-1.5">
                     <span
@@ -874,7 +888,7 @@ onMounted(() => void refresh())
                   </div>
                 </div>
                 <label class="grid gap-1.5">
-                  <span class="text-xs text-muted-foreground">JSON input</span>
+                  <span class="text-xs text-muted-foreground">{{ $st('JSON input') }}</span>
                   <textarea
                     :value="toolInput(selectedTool)"
                     rows="12"
@@ -885,25 +899,25 @@ onMounted(() => void refresh())
                   />
                 </label>
                 <div class="flex flex-wrap items-center justify-between gap-3">
-                  <span v-if="!activeSessionId" class="text-xs text-amber-700 dark:text-amber-300"
-                    >Open a session before running plugin tools.</span
-                  >
+                  <span v-if="!activeSessionId" class="text-xs text-amber-700 dark:text-amber-300">{{
+                    $st('Open a session before running plugin tools.')
+                  }}</span>
                   <span v-else class="text-xs text-muted-foreground"
-                    >The invocation is scoped to session {{ activeSessionId }}.</span
+                    >{{ $st('The invocation is scoped to session') }} {{ activeSessionId }}.</span
                   >
                   <Button :disabled="Boolean(busyActionKey) || !activeSessionId" @click="runManifestTool(selectedTool)">
-                    <RiPlayLine class="mr-2 h-4 w-4" /> Run tool
+                    <RiPlayLine class="mr-2 h-4 w-4" /> {{ $st('Run tool') }}
                   </Button>
                 </div>
                 <details class="rounded-md border border-border/60">
-                  <summary class="cursor-pointer px-3 py-2 text-sm font-medium">Input schema</summary>
+                  <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{{ $st('Input schema') }}</summary>
                   <pre class="max-h-72 overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
                     resultText(selectedTool.contract?.input_schema) || '{}'
                   }}</pre>
                 </details>
                 <details class="rounded-md border border-border/60">
                   <summary class="cursor-pointer px-3 py-2 text-sm font-medium">
-                    Output schema & permission contract
+                    {{ $st('Output schema & permission contract') }}
                   </summary>
                   <pre class="max-h-72 overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
                     resultText({
@@ -917,7 +931,7 @@ onMounted(() => void refresh())
 
             <div v-else-if="activeTab === 'commands'" class="grid gap-4">
               <div v-if="selectedCommands.length === 0" class="text-sm text-muted-foreground">
-                This plugin does not declare Studio commands.
+                {{ $st('This plugin does not declare Studio commands.') }}
               </div>
               <article
                 v-for="command in selectedCommands"
@@ -937,7 +951,7 @@ onMounted(() => void refresh())
                     </div>
                   </div>
                   <Button size="sm" :disabled="Boolean(busyActionKey)" @click="runCommand(command)">
-                    <RiCommandLine class="mr-2 h-4 w-4" /> Run
+                    <RiCommandLine class="mr-2 h-4 w-4" /> {{ $st('Run') }}
                   </Button>
                 </div>
                 <textarea
@@ -949,7 +963,7 @@ onMounted(() => void refresh())
                   class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs"
                 />
                 <details v-if="hasCommandInput(command)" class="rounded-md border border-border/60">
-                  <summary class="cursor-pointer px-3 py-2 text-xs font-medium">Input schema</summary>
+                  <summary class="cursor-pointer px-3 py-2 text-xs font-medium">{{ $st('Input schema') }}</summary>
                   <pre class="max-h-56 overflow-auto border-t border-border/60 p-3 font-mono text-[11px]">{{
                     resultText(command.input_schema)
                   }}</pre>
@@ -959,7 +973,7 @@ onMounted(() => void refresh())
 
             <div v-else-if="activeTab === 'views'" class="grid gap-5">
               <div v-if="selectedViews.length === 0" class="text-sm text-muted-foreground">
-                This plugin does not declare Studio views.
+                {{ $st('This plugin does not declare Studio views.') }}
               </div>
               <section v-for="view in selectedViews" :key="view.id" class="rounded-lg border border-border/60 p-4">
                 <div class="flex flex-wrap items-start justify-between gap-2">
@@ -971,7 +985,7 @@ onMounted(() => void refresh())
                     </div>
                   </div>
                   <Button v-if="view.url" variant="outline" size="sm" @click="openExternalUrl(view.url)">
-                    <RiExternalLinkLine class="mr-2 h-4 w-4" /> Open
+                    <RiExternalLinkLine class="mr-2 h-4 w-4" /> {{ $st('Open') }}
                   </Button>
                 </div>
                 <MarkdownRenderer
@@ -990,7 +1004,7 @@ onMounted(() => void refresh())
 
             <div v-else-if="activeTab === 'controls'" class="grid gap-4">
               <div v-if="selectedControls.length === 0" class="text-sm text-muted-foreground">
-                This plugin does not declare Studio controls.
+                {{ $st('This plugin does not declare Studio controls.') }}
               </div>
               <article
                 v-for="control in selectedControls"
@@ -1015,7 +1029,7 @@ onMounted(() => void refresh())
                       :disabled="Boolean(busyActionKey)"
                       @change="updateToggle(control, $event)"
                     />
-                    {{ boolControlValue(control) ? 'On' : 'Off' }}
+                    {{ boolControlValue(control) ? $st('On') : $st('Off') }}
                   </label>
                   <OptionPicker
                     v-else-if="control.options?.length"
@@ -1033,10 +1047,12 @@ onMounted(() => void refresh())
                       :disabled="Boolean(busyActionKey)"
                       @update:model-value="setControlValue(control, $event)"
                     />
-                    <Button size="sm" :disabled="Boolean(busyActionKey)" @click="runControl(control)">Apply</Button>
+                    <Button size="sm" :disabled="Boolean(busyActionKey)" @click="runControl(control)">{{
+                      $st('Apply')
+                    }}</Button>
                   </template>
                   <Button v-else size="sm" :disabled="Boolean(busyActionKey)" @click="runControl(control)">
-                    <RiPlayLine class="mr-2 h-4 w-4" /> Run
+                    <RiPlayLine class="mr-2 h-4 w-4" /> {{ $st('Run') }}
                   </Button>
                 </div>
               </article>
@@ -1044,15 +1060,17 @@ onMounted(() => void refresh())
 
             <div v-else-if="activeTab === 'capabilities'" class="grid gap-5">
               <section class="grid gap-3 rounded-lg border border-border/60 p-4">
-                <h4 class="text-sm font-semibold">Plugin authority</h4>
+                <h4 class="text-sm font-semibold">{{ $st('Plugin authority') }}</h4>
                 <dl class="grid gap-4 sm:grid-cols-2">
                   <div>
-                    <dt class="text-xs text-muted-foreground">Trust level</dt>
-                    <dd class="mt-1 font-mono text-sm">{{ selectedAuthority?.trust_level || 'Not reported' }}</dd>
+                    <dt class="text-xs text-muted-foreground">{{ $st('Trust level') }}</dt>
+                    <dd class="mt-1 font-mono text-sm">{{ selectedAuthority?.trust_level || $st('Not reported') }}</dd>
                   </div>
                   <div>
-                    <dt class="text-xs text-muted-foreground">Provenance</dt>
-                    <dd class="mt-1 text-sm">{{ selectedAuthority?.provenance?.join(' · ') || 'Not reported' }}</dd>
+                    <dt class="text-xs text-muted-foreground">{{ $st('Provenance') }}</dt>
+                    <dd class="mt-1 text-sm">
+                      {{ selectedAuthority?.provenance?.join(' · ') || $st('Not reported') }}
+                    </dd>
                   </div>
                 </dl>
                 <div v-if="selectedAuthority?.plugin_capabilities?.length" class="flex flex-wrap gap-1.5">
@@ -1065,12 +1083,12 @@ onMounted(() => void refresh())
                 </div>
               </section>
               <section class="grid gap-3 rounded-lg border border-border/60 p-4">
-                <h4 class="text-sm font-semibold">Tool capability grants</h4>
+                <h4 class="text-sm font-semibold">{{ $st('Tool capability grants') }}</h4>
                 <div
                   v-if="!Object.keys(selectedAuthority?.tool_capabilities || {}).length"
                   class="text-sm text-muted-foreground"
                 >
-                  No tool capability grants reported.
+                  {{ $st('No tool capability grants reported.') }}
                 </div>
                 <div
                   v-for="(capabilities, tool) in selectedAuthority?.tool_capabilities || {}"
@@ -1089,7 +1107,9 @@ onMounted(() => void refresh())
                 </div>
               </section>
               <details class="rounded-lg border border-border/60">
-                <summary class="cursor-pointer px-4 py-3 text-sm font-medium">Raw hooks and manifest tags</summary>
+                <summary class="cursor-pointer px-4 py-3 text-sm font-medium">
+                  {{ $st('Raw hooks and manifest tags') }}
+                </summary>
                 <pre class="max-h-80 overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5">{{
                   resultText({
                     hooks: selectedInspect?.plugin?.hooks,
@@ -1101,7 +1121,9 @@ onMounted(() => void refresh())
             </div>
 
             <div v-else-if="activeTab === 'logs'" class="grid gap-2">
-              <div v-if="logs.length === 0" class="text-sm text-muted-foreground">No plugin logs recorded.</div>
+              <div v-if="logs.length === 0" class="text-sm text-muted-foreground">
+                {{ $st('No plugin logs recorded.') }}
+              </div>
               <article
                 v-for="entry in logs"
                 :key="entry.seq"
@@ -1124,11 +1146,11 @@ onMounted(() => void refresh())
               <section class="grid gap-3 rounded-lg border border-border/60 p-4">
                 <div class="flex items-center gap-2">
                   <RiShieldCheckLine class="h-4 w-4" />
-                  <h4 class="text-sm font-semibold">Runtime diagnostics</h4>
+                  <h4 class="text-sm font-semibold">{{ $st('Runtime diagnostics') }}</h4>
                 </div>
                 <dl class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                   <div>
-                    <dt class="text-xs text-muted-foreground">State</dt>
+                    <dt class="text-xs text-muted-foreground">{{ $st('State') }}</dt>
                     <dd class="mt-1 text-sm" :class="statusTone(selectedStatus.state)">{{ selectedStatus.state }}</dd>
                   </div>
                   <div>
@@ -1136,11 +1158,11 @@ onMounted(() => void refresh())
                     <dd class="mt-1 font-mono text-sm">{{ selectedStatus.pid ?? '—' }}</dd>
                   </div>
                   <div>
-                    <dt class="text-xs text-muted-foreground">Restart count</dt>
+                    <dt class="text-xs text-muted-foreground">{{ $st('Restart count') }}</dt>
                     <dd class="mt-1 font-mono text-sm">{{ selectedStatus.restart_count ?? 0 }}</dd>
                   </div>
                   <div>
-                    <dt class="text-xs text-muted-foreground">Last exit code</dt>
+                    <dt class="text-xs text-muted-foreground">{{ $st('Last exit code') }}</dt>
                     <dd class="mt-1 font-mono text-sm">{{ selectedStatus.last_exit_code ?? '—' }}</dd>
                   </div>
                 </dl>
@@ -1150,12 +1172,14 @@ onMounted(() => void refresh())
                 >
                   {{ statusFailure(selectedStatus) }}
                 </div>
-                <div v-else class="text-xs text-muted-foreground">No runtime failure is currently reported.</div>
+                <div v-else class="text-xs text-muted-foreground">
+                  {{ $st('No runtime failure is currently reported.') }}
+                </div>
               </section>
               <section class="grid gap-2 rounded-lg border border-border/60 p-4">
-                <h4 class="text-sm font-semibold">Warnings and errors from recent logs</h4>
+                <h4 class="text-sm font-semibold">{{ $st('Warnings and errors from recent logs') }}</h4>
                 <div v-if="diagnosticLogs.length === 0" class="text-sm text-muted-foreground">
-                  No warning or error log entries in the latest 100 records.
+                  {{ $st('No warning or error log entries in the latest 100 records.') }}
                 </div>
                 <article
                   v-for="entry in diagnosticLogs"
@@ -1169,7 +1193,9 @@ onMounted(() => void refresh())
                 </article>
               </section>
               <details class="rounded-lg border border-border/60">
-                <summary class="cursor-pointer px-4 py-3 text-sm font-medium">Raw plugin inspection</summary>
+                <summary class="cursor-pointer px-4 py-3 text-sm font-medium">
+                  {{ $st('Raw plugin inspection') }}
+                </summary>
                 <pre
                   class="max-h-[32rem] overflow-auto border-t border-border/60 p-3 font-mono text-[11px] leading-5"
                   >{{ resultText(selectedInspect) }}</pre
@@ -1178,7 +1204,7 @@ onMounted(() => void refresh())
             </div>
 
             <section v-if="resultText(lastResult)" class="mt-6 grid gap-2 border-t border-border/60 pt-4">
-              <h4 class="text-sm font-semibold">Last action result</h4>
+              <h4 class="text-sm font-semibold">{{ $st('Last action result') }}</h4>
               <pre
                 class="max-h-[28rem] overflow-auto rounded-md border border-border/60 p-3 font-mono text-xs leading-5"
                 >{{ resultText(lastResult) }}</pre

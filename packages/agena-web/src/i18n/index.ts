@@ -13,6 +13,20 @@ import {
 type MessageSchema = typeof enUS
 
 const messageModules = import.meta.glob('./messages/*.ts', { eager: true }) as Record<string, { default?: unknown }>
+const settingsOverlayModules = import.meta.glob('./settings-overlays/*.json', { eager: true }) as Record<
+  string,
+  { default?: unknown }
+>
+
+function mergeMessageTree(base: unknown, overlay: unknown): unknown {
+  if (!base || typeof base !== 'object' || Array.isArray(base)) return overlay
+  if (!overlay || typeof overlay !== 'object' || Array.isArray(overlay)) return overlay
+  const next: Record<string, unknown> = { ...(base as Record<string, unknown>) }
+  for (const [key, value] of Object.entries(overlay as Record<string, unknown>)) {
+    next[key] = key in next ? mergeMessageTree(next[key], value) : value
+  }
+  return next
+}
 
 const loadedMessages: Record<string, MessageSchema> = {}
 for (const [path, mod] of Object.entries(messageModules)) {
@@ -24,9 +38,21 @@ for (const [path, mod] of Object.entries(messageModules)) {
   }
 }
 
+const loadedSettingsOverlays: Record<string, unknown> = {}
+for (const [path, mod] of Object.entries(settingsOverlayModules)) {
+  const match = path.match(/\/([^/]+)\.json$/)
+  if (!match) continue
+  const locale = match[1]
+  if (locale && mod?.default && typeof mod.default === 'object') loadedSettingsOverlays[locale] = mod.default
+}
+
 const enUSMessages = loadedMessages['en-US'] || enUS
 const messages = Object.fromEntries(
-  SUPPORTED_LOCALES.map((locale) => [locale, loadedMessages[locale] || enUSMessages]),
+  SUPPORTED_LOCALES.map((locale) => {
+    const base = loadedMessages[locale] || enUSMessages
+    const overlay = loadedSettingsOverlays[locale]
+    return [locale, overlay ? mergeMessageTree(base, { settings: overlay }) : base]
+  }),
 ) as Record<AppLocale, MessageSchema>
 
 export const i18n = createI18n({

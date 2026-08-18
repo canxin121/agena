@@ -4,24 +4,25 @@ import McpServerControlPanel from '@/components/settings/McpServerControlPanel.v
 import PluginsPanel from '@/components/settings/PluginsPanel.vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import type { SettingsSubpageDefinition } from '@/components/settings/workbench/settingsSectionNavigation'
+import { settingsText as st } from '@/i18n/settingsText'
 
 const pages: SettingsSubpageDefinition[] = [
   {
     id: 'plugin-workbench',
-    label: 'Plugin Workbench',
-    description: 'Configure plugins, run tools and commands, and inspect capabilities, logs, and diagnostics.',
+    label: st('Plugin Workbench'),
+    description: st('Configure plugins, run tools and commands, and inspect capabilities, logs, and diagnostics.'),
     keywords: ['plugins', 'schema', 'config', 'tools', 'commands', 'logs'],
   },
   {
     id: 'mcp-server',
-    label: 'MCP Server',
-    description: 'Manage the connected server’s MCP listener, OAuth policy, public identity, and tool exposure.',
+    label: st('MCP Server'),
+    description: st('Manage the connected server’s MCP listener, OAuth policy, public identity, and tool exposure.'),
     keywords: ['mcp', 'oauth', 'chatgpt', 'public url', 'tools'],
   },
   {
     id: 'harnesses',
-    label: 'Tool harnesses',
-    description: 'Create named browser, shell, and editor harness configurations.',
+    label: st('Tool harnesses'),
+    description: st('Create named browser, shell, and editor harness configurations.'),
     keywords: ['browser', 'shell', 'editor', 'environment', 'commands'],
   },
 ]
@@ -30,8 +31,10 @@ const pages: SettingsSubpageDefinition[] = [
 <template>
   <SettingsSectionWorkbench
     section="plugins-tools"
-    title="Plugins & Tools"
-    description="Operate the plugin runtime, expose Agena through MCP, and configure provider-native tool harnesses."
+    :title="$st('Plugins & Tools')"
+    :description="
+      $st('Operate the plugin runtime, expose Agena through MCP, and configure provider-native tool harnesses.')
+    "
     :pages="pages"
     default-page="plugin-workbench"
     v-slot="{ activePage }"

@@ -17,6 +17,7 @@ import {
   materializeConfigValue,
   stableJson,
 } from './pluginConfigSchema'
+import { settingsText as st } from '@/i18n/settingsText'
 
 type ConfiguredPlugin = {
   enabled?: boolean
@@ -135,7 +136,7 @@ async function validate() {
       { dry_run: true, validate: true, reload: false },
       'global',
     )
-    toasts.push('success', `${props.pluginId} configuration is valid`)
+    toasts.push('success', st('{pluginId} configuration is valid', { pluginId: props.pluginId }))
   } catch (reason) {
     actionError.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -149,7 +150,7 @@ async function save() {
   actionError.value = ''
   try {
     await setRuntimeSetting(settingsPath.value, persistedRecord(), { validate: true, reload: true }, 'global')
-    toasts.push('success', `${props.pluginId} configuration saved and runtime reloaded`)
+    toasts.push('success', st('{pluginId} configuration saved and runtime reloaded', { pluginId: props.pluginId }))
     emit('saved')
   } catch (reason) {
     actionError.value = reason instanceof Error ? reason.message : String(reason)
@@ -163,16 +164,19 @@ async function save() {
   <div class="grid min-w-0 gap-4">
     <div class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-border/60 bg-muted/10 p-4">
       <div>
-        <h3 class="text-sm font-semibold">Plugin configuration</h3>
+        <h3 class="text-sm font-semibold">{{ $st('Plugin configuration') }}</h3>
         <p class="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">
-          Edits are validated against the plugin’s JSON Schema and the complete composed Agena configuration before the
-          global override is written.
+          {{
+            $st(
+              'Edits are validated against the plugin’s JSON Schema and the complete composed Agena configuration before the global override is written.',
+            )
+          }}
         </p>
         <code class="mt-1 block break-all font-mono text-[10px] text-muted-foreground">{{ settingsPath }}</code>
       </div>
       <label class="inline-flex min-h-9 items-center gap-2 rounded-md border border-border/60 px-3 text-sm">
         <input v-model="enabled" type="checkbox" :disabled="busy" />
-        Plugin enabled
+        {{ $st('Plugin enabled') }}
       </label>
     </div>
 
@@ -180,8 +184,11 @@ async function save() {
       v-if="!schema"
       class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
     >
-      This plugin does not publish a configuration schema. Raw JSON editing remains available and the server still
-      validates the complete plugin record.
+      {{
+        $st(
+          'This plugin does not publish a configuration schema. Raw JSON editing remains available and the server still validates the complete plugin record.',
+        )
+      }}
     </div>
 
     <JsonSchemaField
@@ -189,21 +196,23 @@ async function save() {
       v-model="draft"
       :schema="schema"
       :root-schema="schema"
-      label="Configuration"
+      :label="$st('Configuration')"
       :disabled="busy"
     />
 
     <details class="rounded-lg border border-border/60">
-      <summary class="cursor-pointer px-4 py-3 text-sm font-medium">Configuration diff & persisted override</summary>
+      <summary class="cursor-pointer px-4 py-3 text-sm font-medium">
+        {{ $st('Configuration diff & persisted override') }}
+      </summary>
       <div class="grid gap-3 border-t border-border/60 p-4 lg:grid-cols-2">
         <div class="grid min-w-0 gap-1.5">
-          <div class="text-xs font-medium text-muted-foreground">Saved override</div>
+          <div class="text-xs font-medium text-muted-foreground">{{ $st('Saved override') }}</div>
           <pre class="max-h-72 overflow-auto rounded-md border border-border/60 p-3 font-mono text-[11px] leading-5">{{
             JSON.stringify(savedOverride, null, 2)
           }}</pre>
         </div>
         <div class="grid min-w-0 gap-1.5">
-          <div class="text-xs font-medium text-muted-foreground">Draft override</div>
+          <div class="text-xs font-medium text-muted-foreground">{{ $st('Draft override') }}</div>
           <pre class="max-h-72 overflow-auto rounded-md border border-border/60 p-3 font-mono text-[11px] leading-5">{{
             JSON.stringify(draftOverride, null, 2)
           }}</pre>
@@ -212,7 +221,7 @@ async function save() {
     </details>
 
     <details class="rounded-lg border border-border/60">
-      <summary class="cursor-pointer px-4 py-3 text-sm font-medium">Raw configuration JSON</summary>
+      <summary class="cursor-pointer px-4 py-3 text-sm font-medium">{{ $st('Raw configuration JSON') }}</summary>
       <div class="grid gap-2 border-t border-border/60 p-4">
         <textarea
           v-model="rawText"
@@ -223,10 +232,10 @@ async function save() {
         />
         <div class="flex flex-wrap items-center justify-between gap-2">
           <span v-if="rawError" class="text-xs text-destructive">{{ rawError }}</span>
-          <span v-else class="text-xs text-muted-foreground"
-            >Use this editor for open-ended or schema-unsupported structures.</span
-          >
-          <Button variant="outline" size="sm" :disabled="busy" @click="applyRaw">Apply JSON</Button>
+          <span v-else class="text-xs text-muted-foreground">{{
+            $st('Use this editor for open-ended or schema-unsupported structures.')
+          }}</span>
+          <Button variant="outline" size="sm" :disabled="busy" @click="applyRaw">{{ $st('Apply JSON') }}</Button>
         </div>
       </div>
     </details>
@@ -241,18 +250,18 @@ async function save() {
     <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
       <div class="flex flex-wrap gap-2">
         <Button variant="ghost" size="sm" :disabled="busy || !dirty" @click="revert">
-          <RiRefreshLine class="mr-1.5 h-4 w-4" /> Revert
+          <RiRefreshLine class="mr-1.5 h-4 w-4" /> {{ $st('Revert') }}
         </Button>
         <Button variant="ghost" size="sm" :disabled="busy" @click="resetDefaults">
-          <RiDeleteBinLine class="mr-1.5 h-4 w-4" /> Reset to defaults
+          <RiDeleteBinLine class="mr-1.5 h-4 w-4" /> {{ $st('Reset to defaults') }}
         </Button>
       </div>
       <div class="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" :disabled="busy" @click="validate">
-          <RiShieldCheckLine class="mr-1.5 h-4 w-4" /> {{ validating ? 'Validating…' : 'Validate' }}
+          <RiShieldCheckLine class="mr-1.5 h-4 w-4" /> {{ validating ? $st('Validating…') : $st('Validate') }}
         </Button>
         <Button size="sm" :disabled="busy || !dirty" @click="save">
-          <RiSave3Line class="mr-1.5 h-4 w-4" /> {{ saving ? 'Saving…' : 'Save & reload' }}
+          <RiSave3Line class="mr-1.5 h-4 w-4" /> {{ saving ? $st('Saving…') : $st('Save & reload') }}
         </Button>
       </div>
     </div>

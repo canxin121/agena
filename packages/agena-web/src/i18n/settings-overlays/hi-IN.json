@@ -1,0 +1,126 @@
+{
+  "appearance": {
+    "chat": {
+      "activityDetails": "बंधनेवाला हिस्सा डिफ़ॉल्ट",
+      "activityTable": {
+        "expand": "डिफ़ॉल्ट खुला",
+        "type": "भाग प्रकार"
+      },
+      "autoCollapseActivity": "सहायक खत्म होने के बाद ऑटो-collapse गतिविधि",
+      "label": "चैट",
+      "loadingTools": "पंजीकृत उपकरण लोड हो रहा है ...",
+      "noTools": "कोई मिलान उपकरण नहीं.",
+      "pluginActivityKind": "एक प्लगइन द्वारा पंजीकृत एक भाग प्रस्तुति प्रकार।",
+      "refreshTools": "रिफ्रेश टूल कैटलॉग",
+      "resetToolDefault": "विरासत में मिली डिफ़ॉल्ट का उपयोग करें",
+      "searchTools": "खोज उपकरण",
+      "showReasoning": "तर्क निशान दिखाएँ",
+      "showTimestamps": "टाइमटैम्प",
+      "toolDetails": "उपकरण डिफ़ॉल्ट",
+      "toolDetailsCount": "{shown} of {total} tools",
+      "toolDetailsHint": "प्रत्येक पंजीकृत निष्पादन उपकरण और टूल एपीआई फंक्शन में अपनी डिफ़ॉल्ट ओपन स्टेट है। रीसेट सटीक ओवरराइड को हटा देता है और विरासत वाले श्रेणी डिफ़ॉल्ट को पुनर्स्थापित करता है।",
+      "toolDetailsTable": {
+        "expand": "डिफ़ॉल्ट खुला",
+        "tool": "उपकरण"
+      }
+    },
+    "fonts": {
+      "label": "फ़ॉन्ट्स",
+      "mono": "मोनो फ़ॉन्ट",
+      "options": {
+        "atkinson": "Atkinson Hyperlegible",
+        "ibmPlexMono": "IBM Plex मोनो",
+        "ibmPlexSans": "IBM Plex Sans",
+        "jetbrainsMono": "जेटब्रेन्स मोनो",
+        "serif": "सेरिफ",
+        "system": "प्रणाली"
+      },
+      "search": "खोज फ़ॉन्ट",
+      "ui": "यूआई फ़ॉन्ट"
+    },
+    "intro": "थीम और टाइपोग्राफी सेटिंग्स।",
+    "language": {
+      "help": "स्टूडियो यूआई पर लागू होता है।",
+      "label": "भाषा"
+    },
+    "sizing": {
+      "cornerRadius": "कॉर्नर त्रिज्या (px)",
+      "fontSize": "फ़ॉन्ट आकार (%)",
+      "inputBarOffset": "इनपुट बार ऑफसेट (px)",
+      "label": "आकार",
+      "padding": "पैडिंग (%)"
+    },
+    "theme": {
+      "label": "विषय",
+      "options": {
+        "dark": "अंधेरा",
+        "light": "रोशनी"
+      },
+      "pickerSearch": "खोज विषयों",
+      "pickerTitle": "विषय",
+      "useSystem": "सिस्टम थीम का उपयोग करें"
+    }
+  },
+  "groups": {
+    "application": "एप्लिकेशन",
+    "core": "मुख्य",
+    "system": "सिस्टम"
+  },
+  "refresh": "ताज़ा करें",
+  "refreshAria": "सेटिंग्स ताज़ा करें",
+  "tabs": {
+    "diagnostics": "निदान",
+    "interface": "इंटरफ़ेस",
+    "modelsProviders": "मॉडल और प्रदाता",
+    "permissions": "अनुमतियाँ",
+    "pluginsTools": "प्लगइन और उपकरण",
+    "runtimeSession": "रनटाइम और सत्र"
+  },
+  "title": "सेटिंग्स",
+  "tui": {
+    "activityKindsDescription": "कौन से ट्रांसक्रिप्ट गतिविधि समूहों का विस्तार शुरू होता है।",
+    "activityKindsTitle": "गतिविधि प्रकार",
+    "clientVersionsDescription": "प्रदाता एकीकरण द्वारा उपयोग किए जाने वाले स्थापित क्लाइंट संस्करणों को पिन या रीफ्रेश करें।",
+    "clientVersionsTitle": "प्रदाता ग्राहक संस्करण",
+    "compactionDescription": "नियंत्रण स्वत: संदर्भ संघनन और टोकन रिजर्व संघनन से पहले इस्तेमाल किया।",
+    "compactionTitle": "सत्र संघनन",
+    "diagnosticsDescription": "TUI सेटिंग्स स्टूडियो द्वारा उजागर ट्रेसिंग और रनटाइम डायग्नोस्टिक सेटिंग्स।",
+    "effectiveReadOnly": "प्रभावी सेटिंग्स केवल पढ़ा जाता है। वैश्विक, वर्कस्पेस, या सत्र का चयन एक सतत परत को संपादित करने के लिए करें।",
+    "fields": {
+      "activityDefaultExpanded": "डिफ़ॉल्ट रूप से विस्तारित गतिविधियां",
+      "activityDefaultExpandedDescription": "क्या ट्रांसक्रिप्ट गतिविधि समूह का विस्तार शुरू होता है।",
+      "autoCompaction": "स्वचालित संघटन",
+      "autoCompactionDescription": "जब संदर्भ बजट की आवश्यकता होती है तो सत्र को स्वचालित रूप से कॉम्पैक्ट करें।",
+      "claudeVersion": "क्लाउड क्लाइंट संस्करण",
+      "claudeVersionDescription": "संस्करण बाधा या रिहाई क्लाउड क्लाइंट के लिए चयनित।",
+      "codexVersion": "Codex क्लाइंट संस्करण",
+      "codexVersionDescription": "कोडेक्स क्लाइंट के लिए चयनित संस्करण बाधा या रिलीज।",
+      "colorScheme": "रंग योजना",
+      "colorSchemeDescription": "TUI प्रतिपादन के लिए लाइट, डार्क या सिस्टम कलर स्कीम।",
+      "geminiVersion": "मिथुन क्लाइंट संस्करण",
+      "geminiVersionDescription": "संस्करण बाधा या रिहाई के लिए चयनित मिथुन ग्राहक।",
+      "graphics": "ग्राफिक्स",
+      "graphicsDescription": "ग्राफिकल टर्मिनल रेंडरिंग को सक्षम या अक्षम करें।",
+      "locale": "स्थानीय",
+      "localeDescription": "रनटाइम और टीयूआई द्वारा प्रयुक्त भाषा।",
+      "reservedTokens": "आरक्षित टोकन",
+      "reservedTokensDescription": "Tokens स्वचालित संघन शुरू होने से पहले उपलब्ध रखा।",
+      "theme": "विषय",
+      "themeDescription": "TUI थीम नाम या थीम पहचानकर्ता।",
+      "tracingAdapter": "अनुरेखण एडाप्टर",
+      "tracingAdapterDescription": "अनुरेखण एडाप्टर रनटाइम घटनाओं का निर्यात करने के लिए इस्तेमाल किया।",
+      "tracingDatabase": "डेटाबेस",
+      "tracingDatabaseDescription": "डेटाबेस सिंक या लक्ष्य को ट्रेस करना।",
+      "tracingFilter": "ट्रेसिंग फिल्टर",
+      "tracingFilterDescription": "रनटाइम द्वारा उपयोग किए जाने वाले फ़िल्टर निर्देश को ट्रेस करना।"
+    },
+    "interfaceDescription": "उपस्थिति, भाषा, ट्रांसक्रिप्ट डिफ़ॉल्ट और प्रति उपकरण गतिविधि दृश्यता TUI के साथ साझा की गई।",
+    "noTools": "कोई उपकरण गतिविधि ओवरराइड उपलब्ध नहीं हैं।",
+    "refreshFromNpm": "एनपीएम से ताज़ा",
+    "refreshing": "ताज़ा...",
+    "runtimeDescription": "प्रदाता क्लाइंट संस्करण और सत्र कॉम्पैक्शन सेटिंग TUI रनटाइम के साथ साझा की गई।",
+    "toolOverridesDescription": "व्यक्तिगत उपकरणों के लिए विस्तारित राज्य को ओवरराइड करें, जिसमें डॉटेड टूल नाम शामिल हैं।",
+    "toolOverridesTitle": "उपकरण गतिविधि ओवरराइड"
+  },
+  "unknownTab": "अज्ञात सेटिंग्स टैब।"
+}

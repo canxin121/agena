@@ -1,0 +1,126 @@
+{
+  "appearance": {
+    "chat": {
+      "activityDetails": "تقصير جزئي قابل للتصفير",
+      "activityTable": {
+        "expand": "الخزنة",
+        "type": "نوع الجزء"
+      },
+      "autoCollapseActivity": "نشاط التصفيق الذاتي بعد انتهاء خدمة المساعد",
+      "label": "Chat",
+      "loadingTools": "وضع أدوات مسجلة...",
+      "noTools": "لا توجد أدوات مطابقة.",
+      "pluginActivityKind": "عرض جزئي مسجل من قبل بلوجين",
+      "refreshTools": "دليل أدوات التجديد",
+      "resetToolDefault": "الاستخدام الميراث",
+      "searchTools": "أدوات البحث",
+      "showReasoning": "إظهار آثار المنطق",
+      "showTimestamps": "المصابيح العرضية",
+      "toolDetails": "التخلف عن الدفع",
+      "toolDetailsCount": "{shown} of {total} tools",
+      "toolDetailsHint": "ولكل أداة من أدوات التنفيذ المسجلة ووظيفـة &quot; Tool API &quot; ولاية مفتوحة خاصة بها. ويزيل إعادة التوطين التجاوز الدقيق ويعيد التخلف عن الاستحقاق في الفئة الموروثة.",
+      "toolDetailsTable": {
+        "expand": "الخزنة",
+        "tool": "Tool"
+      }
+    },
+    "fonts": {
+      "label": "Fonts",
+      "mono": "Mono font",
+      "options": {
+        "atkinson": "Atkinson Hyperlegible",
+        "ibmPlexMono": "IBM Plex Mono",
+        "ibmPlexSans": "IBM Plex Sans",
+        "jetbrainsMono": "جبل القطران",
+        "serif": "سيريف",
+        "system": "النظام"
+      },
+      "search": "فونتات البحث",
+      "ui": "UI font"
+    },
+    "intro": "الموضوع والرسم البياني",
+    "language": {
+      "help": "يَعتمدُ على UI الإستوديو.",
+      "label": "اللغة"
+    },
+    "sizing": {
+      "cornerRadius": "رقعة كورنر (px)",
+      "fontSize": "حجم الفونت (%)",
+      "inputBarOffset": "مقاصة المدخلات",
+      "label": "Sizing",
+      "padding": "رسوم (%)"
+    },
+    "theme": {
+      "label": "الموضوع",
+      "options": {
+        "dark": "الظلام",
+        "light": "ضوء"
+      },
+      "pickerSearch": "مواضيع البحث",
+      "pickerTitle": "الموضوع",
+      "useSystem": "موضوع نظام الاستخدام"
+    }
+  },
+  "groups": {
+    "application": "التطبيق",
+    "core": "أساسي",
+    "system": "النظام"
+  },
+  "refresh": "تحديث",
+  "refreshAria": "تحديث الإعدادات",
+  "tabs": {
+    "diagnostics": "التشخيصات",
+    "interface": "الواجهة",
+    "modelsProviders": "النماذج ومزودو الخدمة",
+    "permissions": "الأذونات",
+    "pluginsTools": "الإضافات والأدوات",
+    "runtimeSession": "وقت التشغيل والجلسة"
+  },
+  "title": "الإعدادات",
+  "tui": {
+    "activityKindsDescription": "اختر أي مجموعة من مجموعات نشاط النصوص تبدأ في التوسع.",
+    "activityKindsTitle": "أنواع النشاط",
+    "clientVersionsDescription": "Pin or refresh the installed client versions used by provider integrations.",
+    "clientVersionsTitle": "إصدارات العميل الموفر",
+    "compactionDescription": "التحكم بالإطار التلقائي والاحتياطي المكسور المستخدم قبل الدمج.",
+    "compactionTitle": "ضغط الجلسة",
+    "diagnosticsDescription": "تعقّب وفحوصات تشخيصية جارية كشفها استوديو (تي تي ستينغز)",
+    "effectiveReadOnly": "وتقرأ الأطر الفعالة فقط. اختيار العالم، أو مكان العمل، أو الجلسة لتحرير طبقة مستمرة.",
+    "fields": {
+      "activityDefaultExpanded": "الأنشطة التي تم توسيعها",
+      "activityDefaultExpandedDescription": "وسواء بدأت مجموعات أنشطة النصوص في التوسع.",
+      "autoCompaction": "اتفاق آلي",
+      "autoCompactionDescription": "عقد الدورة تلقائياً عندما تتطلب ميزانية السياق ذلك.",
+      "claudeVersion": "نسخة زبون كلود",
+      "claudeVersionDescription": "تقييد أو إطلاق سراح منتقاة لموكل (كلود)",
+      "codexVersion": "نسخة زبون رمزية",
+      "codexVersionDescription": "تقييد للصوت أو إطلاق سراح مختار لزبون الكودكس",
+      "colorScheme": "مخطط كولور",
+      "colorSchemeDescription": "مُخطّط لون النور أو الظلام أو النظام لـ(تي تي آي)",
+      "geminiVersion": "نسخة زبون جيميني",
+      "geminiVersionDescription": "تقييد أو إطلاق منتقاة لموكل الجوزاء",
+      "graphics": "الرسم البياني",
+      "graphicsDescription": "ترجمه بيانيه",
+      "locale": "المحلية",
+      "localeDescription": "اللغة التي تستخدمها الوحدة",
+      "reservedTokens": "مخابرات محمية",
+      "reservedTokensDescription": "وبقيت المداخل متاحة قبل بدء الدمج الآلي.",
+      "theme": "الموضوع",
+      "themeDescription": "TUI الاسم الموضوعي أو رمز الموضوع.",
+      "tracingAdapter": "جهاز تكييف",
+      "tracingAdapterDescription": "تعقّب المكيّف المستخدم في تصدير الأحداث الجارية.",
+      "tracingDatabase": "قاعدة بيانات التعقب",
+      "tracingDatabaseDescription": "قاعدة بيانات تعقب المغسلة أو الهدف",
+      "tracingFilter": "مرشح للتعقب",
+      "tracingFilterDescription": "تعقّب الرشّة التّوجيهيّة التي تستخدمها في وقت التشغيل."
+    },
+    "interfaceDescription": "Appearance, language, transcript defaults, and per-tool activity visibility shared with the TUI.",
+    "noTools": "ولا توجد تجاوزات في نشاط الأدوات.",
+    "refreshFromNpm": "Refresh from npm",
+    "refreshing": "....",
+    "runtimeDescription": "(ب) نسخ زبونة مقدِّم خدمات وأطر عقد جلسات مدمجة مشتركة مع برنامج العمل العادي للاتحاد.",
+    "toolOverridesDescription": "Override the expanded state for individual tools, including dotted tool names.",
+    "toolOverridesTitle": "التجاوزات في أنشطة السحب"
+  },
+  "unknownTab": "علامة تبويب إعدادات غير معروفة."
+}

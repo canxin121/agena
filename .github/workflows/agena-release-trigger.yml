@@ -1,0 +1,38 @@
+name: Agena Release Trigger
+run-name: Dispatch ${{ github.ref_name }}
+
+on:
+  push:
+    tags:
+      - agena-v*
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: agena-release-trigger-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      # GitHub caches created for different tag refs are isolated. Dispatch the
+      # actual build on the default branch while checking out the tagged SHA.
+      - name: Dispatch release build on the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run agena-release.yml \
+            --repo "$GH_REPO" \
+            --ref "$DEFAULT_BRANCH" \
+            --field tag_name="$RELEASE_TAG" \
+            --field source_sha="$SOURCE_SHA" \
+            --field publish_release=true

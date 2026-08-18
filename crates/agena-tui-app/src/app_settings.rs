@@ -23,6 +23,23 @@ impl App {
                     );
                     return true;
                 }
+                if action.path == MCP_OAUTH_ISSUER_URL_SETTINGS_PATH {
+                    let oauth_issuer_url =
+                        (!input.trim().is_empty()).then(|| input.trim().to_owned());
+                    self.dispatch_backend_operation(
+                        move |application| async move {
+                            application.set_mcp_oauth_issuer_url(oauth_issuer_url).await
+                        },
+                        |app, result| match result {
+                            Ok(_) => {
+                                app.flash_success("Agena MCP OAuth issuer URL updated".to_owned());
+                                app.refresh_current_route_after_local_edit();
+                            }
+                            Err(error) => app.flash_error(error),
+                        },
+                    );
+                    return true;
+                }
                 if action.path == MCP_OAUTH_PASSWORD_SETTINGS_PATH {
                     self.dispatch_backend_operation(
                         move |application| async move {
@@ -88,7 +105,8 @@ impl App {
     }
 }
 use crate::{
-    App, InputDialogKeyResult, KeyEvent, MCP_OAUTH_PASSWORD_SETTINGS_PATH,
-    MCP_PUBLIC_URL_SETTINGS_PATH, SettingsValueEditOverlay, drive_input_dialog_key,
-    parse_settings_field_input, settings_path_cleared_message, settings_path_updated_message,
+    App, InputDialogKeyResult, KeyEvent, MCP_OAUTH_ISSUER_URL_SETTINGS_PATH,
+    MCP_OAUTH_PASSWORD_SETTINGS_PATH, MCP_PUBLIC_URL_SETTINGS_PATH, SettingsValueEditOverlay,
+    drive_input_dialog_key, parse_settings_field_input, settings_path_cleared_message,
+    settings_path_updated_message,
 };

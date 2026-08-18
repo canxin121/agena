@@ -20,6 +20,11 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
             || args.workspace_root.is_some()
             || args.ui_password.is_some()
             || args.mcp_public_url.is_some()
+            || args.mcp_oauth_issuer_url.is_some()
+            || args.mcp_auth_mode.is_some()
+            || args.mcp_anonymous_access.is_some()
+            || args.mcp_tool_exposure.is_some()
+            || args.mcp_client_registration.is_some()
             || args.ui_dir.is_some()
         {
             bail!(
@@ -106,6 +111,25 @@ pub(crate) async fn start(mut args: ServerArgs) -> Result<()> {
     }
     if let Some(mcp_public_url) = &args.mcp_public_url {
         command.arg("--mcp-public-url").arg(mcp_public_url);
+    }
+    if let Some(mcp_oauth_issuer_url) = &args.mcp_oauth_issuer_url {
+        command
+            .arg("--mcp-oauth-issuer-url")
+            .arg(mcp_oauth_issuer_url);
+    }
+    if let Some(mode) = args.mcp_auth_mode {
+        command.arg("--mcp-auth-mode").arg(mode.as_str());
+    }
+    if let Some(access) = args.mcp_anonymous_access {
+        command.arg("--mcp-anonymous-access").arg(access.as_str());
+    }
+    if let Some(exposure) = args.mcp_tool_exposure {
+        command.arg("--mcp-tool-exposure").arg(exposure.as_str());
+    }
+    if let Some(registration) = args.mcp_client_registration {
+        command
+            .arg("--mcp-client-registration")
+            .arg(registration.as_str());
     }
     if let Some(password) = &args.ui_password {
         command.env("AGENA_SERVER_UI_PASSWORD", password);

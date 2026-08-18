@@ -1224,15 +1224,43 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
         tools
             .into_iter()
             .zip(names)
-            .map(|(tool, name)| agena_runtime::RuntimeToolDescriptor {
-                name,
-                summary: tool.summary_text().map(ToOwned::to_owned),
-                before_help: tool.before_help_text().map(ToOwned::to_owned),
-                after_help: tool.after_help_text().map(ToOwned::to_owned),
-                input_schema: tool.input_schema(),
-                interactive: tool.definition.permissions.interactive
-                    || tool.has_tag(agena_plugin_host::sdk::ToolTag::Interactive),
-                plugin_id: Some(tool.plugin_full_name()),
+            .map(|(tool, name)| {
+                let permissions = &tool.definition.permissions;
+                let has_write_access = permissions
+                    .input_paths
+                    .iter()
+                    .any(|path| path.kind == agena_domain::PathKind::Write)
+                    || permissions
+                        .path_access
+                        .iter()
+                        .any(|path| path.kind == agena_domain::PathKind::Write);
+                let open_world = !permissions.input_networks.is_empty()
+                    || !permissions.network_access.is_empty();
+                let interactive = permissions.interactive
+                    || tool.has_tag(agena_plugin_host::sdk::ToolTag::Interactive);
+                let read_only = permissions.read_only
+                    && !permissions.shell
+                    && !permissions.mutating
+                    && !has_write_access
+                    && !open_world
+                    && !interactive
+                    && !permissions.task;
+                let output_schema = tool.output_schema();
+                let output_schema = (!output_schema.is_null()).then_some(output_schema);
+                agena_runtime::RuntimeToolDescriptor {
+                    name,
+                    summary: tool.summary_text().map(ToOwned::to_owned),
+                    before_help: tool.before_help_text().map(ToOwned::to_owned),
+                    after_help: tool.after_help_text().map(ToOwned::to_owned),
+                    input_schema: tool.input_schema(),
+                    output_schema,
+                    interactive,
+                    read_only,
+                    destructive: permissions.shell || permissions.mutating || has_write_access,
+                    open_world,
+                    task: permissions.task,
+                    plugin_id: Some(tool.plugin_full_name()),
+                }
             })
             .collect()
     }

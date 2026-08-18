@@ -36,11 +36,24 @@ pub(crate) fn settings_studio_mcp_items(
         .as_ref()
         .and_then(|value| value.get("enabled"))
         .and_then(serde_json::Value::as_bool);
-    let auth_enabled = control
+    let auth_mode = control
         .as_ref()
-        .and_then(|value| value.get("authEnabled"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
+        .and_then(|value| value.get("authMode"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            control
+                .as_ref()
+                .and_then(|value| value.get("authEnabled"))
+                .and_then(serde_json::Value::as_bool)
+                .map(|enabled| if enabled { "oauth" } else { "none" })
+        })
+        .unwrap_or("none");
+    let auth_enabled = auth_mode != "none";
+    let anonymous_access = control
+        .as_ref()
+        .and_then(|value| value.get("anonymousAccess"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("none");
     let ready = control
         .as_ref()
         .and_then(|value| value.get("ready"))
@@ -67,6 +80,21 @@ pub(crate) fn settings_studio_mcp_items(
         .as_ref()
         .and_then(|value| value.get("resourceUrl"))
         .and_then(serde_json::Value::as_str);
+    let configured_issuer = control
+        .as_ref()
+        .and_then(|value| value.get("oauthIssuerUrl"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty());
+    let tool_exposure = control
+        .as_ref()
+        .and_then(|value| value.get("toolExposure"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("read_only");
+    let client_registration = control
+        .as_ref()
+        .and_then(|value| value.get("clientRegistration"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("cimd_only");
     let password_status = control
         .as_ref()
         .and_then(|value| value.get("oauth"))
@@ -127,10 +155,10 @@ pub(crate) fn settings_studio_mcp_items(
         ),
         SettingsStudioItem::new(
             ui_text::t(i18n, "settings-mcp-auth-label"),
-            if auth_enabled {
-                ui_text::t(i18n, "settings-mcp-auth-enabled")
-            } else {
-                ui_text::t(i18n, "settings-mcp-auth-disabled")
+            match auth_mode {
+                "oauth" => ui_text::t(i18n, "settings-mcp-auth-oauth"),
+                "mixed" => ui_text::t(i18n, "settings-mcp-auth-mixed"),
+                _ => ui_text::t(i18n, "settings-mcp-auth-none"),
             },
             if auth_enabled {
                 let oauth = control.as_ref().and_then(|value| value.get("oauth"));
@@ -168,6 +196,36 @@ pub(crate) fn settings_studio_mcp_items(
             SettingsPickerAction::ToggleMcpAuth,
         ),
         SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-mcp-anonymous-access-label"),
+            if anonymous_access == "read_only" {
+                ui_text::t(i18n, "settings-mcp-anonymous-access-read-only")
+            } else {
+                ui_text::t(i18n, "settings-mcp-anonymous-access-none")
+            },
+            if auth_mode != "mixed" {
+                ui_text::t(i18n, "settings-mcp-anonymous-access-inactive-detail")
+            } else if anonymous_access == "read_only" {
+                ui_text::t(i18n, "settings-mcp-anonymous-access-read-only-detail")
+            } else {
+                ui_text::t(i18n, "settings-mcp-anonymous-access-none-detail")
+            },
+            SettingsPickerAction::ToggleMcpAnonymousAccess,
+        ),
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-mcp-client-registration-label"),
+            if client_registration == "cimd_and_dcr" {
+                ui_text::t(i18n, "settings-mcp-client-registration-dcr")
+            } else {
+                ui_text::t(i18n, "settings-mcp-client-registration-cimd")
+            },
+            if client_registration == "cimd_and_dcr" {
+                ui_text::t(i18n, "settings-mcp-client-registration-dcr-detail")
+            } else {
+                ui_text::t(i18n, "settings-mcp-client-registration-cimd-detail")
+            },
+            SettingsPickerAction::ToggleMcpClientRegistration,
+        ),
+        SettingsStudioItem::new(
             ui_text::t(i18n, "settings-mcp-public-url-label"),
             configured_url
                 .map(str::to_owned)
@@ -181,6 +239,28 @@ pub(crate) fn settings_studio_mcp_items(
                 })
                 .unwrap_or_else(|| ui_text::t(i18n, "settings-mcp-public-url-detail")),
             SettingsPickerAction::EditMcpPublicUrl,
+        ),
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-mcp-oauth-issuer-label"),
+            configured_issuer
+                .map(str::to_owned)
+                .unwrap_or_else(|| ui_text::t(i18n, "settings-mcp-oauth-issuer-derived")),
+            ui_text::t(i18n, "settings-mcp-oauth-issuer-detail"),
+            SettingsPickerAction::EditMcpOAuthIssuerUrl,
+        ),
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-mcp-tool-exposure-label"),
+            if tool_exposure == "all_non_interactive" {
+                ui_text::t(i18n, "settings-mcp-tool-exposure-all")
+            } else {
+                ui_text::t(i18n, "settings-mcp-tool-exposure-read-only")
+            },
+            if tool_exposure == "all_non_interactive" {
+                ui_text::t(i18n, "settings-mcp-tool-exposure-all-detail")
+            } else {
+                ui_text::t(i18n, "settings-mcp-tool-exposure-read-only-detail")
+            },
+            SettingsPickerAction::ToggleMcpToolExposure,
         ),
     ];
     if auth_enabled {

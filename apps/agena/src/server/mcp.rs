@@ -9,7 +9,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{
         Arc, RwLock,
-        atomic::{AtomicBool, AtomicI64, Ordering},
+        atomic::{AtomicI64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -47,6 +47,8 @@ use super::persistence::db::{
 };
 
 const MCP_SCOPE: &str = "agena:tools";
+const OFFLINE_ACCESS_SCOPE: &str = "offline_access";
+const DEFAULT_OAUTH_SCOPE: &str = "agena:tools offline_access";
 const MCP_PATH: &str = "/mcp";
 const ACCESS_TOKEN_TTL: Duration = Duration::from_secs(60 * 60);
 const REFRESH_TOKEN_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -55,13 +57,15 @@ const CIMD_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_MCP_METADATA_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CIMD_DOCUMENT_BYTES: usize = 256 * 1024;
 const MAX_MCP_OAUTH_PASSWORD_BYTES: usize = 4096;
-const OPENAI_MCP_DISCOVER_METHOD: &str = "server/discover";
-const MCP_DISCOVERY_SUPPORTED_VERSIONS: &[&str] =
-    &["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"];
-const MCP_DISCOVERY_TTL_MS: u64 = 60 * 60 * 1000;
+const MAX_REGISTERED_OAUTH_CLIENTS: usize = 256;
+const MAX_CACHED_CIMD_CLIENTS: usize = 128;
+const MAX_OUTSTANDING_AUTHORIZATION_CODES: usize = 1024;
+const MAX_REFRESH_TOKEN_RECORDS: usize = 4096;
+const MAX_OAUTH_URI_BYTES: usize = 4096;
+const MAX_OAUTH_LABEL_BYTES: usize = 256;
 const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const OAUTH_SIGNING_KEY_VERSION: u32 = 1;
-const OAUTH_RUNTIME_VERSION: u32 = 1;
+const OAUTH_RUNTIME_VERSION: u32 = 2;
 const OAUTH_KEYRING_SERVICE: &str = "agena";
 const OAUTH_KEYRING_READ_TIMEOUT: Duration = Duration::from_millis(750);
 
@@ -80,11 +84,204 @@ pub(crate) struct McpServerState {
     fallback_resource: String,
 }
 
+fn mcp_tool_is_exposed_for_mode(tool: &OperatorToolResource, exposure: McpToolExposure) -> bool {
+    if !mcp_tool_is_base_eligible(tool) || tool.task {
+        return false;
+    }
+    match exposure {
+        McpToolExposure::ReadOnly => tool.read_only,
+        McpToolExposure::AllNonInteractive => true,
+    }
+}
+
+fn request_has_modern_mcp_headers(headers: &HeaderMap) -> bool {
+    headers.contains_key("mcp-method")
+        || headers.contains_key("mcp-name")
+        || headers
+            .get("mcp-protocol-version")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|version| version.trim() == "2026-07-28")
+}
+
+fn value_uses_modern_mcp(value: &serde_json::Value) -> bool {
+    let message_is_modern = |message: &serde_json::Value| {
+        message.get("method").and_then(serde_json::Value::as_str) == Some("server/discover")
+            || message
+                .get("params")
+                .and_then(|params| params.get("_meta"))
+                .and_then(|meta| meta.get("io.modelcontextprotocol/protocolVersion"))
+                .and_then(serde_json::Value::as_str)
+                == Some("2026-07-28")
+    };
+    match value {
+        serde_json::Value::Object(_) => message_is_modern(value),
+        serde_json::Value::Array(messages) => messages.iter().any(message_is_modern),
+        _ => false,
+    }
+}
+
+fn value_is_legacy_compat_request(value: &serde_json::Value) -> bool {
+    let message_is_supported = |message: &serde_json::Value| {
+        message
+            .get("method")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|method| {
+                matches!(method, "initialize" | "ping" | "tools/list" | "tools/call")
+                    || method.starts_with("notifications/")
+            })
+    };
+    match value {
+        serde_json::Value::Object(_) => message_is_supported(value),
+        serde_json::Value::Array(messages) => {
+            !messages.is_empty() && messages.iter().all(message_is_supported)
+        }
+        _ => false,
+    }
+}
+
+fn refresh_token_fingerprint(token: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
+}
+
+async fn validate_mcp_host_origin(
+    State(state): State<Arc<McpServerState>>,
+    request: axum::http::Request<Body>,
+    next: middleware::Next,
+) -> Response {
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok());
+    if !host.is_some_and(|host| state.accepts_host(host)) {
+        return control_error(
+            StatusCode::BAD_REQUEST,
+            "untrusted Host header for the Agena MCP/OAuth surface".to_owned(),
+        );
+    }
+
+    if let Some(origin) = request
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        && !state.accepts_origin(origin)
+    {
+        return control_error(
+            StatusCode::FORBIDDEN,
+            "untrusted Origin header for the Agena MCP/OAuth surface".to_owned(),
+        );
+    }
+    next.run(request).await
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum McpToolExposure {
+    /// Expose only tools whose authority-bearing permission contract qualifies
+    /// for Agena's read-only fast path. This is the secure default for a
+    /// remotely reachable ChatGPT connector.
+    #[default]
+    ReadOnly,
+    /// Expose every non-interactive, non-task tool after the provider/plugin
+    /// denylist. This can include shell, filesystem writes, and network tools
+    /// and therefore requires an explicit operator opt-in.
+    AllNonInteractive,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum McpAuthMode {
+    /// No OAuth discovery or bearer enforcement. Every exposed tool declares
+    /// the Apps SDK `noauth` security scheme.
+    #[default]
+    None,
+    /// Protect the complete MCP transport, including initialize and tools/list.
+    Oauth,
+    /// Keep initialize and tool discovery anonymous while applying OAuth per
+    /// tool. Tool calls remain protected by default; operators can explicitly
+    /// opt read-only tools into anonymous access.
+    Mixed,
+}
+
+impl McpAuthMode {
+    const fn is_enabled(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+impl From<agena_cli::McpAuthModeArg> for McpAuthMode {
+    fn from(value: agena_cli::McpAuthModeArg) -> Self {
+        match value {
+            agena_cli::McpAuthModeArg::None => Self::None,
+            agena_cli::McpAuthModeArg::Oauth => Self::Oauth,
+            agena_cli::McpAuthModeArg::Mixed => Self::Mixed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum McpAnonymousAccess {
+    /// No tool call is anonymous. In mixed mode only initialize and discovery
+    /// remain public, which is the safe default for private workspace data.
+    #[default]
+    None,
+    /// Allow tools proven read-only by Agena's permission contract to execute
+    /// anonymously. This is an explicit opt-in because read-only does not mean
+    /// non-sensitive: filesystem and workspace reads can still expose data.
+    ReadOnly,
+}
+
+impl From<agena_cli::McpAnonymousAccessArg> for McpAnonymousAccess {
+    fn from(value: agena_cli::McpAnonymousAccessArg) -> Self {
+        match value {
+            agena_cli::McpAnonymousAccessArg::None => Self::None,
+            agena_cli::McpAnonymousAccessArg::ReadOnly => Self::ReadOnly,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum McpClientRegistration {
+    /// Accept only ChatGPT Client ID Metadata Documents. This is the safer
+    /// default because it avoids exposing an unauthenticated DCR endpoint to
+    /// the public internet.
+    #[default]
+    CimdOnly,
+    /// Also expose OAuth Dynamic Client Registration for older clients.
+    CimdAndDcr,
+}
+
+impl McpClientRegistration {
+    const fn dcr_enabled(self) -> bool {
+        matches!(self, Self::CimdAndDcr)
+    }
+}
+impl From<agena_cli::McpClientRegistrationArg> for McpClientRegistration {
+    fn from(value: agena_cli::McpClientRegistrationArg) -> Self {
+        match value {
+            agena_cli::McpClientRegistrationArg::CimdOnly => Self::CimdOnly,
+            agena_cli::McpClientRegistrationArg::CimdAndDcr => Self::CimdAndDcr,
+        }
+    }
+}
+
+impl From<agena_cli::McpToolExposureArg> for McpToolExposure {
+    fn from(value: agena_cli::McpToolExposureArg) -> Self {
+        match value {
+            agena_cli::McpToolExposureArg::ReadOnly => Self::ReadOnly,
+            agena_cli::McpToolExposureArg::AllNonInteractive => Self::AllNonInteractive,
+        }
+    }
+}
+
 struct McpControlState {
-    enabled: AtomicBool,
-    auth_enabled: AtomicBool,
+    enabled: std::sync::atomic::AtomicBool,
+    auth_mode: RwLock<McpAuthMode>,
+    anonymous_access: RwLock<McpAnonymousAccess>,
     configured_resource: RwLock<Option<String>>,
     configured_issuer: RwLock<Option<String>>,
+    tool_exposure: RwLock<McpToolExposure>,
+    client_registration: RwLock<McpClientRegistration>,
     oauth_password: RwLock<Option<McpOAuthPassword>>,
     database: Option<Arc<ServerStateDb>>,
     update_lock: tokio::sync::Mutex<()>,
@@ -107,12 +304,22 @@ struct PersistedMcpServerControl {
     enabled: bool,
     #[serde(default)]
     public_url: Option<String>,
+    /// Legacy projection retained for downgrade compatibility. New readers use
+    /// `auth_mode`; old persisted values map `true` to full OAuth.
     #[serde(default)]
     auth_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth_mode: Option<McpAuthMode>,
+    #[serde(default)]
+    anonymous_access: McpAnonymousAccess,
     #[serde(default)]
     oauth_password_phc: Option<String>,
     #[serde(default)]
     oauth_issuer_url: Option<String>,
+    #[serde(default)]
+    tool_exposure: McpToolExposure,
+    #[serde(default)]
+    client_registration: McpClientRegistration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -262,6 +469,16 @@ fn default_mcp_server_enabled() -> bool {
     true
 }
 
+pub(crate) struct McpServerStartupConfig<'a> {
+    pub(crate) public_url: Option<&'a str>,
+    pub(crate) oauth_issuer_url: Option<&'a str>,
+    pub(crate) auth_mode: Option<McpAuthMode>,
+    pub(crate) anonymous_access: Option<McpAnonymousAccess>,
+    pub(crate) tool_exposure: Option<McpToolExposure>,
+    pub(crate) client_registration: Option<McpClientRegistration>,
+    pub(crate) fallback_public_url: &'a str,
+}
+
 impl McpServerState {
     #[allow(dead_code)]
     pub(crate) fn new(
@@ -285,7 +502,10 @@ impl McpServerState {
             None,
             fallback_resource,
             true,
-            false,
+            McpAuthMode::None,
+            McpAnonymousAccess::None,
+            McpToolExposure::ReadOnly,
+            McpClientRegistration::CimdOnly,
             None,
             None,
         ))
@@ -296,55 +516,131 @@ impl McpServerState {
         workspace_id: i64,
         ui_auth: UiAuth,
         database: Arc<ServerStateDb>,
-        configured_public_url: Option<&str>,
-        fallback_public_url: &str,
+        startup: McpServerStartupConfig<'_>,
     ) -> Result<Self, String> {
         let persisted = database
             .get_json::<PersistedMcpServerControl>(KV_KEY_MCP_SERVER_CONTROL)
             .await?;
-        let (enabled, auth_enabled, configured_public_url, configured_issuer, oauth_password) =
-            match persisted {
-                Some(persisted) => {
-                    let oauth_password = persisted
-                        .oauth_password_phc
-                        .map(|phc| {
-                            let verifier = auth::init_ui_auth_from_phc(phc.clone())?;
-                            Ok::<_, String>(McpOAuthPassword { verifier, phc })
-                        })
-                        .transpose()?;
-                    (
-                        persisted.enabled,
-                        persisted.auth_enabled,
-                        persisted.public_url,
-                        persisted.oauth_issuer_url,
-                        oauth_password,
-                    )
-                }
-                None => {
-                    let configured_public_url = configured_public_url
-                        .map(normalize_public_mcp_url)
-                        .transpose()?;
-                    (true, false, configured_public_url, None, None)
-                }
-            };
-        let configured_resource = configured_public_url
+        let had_persisted_control = persisted.is_some();
+        let persisted_used_legacy_auth = persisted
+            .as_ref()
+            .is_some_and(|control| control.auth_mode.is_none());
+        let (
+            enabled,
+            mut auth_mode,
+            mut anonymous_access,
+            configured_public_url,
+            configured_issuer_url,
+            mut tool_exposure,
+            mut client_registration,
+            oauth_password,
+        ) = match persisted.as_ref() {
+            Some(persisted) => {
+                let oauth_password = persisted
+                    .oauth_password_phc
+                    .clone()
+                    .map(|phc| {
+                        let verifier = auth::init_ui_auth_from_phc(phc.clone())?;
+                        Ok::<_, String>(McpOAuthPassword { verifier, phc })
+                    })
+                    .transpose()?;
+                (
+                    persisted.enabled,
+                    persisted.auth_mode.unwrap_or(if persisted.auth_enabled {
+                        McpAuthMode::Oauth
+                    } else {
+                        McpAuthMode::None
+                    }),
+                    persisted.anonymous_access,
+                    persisted.public_url.clone(),
+                    persisted.oauth_issuer_url.clone(),
+                    persisted.tool_exposure,
+                    persisted.client_registration,
+                    oauth_password,
+                )
+            }
+            None => (
+                true,
+                McpAuthMode::None,
+                McpAnonymousAccess::None,
+                None,
+                None,
+                McpToolExposure::ReadOnly,
+                McpClientRegistration::CimdOnly,
+                None,
+            ),
+        };
+        let mut configured_resource = configured_public_url
             .map(|value| normalize_public_mcp_url(value.as_str()))
             .transpose()?;
-        let configured_issuer = configured_issuer
+        let mut configured_issuer = configured_issuer_url
             .map(|value| normalize_oauth_issuer_url(value.as_str()))
             .transpose()?;
-        let fallback_resource = normalize_public_mcp_url(fallback_public_url)?;
+        let persisted_effective = (
+            auth_mode,
+            anonymous_access,
+            configured_resource.clone(),
+            configured_issuer.clone(),
+            tool_exposure,
+            client_registration,
+        );
+
+        // Explicit process configuration is authoritative on every startup,
+        // not only on a brand-new database. This is essential for immutable
+        // deployments where a domain, OAuth mode, or policy is changed through
+        // environment variables and the existing state volume is retained.
+        if let Some(public_url) = startup.public_url {
+            configured_resource = Some(normalize_public_mcp_url(public_url)?);
+        }
+        if let Some(oauth_issuer_url) = startup.oauth_issuer_url {
+            configured_issuer = Some(normalize_oauth_issuer_url(oauth_issuer_url)?);
+        }
+        if let Some(value) = startup.auth_mode {
+            auth_mode = value;
+        }
+        if let Some(value) = startup.anonymous_access {
+            anonymous_access = value;
+        }
+        if let Some(value) = startup.tool_exposure {
+            tool_exposure = value;
+        }
+        if let Some(value) = startup.client_registration {
+            client_registration = value;
+        }
+
+        if auth_mode.is_enabled() && matches!(&ui_auth, UiAuth::Disabled) {
+            return Err(
+                "public MCP OAuth requires AGENA_SERVER_UI_PASSWORD (or --ui-password) so the Agena management API and authorization page are not exposed without an operator credential"
+                    .to_owned(),
+            );
+        }
+
+        let effective_control = (
+            auth_mode,
+            anonymous_access,
+            configured_resource.clone(),
+            configured_issuer.clone(),
+            tool_exposure,
+            client_registration,
+        );
+        let control_changed = !had_persisted_control || persisted_effective != effective_control;
+        let fallback_resource = normalize_public_mcp_url(startup.fallback_public_url)?;
         let signing_key = load_or_create_oauth_signing_key(&database).await?;
         let persisted_runtime = database
             .get_json::<PersistedOAuthRuntime>(KV_KEY_MCP_OAUTH_RUNTIME)
             .await?;
         if persisted_runtime
             .as_ref()
-            .is_some_and(|runtime| runtime.version != OAUTH_RUNTIME_VERSION)
+            .is_some_and(|runtime| !matches!(runtime.version, 1 | OAUTH_RUNTIME_VERSION))
         {
             return Err("unsupported persisted MCP OAuth runtime version".to_owned());
         }
-        Ok(Self::with_control(
+        let oauth_runtime = if control_changed {
+            None
+        } else {
+            persisted_runtime
+        };
+        let state = Self::with_control(
             application,
             workspace_id,
             Arc::new(AtomicI64::new(1)),
@@ -352,16 +648,42 @@ impl McpServerState {
             Arc::new(OAuthState::new(
                 signing_key,
                 Some(Arc::clone(&database)),
-                persisted_runtime,
+                oauth_runtime,
             )),
-            configured_resource,
-            configured_issuer,
+            configured_resource.clone(),
+            configured_issuer.clone(),
             fallback_resource,
             enabled,
-            auth_enabled,
+            auth_mode,
+            anonymous_access,
+            tool_exposure,
+            client_registration,
             oauth_password,
-            Some(database),
-        ))
+            Some(Arc::clone(&database)),
+        );
+
+        // Persist normalized/migrated values so a later restart without the
+        // explicit environment still has one coherent connector identity.
+        if control_changed || persisted_used_legacy_auth {
+            state
+                .persist_control(
+                    enabled,
+                    auth_mode,
+                    anonymous_access,
+                    configured_resource,
+                    configured_issuer,
+                    tool_exposure,
+                    client_registration,
+                )
+                .await?;
+        }
+        if control_changed {
+            // Tokens, refresh families, and registered clients are bound to
+            // the previous resource/issuer/policy. Never carry them across an
+            // environment-driven deployment identity change.
+            state.clear_oauth_runtime_state().await?;
+        }
+        Ok(state)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -375,7 +697,10 @@ impl McpServerState {
         configured_issuer: Option<String>,
         fallback_resource: String,
         enabled: bool,
-        auth_enabled: bool,
+        auth_mode: McpAuthMode,
+        anonymous_access: McpAnonymousAccess,
+        tool_exposure: McpToolExposure,
+        client_registration: McpClientRegistration,
         oauth_password: Option<McpOAuthPassword>,
         database: Option<Arc<ServerStateDb>>,
     ) -> Self {
@@ -386,10 +711,13 @@ impl McpServerState {
             ui_auth,
             oauth,
             control: Arc::new(McpControlState {
-                enabled: AtomicBool::new(enabled),
-                auth_enabled: AtomicBool::new(auth_enabled),
+                enabled: std::sync::atomic::AtomicBool::new(enabled),
+                auth_mode: RwLock::new(auth_mode),
+                anonymous_access: RwLock::new(anonymous_access),
                 configured_resource: RwLock::new(configured_resource),
                 configured_issuer: RwLock::new(configured_issuer),
+                tool_exposure: RwLock::new(tool_exposure),
+                client_registration: RwLock::new(client_registration),
                 oauth_password: RwLock::new(oauth_password),
                 database,
                 update_lock: tokio::sync::Mutex::new(()),
@@ -402,8 +730,24 @@ impl McpServerState {
         self.control.enabled.load(Ordering::Acquire)
     }
 
+    fn auth_mode(&self) -> McpAuthMode {
+        *self
+            .control
+            .auth_mode
+            .read()
+            .expect("MCP auth mode lock poisoned")
+    }
+
     fn auth_enabled(&self) -> bool {
-        self.control.auth_enabled.load(Ordering::Acquire)
+        self.auth_mode().is_enabled()
+    }
+
+    fn anonymous_access(&self) -> McpAnonymousAccess {
+        *self
+            .control
+            .anonymous_access
+            .read()
+            .expect("MCP anonymous access lock poisoned")
     }
 
     fn configured_public_url(&self) -> Option<String> {
@@ -420,6 +764,98 @@ impl McpServerState {
             .read()
             .expect("MCP OAuth issuer lock poisoned")
             .clone()
+    }
+
+    fn tool_exposure(&self) -> McpToolExposure {
+        *self
+            .control
+            .tool_exposure
+            .read()
+            .expect("MCP tool exposure lock poisoned")
+    }
+
+    fn client_registration(&self) -> McpClientRegistration {
+        *self
+            .control
+            .client_registration
+            .read()
+            .expect("MCP client registration lock poisoned")
+    }
+
+    fn tool_is_exposed(&self, tool: &OperatorToolResource) -> bool {
+        mcp_tool_is_exposed_for_mode(tool, self.tool_exposure())
+    }
+
+    fn tool_requires_auth(&self, tool: &OperatorToolResource) -> bool {
+        match self.auth_mode() {
+            McpAuthMode::None => false,
+            McpAuthMode::Oauth => true,
+            McpAuthMode::Mixed => match self.anonymous_access() {
+                McpAnonymousAccess::None => true,
+                McpAnonymousAccess::ReadOnly => !tool.read_only,
+            },
+        }
+    }
+
+    async fn exposed_tool_auth_requirements(&self) -> HashMap<String, bool> {
+        self.application
+            .list_operator_tools()
+            .await
+            .into_iter()
+            .filter(|tool| self.tool_is_exposed(tool))
+            .map(|tool| {
+                let requires_auth = self.tool_requires_auth(&tool);
+                (tool.name, requires_auth)
+            })
+            .collect()
+    }
+
+    fn accepts_host(&self, authority: &str) -> bool {
+        let authority = authority.trim().trim_end_matches('.').to_ascii_lowercase();
+        if authority.is_empty() {
+            return false;
+        }
+        if authority_host(authority.as_str())
+            .as_deref()
+            .is_some_and(is_loopback_host_name)
+        {
+            return true;
+        }
+        self.identity_urls().into_iter().any(|url| {
+            url_authority(url.as_str())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(authority.as_str()))
+        })
+    }
+
+    fn accepts_origin(&self, origin: &str) -> bool {
+        let Ok(origin) = Url::parse(origin.trim()) else {
+            return false;
+        };
+        if !origin.username().is_empty()
+            || origin.password().is_some()
+            || origin.query().is_some()
+            || origin.fragment().is_some()
+            || origin.path() != "/"
+        {
+            return false;
+        }
+        let candidate = origin.origin().ascii_serialization();
+        self.identity_urls().into_iter().any(|url| {
+            Url::parse(url.as_str())
+                .map(|url| url.origin().ascii_serialization() == candidate)
+                .unwrap_or(false)
+        })
+    }
+
+    fn identity_urls(&self) -> Vec<String> {
+        let mut urls = vec![self.fallback_resource.clone()];
+        if let Some(resource) = self.configured_public_url() {
+            urls.push(resource);
+        }
+        if let Some(issuer) = self.configured_oauth_issuer_url() {
+            urls.push(issuer);
+        }
+        urls
     }
 
     fn has_custom_oauth_password(&self) -> bool {
@@ -446,27 +882,12 @@ impl McpServerState {
 
     fn public_resource_with_configured(
         &self,
-        headers: &HeaderMap,
+        _headers: &HeaderMap,
         configured_resource: Option<&str>,
     ) -> String {
-        if let Some(resource) = configured_resource {
-            return resource.to_owned();
-        }
-
-        let scheme = forwarded_header(headers, "x-forwarded-proto")
-            .filter(|value| {
-                value.eq_ignore_ascii_case("http") || value.eq_ignore_ascii_case("https")
-            })
-            .unwrap_or("http");
-        let host = forwarded_header(headers, "x-forwarded-host")
-            .or_else(|| forwarded_header(headers, "host"));
-        let Some(host) = host else {
-            return self.fallback_resource.clone();
-        };
-
-        let candidate = format!("{scheme}://{host}{MCP_PATH}");
-        normalize_public_mcp_url(candidate.as_str())
-            .unwrap_or_else(|_| self.fallback_resource.clone())
+        configured_resource
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.fallback_resource.clone())
     }
 
     fn issuer_for_headers(&self, headers: &HeaderMap) -> String {
@@ -481,12 +902,16 @@ impl McpServerState {
         if !self.is_enabled() {
             warnings.push("MCP server is disabled.".to_owned());
         }
+        if !is_https_resource(resource.as_str()) {
+            warnings.push(
+                "ChatGPT requires a canonical remote HTTPS MCP resource URL. Configure a public HTTPS endpoint or Secure MCP Tunnel before connecting it.".to_owned(),
+            );
+        }
+        // Any advertised OAuth mode must be operational before the control
+        // plane calls the connector ChatGPT-ready. Mixed mode still publishes
+        // discovery metadata and may expose privileged tools after a policy
+        // change without changing the public connector identity.
         if self.auth_enabled() {
-            if !is_https_resource(resource.as_str()) {
-                warnings.push(
-                    "OAuth requires a canonical HTTPS MCP resource URL; configure a public HTTPS URL or Secure MCP Tunnel before connecting ChatGPT.".to_owned(),
-                );
-            }
             if !self.has_custom_oauth_password() && !matches!(self.ui_auth, UiAuth::Enabled(_)) {
                 warnings.push(
                     "OAuth authorization password is not configured; set an MCP OAuth password in Web/TUI or start the server with a UI password.".to_owned(),
@@ -498,11 +923,44 @@ impl McpServerState {
                     "OAuth issuer must be a canonical HTTPS URL; configure an externally reachable HTTPS issuer before connecting ChatGPT.".to_owned(),
                 );
             }
+            if resource_has_nonstandard_path(resource.as_str())
+                && self.configured_oauth_issuer_url().is_none()
+            {
+                warnings.push(
+                    "The MCP resource uses a routed path (for example Secure MCP Tunnel). Configure an explicit public OAuth issuer URL: the browser-facing authorization server is not provided automatically by the tunnel.".to_owned(),
+                );
+            }
         }
 
         McpReadiness {
             ready: warnings.is_empty(),
             warnings,
+        }
+    }
+
+    pub(crate) fn log_startup_status(&self) {
+        let headers = HeaderMap::new();
+        let resource = self.public_resource(&headers);
+        let issuer = self.issuer_for_headers(&headers);
+        let readiness = self.readiness(&headers);
+        tracing::info!(
+            target: "agena::server::mcp",
+            enabled = self.is_enabled(),
+            auth_mode = ?self.auth_mode(),
+            anonymous_access = ?self.anonymous_access(),
+            tool_exposure = ?self.tool_exposure(),
+            client_registration = ?self.client_registration(),
+            resource = %resource,
+            issuer = %issuer,
+            ready = readiness.ready,
+            "Agena MCP server configured"
+        );
+        for warning in readiness.warnings {
+            tracing::warn!(
+                target: "agena::server::mcp",
+                warning = %warning,
+                "Agena MCP deployment needs attention"
+            );
         }
     }
 
@@ -540,14 +998,20 @@ impl McpServerState {
     fn control_status(&self, headers: &HeaderMap) -> McpServerControlResponse {
         let resource_url = self.public_resource(headers);
         let issuer = self.issuer_for_headers(headers);
-        let auth_enabled = self.auth_enabled();
+        let auth_mode = self.auth_mode();
+        let auth_enabled = auth_mode.is_enabled();
+        let client_registration = self.client_registration();
         let readiness = self.readiness(headers);
         McpServerControlResponse {
             enabled: self.is_enabled(),
             auth_enabled,
+            auth_mode,
+            anonymous_access: self.anonymous_access(),
             public_url: self.configured_public_url(),
             oauth_issuer_url: self.configured_oauth_issuer_url(),
-            resource_url,
+            tool_exposure: self.tool_exposure(),
+            client_registration,
+            resource_url: resource_url.clone(),
             ready: readiness.ready,
             warnings: readiness.warnings.clone(),
             oauth: auth_enabled.then(|| McpOAuthControlStatus {
@@ -558,7 +1022,11 @@ impl McpServerState {
                     && matches!(self.ui_auth, UiAuth::Enabled(_)),
                 ready: readiness.ready,
                 authorization_server_kind: "agena-managed".to_owned(),
-                registration_methods: vec!["cimd".to_owned(), "dcr".to_owned()],
+                registration_methods: if client_registration.dcr_enabled() {
+                    vec!["cimd".to_owned(), "dcr".to_owned()]
+                } else {
+                    vec!["cimd".to_owned()]
+                },
                 // The current Agena token endpoint implements the public
                 // client/PKCE flow only. Do not advertise private_key_jwt
                 // until assertion signature and replay validation are live;
@@ -568,20 +1036,16 @@ impl McpServerState {
                 pkce_methods: vec!["S256".to_owned()],
                 oidc_supported: false,
                 warnings: readiness.warnings.clone(),
-                scope: MCP_SCOPE.to_owned(),
+                scope: DEFAULT_OAUTH_SCOPE.to_owned(),
                 issuer: issuer.clone(),
                 authorization_endpoint: append_public_endpoint(&issuer, "/oauth/authorize"),
                 token_endpoint: append_public_endpoint(&issuer, "/oauth/token"),
-                registration_endpoint: append_public_endpoint(&issuer, "/oauth/register"),
+                registration_endpoint: client_registration
+                    .dcr_enabled()
+                    .then(|| append_public_endpoint(&issuer, "/oauth/register")),
                 revocation_endpoint: append_public_endpoint(&issuer, "/oauth/revoke"),
-                protected_resource_metadata: append_public_endpoint(
-                    &issuer,
-                    "/.well-known/oauth-protected-resource",
-                ),
-                authorization_server_metadata: append_public_endpoint(
-                    &issuer,
-                    "/.well-known/oauth-authorization-server",
-                ),
+                protected_resource_metadata: protected_resource_metadata_url(&resource_url),
+                authorization_server_metadata: authorization_server_metadata_url(&issuer),
                 jwks_uri: append_public_endpoint(&issuer, "/oauth/jwks.json"),
             }),
         }
@@ -590,9 +1054,12 @@ impl McpServerState {
     async fn persist_control(
         &self,
         enabled: bool,
-        auth_enabled: bool,
+        auth_mode: McpAuthMode,
+        anonymous_access: McpAnonymousAccess,
         public_url: Option<String>,
         oauth_issuer_url: Option<String>,
+        tool_exposure: McpToolExposure,
+        client_registration: McpClientRegistration,
     ) -> Result<(), String> {
         let database = self
             .control
@@ -604,9 +1071,13 @@ impl McpServerState {
                 KV_KEY_MCP_SERVER_CONTROL,
                 &PersistedMcpServerControl {
                     enabled,
-                    auth_enabled,
+                    auth_enabled: auth_mode.is_enabled(),
+                    auth_mode: Some(auth_mode),
+                    anonymous_access,
                     public_url,
                     oauth_issuer_url,
+                    tool_exposure,
+                    client_registration,
                     oauth_password_phc: self.oauth_password_phc(),
                 },
             )
@@ -616,26 +1087,42 @@ impl McpServerState {
     async fn update_control(
         &self,
         enabled: bool,
-        auth_enabled: bool,
+        auth_mode: McpAuthMode,
+        anonymous_access: McpAnonymousAccess,
         configured_resource: Option<String>,
         configured_issuer: Option<String>,
+        tool_exposure: McpToolExposure,
+        client_registration: McpClientRegistration,
     ) -> Result<(), String> {
         let _guard = self.control.update_lock.lock().await;
         let previous_enabled = self.is_enabled();
-        let previous_auth_enabled = self.auth_enabled();
+        let previous_auth_mode = self.auth_mode();
+        let previous_anonymous_access = self.anonymous_access();
         let previous_resource = self.configured_public_url();
         let previous_issuer = self.configured_oauth_issuer_url();
+        let previous_tool_exposure = self.tool_exposure();
+        let previous_client_registration = self.client_registration();
         self.persist_control(
             enabled,
-            auth_enabled,
+            auth_mode,
+            anonymous_access,
             configured_resource.clone(),
             configured_issuer.clone(),
+            tool_exposure,
+            client_registration,
         )
         .await?;
         self.control.enabled.store(enabled, Ordering::Release);
-        self.control
-            .auth_enabled
-            .store(auth_enabled, Ordering::Release);
+        *self
+            .control
+            .auth_mode
+            .write()
+            .expect("MCP auth mode lock poisoned") = auth_mode;
+        *self
+            .control
+            .anonymous_access
+            .write()
+            .expect("MCP anonymous access lock poisoned") = anonymous_access;
         *self
             .control
             .configured_resource
@@ -646,10 +1133,23 @@ impl McpServerState {
             .configured_issuer
             .write()
             .expect("MCP OAuth issuer lock poisoned") = configured_issuer;
+        *self
+            .control
+            .tool_exposure
+            .write()
+            .expect("MCP tool exposure lock poisoned") = tool_exposure;
+        *self
+            .control
+            .client_registration
+            .write()
+            .expect("MCP client registration lock poisoned") = client_registration;
         if previous_enabled != enabled
-            || previous_auth_enabled != auth_enabled
+            || previous_auth_mode != auth_mode
+            || previous_anonymous_access != anonymous_access
             || previous_resource != self.configured_public_url()
             || previous_issuer != self.configured_oauth_issuer_url()
+            || previous_tool_exposure != self.tool_exposure()
+            || previous_client_registration != self.client_registration()
         {
             self.clear_oauth_runtime_state().await?;
         }
@@ -672,6 +1172,10 @@ impl McpServerState {
         let enabled = self.is_enabled();
         let public_url = self.configured_public_url();
         let oauth_issuer_url = self.configured_oauth_issuer_url();
+        let auth_mode = self.auth_mode();
+        let anonymous_access = self.anonymous_access();
+        let tool_exposure = self.tool_exposure();
+        let client_registration = self.client_registration();
         let database = self
             .control
             .database
@@ -682,9 +1186,13 @@ impl McpServerState {
                 KV_KEY_MCP_SERVER_CONTROL,
                 &PersistedMcpServerControl {
                     enabled,
-                    auth_enabled: self.auth_enabled(),
+                    auth_enabled: auth_mode.is_enabled(),
+                    auth_mode: Some(auth_mode),
+                    anonymous_access,
                     public_url,
                     oauth_issuer_url,
+                    tool_exposure,
+                    client_registration,
                     oauth_password_phc: Some(phc.clone()),
                 },
             )
@@ -703,6 +1211,10 @@ impl McpServerState {
         let enabled = self.is_enabled();
         let public_url = self.configured_public_url();
         let oauth_issuer_url = self.configured_oauth_issuer_url();
+        let auth_mode = self.auth_mode();
+        let anonymous_access = self.anonymous_access();
+        let tool_exposure = self.tool_exposure();
+        let client_registration = self.client_registration();
         let database = self
             .control
             .database
@@ -713,9 +1225,13 @@ impl McpServerState {
                 KV_KEY_MCP_SERVER_CONTROL,
                 &PersistedMcpServerControl {
                     enabled,
-                    auth_enabled: self.auth_enabled(),
+                    auth_enabled: auth_mode.is_enabled(),
+                    auth_mode: Some(auth_mode),
+                    anonymous_access,
                     public_url,
                     oauth_issuer_url,
+                    tool_exposure,
+                    client_registration,
                     oauth_password_phc: None,
                 },
             )
@@ -735,8 +1251,12 @@ impl McpServerState {
 pub(crate) struct McpServerControlResponse {
     enabled: bool,
     auth_enabled: bool,
+    auth_mode: McpAuthMode,
+    anonymous_access: McpAnonymousAccess,
     public_url: Option<String>,
     oauth_issuer_url: Option<String>,
+    tool_exposure: McpToolExposure,
+    client_registration: McpClientRegistration,
     resource_url: String,
     ready: bool,
     warnings: Vec<String>,
@@ -761,7 +1281,8 @@ struct McpOAuthControlStatus {
     issuer: String,
     authorization_endpoint: String,
     token_endpoint: String,
-    registration_endpoint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registration_endpoint: Option<String>,
     revocation_endpoint: String,
     protected_resource_metadata: String,
     authorization_server_metadata: String,
@@ -774,17 +1295,25 @@ pub(crate) struct UpdateMcpServerControlRequest {
     #[serde(default)]
     enabled: Option<bool>,
     /// `None` means "leave unchanged"; `Some(None)` explicitly clears the
-    /// configured public URL and returns to request-derived discovery.
+    /// configured public URL and returns to the listener-local fallback.
     #[serde(default)]
     public_url: Option<Option<String>>,
-    /// `None` means "leave unchanged". When disabled, the MCP endpoint is
-    /// anonymous and does not publish or enforce OAuth.
+    /// Backwards-compatible boolean projection. `true` selects full OAuth and
+    /// `false` selects no authentication. New clients should send `authMode`.
     #[serde(default)]
     auth_enabled: Option<bool>,
+    #[serde(default)]
+    auth_mode: Option<McpAuthMode>,
+    #[serde(default)]
+    anonymous_access: Option<McpAnonymousAccess>,
     /// `None` means "leave unchanged"; `Some(None)` clears the configured
     /// issuer and returns to the resource-derived issuer.
     #[serde(default)]
     oauth_issuer_url: Option<Option<String>>,
+    #[serde(default)]
+    tool_exposure: Option<McpToolExposure>,
+    #[serde(default)]
+    client_registration: Option<McpClientRegistration>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -807,9 +1336,21 @@ pub(crate) async fn update_mcp_server_control(
     let enabled = request
         .enabled
         .unwrap_or_else(|| state.mcp_server.is_enabled());
-    let auth_enabled = request
-        .auth_enabled
-        .unwrap_or_else(|| state.mcp_server.auth_enabled());
+    let auth_mode = match (request.auth_mode, request.auth_enabled) {
+        (Some(mode), Some(enabled)) if mode.is_enabled() != enabled => {
+            return control_error(
+                StatusCode::BAD_REQUEST,
+                "authMode and the legacy authEnabled value disagree".to_owned(),
+            );
+        }
+        (Some(mode), _) => mode,
+        (None, Some(true)) => McpAuthMode::Oauth,
+        (None, Some(false)) => McpAuthMode::None,
+        (None, None) => state.mcp_server.auth_mode(),
+    };
+    let anonymous_access = request
+        .anonymous_access
+        .unwrap_or_else(|| state.mcp_server.anonymous_access());
     let configured_resource = match request.public_url {
         None => state.mcp_server.configured_public_url(),
         Some(None) => None,
@@ -818,6 +1359,12 @@ pub(crate) async fn update_mcp_server_control(
             Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
         },
     };
+    let tool_exposure = request
+        .tool_exposure
+        .unwrap_or_else(|| state.mcp_server.tool_exposure());
+    let client_registration = request
+        .client_registration
+        .unwrap_or_else(|| state.mcp_server.client_registration());
     let configured_issuer = match request.oauth_issuer_url {
         None => state.mcp_server.configured_oauth_issuer_url(),
         Some(None) => None,
@@ -826,7 +1373,13 @@ pub(crate) async fn update_mcp_server_control(
             Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
         },
     };
-    if auth_enabled && enabled {
+    if auth_mode.is_enabled() && enabled {
+        if matches!(&state.mcp_server.ui_auth, UiAuth::Disabled) {
+            return control_error(
+                StatusCode::BAD_REQUEST,
+                "Public MCP OAuth requires AGENA_SERVER_UI_PASSWORD (or --ui-password). This credential protects the Agena management API and is also the default OAuth authorization password.".to_owned(),
+            );
+        }
         let effective_resource = state
             .mcp_server
             .public_resource_with_configured(&headers, configured_resource.as_deref());
@@ -836,9 +1389,15 @@ pub(crate) async fn update_mcp_server_control(
                 "MCP OAuth requires a canonical HTTPS resource URL. Configure the Secure MCP Tunnel/public HTTPS URL before enabling Auth.".to_owned(),
             );
         }
+        if resource_has_nonstandard_path(effective_resource.as_str()) && configured_issuer.is_none()
+        {
+            return control_error(
+                StatusCode::BAD_REQUEST,
+                "A routed MCP resource URL (including Secure MCP Tunnel) requires an explicit public OAuth issuer URL because the browser-facing authorization server is separate from the tunnel.".to_owned(),
+            );
+        }
         let effective_issuer = configured_issuer
             .clone()
-            .or_else(|| state.mcp_server.configured_oauth_issuer_url())
             .unwrap_or_else(|| issuer_for_resource(effective_resource.as_str()));
         if !is_https_resource(effective_issuer.as_str()) {
             return control_error(
@@ -851,9 +1410,12 @@ pub(crate) async fn update_mcp_server_control(
         .mcp_server
         .update_control(
             enabled,
-            auth_enabled,
+            auth_mode,
+            anonymous_access,
             configured_resource,
             configured_issuer,
+            tool_exposure,
+            client_registration,
         )
         .await
     {
@@ -924,12 +1486,14 @@ pub(crate) fn router(state: Arc<McpServerState>) -> Router {
     // responses are also accepted by Streamable HTTP and are easier for
     // connector gateways to proxy than one-request SSE streams.
     let mut stream_config = StreamableHttpServerConfig::default()
-        .with_stateful_mode(false)
+        .with_legacy_session_mode(false)
+        .with_stateless_protocol_metadata_required(true)
         .with_json_response(true);
-    // The public URL can be changed through the Web/TUI control plane while
-    // this router is alive. Keep rmcp's host gate open and perform the actual
-    // resource binding against the request-derived/configured URL instead of
-    // freezing the old URL at startup.
+    // The public URL can change through Web/TUI while this router is alive.
+    // Agena therefore performs a dynamic Host/Origin check in middleware
+    // below rather than freezing rmcp's startup-only allowlist. Disabling the
+    // SDK gate is safe only because every MCP and OAuth route is covered by
+    // `validate_mcp_host_origin`.
     stream_config = stream_config.disable_allowed_hosts();
 
     let service = agena_mcp_server::streamable_http_service(
@@ -945,39 +1509,28 @@ pub(crate) fn router(state: Arc<McpServerState>) -> Router {
         // method/status pair is enough to diagnose connector failures without
         // putting tool arguments, bearer tokens, or result data in logs.
         .layer(middleware::from_fn(trace_mcp_http_request))
-        // Secure MCP Tunnel forwards each JSON-RPC request independently. A
-        // few connector probes therefore arrive before (or without) the
-        // lifecycle state that rmcp 2.2 expects in its legacy dispatcher.
-        // Keep this compatibility path inside the bearer middleware and use
-        // it only for the finite, stateless MCP messages ChatGPT needs.
+        // Some existing Secure MCP Tunnel deployments forward legacy-era
+        // requests independently and omit initialize/session state. Preserve
+        // that finite tools-only behavior, but immediately defer every modern
+        // 2026 request to rmcp 3.x so protocol negotiation, standard headers,
+        // cache semantics, and server/discover remain SDK-owned.
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
-            compat_stateless_mcp,
+            compat_legacy_stateless_mcp,
         ))
-        // The compatibility layer must be inside the bearer middleware: an
-        // OpenAI discovery probe is still an MCP request and must not bypass
-        // OAuth when Auth is enabled.
-        .layer(middleware::from_fn(compat_openai_mcp_discover))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             require_mcp_bearer,
         ))
-        // rmcp 2.2 does not yet model the Apps SDK's top-level
-        // `securitySchemes` extension. Rewrite only the finite tools/list
-        // response at the HTTP boundary; tool-call responses remain streamed.
+        // The standard MCP tool model still does not include the Apps SDK's
+        // top-level `securitySchemes` extension. Rewrite only tools/list at the
+        // HTTP boundary; all protocol negotiation and modern stateless
+        // discovery are handled by rmcp 3.x itself.
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             rewrite_tool_security_schemes,
         ))
-        // Do not let an implementation-specific rmcp 422 escape through the
-        // tunnel.  Secure MCP Tunnel forwards JSON-RPC messages one at a
-        // time, while older rmcp dispatchers can still produce HTTP 422 for a
-        // message that is valid on a stateless endpoint.  The compatibility
-        // middleware above handles the known message shapes; this outer
-        // guard is deliberately a last-resort boundary for future rmcp
-        // changes or connector probes we do not recognize yet.
-        .layer(middleware::from_fn(normalize_mcp_http_422))
-    .with_state(Arc::clone(&state));
+        .with_state(Arc::clone(&state));
 
     // Keep the OAuth surface truly disabled when Auth is off. The individual
     // handlers also check this flag, but an extractor (Json/Form/Query) runs
@@ -994,7 +1547,15 @@ pub(crate) fn router(state: Arc<McpServerState>) -> Router {
             axum::routing::get(protected_resource_metadata),
         )
         .route(
+            "/.well-known/oauth-protected-resource/{*path}",
+            axum::routing::get(protected_resource_metadata),
+        )
+        .route(
             "/.well-known/oauth-authorization-server",
+            axum::routing::get(authorization_server_metadata),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server/{*path}",
             axum::routing::get(authorization_server_metadata),
         )
         .route("/.well-known/jwks.json", axum::routing::get(jwks))
@@ -1017,9 +1578,43 @@ pub(crate) fn router(state: Arc<McpServerState>) -> Router {
         .merge(protected_mcp)
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
+            validate_mcp_host_origin,
+        ))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
             require_mcp_enabled,
         ))
         .with_state(state)
+}
+
+fn mcp_request_body_error(error: &impl std::fmt::Display) -> Response {
+    tracing::warn!(
+        target: "agena::server::mcp",
+        error = %error,
+        max_bytes = MAX_MCP_METADATA_BODY_BYTES,
+        "rejected unreadable or oversized MCP request body"
+    );
+    (
+        StatusCode::PAYLOAD_TOO_LARGE,
+        format!(
+            "MCP request body could not be read within the {MAX_MCP_METADATA_BODY_BYTES}-byte limit"
+        ),
+    )
+        .into_response()
+}
+
+fn mcp_response_body_error(error: &impl std::fmt::Display) -> Response {
+    tracing::error!(
+        target: "agena::server::mcp",
+        error = %error,
+        max_bytes = MAX_MCP_METADATA_BODY_BYTES,
+        "MCP tools/list response exceeded the rewrite boundary"
+    );
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "MCP tools/list response could not be serialized safely",
+    )
+        .into_response()
 }
 
 /// Log the MCP HTTP boundary without logging request bodies.
@@ -1046,18 +1641,7 @@ async fn trace_mcp_http_request(
     let (parts, body) = request.into_parts();
     let body = match to_bytes(body, MAX_MCP_METADATA_BODY_BYTES).await {
         Ok(body) => body,
-        Err(error) => {
-            tracing::warn!(
-                target: "agena::server::mcp",
-                %http_method,
-                %path,
-                error = %error,
-                "could not read MCP request body for boundary logging"
-            );
-            return next
-                .run(axum::http::Request::from_parts(parts, Body::empty()))
-                .await;
-        }
+        Err(error) => return mcp_request_body_error(&error),
     };
     let rpc_method = jsonrpc_method_from_bytes(&body);
     let has_id = jsonrpc_request_id_from_bytes(&body).is_some();
@@ -1093,7 +1677,7 @@ impl McpServerBackend for ApplicationMcpBackend {
             .list_operator_tools()
             .await
             .into_iter()
-            .filter(mcp_tool_is_exposed)
+            .filter(|tool| self.state.tool_is_exposed(tool))
             .map(operator_tool_descriptor)
             .collect())
     }
@@ -1105,7 +1689,7 @@ impl McpServerBackend for ApplicationMcpBackend {
         let tools = self.state.application.list_operator_tools().await;
         if !tools
             .iter()
-            .any(|tool| tool.name == params.name && mcp_tool_is_exposed(tool))
+            .any(|tool| tool.name == params.name && self.state.tool_is_exposed(tool))
         {
             return Err(McpServerError::NotFound(format!(
                 "tool '{}' is not exposed by the Agena MCP server",
@@ -1147,8 +1731,13 @@ fn operator_tool_descriptor(tool: OperatorToolResource) -> ToolDescriptor {
         before_help: tool.before_help,
         after_help: tool.after_help,
         input_schema: Some(tool.input_schema),
-        output_schema: None,
-        annotations: None,
+        output_schema: tool.output_schema,
+        annotations: Some(serde_json::json!({
+            "readOnlyHint": tool.read_only,
+            "destructiveHint": tool.destructive,
+            "idempotentHint": tool.read_only,
+            "openWorldHint": tool.open_world,
+        })),
         execution: None,
         icons: Vec::new(),
         meta: None,
@@ -1165,130 +1754,76 @@ fn operator_tool_descriptor(tool: OperatorToolResource) -> ToolDescriptor {
 /// MCP surface, where no HTTP OAuth resource server exists.
 fn add_tool_security_schemes(
     mut payload: serde_json::Value,
-    auth_enabled: bool,
+    auth_mode: McpAuthMode,
+    auth_requirements: &HashMap<String, bool>,
 ) -> Option<serde_json::Value> {
-    let tools = payload
-        .get_mut("result")
-        .and_then(serde_json::Value::as_object_mut)
-        .and_then(|result| result.get_mut("tools"))
-        .and_then(serde_json::Value::as_array_mut)?;
+    fn rewrite_message(
+        payload: &mut serde_json::Value,
+        auth_mode: McpAuthMode,
+        auth_requirements: &HashMap<String, bool>,
+    ) -> bool {
+        if let Some(messages) = payload.as_array_mut() {
+            let mut changed = false;
+            for message in messages {
+                changed |= rewrite_message(message, auth_mode, auth_requirements);
+            }
+            return changed;
+        }
+        let Some(tools) = payload
+            .get_mut("result")
+            .and_then(serde_json::Value::as_object_mut)
+            .and_then(|result| result.get_mut("tools"))
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            return false;
+        };
 
-    let security_schemes = if auth_enabled {
-        serde_json::json!([{
-            "type": "oauth2",
-            "scopes": [MCP_SCOPE],
-        }])
-    } else {
-        serde_json::json!([{"type": "noauth"}])
-    };
-    for tool in tools {
-        let tool = tool.as_object_mut()?;
-        tool.insert("securitySchemes".to_owned(), security_schemes.clone());
+        for tool in tools {
+            let Some(tool) = tool.as_object_mut() else {
+                continue;
+            };
+            let name = tool
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let requires_auth = match auth_mode {
+                McpAuthMode::None => false,
+                McpAuthMode::Oauth => true,
+                // Missing names default closed. A serialized descriptor that
+                // does not match the authoritative catalog must never become
+                // anonymous.
+                McpAuthMode::Mixed => auth_requirements.get(name).copied().unwrap_or(true),
+            };
+            let security_schemes = if requires_auth {
+                serde_json::json!([{
+                    "type": "oauth2",
+                    "scopes": [MCP_SCOPE],
+                }])
+            } else {
+                serde_json::json!([{"type": "noauth"}])
+            };
+            tool.insert("securitySchemes".to_owned(), security_schemes);
+        }
+        true
     }
-    Some(payload)
+
+    rewrite_message(&mut payload, auth_mode, auth_requirements).then_some(payload)
 }
 
 fn is_tools_list_request(body: &[u8]) -> bool {
+    fn contains_tools_list(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(object) => {
+                object.get("method").and_then(serde_json::Value::as_str) == Some("tools/list")
+            }
+            serde_json::Value::Array(messages) => messages.iter().any(contains_tools_list),
+            _ => false,
+        }
+    }
+
     serde_json::from_slice::<serde_json::Value>(body)
         .ok()
-        .and_then(|value| {
-            value
-                .get("method")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
-        .as_deref()
-        == Some("tools/list")
-}
-
-/// Return the MCP 2026-07-28 discovery result used by ChatGPT's pre-handshake
-/// probe.
-///
-/// `server/discover` is not part of the legacy initialize-based MCP revisions
-/// implemented by rmcp 2.2. The current MCP revision nevertheless requires a
-/// server to advertise its versions and capabilities through this method. Keep
-/// the response at the HTTP boundary so the stateless tunnel path does not
-/// create an rmcp session, while still returning the complete modern result
-/// shape (`resultType`, cache hints, and server information in `_meta`).
-fn mcp_discover_result() -> serde_json::Value {
-    serde_json::json!({
-        "resultType": "complete",
-        "supportedVersions": MCP_DISCOVERY_SUPPORTED_VERSIONS,
-        "capabilities": {
-            "tools": {},
-        },
-        "_meta": {
-            "io.modelcontextprotocol/serverInfo": {
-                "name": "agena",
-                "version": env!("CARGO_PKG_VERSION"),
-            },
-        },
-        "instructions": "Agena exposes its local runtime tools over MCP. Interactive, browser, planning-review, and provider/plugin tools are intentionally unavailable on this endpoint.",
-        "ttlMs": MCP_DISCOVERY_TTL_MS,
-        "cacheScope": "public",
-    })
-}
-
-/// Return the discovery response for ChatGPT's pre-handshake probe.
-///
-/// This is deliberately kept at the HTTP boundary. It is not exposed through
-/// the stdio MCP server, and it does not create an rmcp session.
-fn openai_mcp_discover_payload(body: &[u8]) -> Option<serde_json::Value> {
-    let request = serde_json::from_slice::<serde_json::Value>(body).ok()?;
-    let response = |request: &serde_json::Value| {
-        if request.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
-            || request.get("method").and_then(serde_json::Value::as_str)
-                != Some(OPENAI_MCP_DISCOVER_METHOD)
-        {
-            return None;
-        }
-        let id = request.get("id").cloned().filter(|id| !id.is_null())?;
-        Some(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": mcp_discover_result(),
-        }))
-    };
-
-    match request {
-        serde_json::Value::Object(_) => response(&request),
-        // Some MCP hosts send the preflight as a JSON-RPC batch. Only
-        // intercept an all-discover batch; mixed batches must continue to the
-        // normal rmcp parser so we never silently drop another request.
-        serde_json::Value::Array(requests) if !requests.is_empty() => {
-            let responses = requests.iter().map(response).collect::<Option<Vec<_>>>()?;
-            Some(serde_json::Value::Array(responses))
-        }
-        _ => None,
-    }
-}
-
-async fn compat_openai_mcp_discover(
-    request: axum::http::Request<Body>,
-    next: middleware::Next,
-) -> Response {
-    if request.method() != axum::http::Method::POST {
-        return next.run(request).await;
-    }
-
-    let (parts, body) = request.into_parts();
-    let body = match to_bytes(body, MAX_MCP_METADATA_BODY_BYTES).await {
-        Ok(body) => body,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("invalid MCP request body: {error}"),
-            )
-                .into_response();
-        }
-    };
-
-    if let Some(payload) = openai_mcp_discover_payload(&body) {
-        return json_no_store(StatusCode::OK, payload);
-    }
-
-    next.run(axum::http::Request::from_parts(parts, Body::from(body)))
-        .await
+        .is_some_and(|value| contains_tools_list(&value))
 }
 
 /// Handle the small stateless MCP subset used by ChatGPT and Secure MCP
@@ -1307,7 +1842,7 @@ async fn compat_openai_mcp_discover(
 /// but if a future change lets one reach rmcp's legacy dispatcher, convert its
 /// HTTP 422 into a JSON-RPC response so a Secure MCP Tunnel never exposes the
 /// rmcp-specific session error to ChatGPT.
-async fn compat_stateless_mcp(
+async fn compat_legacy_stateless_mcp(
     State(state): State<Arc<McpServerState>>,
     request: axum::http::Request<Body>,
     next: middleware::Next,
@@ -1319,14 +1854,14 @@ async fn compat_stateless_mcp(
     let (parts, body) = request.into_parts();
     let body = match to_bytes(body, MAX_MCP_METADATA_BODY_BYTES).await {
         Ok(body) => body,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("invalid MCP request body: {error}"),
-            )
-                .into_response();
-        }
+        Err(error) => return mcp_request_body_error(&error),
     };
+    if request_has_modern_mcp_headers(&parts.headers) {
+        return next
+            .run(axum::http::Request::from_parts(parts, Body::from(body)))
+            .await;
+    }
+
     let value = match serde_json::from_slice::<serde_json::Value>(&body) {
         Ok(value) => value,
         Err(error) => {
@@ -1353,15 +1888,19 @@ async fn compat_stateless_mcp(
             );
         }
     };
+    if value_uses_modern_mcp(&value) || !value_is_legacy_compat_request(&value) {
+        return next
+            .run(axum::http::Request::from_parts(parts, Body::from(body)))
+            .await;
+    }
     let request_id = jsonrpc_request_id(&value);
 
     let payload = match compat_stateless_mcp_payload(&state, value).await {
         Ok(Some(payload)) => payload,
         Ok(None) => {
-            let response = next
+            return next
                 .run(axum::http::Request::from_parts(parts, Body::from(body)))
                 .await;
-            return normalize_mcp_unprocessable_response(response, request_id);
         }
         Err(error) => {
             return json_no_store(StatusCode::OK, compat_jsonrpc_error(request_id, error));
@@ -1374,54 +1913,6 @@ async fn compat_stateless_mcp(
         return StatusCode::ACCEPTED.into_response();
     }
     json_no_store(StatusCode::OK, payload)
-}
-
-/// Convert an implementation-specific HTTP 422 from the MCP service into a
-/// JSON-RPC error.  ChatGPT and Secure MCP Tunnel communicate in JSON-RPC;
-/// exposing rmcp's transport-level 422 makes the connector report that the
-/// target server failed even though the target is reachable.
-///
-/// This is intentionally the outermost MCP-only guard.  It does not change
-/// authentication failures (401), disabled routes (404), content negotiation
-/// failures (406/415), or application errors.  The request id is copied from
-/// the bounded JSON body when possible, and the body is always reconstructed
-/// before the downstream service sees it.
-async fn normalize_mcp_http_422(
-    request: axum::http::Request<Body>,
-    next: middleware::Next,
-) -> Response {
-    let (parts, body) = request.into_parts();
-    let (request_id, body) = match to_bytes(body, MAX_MCP_METADATA_BODY_BYTES).await {
-        Ok(body) => (jsonrpc_request_id_from_bytes(&body), Body::from(body)),
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "could not buffer MCP request before the HTTP 422 compatibility guard"
-            );
-            (None, Body::empty())
-        }
-    };
-    let method = parts.method.clone();
-    let uri = parts.uri.path().to_owned();
-    let response = next.run(axum::http::Request::from_parts(parts, body)).await;
-    if response.status() != StatusCode::UNPROCESSABLE_ENTITY {
-        return response;
-    }
-
-    tracing::warn!(
-        %method,
-        %uri,
-        "converted an unexpected MCP HTTP 422 into a JSON-RPC error"
-    );
-    json_no_store(
-        StatusCode::OK,
-        compat_jsonrpc_error(
-            request_id,
-            McpServerError::InvalidParams(
-                "MCP request could not be processed by the stateless endpoint".to_owned(),
-            ),
-        ),
-    )
 }
 
 fn jsonrpc_request_id_from_bytes(body: &[u8]) -> Option<serde_json::Value> {
@@ -1453,28 +1944,6 @@ fn jsonrpc_request_id(value: &serde_json::Value) -> Option<serde_json::Value> {
         serde_json::Value::Array(messages) => messages.first().and_then(jsonrpc_request_id),
         _ => None,
     }
-}
-
-fn normalize_mcp_unprocessable_response(
-    response: Response,
-    id: Option<serde_json::Value>,
-) -> Response {
-    if response.status() != StatusCode::UNPROCESSABLE_ENTITY {
-        return response;
-    }
-
-    tracing::warn!(
-        "converted legacy rmcp HTTP 422 response into a JSON-RPC error for stateless MCP"
-    );
-    json_no_store(
-        StatusCode::OK,
-        compat_jsonrpc_error(
-            id,
-            McpServerError::InvalidParams(
-                "MCP request could not be processed as a stateless JSON-RPC message".to_owned(),
-            ),
-        ),
-    )
 }
 
 async fn compat_stateless_mcp_payload(
@@ -1543,13 +2012,13 @@ async fn compat_stateless_mcp_message(
     };
 
     match method {
-        "server/discover" => Ok(response(mcp_discover_result()).or(Some(serde_json::Value::Null))),
         method if method.starts_with("notifications/") => Ok(Some(serde_json::Value::Null)),
         "ping" => Ok(response(serde_json::json!({})).or(Some(serde_json::Value::Null))),
         "initialize" => {
             Ok(response(compat_initialize_result(request)).or(Some(serde_json::Value::Null)))
         }
         "tools/list" => {
+            let auth_requirements = state.exposed_tool_auth_requirements().await;
             let backend = ApplicationMcpBackend {
                 state: Arc::new(state.clone()),
             };
@@ -1563,7 +2032,7 @@ async fn compat_stateless_mcp_message(
             let Some(payload) = payload else {
                 return Ok(Some(serde_json::Value::Null));
             };
-            let payload = add_tool_security_schemes(payload, state.auth_enabled())
+            let payload = add_tool_security_schemes(payload, state.auth_mode(), &auth_requirements)
                 .unwrap_or_else(|| serde_json::json!({}));
             Ok(Some(payload))
         }
@@ -1613,12 +2082,7 @@ fn compat_initialize_result(request: &serde_json::Value) -> serde_json::Value {
         .get("params")
         .and_then(|params| params.get("protocolVersion"))
         .and_then(serde_json::Value::as_str)
-        .filter(|version| {
-            matches!(
-                *version,
-                "2025-03-26" | "2025-06-18" | "2025-11-25" | "2026-06-18"
-            )
-        })
+        .filter(|version| matches!(*version, "2025-03-26" | "2025-06-18" | "2025-11-25"))
         .unwrap_or(DEFAULT_MCP_PROTOCOL_VERSION);
     serde_json::json!({
         "protocolVersion": protocol_version,
@@ -1647,13 +2111,21 @@ fn compat_jsonrpc_error(id: Option<serde_json::Value>, error: McpServerError) ->
     })
 }
 
-fn rewrite_tool_list_json(body: &[u8], auth_enabled: bool) -> Option<Vec<u8>> {
+fn rewrite_tool_list_json(
+    body: &[u8],
+    auth_mode: McpAuthMode,
+    auth_requirements: &HashMap<String, bool>,
+) -> Option<Vec<u8>> {
     let payload = serde_json::from_slice::<serde_json::Value>(body).ok()?;
-    let payload = add_tool_security_schemes(payload, auth_enabled)?;
+    let payload = add_tool_security_schemes(payload, auth_mode, auth_requirements)?;
     serde_json::to_vec(&payload).ok()
 }
 
-fn rewrite_tool_list_sse(body: &[u8], auth_enabled: bool) -> Option<Vec<u8>> {
+fn rewrite_tool_list_sse(
+    body: &[u8],
+    auth_mode: McpAuthMode,
+    auth_requirements: &HashMap<String, bool>,
+) -> Option<Vec<u8>> {
     let text = std::str::from_utf8(body).ok()?;
     let mut changed = false;
     let mut output = String::with_capacity(text.len());
@@ -1665,7 +2137,7 @@ fn rewrite_tool_list_sse(body: &[u8], auth_enabled: bool) -> Option<Vec<u8>> {
             .unwrap_or(line_without_newline);
         if let Some(data) = line_without_newline.strip_prefix("data:")
             && let Ok(payload) = serde_json::from_str::<serde_json::Value>(data.trim_start())
-            && let Some(payload) = add_tool_security_schemes(payload, auth_enabled)
+            && let Some(payload) = add_tool_security_schemes(payload, auth_mode, auth_requirements)
         {
             let newline = &line[line_without_newline.len()..];
             output.push_str("data: ");
@@ -1694,26 +2166,29 @@ async fn rewrite_tool_security_schemes(
     let (parts, body) = request.into_parts();
     let body = match to_bytes(body, MAX_MCP_METADATA_BODY_BYTES).await {
         Ok(body) => body,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("invalid MCP request body: {error}"),
-            )
-                .into_response();
-        }
+        Err(error) => return mcp_request_body_error(&error),
     };
     let should_rewrite = is_tools_list_request(&body);
-    let auth_enabled = state.auth_enabled();
+    let auth_mode = state.auth_mode();
+    let auth_requirements = if should_rewrite {
+        state.exposed_tool_auth_requirements().await
+    } else {
+        HashMap::new()
+    };
     let request = axum::http::Request::from_parts(parts, Body::from(body));
     let response = next.run(request).await;
     if should_rewrite {
-        rewrite_tool_list_response(response, auth_enabled).await
+        rewrite_tool_list_response(response, auth_mode, &auth_requirements).await
     } else {
         response
     }
 }
 
-async fn rewrite_tool_list_response(response: Response, auth_enabled: bool) -> Response {
+async fn rewrite_tool_list_response(
+    response: Response,
+    auth_mode: McpAuthMode,
+    auth_requirements: &HashMap<String, bool>,
+) -> Response {
     let content_type = response
         .headers()
         .get(header::CONTENT_TYPE)
@@ -1729,12 +2204,12 @@ async fn rewrite_tool_list_response(response: Response, auth_enabled: bool) -> R
     let (parts, body) = response.into_parts();
     let body = match to_bytes(body, MAX_MCP_METADATA_BODY_BYTES).await {
         Ok(body) => body,
-        Err(_) => return Response::from_parts(parts, Body::empty()),
+        Err(error) => return mcp_response_body_error(&error),
     };
     let rewritten = if is_json {
-        rewrite_tool_list_json(&body, auth_enabled)
+        rewrite_tool_list_json(&body, auth_mode, auth_requirements)
     } else {
-        rewrite_tool_list_sse(&body, auth_enabled)
+        rewrite_tool_list_sse(&body, auth_mode, auth_requirements)
     };
     let Some(rewritten) = rewritten else {
         return Response::from_parts(parts, Body::from(body));
@@ -1764,7 +2239,7 @@ fn mcp_tool_uses_hidden_provider(tool: &OperatorToolResource) -> bool {
     })
 }
 
-fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
+fn mcp_tool_is_base_eligible(tool: &OperatorToolResource) -> bool {
     !tool.interactive
         && !mcp_tool_uses_hidden_provider(tool)
         && !mcp_tool_has_known_interactive_name(tool.name.as_str())
@@ -1798,9 +2273,11 @@ struct AuthorizationServerMetadata {
     issuer: String,
     authorization_endpoint: String,
     token_endpoint: String,
-    registration_endpoint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registration_endpoint: Option<String>,
     revocation_endpoint: String,
     client_id_metadata_document_supported: bool,
+    authorization_response_iss_parameter_supported: bool,
     token_endpoint_auth_methods_supported: Vec<String>,
     code_challenge_methods_supported: Vec<String>,
     scopes_supported: Vec<String>,
@@ -1823,7 +2300,7 @@ async fn protected_resource_metadata(
         ProtectedResourceMetadata {
             authorization_servers: vec![issuer],
             resource,
-            scopes_supported: vec![MCP_SCOPE.to_owned()],
+            scopes_supported: vec![MCP_SCOPE.to_owned(), OFFLINE_ACCESS_SCOPE.to_owned()],
             bearer_methods_supported: vec!["header".to_owned()],
         },
     )
@@ -1841,6 +2318,7 @@ async fn authorization_server_metadata(
         StatusCode::OK,
         AuthorizationServerMetadata {
             authorization_endpoint: append_public_endpoint(&issuer, "/oauth/authorize"),
+            authorization_response_iss_parameter_supported: true,
             client_id_metadata_document_supported: true,
             code_challenge_methods_supported: vec!["S256".to_owned()],
             grant_types_supported: vec![
@@ -1848,10 +2326,13 @@ async fn authorization_server_metadata(
                 "refresh_token".to_owned(),
             ],
             issuer: issuer.clone(),
-            registration_endpoint: append_public_endpoint(&issuer, "/oauth/register"),
+            registration_endpoint: state
+                .client_registration()
+                .dcr_enabled()
+                .then(|| append_public_endpoint(&issuer, "/oauth/register")),
             response_types_supported: vec!["code".to_owned()],
             revocation_endpoint: append_public_endpoint(&issuer, "/oauth/revoke"),
-            scopes_supported: vec![MCP_SCOPE.to_owned()],
+            scopes_supported: vec![MCP_SCOPE.to_owned(), OFFLINE_ACCESS_SCOPE.to_owned()],
             token_endpoint: append_public_endpoint(&issuer, "/oauth/token"),
             // Keep discovery truthful. Advertising private_key_jwt before
             // validating client assertions makes ChatGPT select a flow the
@@ -1883,9 +2364,7 @@ struct ClientRegistrationRequest {
     #[serde(default)]
     response_types: Option<Vec<String>>,
     #[serde(default)]
-    jwks_uri: Option<String>,
-    #[serde(default)]
-    jwks: Option<serde_json::Value>,
+    application_type: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1897,6 +2376,7 @@ struct ClientRegistrationResponse {
     redirect_uris: Vec<String>,
     grant_types: [&'static str; 2],
     response_types: [&'static str; 1],
+    application_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     client_name: Option<String>,
 }
@@ -1906,8 +2386,6 @@ struct RegisteredClient {
     redirect_uris: Vec<String>,
     client_name: Option<String>,
     token_endpoint_auth_method: String,
-    jwks_uri: Option<String>,
-    jwks: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1933,17 +2411,40 @@ struct CachedCimdClient {
 }
 
 fn client_metadata_supports_none(singular: Option<&str>, plural: Option<&[String]>) -> bool {
-    if let Some(methods) = plural {
-        return methods.iter().any(|method| method == "none");
+    // ChatGPT's production CIMD currently publishes a plural capability set
+    // containing both `none` and `private_key_jwt`, while the legacy singular
+    // field prefers `private_key_jwt`. The plural field is authoritative for
+    // capability intersection: Agena may select `none` because its token
+    // endpoint advertises and implements that public-client method.
+    match plural {
+        Some(methods) => methods.iter().any(|method| method == "none"),
+        None => singular == Some("none"),
     }
-    singular == Some("none")
+}
+
+fn client_metadata_supports_grants(grants: Option<&[String]>) -> bool {
+    grants.is_none_or(|values| {
+        !values.is_empty()
+            && values.iter().any(|value| value == "authorization_code")
+            && values
+                .iter()
+                .all(|value| matches!(value.as_str(), "authorization_code" | "refresh_token"))
+    })
+}
+
+fn client_metadata_supports_code_response(response_types: Option<&[String]>) -> bool {
+    response_types.is_none_or(|values| {
+        !values.is_empty()
+            && values.iter().any(|value| value == "code")
+            && values.iter().all(|value| value == "code")
+    })
 }
 
 async fn register_client(
     State(state): State<Arc<McpServerState>>,
     request: Result<Json<ClientRegistrationRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
-    if !state.auth_enabled() {
+    if !state.auth_enabled() || !state.client_registration().dcr_enabled() {
         return mcp_auth_disabled();
     }
     let Json(request) = match request {
@@ -1963,6 +2464,33 @@ async fn register_client(
             "redirect_uris must contain between one and sixteen URIs",
         );
     }
+    let _registration_guard = state.oauth.registration_lock.lock().await;
+    if state.oauth.clients.len() >= MAX_REGISTERED_OAUTH_CLIENTS {
+        return oauth_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "temporarily_unavailable",
+            "the OAuth client registration limit has been reached",
+        );
+    }
+    if request
+        .client_name
+        .as_deref()
+        .is_some_and(|name| name.trim().is_empty() || name.len() > MAX_OAUTH_LABEL_BYTES)
+    {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "client_name must be non-empty and at most 256 bytes",
+        );
+    }
+    let application_type = request.application_type.as_deref().unwrap_or("web");
+    if !matches!(application_type, "web" | "native") {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "application_type must be web or native",
+        );
+    }
     if !client_metadata_supports_none(
         request.token_endpoint_auth_method.as_deref(),
         request.token_endpoint_auth_methods_supported.as_deref(),
@@ -1973,31 +2501,23 @@ async fn register_client(
             "the client must support token endpoint authentication method none",
         );
     }
-    if request.grant_types.as_deref().is_some_and(|values| {
-        !values.is_empty() && !values.iter().any(|value| value == "authorization_code")
+    if !client_metadata_supports_grants(request.grant_types.as_deref()) {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "grant_types may contain only authorization_code and refresh_token and must include authorization_code",
+        );
+    }
+    if !client_metadata_supports_code_response(request.response_types.as_deref()) {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_client_metadata",
+            "response_types must contain only code",
+        );
+    }
+    if request.redirect_uris.iter().any(|redirect| {
+        redirect.len() > MAX_OAUTH_URI_BYTES || validate_redirect_uri(redirect).is_err()
     }) {
-        return oauth_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_client_metadata",
-            "authorization_code grant type is required",
-        );
-    }
-    if request
-        .response_types
-        .as_deref()
-        .is_some_and(|values| !values.is_empty() && !values.iter().any(|value| value == "code"))
-    {
-        return oauth_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_client_metadata",
-            "code response type is required",
-        );
-    }
-    if request
-        .redirect_uris
-        .iter()
-        .any(|redirect| validate_redirect_uri(redirect).is_err())
-    {
         return oauth_error(
             StatusCode::BAD_REQUEST,
             "invalid_redirect_uri",
@@ -2010,8 +2530,6 @@ async fn register_client(
         redirect_uris: request.redirect_uris.clone(),
         client_name: request.client_name.clone(),
         token_endpoint_auth_method: "none".to_owned(),
-        jwks_uri: request.jwks_uri.clone(),
-        jwks: request.jwks.clone(),
     };
     state.oauth.clients.insert(client_id.clone(), client);
     if let Err(error) = state.oauth.persist().await {
@@ -2032,6 +2550,7 @@ async fn register_client(
         redirect_uris: request.redirect_uris,
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
+        application_type: application_type.to_owned(),
         client_name: request.client_name,
     };
     json_no_store(StatusCode::CREATED, response)
@@ -2090,21 +2609,20 @@ async fn fetch_cimd_document(client_id: &str) -> Result<CimdClientMetadata, ()> 
 fn validate_cimd_document(client_id: &str, metadata: &CimdClientMetadata) -> Result<(), ()> {
     if metadata.client_id.as_deref() != Some(client_id)
         || metadata.redirect_uris.is_empty()
+        || metadata.redirect_uris.len() > 16
         || metadata
-            .redirect_uris
-            .iter()
-            .any(|redirect_uri| validate_redirect_uri(redirect_uri).is_err())
+            .client_name
+            .as_deref()
+            .is_some_and(|name| name.trim().is_empty() || name.len() > MAX_OAUTH_LABEL_BYTES)
+        || metadata.redirect_uris.iter().any(|redirect_uri| {
+            redirect_uri.len() > MAX_OAUTH_URI_BYTES || validate_redirect_uri(redirect_uri).is_err()
+        })
         || !client_metadata_supports_none(
             metadata.token_endpoint_auth_method.as_deref(),
             metadata.token_endpoint_auth_methods_supported.as_deref(),
         )
-        || metadata.grant_types.as_deref().is_some_and(|values| {
-            !values.is_empty() && !values.iter().any(|value| value == "authorization_code")
-        })
-        || metadata
-            .response_types
-            .as_deref()
-            .is_some_and(|values| !values.is_empty() && !values.iter().any(|value| value == "code"))
+        || !client_metadata_supports_grants(metadata.grant_types.as_deref())
+        || !client_metadata_supports_code_response(metadata.response_types.as_deref())
     {
         return Err(());
     }
@@ -2125,6 +2643,23 @@ async fn load_cimd_client(
         .retain(|_, cached| cached.expires_at > now);
     if let Some(cached) = state.oauth.cimd_clients.get(client_id) {
         return Ok(cached.metadata.clone());
+    }
+
+    // Serialize cache misses so repeated authorization requests for one client
+    // cannot fan out into duplicate public fetches, and cap arbitrary callback
+    // IDs so the unauthenticated authorization endpoint cannot grow memory
+    // without bound.
+    let _fetch_guard = state.oauth.cimd_fetch_lock.lock().await;
+    let now = Instant::now();
+    state
+        .oauth
+        .cimd_clients
+        .retain(|_, cached| cached.expires_at > now);
+    if let Some(cached) = state.oauth.cimd_clients.get(client_id) {
+        return Ok(cached.metadata.clone());
+    }
+    if state.oauth.cimd_clients.len() >= MAX_CACHED_CIMD_CLIENTS {
+        return Err(());
     }
 
     let metadata = fetch_cimd_document(client_id).await?;
@@ -2177,27 +2712,73 @@ struct ValidatedAuthorizationRequest {
     scope: String,
 }
 
-async fn validate_authorization_request(
+#[derive(Debug, Clone)]
+struct ValidatedAuthorizationClient {
+    client_id: String,
+    client_name: Option<String>,
+    redirect_uri: String,
+    issuer: String,
+}
+
+#[derive(Debug, Clone)]
+enum AuthorizationValidationError {
+    /// The client identity or redirect URI is not trustworthy, so returning an
+    /// OAuth redirect would create an open redirect or leak request details.
+    Local(OAuthRequestError),
+    /// The client and redirect URI are already validated. RFC 9207 requires the
+    /// authorization-server issuer on both successful and error callbacks when
+    /// the metadata advertises issuer identification support.
+    Redirect {
+        redirect_uri: String,
+        state: Option<String>,
+        issuer: String,
+        error: OAuthRequestError,
+    },
+}
+
+impl AuthorizationValidationError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Local(error) => error.into_response(),
+            Self::Redirect {
+                redirect_uri,
+                state,
+                issuer,
+                error,
+            } => authorization_error_redirect(
+                redirect_uri.as_str(),
+                state.as_deref(),
+                issuer.as_str(),
+                &error,
+            ),
+        }
+    }
+}
+
+async fn validate_authorization_client(
     state: &McpServerState,
     headers: &HeaderMap,
     request: &AuthorizeRequest,
-) -> Result<ValidatedAuthorizationRequest, OAuthRequestError> {
-    if request.response_type.as_deref() != Some("code") {
-        return Err(OAuthRequestError::new(
-            "unsupported_response_type",
-            "response_type=code is required",
-        ));
-    }
+) -> Result<ValidatedAuthorizationClient, OAuthRequestError> {
     let client_id = request
         .client_id
         .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| OAuthRequestError::new("invalid_request", "client_id is required"))?;
-    let registered_client = state
-        .oauth
-        .clients
-        .get(client_id)
-        .map(|entry| entry.clone());
+        .filter(|value| !value.trim().is_empty() && value.len() <= MAX_OAUTH_URI_BYTES)
+        .ok_or_else(|| {
+            OAuthRequestError::new(
+                "invalid_request",
+                "client_id is required and must be at most 4096 bytes",
+            )
+        })?;
+    let registered_client = if state.client_registration().dcr_enabled() {
+        state
+            .oauth
+            .clients
+            .get(client_id)
+            .map(|entry| entry.clone())
+    } else {
+        None
+    };
     let cimd_client = if registered_client.is_none() {
         Some(load_cimd_client(state, client_id).await.map_err(|_| {
             OAuthRequestError::new(
@@ -2211,8 +2792,13 @@ async fn validate_authorization_request(
     let redirect_uri = request
         .redirect_uri
         .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| OAuthRequestError::new("invalid_request", "redirect_uri is required"))?;
+        .filter(|value| !value.trim().is_empty() && value.len() <= MAX_OAUTH_URI_BYTES)
+        .ok_or_else(|| {
+            OAuthRequestError::new(
+                "invalid_request",
+                "redirect_uri is required and must be at most 4096 bytes",
+            )
+        })?;
     let redirect_matches_client = registered_client
         .as_ref()
         .is_some_and(|client| client.redirect_uris.iter().any(|uri| uri == redirect_uri))
@@ -2225,46 +2811,89 @@ async fn validate_authorization_request(
             "redirect_uri does not match the registered client metadata",
         ));
     }
-    let state_value = request
-        .state
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| OAuthRequestError::new("invalid_request", "state is required"))?;
-    let code_challenge = request
-        .code_challenge
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| OAuthRequestError::new("invalid_request", "code_challenge is required"))?;
-    if request.code_challenge_method.as_deref() != Some("S256") {
-        return Err(OAuthRequestError::new(
-            "invalid_request",
-            "code_challenge_method=S256 is required",
-        ));
-    }
-    let resource = request
-        .resource
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| OAuthRequestError::new("invalid_request", "resource is required"))?;
-    let expected_resource = state.public_resource(headers);
-    if resource != expected_resource {
-        return Err(OAuthRequestError::new(
-            "invalid_target",
-            "resource does not match the MCP resource metadata",
-        ));
-    }
-    let scope = normalize_scope(request.scope.as_deref())?;
-    let issuer = state.issuer_for_headers(headers);
-    Ok(ValidatedAuthorizationRequest {
+    Ok(ValidatedAuthorizationClient {
         client_id: client_id.to_owned(),
         client_name: registered_client
             .and_then(|client| client.client_name)
             .or_else(|| cimd_client.and_then(|client| client.client_name))
             .or_else(|| Some("ChatGPT".to_owned())),
         redirect_uri: redirect_uri.to_owned(),
+        issuer: state.issuer_for_headers(headers),
+    })
+}
+
+async fn validate_authorization_request(
+    state: &McpServerState,
+    headers: &HeaderMap,
+    request: &AuthorizeRequest,
+) -> Result<ValidatedAuthorizationRequest, AuthorizationValidationError> {
+    let client = validate_authorization_client(state, headers, request)
+        .await
+        .map_err(AuthorizationValidationError::Local)?;
+    let redirect_error = |error| AuthorizationValidationError::Redirect {
+        redirect_uri: client.redirect_uri.clone(),
+        state: request.state.clone(),
+        issuer: client.issuer.clone(),
+        error,
+    };
+
+    if request.response_type.as_deref() != Some("code") {
+        return Err(redirect_error(OAuthRequestError::new(
+            "unsupported_response_type",
+            "response_type=code is required",
+        )));
+    }
+    let state_value = request
+        .state
+        .as_deref()
+        .filter(|value| !value.is_empty() && value.len() <= MAX_OAUTH_URI_BYTES)
+        .ok_or_else(|| {
+            redirect_error(OAuthRequestError::new(
+                "invalid_request",
+                "state is required and must be at most 4096 bytes",
+            ))
+        })?;
+    let code_challenge = request
+        .code_challenge
+        .as_deref()
+        .filter(|value| valid_pkce_challenge(value))
+        .ok_or_else(|| {
+            redirect_error(OAuthRequestError::new(
+                "invalid_request",
+                "a valid S256 code_challenge is required",
+            ))
+        })?;
+    if request.code_challenge_method.as_deref() != Some("S256") {
+        return Err(redirect_error(OAuthRequestError::new(
+            "invalid_request",
+            "code_challenge_method=S256 is required",
+        )));
+    }
+    let resource = request
+        .resource
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            redirect_error(OAuthRequestError::new(
+                "invalid_request",
+                "resource is required",
+            ))
+        })?;
+    let expected_resource = state.public_resource(headers);
+    if resource != expected_resource {
+        return Err(redirect_error(OAuthRequestError::new(
+            "invalid_target",
+            "resource does not match the MCP resource metadata",
+        )));
+    }
+    let scope = normalize_scope(request.scope.as_deref()).map_err(redirect_error)?;
+    Ok(ValidatedAuthorizationRequest {
+        client_id: client.client_id,
+        client_name: client.client_name,
+        redirect_uri: client.redirect_uri,
         state: state_value.to_owned(),
         code_challenge: code_challenge.to_owned(),
-        issuer,
+        issuer: client.issuer,
         resource: resource.to_owned(),
         scope,
     })
@@ -2279,7 +2908,9 @@ async fn authorize_get(
         return mcp_auth_disabled();
     }
     match validate_authorization_request(&state, &headers, &request).await {
-        Ok(request) => Html(render_authorization_page(&request, None)).into_response(),
+        Ok(request) => {
+            authorization_html(StatusCode::OK, render_authorization_page(&request, None))
+        }
         Err(error) => error.into_response(),
     }
 }
@@ -2325,8 +2956,7 @@ async fn authorize_post(
             ),
         };
         let mut response =
-            Html(render_authorization_page(&validated, Some(message))).into_response();
-        *response.status_mut() = status;
+            authorization_html(status, render_authorization_page(&validated, Some(message)));
         if let OAuthPasswordError::Locked(seconds) = error
             && let Ok(value) = HeaderValue::try_from(seconds.to_string())
         {
@@ -2335,7 +2965,20 @@ async fn authorize_post(
         return response;
     }
 
+    state.oauth.purge_expired();
+    if state.oauth.authorization_codes.len() >= MAX_OUTSTANDING_AUTHORIZATION_CODES {
+        return authorization_error_redirect(
+            validated.redirect_uri.as_str(),
+            Some(validated.state.as_str()),
+            validated.issuer.as_str(),
+            &OAuthRequestError::new(
+                "temporarily_unavailable",
+                "too many outstanding authorization requests; retry shortly",
+            ),
+        );
+    }
     let code = crate::server::issue_token();
+    let callback_issuer = validated.issuer.clone();
     state.oauth.authorization_codes.insert(
         code.clone(),
         AuthorizationCodeRecord {
@@ -2362,11 +3005,72 @@ async fn authorize_post(
     redirect
         .query_pairs_mut()
         .append_pair("code", code.as_str())
-        .append_pair("state", validated.state.as_str());
+        .append_pair("state", validated.state.as_str())
+        .append_pair("iss", callback_issuer.as_str());
     // The authorization form is submitted with POST. A 303 explicitly tells
     // ChatGPT (and a browser) to follow the callback with GET instead of
     // replaying the password-bearing POST as a 307 would do.
-    Redirect::to(redirect.as_str()).into_response()
+    let mut response = Redirect::to(redirect.as_str()).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    response
+}
+
+fn authorization_error_redirect(
+    redirect_uri: &str,
+    state: Option<&str>,
+    issuer: &str,
+    error: &OAuthRequestError,
+) -> Response {
+    let mut redirect = match Url::parse(redirect_uri) {
+        Ok(redirect) => redirect,
+        Err(_) => return error.clone().into_response(),
+    };
+    {
+        let mut query = redirect.query_pairs_mut();
+        query
+            .append_pair("error", error.error)
+            .append_pair("error_description", error.description)
+            .append_pair("iss", issuer);
+        if let Some(state) = state.filter(|value| !value.is_empty()) {
+            query.append_pair("state", state);
+        }
+    }
+    let mut response = Redirect::to(redirect.as_str()).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    response
+}
+
+fn authorization_html(status: StatusCode, html: String) -> Response {
+    let mut response = Html(html).into_response();
+    *response.status_mut() = status;
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    headers.insert(
+        axum::http::HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        ),
+    );
+    headers.insert(
+        axum::http::HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        axum::http::HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    response
 }
 
 fn render_authorization_page(
@@ -2417,6 +3121,8 @@ struct AuthorizationCodeRecord {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct RefreshTokenRecord {
     client_id: String,
+    #[serde(default)]
+    issuer: String,
     resource: String,
     scope: String,
     expires_at: u64,
@@ -2455,6 +3161,10 @@ struct OAuthState {
     authorization_codes: DashMap<String, AuthorizationCodeRecord>,
     refresh_tokens: DashMap<String, RefreshTokenRecord>,
     revoked_jti: DashMap<String, u64>,
+    cimd_fetch_lock: tokio::sync::Mutex<()>,
+    registration_lock: tokio::sync::Mutex<()>,
+    refresh_rotation_lock: tokio::sync::Mutex<()>,
+    persist_lock: tokio::sync::Mutex<()>,
     signing_key: OAuthSigningKey,
     database: Option<Arc<ServerStateDb>>,
 }
@@ -2471,15 +3181,25 @@ impl OAuthState {
             authorization_codes: DashMap::new(),
             refresh_tokens: DashMap::new(),
             revoked_jti: DashMap::new(),
+            cimd_fetch_lock: tokio::sync::Mutex::new(()),
+            registration_lock: tokio::sync::Mutex::new(()),
+            refresh_rotation_lock: tokio::sync::Mutex::new(()),
+            persist_lock: tokio::sync::Mutex::new(()),
             signing_key,
             database,
         };
         if let Some(persisted) = persisted {
+            let legacy_plaintext_refresh_keys = persisted.version == 1;
             for (client_id, client) in persisted.clients {
                 state.clients.insert(client_id, client);
             }
             for (token, record) in persisted.refresh_tokens {
-                state.refresh_tokens.insert(token, record);
+                let key = if legacy_plaintext_refresh_keys {
+                    refresh_token_fingerprint(token.as_str())
+                } else {
+                    token
+                };
+                state.refresh_tokens.insert(key, record);
             }
             for (jti, expires_at) in persisted.revoked_jti {
                 state.revoked_jti.insert(jti, expires_at);
@@ -2492,6 +3212,10 @@ impl OAuthState {
         let Some(database) = self.database.as_ref() else {
             return Ok(());
         };
+        // Snapshot and write under one lock. Without this, an older concurrent
+        // snapshot can finish last and erase a newer client, refresh token, or
+        // revocation record from the single persisted runtime document.
+        let _persist_guard = self.persist_lock.lock().await;
         let clients = self
             .clients
             .iter()
@@ -2540,6 +3264,9 @@ impl OAuthState {
         family_id: Option<&str>,
     ) -> Result<TokenResponse, String> {
         self.purge_expired();
+        if self.refresh_tokens.len() >= MAX_REFRESH_TOKEN_RECORDS {
+            return Err("the MCP OAuth refresh-token limit has been reached".to_owned());
+        }
         let issued_at = unix_timestamp();
         let claims = AccessTokenClaims {
             iss: issuer.to_owned(),
@@ -2562,9 +3289,10 @@ impl OAuthState {
             .map(str::to_owned)
             .unwrap_or_else(crate::server::issue_token);
         self.refresh_tokens.insert(
-            refresh_token.clone(),
+            refresh_token_fingerprint(refresh_token.as_str()),
             RefreshTokenRecord {
                 client_id: client_id.to_owned(),
+                issuer: issuer.to_owned(),
                 resource: resource.to_owned(),
                 scope: scope.to_owned(),
                 expires_at: issued_at + REFRESH_TOKEN_TTL.as_secs(),
@@ -2610,6 +3338,14 @@ impl OAuthState {
             && claims.iat <= now.saturating_add(5)
             && scope_contains(claims.scope.as_str(), MCP_SCOPE)
             && !self.revoked_jti.contains_key(claims.jti.as_str())
+    }
+
+    fn verified_access_token_claims(&self, token: &str) -> Option<AccessTokenClaims> {
+        let untrusted = jsonwebtoken::dangerous::insecure_decode::<AccessTokenClaims>(token)
+            .ok()?
+            .claims;
+        self.validate_access_token(token, untrusted.iss.as_str(), untrusted.resource.as_str())
+            .then_some(untrusted)
     }
 }
 
@@ -2785,25 +3521,33 @@ async fn refresh_access_token(
             "client_id is unknown or its CIMD metadata could not be validated",
         ));
     }
-    let record = state
+    let refresh_key = refresh_token_fingerprint(refresh_token);
+    // Serialize rotation so two concurrent uses of the same refresh token can
+    // never both observe `used == false` and mint independent token families.
+    let _rotation_guard = state.oauth.refresh_rotation_lock.lock().await;
+    let mut current = state
         .oauth
         .refresh_tokens
-        .get_mut(refresh_token)
-        .ok_or_else(|| OAuthTokenError::new("invalid_grant", "refresh token is invalid or expired"))
-        .map(|record| record.clone())?;
-    if record.expires_at <= unix_timestamp()
-        || record.client_id != client_id
-        || request.resource.as_deref() != Some(record.resource.as_str())
-        || record.revoked
+        .get_mut(refresh_key.as_str())
+        .ok_or_else(|| {
+            OAuthTokenError::new("invalid_grant", "refresh token is invalid or expired")
+        })?;
+    if current.expires_at <= unix_timestamp()
+        || current.client_id != client_id
+        || current.issuer != state.issuer_for_headers(headers)
+        || request.resource.as_deref() != Some(current.resource.as_str())
+        || current.revoked
     {
         return Err(OAuthTokenError::new(
             "invalid_grant",
             "refresh token binding is invalid",
         ));
     }
-    if record.used {
+    if current.used {
+        let family_id = current.family_id.clone();
+        drop(current);
         for mut entry in state.oauth.refresh_tokens.iter_mut() {
-            if entry.family_id == record.family_id {
+            if entry.family_id == family_id {
                 entry.revoked = true;
             }
         }
@@ -2814,21 +3558,21 @@ async fn refresh_access_token(
         ));
     }
     if let Some(scope) = request.scope.as_deref()
-        && normalize_scope(Some(scope)).ok().as_deref() != Some(record.scope.as_str())
+        && normalize_scope(Some(scope)).ok().as_deref() != Some(current.scope.as_str())
     {
         return Err(OAuthTokenError::new(
             "invalid_scope",
             "requested scope is not granted",
         ));
     }
-    if let Some(mut current) = state.oauth.refresh_tokens.get_mut(refresh_token) {
-        current.used = true;
-    }
+    current.used = true;
+    let record = current.clone();
+    drop(current);
     let response = state
         .oauth
         .issue_tokens(
             client_id,
-            state.issuer_for_headers(headers).as_str(),
+            record.issuer.as_str(),
             record.resource.as_str(),
             record.scope.as_str(),
             Some(record.family_id.as_str()),
@@ -2889,16 +3633,23 @@ async fn revoke(
             "client_id is unknown or its CIMD metadata could not be validated",
         );
     }
-    if let Ok(token_data) =
-        jsonwebtoken::dangerous::insecure_decode::<AccessTokenClaims>(request.token.as_str())
-        && !token_data.claims.jti.is_empty()
+    if let Some(claims) = state
+        .oauth
+        .verified_access_token_claims(request.token.as_str())
+        && request
+            .client_id
+            .as_deref()
+            .is_none_or(|client_id| client_id == claims.sub)
     {
-        state
-            .oauth
-            .revoked_jti
-            .insert(token_data.claims.jti, token_data.claims.exp);
+        state.oauth.revoked_jti.insert(claims.jti, claims.exp);
     }
-    if let Some(mut refresh) = state.oauth.refresh_tokens.get_mut(request.token.as_str()) {
+    let refresh_key = refresh_token_fingerprint(request.token.as_str());
+    if let Some(mut refresh) = state.oauth.refresh_tokens.get_mut(refresh_key.as_str())
+        && request
+            .client_id
+            .as_deref()
+            .is_none_or(|client_id| client_id == refresh.client_id)
+    {
         let family_id = refresh.family_id.clone();
         refresh.revoked = true;
         for mut entry in state.oauth.refresh_tokens.iter_mut() {
@@ -2944,13 +3695,68 @@ async fn require_mcp_auth_enabled(
     mcp_auth_disabled()
 }
 
+#[derive(Debug, Clone)]
+enum McpAuthRequirement {
+    NotRequired,
+    ToolCall(serde_json::Value),
+    Transport,
+}
+
+async fn mixed_auth_requirement(state: &McpServerState, body: &[u8]) -> McpAuthRequirement {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        // Let the MCP parser return the protocol-level parse error.
+        return McpAuthRequirement::NotRequired;
+    };
+    let requirements = state.exposed_tool_auth_requirements().await;
+    let protected_call = |request: &serde_json::Value| {
+        let object = request.as_object()?;
+        if object.get("method").and_then(serde_json::Value::as_str) != Some("tools/call") {
+            return None;
+        }
+        let name = object
+            .get("params")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|params| params.get("name"))
+            .and_then(serde_json::Value::as_str)?;
+        // Unknown names fail closed. Authenticated calls still reach the
+        // authoritative backend exposure check and receive a normal not-found
+        // error, but anonymous callers cannot use guessed names as an oracle.
+        requirements
+            .get(name)
+            .copied()
+            .unwrap_or(true)
+            .then(|| object.get("id").cloned().filter(|id| !id.is_null()))
+    };
+    match value {
+        serde_json::Value::Object(_) => match protected_call(&value) {
+            Some(Some(id)) => McpAuthRequirement::ToolCall(id),
+            Some(None) => McpAuthRequirement::Transport,
+            None => McpAuthRequirement::NotRequired,
+        },
+        serde_json::Value::Array(requests) => {
+            if requests
+                .iter()
+                .any(|request| protected_call(request).is_some())
+            {
+                // A batch can contain both public and protected calls. Use the
+                // transport challenge instead of dropping unrelated responses.
+                McpAuthRequirement::Transport
+            } else {
+                McpAuthRequirement::NotRequired
+            }
+        }
+        _ => McpAuthRequirement::NotRequired,
+    }
+}
+
 async fn require_mcp_bearer(
     State(state): State<Arc<McpServerState>>,
     headers: HeaderMap,
     request: axum::http::Request<Body>,
     next: middleware::Next,
 ) -> Response {
-    if !state.auth_enabled() {
+    let auth_mode = state.auth_mode();
+    if auth_mode == McpAuthMode::None {
         return next.run(request).await;
     }
     let resource = state.public_resource(&headers);
@@ -2964,18 +3770,36 @@ async fn require_mcp_bearer(
         return next.run(request).await;
     }
 
-    // ChatGPT can use this MCP-level result to open the tool OAuth linking UI
-    // when a call reaches the server without a usable access token. Other MCP
-    // requests still receive the RFC 9728 HTTP challenge so discovery and
-    // whole-server OAuth continue to work as usual.
-    let (parts, body) = request.into_parts();
-    if parts.method == axum::http::Method::POST
-        && let Ok(body) = to_bytes(body, MAX_MCP_METADATA_BODY_BYTES).await
-        && let Some(id) = unauthorized_tool_call_id(&body)
-    {
-        return mcp_tool_authentication_required(&issuer, &resource, id);
+    if request.method() != axum::http::Method::POST {
+        return if auth_mode == McpAuthMode::Mixed {
+            next.run(request).await
+        } else {
+            mcp_unauthorized(&issuer, &resource)
+        };
     }
-    mcp_unauthorized(&issuer, &resource)
+
+    let (parts, body) = request.into_parts();
+    let body = match to_bytes(body, MAX_MCP_METADATA_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(error) => return mcp_request_body_error(&error),
+    };
+    let requirement = match auth_mode {
+        McpAuthMode::None => McpAuthRequirement::NotRequired,
+        McpAuthMode::Oauth => unauthorized_tool_call_id(&body)
+            .map(McpAuthRequirement::ToolCall)
+            .unwrap_or(McpAuthRequirement::Transport),
+        McpAuthMode::Mixed => mixed_auth_requirement(&state, &body).await,
+    };
+    match requirement {
+        McpAuthRequirement::NotRequired => {
+            next.run(axum::http::Request::from_parts(parts, Body::from(body)))
+                .await
+        }
+        McpAuthRequirement::ToolCall(id) => {
+            mcp_tool_authentication_required(&issuer, &resource, id)
+        }
+        McpAuthRequirement::Transport => mcp_unauthorized(&issuer, &resource),
+    }
 }
 
 fn mcp_unauthorized(issuer: &str, resource: &str) -> Response {
@@ -3043,12 +3867,12 @@ fn mcp_tool_authentication_payload(
 }
 
 fn mcp_www_authenticate(
-    issuer: &str,
-    _resource: &str,
+    _issuer: &str,
+    resource: &str,
     error: Option<&str>,
     description: Option<&str>,
 ) -> String {
-    let metadata_url = append_public_endpoint(issuer, "/.well-known/oauth-protected-resource");
+    let metadata_url = protected_resource_metadata_url(resource);
     let mut value = format!(
         "Bearer resource_metadata=\"{}\", scope=\"{}\"",
         metadata_url, MCP_SCOPE
@@ -3103,7 +3927,8 @@ impl OAuthTokenError {
 impl IntoResponse for OAuthTokenError {
     fn into_response(self) -> Response {
         let status = match self.error {
-            "invalid_client" => StatusCode::UNAUTHORIZED,
+            "server_error" => StatusCode::INTERNAL_SERVER_ERROR,
+            "temporarily_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
             _ => StatusCode::BAD_REQUEST,
         };
         oauth_error(status, self.error, self.description)
@@ -3135,15 +3960,22 @@ fn json_no_store<T: Serialize>(status: StatusCode, value: T) -> Response {
 }
 
 fn normalize_scope(scope: Option<&str>) -> Result<String, OAuthRequestError> {
-    let scope = scope.unwrap_or(MCP_SCOPE);
-    let scopes = scope.split_whitespace().collect::<Vec<_>>();
-    if !scopes.is_empty() && scopes.iter().all(|value| *value == MCP_SCOPE) {
-        Ok(MCP_SCOPE.to_owned())
-    } else {
+    let scope = scope.unwrap_or(DEFAULT_OAUTH_SCOPE);
+    let scopes = scope.split_whitespace().collect::<HashSet<_>>();
+    if scopes.is_empty()
+        || !scopes.contains(MCP_SCOPE)
+        || scopes
+            .iter()
+            .any(|value| *value != MCP_SCOPE && *value != OFFLINE_ACCESS_SCOPE)
+    {
         Err(OAuthRequestError::new(
             "invalid_scope",
-            "only the agena:tools scope is supported",
+            "the agena:tools scope is required; offline_access is the only optional scope",
         ))
+    } else if scopes.contains(OFFLINE_ACCESS_SCOPE) {
+        Ok(DEFAULT_OAUTH_SCOPE.to_owned())
+    } else {
+        Ok(MCP_SCOPE.to_owned())
     }
 }
 
@@ -3151,8 +3983,22 @@ fn scope_contains(scope: &str, expected: &str) -> bool {
     scope.split_whitespace().any(|value| value == expected)
 }
 
+fn valid_pkce_challenge(challenge: &str) -> bool {
+    challenge.len() == 43
+        && challenge
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
 fn pkce_matches(verifier: &str, challenge: &str) -> bool {
     if !(43..=128).contains(&verifier.len()) {
+        return false;
+    }
+    if !verifier
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~'))
+        || !valid_pkce_challenge(challenge)
+    {
         return false;
     }
     let digest = Sha256::digest(verifier.as_bytes());
@@ -3168,6 +4014,12 @@ fn validate_redirect_uri(value: &str) -> Result<(), ()> {
         || !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
+        || url.query_pairs().any(|(key, _)| {
+            matches!(
+                key.as_ref(),
+                "code" | "state" | "iss" | "error" | "error_description"
+            )
+        })
     {
         return Err(());
     }
@@ -3175,7 +4027,7 @@ fn validate_redirect_uri(value: &str) -> Result<(), ()> {
 }
 
 fn is_registered_oauth_client(state: &McpServerState, client_id: &str) -> bool {
-    state.oauth.clients.contains_key(client_id)
+    state.client_registration().dcr_enabled() && state.oauth.clients.contains_key(client_id)
 }
 
 /// ChatGPT's CIMD client ID is an HTTPS metadata-document URL rather than a
@@ -3194,14 +4046,15 @@ fn is_supported_cimd_client_id(value: &str) -> bool {
         && url.password().is_none()
         && url.query().is_none()
         && url.fragment().is_none()
-        && path.starts_with("/oauth/")
-        && path.ends_with("/client.json")
+        && (path == "/oauth/client.json"
+            || (path.starts_with("/oauth/") && path.ends_with("/client.json")))
         && path
             .split('/')
             .all(|segment| segment != "." && segment != "..")
-        && path
-            .strip_prefix("/oauth/")
-            .is_some_and(|suffix| suffix.len() > "/client.json".len())
+        && (path == "/oauth/client.json"
+            || path
+                .strip_prefix("/oauth/")
+                .is_some_and(|suffix| suffix.len() > "/client.json".len()))
 }
 
 #[cfg(test)]
@@ -3209,9 +4062,11 @@ fn is_supported_chatgpt_redirect_uri(value: &str) -> bool {
     let Ok(url) = Url::parse(value.trim()) else {
         return false;
     };
-    let Some(callback_id) = url.path().strip_prefix("/connector/oauth/") else {
-        return false;
-    };
+    let path = url.path();
+    let callback_path_is_supported = path == "/connector_platform_oauth_redirect"
+        || path
+            .strip_prefix("/connector/oauth/")
+            .is_some_and(|callback_id| !callback_id.is_empty() && !callback_id.contains('/'));
     url.scheme() == "https"
         && url.host_str() == Some("chatgpt.com")
         && url.port().is_none()
@@ -3219,15 +4074,40 @@ fn is_supported_chatgpt_redirect_uri(value: &str) -> bool {
         && url.password().is_none()
         && url.query().is_none()
         && url.fragment().is_none()
-        && !callback_id.is_empty()
-        && !callback_id.contains('/')
+        && callback_path_is_supported
 }
 
 fn is_loopback_host(url: &Url) -> bool {
-    matches!(
-        url.host_str(),
-        Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
-    )
+    url.host_str().is_some_and(is_loopback_host_name)
+}
+
+fn is_loopback_host_name(host: &str) -> bool {
+    let host = host.trim_matches(['[', ']']).trim_end_matches('.');
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
+fn authority_host(authority: &str) -> Option<String> {
+    Url::parse(format!("http://{authority}").as_str())
+        .ok()?
+        .host_str()
+        .map(str::to_owned)
+}
+
+fn url_authority(value: &str) -> Option<String> {
+    let url = Url::parse(value).ok()?;
+    let host = url.host_str()?;
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
+    Some(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    })
 }
 
 fn normalize_public_mcp_url(value: &str) -> Result<String, String> {
@@ -3267,7 +4147,7 @@ fn normalize_public_mcp_url(value: &str) -> Result<String, String> {
 }
 
 fn normalize_oauth_issuer_url(value: &str) -> Result<String, String> {
-    let url = Url::parse(value.trim())
+    let mut url = Url::parse(value.trim())
         .map_err(|error| format!("invalid MCP OAuth issuer URL: {error}"))?;
     if url.scheme() != "https" && url.scheme() != "http" {
         return Err("MCP OAuth issuer URL must use http or https".to_owned());
@@ -3283,13 +4163,17 @@ fn normalize_oauth_issuer_url(value: &str) -> Result<String, String> {
                 .to_owned(),
         );
     }
-    if url
-        .path()
-        .split('/')
-        .any(|segment| segment == "." || segment == "..")
-    {
-        return Err("MCP OAuth issuer URL path must not contain dot segments".to_owned());
+    if !matches!(url.path(), "" | "/") {
+        return Err(
+            "Agena-managed OAuth issuer URL must be an origin without a path (for example https://agena.example.com)"
+                .to_owned(),
+        );
     }
+    // Agena's embedded authorization endpoints are served at root paths such
+    // as /oauth/authorize and /oauth/token. Canonicalize the issuer to the
+    // origin so discovery can never advertise an unreachable path-prefixed
+    // endpoint.
+    url.set_path("");
     Ok(url.to_string().trim_end_matches('/').to_owned())
 }
 
@@ -3300,11 +4184,52 @@ fn is_https_resource(value: &str) -> bool {
 }
 
 fn issuer_for_resource(resource: &str) -> String {
-    resource
-        .strip_suffix(MCP_PATH)
-        .unwrap_or(resource)
-        .trim_end_matches('/')
-        .to_owned()
+    Url::parse(resource)
+        .map(|url| url.origin().ascii_serialization())
+        .unwrap_or_else(|_| resource.trim_end_matches('/').to_owned())
+}
+
+fn resource_has_nonstandard_path(resource: &str) -> bool {
+    Url::parse(resource)
+        .map(|url| url.path().trim_end_matches('/') != MCP_PATH)
+        .unwrap_or(true)
+}
+
+/// RFC 9728 inserts the protected-resource well-known suffix before the
+/// resource path. For example `https://example.test/public/mcp` maps to
+/// `https://example.test/.well-known/oauth-protected-resource/public/mcp`.
+fn protected_resource_metadata_url(resource: &str) -> String {
+    let Ok(mut url) = Url::parse(resource) else {
+        return append_public_endpoint(resource, "/.well-known/oauth-protected-resource");
+    };
+    let resource_path = url.path().trim_matches('/');
+    let path = if resource_path.is_empty() {
+        "/.well-known/oauth-protected-resource".to_owned()
+    } else {
+        format!("/.well-known/oauth-protected-resource/{resource_path}")
+    };
+    url.set_path(path.as_str());
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string().trim_end_matches('/').to_owned()
+}
+
+/// RFC 8414 applies the same well-known insertion rule to authorization-server
+/// issuers with a path component.
+fn authorization_server_metadata_url(issuer: &str) -> String {
+    let Ok(mut url) = Url::parse(issuer) else {
+        return append_public_endpoint(issuer, "/.well-known/oauth-authorization-server");
+    };
+    let issuer_path = url.path().trim_matches('/');
+    let path = if issuer_path.is_empty() {
+        "/.well-known/oauth-authorization-server".to_owned()
+    } else {
+        format!("/.well-known/oauth-authorization-server/{issuer_path}")
+    };
+    url.set_path(path.as_str());
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string().trim_end_matches('/').to_owned()
 }
 
 fn append_public_endpoint(base: &str, suffix: &str) -> String {
@@ -3313,15 +4238,6 @@ fn append_public_endpoint(base: &str, suffix: &str) -> String {
         base.trim_end_matches('/'),
         suffix.trim_start_matches('/')
     )
-}
-
-fn forwarded_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
@@ -3364,7 +4280,12 @@ mod tests {
             before_help: None,
             after_help: None,
             input_schema: serde_json::json!({"type": "object"}),
+            output_schema: None,
             interactive,
+            read_only: true,
+            destructive: false,
+            open_world: false,
+            task: false,
             plugin_id: plugin_id.map(str::to_owned),
         }
     }
@@ -3395,18 +4316,40 @@ mod tests {
     }
 
     #[test]
-    fn tunnel_resource_uses_its_full_path_for_oauth_endpoints() {
+    fn managed_oauth_issuer_is_an_origin_without_a_path() {
+        assert_eq!(
+            normalize_oauth_issuer_url("https://auth.example.test/").expect("issuer origin"),
+            "https://auth.example.test"
+        );
+        assert!(normalize_oauth_issuer_url("https://auth.example.test/agena").is_err());
+        assert!(normalize_oauth_issuer_url("https://user@auth.example.test").is_err());
+    }
+
+    #[test]
+    fn routed_resources_use_rfc_well_known_paths_and_a_separate_issuer_origin() {
         let resource = "https://tunnel-service.example/v1/mcp/tunnel_123";
         let issuer = issuer_for_resource(resource);
-        assert_eq!(issuer, resource);
+        assert_eq!(issuer, "https://tunnel-service.example");
+        assert!(resource_has_nonstandard_path(resource));
+        assert_eq!(
+            protected_resource_metadata_url(resource),
+            "https://tunnel-service.example/.well-known/oauth-protected-resource/v1/mcp/tunnel_123"
+        );
+        assert_eq!(
+            authorization_server_metadata_url("https://auth.example/agena"),
+            "https://auth.example/.well-known/oauth-authorization-server/agena"
+        );
         assert_eq!(
             append_public_endpoint(&issuer, "/oauth/token"),
-            "https://tunnel-service.example/v1/mcp/tunnel_123/oauth/token"
+            "https://tunnel-service.example/oauth/token"
         );
     }
 
     #[test]
     fn chatgpt_cimd_and_callback_allowlist_is_strict() {
+        assert!(is_supported_cimd_client_id(
+            "https://chatgpt.com/oauth/client.json"
+        ));
         assert!(is_supported_cimd_client_id(
             "https://chatgpt.com/oauth/abc123/client.json"
         ));
@@ -3431,37 +4374,68 @@ mod tests {
     }
 
     #[test]
-    fn mcp_catalog_hides_interactive_and_provider_tools() {
-        assert!(mcp_tool_is_exposed(&tool(
-            "fs.read",
-            false,
-            Some("agena.fs")
-        )));
-        assert!(!mcp_tool_is_exposed(&tool(
-            "prompt.ask",
-            true,
-            Some("agena.prompt")
-        )));
-        assert!(!mcp_tool_is_exposed(&tool(
-            "chatgpt.search",
-            false,
-            Some("agena.chatgpt")
-        )));
-        assert!(!mcp_tool_is_exposed(&tool("gemini.search", false, None)));
-        assert!(!mcp_tool_is_exposed(&tool("claude.ask", false, None)));
-        assert!(!mcp_tool_is_exposed(&tool("web.browser_list", false, None)));
-        assert!(!mcp_tool_is_exposed(&tool(
-            "agena.web.browser_wait",
-            false,
-            None
-        )));
-        assert!(!mcp_tool_is_exposed(&tool(
-            "interaction.notify",
-            false,
-            None
-        )));
-        assert!(!mcp_tool_is_exposed(&tool("plan.phase", false, None)));
-        assert!(!mcp_tool_is_exposed(&tool("plan.review", false, None)));
+    fn mcp_catalog_is_read_only_by_default_and_hides_interactive_provider_tools() {
+        let read = tool("fs.read", false, Some("agena.fs"));
+        assert!(mcp_tool_is_exposed_for_mode(
+            &read,
+            McpToolExposure::ReadOnly
+        ));
+
+        let mut write = tool("fs.write", false, Some("agena.fs"));
+        write.read_only = false;
+        write.destructive = true;
+        assert!(!mcp_tool_is_exposed_for_mode(
+            &write,
+            McpToolExposure::ReadOnly
+        ));
+        assert!(mcp_tool_is_exposed_for_mode(
+            &write,
+            McpToolExposure::AllNonInteractive
+        ));
+
+        assert!(!mcp_tool_is_exposed_for_mode(
+            &tool("prompt.ask", true, Some("agena.prompt")),
+            McpToolExposure::AllNonInteractive
+        ));
+        assert!(!mcp_tool_is_exposed_for_mode(
+            &tool("chatgpt.search", false, Some("agena.chatgpt")),
+            McpToolExposure::AllNonInteractive
+        ));
+        assert!(!mcp_tool_is_exposed_for_mode(
+            &tool("gemini.search", false, None),
+            McpToolExposure::AllNonInteractive
+        ));
+        assert!(!mcp_tool_is_exposed_for_mode(
+            &tool("claude.ask", false, None),
+            McpToolExposure::AllNonInteractive
+        ));
+        assert!(!mcp_tool_is_exposed_for_mode(
+            &tool("web.browser_list", false, None),
+            McpToolExposure::AllNonInteractive
+        ));
+        assert!(!mcp_tool_is_exposed_for_mode(
+            &tool("agena.web.browser_wait", false, None),
+            McpToolExposure::AllNonInteractive
+        ));
+        assert!(!mcp_tool_is_exposed_for_mode(
+            &tool("interaction.notify", false, None),
+            McpToolExposure::AllNonInteractive
+        ));
+        assert!(!mcp_tool_is_exposed_for_mode(
+            &tool("plan.phase", false, None),
+            McpToolExposure::AllNonInteractive
+        ));
+        assert!(!mcp_tool_is_exposed_for_mode(
+            &tool("plan.review", false, None),
+            McpToolExposure::AllNonInteractive
+        ));
+
+        let mut task = tool("job.start", false, Some("agena.jobs"));
+        task.task = true;
+        assert!(!mcp_tool_is_exposed_for_mode(
+            &task,
+            McpToolExposure::AllNonInteractive
+        ));
     }
 
     #[test]
@@ -3477,8 +4451,15 @@ mod tests {
 
     #[test]
     fn scope_is_exactly_limited_to_agena_tools() {
-        assert_eq!(normalize_scope(None).expect("default scope"), MCP_SCOPE);
+        assert_eq!(
+            normalize_scope(None).expect("default scope"),
+            DEFAULT_OAUTH_SCOPE
+        );
         assert!(normalize_scope(Some("agena:tools")).is_ok());
+        assert_eq!(
+            normalize_scope(Some("offline_access agena:tools")).expect("offline access"),
+            DEFAULT_OAUTH_SCOPE
+        );
         assert_eq!(
             normalize_scope(Some("agena:tools agena:tools")).expect("duplicate scope"),
             MCP_SCOPE
@@ -3506,12 +4487,46 @@ mod tests {
                 }]
             }
         });
-        let payload = add_tool_security_schemes(payload, true).expect("tools/list payload");
+        let auth_requirements = HashMap::from([("fs.read".to_owned(), true)]);
+        let payload = add_tool_security_schemes(payload, McpAuthMode::Oauth, &auth_requirements)
+            .expect("tools/list payload");
         assert_eq!(
             payload["result"]["tools"][0]["securitySchemes"],
             serde_json::json!([{"type": "oauth2", "scopes": [MCP_SCOPE]}])
         );
         assert_eq!(payload["result"]["tools"][0]["_meta"]["server"], "agena");
+    }
+
+    #[test]
+    fn chatgpt_security_schemes_are_added_to_jsonrpc_batch_responses() {
+        let payload = serde_json::json!([
+            {
+                "jsonrpc": "2.0",
+                "id": 7,
+                "result": {"tools": [{"name": "fs.read"}]}
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 8,
+                "result": {"pong": true}
+            }
+        ]);
+        let auth_requirements = HashMap::from([("fs.read".to_owned(), true)]);
+        let payload = add_tool_security_schemes(payload, McpAuthMode::Oauth, &auth_requirements)
+            .expect("batch tools/list payload");
+        assert_eq!(
+            payload[0]["result"]["tools"][0]["securitySchemes"],
+            serde_json::json!([{"type": "oauth2", "scopes": [MCP_SCOPE]}])
+        );
+        assert_eq!(payload[1]["result"]["pong"], true);
+        assert!(is_tools_list_request(
+            serde_json::to_vec(&serde_json::json!([
+                {"jsonrpc":"2.0","id":1,"method":"ping"},
+                {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+            ]))
+            .expect("serialize batch request")
+            .as_slice()
+        ));
     }
 
     #[test]
@@ -3521,10 +4536,40 @@ mod tests {
             "id": 7,
             "result": {"tools": [{"name": "fs.read"}]}
         });
-        let payload = add_tool_security_schemes(payload, false).expect("tools/list payload");
+        let auth_requirements = HashMap::from([("fs.read".to_owned(), false)]);
+        let payload = add_tool_security_schemes(payload, McpAuthMode::None, &auth_requirements)
+            .expect("tools/list payload");
         assert_eq!(
             payload["result"]["tools"][0]["securitySchemes"],
             serde_json::json!([{"type": "noauth"}])
+        );
+    }
+
+    #[test]
+    fn mixed_auth_declares_noauth_for_read_only_and_oauth_for_privileged_tools() {
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "result": {
+                "tools": [
+                    {"name": "fs.read"},
+                    {"name": "shell.run"}
+                ]
+            }
+        });
+        let auth_requirements = HashMap::from([
+            ("fs.read".to_owned(), false),
+            ("shell.run".to_owned(), true),
+        ]);
+        let payload = add_tool_security_schemes(payload, McpAuthMode::Mixed, &auth_requirements)
+            .expect("mixed tools/list payload");
+        assert_eq!(
+            payload["result"]["tools"][0]["securitySchemes"],
+            serde_json::json!([{"type": "noauth"}])
+        );
+        assert_eq!(
+            payload["result"]["tools"][1]["securitySchemes"],
+            serde_json::json!([{"type": "oauth2", "scopes": [MCP_SCOPE]}])
         );
     }
 
@@ -3539,7 +4584,10 @@ mod tests {
             "retry: 3000\n\nevent: message\ndata: {}\n\n",
             serde_json::to_string(&payload).expect("serialize payload")
         );
-        let rewritten = rewrite_tool_list_sse(body.as_bytes(), true).expect("SSE tools/list");
+        let auth_requirements = HashMap::from([("fs.read".to_owned(), true)]);
+        let rewritten =
+            rewrite_tool_list_sse(body.as_bytes(), McpAuthMode::Oauth, &auth_requirements)
+                .expect("SSE tools/list");
         let rewritten = String::from_utf8(rewritten).expect("UTF-8 SSE body");
         assert!(rewritten.contains("\"securitySchemes\":[{"));
         assert!(rewritten.contains("\"type\":\"oauth2\""));
@@ -3565,87 +4613,48 @@ mod tests {
     }
 
     #[test]
-    fn openai_server_discover_probe_returns_modern_result_with_echoed_id() {
-        let request = serde_json::json!({
+    fn modern_requests_bypass_the_legacy_stateless_fallback() {
+        let mut headers = HeaderMap::new();
+        headers.insert("mcp-method", HeaderValue::from_static("tools/list"));
+        assert!(request_has_modern_mcp_headers(&headers));
+
+        let discover = serde_json::json!({
             "jsonrpc": "2.0",
-            "id": "openai-mcp-discover",
+            "id": 1,
             "method": "server/discover",
             "params": {
                 "_meta": {
                     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                     "io.modelcontextprotocol/clientInfo": {
                         "name": "ChatGPT",
-                        "version": "diagnostic"
+                        "version": "test"
                     },
                     "io.modelcontextprotocol/clientCapabilities": {}
                 }
             }
         });
-        let payload = openai_mcp_discover_payload(
-            &serde_json::to_vec(&request).expect("serialize discover request"),
-        )
-        .expect("OpenAI discover request");
-
-        assert_eq!(payload["jsonrpc"], "2.0");
-        assert_eq!(payload["id"], "openai-mcp-discover");
-        assert_eq!(payload["result"]["resultType"], "complete");
-        assert_eq!(payload["result"]["supportedVersions"][0], "2026-07-28");
-        assert_eq!(
-            payload["result"]["capabilities"]["tools"],
-            serde_json::json!({})
-        );
-        assert_eq!(
-            payload["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
-            "agena"
-        );
-        assert_eq!(payload["result"]["cacheScope"], "public");
-        assert!(payload["result"]["ttlMs"].as_u64().is_some());
+        assert!(value_uses_modern_mcp(&discover));
+        assert!(!value_is_legacy_compat_request(&discover));
     }
 
     #[test]
-    fn openai_server_discover_probe_supports_an_all_discover_batch() {
-        let request = serde_json::json!([
-            {
+    fn legacy_fallback_accepts_only_the_finite_tools_surface() {
+        for method in ["initialize", "ping", "tools/list", "tools/call"] {
+            assert!(value_is_legacy_compat_request(&serde_json::json!({
                 "jsonrpc": "2.0",
-                "id": "openai-mcp-discover-1",
-                "method": "server/discover"
-            },
-            {
-                "jsonrpc": "2.0",
-                "id": "openai-mcp-discover-2",
-                "method": "server/discover",
-                "params": {}
-            }
-        ]);
-        let payload = openai_mcp_discover_payload(
-            &serde_json::to_vec(&request).expect("serialize discover batch"),
-        )
-        .expect("OpenAI discover batch");
-
-        assert_eq!(payload[0]["id"], "openai-mcp-discover-1");
-        assert_eq!(payload[1]["id"], "openai-mcp-discover-2");
-        assert_eq!(payload[0]["result"]["resultType"], "complete");
-        assert_eq!(payload[1]["result"]["resultType"], "complete");
-        assert_eq!(payload[0]["result"]["supportedVersions"][0], "2026-07-28");
-        assert_eq!(payload[1]["result"]["supportedVersions"][0], "2026-07-28");
-    }
-
-    #[test]
-    fn openai_server_discover_compatibility_does_not_match_other_requests() {
-        let initialize = serde_json::json!({
+                "id": 1,
+                "method": method,
+            })));
+        }
+        assert!(value_is_legacy_compat_request(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+        })));
+        assert!(!value_is_legacy_compat_request(&serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "initialize",
-            "params": {}
-        });
-        let notification = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "server/discover",
-            "params": {}
-        });
-
-        assert!(openai_mcp_discover_payload(&serde_json::to_vec(&initialize).unwrap()).is_none());
-        assert!(openai_mcp_discover_payload(&serde_json::to_vec(&notification).unwrap()).is_none());
+            "method": "resources/list",
+        })));
     }
 
     #[test]
@@ -3674,16 +4683,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_rmcp_422_is_normalized_for_stateless_mcp() {
-        let response = Response::builder()
-            .status(StatusCode::UNPROCESSABLE_ENTITY)
-            .body(Body::from("Unexpected message, expect initialize request"))
-            .expect("build legacy 422 response");
-        let response = normalize_mcp_unprocessable_response(response, Some(serde_json::json!(9)));
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[test]
     fn unauthorized_tool_call_payload_contains_chatgpt_auth_challenge() {
         let payload = mcp_tool_authentication_payload(
             "https://example.test",
@@ -3693,7 +4692,40 @@ mod tests {
         assert_eq!(payload["result"]["isError"], true);
         assert_eq!(
             payload["result"]["_meta"]["mcp/www_authenticate"][0],
-            "Bearer resource_metadata=\"https://example.test/.well-known/oauth-protected-resource\", scope=\"agena:tools\", error=\"invalid_token\", error_description=\"A valid Agena MCP OAuth access token is required.\""
+            "Bearer resource_metadata=\"https://example.test/.well-known/oauth-protected-resource/mcp\", scope=\"agena:tools\", error=\"invalid_token\", error_description=\"A valid Agena MCP OAuth access token is required.\""
+        );
+    }
+
+    #[test]
+    fn authorization_error_callback_preserves_state_and_rfc9207_issuer() {
+        let response = authorization_error_redirect(
+            "https://chatgpt.com/connector/oauth/callback",
+            Some("opaque-state"),
+            "https://auth.example/agena",
+            &OAuthRequestError::new("invalid_scope", "scope is not granted"),
+        );
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let location = response.headers()[header::LOCATION]
+            .to_str()
+            .expect("redirect location");
+        let location = Url::parse(location).expect("parse authorization error callback");
+        let values = location.query_pairs().collect::<HashMap<_, _>>();
+        assert_eq!(
+            values.get("error").map(|value| value.as_ref()),
+            Some("invalid_scope")
+        );
+        assert_eq!(
+            values.get("error_description").map(|value| value.as_ref()),
+            Some("scope is not granted")
+        );
+        assert_eq!(
+            values.get("state").map(|value| value.as_ref()),
+            Some("opaque-state")
+        );
+        assert_eq!(
+            values.get("iss").map(|value| value.as_ref()),
+            Some("https://auth.example/agena")
         );
     }
 
@@ -3721,12 +4753,48 @@ mod tests {
     }
 
     #[test]
+    fn client_metadata_must_unambiguously_select_public_pkce_auth() {
+        assert!(client_metadata_supports_none(Some("none"), None));
+        assert!(client_metadata_supports_none(
+            None,
+            Some(&["none".to_owned()])
+        ));
+        assert!(client_metadata_supports_none(
+            Some("private_key_jwt"),
+            Some(&["none".to_owned(), "private_key_jwt".to_owned()])
+        ));
+        assert!(!client_metadata_supports_none(
+            Some("none"),
+            Some(&["private_key_jwt".to_owned()])
+        ));
+        assert!(client_metadata_supports_grants(Some(&[
+            "authorization_code".to_owned(),
+            "refresh_token".to_owned(),
+        ])));
+        assert!(!client_metadata_supports_grants(Some(&[
+            "authorization_code".to_owned(),
+            "client_credentials".to_owned(),
+        ])));
+        assert!(client_metadata_supports_code_response(Some(&[
+            "code".to_owned()
+        ])));
+        assert!(!client_metadata_supports_code_response(Some(&[
+            "code".to_owned(),
+            "token".to_owned(),
+        ])));
+    }
+
+    #[test]
     fn redirect_uri_validation_requires_https_except_loopback() {
         assert!(validate_redirect_uri("https://chatgpt.com/connector/oauth/abc").is_ok());
         assert!(validate_redirect_uri("http://127.0.0.1:3210/callback").is_ok());
         assert!(validate_redirect_uri("http://example.test/callback").is_err());
         assert!(validate_redirect_uri("https://example.test/callback#fragment").is_err());
         assert!(validate_redirect_uri("https://user@example.test/callback").is_err());
+        assert!(validate_redirect_uri("https://example.test/callback?tenant=agena").is_ok());
+        assert!(validate_redirect_uri("https://example.test/callback?code=attacker").is_err());
+        assert!(validate_redirect_uri("https://example.test/callback?state=attacker").is_err());
+        assert!(validate_redirect_uri("https://example.test/callback?iss=attacker").is_err());
     }
 
     #[test]
@@ -3735,13 +4803,33 @@ mod tests {
         let issuer = "https://example.test";
         let resource = "https://example.test/mcp";
         let response = state
-            .issue_tokens("client-1", issuer, resource, MCP_SCOPE, None)
+            .issue_tokens("client-1", issuer, resource, DEFAULT_OAUTH_SCOPE, None)
             .expect("issue token");
+        assert!(
+            !state
+                .refresh_tokens
+                .contains_key(response.refresh_token.as_str())
+        );
+        assert!(
+            state
+                .refresh_tokens
+                .contains_key(refresh_token_fingerprint(response.refresh_token.as_str()).as_str())
+        );
         assert!(state.validate_access_token(response.access_token.as_str(), issuer, resource));
         assert!(!state.validate_access_token(
             response.access_token.as_str(),
             issuer,
             "https://other.example.test/mcp"
         ));
+
+        let mut forged = response.access_token.clone();
+        let replacement = if forged.ends_with('a') { 'b' } else { 'a' };
+        forged.pop();
+        forged.push(replacement);
+        assert!(
+            state
+                .verified_access_token_claims(forged.as_str())
+                .is_none()
+        );
     }
 }

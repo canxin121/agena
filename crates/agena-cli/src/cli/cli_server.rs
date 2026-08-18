@@ -2510,7 +2510,12 @@ mod tests {
             before_help: None,
             after_help: None,
             input_schema: serde_json::json!({"type": "object"}),
+            output_schema: None,
             interactive,
+            read_only: true,
+            destructive: false,
+            open_world: false,
+            task: false,
             plugin_id: plugin_id.map(str::to_owned),
         }
     }

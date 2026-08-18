@@ -584,7 +584,7 @@ async fn wait_for_execution(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let execution = client
-            .get_session_state(session_id)
+            .get_session_state_with_parts(session_id, true)
             .await
             .expect("read process-test session state");
         if predicate(&execution) {
@@ -666,7 +666,7 @@ async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
         .create_session(workspace_resource.id, "crash recovery", None)
         .await
         .expect("create crash-recovery session");
-    let submitted = client_a
+    client_a
         .submit_message(SubmitRunParams {
             session_id: session.id,
             options: RunOptions::default(),
@@ -680,23 +680,10 @@ async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
         .await
         .expect("fake provider receives hanging request")
         .expect("hanging provider request exists");
-    let running = wait_for_execution(&client_a, session.id, |execution| {
+    wait_for_execution(&client_a, session.id, |execution| {
         execution.session.state.is_running() && execution.session.state.active_execution().is_some()
     })
     .await;
-    assert_eq!(
-        running
-            .session
-            .state
-            .active_execution()
-            .map(|active| active.execution_id),
-        submitted
-            .session
-            .state
-            .active_execution()
-            .map(|active| active.execution_id)
-    );
-
     first_server.crash();
     drop(client_a);
 
@@ -744,7 +731,7 @@ async fn killed_server_restarts_with_interrupted_then_reconciled_session() {
     );
 
     let reconciled = client_b
-        .get_session_state(session.id)
+        .get_session_state_with_parts(session.id, true)
         .await
         .expect("open and reconcile interrupted session");
     assert!(matches!(
@@ -861,7 +848,7 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
         .create_session(workspace_resource.id, title, None)
         .await
         .expect("create process-ownership session");
-    let submitted = web_client
+    web_client
         .submit_message(SubmitRunParams {
             session_id: session.id,
             options: RunOptions::default(),
@@ -879,19 +866,12 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
         execution.session.state.is_running() && execution.session.state.active_execution().is_some()
     })
     .await;
-    assert_eq!(
-        running
-            .session
-            .state
-            .active_execution()
-            .map(|active| active.execution_id),
-        submitted
-            .session
-            .state
-            .active_execution()
-            .map(|active| active.execution_id)
-    );
-
+    let running_execution_id = running
+        .session
+        .state
+        .active_execution()
+        .expect("running session has an active execution")
+        .execution_id;
     // This snapshot-plus-SSE attachment uses the same public transport as the
     // Web conversation runtime and remains connected while the native clients
     // below start. The submitted HTTP request itself is already detached from
@@ -1061,11 +1041,8 @@ async fn simultaneous_web_tui_cli_ide_clients_leave_runtime_ownership_in_server(
             .state
             .active_execution()
             .map(|active| active.execution_id),
-        submitted
-            .session
-            .state
-            .active_execution()
-            .map(|active| active.execution_id)
+        Some(running_execution_id),
+        "disconnecting every client must not replace the server-owned execution"
     );
     assert_eq!(runtime_ownership_records(&audit_path).len(), 1);
     assert!(

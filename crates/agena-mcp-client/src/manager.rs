@@ -1552,7 +1552,7 @@ fn convert_tool_descriptor(tool: Tool) -> ToolDescriptor {
             .output_schema
             .map(|schema| Value::Object(schema.as_ref().clone())),
         annotations: serialize_optional(tool.annotations),
-        execution: serialize_optional(tool.execution),
+        execution: None,
         icons: serialize_values(tool.icons.unwrap_or_default()),
         meta: serialize_optional(tool.meta),
     }

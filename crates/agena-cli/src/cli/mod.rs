@@ -734,13 +734,41 @@ pub struct ServerArgs {
     pub host: String,
     #[arg(short, long, env = "AGENA_SERVER_PORT", default_value_t = 3210)]
     pub port: u16,
-    #[arg(long, env = "AGENA_SERVER_UI_PASSWORD")]
+    /// Operator password for the Web/TUI management API. It is required when
+    /// the built-in public MCP OAuth mode is enabled and also acts as the
+    /// default OAuth authorization password unless an MCP-specific one is set.
+    #[arg(
+        long,
+        env = "AGENA_SERVER_UI_PASSWORD",
+        hide_env_values = true,
+        value_name = "PASSWORD"
+    )]
     pub ui_password: Option<String>,
-    /// Public MCP resource URL. A bare origin is normalized to `/mcp`; when
-    /// omitted, the request Host/X-Forwarded-* headers or the bound address
-    /// are used for OAuth metadata.
+    /// Public MCP resource URL. A bare origin is normalized to `/mcp`. When
+    /// omitted, the listener-local URL is used; request forwarding headers are
+    /// never trusted to define OAuth identity.
     #[arg(long, env = "AGENA_MCP_PUBLIC_URL", value_name = "URL")]
     pub mcp_public_url: Option<String>,
+    /// Public browser-facing issuer for Agena's built-in OAuth server. It must
+    /// be an HTTPS origin without a path. Omit it when OAuth and MCP use the
+    /// same domain; Agena then derives the issuer from the MCP public URL.
+    #[arg(long, env = "AGENA_MCP_OAUTH_ISSUER_URL", value_name = "URL")]
+    pub mcp_oauth_issuer_url: Option<String>,
+    /// MCP authentication mode. An explicit CLI/environment value overrides a
+    /// persisted Web/TUI selection on every process start.
+    #[arg(long, env = "AGENA_MCP_AUTH_MODE", value_enum)]
+    pub mcp_auth_mode: Option<McpAuthModeArg>,
+    /// Mixed-auth anonymous tool policy. The default is `none`; opting into
+    /// `read-only` can expose private workspace data even without writes.
+    #[arg(long, env = "AGENA_MCP_ANONYMOUS_ACCESS", value_enum)]
+    pub mcp_anonymous_access: Option<McpAnonymousAccessArg>,
+    /// Public tool exposure policy. The secure default is `read-only`.
+    #[arg(long, env = "AGENA_MCP_TOOL_EXPOSURE", value_enum)]
+    pub mcp_tool_exposure: Option<McpToolExposureArg>,
+    /// OAuth client-registration policy. CIMD-only is the secure default; DCR
+    /// is retained as an explicit compatibility option.
+    #[arg(long, env = "AGENA_MCP_CLIENT_REGISTRATION", value_enum)]
+    pub mcp_client_registration: Option<McpClientRegistrationArg>,
     #[arg(long = "workspace", env = "AGENA_WORKSPACE_ROOT", value_name = "PATH")]
     pub workspace_root: Option<PathBuf>,
     /// Directory containing the built Web frontend. When omitted, repository
@@ -752,6 +780,72 @@ pub struct ServerArgs {
         value_name = "PATH"
     )]
     pub ui_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab_case")]
+pub enum McpAuthModeArg {
+    None,
+    Oauth,
+    Mixed,
+}
+
+impl McpAuthModeArg {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Oauth => "oauth",
+            Self::Mixed => "mixed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab_case")]
+pub enum McpAnonymousAccessArg {
+    None,
+    ReadOnly,
+}
+
+impl McpAnonymousAccessArg {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::ReadOnly => "read-only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab_case")]
+pub enum McpToolExposureArg {
+    ReadOnly,
+    AllNonInteractive,
+}
+
+impl McpToolExposureArg {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read-only",
+            Self::AllNonInteractive => "all-non-interactive",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab_case")]
+pub enum McpClientRegistrationArg {
+    CimdOnly,
+    CimdAndDcr,
+}
+
+impl McpClientRegistrationArg {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CimdOnly => "cimd-only",
+            Self::CimdAndDcr => "cimd-and-dcr",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -1628,6 +1722,42 @@ mod parser_contract_tests {
         assert!(matches!(
             cli.into_launch_mode(),
             LaunchMode::Server(request) if request.args.port == 4321
+        ));
+    }
+
+    #[test]
+    fn server_accepts_complete_headless_mcp_connector_configuration() {
+        let cli = AgenaCli::try_parse_from([
+            "agena",
+            "server",
+            "--mcp-public-url",
+            "https://mcp.example.test/mcp",
+            "--mcp-oauth-issuer-url",
+            "https://auth.example.test",
+            "--mcp-auth-mode",
+            "mixed",
+            "--mcp-anonymous-access",
+            "read-only",
+            "--mcp-tool-exposure",
+            "all-non-interactive",
+            "--mcp-client-registration",
+            "cimd-only",
+        ])
+        .expect("parse complete MCP server configuration");
+        assert!(matches!(
+            cli.into_launch_mode(),
+            LaunchMode::Server(request)
+                if request.args.mcp_public_url.as_deref()
+                    == Some("https://mcp.example.test/mcp")
+                    && request.args.mcp_oauth_issuer_url.as_deref()
+                        == Some("https://auth.example.test")
+                    && request.args.mcp_auth_mode == Some(super::McpAuthModeArg::Mixed)
+                    && request.args.mcp_anonymous_access
+                        == Some(super::McpAnonymousAccessArg::ReadOnly)
+                    && request.args.mcp_tool_exposure
+                        == Some(super::McpToolExposureArg::AllNonInteractive)
+                    && request.args.mcp_client_registration
+                        == Some(super::McpClientRegistrationArg::CimdOnly)
         ));
     }
 

@@ -179,6 +179,7 @@ pub(crate) struct SettingsFieldSpec {
 /// editor to the server-owned MCP control API. They are never written to
 /// `agena.json`.
 pub(crate) const MCP_PUBLIC_URL_SETTINGS_PATH: &str = "__agena.mcp_server.public_url";
+pub(crate) const MCP_OAUTH_ISSUER_URL_SETTINGS_PATH: &str = "__agena.mcp_server.oauth_issuer_url";
 pub(crate) const MCP_OAUTH_PASSWORD_SETTINGS_PATH: &str = "__agena.mcp_server.oauth_password";
 
 #[derive(Debug, Clone, Copy)]
@@ -193,7 +194,11 @@ pub(crate) enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     ToggleMcpServer,
     ToggleMcpAuth,
+    ToggleMcpAnonymousAccess,
+    ToggleMcpClientRegistration,
+    ToggleMcpToolExposure,
     EditMcpPublicUrl,
+    EditMcpOAuthIssuerUrl,
     EditMcpOAuthPassword,
     ClearMcpOAuthPassword,
     OpenProviderDefaultModelChooser,

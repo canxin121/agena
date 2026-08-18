@@ -6,12 +6,15 @@ ratatui TUI — talk to it purely over HTTP.
 
 ## Documentation
 
-Documentation is generated from source via rustdoc. There are no standalone
-Markdown docs to maintain:
+API documentation is generated from source via rustdoc:
 
 ```bash
 cargo doc --workspace --no-deps --open
 ```
+
+Deployment guides:
+
+- [Public MCP server with built-in OAuth](docs/mcp-public-oauth.md)
 
 ## Quick start
 

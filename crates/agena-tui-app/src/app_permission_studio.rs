@@ -388,27 +388,91 @@ impl App {
                 );
                 false
             }
-            SettingsPickerAction::ToggleMcpAuth => {
-                let auth_enabled = self
-                    .application
-                    .cached_mcp_server_control()
-                    .and_then(|value| value.get("authEnabled").cloned())
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false);
-                self.dispatch_backend_operation(
-                    move |application| async move {
-                        application.set_mcp_auth_enabled(!auth_enabled).await
+            SettingsPickerAction::EditMcpOAuthIssuerUrl => {
+                self.open_settings_field_editor(
+                    SettingsFieldSpec {
+                        section: agena_tui_settings::SettingsStudioSectionId::PluginsTools,
+                        path: MCP_OAUTH_ISSUER_URL_SETTINGS_PATH.to_owned(),
+                        label_key: "settings-mcp-oauth-issuer-label",
+                        description_key: "settings-mcp-oauth-issuer-detail",
+                        kind: SettingsFieldKind::String,
+                        label_override: None,
+                        description_override: None,
                     },
+                    "",
+                );
+                false
+            }
+            SettingsPickerAction::ToggleMcpAuth => {
+                self.dispatch_backend_operation(
+                    |application| async move { application.cycle_mcp_auth_mode().await },
                     |app, result| match result {
                         Ok(value) => {
-                            let enabled = value
-                                .get("authEnabled")
-                                .and_then(serde_json::Value::as_bool)
-                                .unwrap_or(false);
-                            app.flash_success(if enabled {
-                                "Agena MCP authentication enabled".to_owned()
+                            let mode = value
+                                .get("authMode")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("none");
+                            app.flash_success(format!(
+                                "Agena MCP authentication mode set to {mode}"
+                            ));
+                            app.refresh_current_route_after_local_edit();
+                        }
+                        Err(error) => app.flash_error(error),
+                    },
+                );
+                false
+            }
+            SettingsPickerAction::ToggleMcpAnonymousAccess => {
+                self.dispatch_backend_operation(
+                    |application| async move { application.toggle_mcp_anonymous_access().await },
+                    |app, result| match result {
+                        Ok(value) => {
+                            let policy = value
+                                .get("anonymousAccess")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("none");
+                            app.flash_success(format!(
+                                "Agena MCP anonymous tool access set to {policy}"
+                            ));
+                            app.refresh_current_route_after_local_edit();
+                        }
+                        Err(error) => app.flash_error(error),
+                    },
+                );
+                false
+            }
+            SettingsPickerAction::ToggleMcpClientRegistration => {
+                self.dispatch_backend_operation(
+                    |application| async move { application.toggle_mcp_client_registration().await },
+                    |app, result| match result {
+                        Ok(value) => {
+                            let policy = value
+                                .get("clientRegistration")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("cimd_only");
+                            app.flash_success(format!(
+                                "Agena MCP client registration set to {policy}"
+                            ));
+                            app.refresh_current_route_after_local_edit();
+                        }
+                        Err(error) => app.flash_error(error),
+                    },
+                );
+                false
+            }
+            SettingsPickerAction::ToggleMcpToolExposure => {
+                self.dispatch_backend_operation(
+                    |application| async move { application.toggle_mcp_tool_exposure().await },
+                    |app, result| match result {
+                        Ok(value) => {
+                            let exposure = value
+                                .get("toolExposure")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("read_only");
+                            app.flash_success(if exposure == "all_non_interactive" {
+                                "Agena MCP now exposes all non-interactive tools".to_owned()
                             } else {
-                                "Agena MCP authentication disabled".to_owned()
+                                "Agena MCP now exposes read-only tools only".to_owned()
                             });
                             app.refresh_current_route_after_local_edit();
                         }
@@ -748,13 +812,13 @@ impl App {
 }
 use crate::{
     App, BTreeSet, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction, DialogHost,
-    MCP_OAUTH_PASSWORD_SETTINGS_PATH, MCP_PUBLIC_URL_SETTINGS_PATH, ModelCatalogStudioOverlay,
-    Overlay, PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionConfig, PermissionMode,
-    PermissionStudioAction, PermissionStudioCatalogKind, PermissionStudioEditorAction,
-    PermissionStudioModeTarget, PermissionStudioOverlay, PermissionStudioPage,
-    ProviderPickerPurpose, ProviderStudioOverlay, Route, SelectionPickerOverlay,
-    SelectionPickerQuery, SessionNavigationOverlay, SessionSearchOverlay, SettingsFieldKind,
-    SettingsFieldSpec, SettingsPickerAction, SettingsStudioFocus, SettingsStudioOverlay,
-    TimelineOverlay, ToolPermissionRules, ui_text,
+    MCP_OAUTH_ISSUER_URL_SETTINGS_PATH, MCP_OAUTH_PASSWORD_SETTINGS_PATH,
+    MCP_PUBLIC_URL_SETTINGS_PATH, ModelCatalogStudioOverlay, Overlay,
+    PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionConfig, PermissionMode, PermissionStudioAction,
+    PermissionStudioCatalogKind, PermissionStudioEditorAction, PermissionStudioModeTarget,
+    PermissionStudioOverlay, PermissionStudioPage, ProviderPickerPurpose, ProviderStudioOverlay,
+    Route, SelectionPickerOverlay, SelectionPickerQuery, SessionNavigationOverlay,
+    SessionSearchOverlay, SettingsFieldKind, SettingsFieldSpec, SettingsPickerAction,
+    SettingsStudioFocus, SettingsStudioOverlay, TimelineOverlay, ToolPermissionRules, ui_text,
 };
 use agena_tui_components::SearchPickerSelectionMode;

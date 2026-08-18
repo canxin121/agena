@@ -527,12 +527,20 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
             mcp_workspace.id,
             ui_auth.clone(),
             server_state_db.clone(),
-            args.mcp_public_url.as_deref(),
-            endpoint_url.as_str(),
+            crate::server::mcp::McpServerStartupConfig {
+                public_url: args.mcp_public_url.as_deref(),
+                oauth_issuer_url: args.mcp_oauth_issuer_url.as_deref(),
+                auth_mode: args.mcp_auth_mode.map(Into::into),
+                anonymous_access: args.mcp_anonymous_access.map(Into::into),
+                tool_exposure: args.mcp_tool_exposure.map(Into::into),
+                client_registration: args.mcp_client_registration.map(Into::into),
+                fallback_public_url: endpoint_url.as_str(),
+            },
         )
         .await
-        .map_err(|error| anyhow!("invalid MCP public URL: {error}"))?,
+        .map_err(|error| anyhow!("failed to configure the Agena MCP server: {error}"))?,
     );
+    mcp_state.log_startup_status();
 
     let shared_state = Arc::new(AppState {
         ui_auth: ui_auth.clone(),

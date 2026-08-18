@@ -494,16 +494,57 @@ impl TuiBackend {
         Ok(value)
     }
 
-    pub(crate) async fn set_mcp_auth_enabled(
-        &self,
-        auth_enabled: bool,
-    ) -> Result<serde_json::Value> {
+    pub(crate) async fn cycle_mcp_auth_mode(&self) -> Result<serde_json::Value> {
+        let current = self.mcp_server_control().await?;
+        let next = match current.get("authMode").and_then(serde_json::Value::as_str) {
+            Some("oauth") => "mixed",
+            Some("mixed") => "none",
+            _ => "oauth",
+        };
         let value = self
             .inner
             .client
-            .set_mcp_server_auth_enabled(auth_enabled)
+            .set_mcp_server_auth_mode(next)
             .await
-            .context("failed to update Agena MCP authentication")?;
+            .context("failed to update Agena MCP authentication mode")?;
+        *self.inner.mcp_server_control.write().await = Some(value.clone());
+        Ok(value)
+    }
+
+    pub(crate) async fn toggle_mcp_anonymous_access(&self) -> Result<serde_json::Value> {
+        let current = self.mcp_server_control().await?;
+        let next = match current
+            .get("anonymousAccess")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("read_only") => "none",
+            _ => "read_only",
+        };
+        let value = self
+            .inner
+            .client
+            .set_mcp_server_anonymous_access(next)
+            .await
+            .context("failed to update Agena MCP anonymous access policy")?;
+        *self.inner.mcp_server_control.write().await = Some(value.clone());
+        Ok(value)
+    }
+
+    pub(crate) async fn toggle_mcp_client_registration(&self) -> Result<serde_json::Value> {
+        let current = self.mcp_server_control().await?;
+        let next = match current
+            .get("clientRegistration")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("cimd_and_dcr") => "cimd_only",
+            _ => "cimd_and_dcr",
+        };
+        let value = self
+            .inner
+            .client
+            .set_mcp_server_client_registration(next)
+            .await
+            .context("failed to update Agena MCP client registration policy")?;
         *self.inner.mcp_server_control.write().await = Some(value.clone());
         Ok(value)
     }
@@ -523,6 +564,39 @@ impl TuiBackend {
             .update_mcp_server_control(enabled, Some(public_url))
             .await
             .context("failed to update the Agena MCP public URL")?;
+        *self.inner.mcp_server_control.write().await = Some(value.clone());
+        Ok(value)
+    }
+
+    pub(crate) async fn set_mcp_oauth_issuer_url(
+        &self,
+        oauth_issuer_url: Option<String>,
+    ) -> Result<serde_json::Value> {
+        let value = self
+            .inner
+            .client
+            .set_mcp_server_oauth_issuer_url(oauth_issuer_url)
+            .await
+            .context("failed to update the Agena MCP OAuth issuer URL")?;
+        *self.inner.mcp_server_control.write().await = Some(value.clone());
+        Ok(value)
+    }
+
+    pub(crate) async fn toggle_mcp_tool_exposure(&self) -> Result<serde_json::Value> {
+        let current = self.mcp_server_control().await?;
+        let next = match current
+            .get("toolExposure")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("all_non_interactive") => "read_only",
+            _ => "all_non_interactive",
+        };
+        let value = self
+            .inner
+            .client
+            .set_mcp_server_tool_exposure(next)
+            .await
+            .context("failed to update the Agena MCP tool exposure policy")?;
         *self.inner.mcp_server_control.write().await = Some(value.clone());
         Ok(value)
     }

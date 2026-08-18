@@ -117,6 +117,26 @@ fn server_arguments(args: &ServerArgs) -> Result<Vec<OsString>> {
         arguments.push("--mcp-public-url".into());
         arguments.push(mcp_public_url.into());
     }
+    if let Some(mcp_oauth_issuer_url) = &args.mcp_oauth_issuer_url {
+        arguments.push("--mcp-oauth-issuer-url".into());
+        arguments.push(mcp_oauth_issuer_url.into());
+    }
+    if let Some(mode) = args.mcp_auth_mode {
+        arguments.push("--mcp-auth-mode".into());
+        arguments.push(mode.as_str().into());
+    }
+    if let Some(access) = args.mcp_anonymous_access {
+        arguments.push("--mcp-anonymous-access".into());
+        arguments.push(access.as_str().into());
+    }
+    if let Some(exposure) = args.mcp_tool_exposure {
+        arguments.push("--mcp-tool-exposure".into());
+        arguments.push(exposure.as_str().into());
+    }
+    if let Some(registration) = args.mcp_client_registration {
+        arguments.push("--mcp-client-registration".into());
+        arguments.push(registration.as_str().into());
+    }
 
     let workspace = args
         .workspace_root
@@ -488,7 +508,12 @@ mod tests {
             host: "127.0.0.1".to_owned(),
             port: 3210,
             ui_password: None,
-            mcp_public_url: None,
+            mcp_public_url: Some("https://mcp.example.test/mcp".to_owned()),
+            mcp_oauth_issuer_url: Some("https://auth.example.test".to_owned()),
+            mcp_auth_mode: Some(agena_cli::McpAuthModeArg::Mixed),
+            mcp_anonymous_access: Some(agena_cli::McpAnonymousAccessArg::ReadOnly),
+            mcp_tool_exposure: Some(agena_cli::McpToolExposureArg::AllNonInteractive),
+            mcp_client_registration: Some(agena_cli::McpClientRegistrationArg::CimdOnly),
             workspace_root: Some(PathBuf::from("/tmp/agena-workspace")),
             ui_dir: Some(PathBuf::from("/opt/agena/web-dist")),
         };
@@ -502,6 +527,19 @@ mod tests {
                 .windows(2)
                 .any(|pair| pair == ["--ui-dir", "/opt/agena/web-dist"])
         );
+        for expected in [
+            ["--mcp-public-url", "https://mcp.example.test/mcp"],
+            ["--mcp-oauth-issuer-url", "https://auth.example.test"],
+            ["--mcp-auth-mode", "mixed"],
+            ["--mcp-anonymous-access", "read-only"],
+            ["--mcp-tool-exposure", "all-non-interactive"],
+            ["--mcp-client-registration", "cimd-only"],
+        ] {
+            assert!(
+                arguments.windows(2).any(|pair| pair == expected),
+                "installed service arguments must preserve {expected:?}"
+            );
+        }
     }
 
     #[cfg(target_os = "macos")]

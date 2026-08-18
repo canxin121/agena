@@ -16,10 +16,24 @@ pub struct RuntimeToolDescriptor {
     pub before_help: Option<String>,
     pub after_help: Option<String>,
     pub input_schema: serde_json::Value,
+    pub output_schema: Option<serde_json::Value>,
     /// Whether this tool is marked as interactive by either its permission
     /// contract or its discovery metadata. Non-interactive hosts, such as MCP
     /// clients, must not expose it.
     pub interactive: bool,
+    /// True only when the authority-bearing permission contract qualifies the
+    /// tool for Agena's read-only fast path (no shell, writes, mutation, or
+    /// network access).
+    pub read_only: bool,
+    /// The tool may mutate state, write paths, or execute arbitrary shell
+    /// commands. This is exposed to MCP clients as a safety hint and is also
+    /// used by the MCP server's default-deny exposure policy.
+    pub destructive: bool,
+    /// The tool can reach network targets outside the local workspace.
+    pub open_world: bool,
+    /// Long-running autonomous task tools are not suitable for the stateless
+    /// ChatGPT connector surface.
+    pub task: bool,
     /// Stable full plugin id (for example, `agena.fs`).
     pub plugin_id: Option<String>,
 }

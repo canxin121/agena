@@ -33,6 +33,7 @@ impl ServerStateDb {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|err| err.to_string())?;
+            secure_server_state_directory(parent).await?;
         }
 
         let options = SqliteConnectOptions::new()
@@ -53,6 +54,7 @@ impl ServerStateDb {
             .map_err(|err| err.to_string())?;
 
         initialize_schema(&pool).await?;
+        secure_server_state_files(&path).await?;
 
         Ok(Self { path, pool })
     }
@@ -111,6 +113,53 @@ impl ServerStateDb {
         let json = serde_json::to_value(value).map_err(|err| err.to_string())?;
         self.set_value(key, &json).await
     }
+}
+
+#[cfg(unix)]
+async fn secure_server_state_directory(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to restrict Agena server-state directory {}: {error}",
+                path.display()
+            )
+        })
+}
+
+#[cfg(not(unix))]
+async fn secure_server_state_directory(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn secure_server_state_files(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for candidate in [
+        path.to_path_buf(),
+        PathBuf::from(format!("{}-wal", path.display())),
+        PathBuf::from(format!("{}-shm", path.display())),
+    ] {
+        match tokio::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o600)).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to restrict Agena server-state file {}: {error}",
+                    candidate.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn secure_server_state_files(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 async fn initialize_schema(pool: &SqlitePool) -> Result<(), String> {
@@ -179,4 +228,38 @@ fn now_unix_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(all(test, unix))]
+mod permission_tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use super::ServerStateDb;
+
+    #[tokio::test]
+    async fn server_state_directory_and_database_are_private() {
+        let fixture = tempfile::tempdir().expect("create server-state permission fixture");
+        let data_dir = fixture.path().join("agena-data");
+        let path = data_dir.join("agena.db");
+        let db = ServerStateDb::open_at_path(path.clone())
+            .await
+            .expect("open private server-state database");
+
+        assert_eq!(
+            std::fs::metadata(&data_dir)
+                .expect("server-state directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(db.path())
+                .expect("server-state database metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
 }

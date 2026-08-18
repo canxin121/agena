@@ -553,24 +553,78 @@ impl AgenaClient {
             .await
     }
 
-    /// Enable or disable the MCP OAuth surface. When disabled, `/mcp` is
-    /// anonymous and the OAuth discovery, token, and authorization endpoints
-    /// are unavailable.
+    /// Select no-auth, full OAuth, or ChatGPT mixed-auth mode.
+    pub async fn set_mcp_server_auth_mode(
+        &self,
+        auth_mode: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.put_json(
+            "/api/v1/server/mcp",
+            serde_json::json!({"authMode": auth_mode}),
+        )
+        .await
+    }
+
+    /// Backwards-compatible boolean helper. `true` selects full OAuth and
+    /// `false` selects anonymous mode.
     pub async fn set_mcp_server_auth_enabled(
         &self,
         auth_enabled: bool,
     ) -> Result<serde_json::Value, ClientError> {
-        let current = self.mcp_server_control().await?;
-        let enabled = current
-            .get("enabled")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true);
+        self.set_mcp_server_auth_mode(if auth_enabled { "oauth" } else { "none" })
+            .await
+    }
+
+    /// Configure anonymous tool execution in mixed-auth mode. `none` is the
+    /// safe default; `read_only` explicitly permits permission-contract-proven
+    /// read-only tools without OAuth and can expose private workspace data.
+    pub async fn set_mcp_server_anonymous_access(
+        &self,
+        anonymous_access: &str,
+    ) -> Result<serde_json::Value, ClientError> {
         self.put_json(
             "/api/v1/server/mcp",
-            serde_json::json!({
-                "enabled": enabled,
-                "authEnabled": auth_enabled,
-            }),
+            serde_json::json!({"anonymousAccess": anonymous_access}),
+        )
+        .await
+    }
+
+    /// Configure the OAuth client-registration surface. CIMD-only is the safe
+    /// default; `cimd_and_dcr` enables the public DCR endpoint for compatibility.
+    pub async fn set_mcp_server_client_registration(
+        &self,
+        client_registration: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.put_json(
+            "/api/v1/server/mcp",
+            serde_json::json!({"clientRegistration": client_registration}),
+        )
+        .await
+    }
+
+    /// Configure the stable OAuth authorization-server issuer. `None` clears
+    /// the explicit issuer so the server derives it from the configured public
+    /// MCP resource, never from request Host/forwarded headers.
+    pub async fn set_mcp_server_oauth_issuer_url(
+        &self,
+        oauth_issuer_url: Option<String>,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.put_json(
+            "/api/v1/server/mcp",
+            serde_json::json!({"oauthIssuerUrl": oauth_issuer_url}),
+        )
+        .await
+    }
+
+    /// Select the server-side MCP tool exposure policy. The server validates
+    /// the enum and defaults to the read-only policy for new installations.
+    pub async fn set_mcp_server_tool_exposure(
+        &self,
+        tool_exposure: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.put_json(
+            "/api/v1/server/mcp",
+            serde_json::json!({"toolExposure": tool_exposure}),
         )
         .await
     }

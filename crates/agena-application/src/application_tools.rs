@@ -12,7 +12,12 @@ impl Application {
                 before_help: tool.before_help,
                 after_help: tool.after_help,
                 input_schema: tool.input_schema,
+                output_schema: tool.output_schema,
                 interactive: tool.interactive,
+                read_only: tool.read_only,
+                destructive: tool.destructive,
+                open_world: tool.open_world,
+                task: tool.task,
                 plugin_id: tool.plugin_id,
             })
             .collect()

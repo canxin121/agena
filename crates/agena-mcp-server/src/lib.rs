@@ -30,15 +30,24 @@ pub use agena_mcp_client::protocol::{
 use async_trait::async_trait;
 use rmcp::ServerHandler;
 use rmcp::model::{
-    ContentBlock as RmcpContentBlock, ErrorCode, ErrorData, GetPromptRequestParams,
-    GetPromptResult as RmcpGetPromptResult, Implementation, ListPromptsResult, ListResourcesResult,
-    ListToolsResult, Prompt as RmcpPrompt, PromptArgument as RmcpPromptArgument,
-    PromptMessage as RmcpPromptMessage, ReadResourceRequestParams,
-    ReadResourceResult as RmcpReadResourceResult, Resource as RmcpResource,
-    ResourceContents as RmcpResourceContents, Role, ServerCapabilities,
+    CacheScope, CallToolResponse, ContentBlock as RmcpContentBlock, ErrorCode, ErrorData,
+    GetPromptRequestParams, GetPromptResponse, GetPromptResult as RmcpGetPromptResult,
+    Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult, Prompt as RmcpPrompt,
+    PromptArgument as RmcpPromptArgument, PromptMessage as RmcpPromptMessage, ProtocolVersion,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult as RmcpReadResourceResult,
+    Resource as RmcpResource, ResourceContents as RmcpResourceContents, Role, ServerCapabilities,
     ServerInfo as RmcpServerInfo, Tool as RmcpTool,
 };
 use rmcp::service::{RequestContext, RoleServer};
+
+const LIST_CACHE_TTL_MS: u64 = 30_000;
+const SUPPORTED_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[
+    ProtocolVersion::V_2026_07_28,
+    ProtocolVersion::V_2025_11_25,
+    ProtocolVersion::V_2025_06_18,
+    ProtocolVersion::V_2025_03_26,
+    ProtocolVersion::V_2024_11_05,
+];
 
 #[derive(Debug, thiserror::Error)]
 /// Error from the MCP server.
@@ -178,6 +187,10 @@ impl<B> ServerHandler for BackendHandler<B>
 where
     B: McpServerBackend,
 {
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(SUPPORTED_PROTOCOL_VERSIONS)
+    }
+
     fn get_info(&self) -> RmcpServerInfo {
         let capabilities = if self.resources_enabled && self.prompts_enabled {
             ServerCapabilities::builder()
@@ -211,11 +224,9 @@ where
                 .map(convert_tool_descriptor)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(to_rmcp_error)?;
-            Ok(ListToolsResult {
-                meta: None,
-                next_cursor: None,
-                tools,
-            })
+            Ok(ListToolsResult::with_all_items(tools)
+                .with_ttl_ms(LIST_CACHE_TTL_MS)
+                .with_cache_scope(CacheScope::Private))
         }
     }
 
@@ -223,8 +234,7 @@ where
         &self,
         request: rmcp::model::CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<rmcp::model::CallToolResult, ErrorData>> + Send + '_
-    {
+    ) -> impl std::future::Future<Output = Result<CallToolResponse, ErrorData>> + Send + '_ {
         let backend = Arc::clone(&self.backend);
         async move {
             let params = CallToolParams {
@@ -232,7 +242,9 @@ where
                 arguments: request.arguments.map(serde_json::Value::Object),
             };
             let result = backend.call_tool(params).await.map_err(to_rmcp_error)?;
-            convert_call_tool_result(result).map_err(to_rmcp_error)
+            convert_call_tool_result(result)
+                .map(Into::into)
+                .map_err(to_rmcp_error)
         }
     }
 
@@ -254,11 +266,9 @@ where
                 .into_iter()
                 .map(convert_resource_descriptor)
                 .collect();
-            Ok(ListResourcesResult {
-                meta: None,
-                next_cursor: None,
-                resources,
-            })
+            Ok(ListResourcesResult::with_all_items(resources)
+                .with_ttl_ms(LIST_CACHE_TTL_MS)
+                .with_cache_scope(CacheScope::Private))
         }
     }
 
@@ -266,7 +276,7 @@ where
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<RmcpReadResourceResult, ErrorData>> + Send + '_
+    ) -> impl std::future::Future<Output = Result<ReadResourceResponse, ErrorData>> + Send + '_
     {
         let backend = Arc::clone(&self.backend);
         let resources_enabled = self.resources_enabled;
@@ -286,7 +296,8 @@ where
                     .into_iter()
                     .map(convert_resource_contents)
                     .collect(),
-            ))
+            )
+            .into())
         }
     }
 
@@ -305,11 +316,9 @@ where
             }
             let prompts = backend.list_prompts().await.map_err(to_rmcp_error)?;
             let prompts = prompts.into_iter().map(convert_prompt_descriptor).collect();
-            Ok(ListPromptsResult {
-                meta: None,
-                next_cursor: None,
-                prompts,
-            })
+            Ok(ListPromptsResult::with_all_items(prompts)
+                .with_ttl_ms(LIST_CACHE_TTL_MS)
+                .with_cache_scope(CacheScope::Private))
         }
     }
 
@@ -317,7 +326,7 @@ where
         &self,
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<RmcpGetPromptResult, ErrorData>> + Send + '_ {
+    ) -> impl std::future::Future<Output = Result<GetPromptResponse, ErrorData>> + Send + '_ {
         let backend = Arc::clone(&self.backend);
         let prompts_enabled = self.prompts_enabled;
         async move {
@@ -331,7 +340,9 @@ where
                 arguments: request.arguments.map(json_object_to_string_map),
             };
             let result = backend.get_prompt(params).await.map_err(to_rmcp_error)?;
-            convert_get_prompt_result(result).map_err(to_rmcp_error)
+            convert_get_prompt_result(result)
+                .map(Into::into)
+                .map_err(to_rmcp_error)
         }
     }
 }
@@ -431,7 +442,6 @@ fn convert_tool_descriptor(tool: ToolDescriptor) -> Result<RmcpTool, McpServerEr
         .transpose()?
         .map(Arc::new);
     output.annotations = deserialize_optional(tool.annotations)?;
-    output.execution = deserialize_optional(tool.execution)?;
     output.icons = deserialize_values(tool.icons)?;
     output.meta = deserialize_optional(tool.meta)?;
     Ok(output)

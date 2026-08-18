@@ -11,11 +11,21 @@ pub struct OperatorToolResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_help: Option<String>,
     pub input_schema: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
     /// Whether this tool is marked as interactive by its permission contract
     /// or discovery metadata. Consumers that cannot service interaction
     /// should hide it.
     #[serde(default)]
     pub interactive: bool,
+    #[serde(default)]
+    pub read_only: bool,
+    #[serde(default)]
+    pub destructive: bool,
+    #[serde(default)]
+    pub open_world: bool,
+    #[serde(default)]
+    pub task: bool,
     /// Stable full plugin id (for example, `agena.fs`). Optional for
     /// backwards compatibility with older server responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]

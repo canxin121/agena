@@ -46,18 +46,18 @@ mod tests {
         let mut bundled = BTreeMap::new();
         bundled.insert(
             "example".to_owned(),
-            ConfiguredPlugin::static_config(serde_json::json!({"origin": "bundled"})),
+            ConfiguredPlugin::static_settings(serde_json::json!({"origin": "bundled"})),
         );
         let mut configured = PluginsConfig::default();
         configured.list.insert(
             "example".to_owned(),
-            ConfiguredPlugin::static_config(serde_json::json!({"origin": "user"})),
+            ConfiguredPlugin::static_settings(serde_json::json!({"origin": "user"})),
         );
 
         let merged = merge_bundled_plugin_config(configured, bundled);
 
         assert_eq!(
-            merged.list["example"].config(),
+            merged.list["example"].settings(),
             &serde_json::json!({"origin": "user"})
         );
     }

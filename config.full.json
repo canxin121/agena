@@ -87,7 +87,7 @@
         "package": {
           "kind": "static"
         },
-        "config": {
+        "settings": {
           "servers": {}
         }
       },
@@ -119,8 +119,8 @@
       "agena.plan": {
         "package": {
           "kind": "static"
-                },
-        "config": {
+        },
+        "settings": {
           "default_autorun": true
         }
       },
@@ -128,7 +128,7 @@
         "package": {
           "kind": "static"
         },
-        "config": {
+        "settings": {
           "project_instructions": {
             "enabled": true,
             "include_global": true
@@ -144,7 +144,7 @@
         "package": {
           "kind": "static"
         },
-        "config": {
+        "settings": {
           "fetch": {
             "enabled": true,
             "request": {
@@ -201,7 +201,7 @@
         "package": {
           "kind": "static"
         },
-        "config": {
+        "settings": {
           "servers": {
             "docs": {
               "transport": "http",

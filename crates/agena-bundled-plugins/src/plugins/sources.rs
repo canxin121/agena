@@ -14,7 +14,7 @@ fn plugin_key(value: &str) -> agena_plugin_host::PluginKey {
 }
 
 fn static_entry(config: serde_json::Value) -> ConfiguredPlugin {
-    ConfiguredPlugin::static_config(config)
+    ConfiguredPlugin::static_settings(config)
 }
 
 pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {

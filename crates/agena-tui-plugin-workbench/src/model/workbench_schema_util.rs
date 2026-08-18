@@ -502,7 +502,7 @@ pub fn plugin_config_record_value(plugin: &PluginWorkbenchPlugin) -> JsonValue {
             "package": {
                 "kind": "static"
             },
-            "config": JsonValue::Null
+            "settings": JsonValue::Null
         })
     })
 }

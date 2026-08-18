@@ -124,7 +124,7 @@ fn expand_plugin_inherent_impl_attr(
         .iter()
         .find(|binding| binding.hook == PluginHookKind::Init);
     let init_method =
-        (config.config_field.is_some() || config.config_store || init_binding.is_some())
+        (config.settings_field.is_some() || config.settings_store || init_binding.is_some())
             .then(|| expand_plugin_layer_init_method(&config, &self_ty, init_binding))
             .transpose()?;
     let hook_methods = expand_plugin_layer_hook_methods(&self_ty, &hook_bindings)?;

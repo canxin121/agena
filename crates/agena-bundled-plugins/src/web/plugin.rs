@@ -1030,7 +1030,7 @@ struct CrawlWebSearchOutput {
     name = "web",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.",
-    config_schema = web_config_schema(),
+    settings_schema = web_config_schema(),
 )]
 impl WebPlugin {
     pub(crate) fn new() -> Self {
@@ -1052,7 +1052,7 @@ impl WebPlugin {
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
         self.state
             .set(WebPluginState::new(
-                parse_web_config(ctx.config)?,
+                parse_web_config(ctx.settings)?,
                 host.clone(),
             ))
             .map_err(|_| PluginError::internal("web plugin initialized more than once"))?;

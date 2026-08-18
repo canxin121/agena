@@ -272,7 +272,11 @@ async fn initialize_transport(
         &prefetched_manifest,
         "meta/manifest",
     )?;
-    validate_manifest_config(plugin_id, &prefetched_manifest, configured_plugin.config())?;
+    validate_manifest_config(
+        plugin_id,
+        &prefetched_manifest,
+        configured_plugin.settings(),
+    )?;
     host_handle.set_plugin_manifest_name(plugin_key.clone(), prefetched_manifest.name.clone());
 
     let init_ctx = InitContext {
@@ -281,7 +285,7 @@ async fn initialize_transport(
         plugin_id: plugin_key.clone(),
         host_callback_url: host_handle.callback_url(plugin_id),
         host_callback_token: host_handle.callback_token(plugin_id).await,
-        config: configured_plugin.config().clone(),
+        settings: configured_plugin.settings().clone(),
         protocol_version: crate::sdk::rpc::PROTOCOL_VERSION,
     };
 
@@ -573,7 +577,7 @@ fn validate_manifest_config(
     if config.is_null() {
         return Ok(());
     }
-    let Some(schema) = manifest.config_schema.as_ref() else {
+    let Some(schema) = manifest.settings_schema.as_ref() else {
         return Ok(());
     };
     validate_json_schema_value(schema, config).map_err(|message| {

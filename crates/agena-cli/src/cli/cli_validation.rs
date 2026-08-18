@@ -203,8 +203,7 @@ pub(super) fn validate_plugin_manifest_value(
             "commands",
             "plugin_capabilities",
             "ui",
-            "config_schema",
-            "config_schema_i18n",
+            "settings_schema",
         ],
         "manifest.unknown_field",
         output,
@@ -280,15 +279,8 @@ pub(super) fn validate_plugin_manifest_value(
     validate_tool_name_collisions(&manifest, path, output);
     validate_manifest_ui_actions(&manifest, path, output);
 
-    if let Some(schema) = manifest.config_schema.as_ref() {
-        validate_schema_defaults(&format!("{path}.config_schema"), schema, output);
-    }
-    for (locale, schema) in &manifest.config_schema_i18n {
-        validate_schema_defaults(
-            &format!("{path}.config_schema_i18n.{locale}"),
-            schema,
-            output,
-        );
+    if let Some(schema) = manifest.settings_schema.as_ref() {
+        validate_schema_defaults(&format!("{path}.settings_schema"), schema, output);
     }
 
     if !manifest.tools.is_empty()

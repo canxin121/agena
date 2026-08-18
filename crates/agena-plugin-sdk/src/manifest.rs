@@ -58,11 +58,7 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "PluginUiContributions::is_empty")]
     pub ui: PluginUiContributions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_schema: Option<serde_json::Value>,
-    /// Optional localized schema overlays keyed by locale, for hosts that
-    /// render generic JSON Schema config editors.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub config_schema_i18n: BTreeMap<String, serde_json::Value>,
+    pub settings_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1088,8 +1084,7 @@ impl PluginManifest {
             tags: Vec::new(),
             skills: Vec::new(),
             ui: PluginUiContributions::default(),
-            config_schema: None,
-            config_schema_i18n: BTreeMap::new(),
+            settings_schema: None,
         }
     }
 

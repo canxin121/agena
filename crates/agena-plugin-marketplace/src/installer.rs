@@ -908,8 +908,8 @@ fn write_plugin_config(
     }
     let mut plugin_config = JsonMap::new();
     plugin_config.insert("package".to_string(), JsonValue::Object(package));
-    if !version.config.is_null() {
-        plugin_config.insert("config".to_string(), version.config.clone());
+    if !version.settings.is_null() {
+        plugin_config.insert("config".to_string(), version.settings.clone());
     }
     list.insert(plugin_id.to_string(), JsonValue::Object(plugin_config));
     Ok(())

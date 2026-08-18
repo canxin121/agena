@@ -1,4 +1,4 @@
-//! Core plugin contract: `Plugin`, `PluginConfig`, lifecycle, and tool streaming.
+//! Core plugin contract: `Plugin`, `PluginSettings`, lifecycle, and tool streaming.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -24,9 +24,9 @@ pub struct InitContext {
     /// Bearer token the plugin must use when calling back into the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_callback_token: Option<String>,
-    /// Plugin-owned configuration forwarded from `plugins.list.<id>.config`.
+    /// Plugin-owned configuration forwarded from `plugins.list.<id>.settings`.
     #[serde(default)]
-    pub config: serde_json::Value,
+    pub settings: serde_json::Value,
     /// Protocol version both sides agreed on (currently always `1`).
     pub protocol_version: u32,
 }
@@ -49,17 +49,17 @@ impl InitOutcome {
 
 #[derive(Debug)]
 /// Typed plugin configuration with deferred access.
-pub struct PluginConfig<T> {
+pub struct PluginSettings<T> {
     value: OnceLock<T>,
 }
 
-impl<T> Default for PluginConfig<T> {
+impl<T> Default for PluginSettings<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> PluginConfig<T> {
+impl<T> PluginSettings<T> {
     pub const fn new() -> Self {
         Self {
             value: OnceLock::new(),
@@ -81,7 +81,7 @@ impl<T> PluginConfig<T> {
     }
 }
 
-impl<T> PluginConfig<T>
+impl<T> PluginSettings<T>
 where
     T: Default + DeserializeOwned,
 {
@@ -91,17 +91,17 @@ where
         invalid: impl AsRef<str>,
         already: impl Into<String>,
     ) -> Result<()> {
-        let value = crate::macro_support::parse_defaulted_config(input, invalid.as_ref())?;
+        let value = crate::macro_support::parse_defaulted_settings(input, invalid.as_ref())?;
         self.set(value, already)
     }
 }
 
 #[doc(hidden)]
 /// Access to the plugin config store.
-pub trait PluginConfigStoreAccess {
-    fn plugin_config_schema() -> serde_json::Value;
+pub trait PluginSettingsStoreAccess {
+    fn plugin_settings_schema() -> serde_json::Value;
 
-    fn set_plugin_config_from_json(
+    fn set_plugin_settings_from_json(
         &self,
         input: serde_json::Value,
         invalid: &str,

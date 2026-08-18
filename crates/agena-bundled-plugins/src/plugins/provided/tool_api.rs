@@ -18,7 +18,7 @@ pub(crate) struct ToolApiPlugin {
     name = "tools",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Tool API discovery functions. The runtime resolves tools_call directly to its execution target.",
-    config_schema = tool_discovery_config_schema(),
+    settings_schema = tool_discovery_config_schema(),
 )]
 impl ToolApiPlugin {
     pub(crate) fn new() -> Self {
@@ -29,8 +29,8 @@ impl ToolApiPlugin {
 
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        let tool_discovery = agena_plugin_host::sdk::macro_support::parse_defaulted_config(
-            ctx.config.clone(),
+        let tool_discovery = agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
+            ctx.settings.clone(),
             "invalid tools config",
         )?;
         self.inner.initialize(

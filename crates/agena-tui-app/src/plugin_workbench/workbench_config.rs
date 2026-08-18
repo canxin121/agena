@@ -22,7 +22,10 @@ impl App {
             ));
             return;
         };
-        plugin_object.insert("config".to_owned(), persisted_plugin_config_value(&plugin));
+        plugin_object.insert(
+            "settings".to_owned(),
+            persisted_plugin_config_value(&plugin),
+        );
         let path = format!(
             "plugins.list.{}",
             quote_settings_segment(plugin.plugin_id.as_str())

@@ -9,8 +9,8 @@ use agena_runtime::{
 
 use crate::provider_studio::catalog::quoted_settings_segment;
 use crate::provider_studio::save::{
-    normalize_plugin_record_for_config_edit, plugin_config_setting_target,
-    plugin_record_for_config_edit, remove_nested_json_value, set_nested_json_value,
+    normalize_plugin_record_for_settings_edit, plugin_record_for_settings_edit,
+    plugin_settings_setting_target, remove_nested_json_value, set_nested_json_value,
 };
 use crate::{Application, ApplicationError};
 
@@ -31,10 +31,10 @@ impl Application {
         value: serde_json::Value,
     ) -> Result<ConfigSettingsEditResponse, ApplicationError> {
         if let Some((plugin_id, config_segments)) =
-            plugin_config_setting_target(path).map_err(ApplicationError::internal)?
+            plugin_settings_setting_target(path).map_err(ApplicationError::internal)?
         {
             return self
-                .set_plugin_config_setting(plugin_id.as_str(), config_segments.as_slice(), value)
+                .set_plugin_settings_setting(plugin_id.as_str(), config_segments.as_slice(), value)
                 .await;
         }
         self.set_config_setting_direct(path, value).await
@@ -45,10 +45,10 @@ impl Application {
         path: &str,
     ) -> Result<ConfigSettingsEditResponse, ApplicationError> {
         if let Some((plugin_id, config_segments)) =
-            plugin_config_setting_target(path).map_err(ApplicationError::internal)?
+            plugin_settings_setting_target(path).map_err(ApplicationError::internal)?
         {
             return self
-                .delete_plugin_config_setting(plugin_id.as_str(), config_segments.as_slice())
+                .delete_plugin_settings_setting(plugin_id.as_str(), config_segments.as_slice())
                 .await;
         }
         let response = self
@@ -75,29 +75,29 @@ impl Application {
         Ok(response)
     }
 
-    pub async fn set_plugin_config_setting(
+    pub async fn set_plugin_settings_setting(
         &self,
         plugin_id: &str,
         config_segments: &[String],
         value: serde_json::Value,
     ) -> Result<ConfigSettingsEditResponse, ApplicationError> {
         let sources = self.config_json_sources()?;
-        let mut record = plugin_record_for_config_edit(&sources, plugin_id);
-        let config = normalize_plugin_record_for_config_edit(&mut record)
+        let mut record = plugin_record_for_settings_edit(&sources, plugin_id);
+        let config = normalize_plugin_record_for_settings_edit(&mut record)
             .map_err(ApplicationError::internal)?;
         set_nested_json_value(config, config_segments, value);
         let path = format!("plugins.list.{}", quoted_settings_segment(plugin_id));
         self.set_config_setting_direct(path.as_str(), record).await
     }
 
-    pub async fn delete_plugin_config_setting(
+    pub async fn delete_plugin_settings_setting(
         &self,
         plugin_id: &str,
         config_segments: &[String],
     ) -> Result<ConfigSettingsEditResponse, ApplicationError> {
         let sources = self.config_json_sources()?;
-        let mut record = plugin_record_for_config_edit(&sources, plugin_id);
-        let config = normalize_plugin_record_for_config_edit(&mut record)
+        let mut record = plugin_record_for_settings_edit(&sources, plugin_id);
+        let config = normalize_plugin_record_for_settings_edit(&mut record)
             .map_err(ApplicationError::internal)?;
         remove_nested_json_value(config, config_segments);
         let path = format!("plugins.list.{}", quoted_settings_segment(plugin_id));

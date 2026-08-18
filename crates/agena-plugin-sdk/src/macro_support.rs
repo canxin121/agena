@@ -154,7 +154,7 @@ pub fn dedupe_tool_tags(tags: &mut Vec<ToolTag>) {
     *tags = deduped;
 }
 
-pub fn empty_config_schema() -> Value {
+pub fn empty_settings_schema() -> Value {
     serde_json::json!({
         "title": "Plugin Config",
         "description": "This plugin does not expose plugin-specific runtime configuration.",
@@ -230,7 +230,7 @@ where
     parse_typed_json_value(value)
 }
 
-pub fn parse_defaulted_config<T>(input: Value, invalid: &str) -> Result<T>
+pub fn parse_defaulted_settings<T>(input: Value, invalid: &str) -> Result<T>
 where
     T: Default + DeserializeOwned,
 {

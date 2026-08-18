@@ -31,7 +31,7 @@ pub(crate) struct SnapshotPlugin {
     name = "snapshot",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Managed snapshot tools backed by Rift or git worktree.",
-    config_schema = snapshot_config_schema(),
+    settings_schema = snapshot_config_schema(),
 )]
 impl SnapshotPlugin {
     pub(crate) fn new() -> Self {
@@ -144,7 +144,7 @@ mod tests {
             PluginUiAction::OpenPluginWorkbench { tab } if tab.as_deref() == Some("tools")
         ));
         let schema = manifest
-            .config_schema
+            .settings_schema
             .expect("explicit empty config schema");
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["additionalProperties"], false);

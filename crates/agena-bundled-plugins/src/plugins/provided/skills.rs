@@ -915,7 +915,7 @@ fn skills_config_schema() -> serde_json::Value {
     name = "skills",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Discover and read plain-text skills and slash commands.",
-    config_schema = skills_config_schema(),
+    settings_schema = skills_config_schema(),
 )]
 impl SkillsPlugin {
     pub(crate) fn new() -> Self {
@@ -953,8 +953,8 @@ impl SkillsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: SkillsPluginConfig =
-            agena_plugin_host::sdk::macro_support::parse_defaulted_config(
-                ctx.config,
+            agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
+                ctx.settings,
                 "invalid skills plugin config",
             )?;
         config.validate_for_workspace(ctx.workspace_root.as_path())?;

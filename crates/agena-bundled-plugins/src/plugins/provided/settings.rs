@@ -343,7 +343,7 @@ struct SettingsInspectResponse {
     name = "settings",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Inspect and edit Agena's global and workspace agena.json settings.",
-    config_schema = settings_config_schema(),
+    settings_schema = settings_config_schema(),
 )]
 impl SettingsPlugin {
     pub(crate) fn new() -> Self {
@@ -359,8 +359,8 @@ impl SettingsPlugin {
         ctx: agena_plugin_host::sdk::InitContext,
         host: Arc<dyn HostClient>,
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
-        let config = agena_plugin_host::sdk::macro_support::parse_defaulted_config(
-            ctx.config,
+        let config = agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
+            ctx.settings,
             "invalid settings plugin config",
         )?;
         self.config

@@ -70,11 +70,11 @@ pub fn lsp_config_from_plugins(plugins: &PluginsConfig) -> Result<LspConfig, Str
     let Some(configured_plugin) = plugins.list.get(LSP_PLUGIN_ID) else {
         return Ok(LspConfig::default());
     };
-    if configured_plugin.disabled() || configured_plugin.config().is_null() {
+    if configured_plugin.disabled() || configured_plugin.settings().is_null() {
         return Ok(LspConfig::default());
     }
-    serde_json::from_value(configured_plugin.config().clone())
-        .map_err(|error| format!("plugins.list.\"{LSP_PLUGIN_ID}\".config: {error}"))
+    serde_json::from_value(configured_plugin.settings().clone())
+        .map_err(|error| format!("plugins.list.\"{LSP_PLUGIN_ID}\".settings: {error}"))
 }
 
 #[cfg(test)]

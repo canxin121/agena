@@ -14,7 +14,7 @@ pub use crate::quota::QuotaConfig;
 /// Top-level `plugins` config object, parsed from agena's JSON config layer.
 ///
 /// The host only owns transport and lifecycle fields. Plugin-specific
-/// configuration lives in [`ConfiguredPlugin::config`] as JSON and is validated
+/// settings live in [`ConfiguredPlugin::settings`] as JSON and is validated
 /// against the plugin manifest at load time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -76,7 +76,7 @@ pub struct PluginSignature {
 }
 
 /// One configured plugin under `plugins.list.<id>`. The host knows how to
-/// load the `package`; `config` is plugin-owned JSON.
+/// load the `package`; `settings` is plugin-owned JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 /// Configured plugin entry.
@@ -85,7 +85,7 @@ pub struct ConfiguredPlugin {
     pub enabled: bool,
     pub package: PluginPackage,
     #[serde(default)]
-    pub config: serde_json::Value,
+    pub settings: serde_json::Value,
     #[serde(default)]
     pub timeouts: TimeoutsConfig,
 }
@@ -95,7 +95,7 @@ impl Default for ConfiguredPlugin {
         Self {
             enabled: true,
             package: PluginPackage::Static {},
-            config: serde_json::Value::Null,
+            settings: serde_json::Value::Null,
             timeouts: TimeoutsConfig::default(),
         }
     }
@@ -154,21 +154,21 @@ pub enum PluginPackage {
 }
 
 impl ConfiguredPlugin {
-    pub fn static_config(config: serde_json::Value) -> Self {
+    pub fn static_settings(settings: serde_json::Value) -> Self {
         Self {
             enabled: true,
             package: PluginPackage::Static {},
-            config,
+            settings,
             timeouts: TimeoutsConfig::default(),
         }
     }
 
     pub fn static_default() -> Self {
-        Self::static_config(serde_json::Value::Null)
+        Self::static_settings(serde_json::Value::Null)
     }
 
-    pub fn config(&self) -> &serde_json::Value {
-        &self.config
+    pub fn settings(&self) -> &serde_json::Value {
+        &self.settings
     }
 
     pub fn timeouts(&self) -> &TimeoutsConfig {

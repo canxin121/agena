@@ -2311,7 +2311,7 @@ fn mcp_plugin_record(
         Some(serde_json::Value::Object(_)) => {}
         Some(_) => {
             return Err(AppError::Config(
-                "plugins.list.\"agena.mcp\".config must be an object".to_owned(),
+                "plugins.list.\"agena.mcp\".settings must be an object".to_owned(),
             ));
         }
         None => {

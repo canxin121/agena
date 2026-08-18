@@ -177,7 +177,7 @@ struct MemoryRecordOutput {
     name = "memory",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Persistent memory with searchable retrieval and write tools.",
-    config_schema = memory_config_schema(),
+    settings_schema = memory_config_schema(),
 )]
 impl MemoryPlugin {
     pub fn new() -> Self {
@@ -208,7 +208,7 @@ impl MemoryPlugin {
         _host: std::sync::Arc<dyn agena_plugin_host::sdk::HostClient>,
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
         self.config
-            .set(parse_memory_config(ctx.config)?)
+            .set(parse_memory_config(ctx.settings)?)
             .map_err(|_| PluginError::internal("memory plugin initialized more than once"))?;
         self.workspace_root.set(ctx.workspace_root).map_err(|_| {
             PluginError::internal("memory plugin workspace root already initialized")
@@ -717,7 +717,7 @@ mod tests {
             &command.action,
             PluginUiAction::OpenPluginWorkbench { tab } if tab.as_deref() == Some("config")
         ));
-        let schema = manifest.config_schema.expect("memory config schema");
+        let schema = manifest.settings_schema.expect("memory config schema");
         assert!(schema["properties"].get("project_instructions").is_none());
         assert!(schema["properties"].get("retrieval").is_some());
     }

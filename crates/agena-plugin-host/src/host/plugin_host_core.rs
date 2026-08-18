@@ -1962,7 +1962,7 @@ mod tests {
                 "static",
                 crate::config::ConfiguredPlugin {
                     enabled: true,
-                    package: crate::config::PluginPackage::Static {},
+                    package: crate::settings::PluginPackage::Static {},
                     config: serde_json::json!({}),
                     timeouts: TimeoutsConfig::default(),
                 },
@@ -1983,8 +1983,7 @@ mod tests {
                     tags: Vec::new(),
                     skills: Vec::new(),
                     ui: Default::default(),
-                    config_schema: None,
-                    config_schema_i18n: Default::default(),
+                    settings_schema: None,
                 },
                 "test".to_string(),
                 Vec::new(),

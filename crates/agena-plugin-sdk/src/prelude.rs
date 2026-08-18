@@ -45,8 +45,8 @@ pub use crate::manifest::{
     ToolDefinition, ToolInput, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode, ToolTag,
     TransportKind, normalize_tool_tag_name, plugin_workbench_tab_id_is_supported,
 };
-pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
-pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};
+pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
+pub use agena_macros::{PluginSettingsStore, ToolInput, agena_plugin};
 
 #[cfg(feature = "cdylib")]
 pub use crate::cdylib_abi::{AgenaPluginCdylib, AgenaPluginCdylib_Ref};

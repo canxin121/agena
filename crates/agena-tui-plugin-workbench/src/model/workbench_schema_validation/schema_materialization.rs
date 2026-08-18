@@ -5,36 +5,10 @@ use super::super::{
 };
 use super::{schema_const_value, schema_enum_values, validate_schema_at};
 
-pub(crate) fn localized_config_schema(
+pub(crate) fn plugin_settings_schema(
     manifest: &agena_plugin_host::PluginManifest,
-    locale: &str,
 ) -> Option<JsonValue> {
-    let mut schema = manifest.config_schema.clone()?;
-    if let Some(overlay) = manifest.config_schema_i18n.get(locale).or_else(|| {
-        locale
-            .split('-')
-            .next()
-            .and_then(|language| manifest.config_schema_i18n.get(language))
-    }) {
-        merge_schema_overlay(&mut schema, overlay);
-    }
-    Some(schema)
-}
-
-pub(crate) fn merge_schema_overlay(target: &mut JsonValue, overlay: &JsonValue) {
-    match (target, overlay) {
-        (JsonValue::Object(target), JsonValue::Object(overlay)) => {
-            for (key, overlay_value) in overlay {
-                match target.get_mut(key) {
-                    Some(target_value) => merge_schema_overlay(target_value, overlay_value),
-                    None => {
-                        target.insert(key.clone(), overlay_value.clone());
-                    }
-                }
-            }
-        }
-        (target, overlay) => *target = overlay.clone(),
-    }
+    manifest.settings_schema.clone()
 }
 
 pub(crate) fn validate_config_value(

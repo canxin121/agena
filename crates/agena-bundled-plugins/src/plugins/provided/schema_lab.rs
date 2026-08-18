@@ -83,7 +83,7 @@ impl SchemaLabPlugin {
     name = "schema_lab",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor.",
-    config_schema = schema_lab_config_schema(),
+    settings_schema = schema_lab_config_schema(),
 )]
 impl SchemaLabPlugin {
     #[tool(

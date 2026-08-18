@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn settings_paths_round_trip_quoted_segments() {
-        let segments = parse_settings_path(r#"plugins.list."example.plugin".config"#)
+        let segments = parse_settings_path(r#"plugins.list."example.plugin".settings"#)
             .expect("parse quoted settings path");
         assert_eq!(
             segments,
@@ -576,7 +576,7 @@ mod tests {
         );
         assert_eq!(
             format_settings_path(&segments),
-            r#"plugins.list."example.plugin".config"#
+            r#"plugins.list."example.plugin".settings"#
         );
         assert!(parse_settings_path("providers..network").is_err());
         assert!(parse_settings_path(r#"providers."unterminated"#).is_err());

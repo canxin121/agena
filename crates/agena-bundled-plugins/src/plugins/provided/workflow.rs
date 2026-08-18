@@ -171,7 +171,7 @@ pub(crate) fn tool_discovery_config_schema() -> serde_json::Value {
     schema
 }
 
-pub(crate) fn planning_plugin_config_schema() -> serde_json::Value {
+pub(crate) fn planning_plugin_settings_schema() -> serde_json::Value {
     let mut schema = agena_runtime_tools::tool::definition::json_schema_for_default(
         WorkflowPlanConfig::default(),
     );

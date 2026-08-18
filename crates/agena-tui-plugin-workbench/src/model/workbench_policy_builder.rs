@@ -1,6 +1,6 @@
 pub fn build_plugin_workbench_plugin(
     sources: &agena_application::dto::ConfigJsonSources,
-    locale: &str,
+    _locale: &str,
     status: agena_plugin_host::status::PluginStatus,
     inspect: Option<agena_plugin_host::PluginInspect>,
     logs: Vec<agena_plugin_host::PluginLogRecord>,
@@ -43,10 +43,10 @@ pub fn build_plugin_workbench_plugin(
         .filter(|value| !value.is_null());
     let raw_config = configured_plugin_value
         .as_ref()
-        .and_then(|configured_plugin| configured_plugin.get("config"))
+        .and_then(|configured_plugin| configured_plugin.get("settings"))
         .cloned()
         .unwrap_or(JsonValue::Null);
-    let schema = manifest.and_then(|manifest| localized_config_schema(manifest, locale));
+    let schema = manifest.and_then(|manifest| plugin_settings_schema(manifest));
     let schema_missing = schema.is_none();
     let default_config = materialized_config_value(schema.as_ref(), &JsonValue::Null);
     let saved_config = materialized_config_value(schema.as_ref(), &raw_config);
@@ -85,6 +85,6 @@ pub fn build_plugin_workbench_plugin(
 }
 use super::{
     BTreeMap, JsonValue, PluginConfigStatus, PluginConfigStatusKind, PluginWorkbenchPlugin,
-    derive_override_value, localized_config_schema, materialized_config_value,
-    plugin_get_json_path, quote_settings_segment, recompute_plugin_config_state,
+    derive_override_value, materialized_config_value, plugin_get_json_path, plugin_settings_schema,
+    quote_settings_segment, recompute_plugin_config_state,
 };

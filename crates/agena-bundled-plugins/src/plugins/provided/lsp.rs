@@ -157,7 +157,7 @@ struct LspServerSummary {
     name = "lsp",
     version = env!("CARGO_PKG_VERSION"),
     summary = "LSP read-only observability and navigation tools.",
-    config_schema = lsp_config_schema(),
+    settings_schema = lsp_config_schema(),
 )]
 impl LspPlugin {
     #[hook(init)]

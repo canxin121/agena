@@ -92,14 +92,14 @@ pub fn expand_plugin_layer_manifest(
     let hooks_expr = plugin_layer_hooks_expr(tools, hooks);
 
     let config_schema_assignment = expand_plugin_layer_config_schema_assignment(
-        config.config_schema_type.as_ref(),
+        config.settings_schema_type.as_ref(),
         config,
         self_ty,
     )?;
     let config_schema_value_assignment = config
-        .config_schema
+        .settings_schema
         .as_ref()
-        .map(|schema| quote! { manifest.config_schema = Some(#schema); })
+        .map(|schema| quote! { manifest.settings_schema = Some(#schema); })
         .unwrap_or_default();
     let help_assignment = if let Some(help) = config.help.as_ref() {
         quote! { manifest.help = Some(#help.to_string()); }
@@ -139,7 +139,7 @@ pub fn expand_plugin_layer_manifest(
             let mut manifest = ::agena_plugin_sdk::PluginManifest::new(#namespace, #name, #version);
             manifest.summary = Some(#summary.to_string());
             manifest.hooks = #hooks_expr;
-            manifest.config_schema = Some(::agena_plugin_sdk::macro_support::empty_config_schema());
+            manifest.settings_schema = Some(::agena_plugin_sdk::macro_support::empty_settings_schema());
             #config_schema_assignment
             #config_schema_value_assignment
                         #help_assignment
@@ -173,23 +173,23 @@ fn expand_plugin_layer_config_schema_assignment(
     self_ty: &Type,
 ) -> Result<proc_macro2::TokenStream> {
     let Some(ty) = config_schema_type else {
-        if config.config_schema_store {
+        if config.settings_schema_store {
             return Ok(quote! {
-                manifest.config_schema = Some(
-                    <#self_ty as ::agena_plugin_sdk::plugin::PluginConfigStoreAccess>::plugin_config_schema(),
+                manifest.settings_schema = Some(
+                    <#self_ty as ::agena_plugin_sdk::plugin::PluginSettingsStoreAccess>::plugin_settings_schema(),
                 );
             });
         }
         return Ok(quote! {});
     };
-    let Some(default) = config.config_schema_default.as_ref() else {
+    let Some(default) = config.settings_schema_default.as_ref() else {
         return Ok(quote! {
-            manifest.config_schema = Some(::agena_plugin_sdk::macro_support::json_schema_for::<#ty>());
+            manifest.settings_schema = Some(::agena_plugin_sdk::macro_support::json_schema_for::<#ty>());
         });
     };
     if expr_is_ident(default, "default") {
         Ok(quote! {
-            manifest.config_schema = Some(
+            manifest.settings_schema = Some(
                 ::agena_plugin_sdk::macro_support::json_schema_for_default(
                     <#ty as ::core::default::Default>::default(),
                 ),
@@ -197,7 +197,7 @@ fn expand_plugin_layer_config_schema_assignment(
         })
     } else {
         Ok(quote! {
-            manifest.config_schema = Some(
+            manifest.settings_schema = Some(
                 ::agena_plugin_sdk::macro_support::json_schema_for_default(#default),
             );
         })

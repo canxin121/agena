@@ -12,7 +12,7 @@
 //! ```ignore
 //! use agena_plugin_sdk::prelude::*;
 //!
-//! #[derive(Default, PluginConfigStore)]
+//! #[derive(Default, PluginSettingsStore)]
 //! struct MyPlugin;
 //!
 //! #[agena_plugin(namespace = "demo", name = "hello", version = "0.1.0", export = cdylib)]
@@ -26,7 +26,7 @@
 //!
 //! ## Key items
 //!
-//! - [`Plugin`], [`PluginConfig`], [`InitContext`], [`InitOutcome`] — plugin
+//! - [`Plugin`], [`PluginSettings`], [`InitContext`], [`InitOutcome`] — plugin
 //!   contract and lifecycle.
 //! - [`ToolStreamSink`] — streaming output sink for tools.
 //! - [`PluginError`] — typed plugin errors.
@@ -34,7 +34,7 @@
 //! - [`AttachmentKind`] — attachment classification.
 //! - [`prelude`] — everything a plugin author needs in one import.
 //! - `agena_macros` re-exports: [`agena_plugin`], [`ToolInput`],
-//!   [`PluginConfigStore`].
+//!   [`PluginSettingsStore`].
 
 pub extern crate schemars;
 extern crate self as agena_plugin_sdk;
@@ -62,7 +62,7 @@ pub mod cdylib_abi;
 pub mod drivers;
 
 pub use activity::ActivitySourceAdapter;
-pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};
+pub use agena_macros::{PluginSettingsStore, ToolInput, agena_plugin};
 pub use async_trait::async_trait;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use error::{CONFIGURATION_REQUIRED_MARKER, PluginError, PluginErrorKind, Result};
@@ -85,7 +85,7 @@ pub use manifest::{
     ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
     plugin_workbench_tab_id_is_supported,
 };
-pub use plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
+pub use plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
 pub use schemars::JsonSchema;
 
 // Re-exports used by macros so plugin authors don't have to add deps directly.

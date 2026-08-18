@@ -146,7 +146,7 @@ fn default_mcp_config() -> McpConfig {
     name = "mcp",
     version = env!("CARGO_PKG_VERSION"),
     summary = "MCP discovery and bridge tools.",
-    config_schema = mcp_config_schema(),
+    settings_schema = mcp_config_schema(),
 )]
 impl McpPlugin {
     pub(crate) fn new(manager: Arc<McpConnectionManager>) -> Self {

@@ -447,287 +447,289 @@ const dirtyHint = computed(() => (settings.error ? settings.error : null))
           <div v-if="activeSection === 'interface'" class="space-y-6">
             <InterfaceSettingsPanel />
             <div class="space-y-6 border-t border-border/60 pt-6">
-            <div class="text-lg font-medium">{{ t('settings.appearance.intro') }}</div>
+              <div class="text-lg font-medium">{{ t('settings.appearance.intro') }}</div>
 
-            <div class="grid gap-6">
-              <div class="grid gap-2">
-                <label class="text-sm font-medium leading-none">{{ t('settings.appearance.language.label') }}</label>
-                <div class="text-xs text-muted-foreground">{{ t('settings.appearance.language.help') }}</div>
-                <div class="w-56 max-w-full">
-                  <OptionPicker
-                    v-model="uiLocale"
-                    :options="localePickerOptions"
-                    :title="String(t('settings.appearance.language.label'))"
-                    :search-placeholder="String(t('settings.appearance.language.label'))"
-                    :include-empty="false"
-                  />
-                </div>
-              </div>
-
-              <div class="grid gap-2">
-                <label class="text-sm font-medium leading-none">{{ t('settings.appearance.theme.label') }}</label>
-                <div class="flex items-center gap-3 flex-wrap">
-                  <label class="inline-flex items-center gap-2 text-sm">
-                    <input type="checkbox" v-model="useSystemTheme" />
-                    {{ t('settings.appearance.theme.useSystem') }}
-                  </label>
-                  <div class="w-28 min-w-[7rem]">
+              <div class="grid gap-6">
+                <div class="grid gap-2">
+                  <label class="text-sm font-medium leading-none">{{ t('settings.appearance.language.label') }}</label>
+                  <div class="text-xs text-muted-foreground">{{ t('settings.appearance.language.help') }}</div>
+                  <div class="w-56 max-w-full">
                     <OptionPicker
-                      v-model="themeVariant"
-                      :options="themeVariantPickerOptions"
-                      :title="String(t('settings.appearance.theme.pickerTitle'))"
-                      :search-placeholder="String(t('settings.appearance.theme.pickerSearch'))"
-                      :include-empty="false"
-                      :disabled="useSystemTheme"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div class="grid gap-2">
-                <label class="text-sm font-medium leading-none">{{ t('settings.appearance.fonts.label') }}</label>
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                  <div class="grid gap-1">
-                    <div class="text-xs text-muted-foreground">{{ t('settings.appearance.fonts.ui') }}</div>
-                    <OptionPicker
-                      v-model="uiFont"
-                      :options="uiFontPickerOptions"
-                      :title="String(t('settings.appearance.fonts.ui'))"
-                      :search-placeholder="String(t('settings.appearance.fonts.search'))"
-                      :include-empty="false"
-                    />
-                  </div>
-                  <div class="grid gap-1">
-                    <div class="text-xs text-muted-foreground">{{ t('settings.appearance.fonts.mono') }}</div>
-                    <OptionPicker
-                      v-model="monoFont"
-                      :options="monoFontPickerOptions"
-                      :title="String(t('settings.appearance.fonts.mono'))"
-                      :search-placeholder="String(t('settings.appearance.fonts.search'))"
+                      v-model="uiLocale"
+                      :options="localePickerOptions"
+                      :title="String(t('settings.appearance.language.label'))"
+                      :search-placeholder="String(t('settings.appearance.language.label'))"
                       :include-empty="false"
                     />
                   </div>
                 </div>
-              </div>
 
-              <div class="grid gap-2">
-                <label class="text-sm font-medium leading-none">{{ t('settings.appearance.sizing.label') }}</label>
-                <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                  <label class="grid gap-1">
-                    <span class="text-xs text-muted-foreground">{{ t('settings.appearance.sizing.fontSize') }}</span>
-                    <input
-                      type="number"
-                      min="70"
-                      max="140"
-                      v-model.number="fontSize"
-                      class="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-                    />
-                  </label>
-                  <label class="grid gap-1">
-                    <span class="text-xs text-muted-foreground">{{ t('settings.appearance.sizing.padding') }}</span>
-                    <input
-                      type="number"
-                      min="70"
-                      max="140"
-                      v-model.number="padding"
-                      class="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-                    />
-                  </label>
-                  <label class="grid gap-1">
-                    <span class="text-xs text-muted-foreground">{{
-                      t('settings.appearance.sizing.cornerRadius')
-                    }}</span>
-                    <input
-                      type="number"
-                      min="0"
-                      max="28"
-                      v-model.number="cornerRadius"
-                      class="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-                    />
-                  </label>
-                  <label class="grid gap-1">
-                    <span class="text-xs text-muted-foreground">{{
-                      t('settings.appearance.sizing.inputBarOffset')
-                    }}</span>
-                    <input
-                      type="number"
-                      min="-40"
-                      max="80"
-                      v-model.number="inputBarOffset"
-                      class="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
-                    />
-                  </label>
-                </div>
-              </div>
-
-              <div class="grid gap-2">
-                <label class="text-sm font-medium leading-none">{{ t('settings.appearance.chat.label') }}</label>
-                <div class="grid gap-3">
-                  <label class="inline-flex items-center gap-2 text-sm">
-                    <input type="checkbox" v-model="showChatTimestamps" />
-                    {{ t('settings.appearance.chat.showTimestamps') }}
-                  </label>
-                  <label class="inline-flex items-center gap-2 text-sm">
-                    <input type="checkbox" v-model="showReasoningTraces" />
-                    {{ t('settings.appearance.chat.showReasoning') }}
-                  </label>
-                  <label class="inline-flex items-center gap-2 text-sm">
-                    <input type="checkbox" v-model="chatActivityAutoCollapseOnIdle" />
-                    {{ t('settings.appearance.chat.autoCollapseActivity') }}
-                  </label>
-                  <div class="mt-1">
-                    <div class="text-xs font-medium text-muted-foreground">
-                      {{ t('settings.appearance.chat.activityDetails') }}
-                    </div>
-                    <div class="mt-2 overflow-x-auto rounded-md border border-border/60">
-                      <table class="min-w-full text-sm">
-                        <thead class="bg-muted/30 text-xs text-muted-foreground">
-                          <tr>
-                            <th class="px-3 py-2 text-left font-medium">
-                              {{ t('settings.appearance.chat.activityTable.type') }}
-                            </th>
-                            <th class="px-3 py-2 text-center font-medium">
-                              {{ t('settings.appearance.chat.activityTable.expand') }}
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr
-                            v-for="opt in activityKindOptions"
-                            :key="`activity-matrix-${opt.id}`"
-                            class="border-t border-border/50"
-                          >
-                            <td class="px-3 py-2 align-top">
-                              <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                                <span>{{ activityKindLabel(opt) }}</span>
-                                <code class="font-mono text-[10px] text-muted-foreground">{{ opt.id }}</code>
-                              </div>
-                              <div class="text-[11px] text-muted-foreground">{{ activityKindDescription(opt) }}</div>
-                            </td>
-                            <td class="px-3 py-2 text-center align-middle">
-                              <input
-                                type="checkbox"
-                                :checked="activityKindDefaultExpandedEnabled(opt.id)"
-                                @change="toggleActivityKindDefaultExpanded(opt.id)"
-                              />
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
+                <div class="grid gap-2">
+                  <label class="text-sm font-medium leading-none">{{ t('settings.appearance.theme.label') }}</label>
+                  <div class="flex items-center gap-3 flex-wrap">
+                    <label class="inline-flex items-center gap-2 text-sm">
+                      <input type="checkbox" v-model="useSystemTheme" />
+                      {{ t('settings.appearance.theme.useSystem') }}
+                    </label>
+                    <div class="w-28 min-w-[7rem]">
+                      <OptionPicker
+                        v-model="themeVariant"
+                        :options="themeVariantPickerOptions"
+                        :title="String(t('settings.appearance.theme.pickerTitle'))"
+                        :search-placeholder="String(t('settings.appearance.theme.pickerSearch'))"
+                        :include-empty="false"
+                        :disabled="useSystemTheme"
+                      />
                     </div>
                   </div>
+                </div>
 
-                  <div class="mt-1">
-                    <div class="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <div class="text-xs font-medium text-muted-foreground">
-                          {{ t('settings.appearance.chat.toolDetails') }}
-                        </div>
-                        <div class="mt-0.5 text-[11px] text-muted-foreground">
-                          {{
-                            t('settings.appearance.chat.toolDetailsCount', {
-                              shown: filteredToolActivityOptions.length,
-                              total: toolActivityOptions.length,
-                            })
-                          }}
-                        </div>
+                <div class="grid gap-2">
+                  <label class="text-sm font-medium leading-none">{{ t('settings.appearance.fonts.label') }}</label>
+                  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    <div class="grid gap-1">
+                      <div class="text-xs text-muted-foreground">{{ t('settings.appearance.fonts.ui') }}</div>
+                      <OptionPicker
+                        v-model="uiFont"
+                        :options="uiFontPickerOptions"
+                        :title="String(t('settings.appearance.fonts.ui'))"
+                        :search-placeholder="String(t('settings.appearance.fonts.search'))"
+                        :include-empty="false"
+                      />
+                    </div>
+                    <div class="grid gap-1">
+                      <div class="text-xs text-muted-foreground">{{ t('settings.appearance.fonts.mono') }}</div>
+                      <OptionPicker
+                        v-model="monoFont"
+                        :options="monoFontPickerOptions"
+                        :title="String(t('settings.appearance.fonts.mono'))"
+                        :search-placeholder="String(t('settings.appearance.fonts.search'))"
+                        :include-empty="false"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="grid gap-2">
+                  <label class="text-sm font-medium leading-none">{{ t('settings.appearance.sizing.label') }}</label>
+                  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    <label class="grid gap-1">
+                      <span class="text-xs text-muted-foreground">{{ t('settings.appearance.sizing.fontSize') }}</span>
+                      <input
+                        type="number"
+                        min="70"
+                        max="140"
+                        v-model.number="fontSize"
+                        class="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                      />
+                    </label>
+                    <label class="grid gap-1">
+                      <span class="text-xs text-muted-foreground">{{ t('settings.appearance.sizing.padding') }}</span>
+                      <input
+                        type="number"
+                        min="70"
+                        max="140"
+                        v-model.number="padding"
+                        class="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                      />
+                    </label>
+                    <label class="grid gap-1">
+                      <span class="text-xs text-muted-foreground">{{
+                        t('settings.appearance.sizing.cornerRadius')
+                      }}</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="28"
+                        v-model.number="cornerRadius"
+                        class="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                      />
+                    </label>
+                    <label class="grid gap-1">
+                      <span class="text-xs text-muted-foreground">{{
+                        t('settings.appearance.sizing.inputBarOffset')
+                      }}</span>
+                      <input
+                        type="number"
+                        min="-40"
+                        max="80"
+                        v-model.number="inputBarOffset"
+                        class="h-9 rounded-md border border-input bg-transparent px-3 text-sm"
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div class="grid gap-2">
+                  <label class="text-sm font-medium leading-none">{{ t('settings.appearance.chat.label') }}</label>
+                  <div class="grid gap-3">
+                    <label class="inline-flex items-center gap-2 text-sm">
+                      <input type="checkbox" v-model="showChatTimestamps" />
+                      {{ t('settings.appearance.chat.showTimestamps') }}
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-sm">
+                      <input type="checkbox" v-model="showReasoningTraces" />
+                      {{ t('settings.appearance.chat.showReasoning') }}
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-sm">
+                      <input type="checkbox" v-model="chatActivityAutoCollapseOnIdle" />
+                      {{ t('settings.appearance.chat.autoCollapseActivity') }}
+                    </label>
+                    <div class="mt-1">
+                      <div class="text-xs font-medium text-muted-foreground">
+                        {{ t('settings.appearance.chat.activityDetails') }}
                       </div>
-                      <div class="flex min-w-0 items-center gap-2">
-                        <input
-                          v-model="toolCatalogQuery"
-                          type="search"
-                          class="h-8 min-w-0 w-56 max-w-[55vw] rounded-md border border-input bg-transparent px-2.5 text-xs outline-none focus:border-ring"
-                          :placeholder="t('settings.appearance.chat.searchTools')"
-                        />
-                        <button
-                          type="button"
-                          class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
-                          :title="t('settings.appearance.chat.refreshTools')"
-                          :aria-label="t('settings.appearance.chat.refreshTools')"
-                          :disabled="toolCatalogLoading"
-                          @click="loadChatToolCatalog"
-                        >
-                          <RiRefreshLine class="h-4 w-4" :class="toolCatalogLoading ? 'animate-spin' : ''" />
-                        </button>
+                      <div class="mt-2 overflow-x-auto rounded-md border border-border/60">
+                        <table class="min-w-full text-sm">
+                          <thead class="bg-muted/30 text-xs text-muted-foreground">
+                            <tr>
+                              <th class="px-3 py-2 text-left font-medium">
+                                {{ t('settings.appearance.chat.activityTable.type') }}
+                              </th>
+                              <th class="px-3 py-2 text-center font-medium">
+                                {{ t('settings.appearance.chat.activityTable.expand') }}
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr
+                              v-for="opt in activityKindOptions"
+                              :key="`activity-matrix-${opt.id}`"
+                              class="border-t border-border/50"
+                            >
+                              <td class="px-3 py-2 align-top">
+                                <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                  <span>{{ activityKindLabel(opt) }}</span>
+                                  <code class="font-mono text-[10px] text-muted-foreground">{{ opt.id }}</code>
+                                </div>
+                                <div class="text-[11px] text-muted-foreground">{{ activityKindDescription(opt) }}</div>
+                              </td>
+                              <td class="px-3 py-2 text-center align-middle">
+                                <input
+                                  type="checkbox"
+                                  :checked="activityKindDefaultExpandedEnabled(opt.id)"
+                                  @change="toggleActivityKindDefaultExpanded(opt.id)"
+                                />
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
                       </div>
                     </div>
-                    <div class="mt-2 overflow-x-auto rounded-md border border-border/60">
-                      <table class="min-w-full text-sm">
-                        <thead class="bg-muted/30 text-xs text-muted-foreground">
-                          <tr>
-                            <th class="px-3 py-2 text-left font-medium">
-                              {{ t('settings.appearance.chat.toolDetailsTable.tool') }}
-                            </th>
-                            <th class="px-3 py-2 text-center font-medium">
-                              {{ t('settings.appearance.chat.toolDetailsTable.expand') }}
-                            </th>
-                            <th class="w-10 px-2 py-2" aria-label="Reset"></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr v-if="toolCatalogLoading && toolActivityOptions.length === TOOL_API_FUNCTIONS.length">
-                            <td
-                              colspan="3"
-                              class="border-t border-border/50 px-3 py-6 text-center text-xs text-muted-foreground"
-                            >
-                              {{ t('settings.appearance.chat.loadingTools') }}
-                            </td>
-                          </tr>
-                          <tr v-else-if="toolCatalogError && toolActivityOptions.length === TOOL_API_FUNCTIONS.length">
-                            <td
-                              colspan="3"
-                              class="border-t border-border/50 px-3 py-4 text-xs text-rose-700 dark:text-rose-300"
-                            >
-                              {{ toolCatalogError }}
-                            </td>
-                          </tr>
-                          <tr v-else-if="filteredToolActivityOptions.length === 0">
-                            <td
-                              colspan="3"
-                              class="border-t border-border/50 px-3 py-6 text-center text-xs text-muted-foreground"
-                            >
-                              {{ t('settings.appearance.chat.noTools') }}
-                            </td>
-                          </tr>
-                          <tr
-                            v-for="opt in filteredToolActivityOptions"
-                            :key="`tool-matrix-${opt.id}`"
-                            class="border-t border-border/50"
+
+                    <div class="mt-1">
+                      <div class="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div class="text-xs font-medium text-muted-foreground">
+                            {{ t('settings.appearance.chat.toolDetails') }}
+                          </div>
+                          <div class="mt-0.5 text-[11px] text-muted-foreground">
+                            {{
+                              t('settings.appearance.chat.toolDetailsCount', {
+                                shown: filteredToolActivityOptions.length,
+                                total: toolActivityOptions.length,
+                              })
+                            }}
+                          </div>
+                        </div>
+                        <div class="flex min-w-0 items-center gap-2">
+                          <input
+                            v-model="toolCatalogQuery"
+                            type="search"
+                            class="h-8 min-w-0 w-56 max-w-[55vw] rounded-md border border-input bg-transparent px-2.5 text-xs outline-none focus:border-ring"
+                            :placeholder="t('settings.appearance.chat.searchTools')"
+                          />
+                          <button
+                            type="button"
+                            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
+                            :title="t('settings.appearance.chat.refreshTools')"
+                            :aria-label="t('settings.appearance.chat.refreshTools')"
+                            :disabled="toolCatalogLoading"
+                            @click="loadChatToolCatalog"
                           >
-                            <td class="px-3 py-2 align-top">
-                              <div class="font-mono text-xs">{{ opt.label }}</div>
-                              <div class="text-[11px] text-muted-foreground">{{ opt.description }}</div>
-                            </td>
-                            <td class="px-3 py-2 text-center align-middle">
-                              <input
-                                type="checkbox"
-                                :checked="toolDefaultExpandedEnabled(opt.id)"
-                                @change="toggleToolDefaultExpanded(opt.id)"
-                              />
-                            </td>
-                            <td class="px-2 py-2 text-center align-middle">
-                              <button
-                                type="button"
-                                class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/50 hover:text-foreground disabled:invisible"
-                                :title="t('settings.appearance.chat.resetToolDefault')"
-                                :aria-label="t('settings.appearance.chat.resetToolDefault')"
-                                :disabled="!toolDefaultExpandedCustomized(opt.id)"
-                                @click="resetToolDefaultExpanded(opt.id)"
+                            <RiRefreshLine class="h-4 w-4" :class="toolCatalogLoading ? 'animate-spin' : ''" />
+                          </button>
+                        </div>
+                      </div>
+                      <div class="mt-2 overflow-x-auto rounded-md border border-border/60">
+                        <table class="min-w-full text-sm">
+                          <thead class="bg-muted/30 text-xs text-muted-foreground">
+                            <tr>
+                              <th class="px-3 py-2 text-left font-medium">
+                                {{ t('settings.appearance.chat.toolDetailsTable.tool') }}
+                              </th>
+                              <th class="px-3 py-2 text-center font-medium">
+                                {{ t('settings.appearance.chat.toolDetailsTable.expand') }}
+                              </th>
+                              <th class="w-10 px-2 py-2" aria-label="Reset"></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr v-if="toolCatalogLoading && toolActivityOptions.length === TOOL_API_FUNCTIONS.length">
+                              <td
+                                colspan="3"
+                                class="border-t border-border/50 px-3 py-6 text-center text-xs text-muted-foreground"
                               >
-                                <RiResetLeftLine class="h-3.5 w-3.5" />
-                              </button>
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                    <div class="mt-2 text-[11px] text-muted-foreground">
-                      {{ t('settings.appearance.chat.toolDetailsHint') }}
+                                {{ t('settings.appearance.chat.loadingTools') }}
+                              </td>
+                            </tr>
+                            <tr
+                              v-else-if="toolCatalogError && toolActivityOptions.length === TOOL_API_FUNCTIONS.length"
+                            >
+                              <td
+                                colspan="3"
+                                class="border-t border-border/50 px-3 py-4 text-xs text-rose-700 dark:text-rose-300"
+                              >
+                                {{ toolCatalogError }}
+                              </td>
+                            </tr>
+                            <tr v-else-if="filteredToolActivityOptions.length === 0">
+                              <td
+                                colspan="3"
+                                class="border-t border-border/50 px-3 py-6 text-center text-xs text-muted-foreground"
+                              >
+                                {{ t('settings.appearance.chat.noTools') }}
+                              </td>
+                            </tr>
+                            <tr
+                              v-for="opt in filteredToolActivityOptions"
+                              :key="`tool-matrix-${opt.id}`"
+                              class="border-t border-border/50"
+                            >
+                              <td class="px-3 py-2 align-top">
+                                <div class="font-mono text-xs">{{ opt.label }}</div>
+                                <div class="text-[11px] text-muted-foreground">{{ opt.description }}</div>
+                              </td>
+                              <td class="px-3 py-2 text-center align-middle">
+                                <input
+                                  type="checkbox"
+                                  :checked="toolDefaultExpandedEnabled(opt.id)"
+                                  @change="toggleToolDefaultExpanded(opt.id)"
+                                />
+                              </td>
+                              <td class="px-2 py-2 text-center align-middle">
+                                <button
+                                  type="button"
+                                  class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/50 hover:text-foreground disabled:invisible"
+                                  :title="t('settings.appearance.chat.resetToolDefault')"
+                                  :aria-label="t('settings.appearance.chat.resetToolDefault')"
+                                  :disabled="!toolDefaultExpandedCustomized(opt.id)"
+                                  @click="resetToolDefaultExpanded(opt.id)"
+                                >
+                                  <RiResetLeftLine class="h-3.5 w-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div class="mt-2 text-[11px] text-muted-foreground">
+                        {{ t('settings.appearance.chat.toolDetailsHint') }}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
             </div>
           </div>
 

@@ -189,9 +189,7 @@ const awsRegionOptions = [
   'af-south-1',
 ].map((value) => ({ value, label: value }))
 
-const gitlabInstanceOptions = [
-  { value: 'https://gitlab.com', label: 'https://gitlab.com', description: 'GitLab.com' },
-]
+const gitlabInstanceOptions = [{ value: 'https://gitlab.com', label: 'https://gitlab.com', description: 'GitLab.com' }]
 
 const redirectUriOptions = [
   {
@@ -207,7 +205,11 @@ const legacyRedirectUris = new Set(['http://127.0.0.1:1455/callback', 'http://12
 const awsProfiles = ref<string[]>(['default'])
 
 const modelToolModeOptions = [
-  { value: 'provider_protocol', label: 'Provider protocol', description: 'Expose Agena tools through the provider protocol.' },
+  {
+    value: 'provider_protocol',
+    label: 'Provider protocol',
+    description: 'Expose Agena tools through the provider protocol.',
+  },
   { value: 'disabled', label: 'Disabled', description: 'Do not advertise Agena tools for this model.' },
 ]
 
@@ -222,20 +224,40 @@ const modelLifecycleOptions = [
 ]
 
 const modelFields: ModelField[] = [
-  { key: 'model_id', label: 'Model ID', kind: 'readonly', help: 'The provider model identifier is fixed by the route.' },
+  {
+    key: 'model_id',
+    label: 'Model ID',
+    kind: 'readonly',
+    help: 'The provider model identifier is fixed by the route.',
+  },
   { key: 'enabled', label: 'Enabled', kind: 'boolean' },
   { key: 'native_compaction', label: 'Native compaction', kind: 'boolean' },
   { key: 'agena_tools.mode', label: 'Agena tool mode', kind: 'select', options: modelToolModeOptions },
   { key: 'display_name', label: 'Display name', kind: 'text', placeholder: 'Friendly name shown in model pickers' },
   { key: 'lifecycle', label: 'Lifecycle', kind: 'select', options: modelLifecycleOptions },
-  { key: 'context_window_tokens', label: 'Context window tokens', kind: 'number', placeholder: 'Optional unsigned integer' },
+  {
+    key: 'context_window_tokens',
+    label: 'Context window tokens',
+    kind: 'number',
+    placeholder: 'Optional unsigned integer',
+  },
   { key: 'max_input_tokens', label: 'Max input tokens', kind: 'number', placeholder: 'Optional unsigned integer' },
   { key: 'max_output_tokens', label: 'Max output tokens', kind: 'number', placeholder: 'Optional unsigned integer' },
   { key: 'features', label: 'Features', kind: 'csv', placeholder: 'tool_calling, reasoning, streaming' },
   { key: 'input', label: 'Input modalities', kind: 'csv', placeholder: 'text, image, file' },
   { key: 'output_modalities', label: 'Output modalities', kind: 'csv', placeholder: 'text' },
-  { key: 'thinking_modes', label: 'Thinking modes', kind: 'readonly', help: 'Advertised by the provider/catalog and preserved when saving.' },
-  { key: 'speed_modes', label: 'Speed modes', kind: 'readonly', help: 'Advertised by the provider/catalog and preserved when saving.' },
+  {
+    key: 'thinking_modes',
+    label: 'Thinking modes',
+    kind: 'readonly',
+    help: 'Advertised by the provider/catalog and preserved when saving.',
+  },
+  {
+    key: 'speed_modes',
+    label: 'Speed modes',
+    kind: 'readonly',
+    help: 'Advertised by the provider/catalog and preserved when saving.',
+  },
   { key: 'description', label: 'Description', kind: 'textarea', placeholder: 'Optional model description' },
 ]
 
@@ -290,8 +312,15 @@ function authMessageText(value: JsonValue): string {
 
 function authKindMode(value: JsonValue): 'none' | 'api' | 'credential' | 'unset' {
   if (value === 'None') return 'none'
-  if (typeof value === 'string' && ['Api', 'ApiPending', 'ClineApi', 'Gitlab', 'BedrockSigv4'].includes(value)) return 'api'
-  if (value && typeof value === 'object' && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, 'Credential')) return 'credential'
+  if (typeof value === 'string' && ['Api', 'ApiPending', 'ClineApi', 'Gitlab', 'BedrockSigv4'].includes(value))
+    return 'api'
+  if (
+    value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.prototype.hasOwnProperty.call(value, 'Credential')
+  )
+    return 'credential'
   return 'unset'
 }
 
@@ -312,7 +341,9 @@ function authKindSubtype(value: JsonValue): string {
 
 const authMode = computed(() => authKindMode(draft.value?.auth_kind))
 const authSubtype = computed(() => authKindSubtype(draft.value?.auth_kind))
-const authSubtypeOptions = computed(() => (authMode.value === 'credential' ? credentialSubtypeOptions : apiSubtypeOptions))
+const authSubtypeOptions = computed(() =>
+  authMode.value === 'credential' ? credentialSubtypeOptions : apiSubtypeOptions,
+)
 
 const adapterRuleMap: Record<string, string[]> = {
   none: ['ollama'],
@@ -340,10 +371,18 @@ function adapterIdsForAuthKind(value: JsonValue): Set<string> {
 }
 
 const adapterCandidates = computed(() => {
-  const known = (draft.value?.provider_id ? providers.value.find((item) => item.provider_id === draft.value?.source_provider_id || item.provider_id === draft.value?.provider_id)?.adapters || [] : [])
-    .map((item) => item.adapter_id)
+  const known = (
+    draft.value?.provider_id
+      ? providers.value.find(
+          (item) =>
+            item.provider_id === draft.value?.source_provider_id || item.provider_id === draft.value?.provider_id,
+        )?.adapters || []
+      : []
+  ).map((item) => item.adapter_id)
   const pendingApiSubtype = draft.value?.auth_kind === 'ApiPending'
-  const ruleAdapters = pendingApiSubtype ? [] : (adapterRuleMap[authSubtype.value] || adapterRuleMap[authMode.value] || [])
+  const ruleAdapters = pendingApiSubtype
+    ? []
+    : adapterRuleMap[authSubtype.value] || adapterRuleMap[authMode.value] || []
   return [...new Set([...ruleAdapters, ...(pendingApiSubtype ? [] : known)])].filter(Boolean)
 })
 const supportedAdapterIds = computed(() => adapterIdsForAuthKind(draft.value?.auth_kind))
@@ -357,7 +396,9 @@ const awsProfileOptions = computed(() => {
   }))
 })
 
-const allModels = computed(() => adapterModels.value.flatMap((adapter) => adapter.models.map((model) => ({ adapter, model }))))
+const allModels = computed(() =>
+  adapterModels.value.flatMap((adapter) => adapter.models.map((model) => ({ adapter, model }))),
+)
 const selectedDefaultModelKey = computed(() => {
   const adapter = String(draft.value?.default_adapter || '')
   const model = String(draft.value?.default_model || '')
@@ -367,9 +408,9 @@ const defaultModelOptions = computed(() =>
   allModels.value
     .filter(({ adapter }) => supportedAdapterIds.value.has(adapter.adapter_id))
     .map(({ adapter, model }) => ({
-    value: `${adapter.adapter_id}\u001f${model.id}`,
-    label: model.display_name || model.id,
-    description: `${adapter.adapter_id} / ${model.id}`,
+      value: `${adapter.adapter_id}\u001f${model.id}`,
+      label: model.display_name || model.id,
+      description: `${adapter.adapter_id} / ${model.id}`,
     })),
 )
 
@@ -490,7 +531,15 @@ function normalizeDraftShape(value: ProviderConfigDraft): ProviderConfigDraft {
   if (mode === 'unset' || mode === 'none') {
     next.auth.secret_source_kind = 'Unset'
     next.auth.secret_source_value = ''
-    clearAuthFields('base_url', 'region', 'profile', 'access_key_id', 'secret_access_key', 'session_token', 'service_key_env')
+    clearAuthFields(
+      'base_url',
+      'region',
+      'profile',
+      'access_key_id',
+      'secret_access_key',
+      'session_token',
+      'service_key_env',
+    )
   } else if (mode === 'api' && subtype === 'bedrock_sigv4') {
     next.auth.secret_source_kind = 'Unset'
     next.auth.secret_source_value = ''
@@ -498,13 +547,15 @@ function normalizeDraftShape(value: ProviderConfigDraft): ProviderConfigDraft {
   } else if (mode === 'api') {
     clearAuthFields('region', 'profile', 'access_key_id', 'secret_access_key', 'session_token', 'service_key_env')
     if (subtype === 'cline_api') clearAuthFields('base_url')
-    if (subtype === 'gitlab_api' && !String(next.auth.instance_url || '').trim()) next.auth.instance_url = 'https://gitlab.com'
+    if (subtype === 'gitlab_api' && !String(next.auth.instance_url || '').trim())
+      next.auth.instance_url = 'https://gitlab.com'
   } else if (mode === 'credential') {
     next.auth.secret_source_kind = 'Unset'
     next.auth.secret_source_value = ''
     clearAuthFields('region', 'profile', 'access_key_id', 'secret_access_key', 'session_token')
     if (!['google_adc', 'sap_ai_core'].includes(subtype)) clearAuthFields('base_url')
-    if (subtype === 'gitlab' && !String(next.auth.instance_url || '').trim()) next.auth.instance_url = 'https://gitlab.com'
+    if (subtype === 'gitlab' && !String(next.auth.instance_url || '').trim())
+      next.auth.instance_url = 'https://gitlab.com'
     if (subtype === 'sap_ai_core') {
       if (!String(next.auth.service_key_env || '').trim()) next.auth.service_key_env = 'AICORE_SERVICE_KEY'
     } else {
@@ -512,9 +563,7 @@ function normalizeDraftShape(value: ProviderConfigDraft): ProviderConfigDraft {
     }
   }
 
-  const supportedAdapters = next.auth_kind === 'ApiPending'
-    ? []
-    : adapterRuleMap[subtype] || adapterRuleMap[mode] || []
+  const supportedAdapters = next.auth_kind === 'ApiPending' ? [] : adapterRuleMap[subtype] || adapterRuleMap[mode] || []
   next.default_adapter = String(next.default_adapter || '').trim()
   next.default_model = String(next.default_model || '').trim()
   if (next.default_adapter && !supportedAdapters.includes(next.default_adapter)) next.default_adapter = ''
@@ -566,43 +615,98 @@ function authDetailFields(): DraftField[] {
   const mode = authMode.value
   const subtype = authSubtype.value
   const secretSourceKind = fieldValue('auth.secret_source_kind').trim().toLowerCase()
-  const apiSecretField: DraftField = secretSourceKind === 'env'
-    ? {
-        path: 'auth.secret_source_value',
-        label: 'API key environment variable',
-        type: 'select',
-        options: apiKeyEnvironmentOptions,
-        includeEmpty: true,
-        emptyLabel: 'No environment variable',
-        allowCustom: true,
-      }
-    : { path: 'auth.secret_source_value', label: 'API key value', secret: true }
+  const apiSecretField: DraftField =
+    secretSourceKind === 'env'
+      ? {
+          path: 'auth.secret_source_value',
+          label: 'API key environment variable',
+          type: 'select',
+          options: apiKeyEnvironmentOptions,
+          includeEmpty: true,
+          emptyLabel: 'No environment variable',
+          allowCustom: true,
+        }
+      : { path: 'auth.secret_source_value', label: 'API key value', secret: true }
   if (mode === 'api') {
-    if (subtype === 'custom') return [
-      { path: 'auth.base_url', label: 'Base URL', placeholder: 'https://api.example.com/v1' },
-      { path: 'auth.secret_source_kind', label: 'API key source', type: 'select', options: secretSourceOptions, includeEmpty: true, emptyLabel: 'No API key source' },
-      apiSecretField,
-    ]
-    if (subtype === 'cline_api') return [
-      { path: 'auth.secret_source_kind', label: 'API key source', type: 'select', options: secretSourceOptions, includeEmpty: true, emptyLabel: 'No API key source' },
-      apiSecretField,
-    ]
-    if (subtype === 'gitlab_api') return [
-      { path: 'auth.instance_url', label: 'Instance URL', type: 'select', options: gitlabInstanceOptions, includeEmpty: true, emptyLabel: 'No GitLab instance', allowCustom: true },
-      { path: 'auth.secret_source_kind', label: 'API key source', type: 'select', options: secretSourceOptions, includeEmpty: true, emptyLabel: 'No API key source' },
-      apiSecretField,
-    ]
-    if (subtype === 'bedrock_sigv4') return [
-      { path: 'auth.base_url', label: 'Base URL' },
-      { path: 'auth.region', label: 'Region', type: 'select', options: awsRegionOptions, includeEmpty: true, emptyLabel: 'No AWS region', allowCustom: true },
-      { path: 'auth.profile', label: 'AWS profile', type: 'select', options: awsProfileOptions.value, includeEmpty: true, emptyLabel: 'No AWS profile', allowCustom: true },
-      { path: 'auth.access_key_id', label: 'Access key ID', secret: true },
-      { path: 'auth.secret_access_key', label: 'Secret access key', secret: true },
-      { path: 'auth.session_token', label: 'Session token', secret: true },
-    ]
+    if (subtype === 'custom')
+      return [
+        { path: 'auth.base_url', label: 'Base URL', placeholder: 'https://api.example.com/v1' },
+        {
+          path: 'auth.secret_source_kind',
+          label: 'API key source',
+          type: 'select',
+          options: secretSourceOptions,
+          includeEmpty: true,
+          emptyLabel: 'No API key source',
+        },
+        apiSecretField,
+      ]
+    if (subtype === 'cline_api')
+      return [
+        {
+          path: 'auth.secret_source_kind',
+          label: 'API key source',
+          type: 'select',
+          options: secretSourceOptions,
+          includeEmpty: true,
+          emptyLabel: 'No API key source',
+        },
+        apiSecretField,
+      ]
+    if (subtype === 'gitlab_api')
+      return [
+        {
+          path: 'auth.instance_url',
+          label: 'Instance URL',
+          type: 'select',
+          options: gitlabInstanceOptions,
+          includeEmpty: true,
+          emptyLabel: 'No GitLab instance',
+          allowCustom: true,
+        },
+        {
+          path: 'auth.secret_source_kind',
+          label: 'API key source',
+          type: 'select',
+          options: secretSourceOptions,
+          includeEmpty: true,
+          emptyLabel: 'No API key source',
+        },
+        apiSecretField,
+      ]
+    if (subtype === 'bedrock_sigv4')
+      return [
+        { path: 'auth.base_url', label: 'Base URL' },
+        {
+          path: 'auth.region',
+          label: 'Region',
+          type: 'select',
+          options: awsRegionOptions,
+          includeEmpty: true,
+          emptyLabel: 'No AWS region',
+          allowCustom: true,
+        },
+        {
+          path: 'auth.profile',
+          label: 'AWS profile',
+          type: 'select',
+          options: awsProfileOptions.value,
+          includeEmpty: true,
+          emptyLabel: 'No AWS profile',
+          allowCustom: true,
+        },
+        { path: 'auth.access_key_id', label: 'Access key ID', secret: true },
+        { path: 'auth.secret_access_key', label: 'Secret access key', secret: true },
+        { path: 'auth.session_token', label: 'Session token', secret: true },
+      ]
   }
   if (mode !== 'credential') return []
-  const base = subtype === 'openai_chatgpt' ? 'credential_drafts.openai_chatgpt' : subtype === 'github_copilot' ? 'credential_drafts.github_copilot' : 'credential_drafts.gitlab'
+  const base =
+    subtype === 'openai_chatgpt'
+      ? 'credential_drafts.openai_chatgpt'
+      : subtype === 'github_copilot'
+        ? 'credential_drafts.github_copilot'
+        : 'credential_drafts.gitlab'
   if (subtype === 'openai_chatgpt') {
     const fields: DraftField[] = [
       { path: `${base}.login_kind`, label: 'Auth login method', type: 'select', options: loginKindOptions },
@@ -610,7 +714,15 @@ function authDetailFields(): DraftField[] {
     const loginKind = fieldValue(`${base}.login_kind`).trim().toLowerCase()
     if (loginKind === 'browser') {
       fields.push(
-        { path: `${base}.redirect_uri`, label: 'Redirect URI', type: 'select', options: redirectUriOptions, includeEmpty: true, emptyLabel: 'No redirect URI', allowCustom: true },
+        {
+          path: `${base}.redirect_uri`,
+          label: 'Redirect URI',
+          type: 'select',
+          options: redirectUriOptions,
+          includeEmpty: true,
+          emptyLabel: 'No redirect URI',
+          allowCustom: true,
+        },
         { path: `${base}.callback_url`, label: 'Callback URL' },
       )
     }
@@ -622,54 +734,89 @@ function authDetailFields(): DraftField[] {
     )
     return fields
   }
-  if (subtype === 'github_copilot') return [
-    { path: '__auth_login_method', value: 'Device', label: 'Auth login method', readOnly: true },
-    { path: `${base}.enterprise_domain`, label: 'Enterprise domain' },
-    { path: `${base}.tokens.refresh_token`, label: 'Refresh token', secret: true },
-    { path: `${base}.tokens.access_token`, label: 'Access token', secret: true },
-    { path: `${base}.tokens.expires_at_ms`, label: 'Expires at (ms)' },
-  ]
-  if (subtype === 'gitlab') return [
-    { path: '__auth_login_method', value: 'Browser', label: 'Auth login method', readOnly: true },
-    { path: 'auth.instance_url', label: 'Instance URL', type: 'select', options: gitlabInstanceOptions, includeEmpty: true, emptyLabel: 'No GitLab instance', allowCustom: true },
-    { path: `${base}.redirect_uri`, label: 'Redirect URI', type: 'select', options: redirectUriOptions, includeEmpty: true, emptyLabel: 'No redirect URI', allowCustom: true },
-    { path: `${base}.callback_url`, label: 'Callback URL' },
-    { path: `${base}.tokens.refresh_token`, label: 'Refresh token', secret: true },
-    { path: `${base}.tokens.access_token`, label: 'Access token', secret: true },
-    { path: `${base}.tokens.expires_at_ms`, label: 'Expires at (ms)' },
-  ]
+  if (subtype === 'github_copilot')
+    return [
+      { path: '__auth_login_method', value: 'Device', label: 'Auth login method', readOnly: true },
+      { path: `${base}.enterprise_domain`, label: 'Enterprise domain' },
+      { path: `${base}.tokens.refresh_token`, label: 'Refresh token', secret: true },
+      { path: `${base}.tokens.access_token`, label: 'Access token', secret: true },
+      { path: `${base}.tokens.expires_at_ms`, label: 'Expires at (ms)' },
+    ]
+  if (subtype === 'gitlab')
+    return [
+      { path: '__auth_login_method', value: 'Browser', label: 'Auth login method', readOnly: true },
+      {
+        path: 'auth.instance_url',
+        label: 'Instance URL',
+        type: 'select',
+        options: gitlabInstanceOptions,
+        includeEmpty: true,
+        emptyLabel: 'No GitLab instance',
+        allowCustom: true,
+      },
+      {
+        path: `${base}.redirect_uri`,
+        label: 'Redirect URI',
+        type: 'select',
+        options: redirectUriOptions,
+        includeEmpty: true,
+        emptyLabel: 'No redirect URI',
+        allowCustom: true,
+      },
+      { path: `${base}.callback_url`, label: 'Callback URL' },
+      { path: `${base}.tokens.refresh_token`, label: 'Refresh token', secret: true },
+      { path: `${base}.tokens.access_token`, label: 'Access token', secret: true },
+      { path: `${base}.tokens.expires_at_ms`, label: 'Expires at (ms)' },
+    ]
   if (subtype === 'google_adc') return [{ path: 'auth.base_url', label: 'Base URL' }]
-  if (subtype === 'sap_ai_core') return [
-    { path: 'auth.base_url', label: 'Base URL' },
-    { path: 'auth.service_key_env', label: 'Service key env', type: 'select', options: [{ value: 'AICORE_SERVICE_KEY', label: 'AICORE_SERVICE_KEY' }], includeEmpty: true, emptyLabel: 'No service key env', allowCustom: true },
-  ]
+  if (subtype === 'sap_ai_core')
+    return [
+      { path: 'auth.base_url', label: 'Base URL' },
+      {
+        path: 'auth.service_key_env',
+        label: 'Service key env',
+        type: 'select',
+        options: [{ value: 'AICORE_SERVICE_KEY', label: 'AICORE_SERVICE_KEY' }],
+        includeEmpty: true,
+        emptyLabel: 'No service key env',
+        allowCustom: true,
+      },
+    ]
   return []
 }
 
 const visibleAuthFields = computed(() => authDetailFields())
-const interactiveAuthAvailable = computed(() => ['openai_chatgpt', 'github_copilot', 'gitlab'].includes(authSubtype.value))
+const interactiveAuthAvailable = computed(() =>
+  ['openai_chatgpt', 'github_copilot', 'gitlab'].includes(authSubtype.value),
+)
 
 const pendingDeviceAuth = computed(() => {
   const credentials = record(draft.value?.credential_drafts)
   const openai = record(credentials.openai_chatgpt)
-  const openaiLoginKind = String(openai.login_kind || '').trim().toLowerCase()
-  const candidates = authSubtype.value === 'openai_chatgpt'
-    ? [openaiLoginKind === 'browser' ? null : openai.device]
-    : authSubtype.value === 'github_copilot'
-      ? [record(credentials.github_copilot).device]
-      : []
+  const openaiLoginKind = String(openai.login_kind || '')
+    .trim()
+    .toLowerCase()
+  const candidates =
+    authSubtype.value === 'openai_chatgpt'
+      ? [openaiLoginKind === 'browser' ? null : openai.device]
+      : authSubtype.value === 'github_copilot'
+        ? [record(credentials.github_copilot).device]
+        : []
   return candidates.find((value) => String(value?.device_code || '').trim()) || null
 })
 
 const pendingBrowserAuth = computed(() => {
   const credentials = record(draft.value?.credential_drafts)
   const openai = record(credentials.openai_chatgpt)
-  const openaiLoginKind = String(openai.login_kind || '').trim().toLowerCase()
-  const candidates = authSubtype.value === 'openai_chatgpt'
-    ? [openaiLoginKind === 'browser' ? openai.browser : null]
-    : authSubtype.value === 'gitlab'
-      ? [record(credentials.gitlab).browser]
-      : []
+  const openaiLoginKind = String(openai.login_kind || '')
+    .trim()
+    .toLowerCase()
+  const candidates =
+    authSubtype.value === 'openai_chatgpt'
+      ? [openaiLoginKind === 'browser' ? openai.browser : null]
+      : authSubtype.value === 'gitlab'
+        ? [record(credentials.gitlab).browser]
+        : []
   return candidates.find((value) => String(value?.state || '').trim()) || null
 })
 
@@ -692,7 +839,8 @@ const modelListingKind = computed(() => {
 
 const modelListingDescription = computed(() => {
   if (modelListingKind.value === 'live') return 'Fetch current models from the provider using the draft credentials.'
-  if (modelListingKind.value === 'saved') return 'List models using the saved provider configuration; this may contact the provider.'
+  if (modelListingKind.value === 'saved')
+    return 'List models using the saved provider configuration; this may contact the provider.'
   return 'Choose an authentication mode and adapter before listing models.'
 })
 
@@ -733,9 +881,9 @@ async function loadDraft(providerId?: string) {
       : []
     if (requestGeneration !== draftRequestGeneration) return
     const enabled = new Set(
-      (configuredAdapters.length
+      configuredAdapters.length
         ? configuredAdapters.filter((item) => item.enabled).map((item) => item.adapter_id)
-        : (summary?.adapters || []).filter((item) => item.enabled).map((item) => item.adapter_id)),
+        : (summary?.adapters || []).filter((item) => item.enabled).map((item) => item.adapter_id),
     )
     const supported = adapterIdsForAuthKind(nextDraft.auth_kind)
     // Match the TUI restore semantics: only adapters that are actually
@@ -784,17 +932,21 @@ async function listDraftModels() {
   try {
     const adapterIds = [...selectedAdapterIds.value]
     const draftSnapshot = clone(draft.value)
-    const response = modelListingKind.value === 'live'
-      ? await apiJson<AdapterModelsResponse>('/api/v1/provider-studio/draft/models', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ draft: draftSnapshot, adapter_ids: adapterIds }),
-        })
-      : await apiJson<AdapterModelsResponse>(`/api/v1/providers/${encodeURIComponent(draftSnapshot.source_provider_id || '')}/models`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ adapter_ids: adapterIds }),
-        })
+    const response =
+      modelListingKind.value === 'live'
+        ? await apiJson<AdapterModelsResponse>('/api/v1/provider-studio/draft/models', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ draft: draftSnapshot, adapter_ids: adapterIds }),
+          })
+        : await apiJson<AdapterModelsResponse>(
+            `/api/v1/providers/${encodeURIComponent(draftSnapshot.source_provider_id || '')}/models`,
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ adapter_ids: adapterIds }),
+            },
+          )
     if (requestGeneration !== modelListingGeneration) return
     const refreshed = Array.isArray(response?.adapters) ? response.adapters : []
     const byAdapter = new Map(adapterModels.value.map((adapter) => [adapter.adapter_id, adapter]))
@@ -826,7 +978,14 @@ async function listDraftModels() {
 }
 
 function toggleAdapter(adapterId: string) {
-  if (mutationBusy.value || listingModels.value || saving.value || modelSaving.value || !supportedAdapterIds.value.has(adapterId)) return
+  if (
+    mutationBusy.value ||
+    listingModels.value ||
+    saving.value ||
+    modelSaving.value ||
+    !supportedAdapterIds.value.has(adapterId)
+  )
+    return
   const next = new Set(selectedAdapterIds.value)
   if (next.has(adapterId)) next.delete(adapterId)
   else next.add(adapterId)
@@ -1029,7 +1188,11 @@ async function startAuth(action: 'start' | 'continue', silent = false) {
     authMessage.value = ''
   }
   try {
-    const response = await apiJson<{ draft?: ProviderConfigDraft; message?: JsonValue; clipboard_text?: string | null }>(`/api/v1/provider-studio/auth/${action}`, {
+    const response = await apiJson<{
+      draft?: ProviderConfigDraft
+      message?: JsonValue
+      clipboard_text?: string | null
+    }>(`/api/v1/provider-studio/auth/${action}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ draft: draftSnapshot }),
@@ -1172,7 +1335,14 @@ function modelFieldBooleanValue(key: string): boolean {
 }
 
 function csvTokens(value: string): string[] {
-  return [...new Set(value.split(',').map((token) => token.trim()).filter(Boolean))]
+  return [
+    ...new Set(
+      value
+        .split(',')
+        .map((token) => token.trim())
+        .filter(Boolean),
+    ),
+  ]
 }
 
 function deleteModelPath(target: LooseRecord, key: string) {
@@ -1257,7 +1427,8 @@ function setModelFieldValue(key: string, value: string | number | boolean) {
 
 function syncModelValueFromJson(): LooseRecord {
   const parsed = JSON.parse(modelJson.value) as JsonValue
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Model config must be a JSON object.')
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+    throw new Error('Model config must be a JSON object.')
   const next = canonicalizeModelConfig(parsed)
   modelValue.value = next
   return next
@@ -1322,7 +1493,8 @@ async function saveModel() {
         providerDraftIdentity(draft.value) !== draftIdentity ||
         JSON.stringify(draft.value) !== draftSnapshotJson ||
         modelJson.value !== submittedModelJson
-      ) return
+      )
+        return
       toasts.push('success', 'Provider model configuration saved')
       configuredAdapterIds.value = new Set([...configuredAdapterIds.value, editing.adapterId])
       configuredModelKeys.value = new Set([...configuredModelKeys.value, key])
@@ -1378,7 +1550,11 @@ async function deleteModel(adapterId: string, modelId: string) {
     const nextValues = { ...modelConfigValues.value }
     delete nextValues[key]
     modelConfigValues.value = nextValues
-    adapterModels.value = adapterModels.value.map((adapter) => adapter.adapter_id === adapterId ? { ...adapter, models: adapter.models.filter((model) => model.id !== modelId) } : adapter)
+    adapterModels.value = adapterModels.value.map((adapter) =>
+      adapter.adapter_id === adapterId
+        ? { ...adapter, models: adapter.models.filter((model) => model.id !== modelId) }
+        : adapter,
+    )
     const next = new Set(selectedModelKeys.value)
     next.delete(key)
     selectedModelKeys.value = next
@@ -1428,7 +1604,9 @@ async function deleteAdapter(adapterId: string) {
     for (const key of Object.keys(nextValues)) if (key.startsWith(`${adapterId}\u001f`)) delete nextValues[key]
     modelConfigValues.value = nextValues
     configuredAdapterIds.value = new Set([...configuredAdapterIds.value].filter((id) => id !== adapterId))
-    configuredModelKeys.value = new Set([...configuredModelKeys.value].filter((key) => !key.startsWith(`${adapterId}\u001f`)))
+    configuredModelKeys.value = new Set(
+      [...configuredModelKeys.value].filter((key) => !key.startsWith(`${adapterId}\u001f`)),
+    )
     if (draft.value.default_adapter === adapterId) {
       const nextDraft = clone(draft.value)
       nextDraft.default_adapter = ''
@@ -1439,7 +1617,9 @@ async function deleteAdapter(adapterId: string) {
     if (persist) {
       await loadProviders()
       if (requestGeneration === draftRequestGeneration && editorWasUnchanged) {
-        await loadDraft(providers.value.some((provider) => provider.provider_id === providerId) ? providerId : undefined)
+        await loadDraft(
+          providers.value.some((provider) => provider.provider_id === providerId) ? providerId : undefined,
+        )
       }
     }
   } catch (reason) {
@@ -1492,7 +1672,8 @@ async function saveAdapter(adapter: AdapterModels) {
         requestGeneration !== draftRequestGeneration ||
         providerDraftIdentity(draft.value) !== draftIdentity ||
         providerEditorStateFingerprint() !== submittedEditorState
-      ) return
+      )
+        return
       toasts.push('success', `Saved ${adapter.adapter_id} adapter matches`)
       await loadProviders()
       if (
@@ -1552,10 +1733,17 @@ onBeforeUnmount(() => {
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h2 class="text-base font-medium">Provider Studio</h2>
-        <p class="mt-1 text-xs text-muted-foreground">Edit the same provider draft, authentication fields, adapters, and model policies exposed by the TUI.</p>
+        <p class="mt-1 text-xs text-muted-foreground">
+          Edit the same provider draft, authentication fields, adapters, and model policies exposed by the TUI.
+        </p>
       </div>
       <div class="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" :disabled="loading || mutationBusy" @click="loadDraft(selectedProviderId || undefined)">
+        <Button
+          variant="outline"
+          size="sm"
+          :disabled="loading || mutationBusy"
+          @click="loadDraft(selectedProviderId || undefined)"
+        >
           <RiRefreshLine class="mr-2 h-4 w-4" :class="loading ? 'animate-spin' : ''" />
           Refresh draft
         </Button>
@@ -1566,7 +1754,12 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="error" class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ error }}</div>
+    <div
+      v-if="error"
+      class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+    >
+      {{ error }}
+    </div>
 
     <div class="grid gap-4 lg:grid-cols-[minmax(13rem,0.7fr)_minmax(0,2fr)]">
       <div class="grid content-start gap-2">
@@ -1576,14 +1769,25 @@ onBeforeUnmount(() => {
           :key="provider.provider_id"
           type="button"
           class="rounded-md border px-3 py-2 text-left text-xs transition-colors"
-          :class="selectedProviderId === provider.provider_id ? 'border-primary bg-primary/10 text-foreground' : 'border-border/60 hover:bg-muted/40'"
+          :class="
+            selectedProviderId === provider.provider_id
+              ? 'border-primary bg-primary/10 text-foreground'
+              : 'border-border/60 hover:bg-muted/40'
+          "
           :disabled="loading || mutationBusy"
           @click="loadDraft(provider.provider_id)"
         >
           <span class="block truncate font-mono font-semibold">{{ providerLabel(provider) }}</span>
-          <span class="mt-1 block text-[10px] text-muted-foreground">{{ provider.adapters?.length || 0 }} adapters</span>
+          <span class="mt-1 block text-[10px] text-muted-foreground"
+            >{{ provider.adapters?.length || 0 }} adapters</span
+          >
         </button>
-        <div v-if="providers.length === 0" class="rounded-md border border-dashed border-border/60 px-3 py-4 text-center text-xs text-muted-foreground">No providers configured.</div>
+        <div
+          v-if="providers.length === 0"
+          class="rounded-md border border-dashed border-border/60 px-3 py-4 text-center text-xs text-muted-foreground"
+        >
+          No providers configured.
+        </div>
       </div>
 
       <div v-if="draft" class="grid min-w-0 gap-5">
@@ -1591,7 +1795,13 @@ onBeforeUnmount(() => {
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div class="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Draft</div>
             <div class="flex gap-2">
-              <Button variant="ghost" size="sm" class="text-destructive" :disabled="loading || mutationBusy || !draft.source_provider_id" @click="deleteProvider">
+              <Button
+                variant="ghost"
+                size="sm"
+                class="text-destructive"
+                :disabled="loading || mutationBusy || !draft.source_provider_id"
+                @click="deleteProvider"
+              >
                 <RiDeleteBinLine class="mr-1.5 h-4 w-4" /> Delete provider
               </Button>
               <Button size="sm" :disabled="loading || mutationBusy || !draft.provider_id" @click="saveDraft">
@@ -1602,31 +1812,73 @@ onBeforeUnmount(() => {
           <div class="grid gap-3 sm:grid-cols-2">
             <label class="grid gap-1.5">
               <span class="text-xs text-muted-foreground">Provider ID</span>
-              <Input :value="draft.provider_id" class="font-mono" placeholder="openai" @input="setFieldValue('provider_id', ($event.target as HTMLInputElement).value)" />
+              <Input
+                :value="draft.provider_id"
+                class="font-mono"
+                placeholder="openai"
+                @input="setFieldValue('provider_id', ($event.target as HTMLInputElement).value)"
+              />
             </label>
             <label class="grid gap-1.5">
               <span class="text-xs text-muted-foreground">Auth mode</span>
-              <OptionPicker :model-value="authMode" :options="authModeOptions" :include-empty="false" title="Auth mode" @update:model-value="setAuthMode" />
+              <OptionPicker
+                :model-value="authMode"
+                :options="authModeOptions"
+                :include-empty="false"
+                title="Auth mode"
+                @update:model-value="setAuthMode"
+              />
             </label>
             <label v-if="authMode !== 'none' && authMode !== 'unset'" class="grid gap-1.5">
               <span class="text-xs text-muted-foreground">Auth subtype</span>
-              <OptionPicker :model-value="authSubtype" :options="authSubtypeOptions" :include-empty="false" title="Auth subtype" @update:model-value="setAuthSubtype" />
+              <OptionPicker
+                :model-value="authSubtype"
+                :options="authSubtypeOptions"
+                :include-empty="false"
+                title="Auth subtype"
+                @update:model-value="setAuthSubtype"
+              />
             </label>
             <label class="grid gap-1.5">
               <span class="text-xs text-muted-foreground">Default adapter</span>
-              <OptionPicker :model-value="draft.default_adapter" :options="adapterCandidates.map((value) => ({ value, label: value }))" :include-empty="true" empty-label="No default adapter" title="Default adapter" monospace @update:model-value="setDefaultAdapter" />
+              <OptionPicker
+                :model-value="draft.default_adapter"
+                :options="adapterCandidates.map((value) => ({ value, label: value }))"
+                :include-empty="true"
+                empty-label="No default adapter"
+                title="Default adapter"
+                monospace
+                @update:model-value="setDefaultAdapter"
+              />
             </label>
             <label class="grid gap-1.5">
               <span class="text-xs text-muted-foreground">Default model</span>
-              <OptionPicker :model-value="selectedDefaultModelKey" :options="defaultModelOptions" :include-empty="true" empty-label="No default model" title="Default model" monospace :disabled="defaultModelOptions.length === 0" @update:model-value="setDefaultModel" />
+              <OptionPicker
+                :model-value="selectedDefaultModelKey"
+                :options="defaultModelOptions"
+                :include-empty="true"
+                empty-label="No default model"
+                title="Default model"
+                monospace
+                :disabled="defaultModelOptions.length === 0"
+                @update:model-value="setDefaultModel"
+              />
             </label>
             <label class="grid gap-1.5">
               <span class="text-xs text-muted-foreground">Request timeout (seconds)</span>
-              <Input :value="draft.request_timeout_secs" type="number" @input="setFieldValue('request_timeout_secs', Number(($event.target as HTMLInputElement).value))" />
+              <Input
+                :value="draft.request_timeout_secs"
+                type="number"
+                @input="setFieldValue('request_timeout_secs', Number(($event.target as HTMLInputElement).value))"
+              />
             </label>
             <label class="grid gap-1.5">
               <span class="text-xs text-muted-foreground">Connect timeout (seconds)</span>
-              <Input :value="draft.connect_timeout_secs" type="number" @input="setFieldValue('connect_timeout_secs', Number(($event.target as HTMLInputElement).value))" />
+              <Input
+                :value="draft.connect_timeout_secs"
+                type="number"
+                @input="setFieldValue('connect_timeout_secs', Number(($event.target as HTMLInputElement).value))"
+              />
             </label>
           </div>
         </section>
@@ -1635,15 +1887,34 @@ onBeforeUnmount(() => {
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div>
               <div class="text-sm font-medium">Authentication details</div>
-              <div class="mt-1 text-xs text-muted-foreground">Secret values are sent only to the provider-studio endpoint and are masked in the form.</div>
+              <div class="mt-1 text-xs text-muted-foreground">
+                Secret values are sent only to the provider-studio endpoint and are masked in the form.
+              </div>
             </div>
             <div v-if="interactiveAuthAvailable" class="flex gap-2">
-              <Button variant="outline" size="sm" :disabled="mutationBusy || authRequestInFlight || authPolling" @click="startAuth('start')">{{ authRequestInFlight ? 'Working…' : 'Start auth' }}</Button>
-              <Button variant="outline" size="sm" :disabled="mutationBusy || authRequestInFlight || authPolling" @click="startAuth('continue')">{{ authPolling ? 'Waiting…' : 'Continue auth' }}</Button>
+              <Button
+                variant="outline"
+                size="sm"
+                :disabled="mutationBusy || authRequestInFlight || authPolling"
+                @click="startAuth('start')"
+                >{{ authRequestInFlight ? 'Working…' : 'Start auth' }}</Button
+              >
+              <Button
+                variant="outline"
+                size="sm"
+                :disabled="mutationBusy || authRequestInFlight || authPolling"
+                @click="startAuth('continue')"
+                >{{ authPolling ? 'Waiting…' : 'Continue auth' }}</Button
+              >
             </div>
           </div>
-          <div v-if="authMessage" class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs">{{ authMessage }}</div>
-          <div v-if="pendingDeviceAuth" class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+          <div v-if="authMessage" class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs">
+            {{ authMessage }}
+          </div>
+          <div
+            v-if="pendingDeviceAuth"
+            class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs"
+          >
             <div class="font-medium">Device authorization is pending</div>
             <a
               v-if="pendingDeviceAuth.verification_url"
@@ -1654,11 +1925,23 @@ onBeforeUnmount(() => {
             >
               Open verification page
             </a>
-            <div v-if="pendingDeviceAuth.verification_url" class="break-all font-mono text-[11px] text-muted-foreground">{{ pendingDeviceAuth.verification_url }}</div>
-            <div v-if="pendingDeviceAuth.user_code" class="font-mono text-sm">Code: {{ pendingDeviceAuth.user_code }}</div>
-            <div class="text-muted-foreground">The Web client polls this device flow using the provider interval. You can also press Continue auth.</div>
+            <div
+              v-if="pendingDeviceAuth.verification_url"
+              class="break-all font-mono text-[11px] text-muted-foreground"
+            >
+              {{ pendingDeviceAuth.verification_url }}
+            </div>
+            <div v-if="pendingDeviceAuth.user_code" class="font-mono text-sm">
+              Code: {{ pendingDeviceAuth.user_code }}
+            </div>
+            <div class="text-muted-foreground">
+              The Web client polls this device flow using the provider interval. You can also press Continue auth.
+            </div>
           </div>
-          <div v-if="pendingBrowserAuth" class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+          <div
+            v-if="pendingBrowserAuth"
+            class="grid gap-1 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-muted-foreground"
+          >
             <div class="font-medium text-foreground">Browser authorization is pending</div>
             <a
               v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
@@ -1669,13 +1952,21 @@ onBeforeUnmount(() => {
             >
               Open authorization page
             </a>
-            <div v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url" class="break-all font-mono text-[11px]">{{ pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url }}</div>
+            <div
+              v-if="pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url"
+              class="break-all font-mono text-[11px]"
+            >
+              {{ pendingBrowserAuth.display_url || pendingBrowserAuth.authorize_url }}
+            </div>
             <div>Finish the browser flow, paste the callback URL into the field above, then press Continue auth.</div>
           </div>
           <div class="grid gap-3 sm:grid-cols-2">
             <label v-for="field in visibleAuthFields" :key="field.path" class="grid gap-1.5">
               <span class="text-xs text-muted-foreground">{{ field.label }}</span>
-              <div v-if="field.readOnly" class="flex h-9 items-center rounded-md border border-input bg-muted/20 px-3 font-mono text-sm text-muted-foreground">
+              <div
+                v-if="field.readOnly"
+                class="flex h-9 items-center rounded-md border border-input bg-muted/20 px-3 font-mono text-sm text-muted-foreground"
+              >
                 {{ field.value || '—' }}
               </div>
               <OptionPicker
@@ -1705,42 +1996,113 @@ onBeforeUnmount(() => {
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div>
               <div class="text-sm font-medium">Adapter model lists</div>
-              <div class="mt-1 text-xs text-muted-foreground">{{ modelListingDescription }} Selected routes are persisted when you save the Provider.</div>
+              <div class="mt-1 text-xs text-muted-foreground">
+                {{ modelListingDescription }} Selected routes are persisted when you save the Provider.
+              </div>
             </div>
-            <Button variant="outline" size="sm" :disabled="mutationBusy || listingModels || modelListingKind === 'unavailable'" @click="listDraftModels">
-              <RiRefreshLine class="mr-1.5 h-4 w-4" :class="listingModels ? 'animate-spin' : ''" /> {{ modelListingKind === 'saved' ? 'Refresh saved models' : 'List provider models' }}
+            <Button
+              variant="outline"
+              size="sm"
+              :disabled="mutationBusy || listingModels || modelListingKind === 'unavailable'"
+              @click="listDraftModels"
+            >
+              <RiRefreshLine class="mr-1.5 h-4 w-4" :class="listingModels ? 'animate-spin' : ''" />
+              {{ modelListingKind === 'saved' ? 'Refresh saved models' : 'List provider models' }}
             </Button>
           </div>
           <div class="grid gap-2 sm:grid-cols-2">
-            <label v-for="adapterId in adapterCandidates" :key="adapterId" class="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs" :class="!supportedAdapterIds.has(adapterId) ? 'opacity-60' : ''">
-              <input type="checkbox" :checked="selectedAdapterIds.has(adapterId)" :disabled="mutationBusy || listingModels || !supportedAdapterIds.has(adapterId)" @change="toggleAdapter(adapterId)" />
-              <span class="font-mono">{{ !supportedAdapterIds.has(adapterId) ? '[-]' : selectedAdapterIds.has(adapterId) ? '[x]' : '[ ]' }} {{ adapterId }}</span>
-              <span v-if="!supportedAdapterIds.has(adapterId)" class="ml-auto text-[10px] text-muted-foreground">unsupported</span>
+            <label
+              v-for="adapterId in adapterCandidates"
+              :key="adapterId"
+              class="flex items-center gap-2 rounded-md border border-border/60 px-3 py-2 text-xs"
+              :class="!supportedAdapterIds.has(adapterId) ? 'opacity-60' : ''"
+            >
+              <input
+                type="checkbox"
+                :checked="selectedAdapterIds.has(adapterId)"
+                :disabled="mutationBusy || listingModels || !supportedAdapterIds.has(adapterId)"
+                @change="toggleAdapter(adapterId)"
+              />
+              <span class="font-mono"
+                >{{ !supportedAdapterIds.has(adapterId) ? '[-]' : selectedAdapterIds.has(adapterId) ? '[x]' : '[ ]' }}
+                {{ adapterId }}</span
+              >
+              <span v-if="!supportedAdapterIds.has(adapterId)" class="ml-auto text-[10px] text-muted-foreground"
+                >unsupported</span
+              >
             </label>
           </div>
-          <div v-if="adapterModels.length === 0 && !listingModels" class="text-xs text-muted-foreground">No adapter models loaded. Select an adapter and list live models.</div>
+          <div v-if="adapterModels.length === 0 && !listingModels" class="text-xs text-muted-foreground">
+            No adapter models loaded. Select an adapter and list live models.
+          </div>
           <div v-for="adapter in adapterModels" :key="adapter.adapter_id" class="rounded-md border border-border/60">
             <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
               <div class="flex items-center gap-2 text-xs">
                 <span class="font-mono font-semibold">{{ adapter.adapter_id }}</span>
-                <span v-if="adapter.resolved_base_url" class="break-all text-muted-foreground">{{ adapter.resolved_base_url }}</span>
+                <span v-if="adapter.resolved_base_url" class="break-all text-muted-foreground">{{
+                  adapter.resolved_base_url
+                }}</span>
                 <span v-if="adapterFailure(adapter)" class="text-destructive">{{ adapterFailure(adapter) }}</span>
               </div>
               <div class="flex gap-1">
-                <Button variant="ghost" size="sm" :disabled="mutationBusy || !selectedAdapterIds.has(adapter.adapter_id) || !supportedAdapterIds.has(adapter.adapter_id)" @click="saveAdapter(adapter)">Save adapter</Button>
-                <IconButton variant="ghost" size="sm" tooltip="Delete adapter" aria-label="Delete adapter" :disabled="mutationBusy" @click="deleteAdapter(adapter.adapter_id)"><RiDeleteBinLine class="h-4 w-4 text-destructive" /></IconButton>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  :disabled="
+                    mutationBusy ||
+                    !selectedAdapterIds.has(adapter.adapter_id) ||
+                    !supportedAdapterIds.has(adapter.adapter_id)
+                  "
+                  @click="saveAdapter(adapter)"
+                  >Save adapter</Button
+                >
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  tooltip="Delete adapter"
+                  aria-label="Delete adapter"
+                  :disabled="mutationBusy"
+                  @click="deleteAdapter(adapter.adapter_id)"
+                  ><RiDeleteBinLine class="h-4 w-4 text-destructive"
+                /></IconButton>
               </div>
             </div>
             <div class="grid gap-1 p-2">
-              <label v-for="model in adapter.models" :key="model.id" class="flex min-w-0 items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted/40">
-                <input type="checkbox" :checked="selectedModelKeys.has(modelKey(adapter.adapter_id, model.id))" :disabled="mutationBusy || listingModels" @change="toggleModel(adapter.adapter_id, model.id)" />
-                <button type="button" class="min-w-0 flex-1 truncate text-left" :disabled="mutationBusy || listingModels" @click="openModelEditor(adapter.adapter_id, model)">
+              <label
+                v-for="model in adapter.models"
+                :key="model.id"
+                class="flex min-w-0 items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted/40"
+              >
+                <input
+                  type="checkbox"
+                  :checked="selectedModelKeys.has(modelKey(adapter.adapter_id, model.id))"
+                  :disabled="mutationBusy || listingModels"
+                  @change="toggleModel(adapter.adapter_id, model.id)"
+                />
+                <button
+                  type="button"
+                  class="min-w-0 flex-1 truncate text-left"
+                  :disabled="mutationBusy || listingModels"
+                  @click="openModelEditor(adapter.adapter_id, model)"
+                >
                   <span>{{ model.display_name || model.id }}</span>
-                  <code v-if="model.display_name" class="ml-2 font-mono text-[10px] text-muted-foreground">{{ model.id }}</code>
+                  <code v-if="model.display_name" class="ml-2 font-mono text-[10px] text-muted-foreground">{{
+                    model.id
+                  }}</code>
                 </button>
-                <IconButton variant="ghost" size="sm" tooltip="Delete model" aria-label="Delete model" :disabled="mutationBusy" @click.stop="deleteModel(adapter.adapter_id, model.id)"><RiDeleteBinLine class="h-3.5 w-3.5 text-destructive" /></IconButton>
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  tooltip="Delete model"
+                  aria-label="Delete model"
+                  :disabled="mutationBusy"
+                  @click.stop="deleteModel(adapter.adapter_id, model.id)"
+                  ><RiDeleteBinLine class="h-3.5 w-3.5 text-destructive"
+                /></IconButton>
               </label>
-              <div v-if="adapter.models.length === 0" class="px-2 py-3 text-xs text-muted-foreground">No models listed.</div>
+              <div v-if="adapter.models.length === 0" class="px-2 py-3 text-xs text-muted-foreground">
+                No models listed.
+              </div>
             </div>
           </div>
           <div class="flex flex-wrap items-end gap-2">
@@ -1761,7 +2123,13 @@ onBeforeUnmount(() => {
               <span class="text-xs text-muted-foreground">Add model id</span>
               <Input v-model="newModelId" class="font-mono" placeholder="model-name" @keydown.enter="addManualModel" />
             </label>
-            <Button variant="outline" size="sm" :disabled="mutationBusy || listingModels || !newModelId.trim() || !manualModelAdapterId" @click="addManualModel"><RiAddLine class="mr-1.5 h-4 w-4" /> Add model</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              :disabled="mutationBusy || listingModels || !newModelId.trim() || !manualModelAdapterId"
+              @click="addManualModel"
+              ><RiAddLine class="mr-1.5 h-4 w-4" /> Add model</Button
+            >
           </div>
         </section>
 
@@ -1769,7 +2137,9 @@ onBeforeUnmount(() => {
           <div class="flex flex-wrap items-start justify-between gap-2">
             <div>
               <div class="text-sm font-medium">Model · {{ editingModel.adapterId }}/{{ editingModel.modelId }}</div>
-              <div class="mt-1 text-xs text-muted-foreground">The TUI exposes these 15 model configuration fields through its persisted JSON editor.</div>
+              <div class="mt-1 text-xs text-muted-foreground">
+                The TUI exposes these 15 model configuration fields through its persisted JSON editor.
+              </div>
             </div>
             <Button variant="ghost" size="sm" @click="closeModelEditor">Close</Button>
           </div>
@@ -1780,10 +2150,20 @@ onBeforeUnmount(() => {
               <div v-for="field in modelFields" :key="field.key" class="rounded border border-border/50 px-3 py-2">
                 <div class="grid gap-1.5">
                   <div class="flex items-center justify-between gap-2">
-                    <label :for="`provider-model-${field.key.replaceAll('.', '-')}`" class="text-[10px] uppercase tracking-wide text-muted-foreground">{{ field.label }}</label>
+                    <label
+                      :for="`provider-model-${field.key.replaceAll('.', '-')}`"
+                      class="text-[10px] uppercase tracking-wide text-muted-foreground"
+                      >{{ field.label }}</label
+                    >
                     <span v-if="field.kind === 'readonly'" class="text-[10px] text-muted-foreground">read-only</span>
                   </div>
-                  <div v-if="field.kind === 'readonly'" :id="`provider-model-${field.key.replaceAll('.', '-')}`" class="break-all font-mono text-xs">{{ modelFieldValue(field.key) || '—' }}</div>
+                  <div
+                    v-if="field.kind === 'readonly'"
+                    :id="`provider-model-${field.key.replaceAll('.', '-')}`"
+                    class="break-all font-mono text-xs"
+                  >
+                    {{ modelFieldValue(field.key) || '—' }}
+                  </div>
                   <input
                     v-else-if="field.kind === 'boolean'"
                     :id="`provider-model-${field.key.replaceAll('.', '-')}`"
@@ -1818,8 +2198,16 @@ onBeforeUnmount(() => {
                     :type="field.kind === 'number' ? 'number' : 'text'"
                     :placeholder="field.placeholder"
                     :class="field.kind === 'csv' || field.kind === 'number' ? 'font-mono' : ''"
-                    @input="field.kind === 'csv' ? undefined : setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)"
-                    @change="field.kind === 'csv' ? setModelFieldValue(field.key, ($event.target as HTMLInputElement).value) : undefined"
+                    @input="
+                      field.kind === 'csv'
+                        ? undefined
+                        : setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
+                    "
+                    @change="
+                      field.kind === 'csv'
+                        ? setModelFieldValue(field.key, ($event.target as HTMLInputElement).value)
+                        : undefined
+                    "
                   />
                   <div v-if="field.help" class="text-[10px] text-muted-foreground">{{ field.help }}</div>
                 </div>
@@ -1827,17 +2215,28 @@ onBeforeUnmount(() => {
             </div>
             <label class="grid gap-1.5">
               <span class="text-xs text-muted-foreground">Persisted model JSON</span>
-              <textarea v-model="modelJson" rows="16" spellcheck="false" class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs outline-none focus:border-ring" />
+              <textarea
+                v-model="modelJson"
+                rows="16"
+                spellcheck="false"
+                class="w-full rounded-md border border-input bg-transparent p-3 font-mono text-xs outline-none focus:border-ring"
+              />
             </label>
             <div v-if="modelError" class="text-xs text-destructive">{{ modelError }}</div>
             <div class="flex flex-wrap gap-2">
-              <Button variant="outline" :disabled="modelSaving || mutationBusy" @click="applyModelJson">Apply JSON</Button>
-              <Button :disabled="modelSaving || mutationBusy" @click="saveModel"><RiSave3Line class="mr-1.5 h-4 w-4" /> {{ modelSaving ? 'Saving…' : 'Save model config' }}</Button>
+              <Button variant="outline" :disabled="modelSaving || mutationBusy" @click="applyModelJson"
+                >Apply JSON</Button
+              >
+              <Button :disabled="modelSaving || mutationBusy" @click="saveModel"
+                ><RiSave3Line class="mr-1.5 h-4 w-4" /> {{ modelSaving ? 'Saving…' : 'Save model config' }}</Button
+              >
             </div>
           </template>
         </section>
       </div>
-      <div v-else class="rounded-md border border-dashed border-border/60 px-4 py-8 text-sm text-muted-foreground">Loading provider draft…</div>
+      <div v-else class="rounded-md border border-dashed border-border/60 px-4 py-8 text-sm text-muted-foreground">
+        Loading provider draft…
+      </div>
     </div>
   </section>
 </template>

@@ -290,7 +290,8 @@ export function useChatRunUi(opts: {
             ? canonical.current_tokens
             : null
       const contextWindow =
-        typeof canonical.model_context_window_tokens === 'number' && Number.isFinite(canonical.model_context_window_tokens)
+        typeof canonical.model_context_window_tokens === 'number' &&
+        Number.isFinite(canonical.model_context_window_tokens)
           ? canonical.model_context_window_tokens
           : typeof canonical.limit_tokens === 'number' && Number.isFinite(canonical.limit_tokens)
             ? canonical.limit_tokens
@@ -298,8 +299,7 @@ export function useChatRunUi(opts: {
       return {
         tokensValue: tokens,
         tokensLabel: tokens != null ? `${formatTokensK(tokens)} used` : '--',
-        percentUsed:
-          tokens != null && contextWindow != null ? contextUsagePercent(tokens, contextWindow) : null,
+        percentUsed: tokens != null && contextWindow != null ? contextUsagePercent(tokens, contextWindow) : null,
         costLabel: formatCurrencyUSD(0),
       }
     }

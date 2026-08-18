@@ -45,7 +45,10 @@ async function refreshClientVersions() {
           {{ refreshBusy ? t('settings.tui.refreshing') : t('settings.tui.refreshFromNpm') }}
         </Button>
       </div>
-      <div v-if="refreshError" class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+      <div
+        v-if="refreshError"
+        class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+      >
         {{ refreshError }}
       </div>
       <div :key="clientVersionNonce" class="grid gap-2">

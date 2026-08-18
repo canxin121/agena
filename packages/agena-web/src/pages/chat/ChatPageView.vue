@@ -601,9 +601,7 @@ void sessionActionsMenuRef
                       @click.stop="toggleComposerPicker('model')"
                     >
                       <RiStackLine class="h-3 w-3" />
-                      <span :class="modelChipTextClass">{{
-                        modelStatusLabel
-                      }}</span>
+                      <span :class="modelChipTextClass">{{ modelStatusLabel }}</span>
                     </button>
                     <template v-if="hasThinkingModesForSelection">
                       <span class="text-muted-foreground/50">|</span>

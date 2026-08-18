@@ -172,11 +172,7 @@ export type SessionExecutionStatus = {
   usage?: AgenaExecutionState['usage']
 }
 
-export type CancellationResult =
-  | 'cancellation_requested'
-  | 'already_terminal'
-  | 'not_found'
-  | 'execution_mismatch'
+export type CancellationResult = 'cancellation_requested' | 'already_terminal' | 'not_found' | 'execution_mismatch'
 
 export type CancellationOutcome = {
   result: CancellationResult
@@ -1006,10 +1002,7 @@ export async function compactSession(sessionId: string, options?: RunOptionsPayl
 }
 
 /** POST /api/v1/sessions/{id}/cancel — abort an active execution. */
-export async function cancelSession(
-  sessionId: string,
-  executionId?: string | null,
-): Promise<CancellationOutcome> {
+export async function cancelSession(sessionId: string, executionId?: string | null): Promise<CancellationOutcome> {
   const response = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/cancel`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

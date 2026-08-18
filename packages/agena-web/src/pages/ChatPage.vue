@@ -1113,17 +1113,12 @@ function restoredComposerFiles(document: JsonValue): AttachedFile[] {
     const path = typeof reference.path === 'string' ? reference.path.trim() : ''
     if (!path) return []
     const filename =
-      typeof payload.name === 'string' && payload.name.trim()
-        ? payload.name.trim()
-        : path.split('/').pop() || 'file'
+      typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : path.split('/').pop() || 'file'
     const size =
       typeof payload.size_bytes === 'number' && Number.isFinite(payload.size_bytes)
         ? Math.max(0, payload.size_bytes)
         : 0
-    const id =
-      typeof activity.id === 'string' && activity.id.trim()
-        ? activity.id
-        : `restored-${Date.now()}-${index}`
+    const id = typeof activity.id === 'string' && activity.id.trim() ? activity.id : `restored-${Date.now()}-${index}`
     return [
       {
         id,

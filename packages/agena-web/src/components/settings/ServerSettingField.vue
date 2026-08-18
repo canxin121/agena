@@ -87,7 +87,9 @@ const busy = computed(() => loading.value || saving.value || props.disabled)
 const effectiveResponse = computed<RuntimeSettingReadResponse | null>(() => sources.value?.effective || null)
 const globalResponse = computed<RuntimeSettingReadResponse | null>(() => sources.value?.global || null)
 const workspaceResponse = computed<RuntimeSettingReadResponse | null>(() => sources.value?.workspace || null)
-const hasOverride = computed(() => hasPersistedSetting(props.targetLayer === 'workspace' ? workspaceResponse.value : globalResponse.value))
+const hasOverride = computed(() =>
+  hasPersistedSetting(props.targetLayer === 'workspace' ? workspaceResponse.value : globalResponse.value),
+)
 
 function normalizeLocal(value: JsonValue): string | number | boolean {
   if (props.kind === 'boolean') {
@@ -195,16 +197,28 @@ function effectiveLabel(response: RuntimeSettingReadResponse | null): string {
   return displayJsonValue(response?.value)
 }
 
-watch(() => props.path, () => void refresh())
-watch(() => props.defaultValue, () => {
-  if (!sources.value) localValue.value = props.defaultValue
-})
+watch(
+  () => props.path,
+  () => void refresh(),
+)
+watch(
+  () => props.defaultValue,
+  () => {
+    if (!sources.value) localValue.value = props.defaultValue
+  },
+)
 
 onMounted(() => void refresh())
 </script>
 
 <template>
-  <div :class="compact ? 'grid gap-2 border-b border-border/50 py-3 last:border-b-0' : 'grid gap-3 rounded-lg border border-border/60 bg-background/50 p-4'">
+  <div
+    :class="
+      compact
+        ? 'grid gap-2 border-b border-border/50 py-3 last:border-b-0'
+        : 'grid gap-3 rounded-lg border border-border/60 bg-background/50 p-4'
+    "
+  >
     <div class="flex min-w-0 items-start justify-between gap-3">
       <div class="min-w-0">
         <div class="font-medium">{{ label }}</div>
@@ -294,9 +308,18 @@ onMounted(() => void refresh())
     </div>
 
     <div class="grid gap-x-4 gap-y-1 text-[11px] text-muted-foreground sm:grid-cols-3">
-      <div><span class="font-medium text-foreground/80">Effective:</span> <code class="break-all">{{ effectiveLabel(effectiveResponse) }}</code></div>
-      <div><span class="font-medium text-foreground/80">Global layer:</span> <code class="break-all">{{ effectiveLabel(globalResponse) }}</code></div>
-      <div><span class="font-medium text-foreground/80">Workspace layer:</span> <code class="break-all">{{ effectiveLabel(workspaceResponse) }}</code></div>
+      <div>
+        <span class="font-medium text-foreground/80">Effective:</span>
+        <code class="break-all">{{ effectiveLabel(effectiveResponse) }}</code>
+      </div>
+      <div>
+        <span class="font-medium text-foreground/80">Global layer:</span>
+        <code class="break-all">{{ effectiveLabel(globalResponse) }}</code>
+      </div>
+      <div>
+        <span class="font-medium text-foreground/80">Workspace layer:</span>
+        <code class="break-all">{{ effectiveLabel(workspaceResponse) }}</code>
+      </div>
     </div>
     <div v-if="error" class="break-words text-xs text-destructive">{{ error }}</div>
   </div>

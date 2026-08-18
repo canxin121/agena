@@ -8,7 +8,8 @@ import ProviderStudioPanel from '@/components/settings/ProviderStudioPanel.vue'
     <div>
       <div class="text-lg font-medium">Models &amp; Providers</div>
       <div class="mt-1 max-w-3xl text-sm text-muted-foreground">
-        Configure provider authentication and adapters, select the runtime and automatic-approval models, and inspect the resolved model catalog.
+        Configure provider authentication and adapters, select the runtime and automatic-approval models, and inspect
+        the resolved model catalog.
       </div>
     </div>
     <ProviderStudioPanel />

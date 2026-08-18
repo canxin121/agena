@@ -46,7 +46,9 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
         if (isActiveActivityStatus(String(item?.status || ''))) {
           const sid = String(sidRaw)
           const kinds = next[sid]?.kinds || []
-          const kind = String(item?.kind || '').trim().toLowerCase()
+          const kind = String(item?.kind || '')
+            .trim()
+            .toLowerCase()
           // Keep one entry per active activity. TUI renders counts (for
           // example, "shell 2"), so collapsing equal kinds loses information.
           next[sid] = { type: 'busy', kinds: kind ? [...kinds, kind] : kinds }
@@ -73,7 +75,9 @@ export const useSessionActivityStore = defineStore('sessionActivity', () => {
     const props = evt.properties && typeof evt.properties === 'object' ? evt.properties : {}
     if (String(props.kind || '').trim() !== 'activity') return ''
     const payload = props.payload && typeof props.payload === 'object' ? props.payload : {}
-    return String(payload.kind || '').trim().toLowerCase()
+    return String(payload.kind || '')
+      .trim()
+      .toLowerCase()
   }
 
   function applyEvent(evt: SseEvent) {

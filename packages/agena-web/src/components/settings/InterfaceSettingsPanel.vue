@@ -75,12 +75,14 @@ async function loadCatalog() {
         return id ? { value: id, label: label || id, description: pluginId ? `Plugin: ${pluginId}` : undefined } : null
       })
       .filter((theme): theme is { value: string; label: string; description?: string } => Boolean(theme))
-    toolNames.value = [...new Set([
-      ...BUILTIN_ACTIVITY_TOOLS,
-      ...(Array.isArray(response?.permission_tools) ? response.permission_tools : [])
-        .map((item) => String(item?.name || '').trim())
-        .filter(Boolean),
-    ])].sort((a, b) => a.localeCompare(b))
+    toolNames.value = [
+      ...new Set([
+        ...BUILTIN_ACTIVITY_TOOLS,
+        ...(Array.isArray(response?.permission_tools) ? response.permission_tools : [])
+          .map((item) => String(item?.name || '').trim())
+          .filter(Boolean),
+      ]),
+    ].sort((a, b) => a.localeCompare(b))
   } catch (reason) {
     catalogError.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -178,8 +180,13 @@ onMounted(() => void loadCatalog())
         <h2 class="text-sm font-medium">{{ t('settings.tui.activityKindsTitle') }}</h2>
         <p class="mt-1 text-xs text-muted-foreground">{{ t('settings.tui.activityKindsDescription') }}</p>
       </div>
-      <div v-if="loadingCatalog && activityKinds.length === 0" class="text-sm text-muted-foreground">Loading activity catalog…</div>
-      <div v-else-if="catalogError" class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+      <div v-if="loadingCatalog && activityKinds.length === 0" class="text-sm text-muted-foreground">
+        Loading activity catalog…
+      </div>
+      <div
+        v-else-if="catalogError"
+        class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+      >
         {{ catalogError }}
       </div>
       <div v-else class="grid gap-2">

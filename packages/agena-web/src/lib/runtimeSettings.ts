@@ -78,9 +78,7 @@ export async function getRuntimeSettingLayer(
   path: string,
 ): Promise<RuntimeSettingReadResponse> {
   const query = layerQuery(path)
-  return await apiJson<RuntimeSettingReadResponse>(
-    `/api/v1/settings/layers/${layer}${query ? `?${query}` : ''}`,
-  )
+  return await apiJson<RuntimeSettingReadResponse>(`/api/v1/settings/layers/${layer}${query ? `?${query}` : ''}`)
 }
 
 export async function readRuntimeSettingSources(path: string): Promise<RuntimeSettingsReadBundle> {
@@ -100,14 +98,11 @@ export async function setRuntimeSetting(
   layer?: RuntimeSettingsLayer,
 ): Promise<RuntimeSettingEditResponse> {
   const body = JSON.stringify({ path, value, ...optionsBody(options) })
-  return await apiJson<RuntimeSettingEditResponse>(
-    layer ? `/api/v1/settings/layers/${layer}` : '/api/v1/settings',
-    {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body,
-    },
-  )
+  return await apiJson<RuntimeSettingEditResponse>(layer ? `/api/v1/settings/layers/${layer}` : '/api/v1/settings', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body,
+  })
 }
 
 export async function patchRuntimeSettings(
@@ -167,9 +162,7 @@ export function jsonPathForKey(parent: string, key: string): string {
 }
 
 export function settingValue<T>(response: RuntimeSettingReadResponse | null | undefined, fallback: T): T {
-  return response && response.value !== undefined && response.value !== null
-    ? (response.value as T)
-    : fallback
+  return response && response.value !== undefined && response.value !== null ? (response.value as T) : fallback
 }
 
 export function hasPersistedSetting(response: RuntimeSettingReadResponse | null | undefined): boolean {

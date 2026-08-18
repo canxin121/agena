@@ -1,13 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import {
-  RiBugLine,
-  RiComputerLine,
-  RiFlowChart,
-  RiPlugLine,
-  RiShieldCheckLine,
-  RiSettingsLine,
-} from '@remixicon/vue'
+import { RiBugLine, RiComputerLine, RiFlowChart, RiPlugLine, RiShieldCheckLine, RiSettingsLine } from '@remixicon/vue'
 
 import SidebarListItem from '@/components/ui/SidebarListItem.vue'
 import type { SettingsSidebarIconKey } from './settingsSidebarNavigation'

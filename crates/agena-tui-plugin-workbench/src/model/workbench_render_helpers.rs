@@ -7,28 +7,42 @@ pub fn render_plugin_list_page(frame: &mut Frame, area: Rect, dialog: &PluginWor
             Constraint::Length(1),
         ])
         .split(area);
-    let filter_line = format!(
-        "Search plugins... {}        Transport: {}        Config: {}        {}/{} shown",
-        if dialog.list.query.text().is_empty() {
-            "all".to_owned()
-        } else {
-            clean(dialog.list.query.text())
-        },
-        dialog.list.transport_filter.label(),
-        dialog.list.config_filter.label(),
-        dialog.list.visible_len(),
-        dialog.plugins.len()
+    let query = if dialog.list.query.text().is_empty() {
+        dialog.i18n.text("plugin-workbench-filter-all")
+    } else {
+        clean(dialog.list.query.text())
+    };
+    let filter_line = dialog.i18n.text_args(
+        "plugin-workbench-list-summary",
+        &agena_tui::fl_args![
+            "query" => query,
+            "transport" => dialog.list.transport_filter.label(&dialog.i18n),
+            "config" => dialog.list.config_filter.label(&dialog.i18n),
+            "shown" => dialog.list.visible_len(),
+            "total" => dialog.plugins.len(),
+        ],
     );
     let controls = agena_tui_components::build_shortcut_line([
         agena_tui_components::ShortcutHint::new(
             "Ctrl+T",
-            format!("transport {}", dialog.list.transport_filter.label()),
+            format!(
+                "{} {}",
+                dialog.i18n.text("plugin-workbench-transport"),
+                dialog.list.transport_filter.label(&dialog.i18n)
+            ),
         ),
         agena_tui_components::ShortcutHint::new(
             "Ctrl+G",
-            format!("config {}", dialog.list.config_filter.label()),
+            format!(
+                "{} {}",
+                dialog.i18n.text("plugin-workbench-config"),
+                dialog.list.config_filter.label(&dialog.i18n)
+            ),
         ),
-        agena_tui_components::ShortcutHint::new("Ctrl+R", "refresh"),
+        agena_tui_components::ShortcutHint::new(
+            "Ctrl+R",
+            dialog.i18n.text("plugin-workbench-action-refresh"),
+        ),
     ]);
     frame.render_widget(
         Paragraph::new(vec![Line::from(filter_line), controls]).wrap(Wrap { trim: false }),
@@ -39,20 +53,37 @@ pub fn render_plugin_list_page(frame: &mut Frame, area: Rect, dialog: &PluginWor
     lines.push(Line::from(Span::styled(
         fixed_columns(
             &[
-                ("Plugin", 22),
-                ("Visible Tool", 16),
-                ("Version", 12),
-                ("Transport", 11),
-                ("Tools", 7),
-                ("Commands", 10),
-                ("Config", 16),
+                (
+                    dialog.i18n.text("plugin-workbench-column-plugin").as_str(),
+                    22,
+                ),
+                (
+                    dialog
+                        .i18n
+                        .text("plugin-workbench-column-visible-tool")
+                        .as_str(),
+                    16,
+                ),
+                (
+                    dialog.i18n.text("plugin-workbench-column-version").as_str(),
+                    12,
+                ),
+                (dialog.i18n.text("plugin-workbench-transport").as_str(), 11),
+                (dialog.i18n.text("plugin-workbench-tab-tools").as_str(), 7),
+                (
+                    dialog.i18n.text("plugin-workbench-tab-commands").as_str(),
+                    10,
+                ),
+                (dialog.i18n.text("plugin-workbench-config").as_str(), 16),
             ],
             area.width.saturating_sub(4),
         ),
         Style::default().add_modifier(Modifier::BOLD),
     )));
     if dialog.list.visible_len() == 0 {
-        lines.push(Line::from("No plugins match the current filters."));
+        lines.push(Line::from(
+            dialog.i18n.text("plugin-workbench-no-filter-matches"),
+        ));
     } else {
         for visible_row in 0..dialog.list.visible_len() {
             let Some(key) = dialog.list.visible_key(visible_row) else {
@@ -74,7 +105,7 @@ pub fn render_plugin_list_page(frame: &mut Frame, area: Rect, dialog: &PluginWor
                         (transport_display(plugin.transport.as_str()), 11),
                         (plugin.tools.len().to_string().as_str(), 7),
                         (plugin.commands.len().to_string().as_str(), 10),
-                        (plugin.config_status.label.as_str(), 16),
+                        (plugin.config_status.kind.label(&dialog.i18n).as_str(), 16),
                     ],
                     area.width.saturating_sub(7),
                 )
@@ -87,11 +118,17 @@ pub fn render_plugin_list_page(frame: &mut Frame, area: Rect, dialog: &PluginWor
             lines.push(Line::from(Span::styled(clean(line), style)));
         }
     }
-    render_plugin_panel(frame, rows[1], "Plugins", Text::from(lines), None);
+    render_plugin_panel(
+        frame,
+        rows[1],
+        dialog.i18n.text("plugin-workbench-plugins"),
+        Text::from(lines),
+        None,
+    );
     render_plugin_footer(
         frame,
         rows[2],
-        "Type to search · Up/Down select · Enter open · Esc close",
+        dialog.i18n.text("plugin-workbench-list-footer").as_str(),
     );
 }
 
@@ -100,8 +137,8 @@ pub fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginW
         render_plugin_panel(
             frame,
             area,
-            "Plugin",
-            Text::from("No plugin selected."),
+            dialog.i18n.text("plugin-workbench-plugin"),
+            Text::from(dialog.i18n.text("plugin-workbench-no-selection")),
             None,
         );
         return;
@@ -124,34 +161,31 @@ pub fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginW
         frame,
         rows[0],
         plugin.plugin_id.as_str(),
-        plugin_header_text(plugin),
+        plugin_header_text(dialog, plugin),
         None,
     );
-    render_plugin_tabs(frame, rows[1], dialog.navigation.detail_tab);
+    render_plugin_tabs(frame, rows[1], dialog, dialog.navigation.detail_tab);
     let body = match dialog.navigation.detail_tab {
         PluginDetailTab::Config => Text::default(),
         PluginDetailTab::Tools => plugin_tools_text(dialog, plugin),
-        PluginDetailTab::Commands => plugin_commands_text(plugin),
-        PluginDetailTab::Capabilities => plugin_capabilities_text(plugin),
-        PluginDetailTab::Logs => plugin_logs_text(plugin),
-        PluginDetailTab::Diagnostics => plugin_diagnostics_text(plugin),
+        PluginDetailTab::Commands => plugin_commands_text(dialog, plugin),
+        PluginDetailTab::Capabilities => plugin_capabilities_text(dialog, plugin),
+        PluginDetailTab::Logs => plugin_logs_text(dialog, plugin),
+        PluginDetailTab::Diagnostics => plugin_diagnostics_text(dialog, plugin),
     };
     render_plugin_panel(
         frame,
         rows[2],
-        dialog.navigation.detail_tab.label(),
+        dialog.navigation.detail_tab.label(&dialog.i18n),
         body,
         Some((dialog.config_scroll.min(u16::MAX as usize) as u16, 0)),
     );
-    render_plugin_footer(
-        frame,
-        rows[3],
-        if dialog.navigation.detail_tab == PluginDetailTab::Tools {
-            "Tab/Shift+Tab section · Up/Down select · Enter configure and run · Esc back"
-        } else {
-            "Tab/Shift+Tab section · Up/Down scroll · Esc back"
-        },
-    );
+    let footer = if dialog.navigation.detail_tab == PluginDetailTab::Tools {
+        dialog.i18n.text("plugin-workbench-detail-tools-footer")
+    } else {
+        dialog.i18n.text("plugin-workbench-detail-footer")
+    };
+    render_plugin_footer(frame, rows[3], footer.as_str());
 }
 
 pub(crate) fn render_plugin_compact_config_page(
@@ -161,7 +195,13 @@ pub(crate) fn render_plugin_compact_config_page(
     plugin: &PluginWorkbenchPlugin,
 ) {
     let block = Block::default()
-        .title(format!(" {} / Config ", clean(plugin.plugin_id.as_str())))
+        .title(format!(
+            " {} ",
+            dialog.i18n.text_args(
+                "plugin-workbench-config-title",
+                &agena_tui::fl_args!["plugin" => clean(plugin.plugin_id.as_str())],
+            )
+        ))
         .borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -178,7 +218,7 @@ pub(crate) fn render_plugin_compact_config_page(
         .split(inner);
 
     frame.render_widget(
-        Paragraph::new(compact_config_header_line(plugin)).wrap(Wrap { trim: false }),
+        Paragraph::new(compact_config_header_line(dialog, plugin)).wrap(Wrap { trim: false }),
         rows[0],
     );
     frame.render_widget(
@@ -186,7 +226,7 @@ pub(crate) fn render_plugin_compact_config_page(
         rows[1],
     );
     frame.render_widget(
-        Paragraph::new(compact_config_toolbar_text()).wrap(Wrap { trim: false }),
+        Paragraph::new(compact_config_toolbar_text(dialog)).wrap(Wrap { trim: false }),
         rows[2],
     );
     frame.render_widget(
@@ -279,15 +319,15 @@ pub fn render_plugin_workbench_editor_overlay(
         render_plugin_config_drilldown_overlay(frame, area, dialog, overlay);
     }
     if let Some(selection) = dialog.selection.as_ref() {
-        render_plugin_config_selection_overlay(frame, area, selection);
+        render_plugin_config_selection_overlay(frame, area, dialog, selection);
         if let Some(actions) = dialog.actions.as_ref() {
-            render_plugin_config_actions_overlay(frame, area, actions);
+            render_plugin_config_actions_overlay(frame, area, dialog, actions);
         }
         return;
     }
     let Some(editor) = dialog.editor.as_ref() else {
         if let Some(actions) = dialog.actions.as_ref() {
-            render_plugin_config_actions_overlay(frame, area, actions);
+            render_plugin_config_actions_overlay(frame, area, dialog, actions);
         }
         return;
     };
@@ -307,13 +347,14 @@ pub fn render_plugin_workbench_editor_overlay(
         &editor.input,
     );
     if let Some(actions) = dialog.actions.as_ref() {
-        render_plugin_config_actions_overlay(frame, area, actions);
+        render_plugin_config_actions_overlay(frame, area, dialog, actions);
     }
 }
 
 pub(crate) fn render_plugin_config_selection_overlay(
     frame: &mut Frame,
     area: Rect,
+    dialog: &PluginWorkbenchOverlay,
     overlay: &PluginConfigSelectionOverlay,
 ) {
     agena_tui_components::render_search_picker_dialog(
@@ -321,8 +362,8 @@ pub(crate) fn render_plugin_config_selection_overlay(
         area,
         &overlay.presentation,
         &agena_tui_components::SearchPickerDialogSpec::new(
-            "Loading choices…".into(),
-            "Choices".into(),
+            dialog.i18n.text("plugin-workbench-loading-choices").into(),
+            dialog.i18n.text("plugin-workbench-choices").into(),
         ),
         |value| clean(value),
     );
@@ -331,6 +372,7 @@ pub(crate) fn render_plugin_config_selection_overlay(
 pub(crate) fn render_plugin_config_actions_overlay(
     frame: &mut Frame,
     area: Rect,
+    dialog: &PluginWorkbenchOverlay,
     overlay: &PluginConfigActionOverlay,
 ) {
     agena_tui_components::render_search_picker_dialog(
@@ -338,8 +380,8 @@ pub(crate) fn render_plugin_config_actions_overlay(
         area,
         &overlay.presentation,
         &agena_tui_components::SearchPickerDialogSpec::new(
-            "Loading actions…".into(),
-            "Actions".into(),
+            dialog.i18n.text("plugin-workbench-loading-actions").into(),
+            dialog.i18n.text("plugin-workbench-actions").into(),
         ),
         |value| clean(value),
     );
@@ -391,21 +433,21 @@ pub(crate) fn render_plugin_config_drilldown_overlay(
         lines.push(Line::from(Span::styled(
             if group_has_action_column(group, dialog.config_view) {
                 standard_config_row_line_with_action(
-                    "Setting",
-                    "Type",
-                    "Value",
-                    "Default",
-                    "Action",
-                    "State",
+                    dialog.i18n.text("plugin-workbench-config-setting").as_str(),
+                    dialog.i18n.text("plugin-workbench-config-type").as_str(),
+                    dialog.i18n.text("plugin-workbench-config-value").as_str(),
+                    dialog.i18n.text("plugin-workbench-config-default").as_str(),
+                    dialog.i18n.text("plugin-workbench-config-action").as_str(),
+                    dialog.i18n.text("plugin-workbench-config-state").as_str(),
                     rows[0].width.saturating_sub(4),
                 )
             } else {
                 standard_config_row_line(
-                    "Setting",
-                    "Type",
-                    "Value",
-                    "Default",
-                    "State",
+                    dialog.i18n.text("plugin-workbench-config-setting").as_str(),
+                    dialog.i18n.text("plugin-workbench-config-type").as_str(),
+                    dialog.i18n.text("plugin-workbench-config-value").as_str(),
+                    dialog.i18n.text("plugin-workbench-config-default").as_str(),
+                    dialog.i18n.text("plugin-workbench-config-state").as_str(),
                     rows[0].width.saturating_sub(4),
                 )
             },
@@ -429,6 +471,7 @@ pub(crate) fn render_plugin_config_drilldown_overlay(
                         None
                     };
                     lines.push(standard_config_row_line_with_focus(
+                        dialog,
                         row,
                         rows[0].width.saturating_sub(4),
                         focused_cell,
@@ -441,7 +484,9 @@ pub(crate) fn render_plugin_config_drilldown_overlay(
     }
     if lines.len() == 1 {
         lines.push(Line::from(""));
-        lines.push(Line::from("No editable rows."));
+        lines.push(Line::from(
+            dialog.i18n.text("plugin-workbench-no-editable-rows"),
+        ));
     }
     render_plugin_panel(
         frame,
@@ -465,7 +510,7 @@ pub(crate) fn render_plugin_config_diff_overlay(
         area,
         SurfaceMode::Overlay,
         &FramedSurfaceSpec {
-            title: clean("Config Diff").into(),
+            title: dialog.i18n.text("plugin-workbench-config-diff").into(),
             target_width: 112,
             target_height: 18,
         },
@@ -477,11 +522,15 @@ pub(crate) fn render_plugin_config_diff_overlay(
     render_plugin_panel(
         frame,
         rows[0],
-        "Config Diff",
+        dialog.i18n.text("plugin-workbench-config-diff"),
         config_diff_text(dialog, plugin),
         None,
     );
-    render_plugin_footer(frame, rows[1], "Esc close");
+    render_plugin_footer(
+        frame,
+        rows[1],
+        dialog.i18n.text("plugin-workbench-close-footer").as_str(),
+    );
 }
 
 pub(crate) fn render_plugin_panel(
@@ -505,7 +554,12 @@ pub(crate) fn render_plugin_footer(frame: &mut Frame, area: Rect, text: &str) {
     frame.render_widget(Paragraph::new(clean(text)).wrap(Wrap { trim: false }), area);
 }
 
-pub(crate) fn render_plugin_tabs(frame: &mut Frame, area: Rect, selected: PluginDetailTab) {
+pub(crate) fn render_plugin_tabs(
+    frame: &mut Frame,
+    area: Rect,
+    dialog: &PluginWorkbenchOverlay,
+    selected: PluginDetailTab,
+) {
     let mut spans = Vec::new();
     for (index, tab) in PluginDetailTab::ALL.iter().copied().enumerate() {
         if index > 0 {
@@ -516,9 +570,18 @@ pub(crate) fn render_plugin_tabs(frame: &mut Frame, area: Rect, selected: Plugin
         } else {
             Style::default()
         };
-        spans.push(Span::styled(format!(" {} ", tab.label()), style));
+        spans.push(Span::styled(
+            format!(" {} ", tab.label(&dialog.i18n)),
+            style,
+        ));
     }
-    render_plugin_panel(frame, area, "Tabs", Text::from(Line::from(spans)), None);
+    render_plugin_panel(
+        frame,
+        area,
+        dialog.i18n.text("plugin-workbench-tabs"),
+        Text::from(Line::from(spans)),
+        None,
+    );
 }
 use super::{
     Block, Borders, Constraint, Direction, EditorDialogSpec, Frame, FramedSurfaceSpec, Layout,

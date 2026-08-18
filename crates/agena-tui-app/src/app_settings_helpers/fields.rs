@@ -243,17 +243,23 @@ pub(crate) fn settings_studio_activity_tool_items(
     let mut tools = agena_domain::ToolApiFunction::ALL
         .into_iter()
         .map(|function| {
-            let summary = match function {
-                agena_domain::ToolApiFunction::List => "Enumerate execution tools.",
-                agena_domain::ToolApiFunction::Search => "Search execution tools.",
-                agena_domain::ToolApiFunction::Help => "Inspect execution-tool contracts.",
-                agena_domain::ToolApiFunction::Tags => "List execution-tool tags.",
-                agena_domain::ToolApiFunction::Call => "Invoke an execution tool.",
-                agena_domain::ToolApiFunction::PluginsList => "Enumerate tool plugins.",
-                agena_domain::ToolApiFunction::PluginsSearch => "Search tool plugins.",
-                agena_domain::ToolApiFunction::PluginsTags => "List tool-plugin tags.",
+            let summary_key = match function {
+                agena_domain::ToolApiFunction::List => "settings-tool-api-list-description",
+                agena_domain::ToolApiFunction::Search => "settings-tool-api-search-description",
+                agena_domain::ToolApiFunction::Help => "settings-tool-api-help-description",
+                agena_domain::ToolApiFunction::Tags => "settings-tool-api-tags-description",
+                agena_domain::ToolApiFunction::Call => "settings-tool-api-call-description",
+                agena_domain::ToolApiFunction::PluginsList => {
+                    "settings-tool-api-plugins-list-description"
+                }
+                agena_domain::ToolApiFunction::PluginsSearch => {
+                    "settings-tool-api-plugins-search-description"
+                }
+                agena_domain::ToolApiFunction::PluginsTags => {
+                    "settings-tool-api-plugins-tags-description"
+                }
             };
-            (function.function_name().to_owned(), summary.to_owned())
+            (function.function_name().to_owned(), i18n.text(summary_key))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
     for tool in application.permission_tools() {

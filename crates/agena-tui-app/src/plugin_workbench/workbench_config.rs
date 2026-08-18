@@ -180,7 +180,7 @@ impl App {
                 format!("Switch the active type for {}.", context.row.title)
             };
             actions.push(PluginConfigActionCandidate {
-                label: context.row.type_mode.action_label().to_owned(),
+                label: context.row.type_mode.action_label(&dialog.i18n),
                 description,
                 action: PluginConfigAction::SelectType {
                     plugin_id: context.plugin_id.clone(),

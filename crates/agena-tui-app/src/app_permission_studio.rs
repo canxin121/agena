@@ -376,11 +376,11 @@ impl App {
                                 .get("enabled")
                                 .and_then(serde_json::Value::as_bool)
                                 .unwrap_or(false);
-                            app.flash_success(if enabled {
-                                "Agena MCP server enabled".to_owned()
+                            app.flash_success(app.i18n.text(if enabled {
+                                "settings-mcp-server-enabled-flash"
                             } else {
-                                "Agena MCP server disabled".to_owned()
-                            });
+                                "settings-mcp-server-disabled-flash"
+                            }));
                             app.refresh_current_route_after_local_edit();
                         }
                         Err(error) => app.flash_error(error),
@@ -412,8 +412,9 @@ impl App {
                                 .get("authMode")
                                 .and_then(serde_json::Value::as_str)
                                 .unwrap_or("none");
-                            app.flash_success(format!(
-                                "Agena MCP authentication mode set to {mode}"
+                            app.flash_success(app.i18n.text_args(
+                                "settings-mcp-auth-mode-updated",
+                                &agena_tui::fl_args!("mode" => mode.to_owned()),
                             ));
                             app.refresh_current_route_after_local_edit();
                         }
@@ -431,8 +432,9 @@ impl App {
                                 .get("anonymousAccess")
                                 .and_then(serde_json::Value::as_str)
                                 .unwrap_or("none");
-                            app.flash_success(format!(
-                                "Agena MCP anonymous tool access set to {policy}"
+                            app.flash_success(app.i18n.text_args(
+                                "settings-mcp-anonymous-access-updated",
+                                &agena_tui::fl_args!("policy" => policy.to_owned()),
                             ));
                             app.refresh_current_route_after_local_edit();
                         }
@@ -450,8 +452,9 @@ impl App {
                                 .get("clientRegistration")
                                 .and_then(serde_json::Value::as_str)
                                 .unwrap_or("cimd_only");
-                            app.flash_success(format!(
-                                "Agena MCP client registration set to {policy}"
+                            app.flash_success(app.i18n.text_args(
+                                "settings-mcp-client-registration-updated",
+                                &agena_tui::fl_args!("policy" => policy.to_owned()),
                             ));
                             app.refresh_current_route_after_local_edit();
                         }
@@ -495,7 +498,7 @@ impl App {
                     |application| async move { application.clear_mcp_oauth_password().await },
                     |app, result| match result {
                         Ok(_) => {
-                            app.flash_success("Agena MCP OAuth password cleared".to_owned());
+                            app.flash_success(app.i18n.text("settings-mcp-oauth-password-cleared"));
                             app.refresh_current_route_after_local_edit();
                         }
                         Err(error) => app.flash_error(error),

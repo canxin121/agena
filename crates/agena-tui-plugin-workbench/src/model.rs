@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use agena_tui::i18n::I18n;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -99,6 +100,7 @@ pub const PLUGIN_WORKBENCH_LOG_LIMIT: usize = 80;
 /// An overlay of the plugin workbench.
 pub struct PluginWorkbenchOverlay {
     pub title: String,
+    pub i18n: I18n,
     pub list: PluginWorkbenchListPresentation,
     pub navigation: PluginWorkbenchNavigation,
     pub plugins: Vec<PluginWorkbenchPlugin>,
@@ -174,6 +176,20 @@ pub enum PluginConfigStatusKind {
     Warning,
     NeedsRestart,
     RuntimeIssue,
+}
+
+impl PluginConfigStatusKind {
+    pub fn label(self, i18n: &I18n) -> String {
+        match self {
+            Self::Valid => i18n.text("plugin-workbench-status-valid"),
+            Self::Missing => i18n.text("plugin-workbench-status-missing"),
+            Self::SchemaMissing => i18n.text("plugin-workbench-status-schema-missing"),
+            Self::Invalid => i18n.text("plugin-workbench-status-invalid"),
+            Self::Warning => i18n.text("plugin-workbench-status-warning"),
+            Self::NeedsRestart => i18n.text("plugin-workbench-status-needs-restart"),
+            Self::RuntimeIssue => i18n.text("plugin-workbench-status-runtime-issue"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -309,11 +325,11 @@ impl ConfigRowTypeMode {
         !matches!(self, Self::Fixed)
     }
 
-    pub fn action_label(self) -> &'static str {
+    pub fn action_label(self, i18n: &I18n) -> String {
         match self {
-            Self::Fixed => "Type",
-            Self::SelectType => "Choose Type",
-            Self::SelectShape => "Choose Shape",
+            Self::Fixed => i18n.text("plugin-workbench-config-type"),
+            Self::SelectType => i18n.text("plugin-workbench-config-choose-type"),
+            Self::SelectShape => i18n.text("plugin-workbench-config-choose-shape"),
         }
     }
 }
@@ -355,13 +371,13 @@ pub enum ConfigRowState {
 }
 
 impl ConfigRowState {
-    fn label(self) -> &'static str {
+    fn label(self, i18n: &I18n) -> String {
         match self {
-            Self::Default => "Default",
-            Self::Override => "Changed",
-            Self::Dirty => "Dirty",
-            Self::Error => "Error",
-            Self::Inactive => "Inactive",
+            Self::Default => i18n.text("plugin-workbench-config-state-default"),
+            Self::Override => i18n.text("plugin-workbench-config-state-changed"),
+            Self::Dirty => i18n.text("plugin-workbench-config-state-dirty"),
+            Self::Error => i18n.text("plugin-workbench-config-state-error"),
+            Self::Inactive => i18n.text("plugin-workbench-config-state-inactive"),
         }
     }
 }
@@ -749,6 +765,7 @@ mod tests {
         let plugins = vec![plugin];
         PluginWorkbenchOverlay {
             title: "Plugins".to_owned(),
+            i18n: I18n::english(),
             list: PluginWorkbenchListPresentation::new(plugin_workbench_list_items(&plugins), ""),
             navigation: PluginWorkbenchNavigation::new(),
             plugins,

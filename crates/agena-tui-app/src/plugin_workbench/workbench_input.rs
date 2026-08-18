@@ -49,7 +49,8 @@ impl App {
         plugins.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
 
         Ok(PluginWorkbenchOverlay {
-            title: "Plugins".to_owned(),
+            title: self.i18n.text("settings-plugin-workbench-label"),
+            i18n: self.i18n.clone(),
             list: PluginWorkbenchListPresentation::new(
                 plugin_workbench_list_items(&plugins),
                 query,

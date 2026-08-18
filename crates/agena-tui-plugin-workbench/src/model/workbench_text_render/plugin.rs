@@ -6,7 +6,16 @@ use super::super::{
 use super::append_schema_editor_lines;
 use super::diagnostics_text;
 
-pub(crate) fn plugin_header_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
+pub(crate) fn plugin_header_text(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) -> Text<'static> {
+    let package = plugin
+        .configured_plugin_value
+        .as_ref()
+        .and_then(|configured_plugin| configured_plugin.get("package"))
+        .map(plugin_package_preview)
+        .unwrap_or_else(|| dialog.i18n.text("plugin-workbench-unavailable"));
     Text::from(vec![
         Line::from(format!(
             "{}        {}        v{}        {}",
@@ -15,20 +24,17 @@ pub(crate) fn plugin_header_text(plugin: &PluginWorkbenchPlugin) -> Text<'static
             clean(plugin.version.as_str()),
             clean(plugin.transport.as_str())
         )),
-        Line::from(format!(
-            "Tools: {}        Commands: {}        Config: {}",
-            plugin.tools.len(),
-            plugin.commands.len(),
-            clean(plugin.config_status.label.as_str())
+        Line::from(dialog.i18n.text_args(
+            "plugin-workbench-header-summary",
+            &agena_tui::fl_args![
+                "tools" => plugin.tools.len(),
+                "commands" => plugin.commands.len(),
+                "config" => plugin.config_status.kind.label(&dialog.i18n),
+            ],
         )),
-        Line::from(format!(
-            "Package: {}",
-            plugin
-                .configured_plugin_value
-                .as_ref()
-                .and_then(|configured_plugin| configured_plugin.get("package"))
-                .map(plugin_package_preview)
-                .unwrap_or_else(|| "unavailable".to_owned())
+        Line::from(dialog.i18n.text_args(
+            "plugin-workbench-package-summary",
+            &agena_tui::fl_args!["package" => package],
         )),
     ])
 }
@@ -38,14 +44,31 @@ pub(crate) fn plugin_tools_text(
     plugin: &PluginWorkbenchPlugin,
 ) -> Text<'static> {
     if plugin.tools.is_empty() {
-        return Text::from("No tools.");
+        return Text::from(dialog.i18n.text("plugin-workbench-no-tools"));
     }
-    let mut lines = vec![Line::from(
-        "Up/Down selects a tool. Enter opens the host-owned Schema form; Ctrl+S validates and runs it.",
-    )];
+    let mut lines = vec![Line::from(dialog.i18n.text("plugin-workbench-tools-help"))];
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        fixed_columns(&[("Tool", 24), ("Description", 54), ("Inputs", 8)], 124),
+        fixed_columns(
+            &[
+                (
+                    dialog.i18n.text("plugin-workbench-column-tool").as_str(),
+                    24,
+                ),
+                (
+                    dialog
+                        .i18n
+                        .text("plugin-workbench-column-description")
+                        .as_str(),
+                    54,
+                ),
+                (
+                    dialog.i18n.text("plugin-workbench-column-inputs").as_str(),
+                    8,
+                ),
+            ],
+            124,
+        ),
         Style::default().add_modifier(Modifier::BOLD),
     )));
     for (index, tool) in plugin.tools.iter().enumerate() {
@@ -82,29 +105,37 @@ pub(crate) fn plugin_tools_text(
     if let Some(tool) = plugin.tools.get(dialog.selected_tool) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            format!("Input preview: {}", tool.name),
+            dialog.i18n.text_args(
+                "plugin-workbench-input-preview",
+                &agena_tui::fl_args!["tool" => tool.name.clone()],
+            ),
             Style::default().add_modifier(Modifier::BOLD),
         )));
-        lines.push(Line::from(format!(
-            "Tags: {}",
-            if tool.tags.is_empty() {
-                "none declared".to_owned()
-            } else {
-                tool.tags
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
+        let tags = if tool.tags.is_empty() {
+            dialog.i18n.text("plugin-workbench-none-declared")
+        } else {
+            tool.tags
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        lines.push(Line::from(dialog.i18n.text_args(
+            "plugin-workbench-tags-summary",
+            &agena_tui::fl_args!["tags" => tags],
         )));
         let default =
             default_value_for_schema(&tool.contract.input_schema, &tool.contract.input_schema);
         append_schema_editor_lines(
             &mut lines,
+            &dialog.i18n,
             Some(&tool.contract.input_schema),
             Some(&tool.contract.input_schema),
             &default,
-            "Arguments",
+            dialog
+                .i18n
+                .text("plugin-workbench-column-arguments")
+                .as_str(),
             0,
             124,
             18,
@@ -116,11 +147,14 @@ pub(crate) fn plugin_tools_text(
         {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                if result.succeeded {
-                    format!("Last result · {} · success", result.tool_name)
-                } else {
-                    format!("Last result · {} · failed", result.tool_name)
-                },
+                dialog.i18n.text_args(
+                    if result.succeeded {
+                        "plugin-workbench-last-result-success"
+                    } else {
+                        "plugin-workbench-last-result-failed"
+                    },
+                    &agena_tui::fl_args!["tool" => result.tool_name.clone()],
+                ),
                 Style::default()
                     .fg(if result.succeeded {
                         agena_tui_components::theme::success_color()
@@ -137,17 +171,35 @@ pub(crate) fn plugin_tools_text(
     Text::from(lines)
 }
 
-pub(crate) fn plugin_commands_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
+pub(crate) fn plugin_commands_text(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) -> Text<'static> {
     if plugin.commands.is_empty() {
-        return Text::from("No commands.");
+        return Text::from(dialog.i18n.text("plugin-workbench-no-commands"));
     }
     let mut lines = vec![Line::from(Span::styled(
         fixed_columns(
             &[
-                ("Command", 30),
-                ("Description", 64),
-                ("Args", 8),
-                ("Category", 18),
+                (
+                    dialog.i18n.text("plugin-workbench-column-command").as_str(),
+                    30,
+                ),
+                (
+                    dialog
+                        .i18n
+                        .text("plugin-workbench-column-description")
+                        .as_str(),
+                    64,
+                ),
+                (dialog.i18n.text("plugin-workbench-column-args").as_str(), 8),
+                (
+                    dialog
+                        .i18n
+                        .text("plugin-workbench-column-category")
+                        .as_str(),
+                    18,
+                ),
             ],
             124,
         ),
@@ -168,50 +220,67 @@ pub(crate) fn plugin_commands_text(plugin: &PluginWorkbenchPlugin) -> Text<'stat
     if let Some(command) = plugin.commands.first() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            format!("Arguments: {}", command.title),
+            dialog.i18n.text_args(
+                "plugin-workbench-command-arguments",
+                &agena_tui::fl_args!["command" => command.title.clone()],
+            ),
             Style::default().add_modifier(Modifier::BOLD),
         )));
         match command_schema_and_value(plugin, command) {
             Some((schema, value)) => append_schema_editor_lines(
                 &mut lines,
+                &dialog.i18n,
                 Some(&schema),
                 Some(&schema),
                 &value,
-                "Arguments",
+                dialog
+                    .i18n
+                    .text("plugin-workbench-column-arguments")
+                    .as_str(),
                 0,
                 124,
                 18,
             ),
-            None => lines.push(Line::from("No structured arguments.")),
+            None => lines.push(Line::from(
+                dialog.i18n.text("plugin-workbench-no-structured-arguments"),
+            )),
         }
     }
     Text::from(lines)
 }
 
-pub(crate) fn plugin_capabilities_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
+pub(crate) fn plugin_capabilities_text(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) -> Text<'static> {
     let mut lines = Vec::new();
     if let Some(authority) = plugin
         .inspect
         .as_ref()
         .and_then(|inspect| inspect.authority.as_ref())
     {
-        lines.push(Line::from(format!(
-            "Trust level: {}",
-            authority.trust_level
+        lines.push(Line::from(dialog.i18n.text_args(
+            "plugin-workbench-trust-level",
+            &agena_tui::fl_args!["level" => authority.trust_level.clone()],
         )));
         if !authority.provenance.is_empty() {
-            lines.push(Line::from(format!(
-                "Provenance: {}",
-                clean(authority.provenance.join(", "))
+            lines.push(Line::from(dialog.i18n.text_args(
+                "plugin-workbench-provenance",
+                &agena_tui::fl_args![
+                    "provenance" => clean(authority.provenance.join(", ")),
+                ],
             )));
         }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Plugin capabilities",
+            dialog.i18n.text("plugin-workbench-plugin-capabilities"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
         if authority.plugin_capabilities.is_empty() {
-            lines.push(Line::from("  none"));
+            lines.push(Line::from(format!(
+                "  {}",
+                dialog.i18n.text("plugin-workbench-none")
+            )));
         } else {
             for capability in &authority.plugin_capabilities {
                 lines.push(Line::from(format!("  {}", clean(capability))));
@@ -219,11 +288,14 @@ pub(crate) fn plugin_capabilities_text(plugin: &PluginWorkbenchPlugin) -> Text<'
         }
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "Tool capabilities",
+            dialog.i18n.text("plugin-workbench-tool-capabilities"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
         if authority.tool_capabilities.is_empty() {
-            lines.push(Line::from("  none"));
+            lines.push(Line::from(format!(
+                "  {}",
+                dialog.i18n.text("plugin-workbench-none")
+            )));
         } else {
             for (tool_name, capabilities) in &authority.tool_capabilities {
                 lines.push(Line::from(format!(
@@ -234,14 +306,19 @@ pub(crate) fn plugin_capabilities_text(plugin: &PluginWorkbenchPlugin) -> Text<'
             }
         }
     } else {
-        lines.push(Line::from("Authority data unavailable."));
+        lines.push(Line::from(
+            dialog.i18n.text("plugin-workbench-authority-unavailable"),
+        ));
     }
     Text::from(lines)
 }
 
-pub(crate) fn plugin_logs_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
+pub(crate) fn plugin_logs_text(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) -> Text<'static> {
     if plugin.logs.is_empty() {
-        return Text::from("No logs.");
+        return Text::from(dialog.i18n.text("plugin-workbench-no-logs"));
     }
     Text::from(
         plugin
@@ -259,8 +336,11 @@ pub(crate) fn plugin_logs_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> 
     )
 }
 
-pub(crate) fn plugin_diagnostics_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
+pub(crate) fn plugin_diagnostics_text(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) -> Text<'static> {
     let mut diagnostics = plugin.diagnostics.clone();
     diagnostics.extend(plugin.runtime_diagnostics.clone());
-    diagnostics_text(diagnostics.as_slice(), false, 0)
+    diagnostics_text(dialog, diagnostics.as_slice(), false, 0)
 }

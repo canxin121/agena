@@ -430,8 +430,15 @@ pub(crate) fn permission_studio_creator_spec(
             String::new(),
         ),
         PermissionStudioEditorAction::AddToolCommandPattern { tool_name } => (
-            settings_edit_title(i18n, format!("{tool_name} command pattern").as_str()),
-            "Enter a shell command glob, for example `git status` or `git push *`.".to_string(),
+            settings_edit_title(
+                i18n,
+                i18n.text_args(
+                    "permission-studio-command-pattern-title",
+                    &agena_tui::fl_args!("tool_name" => tool_name.clone()),
+                )
+                .as_str(),
+            ),
+            i18n.text("permission-studio-command-pattern-help"),
         ),
         _ => (String::new(), String::new()),
     }

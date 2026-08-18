@@ -599,22 +599,39 @@ pub fn move_config_row_cell(
 }
 
 pub(crate) fn config_row_cell_label(
+    i18n: &agena_tui::i18n::I18n,
     row: &ConfigRowView,
     layout: ConfigGroupLayout,
     cell: ConfigRowCell,
-) -> &'static str {
+) -> String {
     match (layout, normalize_config_row_cell(row, layout, cell)) {
-        (ConfigGroupLayout::Standard, ConfigRowCell::Type) => "Type",
-        (ConfigGroupLayout::Standard, ConfigRowCell::Value) => "Value",
-        (ConfigGroupLayout::Standard, ConfigRowCell::Default) => "Default",
-        (ConfigGroupLayout::Standard, ConfigRowCell::Action) => "Action",
-        (ConfigGroupLayout::Standard, ConfigRowCell::State) => "State",
-        (ConfigGroupLayout::Standard, _) => "Value",
-        (ConfigGroupLayout::Pair { left_label, .. }, ConfigRowCell::Value) => left_label,
-        (ConfigGroupLayout::Pair { right_label, .. }, ConfigRowCell::SecondaryValue) => right_label,
-        (ConfigGroupLayout::Pair { .. }, ConfigRowCell::Action) => "Action",
-        (ConfigGroupLayout::Pair { .. }, ConfigRowCell::State) => "State",
-        (ConfigGroupLayout::Pair { left_label, .. }, _) => left_label,
+        (ConfigGroupLayout::Standard, ConfigRowCell::Type) => {
+            i18n.text("plugin-workbench-config-type")
+        }
+        (ConfigGroupLayout::Standard, ConfigRowCell::Value) => {
+            i18n.text("plugin-workbench-config-value")
+        }
+        (ConfigGroupLayout::Standard, ConfigRowCell::Default) => {
+            i18n.text("plugin-workbench-config-default")
+        }
+        (ConfigGroupLayout::Standard, ConfigRowCell::Action) => {
+            i18n.text("plugin-workbench-config-action")
+        }
+        (ConfigGroupLayout::Standard, ConfigRowCell::State) => {
+            i18n.text("plugin-workbench-config-state")
+        }
+        (ConfigGroupLayout::Standard, _) => i18n.text("plugin-workbench-config-value"),
+        (ConfigGroupLayout::Pair { left_label, .. }, ConfigRowCell::Value) => left_label.to_owned(),
+        (ConfigGroupLayout::Pair { right_label, .. }, ConfigRowCell::SecondaryValue) => {
+            right_label.to_owned()
+        }
+        (ConfigGroupLayout::Pair { .. }, ConfigRowCell::Action) => {
+            i18n.text("plugin-workbench-config-action")
+        }
+        (ConfigGroupLayout::Pair { .. }, ConfigRowCell::State) => {
+            i18n.text("plugin-workbench-config-state")
+        }
+        (ConfigGroupLayout::Pair { left_label, .. }, _) => left_label.to_owned(),
     }
 }
 

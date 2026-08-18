@@ -5,13 +5,59 @@ use super::super::{
     object_field_state, object_property_schema, ordered_object_keys, preview_value,
     schema_const_value, schema_enum_values, schema_examples, schema_first_string_keyword,
     schema_is_map_like, schema_kind_label, schema_matches, schema_prefix_item_count,
-    schema_string_is_multiline, schema_type_choices, structured_preview, title_from_key,
-    truncate_text,
+    schema_string_is_multiline, schema_type_choices, title_from_key, truncate_text,
 };
+use agena_tui::i18n::I18n;
+
+fn localized_kind_label(i18n: &I18n, label: &str) -> String {
+    let key = match label {
+        "null" => "plugin-workbench-kind-null",
+        "boolean" => "plugin-workbench-kind-boolean",
+        "integer" => "plugin-workbench-kind-integer",
+        "number" => "plugin-workbench-kind-number",
+        "string" => "plugin-workbench-kind-string",
+        "array" => "plugin-workbench-kind-array",
+        "object" => "plugin-workbench-kind-object",
+        "value" => "plugin-workbench-kind-value",
+        "oneOf" => "plugin-workbench-kind-one-of",
+        "anyOf" => "plugin-workbench-kind-any-of",
+        "allOf" => "plugin-workbench-kind-all-of",
+        _ => return label.to_owned(),
+    };
+    i18n.text(key)
+}
+
+fn localized_object_field_state(i18n: &I18n, state: &str) -> String {
+    let key = match state {
+        "custom" => "plugin-workbench-field-state-custom",
+        "required" => "plugin-workbench-field-state-required",
+        "missing" => "plugin-workbench-field-state-missing",
+        "optional" => "plugin-workbench-field-state-optional",
+        "available" => "plugin-workbench-field-state-available",
+        "map key" => "plugin-workbench-field-state-map-key",
+        _ => return state.to_owned(),
+    };
+    i18n.text(key)
+}
+
+fn localized_structured_preview(i18n: &I18n, value: &JsonValue) -> String {
+    match value {
+        JsonValue::Object(object) => i18n.text_args(
+            "plugin-workbench-editor-object-preview",
+            &agena_tui::fl_args!("count" => object.len()),
+        ),
+        JsonValue::Array(items) => i18n.text_args(
+            "plugin-workbench-editor-array-preview",
+            &agena_tui::fl_args!("count" => items.len()),
+        ),
+        _ => preview_value(value),
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn append_schema_editor_lines(
     lines: &mut Vec<Line<'static>>,
+    i18n: &I18n,
     root_schema: Option<&JsonValue>,
     schema: Option<&JsonValue>,
     value: &JsonValue,
@@ -22,8 +68,9 @@ pub(crate) fn append_schema_editor_lines(
 ) {
     if remaining == 0 {
         lines.push(Line::from(format!(
-            "{}[ Configure... ]",
-            "  ".repeat(depth)
+            "{}[ {} ]",
+            "  ".repeat(depth),
+            i18n.text("plugin-workbench-editor-configure")
         )));
         return;
     }
@@ -41,12 +88,12 @@ pub(crate) fn append_schema_editor_lines(
             title.clone(),
             Style::default().add_modifier(Modifier::BOLD),
         )));
-        lines.push(Line::from(format!(
-            "{}Type: {}        Path editor: structured GUI",
-            indent,
-            render_schema
-                .map(schema_kind_label)
-                .unwrap_or_else(|| json_kind_label(value).to_owned())
+        let kind = render_schema
+            .map(schema_kind_label)
+            .unwrap_or_else(|| json_kind_label(value).to_owned());
+        lines.push(Line::from(i18n.text_args(
+            "plugin-workbench-editor-type-summary",
+            &agena_tui::fl_args!("type" => localized_kind_label(i18n, kind.as_str())),
         )));
         lines.push(Line::from(""));
     }
@@ -54,21 +101,23 @@ pub(crate) fn append_schema_editor_lines(
     if let Some(schema) = declared_schema {
         append_branch_selector_lines(
             lines,
+            i18n,
             root_schema.unwrap_or(schema),
             schema,
             value,
             depth,
             width,
         );
-        append_type_selector_line(lines, schema, value, depth);
+        append_type_selector_line(lines, i18n, schema, value, depth);
     }
     if let Some(schema) = render_schema {
         if let Some(constant) = schema_const_value(schema) {
             lines.push(Line::from(format!(
-                "{}{}        [ {} ] readonly",
+                "{}{}        [ {} ] {}",
                 indent,
                 title,
-                preview_value(&constant)
+                preview_value(&constant),
+                i18n.text("plugin-workbench-editor-readonly")
             )));
             return;
         }
@@ -84,12 +133,15 @@ pub(crate) fn append_schema_editor_lines(
             return;
         }
     } else if depth == 0 {
-        lines.push(Line::from("Schema missing        Basic structured editor"));
+        lines.push(Line::from(
+            i18n.text("plugin-workbench-editor-schema-missing"),
+        ));
     }
 
     match value {
         JsonValue::Object(object) => append_object_editor_lines(
             lines,
+            i18n,
             root_schema,
             render_schema,
             object,
@@ -99,6 +151,7 @@ pub(crate) fn append_schema_editor_lines(
         ),
         JsonValue::Array(items) => append_array_editor_lines(
             lines,
+            i18n,
             root_schema,
             render_schema,
             items,
@@ -107,10 +160,10 @@ pub(crate) fn append_schema_editor_lines(
             remaining,
         ),
         JsonValue::String(text) => {
-            append_string_editor_lines(lines, render_schema, title.as_str(), text, depth)
+            append_string_editor_lines(lines, i18n, render_schema, title.as_str(), text, depth)
         }
         JsonValue::Number(number) => {
-            append_number_editor_lines(lines, render_schema, title.as_str(), number, depth)
+            append_number_editor_lines(lines, i18n, render_schema, title.as_str(), number, depth)
         }
         JsonValue::Bool(value) => lines.push(Line::from(format!(
             "{}{}        [{}]",
@@ -120,6 +173,7 @@ pub(crate) fn append_schema_editor_lines(
         ))),
         JsonValue::Null => append_null_editor_lines(
             lines,
+            i18n,
             declared_schema.or(render_schema),
             title.as_str(),
             depth,
@@ -129,6 +183,7 @@ pub(crate) fn append_schema_editor_lines(
 
 pub(crate) fn append_branch_selector_lines(
     lines: &mut Vec<Line<'static>>,
+    i18n: &I18n,
     root_schema: &JsonValue,
     schema: &JsonValue,
     value: &JsonValue,
@@ -150,11 +205,25 @@ pub(crate) fn append_branch_selector_lines(
     let suffix = if also_matches.is_empty() {
         String::new()
     } else {
-        format!("   also matches: {}", clean(also_matches.join(", ")))
+        format!(
+            "   {}",
+            i18n.text_args(
+                "plugin-workbench-editor-also-matches",
+                &agena_tui::fl_args!("matches" => clean(also_matches.join(", "))),
+            )
+        )
     };
     lines.push(Line::from(fixed_columns(
         &[
-            (format!("{}Shape", "  ".repeat(depth)).as_str(), 18),
+            (
+                format!(
+                    "{}{}",
+                    "  ".repeat(depth),
+                    i18n.text("plugin-workbench-editor-shape")
+                )
+                .as_str(),
+                18,
+            ),
             (format!("[ {active} v ]{suffix}").as_str(), 72),
         ],
         width,
@@ -163,6 +232,7 @@ pub(crate) fn append_branch_selector_lines(
 
 pub(crate) fn append_type_selector_line(
     lines: &mut Vec<Line<'static>>,
+    i18n: &I18n,
     schema: &JsonValue,
     value: &JsonValue,
     depth: usize,
@@ -173,14 +243,16 @@ pub(crate) fn append_type_selector_line(
     }
     let active = json_kind_label(value);
     lines.push(Line::from(format!(
-        "{}Type        [ {} v ]",
+        "{}{}        [ {} v ]",
         "  ".repeat(depth),
-        active
+        i18n.text("plugin-workbench-config-type"),
+        localized_kind_label(i18n, active)
     )));
 }
 
 pub(crate) fn append_object_editor_lines(
     lines: &mut Vec<Line<'static>>,
+    i18n: &I18n,
     root_schema: Option<&JsonValue>,
     schema: Option<&JsonValue>,
     object: &JsonMap<String, JsonValue>,
@@ -189,20 +261,24 @@ pub(crate) fn append_object_editor_lines(
     remaining: usize,
 ) {
     let indent = "  ".repeat(depth);
-    match schema {
-        None => lines.push(Line::from(format!("{indent}Generic object editor"))),
+    let editor_label = match schema {
+        None => i18n.text("plugin-workbench-editor-generic-object"),
         Some(schema) if schema_is_map_like(root_schema.unwrap_or(schema), schema) => {
-            lines.push(Line::from(format!("{indent}Map editor")));
+            i18n.text("plugin-workbench-editor-map")
         }
-        Some(_) => lines.push(Line::from(format!("{indent}Object editor"))),
-    }
+        Some(_) => i18n.text("plugin-workbench-editor-object"),
+    };
+    lines.push(Line::from(format!("{indent}{editor_label}")));
     lines.push(Line::from(Span::styled(
         fixed_columns(
             &[
-                (format!("{indent}Field").as_str(), 28),
-                ("Type", 14),
-                ("Value", 46),
-                ("State", 14),
+                (
+                    format!("{indent}{}", i18n.text("plugin-workbench-column-field")).as_str(),
+                    28,
+                ),
+                (i18n.text("plugin-workbench-config-type").as_str(), 14),
+                (i18n.text("plugin-workbench-config-value").as_str(), 46),
+                (i18n.text("plugin-workbench-config-state").as_str(), 14),
             ],
             width,
         ),
@@ -210,7 +286,10 @@ pub(crate) fn append_object_editor_lines(
     )));
     let keys = ordered_object_keys(schema, object);
     if keys.is_empty() {
-        lines.push(Line::from(format!("{indent}No fields.")));
+        lines.push(Line::from(format!(
+            "{indent}{}",
+            i18n.text("plugin-workbench-editor-no-fields")
+        )));
     }
     for key in keys {
         let child = object.get(key.as_str()).unwrap_or(&JsonValue::Null);
@@ -221,12 +300,14 @@ pub(crate) fn append_object_editor_lines(
             .as_ref()
             .map(schema_kind_label)
             .unwrap_or_else(|| json_kind_label(child).to_owned());
+        let kind = localized_kind_label(i18n, kind.as_str());
         let state = object_field_state(
             root_schema,
             schema,
             key.as_str(),
             object.contains_key(key.as_str()),
         );
+        let state = localized_object_field_state(i18n, state.as_str());
         lines.push(Line::from(fixed_columns(
             &[
                 (
@@ -234,7 +315,7 @@ pub(crate) fn append_object_editor_lines(
                     28,
                 ),
                 (kind.as_str(), 14),
-                (structured_preview(child).as_str(), 46),
+                (localized_structured_preview(i18n, child).as_str(), 46),
                 (state.as_str(), 14),
             ],
             width,
@@ -243,6 +324,7 @@ pub(crate) fn append_object_editor_lines(
         {
             append_schema_editor_lines(
                 lines,
+                i18n,
                 root_schema,
                 child_schema.as_ref(),
                 child,
@@ -254,12 +336,14 @@ pub(crate) fn append_object_editor_lines(
         }
     }
     lines.push(Line::from(format!(
-        "{indent}Enter action menu · Add field from the Action cell"
+        "{indent}{}",
+        i18n.text("plugin-workbench-editor-object-action-help")
     )));
 }
 
 pub(crate) fn append_array_editor_lines(
     lines: &mut Vec<Line<'static>>,
+    i18n: &I18n,
     root_schema: Option<&JsonValue>,
     schema: Option<&JsonValue>,
     items: &[JsonValue],
@@ -271,22 +355,25 @@ pub(crate) fn append_array_editor_lines(
     let tuple = schema.is_some_and(|schema| schema_prefix_item_count(schema) > 0);
     let object_items = items.iter().any(JsonValue::is_object);
     let title = if tuple {
-        "Tuple editor"
+        i18n.text("plugin-workbench-editor-tuple")
     } else if object_items {
-        "Object array table editor"
+        i18n.text("plugin-workbench-editor-object-array")
     } else {
-        "Primitive array editor"
+        i18n.text("plugin-workbench-editor-primitive-array")
     };
     lines.push(Line::from(format!("{indent}{title}")));
     if object_items {
-        append_object_array_table(lines, root_schema, schema, items, depth, width);
+        append_object_array_table(lines, i18n, root_schema, schema, items, depth, width);
     } else {
         lines.push(Line::from(Span::styled(
             fixed_columns(
                 &[
-                    (format!("{indent}Index").as_str(), 10),
-                    ("Type", 14),
-                    ("Preview", 56),
+                    (
+                        format!("{indent}{}", i18n.text("plugin-workbench-editor-index")).as_str(),
+                        10,
+                    ),
+                    (i18n.text("plugin-workbench-config-type").as_str(), 14),
+                    (i18n.text("plugin-workbench-editor-preview").as_str(), 56),
                 ],
                 width,
             ),
@@ -296,18 +383,17 @@ pub(crate) fn append_array_editor_lines(
             let item_schema = schema.and_then(|schema| {
                 root_schema.and_then(|root| array_item_schema(root, schema, index))
             });
+            let item_kind = item_schema
+                .as_ref()
+                .map(schema_kind_label)
+                .unwrap_or_else(|| json_kind_label(item).to_owned());
+            let item_kind = localized_kind_label(i18n, item_kind.as_str());
+            let item_preview = localized_structured_preview(i18n, item);
             lines.push(Line::from(fixed_columns(
                 &[
                     (format!("{indent}{index}").as_str(), 10),
-                    (
-                        item_schema
-                            .as_ref()
-                            .map(schema_kind_label)
-                            .unwrap_or_else(|| json_kind_label(item).to_owned())
-                            .as_str(),
-                        14,
-                    ),
-                    (structured_preview(item).as_str(), 56),
+                    (item_kind.as_str(), 14),
+                    (item_preview.as_str(), 56),
                 ],
                 width,
             )));
@@ -317,10 +403,15 @@ pub(crate) fn append_array_editor_lines(
             {
                 append_schema_editor_lines(
                     lines,
+                    i18n,
                     root_schema,
                     item_schema.as_ref(),
                     item,
-                    format!("Item {index}").as_str(),
+                    i18n.text_args(
+                        "plugin-workbench-editor-item",
+                        &agena_tui::fl_args!("index" => index),
+                    )
+                    .as_str(),
                     depth + 1,
                     width,
                     remaining.saturating_sub(1),
@@ -329,15 +420,20 @@ pub(crate) fn append_array_editor_lines(
         }
     }
     if items.is_empty() {
-        lines.push(Line::from(format!("{indent}No items.")));
+        lines.push(Line::from(format!(
+            "{indent}{}",
+            i18n.text("plugin-workbench-editor-no-items")
+        )));
     }
     lines.push(Line::from(format!(
-        "{indent}Enter action menu · Ctrl+D remove selected row"
+        "{indent}{}",
+        i18n.text("plugin-workbench-editor-array-action-help")
     )));
 }
 
 pub(crate) fn append_object_array_table(
     lines: &mut Vec<Line<'static>>,
+    i18n: &I18n,
     root_schema: Option<&JsonValue>,
     schema: Option<&JsonValue>,
     items: &[JsonValue],
@@ -348,7 +444,10 @@ pub(crate) fn append_object_array_table(
     let item_schema =
         schema.and_then(|schema| root_schema.and_then(|root| array_item_schema(root, schema, 0)));
     let columns = object_array_columns(item_schema.as_ref(), items);
-    let mut header = vec![(format!("{indent}Index"), 8)];
+    let mut header = vec![(
+        format!("{indent}{}", i18n.text("plugin-workbench-editor-index")),
+        8,
+    )];
     for column in &columns {
         header.push((title_from_key(column), 18));
     }
@@ -367,13 +466,13 @@ pub(crate) fn append_object_array_table(
                 row.push((
                     object
                         .get(column)
-                        .map(structured_preview)
-                        .unwrap_or_else(|| "missing".to_owned()),
+                        .map(|value| localized_structured_preview(i18n, value))
+                        .unwrap_or_else(|| i18n.text("plugin-workbench-field-state-missing")),
                     18,
                 ));
             }
         } else {
-            row.push((structured_preview(item), 18));
+            row.push((localized_structured_preview(i18n, item), 18));
         }
         let row_refs = row
             .iter()
@@ -383,13 +482,15 @@ pub(crate) fn append_object_array_table(
     }
     if root_schema.is_some() && item_schema.is_some() {
         lines.push(Line::from(format!(
-            "{indent}Edit opens the selected item with the same structured editor."
+            "{indent}{}",
+            i18n.text("plugin-workbench-editor-object-array-help")
         )));
     }
 }
 
 pub(crate) fn append_string_editor_lines(
     lines: &mut Vec<Line<'static>>,
+    i18n: &I18n,
     schema: Option<&JsonValue>,
     title: &str,
     text: &str,
@@ -398,7 +499,15 @@ pub(crate) fn append_string_editor_lines(
     let indent = "  ".repeat(depth);
     let format_suffix = schema
         .and_then(|schema| schema_first_string_keyword(schema, "format"))
-        .map(|format| format!("   format: {format}"))
+        .map(|format| {
+            format!(
+                "   {}",
+                i18n.text_args(
+                    "plugin-workbench-editor-format",
+                    &agena_tui::fl_args!("format" => format.to_owned()),
+                )
+            )
+        })
         .unwrap_or_default();
     if schema.is_some_and(schema_string_is_multiline) || text.contains('\n') {
         lines.push(Line::from(format!("{indent}{title}")));
@@ -425,7 +534,8 @@ pub(crate) fn append_string_editor_lines(
             .collect::<Vec<_>>()
             .join(", ");
         lines.push(Line::from(format!(
-            "{indent}Suggestions        [ {} v ]",
+            "{indent}{}        [ {} v ]",
+            i18n.text("plugin-workbench-editor-suggestions"),
             clean(suggestions)
         )));
     }
@@ -433,6 +543,7 @@ pub(crate) fn append_string_editor_lines(
 
 pub(crate) fn append_number_editor_lines(
     lines: &mut Vec<Line<'static>>,
+    _i18n: &I18n,
     schema: Option<&JsonValue>,
     title: &str,
     number: &JsonNumber,
@@ -451,6 +562,7 @@ pub(crate) fn append_number_editor_lines(
 
 pub(crate) fn append_null_editor_lines(
     lines: &mut Vec<Line<'static>>,
+    i18n: &I18n,
     schema: Option<&JsonValue>,
     title: &str,
     depth: usize,
@@ -459,7 +571,10 @@ pub(crate) fn append_null_editor_lines(
     let choices = schema.map(schema_type_choices).unwrap_or_default();
     if choices.len() > 1 {
         lines.push(Line::from(format!("{indent}{title}")));
-        lines.push(Line::from(format!("{indent}Type        [ null v ]")));
+        lines.push(Line::from(format!(
+            "{indent}{}        [ null v ]",
+            i18n.text("plugin-workbench-config-type")
+        )));
     } else {
         lines.push(Line::from(format!("{indent}{title}        [ null ]")));
     }

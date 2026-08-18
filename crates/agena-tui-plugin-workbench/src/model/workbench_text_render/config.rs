@@ -1,8 +1,8 @@
 use super::super::{
     ConfigDiagnostic, ConfigGroupLayout, ConfigGroupView, ConfigOverviewCard, ConfigRowCell,
-    ConfigRowView, ConfigSectionBody, ConfigSectionView, Line, Modifier, PathSegment,
-    PluginConfigFocus, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span, Style, Text, clean,
-    diagnostic_severity_label, fixed_columns, group_has_action_column, pad_to_width, path_display,
+    ConfigRowView, ConfigSectionBody, ConfigSectionView, DiagnosticSeverity, Line, Modifier,
+    PathSegment, PluginConfigFocus, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span, Style,
+    Text, clean, fixed_columns, group_has_action_column, pad_to_width, path_display,
     plugin_uses_compact_config_layout, plugin_workbench_selection_highlight_style, row_visible,
     section_selected_row_cell,
 };
@@ -16,7 +16,9 @@ pub(crate) fn config_editor_text(
             || dialog.config_focus == PluginConfigFocus::Editor;
         append_section_lines(&mut lines, dialog, plugin, section, 98, highlight_selection);
     } else {
-        lines.push(Line::from("No config section."));
+        lines.push(Line::from(
+            dialog.i18n.text("plugin-workbench-no-config-section"),
+        ));
     }
     Text::from(lines)
 }
@@ -34,7 +36,13 @@ pub(crate) fn append_section_lines(
             cards,
             lines: summary,
         } => {
-            append_overview_section_lines(lines, cards.as_slice(), summary.as_slice(), width);
+            append_overview_section_lines(
+                lines,
+                dialog,
+                cards.as_slice(),
+                summary.as_slice(),
+                width,
+            );
         }
         ConfigSectionBody::Form { notice, groups } => {
             lines.push(Line::from(Span::styled(
@@ -70,17 +78,34 @@ pub(crate) fn append_section_lines(
 
 pub(crate) fn append_overview_section_lines(
     lines: &mut Vec<Line<'static>>,
+    dialog: &PluginWorkbenchOverlay,
     cards: &[ConfigOverviewCard],
     summary: &[String],
     width: u16,
 ) {
     lines.push(Line::from(Span::styled(
-        "Overview".to_owned(),
+        dialog.i18n.text("plugin-workbench-overview"),
         Style::default().add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        fixed_columns(&[("Section", 12), ("Summary", 68), ("State", 12)], width),
+        fixed_columns(
+            &[
+                (
+                    dialog.i18n.text("plugin-workbench-column-section").as_str(),
+                    12,
+                ),
+                (
+                    dialog.i18n.text("plugin-workbench-column-summary").as_str(),
+                    68,
+                ),
+                (
+                    dialog.i18n.text("plugin-workbench-config-state").as_str(),
+                    12,
+                ),
+            ],
+            width,
+        ),
         Style::default().add_modifier(Modifier::BOLD),
     )));
     for card in cards {
@@ -95,7 +120,7 @@ pub(crate) fn append_overview_section_lines(
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "Config".to_owned(),
+        dialog.i18n.text("plugin-workbench-config"),
         Style::default().add_modifier(Modifier::BOLD),
     )));
     for line in summary {
@@ -211,6 +236,7 @@ pub(crate) fn config_row_cell_style(
 }
 
 pub(crate) fn standard_config_row_line_with_focus(
+    dialog: &PluginWorkbenchOverlay,
     row: &ConfigRowView,
     width: u16,
     selected_cell: Option<ConfigRowCell>,
@@ -240,7 +266,7 @@ pub(crate) fn standard_config_row_line_with_focus(
                 config_row_cell_style(selected_cell, ConfigRowCell::Action),
             ),
             (
-                row.state.label().to_owned(),
+                row.state.label(&dialog.i18n),
                 8,
                 config_row_cell_style(selected_cell, ConfigRowCell::State),
             ),
@@ -264,7 +290,7 @@ pub(crate) fn standard_config_row_line_with_focus(
                 config_row_cell_style(selected_cell, ConfigRowCell::Default),
             ),
             (
-                row.state.label().to_owned(),
+                row.state.label(&dialog.i18n),
                 10,
                 config_row_cell_style(selected_cell, ConfigRowCell::State),
             ),
@@ -274,6 +300,7 @@ pub(crate) fn standard_config_row_line_with_focus(
 }
 
 pub(crate) fn pair_config_row_line_with_focus(
+    dialog: &PluginWorkbenchOverlay,
     row: &ConfigRowView,
     width: u16,
     selected_cell: Option<ConfigRowCell>,
@@ -298,7 +325,7 @@ pub(crate) fn pair_config_row_line_with_focus(
                 config_row_cell_style(selected_cell, ConfigRowCell::Action),
             ),
             (
-                row.state.label().to_owned(),
+                row.state.label(&dialog.i18n),
                 8,
                 config_row_cell_style(selected_cell, ConfigRowCell::State),
             ),
@@ -317,7 +344,7 @@ pub(crate) fn pair_config_row_line_with_focus(
                 config_row_cell_style(selected_cell, ConfigRowCell::SecondaryValue),
             ),
             (
-                row.state.label().to_owned(),
+                row.state.label(&dialog.i18n),
                 10,
                 config_row_cell_style(selected_cell, ConfigRowCell::State),
             ),
@@ -345,10 +372,23 @@ pub(crate) fn append_group_lines(
             lines.push(Line::from(Span::styled(
                 if include_action {
                     standard_config_row_line_with_action(
-                        "Setting", "Type", "Value", "Default", "Action", "State", width,
+                        dialog.i18n.text("plugin-workbench-config-setting").as_str(),
+                        dialog.i18n.text("plugin-workbench-config-type").as_str(),
+                        dialog.i18n.text("plugin-workbench-config-value").as_str(),
+                        dialog.i18n.text("plugin-workbench-config-default").as_str(),
+                        dialog.i18n.text("plugin-workbench-config-action").as_str(),
+                        dialog.i18n.text("plugin-workbench-config-state").as_str(),
+                        width,
                     )
                 } else {
-                    standard_config_row_line("Setting", "Type", "Value", "Default", "State", width)
+                    standard_config_row_line(
+                        dialog.i18n.text("plugin-workbench-config-setting").as_str(),
+                        dialog.i18n.text("plugin-workbench-config-type").as_str(),
+                        dialog.i18n.text("plugin-workbench-config-value").as_str(),
+                        dialog.i18n.text("plugin-workbench-config-default").as_str(),
+                        dialog.i18n.text("plugin-workbench-config-state").as_str(),
+                        width,
+                    )
                 },
                 Style::default().add_modifier(Modifier::BOLD),
             )));
@@ -360,20 +400,26 @@ pub(crate) fn append_group_lines(
             lines.push(Line::from(Span::styled(
                 if include_action {
                     pair_config_row_line_with_action(
-                        "Setting",
+                        dialog.i18n.text("plugin-workbench-config-setting").as_str(),
                         left_label,
                         right_label,
-                        "Action",
-                        "State",
+                        dialog.i18n.text("plugin-workbench-config-action").as_str(),
+                        dialog.i18n.text("plugin-workbench-config-state").as_str(),
                         width,
                     )
                 } else {
                     fixed_columns(
                         &[
-                            ("Setting", 24),
+                            (
+                                dialog.i18n.text("plugin-workbench-config-setting").as_str(),
+                                24,
+                            ),
                             (left_label, 20),
                             (right_label, 20),
-                            ("State", 10),
+                            (
+                                dialog.i18n.text("plugin-workbench-config-state").as_str(),
+                                10,
+                            ),
                         ],
                         width,
                     )
@@ -403,14 +449,19 @@ pub(crate) fn append_group_lines(
                 };
                 let line = match group.layout {
                     ConfigGroupLayout::Standard => standard_config_row_line_with_focus(
+                        dialog,
                         row,
                         width,
                         focused_cell,
                         include_action,
                     ),
-                    ConfigGroupLayout::Pair { .. } => {
-                        pair_config_row_line_with_focus(row, width, focused_cell, include_action)
-                    }
+                    ConfigGroupLayout::Pair { .. } => pair_config_row_line_with_focus(
+                        dialog,
+                        row,
+                        width,
+                        focused_cell,
+                        include_action,
+                    ),
                 };
                 lines.push(line);
             }
@@ -480,6 +531,7 @@ pub fn plugin_all_diagnostics(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigDiagn
 }
 
 pub(crate) fn diagnostics_text(
+    dialog: &PluginWorkbenchOverlay,
     diagnostics: &[ConfigDiagnostic],
     highlight_selection: bool,
     selected_row: usize,
@@ -487,24 +539,45 @@ pub(crate) fn diagnostics_text(
     let table_width = 112;
     let mut lines = Vec::new();
     if diagnostics.is_empty() {
-        lines.push(Line::from("No issues"));
+        lines.push(Line::from(dialog.i18n.text("plugin-workbench-no-issues")));
     } else {
         lines.push(Line::from(Span::styled(
             fixed_columns(
                 &[
-                    ("Severity", 10),
-                    ("Source", 10),
-                    ("Field", 22),
-                    ("Message", 80),
+                    (
+                        dialog
+                            .i18n
+                            .text("plugin-workbench-column-severity")
+                            .as_str(),
+                        10,
+                    ),
+                    (
+                        dialog.i18n.text("plugin-workbench-column-source").as_str(),
+                        10,
+                    ),
+                    (
+                        dialog.i18n.text("plugin-workbench-column-field").as_str(),
+                        22,
+                    ),
+                    (
+                        dialog.i18n.text("plugin-workbench-column-message").as_str(),
+                        80,
+                    ),
                 ],
                 table_width,
             ),
             Style::default().add_modifier(Modifier::BOLD),
         )));
         for (index, diagnostic) in diagnostics.iter().enumerate() {
+            let severity = match diagnostic.severity {
+                DiagnosticSeverity::Error => dialog.i18n.text("plugin-workbench-severity-error"),
+                DiagnosticSeverity::Warning => {
+                    dialog.i18n.text("plugin-workbench-severity-warning")
+                }
+            };
             let line = fixed_columns(
                 &[
-                    (diagnostic_severity_label(diagnostic.severity), 10),
+                    (severity.as_str(), 10),
                     (diagnostic.source.as_str(), 10),
                     (diagnostic.field.as_str(), 22),
                     (diagnostic.message.as_str(), 80),
@@ -529,11 +602,28 @@ pub(crate) fn config_diff_text(
     let table_width = 116;
     let mut lines = Vec::new();
     if plugin.diff.is_empty() {
-        lines.push(Line::from("No changes"));
+        lines.push(Line::from(dialog.i18n.text("plugin-workbench-no-changes")));
     } else {
         lines.push(Line::from(Span::styled(
             fixed_columns(
-                &[("Field", 28), ("Before", 28), ("After", 28), ("Change", 28)],
+                &[
+                    (
+                        dialog.i18n.text("plugin-workbench-column-field").as_str(),
+                        28,
+                    ),
+                    (
+                        dialog.i18n.text("plugin-workbench-column-before").as_str(),
+                        28,
+                    ),
+                    (
+                        dialog.i18n.text("plugin-workbench-column-after").as_str(),
+                        28,
+                    ),
+                    (
+                        dialog.i18n.text("plugin-workbench-column-change").as_str(),
+                        28,
+                    ),
+                ],
                 table_width,
             ),
             Style::default().add_modifier(Modifier::BOLD),

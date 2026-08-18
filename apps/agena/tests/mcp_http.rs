@@ -845,9 +845,66 @@ async fn oauth_discovery_and_authorization_code_flow_are_chatgpt_compatible() {
             .get("content-security-policy")
             .is_some()
     );
+    assert!(
+        authorization_page
+            .headers()
+            .get("content-security-policy")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|policy| policy.contains("form-action 'self' https://chatgpt.com"))
+    );
+
+    let untrusted_authorization_submit = client
+        .post(format!("{}/oauth/authorize", server.base_url))
+        .header("origin", "https://attacker.example")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(form_body(&[
+            ("response_type", "code"),
+            ("client_id", client_id.as_str()),
+            ("redirect_uri", redirect_uri),
+            ("state", state),
+            ("code_challenge", challenge.as_str()),
+            ("code_challenge_method", "S256"),
+            ("resource", resource),
+            ("scope", "agena:tools offline_access"),
+            ("password", password),
+        ]))
+        .send()
+        .await
+        .expect("reject OAuth authorization form from untrusted origin");
+    assert_eq!(
+        untrusted_authorization_submit.status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let opaque_origin_authorization_submit = client
+        .post(format!("{}/oauth/authorize", server.base_url))
+        .header("origin", "null")
+        .header("sec-fetch-site", "same-origin")
+        .header("sec-fetch-mode", "navigate")
+        .header("sec-fetch-dest", "document")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(form_body(&[
+            ("response_type", "code"),
+            ("client_id", client_id.as_str()),
+            ("redirect_uri", redirect_uri),
+            ("state", state),
+            ("code_challenge", challenge.as_str()),
+            ("code_challenge_method", "S256"),
+            ("resource", resource),
+            ("scope", "agena:tools offline_access"),
+            ("password", password),
+        ]))
+        .send()
+        .await
+        .expect("accept same-origin OAuth form with an opaque Origin");
+    assert_eq!(
+        opaque_origin_authorization_submit.status(),
+        StatusCode::SEE_OTHER
+    );
 
     let authorization_submit = client
         .post(format!("{}/oauth/authorize", server.base_url))
+        .header("origin", "https://chatgpt.com")
         .header("content-type", "application/x-www-form-urlencoded")
         .body(form_body(&[
             ("response_type", "code"),

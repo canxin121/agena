@@ -67,6 +67,10 @@ const MAX_OAUTH_SCOPE_BYTES: usize = 512;
 const DEFAULT_MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const OAUTH_SIGNING_KEY_VERSION: u32 = 1;
 const OAUTH_RUNTIME_VERSION: u32 = 2;
+// ChatGPT submits the user-facing OAuth authorization form from its hosted
+// connector origin. Keep this allowlist explicit and narrow; arbitrary
+// browser origins must not be accepted for the MCP/OAuth surface.
+const TRUSTED_MCP_CLIENT_ORIGINS: &[&str] = &["https://chatgpt.com", "https://chat.openai.com"];
 
 const HIDDEN_MCP_PLUGIN_IDS: &[&str] = &[
     "agena.chatgpt",
@@ -147,6 +151,32 @@ fn refresh_token_fingerprint(token: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
 }
 
+fn accepts_opaque_oauth_form_origin(request: &axum::http::Request<Body>) -> bool {
+    if request.method().as_str() != "POST" || request.uri().path() != "/oauth/authorize" {
+        return false;
+    }
+    let header_matches = |name: &str, expected: &str| {
+        request
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case(expected))
+    };
+    header_matches("sec-fetch-site", "same-origin")
+        && header_matches("sec-fetch-mode", "navigate")
+        && header_matches("sec-fetch-dest", "document")
+        && request
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .is_some_and(|value| {
+                value
+                    .trim()
+                    .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+            })
+}
+
 async fn validate_mcp_host_origin(
     State(state): State<Arc<McpServerState>>,
     request: axum::http::Request<Body>,
@@ -163,16 +193,27 @@ async fn validate_mcp_host_origin(
         );
     }
 
-    if let Some(origin) = request
-        .headers()
-        .get(header::ORIGIN)
-        .and_then(|value| value.to_str().ok())
-        && !state.accepts_origin(origin)
-    {
-        return control_error(
-            StatusCode::FORBIDDEN,
-            "untrusted Origin header for the Agena MCP/OAuth surface".to_owned(),
-        );
+    if let Some(origin_header) = request.headers().get(header::ORIGIN) {
+        let origin = origin_header.to_str().ok();
+        let accepted = origin.is_some_and(|origin| {
+            state.accepts_origin(origin)
+                || (origin.eq_ignore_ascii_case("null")
+                    && accepts_opaque_oauth_form_origin(&request))
+        });
+        if !accepted {
+            tracing::warn!(
+                target: "agena::server::mcp",
+                origin = %origin.unwrap_or("<invalid utf-8>"),
+                host = ?host,
+                method = %request.method(),
+                path = %request.uri().path(),
+                "rejected MCP/OAuth request from untrusted Origin"
+            );
+            return control_error(
+                StatusCode::FORBIDDEN,
+                "untrusted Origin header for the Agena MCP/OAuth surface".to_owned(),
+            );
+        }
     }
     next.run(request).await
 }
@@ -787,11 +828,12 @@ impl McpServerState {
             return false;
         }
         let candidate = origin.origin().ascii_serialization();
-        self.identity_urls().into_iter().any(|url| {
-            Url::parse(url.as_str())
-                .map(|url| url.origin().ascii_serialization() == candidate)
-                .unwrap_or(false)
-        })
+        TRUSTED_MCP_CLIENT_ORIGINS.contains(&candidate.as_str())
+            || self.identity_urls().into_iter().any(|url| {
+                Url::parse(url.as_str())
+                    .map(|url| url.origin().ascii_serialization() == candidate)
+                    .unwrap_or(false)
+            })
     }
 
     fn identity_urls(&self) -> Vec<String> {
@@ -2835,9 +2877,11 @@ async fn authorize_get(
         return mcp_auth_disabled();
     }
     match validate_authorization_request(&state, &headers, &request).await {
-        Ok(request) => {
-            authorization_html(StatusCode::OK, render_authorization_page(&request, None))
-        }
+        Ok(request) => authorization_html(
+            StatusCode::OK,
+            render_authorization_page(&request, None),
+            request.redirect_uri.as_str(),
+        ),
         Err(error) => error.into_response(),
     }
 }
@@ -2882,8 +2926,11 @@ async fn authorize_post(
                 "Too many failed password attempts; try again after the lockout expires.",
             ),
         };
-        let mut response =
-            authorization_html(status, render_authorization_page(&validated, Some(message)));
+        let mut response = authorization_html(
+            status,
+            render_authorization_page(&validated, Some(message)),
+            validated.redirect_uri.as_str(),
+        );
         if let OAuthPasswordError::Locked(seconds) = error
             && let Ok(value) = HeaderValue::try_from(seconds.to_string())
         {
@@ -2978,7 +3025,7 @@ fn authorization_error_redirect(
     response
 }
 
-fn authorization_html(status: StatusCode, html: String) -> Response {
+fn authorization_html(status: StatusCode, html: String, redirect_uri: &str) -> Response {
     let mut response = Html(html).into_response();
     *response.status_mut() = status;
     let headers = response.headers_mut();
@@ -2986,9 +3033,7 @@ fn authorization_html(status: StatusCode, html: String) -> Response {
     headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
     headers.insert(
         axum::http::HeaderName::from_static("content-security-policy"),
-        HeaderValue::from_static(
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-        ),
+        authorization_content_security_policy(redirect_uri),
     );
     headers.insert(
         axum::http::HeaderName::from_static("x-frame-options"),
@@ -2999,6 +3044,20 @@ fn authorization_html(status: StatusCode, html: String) -> Response {
         HeaderValue::from_static("no-referrer"),
     );
     response
+}
+
+fn authorization_content_security_policy(redirect_uri: &str) -> HeaderValue {
+    let redirect_origin = Url::parse(redirect_uri)
+        .map(|url| url.origin().ascii_serialization())
+        .unwrap_or_else(|_| "'none'".to_owned());
+    let policy = format!(
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' {redirect_origin}; base-uri 'none'; frame-ancestors 'none'"
+    );
+    HeaderValue::try_from(policy).unwrap_or_else(|_| {
+        HeaderValue::from_static(
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        )
+    })
 }
 
 fn render_authorization_page(

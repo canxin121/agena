@@ -91,7 +91,6 @@ jobs:
       # Cargo incremental state is not portable across ephemeral runners.
       # Disable it so sccache can reuse rustc outputs across workflow runs.
       CARGO_INCREMENTAL: "0"
-      RUSTC_WRAPPER: sccache
       SCCACHE_BASEDIRS: ${{ github.workspace }}
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_VERSION: agena-v1
@@ -110,6 +109,9 @@ jobs:
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.17.0
+
+      - name: Configure Cargo sccache wrapper
+        uses: ./.github/actions/configure-sccache-wrapper
 
       - name: Restore Cargo dependency cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -165,7 +167,9 @@ jobs:
 
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
+          name: Agena ${{ needs.metadata.outputs.version }}
           tag_name: ${{ needs.metadata.outputs.tag }}
           target_commitish: ${{ needs.metadata.outputs.source_sha }}
+          prerelease: ${{ contains(needs.metadata.outputs.version, '-') }}
           generate_release_notes: true
           files: release-assets/**/*

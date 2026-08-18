@@ -1,0 +1,31 @@
+name: Configure sccache wrapper
+description: Configure Cargo to use the exact sccache executable installed by sccache-action
+
+runs:
+  using: composite
+  steps:
+    - name: Configure sccache wrapper (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -z "${SCCACHE_PATH:-}" || ! -x "$SCCACHE_PATH" ]]; then
+          echo "sccache executable not found at SCCACHE_PATH=${SCCACHE_PATH:-<unset>}" >&2
+          exit 1
+        fi
+        printf 'RUSTC_WRAPPER=%s\n' "$SCCACHE_PATH" >> "$GITHUB_ENV"
+        "$SCCACHE_PATH" --version
+
+    - name: Configure sccache wrapper (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $wrapper = $env:SCCACHE_PATH
+        if (-not (Test-Path -LiteralPath $wrapper)) {
+          $wrapper = "$wrapper.exe"
+        }
+        if (-not (Test-Path -LiteralPath $wrapper)) {
+          throw "sccache executable not found at SCCACHE_PATH=$env:SCCACHE_PATH"
+        }
+        "RUSTC_WRAPPER=$wrapper" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        & $wrapper --version

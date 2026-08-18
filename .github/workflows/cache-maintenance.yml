@@ -28,7 +28,7 @@ jobs:
       MAX_CACHE_BYTES: "9126805504"
       TARGET_CACHE_BYTES: "7516192768"
       SCCACHE_MAX_AGE_DAYS: "21"
-      MAX_DELETIONS: "1500"
+      MAX_DELETIONS: "3000"
     steps:
       - name: Remove obsolete caches and enforce the cache budget
         shell: bash
@@ -72,6 +72,7 @@ jobs:
           def select(cache: dict, reason: str) -> None:
               selected.setdefault(int(cache["id"]), (cache, reason))
 
+          rust_cache_generations: dict[str, list[dict]] = {}
           for cache in caches:
               ref = str(cache.get("ref", ""))
               key = str(cache.get("key", ""))
@@ -83,13 +84,30 @@ jobs:
               elif key.startswith("sccache/") and now - last_accessed > max_age:
                   select(cache, f"sccache object unused for more than {max_age.days} days")
 
+              generation = re.match(
+                  r"^(v1-rust-sccache-.+)-[0-9a-f]{8}-[0-9a-f]{8}$",
+                  key,
+              )
+              if generation:
+                  rust_cache_generations.setdefault(generation.group(1), []).append(cache)
+
+          # rust-cache keys include environment and lock hashes. Once a newer
+          # generation exists for the same stable job/target prefix, older 1 GiB
+          # archives are redundant and otherwise crowd out content-addressed
+          # compiler objects.
+          for generation_caches in rust_cache_generations.values():
+              newest = max(generation_caches, key=lambda cache: parse_time(cache["created_at"]))
+              for cache in generation_caches:
+                  if int(cache["id"]) != int(newest["id"]):
+                      select(cache, "superseded Rust target cache generation")
+
           total_bytes = sum(int(cache.get("size_in_bytes", 0)) for cache in caches)
           projected_bytes = total_bytes - sum(
               int(cache.get("size_in_bytes", 0)) for cache, _ in selected.values()
           )
 
           if projected_bytes > max_bytes:
-              protected_since = now - timedelta(days=2)
+              protected_since = now - timedelta(minutes=30)
               candidates = sorted(
                   (
                       cache
@@ -143,6 +161,10 @@ jobs:
                   summary.write(f"- Size before cleanup: {total_bytes / 1024**3:.2f} GiB\n")
                   summary.write(f"- Planned deletions: {len(planned)}\n")
                   summary.write(f"- Planned reclaimed space: {planned_bytes / 1024**3:.2f} GiB\n")
+                  summary.write(
+                      f"- Projected size after planned cleanup: "
+                      f"{(total_bytes - planned_bytes) / 1024**3:.2f} GiB\n"
+                  )
                   summary.write(f"- Dry run: {dry_run}\n")
 
           if len(selected) > max_deletions:

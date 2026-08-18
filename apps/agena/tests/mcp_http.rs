@@ -164,6 +164,33 @@ fn test_client() -> Client {
         .expect("build MCP HTTP test client")
 }
 
+fn tool_name_is_hidden_from_stateless_mcp(name: &str) -> bool {
+    let compact = name.strip_prefix("agena.").unwrap_or(name);
+    [
+        "chatgpt.",
+        "gemini.",
+        "claude.",
+        "openai.",
+        "schema_lab.",
+        "interaction.",
+        "session.",
+        "plan.",
+        "tasks.",
+        "cron.",
+        "monitor.",
+        "snapshot.",
+        "report.",
+        "settings.",
+        "memory.",
+        "skills.",
+        "tools.",
+        "mcp.",
+        "web.browser_",
+    ]
+    .iter()
+    .any(|prefix| compact.starts_with(prefix))
+}
+
 async fn response_json(
     response: reqwest::Response,
 ) -> (StatusCode, reqwest::header::HeaderMap, Value) {
@@ -334,10 +361,9 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
             .as_array()
             .expect("pre-initialize tools/list returns an array")
             .iter()
-            .all(|tool| !tool["name"]
-                .as_str()
-                .unwrap_or_default()
-                .starts_with("session."))
+            .all(|tool| !tool_name_is_hidden_from_stateless_mcp(
+                tool["name"].as_str().unwrap_or_default()
+            ))
     );
 
     let (status, discover) = post_mcp_with_headers(
@@ -412,10 +438,7 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
             .any(|tool| tool["name"] == "shell.run")
     );
     assert!(modern_tool_list.iter().all(|tool| {
-        !tool["name"]
-            .as_str()
-            .unwrap_or_default()
-            .starts_with("session.")
+        !tool_name_is_hidden_from_stateless_mcp(tool["name"].as_str().unwrap_or_default())
     }));
 
     let (status, initialize) = post_mcp(&client, &mcp_url, initialize_request(1)).await;
@@ -440,14 +463,7 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
     );
     assert!(listed.iter().all(|tool| {
         let name = tool["name"].as_str().unwrap_or_default();
-        !name.contains("interactive")
-            && !name.contains("browser")
-            && !name.contains("chatgpt")
-            && !name.contains("gemini")
-            && !name.contains("claude")
-            && !name.starts_with("session.")
-            && name != "plan.phase"
-            && name != "plan.review"
+        !name.contains("interactive") && !tool_name_is_hidden_from_stateless_mcp(name)
     }));
 
     // The compatibility seam is deliberately tools-only. Other legacy-era
@@ -515,6 +531,25 @@ async fn anonymous_mcp_is_stateless_and_hides_interactive_tools() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(hidden_session_call["error"].is_object());
+
+    for (id, name) in [(5, "plan.get"), (6, "settings.get"), (7, "mcp.tools.call")] {
+        let (status, hidden_internal_call) = post_mcp(
+            &client,
+            &mcp_url,
+            json!({
+                "jsonrpc":"2.0",
+                "id":id,
+                "method":"tools/call",
+                "params":{"name":name,"arguments":{}}
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            hidden_internal_call["error"].is_object(),
+            "{name} must not be callable through stateless MCP"
+        );
+    }
 
     let (status, _, _) = response_json(
         client

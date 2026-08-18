@@ -40,6 +40,10 @@ use rmcp::model::{
 };
 use rmcp::service::{RequestContext, RoleServer};
 
+mod stateless_tool_policy;
+
+pub use stateless_tool_policy::{StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed};
+
 const LIST_CACHE_TTL_MS: u64 = 30_000;
 const SUPPORTED_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[
     ProtocolVersion::V_2026_07_28,

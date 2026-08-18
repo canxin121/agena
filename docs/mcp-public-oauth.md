@@ -256,16 +256,19 @@ refresh tokens.
 
 ## 7. Tool surface
 
-Agena exposes every tool that can run without an interactive approval/session
-UI, including shell, filesystem-write, mutation, and outbound-network tools.
-There is no read-only exposure mode and no MCP setting that filters tools by
-their permission contract.
+Agena's stateless MCP transports expose the direct computer/workspace-control
+surface, including shell, filesystem-write, code/LSP, notebook, and stateless
+web search/fetch/crawl tools. There is no read-only exposure mode and no MCP
+setting that filters these tools by their permission contract.
 
-Interactive tools, autonomous task tools, the `agena.session` plugin, browser
-interaction tools, planning-review entry points, and the ChatGPT/Gemini/Claude
-provider plugins remain hidden because they cannot operate correctly on this
-stateless connector surface. OAuth proves who is authorized; it does not make a
-high-impact tool invocation intrinsically safe.
+The connector intentionally hides Agena's session/runtime and control-plane
+plugins: interaction, session, plan, tasks, cron, monitor, snapshot, report,
+settings, memory, skills, tools discovery, and the nested `agena.mcp` bridge.
+Provider/developer adapters (ChatGPT/Gemini/Claude/OpenAI/schema-lab) and the
+managed `web.browser_*` lifecycle are hidden as well. These capabilities either
+depend on Agena session/UI semantics or would expose internal agent/control
+state instead of directly operating the workspace. OAuth proves who is
+authorized; it does not make a high-impact tool invocation intrinsically safe.
 
 ## Troubleshooting
 

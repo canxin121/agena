@@ -16,8 +16,9 @@ use std::{
 
 use agena_application::{Application, dto::OperatorToolResource};
 use agena_mcp_server::{
-    CallToolParams, CallToolResult, McpServerBackend, McpServerError, ToolDescriptor,
-    serialize_call_tool_result, serialize_tool_descriptor,
+    CallToolParams, CallToolResult, McpServerBackend, McpServerError, StatelessMcpToolMetadata,
+    ToolDescriptor, is_stateless_mcp_tool_exposed, serialize_call_tool_result,
+    serialize_tool_descriptor,
 };
 use async_trait::async_trait;
 use axum::{
@@ -72,19 +73,6 @@ const OAUTH_RUNTIME_VERSION: u32 = 2;
 // browser origins must not be accepted for the MCP/OAuth surface.
 const TRUSTED_MCP_CLIENT_ORIGINS: &[&str] = &["https://chatgpt.com", "https://chat.openai.com"];
 
-const HIDDEN_MCP_PLUGIN_IDS: &[&str] = &[
-    "agena.chatgpt",
-    "agena.gemini",
-    "agena.claude",
-    "agena.schema_lab",
-];
-// MCP requests are handled statelessly and do not belong to an Agena
-// conversation/session. The bundled session plugin therefore has no valid
-// execution context on this transport and must not be advertised or invoked.
-const HIDDEN_MCP_SESSION_PLUGIN_IDS: &[&str] = &["agena.session"];
-const KNOWN_INTERACTIVE_MCP_TOOL_NAMES: &[&str] = &["interaction.ask", "interaction.notify"];
-const KNOWN_INTERACTIVE_MCP_TOOL_PREFIXES: &[&str] = &["web.browser_", "agena.web.browser_"];
-
 #[derive(Clone)]
 pub(crate) struct McpServerState {
     application: Application,
@@ -97,9 +85,12 @@ pub(crate) struct McpServerState {
 }
 
 fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
-    // MCP is stateless: expose every tool that can run without an interactive
-    // approval/session UI, while keeping the explicit denylist below in force.
-    mcp_tool_is_base_eligible(tool) && !tool.task
+    is_stateless_mcp_tool_exposed(StatelessMcpToolMetadata {
+        name: tool.name.as_str(),
+        plugin_id: tool.plugin_id.as_deref(),
+        interactive: tool.interactive,
+        task: tool.task,
+    })
 }
 
 fn request_has_modern_mcp_headers(headers: &HeaderMap) -> bool {
@@ -2162,57 +2153,6 @@ async fn rewrite_tool_list_response(
     let mut response = Response::from_parts(parts, Body::from(rewritten));
     response.headers_mut().remove(header::CONTENT_LENGTH);
     response
-}
-
-fn name_belongs_to_plugin(name: &str, plugin_id: &str) -> bool {
-    name == plugin_id
-        || name
-            .strip_prefix(plugin_id)
-            .is_some_and(|suffix| suffix.starts_with('.'))
-}
-
-fn mcp_tool_uses_hidden_provider(tool: &OperatorToolResource) -> bool {
-    if let Some(plugin_id) = tool.plugin_id.as_deref() {
-        return HIDDEN_MCP_PLUGIN_IDS.contains(&plugin_id);
-    }
-
-    HIDDEN_MCP_PLUGIN_IDS.iter().any(|plugin_id| {
-        let compact_plugin_id = plugin_id.strip_prefix("agena.").unwrap_or(plugin_id);
-        name_belongs_to_plugin(tool.name.as_str(), compact_plugin_id)
-            || name_belongs_to_plugin(tool.name.as_str(), plugin_id)
-    })
-}
-
-fn mcp_tool_uses_hidden_session_plugin(tool: &OperatorToolResource) -> bool {
-    if let Some(plugin_id) = tool.plugin_id.as_deref()
-        && HIDDEN_MCP_SESSION_PLUGIN_IDS.contains(&plugin_id)
-    {
-        return true;
-    }
-
-    HIDDEN_MCP_SESSION_PLUGIN_IDS.iter().any(|plugin_id| {
-        let compact_plugin_id = plugin_id.strip_prefix("agena.").unwrap_or(plugin_id);
-        name_belongs_to_plugin(tool.name.as_str(), compact_plugin_id)
-            || name_belongs_to_plugin(tool.name.as_str(), plugin_id)
-    })
-}
-
-fn mcp_tool_is_base_eligible(tool: &OperatorToolResource) -> bool {
-    !tool.interactive
-        && !mcp_tool_uses_hidden_provider(tool)
-        && !mcp_tool_uses_hidden_session_plugin(tool)
-        && !mcp_tool_has_known_interactive_name(tool.name.as_str())
-}
-
-fn mcp_tool_has_known_interactive_name(name: &str) -> bool {
-    KNOWN_INTERACTIVE_MCP_TOOL_NAMES.contains(&name)
-        || KNOWN_INTERACTIVE_MCP_TOOL_PREFIXES
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
-        // Plan phase can conditionally open the same approval dialog as
-        // plan.review, depending on the request body. A non-interactive MCP
-        // client cannot safely offer either entry point.
-        || matches!(name, "plan.phase" | "plan.review")
 }
 
 // ---------------------------------------------------------------------------
@@ -4482,7 +4422,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_catalog_exposes_all_noninteractive_tools_and_hides_stateless_ineligible_tools() {
+    fn mcp_catalog_exposes_direct_workspace_tools_and_hides_internal_surfaces() {
         let read = tool("fs.read", false, Some("agena.fs"));
         assert!(mcp_tool_is_exposed(&read));
 
@@ -4496,8 +4436,20 @@ mod tests {
             tool("chatgpt.search", false, Some("agena.chatgpt")),
             tool("gemini.search", false, None),
             tool("claude.ask", false, None),
+            tool("openai.web_search", false, Some("agena.openai")),
+            tool("cron.create", false, Some("agena.cron")),
+            tool("mcp.tools.call", false, Some("agena.mcp")),
+            tool("memory.write", false, Some("agena.memory")),
+            tool("monitor.start", false, Some("agena.monitor")),
+            tool("plan.set", false, Some("agena.plan")),
+            tool("report.findings", false, Some("agena.report")),
             tool("schema_lab.inspect", false, Some("agena.schema_lab")),
             tool("agena.schema_lab.echo", false, None),
+            tool("settings.set", false, Some("agena.settings")),
+            tool("skills.update", false, Some("agena.skills")),
+            tool("snapshot.enter", false, Some("agena.snapshot")),
+            tool("tasks.list", false, Some("agena.tasks")),
+            tool("tools.search", false, Some("agena.tools")),
             tool("session.model", false, Some("agena.session")),
             tool("session.rename", false, None),
             tool("agena.session.tokens", false, None),
@@ -4505,8 +4457,15 @@ mod tests {
             tool("web.browser_list", false, None),
             tool("agena.web.browser_wait", false, None),
             tool("interaction.notify", false, None),
-            tool("plan.phase", false, None),
-            tool("plan.review", false, None),
+            tool("plan.clear", false, None),
+            tool("agena.cron.list", false, None),
+            tool("monitor.stop", false, None),
+            tool("snapshot.status", false, None),
+            tool("mcp.servers.status", false, None),
+            tool("memory.search", false, None),
+            tool("settings.get", false, None),
+            tool("skills.list", false, None),
+            tool("report.findings", false, None),
         ] {
             assert!(
                 !mcp_tool_is_exposed(&hidden),

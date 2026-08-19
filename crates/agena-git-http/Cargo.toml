@@ -12,7 +12,7 @@ axum = { workspace = true, features = ["macros"] }
 async-stream = { workspace = true }
 base64 = { workspace = true }
 dashmap = { workspace = true }
-git2 = { version = "0.21.0", default-features = false, features = ["ssh", "https", "vendored-libgit2", "vendored-openssl"] }
+git2 = { version = "0.21.0", default-features = false, features = ["vendored-libgit2"] }
 ignore = { workspace = true }
 libc = { workspace = true }
 regex = { workspace = true }

@@ -9,3 +9,4 @@ third_party/tantivy/** whitespace=-trailing-space
 third_party/tower-http/** whitespace=-trailing-space
 third_party/reqwest-0.13/** whitespace=-trailing-space
 third_party/jsonschema/** whitespace=-trailing-space
+third_party/rustix-1.1/** whitespace=-trailing-space

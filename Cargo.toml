@@ -369,6 +369,7 @@ debug = false
 incremental = false
 
 [patch.crates-io]
+rustix = { path = "third_party/rustix-1.1" }
 jsonschema = { path = "third_party/jsonschema" }
 reqwest = { path = "third_party/reqwest-0.13" }
 tower-http = { path = "third_party/tower-http" }

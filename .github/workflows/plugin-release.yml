@@ -1,0 +1,182 @@
+name: Reusable Plugin Release
+
+on:
+  workflow_call:
+    inputs:
+      agena_ref:
+        description: Exact Agena git revision providing the SDK, developer tool, and reusable workflow contract
+        required: true
+        type: string
+      crate_name:
+        description: Cargo package/binary name
+        required: true
+        type: string
+      plugin_kind:
+        description: stdio or cdylib
+        required: true
+        type: string
+      manifest_path:
+        description: Agena plugin project manifest
+        required: false
+        type: string
+        default: agena-plugin.toml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-26-intel
+            target: x86_64-apple-darwin
+          - runner: macos-26
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: agena-plugin-release-v1
+          key: ${{ matrix.target }}
+          cache-on-failure: true
+
+      - name: Validate release inputs
+        shell: bash
+        env:
+          PLUGIN_KIND: ${{ inputs.plugin_kind }}
+        run: |
+          set -euo pipefail
+          case "$PLUGIN_KIND" in
+            stdio|cdylib) ;;
+            *) echo "plugin_kind must be stdio or cdylib" >&2; exit 2 ;;
+          esac
+
+      - name: Build plugin
+        shell: bash
+        run: cargo build --release --locked --target "${{ matrix.target }}"
+
+      - name: Install Agena plugin developer tool
+        shell: bash
+        env:
+          AGENA_REF: ${{ inputs.agena_ref }}
+        run: >-
+          cargo install --locked
+          --git https://github.com/canxin121/agena
+          --rev "$AGENA_REF"
+          agena-plugin-dev
+
+      - name: Resolve compiled artifact
+        id: artifact
+        shell: bash
+        env:
+          CRATE_NAME: ${{ inputs.crate_name }}
+          PLUGIN_KIND: ${{ inputs.plugin_kind }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          dir="target/${TARGET}/release"
+          rust_name="${CRATE_NAME//-/_}"
+          case "${PLUGIN_KIND}:${TARGET}" in
+            stdio:*windows*) path="${dir}/${CRATE_NAME}.exe" ;;
+            stdio:*) path="${dir}/${CRATE_NAME}" ;;
+            cdylib:*windows*) path="${dir}/${rust_name}.dll" ;;
+            cdylib:*apple*) path="${dir}/lib${rust_name}.dylib" ;;
+            cdylib:*linux*) path="${dir}/lib${rust_name}.so" ;;
+            *) echo "unsupported plugin kind/target: ${PLUGIN_KIND}/${TARGET}" >&2; exit 2 ;;
+          esac
+          test -f "$path"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
+      - name: Package immutable release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          agena-plugin package \
+            --manifest "${{ inputs.manifest_path }}" \
+            --artifact "${{ steps.artifact.outputs.path }}" \
+            --target "${{ matrix.target }}" \
+            --output dist
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: plugin-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist/fragments
+          merge-multiple: true
+
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+
+      - name: Install Agena plugin developer tool
+        env:
+          AGENA_REF: ${{ inputs.agena_ref }}
+        run: >-
+          cargo install --locked
+          --git https://github.com/canxin121/agena
+          --rev "$AGENA_REF"
+          agena-plugin-dev
+
+      - name: Assemble and verify release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
+          repository="https://github.com/${GITHUB_REPOSITORY}"
+          workflow_run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          mkdir -p dist/release
+          agena-plugin release assemble dist/fragments \
+            --output dist/release \
+            --base-url "$base" \
+            --expected-version "$tag" \
+            --github-repository "$repository" \
+            --github-tag "$tag" \
+            --github-commit "$GITHUB_SHA" \
+            --github-workflow-run-url "$workflow_run_url"
+          cp dist/fragments/*.tar.gz dist/release/
+          (cd dist/release && sha256sum *.tar.gz > SHA256SUMS)
+
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          files: dist/release/*
+          generate_release_notes: true

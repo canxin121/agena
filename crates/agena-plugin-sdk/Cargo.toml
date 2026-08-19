@@ -35,7 +35,7 @@ reqwest = { workspace = true, features = ["json", "rustls"], optional = true }
 [features]
 default = []
 cdylib = ["dep:abi_stable", "tokio/rt-multi-thread", "tokio/macros"]
-stdio = ["dep:agena-stdio-codec", "dep:bytes", "dep:futures-util", "dep:tokio-util", "tokio/rt-multi-thread", "tokio/macros", "tokio/io-util", "tokio/io-std"]
+stdio = ["dep:agena-stdio-codec", "dep:bytes", "dep:futures-util", "dep:tokio-util", "tokio/rt-multi-thread", "tokio/macros", "tokio/io-util", "tokio/io-std", "tokio/time"]
 http = ["tokio/rt-multi-thread", "tokio/macros", "dep:axum", "dep:reqwest"]
 
 [dev-dependencies]

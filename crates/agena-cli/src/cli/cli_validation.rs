@@ -86,13 +86,84 @@ pub(super) fn validate_plugin_target(
 ) -> Result<PluginValidateOutput, AppError> {
     let path = resolve_plugin_validate_path(path)?;
     let raw = fs::read_to_string(&path)?;
+    if path.file_name().is_some_and(|name| {
+        name == agena_plugin_marketplace::project::AGENA_PROJECT_MANIFEST_FILENAME
+    }) {
+        let mut messages: PluginValidationMessages = (Vec::new(), Vec::new());
+        if let Err(error) = agena_plugin_marketplace::PluginProjectManifest::load(&path) {
+            push_error(
+                &mut messages,
+                "project.invalid",
+                error.to_string(),
+                Some("$"),
+            );
+        }
+        return finish_plugin_validation(&path, "plugin_project", None, messages, strict);
+    }
+    if path
+        .file_name()
+        .is_some_and(|name| name == agena_plugin_marketplace::AGENA_MARKETPLACE_PROJECT_FILENAME)
+    {
+        let mut messages: PluginValidationMessages = (Vec::new(), Vec::new());
+        if let Err(error) = agena_plugin_marketplace::MarketplaceProjectManifest::load(&path) {
+            push_error(
+                &mut messages,
+                "marketplace_project.invalid",
+                error.to_string(),
+                Some("$"),
+            );
+        }
+        return finish_plugin_validation(&path, "marketplace_project", None, messages, strict);
+    }
     let value: serde_json::Value = serde_json::from_str(&raw)?;
     let mut target_kind = "unknown".to_string();
     let mut manifest_hash = None;
     let mut messages: PluginValidationMessages = (Vec::new(), Vec::new());
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
 
-    if looks_like_plugin_manifest(&value) {
+    if value.get("plugins").is_some() && value.get("version").is_some() {
+        target_kind = "marketplace_index".to_string();
+        match serde_json::from_value::<agena_plugin_marketplace::RegistryIndex>(value.clone()) {
+            Ok(index) => {
+                if let Err(error) = index.validate() {
+                    push_error(
+                        &mut messages,
+                        "marketplace.invalid",
+                        error.to_string(),
+                        Some("$"),
+                    );
+                }
+            }
+            Err(error) => push_error(
+                &mut messages,
+                "marketplace.decode",
+                error.to_string(),
+                Some("$"),
+            ),
+        }
+    } else if value.get("artifacts").is_some() && value.get("id").is_some() {
+        target_kind = "plugin_release".to_string();
+        match serde_json::from_value::<agena_plugin_marketplace::PluginReleaseManifest>(
+            value.clone(),
+        ) {
+            Ok(release) => {
+                if let Err(error) = release.validate() {
+                    push_error(
+                        &mut messages,
+                        "release.invalid",
+                        error.to_string(),
+                        Some("$"),
+                    );
+                }
+            }
+            Err(error) => push_error(
+                &mut messages,
+                "release.decode",
+                error.to_string(),
+                Some("$"),
+            ),
+        }
+    } else if looks_like_plugin_manifest(&value) {
         target_kind = "manifest".to_string();
         validate_plugin_manifest_value("$", &value, &mut manifest_hash, &mut messages);
     } else if value.get("package").is_some() {
@@ -173,6 +244,16 @@ pub(super) fn validate_plugin_target(
         );
     }
 
+    finish_plugin_validation(&path, &target_kind, manifest_hash, messages, strict)
+}
+
+fn finish_plugin_validation(
+    path: &Path,
+    target_kind: &str,
+    manifest_hash: Option<String>,
+    mut messages: PluginValidationMessages,
+    strict: bool,
+) -> Result<PluginValidateOutput, AppError> {
     if strict && !messages.1.is_empty() {
         for warning in messages.1.clone() {
             messages.0.push(PluginValidationMessage {
@@ -186,7 +267,7 @@ pub(super) fn validate_plugin_target(
     let warnings = messages.1;
     Ok(PluginValidateOutput {
         path: path.display().to_string(),
-        target_kind,
+        target_kind: target_kind.to_string(),
         ok: errors.is_empty(),
         manifest_hash,
         errors,
@@ -200,6 +281,10 @@ pub(super) fn resolve_plugin_validate_path(path: &Path) -> Result<PathBuf, AppEr
     }
     if path.is_dir() {
         for candidate in [
+            path.join(agena_plugin_marketplace::project::AGENA_PROJECT_MANIFEST_FILENAME),
+            path.join(agena_plugin_marketplace::AGENA_MARKETPLACE_PROJECT_FILENAME),
+            path.join(agena_plugin_marketplace::AGENA_RELEASE_MANIFEST_FILENAME),
+            path.join(agena_plugin_marketplace::AGENA_MARKETPLACE_FILENAME),
             path.join(".agena-plugin").join("plugin.json"),
             path.join("plugin.json"),
             path.join("manifest.json"),

@@ -206,6 +206,12 @@ pub struct InstalledRecord {
     /// requiring the user to pass `--registry` every time.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub registry_url: String,
+    /// Trust policy captured at install time. Upgrades must not silently
+    /// weaken signature or GitHub provenance requirements.
+    #[serde(default)]
+    pub require_signature: bool,
+    #[serde(default)]
+    pub require_github_distribution: bool,
     /// True when the artifact was extracted from a tar.gz archive.
     #[serde(default)]
     pub archive_extracted: bool,

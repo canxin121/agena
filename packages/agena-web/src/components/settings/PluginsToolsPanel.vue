@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import HarnessSettingsPanel from '@/components/settings/HarnessSettingsPanel.vue'
 import McpServerControlPanel from '@/components/settings/McpServerControlPanel.vue'
+import PluginMarketplacePanel from '@/components/settings/PluginMarketplacePanel.vue'
 import PluginsPanel from '@/components/settings/PluginsPanel.vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import type { SettingsSubpageDefinition } from '@/components/settings/workbench/settingsSectionNavigation'
@@ -8,10 +9,16 @@ import { settingsText as st } from '@/i18n/settingsText'
 
 const pages: SettingsSubpageDefinition[] = [
   {
+    id: 'marketplace',
+    label: st('Plugin Marketplace'),
+    description: st('Discover, verify, install, upgrade, and remove GitHub-hosted Agena plugins.'),
+    keywords: ['marketplace', 'github', 'install', 'upgrade', 'release', 'plugins'],
+  },
+  {
     id: 'plugin-workbench',
     label: st('Plugin Workbench'),
-    description: st('Configure plugins, run tools and commands, and inspect capabilities, logs, and diagnostics.'),
-    keywords: ['plugins', 'schema', 'config', 'tools', 'commands', 'logs'],
+    description: st('Configure plugins, run tools and operations, and inspect capabilities, logs, and diagnostics.'),
+    keywords: ['plugins', 'schema', 'config', 'tools', 'operations', 'logs'],
   },
   {
     id: 'mcp-server',
@@ -40,6 +47,7 @@ const pages: SettingsSubpageDefinition[] = [
     v-slot="{ activePage }"
   >
     <PluginsPanel v-if="activePage === 'plugin-workbench'" />
+    <PluginMarketplacePanel v-else-if="activePage === 'marketplace'" />
     <McpServerControlPanel v-else-if="activePage === 'mcp-server'" />
     <HarnessSettingsPanel v-else />
   </SettingsSectionWorkbench>

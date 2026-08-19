@@ -11,6 +11,8 @@ pub enum MarketplaceError {
     Http(String),
     #[error("invalid registry index: {0}")]
     Index(String),
+    #[error("invalid plugin project: {0}")]
+    Project(String),
     #[error("plugin `{0}` not found in registry")]
     PluginNotFound(String),
     #[error("no version of `{0}` matches platform `{1}`")]
@@ -42,6 +44,18 @@ pub enum MarketplaceError {
         plugin: String,
         dependents: Vec<String>,
     },
+}
+
+impl From<toml::de::Error> for MarketplaceError {
+    fn from(err: toml::de::Error) -> Self {
+        Self::Project(err.to_string())
+    }
+}
+
+impl From<toml::ser::Error> for MarketplaceError {
+    fn from(err: toml::ser::Error) -> Self {
+        Self::Project(err.to_string())
+    }
 }
 
 impl From<reqwest::Error> for MarketplaceError {

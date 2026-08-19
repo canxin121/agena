@@ -478,8 +478,10 @@ dependencies = [
 name = "agena-marketplace-server"
 version = "0.1.0"
 dependencies = [
+ "agena-plugin-marketplace",
  "axum",
- "serde_json",
+ "hex",
+ "sha2 0.11.0",
  "tokio",
 ]
 
@@ -576,6 +578,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-plugin-dev"
+version = "0.1.0"
+dependencies = [
+ "agena-plugin-marketplace",
+ "clap",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "agena-plugin-host"
 version = "0.1.0"
 dependencies = [
@@ -625,7 +637,9 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 2.0.19",
+ "toml",
  "tracing",
+ "walkdir",
 ]
 
 [[package]]

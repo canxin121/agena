@@ -6,11 +6,13 @@ license.workspace = true
 rust-version.workspace = true
 [features]
 default = []
-server = ["dep:axum", "dep:tokio", "dep:serde_json"]
+server = ["dep:axum", "dep:tokio"]
 
 [dependencies]
+agena-plugin-marketplace = { workspace = true }
 axum = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
 tokio = { workspace = true, features = ["net"], optional = true }
 
 [lints]

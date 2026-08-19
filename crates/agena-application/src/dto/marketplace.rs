@@ -8,6 +8,14 @@ pub struct MarketplacePluginResource {
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     pub version_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_version: Option<String>,
@@ -15,6 +23,28 @@ pub struct MarketplacePluginResource {
     pub latest_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_platform: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_source_repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_source_tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_source_commit: Option<String>,
+    pub review_tier: String,
+    pub featured: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MarketplaceIdentityResource {
+    pub name: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -22,6 +52,7 @@ pub struct MarketplacePluginResource {
 pub struct MarketplaceSearchResponse {
     pub registry_id: String,
     pub registry_url: String,
+    pub marketplace: MarketplaceIdentityResource,
     pub entries: Vec<MarketplacePluginResource>,
 }
 
@@ -30,7 +61,8 @@ pub struct MarketplaceSearchResponse {
 pub struct MarketplaceRegistryRequest {
     #[serde(default)]
     pub registry_id: Option<String>,
-    pub registry_url: String,
+    #[serde(default)]
+    pub registry_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -75,6 +107,8 @@ pub struct MarketplaceInstalledPluginResource {
     pub installed_at: DateTime<Utc>,
     pub registry_id: String,
     pub registry_url: String,
+    pub require_signature: bool,
+    pub require_github_distribution: bool,
     pub archive_extracted: bool,
 }
 

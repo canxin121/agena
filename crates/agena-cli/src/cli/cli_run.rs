@@ -3,9 +3,9 @@ use super::{
     ConfigCommand, ContinueArgs, CostArgs, DebugCommand, DiagnosticsArgs, ExecArgs, ForkArgs,
     GitArgs, InspectArgs, LoginArgs, LogoutArgs, McpCommand, McpGetArgs, McpServerArgs,
     McpStatusArgs, McpSubcommand, MemoryCommand, OutputFormat, PermissionsArgs, PluginOperation,
-    PluginSubcommand, PrArgs, ProviderCommand, ResumeArgs, ReviewArgs, SessionsCommand,
-    SnapshotArgs, UsageArgs, render_completion_command, render_plugin_validate_output,
-    validate_plugin_target,
+    PluginReleaseSubcommand, PluginSubcommand, PluginTemplateArg, PrArgs, ProviderCommand,
+    ResumeArgs, ReviewArgs, SessionsCommand, SnapshotArgs, UsageArgs, render_completion_command,
+    render_plugin_validate_output, validate_plugin_target,
 };
 impl AgenaCli {
     pub async fn run_command(self) -> Result<(), AppError> {
@@ -79,7 +79,11 @@ impl AgenaCli {
 
     pub(super) async fn run_plugin(self, command: PluginOperation) -> Result<(), AppError> {
         use agena_plugin_marketplace::{
-            InstallRequest, MarketplaceCache, MarketplaceClient, RegistrySpec, default_cache_root,
+            AssembleReleaseRequest, DEFAULT_MARKETPLACE_SOURCE, InstallRequest, MarketplaceCache,
+            MarketplaceClient, PackagePluginRequest, PluginInstallLocator, PluginReleaseSource,
+            PluginTemplateKind, RegistrySpec, ScaffoldPluginRequest, assemble_release,
+            current_target_triple, default_cache_root, generate_plugin_lockfile, package_plugin,
+            parse_plugin_install_locator, scaffold_plugin,
         };
 
         let cache = MarketplaceCache::new(default_cache_root());
@@ -114,23 +118,137 @@ impl AgenaCli {
                 }
                 Ok(())
             }
+            PluginSubcommand::Init(args) => {
+                let short_name = args
+                    .id
+                    .split_once('.')
+                    .map(|(_, name)| name)
+                    .unwrap_or(args.id.as_str());
+                let crate_name = args
+                    .crate_name
+                    .unwrap_or_else(|| format!("agena-plugin-{}", short_name.replace('_', "-")));
+                let display_name = args
+                    .name
+                    .unwrap_or_else(|| humanize_plugin_name(short_name));
+                let kind = match args.kind {
+                    PluginTemplateArg::Stdio => PluginTemplateKind::Stdio,
+                    PluginTemplateArg::Cdylib => PluginTemplateKind::Cdylib,
+                };
+                scaffold_plugin(ScaffoldPluginRequest {
+                    destination: args.path.clone(),
+                    plugin_id: args.id,
+                    crate_name,
+                    display_name,
+                    description: args.description,
+                    author: args.author,
+                    repository: args.repository,
+                    kind,
+                    force: args.force,
+                })
+                .map_err(|error| AppError::Config(error.to_string()))?;
+                generate_plugin_lockfile(&args.path)
+                    .map_err(|error| AppError::Config(error.to_string()))?;
+                println!("Created Agena plugin repository at {}", args.path.display());
+                println!("Next: cargo test && agena plugin validate .");
+                Ok(())
+            }
+            PluginSubcommand::Package(args) => {
+                let outcome = package_plugin(PackagePluginRequest {
+                    manifest_path: args.manifest,
+                    artifact_path: args.artifact,
+                    target: args
+                        .target
+                        .unwrap_or_else(|| current_target_triple().to_string()),
+                    output_dir: args.output,
+                })
+                .map_err(|error| AppError::Config(error.to_string()))?;
+                println!(
+                    "Packaged {} v{} for {}\narchive: {}\nfragment: {}\nsha256: {}",
+                    outcome.plugin_id,
+                    outcome.version,
+                    outcome.target,
+                    outcome.archive_path.display(),
+                    outcome.fragment_path.display(),
+                    outcome.sha256
+                );
+                Ok(())
+            }
+            PluginSubcommand::Release(operation) => match operation.command {
+                PluginReleaseSubcommand::Assemble(args) => {
+                    let source = args
+                        .github_repository
+                        .map(|repository| PluginReleaseSource {
+                            repository,
+                            tag: args.github_tag.expect("clap requires github_tag"),
+                            commit: args.github_commit.expect("clap requires github_commit"),
+                            workflow_run_url: args.github_workflow_run_url,
+                        });
+                    let outcome = assemble_release(AssembleReleaseRequest {
+                        fragments_dir: args.fragments,
+                        output_dir: args.output,
+                        base_url: args.base_url,
+                        expected_version: args.expected_version,
+                        source,
+                    })
+                    .map_err(|error| AppError::Config(error.to_string()))?;
+                    println!(
+                        "Assembled {} artifact(s) into {}",
+                        outcome.artifact_count,
+                        outcome.release_manifest_path.display()
+                    );
+                    Ok(())
+                }
+            },
             PluginSubcommand::Install(args) => {
-                let registry_url = args.registry.ok_or_else(|| {
-                    AppError::Config("agena plugin install requires --registry <url>".to_string())
-                })?;
-                let (plugin_id, version) = match args.spec.split_once('@') {
-                    Some((id, ver)) => (id.to_string(), Some(ver.to_string())),
-                    None => (args.spec.clone(), None),
+                let locator = parse_plugin_install_locator(args.spec.as_str())
+                    .map_err(|error| AppError::Config(error.to_string()))?;
+                let (registry, plugin_id, version) = match (args.registry.as_deref(), locator) {
+                    (Some(source), PluginInstallLocator::Marketplace { plugin_id, version }) => (
+                        RegistrySpec::from_source(
+                            args.registry_id.clone(),
+                            source,
+                            args.require_signature,
+                        )
+                        .map_err(|error| AppError::Config(error.to_string()))?,
+                        plugin_id,
+                        version,
+                    ),
+                    (Some(_), PluginInstallLocator::GitHubRelease { .. }) => {
+                        return Err(AppError::Config(
+                            "do not combine a direct GitHub repository install with --registry"
+                                .to_string(),
+                        ));
+                    }
+                    (None, PluginInstallLocator::GitHubRelease { repository, tag }) => {
+                        let registry = RegistrySpec::github_release(
+                            repository,
+                            tag.as_deref(),
+                            args.require_signature,
+                        )
+                        .map_err(|error| AppError::Config(error.to_string()))?;
+                        let index = client
+                            .registry(registry.clone())
+                            .fetch_index(args.refresh)
+                            .map_err(|error| AppError::Config(error.to_string()))?;
+                        let plugin_id = single_release_plugin_id(&index)?;
+                        (registry, plugin_id, None)
+                    }
+                    (None, PluginInstallLocator::Marketplace { plugin_id, version }) => (
+                        RegistrySpec::from_source(
+                            "official",
+                            DEFAULT_MARKETPLACE_SOURCE,
+                            args.require_signature,
+                        )
+                        .map_err(|error| AppError::Config(error.to_string()))?,
+                        plugin_id,
+                        version,
+                    ),
                 };
                 let config_path =
                     agena_runtime::default_config_path(&agena_runtime::ProcessEnvironment);
                 let outcome = client
                     .install(InstallRequest {
-                        registry: RegistrySpec {
-                            id: args.registry_id.clone(),
-                            url: registry_url,
-                            require_signature: args.require_signature,
-                        },
+                        registry,
                         plugin_id,
                         version,
                         config_path,
@@ -150,8 +268,11 @@ impl AgenaCli {
                     );
                 } else {
                     println!(
-                        "Installed {} v{} ({}); restart agena to load.",
-                        outcome.plugin_id, outcome.version, outcome.kind
+                        "Installed {} v{} ({}) to {}",
+                        outcome.plugin_id,
+                        outcome.version,
+                        outcome.kind,
+                        outcome.artifact_path.display()
                     );
                 }
                 Ok(())
@@ -190,11 +311,10 @@ impl AgenaCli {
                 Ok(())
             }
             PluginSubcommand::Sync(args) => {
-                let registry = client.registry(RegistrySpec {
-                    id: args.registry_id,
-                    url: args.registry,
-                    require_signature: false,
-                });
+                let registry = client.registry(
+                    RegistrySpec::from_source(args.registry_id, args.registry, false)
+                        .map_err(|error| AppError::Config(error.to_string()))?,
+                );
                 let index = registry
                     .fetch_index(true)
                     .map_err(|err| AppError::Config(err.to_string()))?;
@@ -205,11 +325,10 @@ impl AgenaCli {
                 Ok(())
             }
             PluginSubcommand::Search(args) => {
-                let registry = client.registry(RegistrySpec {
-                    id: args.registry_id,
-                    url: args.registry,
-                    require_signature: false,
-                });
+                let registry = client.registry(
+                    RegistrySpec::from_source(args.registry_id, args.registry, false)
+                        .map_err(|error| AppError::Config(error.to_string()))?,
+                );
                 let index = registry
                     .fetch_index(false)
                     .map_err(|err| AppError::Config(err.to_string()))?;
@@ -239,11 +358,14 @@ impl AgenaCli {
                 Ok(())
             }
             PluginSubcommand::Upgrade(args) => {
-                let override_spec = args.registry.as_ref().map(|url| RegistrySpec {
-                    id: args.registry_id.clone(),
-                    url: url.clone(),
-                    require_signature: false,
-                });
+                let override_spec = args
+                    .registry
+                    .as_ref()
+                    .map(|source| {
+                        RegistrySpec::from_source(args.registry_id.clone(), source, false)
+                    })
+                    .transpose()
+                    .map_err(|error| AppError::Config(error.to_string()))?;
                 let targets: Vec<String> = if args.all {
                     client
                         .list_installed()
@@ -496,4 +618,45 @@ fn normalized_mcp_server_name(server: &str) -> Result<String, AppError> {
         ));
     }
     Ok(server.to_owned())
+}
+
+fn single_release_plugin_id(
+    index: &agena_plugin_marketplace::RegistryIndex,
+) -> Result<String, AppError> {
+    match index.plugins.as_slice() {
+        [plugin] => Ok(plugin.id.clone()),
+        [] => Err(AppError::Config(
+            "GitHub release manifest contains no plugin".to_string(),
+        )),
+        plugins => Err(AppError::Config(format!(
+            "GitHub release manifest contains {} plugins; direct repository installs require exactly one",
+            plugins.len()
+        ))),
+    }
+}
+
+fn humanize_plugin_name(value: &str) -> String {
+    value
+        .split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut characters = part.chars();
+            match characters.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), characters.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod plugin_supply_tests {
+    use super::humanize_plugin_name;
+
+    #[test]
+    fn generated_plugin_names_are_readable() {
+        assert_eq!(humanize_plugin_name("workspace-notes"), "Workspace Notes");
+        assert_eq!(humanize_plugin_name("code_review"), "Code Review");
+    }
 }

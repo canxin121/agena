@@ -1349,7 +1349,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          changed="$(git diff --name-status "$BASE_SHA"...HEAD -- releases || true)"
+          changed="$(git diff --name-status "$BASE_SHA" HEAD -- releases || true)"
           printf '%s\n' "$changed"
           if printf '%s\n' "$changed" | grep -Ev '^A[[:space:]]' | grep -q .; then
             echo "Published release records are immutable; only new release files may be added." >&2

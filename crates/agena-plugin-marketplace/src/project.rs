@@ -189,7 +189,24 @@ pub fn scaffold_marketplace(request: ScaffoldMarketplaceRequest) -> Result<(), M
         &request.destination.join(".github/pull_request_template.md"),
         MARKETPLACE_PULL_REQUEST_TEMPLATE,
     )?;
+    if let Some(owner) = github_repository_owner(request.repository.as_str()) {
+        write_text(
+            &request.destination.join(".github/CODEOWNERS"),
+            format!("* @{owner}\n").as_str(),
+        )?;
+    }
     Ok(())
+}
+
+fn github_repository_owner(value: &str) -> Option<&str> {
+    value
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .strip_prefix("https://github.com/")?
+        .split('/')
+        .next()
+        .filter(|owner| !owner.is_empty())
 }
 
 /// Generate the standalone repository lockfile after scaffolding. The template
@@ -831,6 +848,16 @@ pub fn scaffold_plugin(request: ScaffoldPluginRequest) -> Result<(), Marketplace
         &request.destination.join(".github/ISSUE_TEMPLATE/bug.yml"),
         BUG_ISSUE_TEMPLATE,
     )?;
+    if let Some(owner) = request
+        .repository
+        .as_deref()
+        .and_then(github_repository_owner)
+    {
+        write_text(
+            &request.destination.join(".github/CODEOWNERS"),
+            format!("* @{owner}\n").as_str(),
+        )?;
+    }
     write_text(
         &request.destination.join(".github/workflows/ci.yml"),
         template_ci_workflow().as_str(),
@@ -1139,6 +1166,12 @@ include = ["README.md", "LICENSE"]
 }
 
 fn readme_template(request: &ScaffoldPluginRequest) -> String {
+    let install_source = request
+        .repository
+        .as_deref()
+        .and_then(|repository| repository.strip_prefix("https://github.com/"))
+        .unwrap_or("OWNER/REPOSITORY")
+        .trim_end_matches('/');
     format!(
         r#"# {}
 
@@ -1172,13 +1205,13 @@ packages immutable assets, verifies every SHA-256 digest, and publishes
 Install the latest release directly from GitHub:
 
 ```bash
-agena plugin install OWNER/REPOSITORY
+agena plugin install {}
 ```
 
 Or submit the release manifest to an Agena marketplace repository so users can
 install it by plugin id.
 "#,
-        request.display_name, request.description
+        request.display_name, request.description, install_source
     )
 }
 
@@ -1265,6 +1298,7 @@ release's `agena-plugin-release.json`, then run:
 ```bash
 agena-plugin marketplace add /path/to/agena-plugin-release.json \
   --releases releases \
+  --project agena-marketplace.toml \
   --index agena-marketplace.json \
   --github-only
 ```
@@ -1687,6 +1721,10 @@ mod tests {
         })
         .unwrap();
         assert!(destination.join(".github/workflows/release.yml").is_file());
+        assert_eq!(
+            fs::read_to_string(destination.join(".github/CODEOWNERS")).unwrap(),
+            "* @example\n"
+        );
         assert!(destination.join("src/main.rs").is_file());
         PluginProjectManifest::load(&destination.join(AGENA_PROJECT_MANIFEST_FILENAME)).unwrap();
         let cargo = fs::read_to_string(destination.join("Cargo.toml")).unwrap();
@@ -1719,6 +1757,10 @@ mod tests {
         assert_eq!(project.marketplace.name, "Example Marketplace");
         let workflow_path = destination.join(".github/workflows/validate.yml");
         assert!(workflow_path.is_file());
+        assert_eq!(
+            fs::read_to_string(destination.join(".github/CODEOWNERS")).unwrap(),
+            "* @example\n"
+        );
         let workflow = fs::read_to_string(&workflow_path).unwrap();
         assert!(workflow.contains(&format!("--rev {AGENA_TEMPLATE_BASELINE_REF}")));
         assert!(workflow.contains("Published release records are immutable"));

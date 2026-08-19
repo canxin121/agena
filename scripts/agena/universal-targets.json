@@ -1,0 +1,439 @@
+{
+  "schema_version": 1,
+  "cross_revision": "c5c9de4a8f54ed3f40c0ca9f9cc8be60c4bc4019",
+  "nightly_toolchain": "nightly-2026-08-18",
+  "hosted_cross": [
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-linux-musl",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64_be-unknown-linux-gnu",
+      "build_std": true,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "arm-unknown-linux-gnueabi",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "arm-unknown-linux-gnueabihf",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-unknown-linux-gnueabi",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-unknown-linux-gnueabihf",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "thumbv7neon-unknown-linux-gnueabihf",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i586-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "loongarch64-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "loongarch64-unknown-linux-musl",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mips-unknown-linux-gnu",
+      "build_std": true,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mipsel-unknown-linux-gnu",
+      "build_std": true,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mips64-unknown-linux-gnuabi64",
+      "build_std": true,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "mips64el-unknown-linux-gnuabi64",
+      "build_std": true,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc64-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "powerpc64le-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64gc-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "riscv64gc-unknown-linux-musl",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "s390x-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "sparc64-unknown-linux-gnu",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-linux-musl",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "arm-unknown-linux-musleabihf",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "arm-unknown-linux-musleabi",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv5te-unknown-linux-gnueabi",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv5te-unknown-linux-musleabi",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-unknown-linux-musleabi",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-unknown-linux-musleabihf",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i586-unknown-linux-musl",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-unknown-linux-musl",
+      "build_std": false,
+      "family": "linux",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-linux-android",
+      "build_std": false,
+      "family": "android",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "arm-linux-androideabi",
+      "build_std": false,
+      "family": "android",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "armv7-linux-androideabi",
+      "build_std": false,
+      "family": "android",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "thumbv7neon-linux-androideabi",
+      "build_std": false,
+      "family": "android",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-linux-android",
+      "build_std": false,
+      "family": "android",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-linux-android",
+      "build_std": false,
+      "family": "android",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-pc-windows-gnu",
+      "build_std": false,
+      "family": "windows-gnu",
+      "can_run_in_cross": true,
+      "requires_cpp": false,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-pc-windows-gnu",
+      "build_std": false,
+      "family": "windows-gnu",
+      "can_run_in_cross": true,
+      "requires_cpp": false,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "wasm32-unknown-emscripten",
+      "build_std": false,
+      "family": "web",
+      "can_run_in_cross": true,
+      "requires_cpp": true,
+      "artifact_kind": "web-runtime"
+    },
+    {
+      "target": "x86_64-unknown-dragonfly",
+      "build_std": true,
+      "family": "bsd",
+      "can_run_in_cross": false,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-unknown-freebsd",
+      "build_std": false,
+      "family": "bsd",
+      "can_run_in_cross": false,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-freebsd",
+      "build_std": false,
+      "family": "bsd",
+      "can_run_in_cross": false,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-unknown-freebsd",
+      "build_std": true,
+      "family": "bsd",
+      "can_run_in_cross": false,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-netbsd",
+      "build_std": false,
+      "family": "bsd",
+      "can_run_in_cross": false,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "sparcv9-sun-solaris",
+      "build_std": false,
+      "family": "solaris",
+      "can_run_in_cross": false,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-pc-solaris",
+      "build_std": false,
+      "family": "solaris",
+      "can_run_in_cross": false,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-unknown-illumos",
+      "build_std": false,
+      "family": "solaris",
+      "can_run_in_cross": false,
+      "requires_cpp": true,
+      "artifact_kind": "backend"
+    }
+  ],
+  "native": [
+    {
+      "target": "x86_64-apple-darwin",
+      "runner": "macos-15-intel",
+      "shell": "bash",
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "runner": "macos-15",
+      "shell": "bash",
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runner": "windows-latest",
+      "shell": "pwsh",
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "i686-pc-windows-msvc",
+      "runner": "windows-latest",
+      "shell": "pwsh",
+      "artifact_kind": "backend"
+    },
+    {
+      "target": "aarch64-pc-windows-msvc",
+      "runner": "windows-11-arm",
+      "shell": "pwsh",
+      "artifact_kind": "backend"
+    }
+  ]
+}

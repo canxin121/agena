@@ -6,3 +6,4 @@ third_party/prometheus/** whitespace=-trailing-space
 third_party/nix-0.28/** whitespace=-trailing-space
 third_party/rmcp/** whitespace=-trailing-space
 third_party/tantivy/** whitespace=-trailing-space
+third_party/tower-http/** whitespace=-trailing-space

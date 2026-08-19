@@ -369,6 +369,7 @@ debug = false
 incremental = false
 
 [patch.crates-io]
+tower-http = { path = "third_party/tower-http" }
 tantivy = { path = "third_party/tantivy" }
 rmcp = { path = "third_party/rmcp" }
 nix = { path = "third_party/nix-0.28" }

@@ -368,6 +368,8 @@ debug = false
 incremental = false
 
 [patch.crates-io]
+abi_stable = { path = "third_party/abi_stable" }
+tree-sitter = { path = "third_party/tree-sitter" }
 spider_fingerprint = { path = "third_party/spider_fingerprint" }
 # Agena performs response-bearing terminal queries while the TUI is running.
 # Upstream Crossterm 0.29 treats OSC replies as Alt-key input because its

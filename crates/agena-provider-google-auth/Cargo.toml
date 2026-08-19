@@ -7,8 +7,9 @@ rust-version.workspace = true
 description = "Google ADC provider SDK leaf adapter"
 
 [dependencies]
-gcp_auth = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]
 workspace = true
+[target.'cfg(not(all(target_arch = "aarch64", target_endian = "big")))'.dependencies]
+gcp_auth = { workspace = true }

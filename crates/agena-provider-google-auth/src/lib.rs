@@ -17,6 +17,7 @@ pub enum GoogleAdcError {
 
 /// Resolve a Google ADC access token with the scope required by Google model
 /// provider adapters.
+#[cfg(not(all(target_arch = "aarch64", target_endian = "big")))]
 pub async fn access_token() -> Result<String, GoogleAdcError> {
     let provider = gcp_auth::provider()
         .await
@@ -26,4 +27,11 @@ pub async fn access_token() -> Result<String, GoogleAdcError> {
         .await
         .map_err(|error| GoogleAdcError::Token(error.to_string()))?;
     Ok(token.as_str().to_owned())
+}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "big"))]
+pub async fn access_token() -> Result<String, GoogleAdcError> {
+    Err(GoogleAdcError::Provider(
+        "Google ADC is unavailable on big-endian AArch64 builds".to_owned(),
+    ))
 }

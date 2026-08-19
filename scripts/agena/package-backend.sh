@@ -37,22 +37,24 @@ case "$TARGET_TRIPLE" in
 esac
 
 echo "Building agena for ${TARGET_TRIPLE}..."
-if ! command -v bun >/dev/null 2>&1; then
-  echo "ERROR: bun is required to build the Agena Web frontend." >&2
-  exit 1
-fi
-if [[ ! -d "$WEB_PROJECT_DIR/node_modules" ]]; then
+if [[ "${AGENA_WEB_DIST_PREBUILT:-0}" != "1" ]]; then
+  if ! command -v bun >/dev/null 2>&1; then
+    echo "ERROR: bun is required to build the Agena Web frontend." >&2
+    exit 1
+  fi
+  if [[ ! -d "$WEB_PROJECT_DIR/node_modules" ]]; then
+    (
+      cd "$WEB_PROJECT_DIR"
+      bun install --frozen-lockfile
+    )
+  fi
   (
     cd "$WEB_PROJECT_DIR"
-    bun install --frozen-lockfile
+    bun run build
   )
 fi
-(
-  cd "$WEB_PROJECT_DIR"
-  bun run build
-)
 if [[ ! -f "$WEB_DIST_DIR/index.html" ]]; then
-  echo "ERROR: built Web frontend not found at $WEB_DIST_DIR" >&2
+  echo "ERROR: Web frontend not found at $WEB_DIST_DIR" >&2
   exit 1
 fi
 
@@ -111,4 +113,14 @@ else
   tar -C "$STAGE_DIR" -czf "$RELEASE_DIR/$ARCHIVE_NAME" .
 fi
 
-echo "Package ready: $RELEASE_DIR/$ARCHIVE_NAME"
+ARCHIVE_PATH="$RELEASE_DIR/$ARCHIVE_NAME"
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd "$RELEASE_DIR" && sha256sum "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256")
+else
+  checksum="$(shasum -a 256 "$ARCHIVE_PATH" | awk '{print $1}')"
+  printf '%s  %s
+' "$checksum" "$ARCHIVE_NAME" > "$ARCHIVE_PATH.sha256"
+fi
+
+echo "Package ready: $ARCHIVE_PATH"
+echo "Checksum ready: $ARCHIVE_PATH.sha256"

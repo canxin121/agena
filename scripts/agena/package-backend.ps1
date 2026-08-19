@@ -25,6 +25,7 @@ $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
 $ServerManifest = Join-Path $RepoRoot "Cargo.toml"
 $ServerTargetDir = Join-Path $RepoRoot "target"
 $ReleaseDir = Join-Path $RepoRoot "artifacts/agena"
+$WebDistDir = Join-Path $RepoRoot "packages/agena-web/dist"
 
 if (-not $TargetTriple) {
   $TargetTriple = Get-HostTriple
@@ -40,6 +41,10 @@ if (-not $agenaPackage) {
   throw "Cargo metadata does not contain the agena package"
 }
 $Version = $agenaPackage.version
+
+if (-not (Test-Path -LiteralPath (Join-Path $WebDistDir "index.html"))) {
+  throw "Prebuilt Agena Web frontend not found at $WebDistDir"
+}
 
 $Ext = ""
 $ArchiveExt = ".tar.gz"
@@ -71,9 +76,12 @@ if (Test-Path -LiteralPath $StageDir) {
 }
 
 $StageBinDir = Join-Path $StageDir "bin"
+$StageWebDir = Join-Path $StageDir "web-dist"
 New-Item -ItemType Directory -Force -Path $StageBinDir | Out-Null
+New-Item -ItemType Directory -Force -Path $StageWebDir | Out-Null
 
 Copy-Item -LiteralPath $BinPath -Destination (Join-Path $StageBinDir "agena$Ext") -Force
+Copy-Item -Path (Join-Path $WebDistDir "*") -Destination $StageWebDir -Recurse -Force
 
 $Readme = @"
 Agena package
@@ -82,6 +90,7 @@ Target: $TargetTriple
 
 Contents:
 - bin/agena$Ext
+- web-dist/ (served by the Agena server on the same host and port)
 "@
 Set-Content -LiteralPath (Join-Path $StageDir "README.txt") -Value $Readme
 
@@ -108,4 +117,9 @@ else {
   }
 }
 
+$Hash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$ChecksumPath = "$ArchivePath.sha256"
+Set-Content -LiteralPath $ChecksumPath -Value "$Hash  $ArchiveName"
+
 Write-Host "Package ready: $ArchivePath"
+Write-Host "Checksum ready: $ChecksumPath"

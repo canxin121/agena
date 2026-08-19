@@ -24,6 +24,15 @@ VERSION="$(read_version)"
 }
 command -v cross >/dev/null 2>&1 || { echo "ERROR: cross is required" >&2; exit 1; }
 
+case "$TARGET_TRIPLE" in
+  i586-unknown-linux-*)
+    export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+sse,+sse2"
+    ;;
+  mips64-unknown-linux-gnuabi64|mips64el-unknown-linux-gnuabi64)
+    export RUSTFLAGS="${RUSTFLAGS:-} -C relocation-model=static"
+    ;;
+esac
+
 PACKAGE="agena"
 BINARY_BASENAME="agena"
 ARCHIVE_PREFIX="agena-backend"
@@ -44,7 +53,7 @@ build_args=(
 )
 if [[ "$BUILD_STD" == true ]]; then
   NIGHTLY="$(python3 -c 'import json; print(json.load(open("scripts/agena/universal-targets.json"))["nightly_toolchain"])')"
-  cross "+$NIGHTLY" "${build_args[@]}" -Z build-std=std,panic_abort
+  cross "+$NIGHTLY" "${build_args[@]}" -Z build-std=std,panic_abort,proc_macro
 else
   cross "${build_args[@]}"
 fi
@@ -122,4 +131,7 @@ else
   tar -C "$STAGE_DIR" -czf "$RELEASE_DIR/$ARCHIVE_NAME" .
 fi
 
-echo "Package ready: $RELEASE_DIR/$ARCHIVE_NAME"
+ARCHIVE_PATH="$RELEASE_DIR/$ARCHIVE_NAME"
+sha256sum "$ARCHIVE_PATH" | sed "s#  $ARCHIVE_PATH#  $ARCHIVE_NAME#" > "$ARCHIVE_PATH.sha256"
+echo "Package ready: $ARCHIVE_PATH"
+echo "Checksum ready: $ARCHIVE_PATH.sha256"

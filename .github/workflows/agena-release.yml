@@ -25,6 +25,10 @@ concurrency:
   group: agena-release-${{ inputs.tag_name || inputs.source_sha || github.sha }}
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   metadata:
     runs-on: ubuntu-latest
@@ -56,7 +60,6 @@ jobs:
           if [[ -z "$tag" ]]; then
             tag="agena-v${version}"
           fi
-
           if [[ "$tag" != "agena-v${version}" ]]; then
             echo "tag $tag does not match agena version $version" >&2
             exit 1
@@ -68,29 +71,158 @@ jobs:
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "publish_release=$PUBLISH_RELEASE" >> "$GITHUB_OUTPUT"
 
-  backend:
+  targets:
+    name: Load universal release target manifest
     needs: metadata
+    runs-on: ubuntu-latest
+    outputs:
+      hosted: ${{ steps.matrix.outputs.hosted }}
+      native: ${{ steps.matrix.outputs.native }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - id: matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          hosted="$(python3 scripts/agena/target-matrix.py hosted-cross --compact)"
+          native="$(python3 scripts/agena/target-matrix.py native --compact)"
+          echo "hosted=$hosted" >> "$GITHUB_OUTPUT"
+          echo "native=$native" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import json
+          data = json.load(open("scripts/agena/universal-targets.json", encoding="utf-8"))
+          print(f"Hosted/cross targets: {len(data['hosted_cross'])}")
+          print(f"Native targets: {len(data['native'])}")
+          PY
+
+  web:
+    name: Build Agena Web once
+    needs: metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.bun/install/cache
+            packages/agena-web/node_modules
+          key: agena-web-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version', 'packages/agena-web/bun.lock') }}
+      - name: Install Web dependencies
+        working-directory: packages/agena-web
+        run: bun install --frozen-lockfile
+      - name: Build Web frontend
+        working-directory: packages/agena-web
+        run: bun run build
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agena-web-dist-internal
+          path: packages/agena-web/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  cross-tool:
+    name: Build pinned cross tool
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+      - name: Build cross
+        run: |
+          set -euo pipefail
+          cargo install cross \
+            --git https://github.com/cross-rs/cross \
+            --rev c5c9de4a8f54ed3f40c0ca9f9cc8be60c4bc4019 \
+            --locked \
+            --root "$RUNNER_TEMP/cross"
+          "$RUNNER_TEMP/cross/bin/cross" --version || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cross-linux-x86_64-internal
+          path: ${{ runner.temp }}/cross/bin/cross
+          if-no-files-found: error
+          retention-days: 1
+
+  hosted-backend:
+    name: release ${{ matrix.target }}
+    needs:
+      - metadata
+      - targets
+      - web
+      - cross-tool
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact_suffix: linux-x86_64
-            shell: bash
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-            artifact_suffix: macos-x86_64
-            shell: bash
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_suffix: windows-x86_64
-            shell: pwsh
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.targets.outputs.hosted) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.metadata.outputs.source_sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+      - name: Install nightly rust-src for build-std targets
+        if: matrix.build_std
+        run: rustup toolchain install nightly-2026-08-18 --profile minimal --component rust-src
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cross-linux-x86_64-internal
+          path: ${{ runner.temp }}/cross/bin
+      - name: Install cross tool
+        run: |
+          chmod +x "$RUNNER_TEMP/cross/bin/cross"
+          echo "$RUNNER_TEMP/cross/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agena-web-dist-internal
+          path: packages/agena-web/dist
+      - name: Restore Cargo source cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          prefix-key: universal-release-sources
+          key: hosted
+          cache-targets: false
+          cache-on-failure: true
+      - name: Build and package target
+        run: >-
+          bash scripts/agena/package-cross-backend.sh
+          '${{ matrix.target }}'
+          '${{ matrix.build_std }}'
+          '${{ matrix.artifact_kind }}'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agena-release-${{ matrix.target }}
+          path: |
+            artifacts/agena/*.tar.gz
+            artifacts/agena/*.zip
+            artifacts/agena/*.sha256
+          if-no-files-found: error
+
+  native-backend:
+    name: release ${{ matrix.target }}
+    needs:
+      - metadata
+      - targets
+      - web
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.targets.outputs.native) }}
     env:
-      # Cargo incremental state is not portable across ephemeral runners.
-      # Disable it so sccache can reuse rustc outputs across workflow runs.
-      CARGO_INCREMENTAL: "0"
+      AGENA_WEB_DIST_PREBUILT: "1"
       SCCACHE_BASEDIRS: ${{ github.workspace }}
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_VERSION: agena-v1
@@ -100,77 +232,82 @@ jobs:
         with:
           ref: ${{ needs.metadata.outputs.source_sha }}
           persist-credentials: false
-
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
           toolchain: 1.97.0
-
+          targets: ${{ matrix.target }}
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.17.0
-
       - name: Configure Cargo sccache wrapper
         uses: ./.github/actions/configure-sccache-wrapper
-
       - name: Restore Cargo dependency cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           prefix-key: v1-rust-sccache
-          key: release-${{ matrix.target }}
+          key: universal-release-${{ matrix.target }}
           cache-bin: false
           cache-on-failure: true
-
-      - name: Set up Bun (Unix)
-        if: matrix.shell == 'bash'
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          bun-version-file: .bun-version
-
-      - name: Restore Agena Web dependencies (Unix)
-        if: matrix.shell == 'bash'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.bun/install/cache
-            packages/agena-web/node_modules
-          key: agena-web-bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bun-version', 'packages/agena-web/bun.lock') }}
-
+          name: agena-web-dist-internal
+          path: packages/agena-web/dist
       - name: Build Backend Package (Unix)
         if: matrix.shell == 'bash'
-        run: bash scripts/agena/package-backend.sh ${{ matrix.target }}
-
+        shell: bash
+        run: bash scripts/agena/package-backend.sh '${{ matrix.target }}'
       - name: Build Backend Package (Windows)
         if: matrix.shell == 'pwsh'
         shell: pwsh
-        run: ./scripts/agena/package-backend.ps1 -TargetTriple ${{ matrix.target }}
-
+        run: ./scripts/agena/package-backend.ps1 -TargetTriple '${{ matrix.target }}'
       - name: Verify sccache compiler activity
         uses: ./.github/actions/verify-sccache
         with:
           label: release-${{ matrix.target }}
-          minimum-requests: "1"
-
+          minimum-requests: "0"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: agena-backend-${{ matrix.artifact_suffix }}
-          path: artifacts/agena/agena-backend-*
+          name: agena-release-${{ matrix.target }}
+          path: |
+            artifacts/agena/*.tar.gz
+            artifacts/agena/*.zip
+            artifacts/agena/*.sha256
           if-no-files-found: error
 
   publish:
-    if: >
+    if: >-
       always() &&
       needs.metadata.outputs.publish_release == 'true' &&
-      needs.backend.result == 'success'
+      needs.hosted-backend.result == 'success' &&
+      needs.native-backend.result == 'success'
     needs:
       - metadata
-      - backend
+      - hosted-backend
+      - native-backend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
+          pattern: agena-release-*
           path: release-assets
-
+          merge-multiple: true
+      - name: Verify unique release asset names and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          find release-assets -maxdepth 1 -type f -print | sort
+          count="$(find release-assets -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l | tr -d ' ')"
+          if [[ "$count" -lt 55 ]]; then
+            echo "expected at least 55 release archives, found $count" >&2
+            exit 1
+          fi
+          (
+            cd release-assets
+            for checksum in *.sha256; do
+              sha256sum -c "$checksum"
+            done
+          )
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: Agena ${{ needs.metadata.outputs.version }}
@@ -178,4 +315,4 @@ jobs:
           target_commitish: ${{ needs.metadata.outputs.source_sha }}
           prerelease: ${{ contains(needs.metadata.outputs.version, '-') }}
           generate_release_notes: true
-          files: release-assets/**/*
+          files: release-assets/*

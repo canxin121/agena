@@ -418,7 +418,7 @@ libc_enum! {
         VEOL,
         VEOL2,
         VERASE,
-        #[cfg(freebsdlike)]
+        #[cfg(any(freebsdlike, target_os = "illumos"))]
         VERASE2,
         VINTR,
         VKILL,
@@ -431,7 +431,7 @@ libc_enum! {
         #[cfg(not(target_os = "haiku"))]
         VREPRINT,
         VSTART,
-        #[cfg(any(bsd, solarish))]
+        #[cfg(any(bsd, target_os = "illumos"))]
         VSTATUS,
         VSTOP,
         VSUSP,

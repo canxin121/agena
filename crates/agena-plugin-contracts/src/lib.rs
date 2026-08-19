@@ -8,6 +8,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 pub const SETTINGS_CONTRACT_VERSION: u32 = 1;
 pub const MAX_SETTINGS_DEPTH: usize = 16;
@@ -26,6 +28,48 @@ pub const MAX_OPERATION_ALIASES: usize = 16;
 pub const MAX_OPERATION_DIAGNOSTICS: usize = 32;
 pub const MAX_OPERATION_EFFECTS: usize = 8;
 pub const MAX_PLUGIN_SERVICES: usize = 128;
+
+/// Durable Operation titles are compact scan labels, not result previews.
+pub const TOOL_TITLE_MAX_DISPLAY_WIDTH: usize = 96;
+/// Durable Operation summaries are compact result statements.
+pub const TOOL_SUMMARY_MAX_DISPLAY_WIDTH: usize = 120;
+
+/// Normalize a tool/plugin title at the shared contract boundary. This lives
+/// in the lightweight contract crate so SDK authors do not need Agena's
+/// syntax-tree/runtime tool implementation just to format one-line metadata.
+pub fn normalize_tool_title(title: impl AsRef<str>) -> String {
+    normalize_tool_presentation_line(title, TOOL_TITLE_MAX_DISPLAY_WIDTH)
+}
+
+/// Normalize a tool/plugin summary at the shared contract boundary.
+pub fn normalize_tool_summary(summary: impl AsRef<str>) -> String {
+    normalize_tool_presentation_line(summary, TOOL_SUMMARY_MAX_DISPLAY_WIDTH)
+}
+
+fn normalize_tool_presentation_line(value: impl AsRef<str>, max_width: usize) -> String {
+    let normalized = value
+        .as_ref()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if UnicodeWidthStr::width(normalized.as_str()) <= max_width {
+        return normalized;
+    }
+    let content_width = max_width.saturating_sub(1);
+    let mut width = 0_usize;
+    let mut bounded = String::new();
+    for grapheme in normalized.graphemes(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        if width.saturating_add(grapheme_width) > content_width {
+            break;
+        }
+        bounded.push_str(grapheme);
+        width = width.saturating_add(grapheme_width);
+    }
+    bounded = bounded.trim_end().to_owned();
+    bounded.push('…');
+    bounded
+}
 
 /// Host-neutral syntax error for Agena's stable `namespace.plugin` identity.
 /// The SDK, marketplace, runtime configuration and tooling all delegate to

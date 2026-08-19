@@ -11,7 +11,6 @@ agena-failure = { workspace = true }
 agena-macros = { workspace = true }
 agena-plugin-contracts = { workspace = true }
 agena-stdio-codec = { workspace = true, optional = true }
-agena-tool = { workspace = true }
 async-trait = { workspace = true }
 bitflags = { workspace = true }
 bytes = { workspace = true, optional = true }

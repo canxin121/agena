@@ -29,41 +29,15 @@ use agena_domain::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, PermissionAction,
     PermissionDecision, ToolInvocation, ToolPermissionContract,
 };
+pub use agena_plugin_contracts::{
+    TOOL_SUMMARY_MAX_DISPLAY_WIDTH, TOOL_TITLE_MAX_DISPLAY_WIDTH, normalize_tool_summary,
+    normalize_tool_title,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 pub use tool_activity::{
     RenderContext, RenderError, ToolActivityEvent, ToolActivityResult, ToolHumanRenderer,
 };
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
-
-/// Durable Operation titles are compact scan labels, not result previews.
-/// Detailed output belongs in `summary`, sections, and the expanded Activity.
-pub const TOOL_TITLE_MAX_DISPLAY_WIDTH: usize = 96;
-
-/// Durable Operation summaries are compact result statements. They are
-/// intentionally much smaller than model-visible output so transcript clients
-/// can render them without loading or inspecting the full result.
-pub const TOOL_SUMMARY_MAX_DISPLAY_WIDTH: usize = 120;
-
-/// Normalize a tool-provided title at the shared runtime boundary.
-///
-/// Whitespace is collapsed so streamed or plugin titles cannot accidentally
-/// become multi-line transcript content. Titles that are genuinely long are
-/// bounded by terminal display width and retain an ellipsis; ordinary titles
-/// remain readable without a fixed, prematurely small UI cutoff.
-pub fn normalize_tool_title(title: impl AsRef<str>) -> String {
-    normalize_tool_presentation_line(title, TOOL_TITLE_MAX_DISPLAY_WIDTH)
-}
-
-/// Normalize a tool-provided result summary at the shared runtime boundary.
-///
-/// Tools remain responsible for the summary's meaning. This function only
-/// enforces the one-line, bounded storage contract; it never derives a summary
-/// from `output_text`.
-pub fn normalize_tool_summary(summary: impl AsRef<str>) -> String {
-    normalize_tool_presentation_line(summary, TOOL_SUMMARY_MAX_DISPLAY_WIDTH)
-}
 
 /// Compose the durable Operation title from the execution-tool name and the
 /// concise, call-specific summary produced for this invocation
@@ -124,32 +98,6 @@ pub fn invocation_call_summary(input: &serde_json::Value) -> String {
         }
     }
     String::new()
-}
-
-fn normalize_tool_presentation_line(value: impl AsRef<str>, max_width: usize) -> String {
-    let normalized = value
-        .as_ref()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if UnicodeWidthStr::width(normalized.as_str()) <= max_width {
-        return normalized;
-    }
-
-    let content_width = max_width.saturating_sub(1);
-    let mut width = 0_usize;
-    let mut bounded = String::new();
-    for grapheme in normalized.graphemes(true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
-        if width.saturating_add(grapheme_width) > content_width {
-            break;
-        }
-        bounded.push_str(grapheme);
-        width = width.saturating_add(grapheme_width);
-    }
-    bounded = bounded.trim_end().to_owned();
-    bounded.push('…');
-    bounded
 }
 
 #[cfg(test)]

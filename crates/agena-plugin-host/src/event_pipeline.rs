@@ -5,9 +5,10 @@
 //! durable state. Handler registrations belong to exact plugin generations and
 //! disappear automatically when the owning `PluginEffectScope` disposes.
 
+use portable_atomic::AtomicU64;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, Weak};
 
 use serde::{Deserialize, Serialize};

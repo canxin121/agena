@@ -29,7 +29,7 @@ case "$TARGET_TRIPLE" in
     export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+sse,+sse2"
     ;;
   mips64-unknown-linux-gnuabi64|mips64el-unknown-linux-gnuabi64)
-    export RUSTFLAGS="${RUSTFLAGS:-} -C relocation-model=static"
+    export RUSTFLAGS="${RUSTFLAGS:-} -C relocation-model=static -C code-model=large"
     ;;
   aarch64_be-unknown-linux-gnu)
     # Rustix's linux_raw backend does not support big-endian AArch64. Force

@@ -7,9 +7,10 @@
 //! without re-running its disposer, preventing an old generation from deleting
 //! a replacement resource.
 
+use portable_atomic::AtomicU64;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      native: ${{ steps.matrix.outputs.native }}
       portable: ${{ steps.matrix.outputs.portable }}
       portable_build_std: ${{ steps.matrix.outputs.portable_build_std }}
     steps:
@@ -34,15 +35,18 @@ jobs:
         run: |
           set -euo pipefail
           matrix="$(python3 scripts/agena/target-matrix.py hosted-cross --compact)"
+          native="$(python3 scripts/agena/target-matrix.py native --compact)"
           portable="$(python3 scripts/agena/target-matrix.py portable --compact)"
           portable_build_std="$(python3 scripts/agena/target-matrix.py portable-build-std --compact)"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "native=$native" >> "$GITHUB_OUTPUT"
           echo "portable=$portable" >> "$GITHUB_OUTPUT"
           echo "portable_build_std=$portable_build_std" >> "$GITHUB_OUTPUT"
           python3 - <<'PY_MATRIX'
           import json
           data = json.load(open("scripts/agena/universal-targets.json", encoding="utf-8"))
           print(f"Loaded {len(data['hosted_cross'])} hosted target definitions")
+          print(f"Loaded {len(data['native'])} native target definitions")
           print(f"Loaded {len(data['portable'])} distributed portable target definitions")
           print(f"Loaded {len(data['portable_build_std'])} build-std portable target definitions")
           PY_MATRIX
@@ -107,6 +111,25 @@ jobs:
           cache-on-failure: true
       - name: Check target
         run: bash scripts/ci/cross-check-target.sh '${{ matrix.target }}' '${{ matrix.build_std }}' '${{ matrix.artifact_kind }}'
+
+  native-targets:
+    name: native ${{ matrix.target }}
+    needs: targets
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.targets.outputs.native) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: 1.97.0
+          targets: ${{ matrix.target }}
+      - name: Check native target
+        run: cargo check -p agena --target '${{ matrix.target }}' --locked
 
   portable-targets:
     name: portable ${{ matrix.target }}
